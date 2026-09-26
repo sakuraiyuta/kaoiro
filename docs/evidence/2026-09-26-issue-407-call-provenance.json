@@ -1,0 +1,776 @@
+{
+  "baseline": "ba696b503261db5c3af9f4806a5579b9f8f8d995",
+  "method": "Loopback model APIs; actual pinned CLIs; no product guard implementation",
+  "claude": {
+    "serial": {
+      "log": [
+        {
+          "ms": 338,
+          "event": "sdk",
+          "type": "system"
+        },
+        {
+          "ms": 369,
+          "event": "api",
+          "n": 1
+        },
+        {
+          "ms": 374,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_A",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "A"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 379,
+          "event": "pretool",
+          "input": {
+            "session_id": "dc6b6053-2d15-4468-8f83-18519b8f8803",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/dc6b6053-2d15-4468-8f83-18519b8f8803.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "8c59cfa5-67c8-4f64-b136-065679a3d0e0",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "A"
+            },
+            "tool_use_id": "toolu_kogane_A",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_A"
+        },
+        {
+          "ms": 380,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_B",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "B"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 388,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "A"
+          },
+          "toolUseID": "toolu_kogane_A",
+          "requestId": "8fd468a6-ca77-4a5a-8a15-bf84d5f10a18"
+        },
+        {
+          "ms": 388,
+          "event": "permission_allow",
+          "label": "A"
+        },
+        {
+          "ms": 393,
+          "event": "handler",
+          "args": {
+            "label": "A"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_A",
+              "progressToken": 2
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 2
+          }
+        },
+        {
+          "ms": 393,
+          "event": "recovery_handoff_marker"
+        },
+        {
+          "ms": 398,
+          "event": "pretool",
+          "input": {
+            "session_id": "dc6b6053-2d15-4468-8f83-18519b8f8803",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/dc6b6053-2d15-4468-8f83-18519b8f8803.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "8c59cfa5-67c8-4f64-b136-065679a3d0e0",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "B"
+            },
+            "tool_use_id": "toolu_kogane_B",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_B"
+        },
+        {
+          "ms": 399,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 401,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "B"
+          },
+          "toolUseID": "toolu_kogane_B",
+          "requestId": "343911e2-1311-41b4-9584-fb474b0dbb0d"
+        },
+        {
+          "ms": 493,
+          "event": "permission_allow",
+          "label": "B"
+        },
+        {
+          "ms": 496,
+          "event": "handler",
+          "args": {
+            "label": "B"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_B",
+              "progressToken": 3
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 3
+          }
+        },
+        {
+          "ms": 498,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 507,
+          "event": "api",
+          "n": 2
+        },
+        {
+          "ms": 509,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_C",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "C"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 510,
+          "event": "pretool",
+          "input": {
+            "session_id": "dc6b6053-2d15-4468-8f83-18519b8f8803",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/dc6b6053-2d15-4468-8f83-18519b8f8803.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "8c59cfa5-67c8-4f64-b136-065679a3d0e0",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "C"
+            },
+            "tool_use_id": "toolu_kogane_C",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_C"
+        },
+        {
+          "ms": 513,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "C"
+          },
+          "toolUseID": "toolu_kogane_C",
+          "requestId": "5e8808a9-aaf5-4f0c-a866-a03f746ff5aa"
+        },
+        {
+          "ms": 513,
+          "event": "permission_allow",
+          "label": "C"
+        },
+        {
+          "ms": 515,
+          "event": "handler",
+          "args": {
+            "label": "C"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_C",
+              "progressToken": 4
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 4
+          }
+        },
+        {
+          "ms": 517,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 523,
+          "event": "api",
+          "n": 3
+        },
+        {
+          "ms": 550,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 555,
+          "event": "api",
+          "n": 4
+        },
+        {
+          "ms": 561,
+          "event": "sdk",
+          "type": "result",
+          "subtype": "success"
+        }
+      ],
+      "stderr": "",
+      "annotation": "default"
+    },
+    "parallel": {
+      "log": [
+        {
+          "ms": 312,
+          "event": "sdk",
+          "type": "system"
+        },
+        {
+          "ms": 342,
+          "event": "api",
+          "n": 1
+        },
+        {
+          "ms": 347,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_A",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "A"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 351,
+          "event": "pretool",
+          "input": {
+            "session_id": "65a07bf4-c63a-4a7d-a201-f76704ab493a",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/65a07bf4-c63a-4a7d-a201-f76704ab493a.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "efbcb1fe-bc7e-4a1c-95db-427463ef2b07",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "A"
+            },
+            "tool_use_id": "toolu_kogane_A",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_A"
+        },
+        {
+          "ms": 352,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_B",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "B"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 353,
+          "event": "pretool",
+          "input": {
+            "session_id": "65a07bf4-c63a-4a7d-a201-f76704ab493a",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/65a07bf4-c63a-4a7d-a201-f76704ab493a.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "efbcb1fe-bc7e-4a1c-95db-427463ef2b07",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "B"
+            },
+            "tool_use_id": "toolu_kogane_B",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_B"
+        },
+        {
+          "ms": 362,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "A"
+          },
+          "toolUseID": "toolu_kogane_A",
+          "requestId": "03ddbf60-0068-4a19-96c0-7ea13cc53ca6"
+        },
+        {
+          "ms": 362,
+          "event": "permission_allow",
+          "label": "A"
+        },
+        {
+          "ms": 362,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "B"
+          },
+          "toolUseID": "toolu_kogane_B",
+          "requestId": "92123f73-b000-4feb-bd66-a9bbb600c73c"
+        },
+        {
+          "ms": 366,
+          "event": "handler",
+          "args": {
+            "label": "A"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_A",
+              "progressToken": 2
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 2
+          }
+        },
+        {
+          "ms": 366,
+          "event": "recovery_handoff_marker"
+        },
+        {
+          "ms": 371,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 466,
+          "event": "permission_allow",
+          "label": "B"
+        },
+        {
+          "ms": 469,
+          "event": "handler",
+          "args": {
+            "label": "B"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_B",
+              "progressToken": 3
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 3
+          }
+        },
+        {
+          "ms": 471,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 479,
+          "event": "api",
+          "n": 2
+        },
+        {
+          "ms": 482,
+          "event": "sdk",
+          "type": "assistant",
+          "message": {
+            "id": "msg_kogane_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_kogane_C",
+                "name": "mcp__probe__send_to_agent",
+                "input": {
+                  "label": "C"
+                }
+              }
+            ],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 0
+            },
+            "context_management": null
+          }
+        },
+        {
+          "ms": 483,
+          "event": "pretool",
+          "input": {
+            "session_id": "65a07bf4-c63a-4a7d-a201-f76704ab493a",
+            "transcript_path": "/tmp/kogane407-call-provenance.CqZxHc/config/projects/-tmp-kogane407-call-provenance-CqZxHc/65a07bf4-c63a-4a7d-a201-f76704ab493a.jsonl",
+            "cwd": "/tmp/kogane407-call-provenance.CqZxHc",
+            "prompt_id": "efbcb1fe-bc7e-4a1c-95db-427463ef2b07",
+            "permission_mode": "default",
+            "effort": {
+              "level": "high"
+            },
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__probe__send_to_agent",
+            "tool_input": {
+              "label": "C"
+            },
+            "tool_use_id": "toolu_kogane_C",
+            "mcp_server": {
+              "name": "probe",
+              "source": "sdk"
+            }
+          },
+          "id": "toolu_kogane_C"
+        },
+        {
+          "ms": 486,
+          "event": "permission_enter",
+          "name": "mcp__probe__send_to_agent",
+          "input": {
+            "label": "C"
+          },
+          "toolUseID": "toolu_kogane_C",
+          "requestId": "8368f5e4-3cdc-4aaf-aee5-32ee4fa86ddf"
+        },
+        {
+          "ms": 486,
+          "event": "permission_allow",
+          "label": "C"
+        },
+        {
+          "ms": 488,
+          "event": "handler",
+          "args": {
+            "label": "C"
+          },
+          "extra": {
+            "signal": {},
+            "_meta": {
+              "claudecode/toolUseId": "toolu_kogane_C",
+              "progressToken": 4
+            },
+            "sendNotification": "[function]",
+            "sendRequest": "[function]",
+            "requestId": 4
+          }
+        },
+        {
+          "ms": 490,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 496,
+          "event": "api",
+          "n": 3
+        },
+        {
+          "ms": 522,
+          "event": "sdk",
+          "type": "user"
+        },
+        {
+          "ms": 527,
+          "event": "api",
+          "n": 4
+        },
+        {
+          "ms": 533,
+          "event": "sdk",
+          "type": "result",
+          "subtype": "success"
+        }
+      ],
+      "stderr": "",
+      "annotation": "readOnlyHint=true (probe only)"
+    }
+  },
+  "codex": {
+    "exec": {
+      "calls": [
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "method": "tools/call",
+          "params": {
+            "_meta": {
+              "callId": "call_kogane_A",
+              "x-codex-turn-metadata": {
+                "session_id": "01a0dc29-e0eb-7953-9b62-3247835ca560",
+                "thread_id": "01a0dc29-e0eb-7953-9b62-3247835ca560",
+                "reasoning_effort": "medium",
+                "turn_id": "01a0dc29-e114-7881-955d-b8f86b1c8594",
+                "model": "gpt-5.4",
+                "thread_source": "user",
+                "turn_trigger": "exec",
+                "sandbox": "seccomp",
+                "sandbox_mode": "read-only",
+                "auto_review_enabled": false,
+                "node_repl_auto_review_required": false,
+                "node_repl_disabled": false,
+                "turn_started_at_unix_ms": 1790400127253,
+                "codex_version": "0.156.1"
+              },
+              "threadId": "01a0dc29-e0eb-7953-9b62-3247835ca560",
+              "sessionId": "01a0dc29-e0eb-7953-9b62-3247835ca560",
+              "windowId": "01a0dc29-e0eb-7953-9b62-3247835ca560:0",
+              "itemId": "fc_kogane_A",
+              "progressToken": 1
+            },
+            "name": "send_to_agent",
+            "arguments": {
+              "label": "A"
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "type": "item.started",
+          "item": {
+            "id": "item_0",
+            "type": "mcp_tool_call",
+            "server": "probe",
+            "tool": "send_to_agent",
+            "arguments": {
+              "label": "A"
+            },
+            "result": null,
+            "error": null,
+            "status": "in_progress"
+          }
+        }
+      ],
+      "exitCode": 0,
+      "signal": null,
+      "stderr": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/kogane407-call-provenance.CqZxHc/codex-exec\"))\nReading additional input from stdin...\n"
+    },
+    "app": {
+      "calls": [
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "method": "tools/call",
+          "params": {
+            "_meta": {
+              "callId": "call_kogane_A",
+              "x-codex-turn-metadata": {
+                "session_id": "01a0dc29-faaa-74b1-922d-d95b483343dd",
+                "thread_id": "01a0dc29-faaa-74b1-922d-d95b483343dd",
+                "reasoning_effort": "medium",
+                "turn_id": "01a0dc29-fad7-7101-894e-091c03f6eab1",
+                "model": "gpt-5.4",
+                "sandbox": "none",
+                "sandbox_mode": "danger-full-access",
+                "auto_review_enabled": false,
+                "node_repl_auto_review_required": false,
+                "node_repl_disabled": false,
+                "turn_started_at_unix_ms": 1790400133849,
+                "codex_version": "0.156.1"
+              },
+              "threadId": "01a0dc29-faaa-74b1-922d-d95b483343dd",
+              "sessionId": "01a0dc29-faaa-74b1-922d-d95b483343dd",
+              "windowId": "01a0dc29-faaa-74b1-922d-d95b483343dd:0",
+              "itemId": "fc_kogane_A",
+              "progressToken": 1
+            },
+            "name": "send_to_agent",
+            "arguments": {
+              "label": "A"
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "mcpToolCall",
+              "id": "call_kogane_A",
+              "server": "probe",
+              "tool": "send_to_agent",
+              "status": "inProgress",
+              "arguments": {
+                "label": "A"
+              },
+              "appContext": null,
+              "mcpAppUi": null,
+              "pluginId": null,
+              "readOnlyHint": null,
+              "result": null,
+              "error": null,
+              "durationMs": null
+            },
+            "threadId": "01a0dc29-faaa-74b1-922d-d95b483343dd",
+            "turnId": "01a0dc29-fad7-7101-894e-091c03f6eab1",
+            "startedAtMs": 1790400133966
+          },
+          "emittedAtMs": 1790400133967
+        }
+      ],
+      "exitCode": 0,
+      "signal": null,
+      "stderr": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/kogane407-call-provenance.CqZxHc/codex-app\"))\n"
+    }
+  },
+  "artifacts": {
+    "probe.mjs": "30fa710f744785e309910288cc979190f64f624641f81fafb860c17a9b9bdfb4",
+    "codex.mjs": "022063739084dce9071900d800682ca21b4c4c98a36b4fba13d91da7589d0977",
+    "mcp.mjs": "a59a4662a894301e353aaba9053aba89f7c8b6ca28a7c10951344b2881064a5f",
+    "out-serial.json": "199e936edeabbcee3e70d6c780af5287820a8f7903884b8c8c845634e33f6528",
+    "out-parallel.json": "d3d45883c8b622f939d01ea22792e4c8fb8a4d087ae09f62721b9eacc08d0651",
+    "codex-exec.json": "b1c84d96fedd1d3ec0e8748c6d65d028c97ec27d3f05214441c1b76c29f7798e",
+    "codex-app.json": "36d6fbe9deb458440551c24593e19a981c689e0b21a67a1aeb0b3081b0af0afc"
+  }
+}
