@@ -17,7 +17,7 @@ these up on GitHub can lead to an unrelated issue. The task covers
 until the issue 407 work lands.
 
 The issue body reports an earlier audit of 818 Gitea-era occurrences across
-four test roots. That count is not directly comparable to this audit's 915 raw
+four test roots. That count is not directly comparable to this audit's 916 raw
 `#N` tokens across three roots: this audit uses the current base and includes
 340 post-import tokens, five non-issue labels, and tests added since the earlier
 audit.
@@ -27,19 +27,23 @@ used `git blame -w -M -C -C` and the 2026-08-23 import boundary at
 2026-08-23 04:54Z. The companion GitHub issue migration began creating native
 issues at 2026-08-26 08:27Z. No blamed lines fell between these times.
 
-The scoped audit found 575 pre-import `#N` tokens (98 numbers) and 340
-post-import tokens (47 numbers). Each mapped destination is resolved from
+The scoped audit found 576 pre-import `#N` tokens (99 numbers) and 340
+post-import tokens (47 numbers), 916 tokens total. Counts use the literal
+`#[0-9]+` match; unlike `(?<!\w)#[0-9]+`, it includes labels such as
+`2026-08-09#1`. Each mapped destination is resolved from
 the exact `Migrated from private Gitea issue N` footer on the imported GitHub
 issue. Among the pre-import tokens, 83 use numbers 1–88 and retain their number;
-five of these are non-issue labels. Another 490 have a footer destination; two
-are Gitea issue 154, for which no imported-issue footer exists.
+five of these are non-issue labels and the other 78 are issue references.
+Another 491 have a footer destination; two are Gitea issue 154, for which no
+imported-issue footer exists. The design-time count of 490 footer destinations
+omitted one occurrence; the measured and context-checked value is 491.
 
 ## Proposed decisions
 
 | Source and numbers | Decision | Count |
 |---|---|---:|
 | Pre-import Gitea 1–88 | Keep the same number; this group includes five non-issue labels | 83 |
-| Pre-import Gitea numbers with a migration footer | Repoint each occurrence to the footer's GitHub issue number | 490 |
+| Pre-import Gitea numbers with a migration footer | Repoint each occurrence to the footer's GitHub issue number | 491 |
 | Pre-import Gitea 154 | Remove the stale issue marker while retaining the descriptive test name; no migration footer exists | 2 |
 | Post-import references 89–276 listed below | Repoint only where the test context matches the old Gitea issue; keep the other GitHub references | 9 repointed / 117 kept |
 | Other post-import references | Keep; the number is below 89 or refers to a GitHub issue created after migration | 214 |
@@ -66,7 +70,7 @@ references also match the earlier reviewed issue 375 audit. Other post-import
 references in this scope are retained.
 
 For Gitea issue 154, the current public GitHub issue list was searched across
-all open and closed results (265 issues returned, below the 1,000-result
+all open and closed results (390 issues returned, below the 1,000-result
 limit) for the exact migration footer; no match was found. GitHub issue 154 is
 unrelated, so only the stale markers are removed.
 
@@ -80,13 +84,14 @@ the ongoing issue 407 wrapper-test work are outside this change.
 
 ## Verification
 
-- Recompute the before/after counts by scope and by issue number from grep
-  output; confirm the total delta matches the reviewed table.
+- Recompute the before/after counts by scope and by issue number using the
+  literal `rg -n -o '#[0-9]+'` matches; confirm exactly 502 tokens change (491
+  footer replacements, nine post-import replacements, and two removals).
 - Verify every replacement destination against the matched migration footer.
 - Check the diff to confirm it changes only issue-number tokens or the two
   unmigrated issue labels. Confirm non-issue labels such as `cwd #1`, `cwd #2`,
-  `client #1 token`, and the dated master-approval `#1` labels are unchanged,
-  and that none were included among the 490 footer-based replacements.
+  `client #1 token`, and both dated master-approval `#1` labels are unchanged,
+  and that none were included among the footer-based replacements.
 - Run full runner, server, and dashboard test suites. Report exit codes
   separately from pass counts.
 
