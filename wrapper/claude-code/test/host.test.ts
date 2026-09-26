@@ -4713,6 +4713,7 @@ describe("AgentHost — SDK notification reply origin", () => {
   it("does not let a late notification result retire an already yielded wrapper input", async () => {
     const starts: string[] = [];
     const ends: string[] = [];
+    const freezes: string[] = [];
     const queryFn = makeQueryFn(({ prompt, options }) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         const input = prompt[Symbol.asyncIterator]();
@@ -4720,6 +4721,9 @@ describe("AgentHost — SDK notification reply origin", () => {
         yield msg({ type: "system", subtype: "task_started", session_id: "s", task_id: "task", task_type: "local_bash", is_backgrounded: true });
         yield result("success", { result: "first" });
         expect((await input.next()).done).toBe(false);
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "wrapper", prompt: "second",
+        } as never, undefined, { signal: new AbortController().signal });
         yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "notification", prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>",
@@ -4728,6 +4732,8 @@ describe("AgentHost — SDK notification reply origin", () => {
         expect(starts).toHaveLength(2);
         expect(ends).toHaveLength(1);
         yield result("success", { result: "second" });
+        expect(ends).toHaveLength(1);
+        expect(freezes).toEqual([starts[1]]);
       }
       return asQuery(gen());
     });
@@ -4735,6 +4741,7 @@ describe("AgentHost — SDK notification reply origin", () => {
       onState: () => {}, queryFn,
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
       onTurnEnd: ({ turnToken }) => { if (turnToken) ends.push(turnToken); },
+      onAdmissionFailStop: ({ turnToken }) => freezes.push(turnToken),
     });
     const running = host.run();
     await host.send("first");
@@ -4742,6 +4749,56 @@ describe("AgentHost — SDK notification reply origin", () => {
     await running;
     host.close();
     expect(ends).toEqual(starts);
+  });
+
+  it("stops admission when a rejected foreign notification has an originless result", async () => {
+    const starts: string[] = [];
+    const ends: Array<{ token: string; error?: string }> = [];
+    const freezes: string[] = [];
+    const hookSignal = { signal: new AbortController().signal };
+    const queryFn = makeQueryFn(({ prompt, options }) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = prompt[Symbol.asyncIterator]();
+        expect((await input.next()).done).toBe(false);
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "launch",
+        } as never, undefined, hookSignal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        yield msg({ type: "system", subtype: "task_started", session_id: "s", task_id: "task", task_type: "local_bash", is_backgrounded: true });
+        yield result("success", { result: "WAITING" });
+        expect((await input.next()).done).toBe(false);
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: "next",
+        } as never, undefined, hookSignal);
+        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "foreign",
+          prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>",
+        } as never, undefined, hookSignal);
+        yield result("success", { result: "owner unknown" });
+        expect(ends).toEqual([{ token: starts[0] }]);
+        expect(freezes).toEqual([starts[1]]);
+        yield msg({ type: "system", subtype: "init", session_id: "new-session" });
+        yield result("success", { result: "late unowned result" });
+        expect(ends).toEqual([{ token: starts[0] }]);
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, {
+      onState: () => {}, queryFn,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: ({ turnToken, error }) => { if (turnToken) ends.push({ token: turnToken, ...(error?.detail ? { error: error.detail } : {}) }); },
+      onAdmissionFailStop: ({ turnToken }) => freezes.push(turnToken),
+    });
+    const running = host.run();
+    await host.send("launch");
+    await host.send("next");
+    await running;
+    expect(starts).toHaveLength(2);
+    expect(ends).toHaveLength(2);
+    expect(ends[1]?.token).toBe(starts[1]);
+    expect(ends[1]?.error).toContain("SDK stream ended");
+    await expect(host.send("third")).rejects.toThrow();
   });
 });
 

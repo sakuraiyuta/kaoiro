@@ -32,6 +32,52 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it("freezes later peer dispatch after an unattributable notification result", async () => {
+    const sentTokens: string[] = [];
+    let hostOptions!: Record<string, any>;
+    let linkOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          acknowledgeInterAgentDelivery: () => {},
+          retireInterAgentDeliveries: () => true,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          run: async () => { started(); await finished; },
+          send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+            sentTokens.push(token);
+            hostOptions.prepareInput(token);
+            hostOptions.onTurnStart({ turnToken: token });
+          },
+        } as never;
+      },
+    });
+    try {
+      await ready;
+      await linkOptions.onInterAgentMessage(inboundEnvelope(1, 1));
+      await vi.waitFor(() => expect(sentTokens).toHaveLength(1));
+      hostOptions.onAdmissionFailStop({ turnToken: sentTokens[0], conversationIds: ["c-1"] });
+      await linkOptions.onInterAgentMessage(inboundEnvelope(2, 3));
+      hostOptions.onTurnEnd({ turnToken: sentTokens[0], error: { reason: "stream_eof" } });
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(sentTokens).toHaveLength(1);
+    } finally { finishHost(); await running; }
+  });
+
   it("resolves a coordinator batch and a newly recovered CID before ending T2", async () => {
     const notices: Envelope[] = [];
     let hostOptions!: Record<string, any>;

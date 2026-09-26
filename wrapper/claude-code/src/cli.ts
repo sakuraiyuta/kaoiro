@@ -296,10 +296,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
    * copied into a CLI-only harness.
    */
   let interAgentTurns!: InterAgentTurnCoordinator;
-  // Set only after the watchdog exhausted its interrupt grace. Once true the
-  // current SDK token's outcome is unknown, so no later callback may reopen
-  // dispatch on this host generation (issue #238).
-  let watchdogFailStopped = false;
+  // A watchdog or an unattributable notification result freezes this host
+  // generation; no later callback may reopen dispatch (issue #238, #422).
+  let admissionFailStopped = false;
   // Transport deliberately does not await onInterAgentMessage. Register a
   // lease before receiveInbound() can await InterAgentTool's pending-done
   // gate, so host terminal teardown can stop a late handler before it enters
@@ -387,7 +386,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             // an instructionChain task that resumes afterwards is a retired
             // no-op, not a fresh error to settle against the unknown active
             // generation.
-            if (watchdogFailStopped) return;
+            if (admissionFailStopped) return;
             // A rejected input never reaches the SDK, so it has no terminal
             // callback. Settle this exact token and let the coordinator, not
             // a CID lookup, decide whether its peer may advance.
@@ -882,6 +881,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     clearTimeout(timeoutHandle);
   }
 
+  const freezeInterAgentAdmission = (turnToken: string | undefined, attribution: string, reason: string): void => {
+    admissionFailStopped = true;
+    const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+    const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+    writeRedactedStderr(
+      `[kaoiro] ${reason}: token=${turnToken ?? "<unknown>"} ` +
+        `attribution=${attribution}; ` +
+        `closed ingress=${pendingIngress}, discarded unstarted ` +
+        `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}. ` +
+        "Do not reuse this host; operator-controlled restore is required.\n",
+    );
+  };
+
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<AgentHostOptions, "onTurnStart">
   >({
@@ -918,7 +930,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         resolveInterAgentConversationIds(turnToken, interAgent?.pendingConversationIdsForTurn(turnToken) ?? [], error);
         interAgent?.endReplyInput(turnToken);
         turnWatchdog.end(turnToken);
-        if (cancellation === undefined && !watchdogFailStopped) sessionReset.onTurnEnd();
+        if (cancellation === undefined && !admissionFailStopped) sessionReset.onTurnEnd();
         return;
       }
       if (turnToken) interAgent?.endReplyInput(turnToken);
@@ -930,10 +942,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         // the coordinator's remaining batches and enqueues their notices
         // before link.close (transport acceptance is not awaited).
         resolveInterAgentTurn(settlement, error, {
-          dispatchNext: cancellation === undefined && !watchdogFailStopped,
+          dispatchNext: cancellation === undefined && !admissionFailStopped,
         });
       }
-      if (cancellation === undefined && !watchdogFailStopped) {
+      if (cancellation === undefined && !admissionFailStopped) {
         // phase-28 C2 / ADR-0043 D3: a real ResultMessage is the wrapper's
         // turn boundary. A never-started queue cancellation is settlement,
         // not permission to relaunch a session.
@@ -941,16 +953,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
-      watchdogFailStopped = true;
-      const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-      writeRedactedStderr(
-        `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
-          `attribution=${attribution}; ` +
-          `closed ingress=${pendingIngress}, discarded unstarted ` +
-          `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}. ` +
-          "Do not reuse this host; operator-controlled restore is required.\n",
-      );
+      freezeInterAgentAdmission(turnToken, attribution, "turn watchdog fail-stop");
+    },
+    onAdmissionFailStop: ({ turnToken }) => {
+      freezeInterAgentAdmission(turnToken, "unattributed", "notification result fail-stop");
     },
     onHostEnd: ({ error }) => {
       turnWatchdog.dispose();

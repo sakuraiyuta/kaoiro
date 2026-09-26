@@ -676,7 +676,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
     turnToken: string | undefined,
     error?: { reason?: string; detail?: string },
     cancellation?: {
-      kind: "stream_eof" | "watchdog_fail_stop";
+      kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop";
       started: boolean;
     },
   ): void {

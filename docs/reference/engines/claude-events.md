@@ -109,6 +109,10 @@ subagent call, retired prompt ID, or unmatched result cannot borrow the newest
 wrapper turn. Notification candidates received during a live turn are retained
 until its terminal boundary; unmatched candidates release the next-input
 barrier after a bounded 10-second wait.
+If a different notification prompt is rejected while a wrapper turn is live,
+an originless result cannot prove which prompt ended. The host stops admission
+and keeps the wrapper owner until stream teardown; operator-controlled restore
+is required before new work is accepted.
 
 **Observed record (task_notification terminal guarantee, issue #170)**: SDK
 `0.3.220`, captured 2026-08-09. A disposable script captured a real `query()`

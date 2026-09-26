@@ -429,7 +429,7 @@ export interface AgentHostOptions {
     kind?: "wrapper_input" | "sdk_notification";
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
-    cancellation?: { kind: "stream_eof" | "watchdog_fail_stop"; started: boolean };
+    cancellation?: { kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop"; started: boolean };
   }) => void;
   /** Invoked when the inactivity watchdog's abort grace expires, or when the
    * watchdog detects a token-attribution invariant failure. The host stops
@@ -442,6 +442,9 @@ export interface AgentHostOptions {
     conversationIds: readonly string[];
     attribution: "exact" | "unattributed";
   }) => void;
+  /** An SDK result cannot be assigned to the live wrapper input after a
+   * competing notification prompt was rejected without a result origin. */
+  onAdmissionFailStop?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
   /** Invoked exactly once after the host has terminally settled every turn it
    *  accepted (including queued cancellations). It runs before the CLI closes
    *  its ServerLink, so ownership layers outside AgentHost can synchronously
@@ -664,10 +667,11 @@ export class AgentHost implements EngineAdapter {
   #turnBoundaryNotify: (() => void) | null = null;
   #notify: (() => void) | null = null;
   #closed = false;
-  /** A watchdog fail-stop is stricter than close(): it blocks all future
-   * admission, while preserving the unknown active token until a real SDK
-   * terminal boundary arrives. */
-  #watchdogFailStopped = false;
+  /** A fail-stop blocks future admission while preserving an active token
+   * whose result cannot safely be assigned to it. */
+  #admissionFailStopped = false;
+  #unattributedTerminalFrozen = false;
+  readonly #unresolvedForeignPromptIds = new Set<string>();
   #hostEnded = false;
   #query: Query | null = null;
   /** Forwarded to `Options.abortController` so `close()` can bound the SDK's
@@ -1432,7 +1436,7 @@ export class AgentHost implements EngineAdapter {
    * a buffered ResultMessage must still settle this token before another turn
    * can begin (issue #236 / #238). */
   requestInterruptForTurn(turnToken: string): boolean {
-    if (this.#activeTurn?.turnToken !== turnToken || this.#watchdogFailStopped) {
+    if (this.#activeTurn?.turnToken !== turnToken || this.#admissionFailStopped) {
       return false;
     }
     void this.interrupt().catch((err: unknown) => {
@@ -1450,7 +1454,7 @@ export class AgentHost implements EngineAdapter {
     const activeTurn = this.#activeTurn;
     if (
       activeTurn?.turnToken !== turnToken ||
-      this.#watchdogFailStopped ||
+      this.#admissionFailStopped ||
       this.#hostEnded
     ) {
       return false;
@@ -1463,7 +1467,7 @@ export class AgentHost implements EngineAdapter {
    * current token if there is one, otherwise freeze all admission without an
    * ownership claim (issue #238 must-fix 1). */
   failStopForWatchdogAttributionUnknown(): boolean {
-    if (this.#watchdogFailStopped || this.#hostEnded) return false;
+    if (this.#admissionFailStopped || this.#hostEnded) return false;
     return this.#failStopForWatchdog(this.#activeTurn, "unattributed");
   }
 
@@ -1471,7 +1475,36 @@ export class AgentHost implements EngineAdapter {
     activeTurn: QueuedTurn | NotificationTurn | null,
     attribution: "exact" | "unattributed",
   ): boolean {
-    this.#watchdogFailStopped = true;
+    const detail = attribution === "exact"
+      ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
+      : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery";
+    return this.#failStopAdmission(activeTurn, detail, "watchdog_fail_stop", () => {
+      this.#options.onWatchdogFailStop?.({
+        ...(activeTurn === null ? {} : { turnToken: activeTurn.turnToken }),
+        conversationIds: activeTurn?.conversationIds ?? [],
+        attribution,
+      });
+    });
+  }
+
+  #failStopForAmbiguousResult(): void {
+    const activeTurn = this.#activeTurn;
+    if (activeTurn === null || this.#admissionFailStopped) return;
+    this.#unattributedTerminalFrozen = true;
+    this.#failStopAdmission(activeTurn,
+      "notification result ownership ambiguous; host admission stopped pending operator recovery",
+      "admission_fail_stop", () => {
+        this.#options.onAdmissionFailStop?.({ turnToken: activeTurn.turnToken, conversationIds: activeTurn.conversationIds });
+      });
+  }
+
+  #failStopAdmission(
+    activeTurn: QueuedTurn | NotificationTurn | null,
+    detail: string,
+    cancellationKind: "watchdog_fail_stop" | "admission_fail_stop",
+    onFreeze: () => void,
+  ): boolean {
+    this.#admissionFailStopped = true;
     this.#closed = true;
     this.#clearNotificationCandidates();
     this.#startupProbeAbort.abort();
@@ -1486,28 +1519,19 @@ export class AgentHost implements EngineAdapter {
     this.#emitState("error");
 
     // These turns have not reached #input(), so exact cancellation is safe.
-    // The active token remains held until the SDK gives a real terminal
-    // boundary; it must never be confused with a later generation.
+    // The active token remains held until an attributable terminal boundary
+    // or stream teardown; it must never move to a later generation.
     const queuedTurns = this.#queue.splice(0);
-    const error = {
-      detail:
-        attribution === "exact"
-          ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
-          : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
-    };
+    const error = { detail };
     for (const turn of queuedTurns) {
       this.#options.onTurnEnd?.({
         turnToken: turn.turnToken,
         conversationIds: turn.conversationIds,
         error,
-        cancellation: { kind: "watchdog_fail_stop", started: false },
+        cancellation: { kind: cancellationKind, started: false },
       });
     }
-    this.#options.onWatchdogFailStop?.({
-      ...(activeTurn === null ? {} : { turnToken: activeTurn.turnToken }),
-      conversationIds: activeTurn?.conversationIds ?? [],
-      attribution,
-    });
+    onFreeze();
     this.#wakeTurnBoundary();
     this.#wake();
     return true;
@@ -1862,6 +1886,9 @@ export class AgentHost implements EngineAdapter {
       }
       return;
     }
+    if (active !== null && active.kind !== "sdk_notification" && input.prompt.includes("<task-notification>")) {
+      this.#unresolvedForeignPromptIds.add(input.prompt_id);
+    }
     if (wrapperMatch && !notificationMatch && input.source !== "system") {
       this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: active.turnToken, kind: "wrapper_input" });
       this.#options.onPromptAdmitted?.(active.turnToken);
@@ -2055,6 +2082,7 @@ export class AgentHost implements EngineAdapter {
             this.#clearNotificationCandidates();
             this.#promptOwners.clear();
             this.#retiredPromptIds.clear();
+            this.#unresolvedForeignPromptIds.clear();
             this.toolOrigins.reset();
           }
           // A result from the old conversation must never refresh the new
@@ -2234,15 +2262,22 @@ export class AgentHost implements EngineAdapter {
           // clear it whether or not this result actually consumed it
           // (e.g. a plain success has no error_code to carry).
           this.#pendingAssistantErrorCode = undefined;
-          this.#emitResult(result, sdkMessageToCost(message));
+          if (this.#unattributedTerminalFrozen) continue;
           const notificationResult = (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";
-          if (notificationResult && this.#activeTurn?.kind !== "sdk_notification") {
+          if (!notificationResult && this.#activeTurn?.kind !== "sdk_notification" && this.#unresolvedForeignPromptIds.size > 0) {
+            this.#warn("[kaoiro] notification result ownership ambiguous; stopping host admission");
+            this.#failStopForAmbiguousResult();
+          } else if (notificationResult && this.#activeTurn?.kind !== "sdk_notification") {
             // A late SDK continuation must never settle a newly yielded wrapper input.
+            // result.origin has no prompt ID, so even a tagged result cannot
+            // prove which rejected prompt ended or clear an earlier collision.
+            this.#emitResult(result, sdkMessageToCost(message));
             this.#clearNotificationCandidates();
           } else if (!notificationResult && this.#activeTurn?.kind === "sdk_notification") {
             this.#warn("[kaoiro] notification result lacks task-notification ownership; closing admission");
             this.close();
           } else if (result.is_error) {
+            this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
             this.#completeActiveTurn(
               {
@@ -2254,6 +2289,7 @@ export class AgentHost implements EngineAdapter {
               true,
             );
           } else {
+            this.#emitResult(result, sdkMessageToCost(message));
             this.#completeActiveTurn(undefined, true);
           }
           this.#toolNames.clear();
@@ -2537,7 +2573,7 @@ export class AgentHost implements EngineAdapter {
     // late ResultMessage/EOF can settle its exact token. Its ordinary state
     // transitions must not overwrite the operator-visible sticky error,
     // including permission/question finally callbacks that also use #apply.
-    if (this.#watchdogFailStopped) return;
+    if (this.#admissionFailStopped) return;
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
     for (const state of emitted) {
@@ -3959,7 +3995,7 @@ export class AgentHost implements EngineAdapter {
     error: { reason?: string; detail?: string } | undefined,
     notifyWhenAbsent: boolean,
     cancellation?: {
-      kind: "stream_eof" | "watchdog_fail_stop";
+      kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop";
       started: boolean;
     },
   ): void {
@@ -3971,7 +4007,7 @@ export class AgentHost implements EngineAdapter {
     // state, and at stream EOF that state is still waiting_permission — after
     // the clear it would read as a busy state with no turn behind it and trip
     // the invariant on an ordinary teardown (review round 1, S1).
-    if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#watchdogFailStopped) {
+    if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#admissionFailStopped) {
       this.#emitState(this.#machine.state);
     }
     if (turn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(turn.turnToken);
@@ -3983,6 +4019,7 @@ export class AgentHost implements EngineAdapter {
       }
     }
     this.#activeTurn = null;
+    this.#unresolvedForeignPromptIds.clear();
     for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
     if (turn !== null) {
       this.#options.onTurnEnd?.({
