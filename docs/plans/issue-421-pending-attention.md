@@ -44,6 +44,21 @@ the broker wait, and the host wires those callbacks to
 1718-1719`). For an actual hook-gated command, the expected sequence is
 `tool_running -> waiting_permission -> tool_running`.
 
+The one-time flash has a code-supported likely explanation, though it is not
+an event trace recovered from production. `PermissionBroker.decide`
+(`agent-common/src/permission.ts:130-143`) sends the initial
+`permission_request` envelope first; that envelope is explicitly
+`waiting_permission` with empty `ext` (`agent-common/src/state.ts:324-339`).
+It then synchronously calls `onPendingChange`, and Antigravity emits a
+`state_change` carrying the pending record but retaining `tool_running`
+(`antigravity/src/host.ts:1082-1085`). The server stores either event as the
+latest state (`wrapper_channel.ex:1235-1236, 1255`). Thus the initial
+`waiting_permission` can briefly light the blindspot, then the next
+`tool_running + pending_permission` state removes it under the live-state-only
+predicate. The fake observation confirms the latter state; the exact
+production delivery timing remains unverified because the server does not
+retain state-transition history.
+
 Fake-based pending-wait traces were also captured from the existing Claude and
 Codex test setups. Claude `canUseTool` emitted `sending -> tool_running ->
 waiting_permission` with a pending permission (`claude-code/src/host.ts:2215-2299`).
@@ -126,11 +141,12 @@ Out of scope:
   dashboard test suite.
 - Exercise the default `App.svelte` composition and its normal `AgentCard` /
   `AgentDetail` wiring with no custom attention predicate or injected
-  replacement component. Feed state envelopes through the normal dashboard
-  envelope path: (a) `tool_running` + valid pending permission/question keeps
-  the grid badge and another-agent blindspot on; (b) clearing pending turns
-  them off when live state is non-attention; (c) pending on the selected agent
-  does not increment the "other agents" count.
+  replacement component. Select Chloe and feed envelopes through the normal
+  dashboard path for another agent, Hisui: (a) `tool_running` + valid pending
+  permission/question keeps Hisui's grid badge and increments Chloe's
+  "other agents" blindspot count by one; (b) clearing pending turns those
+  indicators off when live state is non-attention; (c) select Hisui and confirm
+  Hisui is excluded from its own "other agents" count.
 - Negative control: remove the pending-record branch from the attention
   predicate, rerun the same default-composition test, and require it to fail
   specifically because the attention indicator is absent; restore the branch
