@@ -53,6 +53,29 @@ describe("input-bound reply tickets", () => {
 });
 
 describe("actual shared send path", () => {
+  it("rejects an unbound call with actionable guidance and no transport send", async () => {
+    const sendInterAgent = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+    const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1", sendInterAgent });
+    const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" });
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      error: "unbound_tool_call",
+      send_not_attempted: true,
+      guidance: "This tool call is not bound to a live wrapper-delivered input. No message was sent. Wait for a new operator or peer input delivered by the wrapper before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call.",
+    });
+    expect(sendInterAgent).not.toHaveBeenCalled();
+  });
+  it("rejects a retired call with distinct guidance and no transport send", async () => {
+    const sendInterAgent = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+    const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1", sendInterAgent });
+    tool.beginReplyInput("T"); tool.endReplyInput("T");
+    const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      error: "stale_tool_call",
+      send_not_attempted: true,
+      guidance: "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input.",
+    });
+    expect(sendInterAgent).not.toHaveBeenCalled();
+  });
   it("stale rejection hands off a body once; B before receipt fails, C and a fresh transient retry succeed", async () => {
     const envelopes: Envelope[] = []; let reject = "stale_reply_basis";
     const commit = vi.fn(); const rollback = vi.fn(); const ack = vi.fn();

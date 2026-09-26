@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -61,6 +61,14 @@ The wrapper captures that default through an origin bound to the tool call. It
 checks origin liveness again immediately before the send sink, after asynchronous
 waits. Retired or unbound calls fail locally with `send_not_attempted: true`.
 They cannot borrow the current turn's snapshot.
+
+An `unbound_tool_call` means no live wrapper-delivered input owns that call;
+adding a ticket, changing the conversation ID, or retrying within the same
+continuation cannot bind it. A `stale_tool_call` means its owning input ended
+or was cancelled. Neither error attempts a send. A new wrapper-delivered input
+is required before retrying either call. Claude SDK background-task completion
+can currently start an autonomous continuation with no wrapper input; its
+origin and lifecycle are tracked by [issue 422](https://github.com/sakuraiyuta/kaoiro/issues/422).
 
 | Adapter | Origin binding |
 | --- | --- |
