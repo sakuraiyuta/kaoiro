@@ -2,7 +2,7 @@
 title: Antigravity CLI contract evidence
 description: Measured customization and headless-MCP observations for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-26
 related: [antigravity-adapter]
 ---
 
@@ -38,8 +38,10 @@ customization root **without** being listed in
   alone, that dir became the only root and the model's `Cwd`. With
   **both** `--add-dir <cwd> --add-dir <customization dir>` (either order),
   `hook.workspacePaths` lists both and `run_command` ran in the real cwd.
-  The adapter therefore always passes both, the rules text names the
-  working directory, and the gate rejects a `Cwd` outside the agent cwd.
+  For the adapter's required launch arguments, see
+  [Antigravity events](../../reference/engines/antigravity-events.md#main-api-and-process-model).
+  The `Cwd` containment contract is in
+  [Antigravity tools and permissions](../../reference/engines/antigravity-tools-permissions.md#run_command-cwd-containment).
 - **Environment inheritance (measured, Stage 0.3)**: a variable set on the
   `agy` process reached both the hook command and the `run_command` shell,
   so the bridge socket path and per-spawn nonce can travel in the
@@ -49,15 +51,15 @@ customization root **without** being listed in
   (`JSON hook "jsonhook__kaoiro-gate_PreToolUse_0_0" failed: command
   failed: signal: killed`) — the tool did **not** run. Timeout is
   fail-closed on the CLI side as well.
-- `.agents/mcp_config.json`, `.agents/plugins/<p>/mcp_config.json`,
-  `.agents/permissions.json`, `.agents/settings.json` — **not loaded** in
-  headless mode *(measured)*.
+- `.agents/permissions.json` and `.agents/settings.json` — **not loaded** in
+  headless mode *(measured)*. MCP configuration behavior is detailed below.
 
 ### MCP is not available in headless mode
 
 *(measured)* No MCP server was ever spawned in print mode: a stdio server
 registered via `agy mcp add` (global `~/.gemini/config/mcp_config.json`),
-via a plugin under `--add-dir`, and via a custom agent with
+via `.agents/mcp_config.json`, via a plugin under `--add-dir` (including
+`.agents/plugins/<p>/mcp_config.json`), and via a custom agent with
 `inheritMcp: true` never started (startup marker absent), and the CLI log
 shows `declarative_config_loader.go: skipping component during resolution:
 empty component: prompt section "mcp_servers"` on every run. `call_mcp_tool`

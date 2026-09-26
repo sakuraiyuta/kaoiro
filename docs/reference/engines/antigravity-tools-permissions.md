@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-23
+last_updated: 2026-09-26
 related: [protocol, antigravity-adapter]
 ---
 
@@ -22,8 +22,10 @@ Headless `agy` cannot prompt. Measured behaviour by configuration:
 | `--sandbox` (always-proceed, hook allow) | **no effect observed**: `touch` outside cwd and `curl https://example.com` both succeeded *(measured on WSL2; the terminal sandbox is advisory for this adapter)* |
 
 Therefore the adapter's approval channel is a **PreToolUse hook** shipped in
-the per-agent customization dir (`.agents/hooks.json`, matcher `*`). The
-hook command receives the tool call on stdin and answers on stdout:
+the per-agent customization dir (`.agents/hooks.json`, matcher `*`); measured
+customization discovery and root behavior are recorded in
+[Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
+The hook command receives the tool call on stdin and answers on stdout:
 
 ```jsonc
 // stdin (camelCase, protojson)
@@ -51,10 +53,10 @@ hook command receives the tool call on stdin and answers on stdout:
 - The hook payload's `stepIdx` equals the stream's `step_index` of the
   matching `tool` step (4 of 4 tool calls across 3 conversations,
   *measured*), which is what the ADR-0057 F4b correlation invariant keys on.
-- `agy -p /hooks --add-dir <dir> --output-format json` lists the gate
-  (`name`, `source` path, `matcher`, `timeout_seconds`) without a model turn
-  *(measured)*; without `--add-dir` the list is empty. This is the quota-free
-  registration check the wrapper runs before the first turn.
+- The wrapper runs a quota-free `agy -p /hooks --add-dir <dir>
+  --output-format json` registration check before the first turn. Its measured
+  output and the effect of omitting `--add-dir` are recorded in
+  [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
 - `PreToolUse` fires for every tool including reads. The 57 names in
   `init.tools` (1.1.26), classified for ADR-0057 F4 — the table is the
   source of truth and any name outside it is *unclassified*:
@@ -198,7 +200,9 @@ reached the `[antigravity-lifecycle]` stream.
 
 The wrapper reuses the Codex `ToolHost` (NDJSON over a per-agent unix
 socket: `list_tools` / `call_tool`) and ships `dist/bridge.js` as a **CLI**
-instead of an MCP server:
+bridge. The measured absence of MCP in headless mode is recorded in
+[Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#mcp-is-not-available-in-headless-mode).
+The bridge accepts these invocations:
 
 ```text
 node <pkg>/dist/bridge.js call <tool_name> '<json input>'   # prints the tool result
