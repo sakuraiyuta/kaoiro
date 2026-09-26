@@ -3121,6 +3121,40 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(pushed, "ext")
     end
 
+    test "viewer は bridge approval の後続 state_change でも waiting_permission を保つ" do
+      agent_id = "test.sanitize-approval-state"
+      _socket = join_as(:viewer)
+
+      KaoiroServerWeb.Endpoint.broadcast(
+        "agents:lobby",
+        "envelope",
+        permission_envelope(agent_id)
+      )
+
+      assert_push "envelope", %{
+        "type" => "state_change",
+        "state" => "waiting_permission",
+        "payload" => %{}
+      }
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-09-27T00:00:01Z",
+        "type" => "state_change",
+        "state" => "waiting_permission",
+        "payload" => %{},
+        "ext" => %{
+          "pending_permission" => %{"request_id" => "secret", "input" => %{"command" => "secret"}}
+        }
+      })
+
+      assert_push "envelope", pushed
+      assert pushed["state"] == "waiting_permission"
+      refute Map.has_key?(pushed, "ext")
+      refute inspect(pushed) =~ "secret"
+    end
+
     test "operator への broadcast は input を保つ" do
       agent_id = "test.sanitize-2"
       envelope = permission_envelope(agent_id)
