@@ -247,6 +247,12 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   own non-authoritative `onTurnEnd`, which cancels ANY pending
   reservation on sight (before checking which turn owns it), so the
   active turn's reservation is dropped with a notice instead of freezing.
+- While either this bridge approval or a native hook approval is pending, the
+  host holds `waiting_permission`. Each wait has a unique owner ID and active
+  turn token; the host emits the entry transition on the first owner and the
+  return to `tool_running` only after the final owner releases. Broker pending
+  metadata updates do not acquire a second owner for the native hook wait.
+  Releases from a stale turn cannot restore state over a later turn's state.
 - PreToolUse fired for every tool step observed so far: `write_to_file`,
   `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
   `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.

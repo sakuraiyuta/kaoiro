@@ -55,7 +55,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 |---|---|---|---|
 | Card → open detail | Not directory-only (directory-only is `disabled`) | Card itself | Same |
 | Card state display | Always | Always | Always |
-| Card attention display | Depends on state / pending | Always | Always |
+| Card attention display | Live `waiting_permission` / `waiting_question` / `error`, unacknowledged error, or valid pending permission / question record | Always | Always |
 | Card stats display | At least one usable `ext` value for stats and `settings.agentCardStatsEnabled` | Always | Always |
 | Card stop / restore | Agent state + connection | On card | Same |
 | Card interrupt / delete | Agent state + connection | On card | Same |
@@ -69,7 +69,7 @@ fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 | Element | Display condition | desktop | tablet | smartphone |
 |---|---|---|---|---|
 | Back to grid (`button.back`) | Always | Always | Always | Always |
-| Blind-spot indicator (`button.blindspot`) | Another agent needs attention | Always | Always | Always (below) |
+| Blind-spot indicator (`button.blindspot`) | Another agent has a live waiting/error state or valid pending permission / question record; excludes the selected agent | Always | Always | Always (below) |
 | Previous/next agent switch | Two or more agents | Always | Always | Always |
 | Status (model / effort / permission mode) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
 | Context / rate-limit meter | Capability exists | Always (left sidebar) | Within sheet | Within sheet |
