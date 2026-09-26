@@ -181,6 +181,18 @@ the five most recent eligible completions:
 
 Step 3 records the actual `T_server` and the per-assignment details.
 
+## Rollout record (2026-09-26, develop `b71674a2`)
+
+| Event | Time (UTC) | Source |
+|---|---|---|
+| Server switch (`T_server`) | 2026-09-26T12:29:16Z | Production container `StartedAt`; deploy transaction `20260926T122715Z`, health `build_revision` `b71674a2` |
+| Last old-wrapper retirement | 2026-09-26T12:34:57Z | Runner unit stopped for the `b71674a2` release (runner journal) |
+| v1 wrapper joins | 2026-09-26T12:35:34Z to 12:35:35Z | Runner `spawn_result ok` for kogane, kuroe, fuji, ao, hiiro, kohaku and momo. The Antigravity peer hisui failed to respawn (issue #386) and stays on legacy by decision (issue #416) |
+| First successful ordinary exchange | 2026-09-26T12:36:25Z | kuroe to kohaku, conversation `0f79faf1-…`, accepted with `inter_agent_reply_basis: v1` |
+
+Between `T_server` and the last old-wrapper retirement, the wrappers still ran
+`148a469a` and were unprotected (mixed-version interval, 5 min 41 s).
+
 ## Freeze procedure (before the first server switch)
 
 1. Take a new snapshot of every sidecar, transcript and conversation store
