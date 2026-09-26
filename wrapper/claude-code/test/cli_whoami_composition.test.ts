@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  type InterAgentTool,
+  type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
-import { buildKaoiroMcpServer } from "../src/inter_agent_sdk.js";
+import { buildKaoiroMcpServer, kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -67,7 +69,10 @@ describe("Claude CLI whoami composition (issue #254)", () => {
   });
 
   it("actual entrypoint gives whoami the live host rate-limit snapshot", async () => {
-    let interAgent!: InterAgentTool;
+    let whoamiHandler!: NonNullable<ToolDescriptor["handler"]>;
+    const buildArtifact = JSON.parse(readFileSync(
+      fileURLToPath(new URL("../dist/build-info.json", import.meta.url)), "utf8",
+    )) as { revision: string; dirty: boolean; version: string; channel: "dev" | "release" };
     const link = {
       close: () => {},
       currentSessionId: () => null,
@@ -96,13 +101,20 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       },
       createHost: () => host as never,
       buildMcpServer: (actualInterAgent, claudeOnly) => {
-        interAgent = actualInterAgent;
+        whoamiHandler = kaoiroToolDescriptors(actualInterAgent)
+          .find((descriptor) => descriptor.name === "whoami")!.handler!;
         return buildKaoiroMcpServer(actualInterAgent, claudeOnly);
       },
     });
 
-    const result = await interAgent.whoami();
+    const result = await whoamiHandler({});
     expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      build: {
+        revision: buildArtifact.revision,
+        dirty: buildArtifact.dirty,
+        version: buildArtifact.version,
+        channel: buildArtifact.channel,
+      },
       rate_limits: {
         seven_day: { utilization: 0.25, resets_at: 1787371200 },
       },

@@ -523,7 +523,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
     requestInterAgentDeliveryStatus: () =>
       link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
-    getWhoami: () => host.statusSnapshot(),
+    getWhoami: () => ({
+      ...host.statusSnapshot(),
+      build: {
+        revision: buildInfo.revision,
+        dirty: buildInfo.dirty,
+        version: buildInfo.version,
+        channel: buildInfo.channel,
+      },
+    }),
   });
   // ADR-0051 D3-2 / D3-5 — same contract as the Claude wrapper, with the
   // codex rollout directory as the sidecar's home. That directory is

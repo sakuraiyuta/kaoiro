@@ -177,6 +177,12 @@ export async function runAntigravityCli(
       persona: config.persona,
       state: host?.state ?? "idle",
       ...(host?.statusSnapshot() ?? { engine: "antigravity" }),
+      build: {
+        revision: buildInfo.revision,
+        dirty: buildInfo.dirty,
+        version: buildInfo.version,
+        channel: buildInfo.channel,
+      },
     }) as WhoamiSnapshot,
   });
   const interAgentTurns = new AntigravityInterAgentTurnCoordinator({

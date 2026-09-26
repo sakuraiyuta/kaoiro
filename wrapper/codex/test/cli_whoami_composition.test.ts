@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { createConnection } from "node:net";
 import { describe, expect, it } from "vitest";
 import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
+import { ToolHost } from "../src/toolhost.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -12,6 +16,9 @@ const config: WrapperConfig = {
 describe("Codex CLI whoami composition (issue #254)", () => {
   it("actual entrypoint gives whoami the live host rate-limit snapshot", async () => {
     let hostOptions!: Record<string, unknown>;
+    const buildArtifact = JSON.parse(readFileSync(
+      fileURLToPath(new URL("../dist/build-info.json", import.meta.url)), "utf8",
+    )) as { revision: string; dirty: boolean; version: string; channel: "dev" | "release" };
     const disconnectReasons: string[] = [];
     const link = {
       close: () => {},
@@ -50,17 +57,38 @@ describe("Codex CLI whoami composition (issue #254)", () => {
       prepareStartup: async () => {},
     });
 
-    const whoami = (hostOptions.toolDescriptors as ToolDescriptor[]).find(
-      (descriptor) => descriptor.name === "whoami",
-    );
-    expect(whoami).toBeDefined();
-    expect(whoami!.handler).toBeTypeOf("function");
-    const result = await whoami!.handler!({});
-    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+    const toolHost = await ToolHost.listen(hostOptions.toolDescriptors as ToolDescriptor[]);
+    try {
+      const result = await new Promise<{ content: { text: string }[] }>((resolve, reject) => {
+        const socket = createConnection(toolHost.socketPath);
+        let buffer = "";
+        socket.once("error", reject);
+        socket.on("connect", () => {
+          socket.write(`${JSON.stringify({ id: 1, method: "call_tool", name: "whoami", input: {} })}\n`);
+        });
+        socket.on("data", (chunk: string) => {
+          buffer += chunk;
+          const newline = buffer.indexOf("\n");
+          if (newline === -1) return;
+          const response = JSON.parse(buffer.slice(0, newline)) as { result: { content: { text: string }[] } };
+          socket.end();
+          resolve(response.result);
+        });
+      });
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      build: {
+        revision: buildArtifact.revision,
+        dirty: buildArtifact.dirty,
+        version: buildArtifact.version,
+        channel: buildArtifact.channel,
+      },
       rate_limits: {
         seven_day: { utilization: 0.25, resets_at: 1787371200 },
       },
-    });
+      });
+    } finally {
+      toolHost.close();
+    }
     expect(disconnectReasons).toEqual(["stop"]);
   });
 

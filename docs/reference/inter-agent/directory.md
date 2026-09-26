@@ -7,7 +7,7 @@ last_updated: 2026-09-26
 # Peer directory
 
 The structural types `DirectoryEntry`, `DirectoryResult`, `UserDirectoryEntry`,
-`DirectoryContext`, and `DirectoryRateLimitWindow` are defined in
+`DirectoryContext`, `DirectoryRateLimitWindow`, and `WrapperBuildIdentity` are defined in
 [@kaoiro/protocol](../../../protocol/src/index.ts). Shared tool definitions
 are in [agent-common](../../../wrapper/agent-common/src/inter_agent.ts).
 
@@ -44,6 +44,7 @@ report peers that have been inactive for a long time.
 | `last_activity_at` | ISO8601 (UTC) | time the server last accepted an envelope | no envelope accepted yet |
 | `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | latest reported usage-limit snapshot, including an account read before the first turn | no usable source, all windows dropped in projection, or disconnected |
+| `build` | `WrapperBuildIdentity` | validated wrapper artifact identity reported on the live connection | no report is available or the entry is `directory_only` |
 | `disconnect` | `{origin, reason}` | server-observed terminal disconnect attribution using the closed pairs from protocol.md | connected, planned restart, legacy server, or malformed pair |
 | `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
 | `last_seen` | ISO8601 (UTC), issue #259 | memory-only hint of the last envelope accepted by `AgentDirectory` | after server restart / never touched, or for live entries (which have `last_activity_at`) |
@@ -51,6 +52,17 @@ report peers that have been inactive for a long time.
 `session_started_at` and `last_activity_at` are **server timestamps**. They
 are not wrapper measurements and are independent of envelope `ts` (the
 wrapper host clock), avoiding cross-host clock skew in decisions.
+
+`build` has the nested shape `{revision, dirty, version, channel}`. The wrapper
+reports flat channel fields, which the server validates with
+`WrapperBuildInfos.canonical_info/1` and projects as follows: `build_revision`
+→ `build.revision`, `build_dirty` → `build.dirty`, `build_version` →
+`build.version`, and `build_channel` → `build.channel`. The server reads only
+its validated live snapshot; it does not copy arbitrary envelope `ext` fields.
+An absent object means the live wrapper has not reported a usable identity (or
+the entry is `directory_only`); a present `unknown` value means the wrapper
+reported an identity that could not be determined. The value is observational
+metadata, not a signed artifact attestation or an authorization input.
 
 - MUST (issue #167): Closed conversations are inactive in `peer_index` and in
   disconnect unresponsive notices.
@@ -254,8 +266,8 @@ and self-identification without per-call approval.
 
 | Tool (full name) | purpose | path |
 |---|---|---|
-| `mcp__kaoiro__list_agents` | Lists other agents on the connection, returning destination identifiers (id/persona name/state), execution characteristics (engine/model/effort), and liveness (context/session_started_at/turns/last_activity_at/conversation/rate_limits). | Calls server `directory_request`, narrows both `agents` and `users`, and returns them as separate arrays. Users are not `send_to_agent` destinations. |
-| `mcp__kaoiro__whoami` | Returns the server's view of this agent: agent_id/persona/state/engine, effective model/effort and sources, permission/network_access, legacy permission_mode/fast_mode, session_id/cwd, `context`, `rate_limits`, and `inter_agent_delivery` when available. | Reads identity/effective settings/context/rate_limits from local `EffectiveStatusSnapshot` and host cache. If delivery status is wired, performs a server `delivery_status_request` round trip and includes `inter_agent_delivery` only on success. |
+| `mcp__kaoiro__list_agents` | Lists other agents on the connection, returning destination identifiers (id/persona name/state), execution characteristics (engine/model/effort), liveness (context/session_started_at/turns/last_activity_at/conversation/rate_limits), and validated build identity when reported. | Calls server `directory_request`, narrows both `agents` and `users`, and returns them as separate arrays. Users are not `send_to_agent` destinations. An absent `build` means unreported; present `unknown` values mean reported but indeterminate. |
+| `mcp__kaoiro__whoami` | Returns the server's view of this agent: agent_id/persona/state/engine, effective model/effort and sources, permission/network_access, legacy permission_mode/fast_mode, session_id/cwd, `context`, `rate_limits`, `inter_agent_delivery` when available, and local build identity. | Reads identity/effective settings/context/rate_limits and build identity from local snapshots and host cache. The nested `build` object is always present; if the artifact is unavailable, bounded `unknown` values are returned. If delivery status is wired, performs a server `delivery_status_request` round trip and includes `inter_agent_delivery` only on success. |
 
 Build `whoami` local fields from the shared host `EffectiveStatusSnapshot` and
 cache rather than a separate state envelope. Return model/effort/source and

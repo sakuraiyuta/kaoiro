@@ -57,6 +57,7 @@ phase-N).
 | Plan | Status | Description |
 |------|--------|------|
 | [dashboard-bulk-reset](dashboard-bulk-reset.md) | ⏳ | Operator `SettingsDrawer` control to bulk-close all conversations and bulk-clear all agent sessions, [ADR-0061](../adr/0061-dashboard-operator-bulk-reset.md) |
+| [issue-365-wrapper-build-identity](issue-365-wrapper-build-identity.md) | ⏳ | Expose validated wrapper build identity through `list_agents` and `whoami`, [issue #365](https://github.com/sakuraiyuta/kaoiro/issues/365) |
 
 (The former `persona-personality-injection` was superseded by
 [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) and

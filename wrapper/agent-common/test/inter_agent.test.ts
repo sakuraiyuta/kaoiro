@@ -1730,6 +1730,7 @@ describe("list_agents / whoami companion tools", () => {
       agent_id: "self.agent",
       persona: { id: "mio", name: "澪", sprite_set: "mio" },
       state: "thinking",
+      build: { revision: "unknown", dirty: false, version: "unknown", channel: "dev" },
       engine: "codex",
       model: "claude-sonnet-4-6",
       effort: "high",

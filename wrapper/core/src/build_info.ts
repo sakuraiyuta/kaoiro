@@ -45,14 +45,15 @@ function validBuiltAt(value: unknown): value is string {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
-function validBuildInfo(value: unknown): value is WrapperBuildInfo & { built_at: string } {
+/** Reusable shape/domain check for identity fields received outside the
+ *  generated artifact, such as a peer directory response. */
+export function isWrapperBuildIdentityValid(value: unknown): value is WrapperBuildInfo {
   if (typeof value !== "object" || value === null) return false;
   const raw = value as Record<string, unknown>;
   return (
     typeof raw.revision === "string" &&
     (raw.revision === "unknown" || BUILD_REVISION_RE.test(raw.revision)) &&
     typeof raw.dirty === "boolean" &&
-    validBuiltAt(raw.built_at) &&
     typeof raw.version === "string" &&
     (raw.version === "unknown" || BUILD_VERSION_RE.test(raw.version)) &&
     (raw.channel === "dev" || raw.channel === "release") &&
@@ -62,6 +63,13 @@ function validBuildInfo(value: unknown): value is WrapperBuildInfo & { built_at:
       version: raw.version,
       channel: raw.channel,
     })
+  );
+}
+
+function validBuildInfo(value: unknown): value is WrapperBuildInfo & { built_at: string } {
+  return (
+    isWrapperBuildIdentityValid(value) &&
+    validBuiltAt((value as unknown as { built_at: unknown }).built_at)
   );
 }
 

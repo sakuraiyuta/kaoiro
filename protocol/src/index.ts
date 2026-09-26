@@ -167,6 +167,14 @@ export interface WrapperBuildInfoPayload {
   build_channel: "dev" | "release";
 }
 
+/** Nested, allow-listed wrapper identity exposed by peer directory tools. */
+export interface WrapperBuildIdentity {
+  revision: string;
+  dirty: boolean;
+  version: string;
+  channel: WrapperBuildInfoPayload["build_channel"];
+}
+
 /** Assigned persona (protocol.md / ADR-0003). Under the server-集約 SoT
  *  model (ADR-0029) the wrapper carries only the wire-safe identifiers;
  *  the personality prompt is fetched from the server via WS handshake,
@@ -1251,6 +1259,8 @@ export interface DirectoryEntry {
   last_activity_at?: string;
   conversation?: DirectoryConversation;
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
+  /** Present only when a live wrapper has reported a validated identity. */
+  build?: WrapperBuildIdentity;
   inter_agent_delivery?: InterAgentDeliveryStatus;
   /** Present only while the latest state is disconnected. */
   disconnect?: DisconnectExt;

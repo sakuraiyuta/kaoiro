@@ -32,6 +32,7 @@ import type {
   UserRole,
 } from "@kaoiro/protocol";
 import {
+  isWrapperBuildIdentityValid,
   normalizeWrapperBuildInfo,
   type WrapperBuildInfo,
 } from "./build_info.js";
@@ -947,6 +948,14 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (conversation !== undefined) entry.conversation = conversation;
   const rateLimits = projectRateLimits(v.rate_limits);
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
+  if (isWrapperBuildIdentityValid(v.build)) {
+    entry.build = {
+      revision: v.build.revision,
+      dirty: v.build.dirty,
+      version: v.build.version,
+      channel: v.build.channel,
+    };
+  }
   const disconnect = disconnectFrom(v.disconnect);
   if (v.state === "disconnected" && disconnect !== undefined) entry.disconnect = disconnect;
   // issue #259: server は true のときだけ載せる。それ以外の値 (false /

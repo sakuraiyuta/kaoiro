@@ -553,7 +553,15 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
     requestInterAgentDeliveryStatus: () =>
       link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
-    getWhoami: () => host.statusSnapshot(),
+    getWhoami: () => ({
+      ...host.statusSnapshot(),
+      build: {
+        revision: buildInfo.revision,
+        dirty: buildInfo.dirty,
+        version: buildInfo.version,
+        channel: buildInfo.channel,
+      },
+    }),
   });
   // ADR-0051 D3-2 / D3-5: the host-local record of this agent's
   // inter-agent messages. Namespaced by the launch transition so a relaunch
