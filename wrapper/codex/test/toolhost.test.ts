@@ -197,3 +197,28 @@ describe("ToolHost — call lifetime signal (issue #347)", () => {
     expect(socket.destroyed).toBe(true);
   });
 });
+
+it.each(["success", "disconnect", "serialize"])("result ownership follows the real socket boundary: %s", async scenario => {
+  const { bindToolResultHandoff } = await import("@kaoiro/agent-common");
+  const commit = vi.fn(), rollback = vi.fn(); let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; }); let entered = false;
+  const host = await ToolHost.listen([{ ...ECHO, name: "send_to_agent", handler: async () => {
+    entered = true; await gate;
+    const result = { content: [{ type: "text" as const, text: "complete recovery body" }] };
+    if (scenario === "serialize") Object.assign(result, { cycle: result });
+    return bindToolResultHandoff(result, { live: () => true, commit, rollback });
+  } }]);
+  const socket = createConnection(host.socketPath); let frame = "";
+  socket.setEncoding("utf8"); socket.on("data", data => { frame += data; });
+  try {
+    await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+    socket.write(JSON.stringify({ id: 1, method: "call_tool", name: "send_to_agent", input: {} }) + "\n");
+    await vi.waitFor(() => expect(entered).toBe(true));
+    if (scenario === "disconnect") { socket.destroy(); await new Promise<void>(r => socket.once("close", r)); }
+    release();
+    if (scenario === "success") {
+      await vi.waitFor(() => expect(frame).toContain("\n"));
+      expect(JSON.parse(frame).result.content[0].text).toBe("complete recovery body"); expect(commit).toHaveBeenCalledOnce(); expect(rollback).not.toHaveBeenCalled();
+    } else { await vi.waitFor(() => expect(rollback).toHaveBeenCalledOnce()); expect(commit).not.toHaveBeenCalled(); }
+  } finally { release(); socket.destroy(); host.close(); }
+});

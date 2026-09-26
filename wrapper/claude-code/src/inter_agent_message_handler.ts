@@ -59,7 +59,7 @@ export async function handleInterAgentMessage(
       return;
     }
     if (disposition.consumed) {
-      context.acknowledgeDelivery?.(envelope);
+      if (!disposition.deferAck) context.acknowledgeDelivery?.(envelope);
       context.log(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
       return;
     }

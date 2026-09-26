@@ -720,10 +720,11 @@ describe("permission gate cancellation notice composition", () => {
       loadConfig: () => ({ ...config, sandbox: "read-only", network_access: false }),
       createServerLink: (_url, _id, options) => {
         onMessage = options.onInterAgentMessage!;
-        queueMicrotask(() => options.onPersonaPrompt?.("test"));
+        queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("test"); });
         return {
           close() {}, currentSessionId: () => null,
           send: (envelope: Envelope) => sent.push(envelope),
+          sendInterAgent: async (envelope: Envelope) => { sent.push(envelope); return { kind: "accepted", stamp: null }; },
           acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
           waitForPermissionSyncNegotiation: async () => true,
           waitForPermissionSync: async () => {},

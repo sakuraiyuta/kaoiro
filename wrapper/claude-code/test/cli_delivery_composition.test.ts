@@ -52,6 +52,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       send: async (text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
         sends.push(text);
         if (firstTurnToken === "") firstTurnToken = token;
+        hostOptions.prepareInput(token);
         hostOptions.onTurnStart({ turnToken: token });
       },
     };
@@ -61,7 +62,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: (interAgent) => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
-        queueMicrotask(() => linkOptions.onPersonaPrompt("system prompt"));
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
           retireInterAgentDeliveries: retire,
@@ -88,7 +89,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       await linkOptions.onInterAgentMessage(first);
       await vi.waitFor(() => expect(sends).toHaveLength(1));
       await linkOptions.onInterAgentMessage(second);
-      const done = await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "queued-closed", done: true });
+      const done = await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "queued-closed", done: true }, { origin: { token: firstTurnToken } });
       expect(done.isError).toBeFalsy();
       hostOptions.onTurnEnd({ turnToken: firstTurnToken });
       expect(retire).not.toHaveBeenCalled();

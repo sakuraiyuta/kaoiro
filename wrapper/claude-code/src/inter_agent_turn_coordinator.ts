@@ -116,6 +116,10 @@ export class InterAgentIngressGate {
  * directly instead of reimplementing it in a harness (issue #236).
  */
 export class InterAgentTurnCoordinator {
+  readonly #receiveOrder = new WeakMap<Envelope, number>();
+  #nextReceiveOrder = 0;
+  readonly #inputStarted = new Set<string>();
+  readonly #recoveryLeases = new Set<readonly Envelope[]>();
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
   readonly #batchByTurnToken = new Map<string, DispatchedInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
@@ -140,10 +144,73 @@ export class InterAgentTurnCoordinator {
    * peer has no active generation. Later arrivals for a busy peer accumulate
    * behind its active turn, preserving the issue #211 busy-trigger behaviour.
    */
+  unreadCount(activeToken: string | null): number {
+    return [...this.#batchByTurnToken.values()].filter(batch => batch.turnToken !== activeToken).reduce((n, batch) => n + batch.items.length, 0)
+      + [...this.#pendingBatches.values()].flat().reduce((n, batch) => n + batch.items.length, 0)
+      + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
+  }
+
+  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean): { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined {
+    const selected: InterAgentBatchItem[] = [];
+    const candidates = [
+      ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken)).flatMap(batch => batch.items),
+      ...(this.#pendingBatches.get(peer) ?? []).flatMap(batch => batch.items),
+    ];
+    for (const item of candidates) {
+      if (item.envelope.payload.conversation_id !== cid || item.envelope.agent_id !== peer || item.envelope.payload.notice_type !== undefined) continue;
+      if (!fit([...selected, item].map(i => i.envelope))) {
+        if (!selected.length) return { envelopes: [], oversizedPending: true, commit: () => {}, rollback: () => {} };
+        break;
+      }
+      selected.push(item);
+    }
+    if (!selected.length) return undefined;
+    const priorDispatched = new Map(this.#batchByTurnToken);
+    const priorPending = (this.#pendingBatches.get(peer) ?? []).map(batch => ({ batch, items: [...batch.items] }));
+    const taken = new Set(selected);
+    for (const [token, batch] of this.#batchByTurnToken) {
+      const items = batch.items.filter(item => !taken.has(item));
+      if (items.length !== batch.items.length) this.#batchByTurnToken.set(token, { ...batch, items });
+    }
+    for (const batch of this.#pendingBatches.get(peer) ?? []) {
+      batch.items = batch.items.filter(item => !taken.has(item));
+      batch.bytes = Buffer.byteLength(formatInboundMessages(batch.items), "utf8");
+    }
+    const envelopes = selected.map(item => item.envelope);
+    this.#recoveryLeases.add(envelopes);
+    let settled = false;
+    return { envelopes,
+      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); },
+      rollback: () => {
+        if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
+        if (this.#closed) return;
+        const remaining = new Set(selected);
+        const restore = (before: readonly InterAgentBatchItem[], current: readonly InterAgentBatchItem[]): InterAgentBatchItem[] => {
+          const restored = before.filter(item => remaining.delete(item));
+          return [...current, ...restored].sort((a, b) => this.#receiveOrder.get(a.envelope)! - this.#receiveOrder.get(b.envelope)!);
+        };
+        for (const [token, before] of priorDispatched) {
+          const current = this.#batchByTurnToken.get(token);
+          if (current && !this.#inputStarted.has(token)) this.#batchByTurnToken.set(token, { ...current, items: restore(before.items, current.items) });
+        }
+        for (const { batch, items } of priorPending) if (this.#pendingBatches.get(peer)?.includes(batch)) {
+          batch.items = restore(items, batch.items); batch.bytes = Buffer.byteLength(formatInboundMessages(batch.items), "utf8");
+        }
+        if (!remaining.size) return;
+        const returned = [...remaining];
+        const queue = this.#pendingBatches.get(peer) ?? [];
+        queue.unshift({ items: returned, bytes: Buffer.byteLength(formatInboundMessages(returned), "utf8") });
+        this.#pendingBatches.set(peer, queue);
+        this.#dispatchNext(peer);
+      },
+    };
+  }
+
   receive(envelope: Envelope, mode: InboundReplyMode): void {
     if (this.#closed) {
       throw new Error("inter-agent turn coordinator is closed");
     }
+    if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: InterAgentBatchItem = { envelope, mode };
     const itemBytes = Buffer.byteLength(
@@ -181,6 +248,7 @@ export class InterAgentTurnCoordinator {
     }
 
     this.#batchByTurnToken.delete(turnToken);
+    this.#inputStarted.delete(turnToken);
     this.#retire(turnToken);
     // A mismatched active token is an invariant violation. Do not free the
     // peer: its current generation might still be live. The old token is now
@@ -205,6 +273,7 @@ export class InterAgentTurnCoordinator {
   prepareInput(turnToken: string): { batch: DispatchedInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return undefined;
+    this.#inputStarted.add(turnToken);
     const items: InterAgentBatchItem[] = [];
     const removed: InterAgentBatchItem[] = [];
     for (const item of batch.items) {
@@ -215,8 +284,7 @@ export class InterAgentTurnCoordinator {
     const conversationIds = items.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
       .filter((cid): cid is string => typeof cid === "string");
     const survivingIds = new Set(conversationIds);
-    const removedConversationIds = removed.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
-      .filter((cid): cid is string => typeof cid === "string" && !survivingIds.has(cid));
+    const removedConversationIds = batch.conversationIds.filter(cid => !survivingIds.has(cid));
     for (const item of removed) this.#onTerminalQueued?.(item);
     if (items.length === 0) return { batch: null, removedConversationIds };
     const prepared = { ...batch, items, conversationIds, text: formatInboundMessages(items) };

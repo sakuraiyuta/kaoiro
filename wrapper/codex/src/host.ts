@@ -1403,12 +1403,7 @@ export class CodexHost implements EngineAdapter {
     }
     const appServer = this.#options.backend === "app-server";
     const descriptors = this.#options.toolDescriptors ?? [];
-    const toolHost =
-      !appServer && descriptors.length > 0
-        ? await ToolHost.listen(descriptors, {
-            turnSignal: () => this.#turnScope?.signal ?? null,
-          })
-        : null;
+    let toolHost: ToolHost | null = null;
     const factory =
       this.#options.codexFactory ??
       ((options: CodexOptions) => new Codex(options) as CodexClientLike);
@@ -1425,36 +1420,6 @@ export class CodexHost implements EngineAdapter {
     codexConfig.features = {
       multi_agent: this.#config.codex_internal_subagents ?? true,
     };
-    if (toolHost !== null) {
-      codexConfig.mcp_servers = {
-        kaoiro: {
-          command: process.execPath,
-          args: [BRIDGE_SCRIPT],
-          env: {
-            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-            // The bridge appends only its own stderr to this private local
-            // file. Each failure trace snapshots its tail; neither is sent
-            // to a peer or interpolated into the notice template.
-            KAOIRO_BRIDGE_STDERR_PATH:
-              `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
-          },
-          // The wrapper pins approval_policy=never, which otherwise
-          // auto-cancels every MCP tool call ("user cancelled MCP tool
-          // call"). "approve" auto-approves the kaoiro tools so they run
-          // (verified 2026-07-11; the other accepted values auto/prompt/
-          // writes all leave the call cancelled). These tools are
-          // wrapper-provided and gated by the operator elsewhere
-          // (send_to_agent per-call on Claude; ask_user_question IS the
-          // operator prompt), so auto-approving them is safe. Behavior
-          // under approval_policy=on-request has not been verified.
-          ...BRIDGE_MCP_POLICY,
-        },
-      };
-    }
-    const codex = appServer ? null : factory({
-      config: codexConfig as NonNullable<CodexOptions["config"]>,
-    });
-
     if (appServer) this.#appRuntime = this.#createAppServerRuntime();
 
     if (initialPrompt !== undefined) {
@@ -1493,13 +1458,44 @@ export class CodexHost implements EngineAdapter {
           await this.#runAppServerTurn(turn.input, turn.tempDir, turn.conversationIds ?? [], turn.turnToken ?? randomUUID());
           continue;
         }
-        await this.#runTurn(
-          codex!,
-          turn.input,
-          turn.tempDir,
-          turn.conversationIds ?? [],
-          turn.turnToken ?? randomUUID(),
-        );
+        const originToken = turn.turnToken ?? randomUUID();
+        const endpointLifetime = new AbortController();
+        toolHost = descriptors.length ? await ToolHost.listen(descriptors, {
+          turnSignal: () => this.#activeTurnToken === originToken ? this.#turnScope?.signal ?? AbortSignal.abort() : AbortSignal.abort(),
+          resolveOrigin: () => ({ token: originToken, signal: endpointLifetime.signal }),
+        }) : null;
+        if (toolHost !== null) {
+          codexConfig.mcp_servers = {
+            kaoiro: {
+              command: process.execPath,
+              args: [BRIDGE_SCRIPT],
+              env: {
+                KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+                // The bridge appends only its own stderr to this private local
+                // file. Each failure trace snapshots its tail; neither is sent
+                // to a peer or interpolated into the notice template.
+                KAOIRO_BRIDGE_STDERR_PATH:
+                  `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
+              },
+              // The wrapper pins approval_policy=never, which otherwise
+              // auto-cancels every MCP tool call ("user cancelled MCP tool
+              // call"). "approve" auto-approves the kaoiro tools so they run
+              // (verified 2026-07-11; the other accepted values auto/prompt/
+              // writes all leave the call cancelled). These tools are
+              // wrapper-provided and gated by the operator elsewhere
+              // (send_to_agent per-call on Claude; ask_user_question IS the
+              // operator prompt), so auto-approving them is safe. Behavior
+              // under approval_policy=on-request has not been verified.
+              ...BRIDGE_MCP_POLICY,
+            },
+          };
+        }
+        const codex = factory({ config: { ...codexConfig } as NonNullable<CodexOptions["config"]> });
+        try {
+          await this.#runTurn(codex, turn.input, turn.tempDir, turn.conversationIds ?? [], originToken);
+        } finally {
+          endpointLifetime.abort(); toolHost?.close(); toolHost = null;
+        }
       }
     } finally {
       if (this.#gcTimer !== null) clearInterval(this.#gcTimer);

@@ -137,7 +137,7 @@ class FakeBridge {
   }
 
   ready(): Promise<void> {
-    return new Promise((resolve) => this.#socket.once("connect", resolve));
+    return new Promise((resolve, reject) => { this.#socket.once("connect", resolve); this.#socket.once("error", reject); });
   }
 
   call(name: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -622,7 +622,7 @@ describe("codex request_session_reset gate (issue #347)", () => {
     }
   }
 
-  it("a call with no active turn is denied without a dialog", async () => {
+  it("a retired exec endpoint rejects connections without a dialog", async () => {
     const script: TurnScript = { tool: false, ending: deferred<Ending>() };
     const rig = await makeRig([script]);
     try {
@@ -630,12 +630,9 @@ describe("codex request_session_reset gate (issue #347)", () => {
       await vi.waitFor(() =>
         expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(1),
       );
-      const bridge = await rig.bridge();
-      const result = await bridge.call("request_session_reset", { mode: "new" });
-      expect((result.result as { isError?: boolean }).isError).toBe(true);
+      await expect(rig.bridge()).rejects.toMatchObject({ code: "ENOENT" });
       expect(permissionRequests(rig.sent)).toHaveLength(0);
       expect(rig.requests).toHaveLength(0);
-      bridge.destroy();
     } finally {
       await finish(rig);
     }

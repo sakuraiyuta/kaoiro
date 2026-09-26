@@ -10,17 +10,18 @@
 //   -> { id, method: "call_tool", name, input }
 //   <- { id, result: { content, isError? } }  |  { id, error }
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { ToolDescriptor } from "@kaoiro/agent-common";
+import { join, dirname } from "node:path";
+import { handoffToolResult, discardToolResult, type ToolDescriptor, type ReplyOrigin } from "@kaoiro/agent-common";
 
 /** Bounds one request line; far above any real tool input (the biggest is
  *  ask_user_question's 4 questions x 4 options). */
 const MAX_LINE_BYTES = 1024 * 1024;
 
 export interface ToolHostOptions {
+  resolveOrigin?: (metadata: unknown) => ReplyOrigin | undefined | Promise<ReplyOrigin | undefined>;
   /** The signal of the engine turn currently executing, or null when none
    *  is. Each call's handler context aborts when EITHER this turn signal or
    *  the bridge connection aborts (issue #347 M2): the socket outlives the
@@ -40,6 +41,7 @@ interface CallToolRequest {
   method: "call_tool";
   name: string;
   input?: Record<string, unknown>;
+  metadata?: unknown;
 }
 type BridgeRequest = ListToolsRequest | CallToolRequest;
 
@@ -89,7 +91,7 @@ export class ToolHost {
    *  operator could deliver its result — and act — after the host was told
    *  to shut down (measured in review of issue #347). */
   close(): void {
-    this.#server.close();
+    this.#server.close(() => { rmSync(dirname(this.socketPath), { recursive: true, force: true }); });
     for (const [socket, controller] of this.#connections) {
       this.#connections.delete(socket);
       controller.abort();
@@ -169,10 +171,17 @@ export class ToolHost {
         return;
       }
       try {
+        const callSignal = this.#callSignal(connection);
+        const origin = await this.#options.resolveOrigin?.(request.metadata);
         const result = await descriptor.handler(request.input ?? {}, {
-          signal: this.#callSignal(connection),
+          signal: callSignal,
+          ...(origin ? { origin: { ...origin, signal: AbortSignal.any([callSignal, ...(origin.signal ? [origin.signal] : [])]) } } : {}),
         });
-        reply({ result });
+        if (socket.destroyed) { discardToolResult(result); return; }
+        if (callSignal.aborted && descriptor.name === "send_to_agent") { discardToolResult(result); reply({ error: "stale_tool_call" }); return; }
+        let serialized: string;
+        try { serialized = JSON.stringify({ id: request.id, result }) + "\n"; } catch (error) { discardToolResult(result); throw error; }
+        if (!handoffToolResult(result, () => { socket.write(serialized); })) reply({ error: "stale_tool_call" });
       } catch (err) {
         reply({ error: String(err) });
       }

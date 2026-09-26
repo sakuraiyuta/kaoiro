@@ -8127,3 +8127,27 @@ describe("close()'s abort-error swallowing scope (issue #391)", () => {
     await expect(running).rejects.toThrow("transport exploded");
   });
 });
+
+it.each([false, true])("binds permission-before-assistant observation to the same native tool ID (cancel=%s)", async cancel => {
+  const decided = deferred(); const permission = deferred<{ allow: boolean }>(); let verdict: string | undefined; let entered = false;
+  const host = new AgentHost(config, {
+    onState: () => {},
+    queryOptions: { mcpServers: { kaoiro: { type: "sdk", name: "kaoiro", instance: {} } } as never },
+    decidePermission: () => { entered = true; decided.resolve(); return permission.promise; },
+    queryFn: makeQueryFn(args => asQuery((async function* () {
+      await args.prompt[Symbol.asyncIterator]().next();
+      const check = args.options.canUseTool!(INTER_AGENT_TOOL_FQN, { to: "peer", body: "reply" }, { toolUseID: "early-native-call", signal: new AbortController().signal } as never);
+      expect(entered).toBe(false);
+      yield assistant([{ type: "tool_use", id: "early-native-call", name: INTER_AGENT_TOOL_FQN, input: {} }]);
+      verdict = (await check).behavior;
+      yield result("success", { result: "finished" });
+    })())),
+  });
+  const run = host.run("input");
+  try {
+    await decided.promise;
+    if (cancel) await host.interrupt();
+    permission.resolve({ allow: true }); await run;
+    expect(verdict).toBe(cancel ? "deny" : "allow");
+  } finally { permission.resolve({ allow: false }); host.close(); await run; }
+});

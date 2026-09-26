@@ -975,6 +975,7 @@ if (args[0] === "models") {
     expect(classifyInterAgentError(turnErrors[0]!)).toEqual({
       code: "rate_limit",
       message: "the peer hit a rate limit; Resets in 148h49m28s",
+      reset_delay_seconds: 535_768,
     });
     expect(states.at(-1)?.ext?.rate_limits).toEqual(expected);
     expect(host.statusSnapshot().rate_limits).toEqual(expected);
