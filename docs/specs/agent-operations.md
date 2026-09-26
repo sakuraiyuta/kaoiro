@@ -142,8 +142,9 @@ For persona-name resolution and existing-peer routing, follow
   cherry-picked stack on the current `develop`), push it as a branch, and
   have the implementation reviewer gate that exact commit. The implementer
   then fixes forward on that branch, and the landing is a fast-forward to
-  the reviewed commit. Why: issue #422's branch predated issues #386 and
-  #421; its gate counts came from a tree that would have reverted them.
+  the reviewed commit. Why: issue #422's branch predated the landings of
+  issues #386 and #421; its gate counts came from a tree that would have
+  reverted them.
 - Native (real CLI / SDK) experiments go through the production composition
   entry point (for Claude, `runClaudeCli` with its dependency seams), not a
   hand-built host and tool. Observation layers may only forward. Any later
