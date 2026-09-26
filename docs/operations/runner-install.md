@@ -10,27 +10,15 @@ related: [deployment]
 
 ## 2. Deploy runners (multiple hosts)
 
-Distribution currently uses tarballs (issue #70, revised 2026-07-25 in
-[ADR-0018](../adr/0018-runner-distribution.md)); expand one on each agent host.
-This page is canonical for the full procedure and service setup (systemd user
-unit / launchd LaunchAgent); this section covers only points specific to
-multi-host deployment.
-
-```sh
-# Generate per target architecture on the build host (1 machine)
-./scripts/build-runner-tarball.sh --target linux-x64
-./scripts/build-runner-tarball.sh --target darwin-arm64
-
-# Transfer to each agent host and install as a release
-# (expanded destination is <install-root>/releases/<rev>/, revised 2026-08-16 in ADR-0018)
-./kaoiro-runner-install.sh kaoiro-runner-<rev>-linux-x64.tar.gz
-./kaoiro-runner-switch.sh <release-id>
-```
-
-The install / switch scripts are in the package's `deploy/`. For the first
-installation, expand the archive once and run from there
-(`tar xzf ... && cd ... && ./deploy/kaoiro-runner-install.sh ../<archive>`).
-Afterward use `<install-root>/current/deploy/`. [Runner artifacts](../reference/deployment/runner-artifacts.md) is canonical for layout; [Runner update and rollback](runner-update-and-rollback.md) is canonical for updates and rollback.
+Distribution uses OS/architecture-specific tarballs (issue #70, revised
+2026-07-25 in [ADR-0018](../adr/0018-runner-distribution.md)). This page is
+canonical for the full procedure and service setup (systemd user unit /
+launchd LaunchAgent); the detailed build and per-host install/switch steps are
+in [Creating distribution tarballs](#creating-distribution-tarballs) and
+[Installation on the target host](#installation-on-the-target-host).
+[Runner artifacts](../reference/deployment/runner-artifacts.md) is canonical
+for layout; [Runner update and rollback](runner-update-and-rollback.md) is
+canonical for updates and rollback.
 
 ### Run as a service
 
@@ -298,6 +286,7 @@ location and `cd`s there).
 ```sh
 ./scripts/build-runner-tarball.sh                      # For this host
 ./scripts/build-runner-tarball.sh --target linux-x64   # Cross-generation
+./scripts/build-runner-tarball.sh --target darwin-arm64
 ./scripts/build-runner-tarball.sh --out /path/to/dir   # Change output destination
 ```
 
@@ -326,9 +315,15 @@ variants as well, supporting both glibc and musl.
 tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
 cd kaoiro-runner-<rev>-linux-x64
 
-./deploy/kaoiro-runner-setup.sh    # Interactively generate configuration
-./deploy/kaoiro-runner-launch.sh   # Foreground launch for connectivity check
+./deploy/kaoiro-runner-install.sh ../kaoiro-runner-<rev>-linux-x64.tar.gz
+./deploy/kaoiro-runner-switch.sh <release-id>
+
+cd <install-root>/current/deploy
+./kaoiro-runner-setup.sh           # Interactively generate configuration
+./kaoiro-runner-launch.sh          # Foreground launch for connectivity check
 ```
+
+For later invocations, use the scripts under `<install-root>/current/deploy/`.
 
 When placing manually without using the wizard, copy `runner.config.example.json`
 / `deploy/runner.env.example` to the configuration directory listed in the
