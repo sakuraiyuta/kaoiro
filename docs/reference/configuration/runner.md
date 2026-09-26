@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 ---
 
 # Runner configuration
@@ -79,37 +79,35 @@ emits the full log to `tmp/dogfood-logs/runner.log`.
 ## Codex backend
 
 The public Codex engine defaults to `codex exec`. Set `codex.backend` to
-`"app-server"` in `runner.config.json` to select the persistent app-server child
-for subsequent Codex wrapper lifetimes on that host. `"exec"` or omission keeps
-the default. The runner relays only its local selection as `codex_backend` in
-the wrapper startup config; direct wrapper launches may use that same field.
-Unknown values are rejected. No environment variable, command-line backend flag,
-dashboard selector, spawn payload or resume snapshot selects a backend.
+`"app-server"` in `runner.config.json` to select the persistent app-server child;
+`"exec"` or omission keeps the default. The setting is host-wide and applies
+only to new Codex wrapper lifetimes, including resume, reset, and automatic
+restart. Existing children retain their launch-time selection after reload.
+The runner relays only its local selection as `codex_backend` in the wrapper
+startup config; direct wrapper launches may use that same field. No environment
+variable, command-line backend flag, dashboard selector, spawn payload, or
+resume snapshot selects a backend.
 
-Configuration reload does not switch running children. After the runner's
-`codex backend=... for subsequent wrappers` diagnostic, new launches and resumes
-use the new selection. The wrapper also logs its selected backend at startup.
-There is no automatic fallback to exec. See the
+Unknown values reject startup; a bad reload is skipped without replacing the
+last valid configuration. After a valid reload, wait for the runner's
+`codex backend=... for subsequent wrappers` diagnostic: the earlier `config
+reload` line is not an application receipt. New launches and resumes use the
+new selection, and the wrapper logs its selected backend at startup. There is
+no automatic fallback to exec. Use a runner release that bundles this selector
+and both backends; older wrapper releases may ignore the new field. For
+rollback, stop the target agent, set `backend` to `"exec"`, wait for the applied
+configuration diagnostic, then resume its recorded session on the same host
+and cwd. See the
 [rollback runbook](../../operations/codex-backend-switch.md#codex-backend-selection-and-rollback)
 and [ADR-0058](../../adr/0058-codex-app-server-turn-steer.md).
 Steering remains disabled and approval remains `never`.
 
 ### Codex backend selection
 
-`runner.config.json` accepts `"codex": { "backend": "app-server" }` alongside
-existing auth/catalog options. Omission or `"exec"` selects exec. The setting
-is host-wide and applies only to new Codex wrapper lifetimes, including resume,
-reset, and automatic restart. Existing children are not switched by a reload.
-Invalid values reject startup (or skip a bad reload without replacing the last
-valid config). Wait for `runner: codex backend=... for subsequent wrappers`
-after editing; the earlier `config reload` line is not an application receipt.
-There is no backend environment variable, flag or dashboard launch selector.
-
-For rollback, stop the target agent, set `backend` to `"exec"`, wait for the
-applied-config diagnostic, then resume its recorded session on the same host
-and cwd. See [backend switching runbook](../../operations/codex-backend-switch.md#codex-backend-selection-and-rollback).
-Use a runner release that bundles this selector and both backends; older
-wrapper releases may ignore the new field. No automatic exec fallback is used.
+This subsection is retained as a fragment-compatible pointer. The selector,
+reload, compatibility, and rollback contract is in
+[Codex backend](#codex-backend); the operator procedure is in the
+[backend switching runbook](../../operations/codex-backend-switch.md#codex-backend-selection-and-rollback).
 
 ## Codex configuration
 
