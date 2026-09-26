@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { effectiveNetworkAccess } from "@kaoiro/antigravity";
 import { resolveAntigravityCeiling } from "../src/permission_ceiling.js";
 
 // ADR-0057 F4c Stage B0 (issue #359). resolveAntigravityCeiling always returns
@@ -101,5 +102,25 @@ describe("resolveAntigravityCeiling", () => {
     const { conflict, conflictAxes } = resolveAntigravityCeiling(launch, undefined);
     expect(conflict).toBeNull();
     expect(conflictAxes).toEqual([]);
+  });
+});
+
+describe("runner-imported Antigravity effective network mapping", () => {
+  it("pins all sandbox and configured-network combinations", () => {
+    const cases = [
+      ["danger-full-access", false, true],
+      ["danger-full-access", true, true],
+      ["read-only", false, false],
+      ["read-only", true, false],
+      ["workspace-write", false, false],
+      ["workspace-write", true, true],
+    ] as const;
+
+    for (const [sandbox, configuredNetworkAccess, expected] of cases) {
+      expect(
+        effectiveNetworkAccess(sandbox, configuredNetworkAccess),
+        `${sandbox} with configured network_access=${configuredNetworkAccess}`,
+      ).toBe(expected);
+    }
   });
 });

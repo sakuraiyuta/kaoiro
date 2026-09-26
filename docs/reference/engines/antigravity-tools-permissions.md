@@ -269,6 +269,13 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   `set_permission` at the next turn boundary and rejects an over-ceiling value
   again in the wrapper; this does not make sandbox enforcement non-advisory.
 
+- Resume checks for `reset_session` and `switch_session` compare effective
+  network access on both sides. `danger-full-access` makes the effective value
+  `true`, `read-only` makes it `false`, and `workspace-write` follows the
+  configured network value. The ceiling uses the same mapping with its
+  `max_sandbox` and raw `max_network_access`. Stored and relayed `max_*` values
+  remain raw; spawn validation also continues to check raw launch values.
+
 - **Troubleshooting: a session reset (`/new` / `/clear`) refused with
   `permission_ceiling_conflict`** means the agent's current live permission
   on the named axis is wider than the immutable ceiling pinned at its launch
@@ -276,3 +283,6 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   and the ceiling. This is not a dead end and does not require deleting and
   respawning the agent: narrow that axis back through the normal permission
   picker (`set_permission`), then retry the reset (issue #397).
+  If both `sandbox` and `network_access` conflict while the current sandbox is
+  `danger-full-access`, narrow `sandbox` first: that sandbox fixes effective
+  network access to `true`, so changing `network_access` alone cannot lower it.

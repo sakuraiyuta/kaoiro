@@ -27,6 +27,7 @@ import type { CodexAuthMode } from "./codex-auth.js";
 import type { ChatGptPlan } from "./config.js";
 import {
   agyFailureDetail,
+  effectiveNetworkAccess,
   resolveAgyExecutable,
   type AgyExecutableResolution,
 } from "@kaoiro/antigravity";
@@ -1435,24 +1436,28 @@ export class Supervisor {
     return { ceiling, conflict };
   }
 
-  /** True when `parsed`'s launch values would widen past an already-resolved,
-   *  immutable ceiling (a switch / reset carrying a snapshot value more
-   *  permissive than the launch ceiling). Returns the conflict detail
-   *  (string form for logging, structured per-axis form for `reset_session`'s
-   *  `ceiling_conflict` detail, issue #397) or nulls when there is no
-   *  conflict. Reuses resolveAntigravityCeiling with the stored ceiling as
-   *  the explicit config bound. */
+  /** Checks a resume snapshot against its immutable ceiling. Network values
+   *  are mapped on both sides because the wrapper reports effective access;
+   *  stored and relayed maxima remain the raw operator configuration. */
   #ceilingConflictAgainst(
     parsed: ParsedSpawn,
     ceiling: AntigravityCeiling,
   ): { conflict: string | null; conflictAxes: PermissionCeilingConflictAxis[] } {
+    const effectiveNetwork = effectiveNetworkAccess(
+      parsed.sandbox ?? "workspace-write",
+      parsed.networkAccess ?? false,
+    );
+    const effectiveNetworkCeiling = effectiveNetworkAccess(
+      ceiling.max_sandbox,
+      ceiling.max_network_access,
+    );
     const { conflict, conflictAxes } = resolveAntigravityCeiling(
       {
         sandbox: parsed.sandbox,
         approval: parsed.approval,
-        networkAccess: parsed.networkAccess,
+        networkAccess: effectiveNetwork,
       },
-      ceiling,
+      { ...ceiling, max_network_access: effectiveNetworkCeiling },
     );
     return { conflict, conflictAxes };
   }

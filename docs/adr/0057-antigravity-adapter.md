@@ -577,6 +577,26 @@ folded into #397's scope. #397 leaves this trust model and #400 untouched;
 it only makes whichever refusal results diagnosable instead of a blank
 `spawn_failed`.
 
+**Effective network basis for resume ceilings (issue #405, 2026-09-26).** The
+wrapper stamps effective `network_access` into its resume snapshot: full access
+forces `true`, read-only forces `false`, and workspace-write follows the
+configured value. The runner now maps both the snapshot value and the pinned
+network ceiling through that same rule before checking `reset_session` or
+`switch_session`. Sandbox and approval checks remain unchanged. Spawn-time
+validation still checks the operator's raw launch values against raw configured
+maxima; the stored ceiling and wrapper relay also keep raw `max_*` values.
+
+Consequently, a full-access ceiling with raw `max_network_access=false` has an
+effective network ceiling of `true`. A resume snapshot with
+`sandbox=workspace-write` and `network_access=true` passes that resume check,
+while the relaunched wrapper continues to advertise raw network maximum
+`false`, and later permission-switch requests are still checked against that
+raw maximum by the server and wrapper. This preserves existing configuration
+semantics and corrects the basis mismatch; it does not normalize or widen the
+stored maximum. When a failure reports both a full-access sandbox conflict and
+a network conflict, the dashboard directs the operator to narrow the sandbox
+first because it pins effective network access to `true`.
+
 ### F5 — kaoiro tools through a CLI bridge, not MCP
 
 `ToolHost` (Codex, unix socket NDJSON) is reused; `dist/bridge.js` becomes

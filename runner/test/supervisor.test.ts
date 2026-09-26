@@ -1171,6 +1171,72 @@ describe("Supervisor.handleSwitchSession", () => {
     expect(h.configs.at(-1)!.max_approval).toBe("local");
   });
 
+  it("allows the issue 405 effective full-access snapshot on switch and relays the raw ceiling", () => {
+    const h = harness({ exists: true });
+    const agentId = "lab-pc-1.antigravity-405-switch";
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: agentId,
+      engine: "antigravity",
+      sandbox: "danger-full-access",
+      approval: "never",
+    });
+    const original = h.children[0]!;
+
+    h.sup.handleSwitchSession({
+      agent_id: agentId,
+      request_id: "sw_405",
+      resume_session_id: otherSession,
+      resume_snapshot: {
+        sandbox: "danger-full-access",
+        network_access: true,
+        approval: "never",
+      },
+    });
+
+    expect(original.kills).toBe(1);
+    original.exit();
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBe(otherSession);
+    expect(h.configs[1]).toMatchObject({
+      sandbox: "danger-full-access",
+      network_access: true,
+      max_network_access: false,
+    });
+  });
+
+  it("still rejects a real network widening on switch before killing the old child", () => {
+    const h = harness({ exists: true });
+    const agentId = "lab-pc-1.antigravity-405-switch-widen";
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: agentId,
+      engine: "antigravity",
+      sandbox: "workspace-write",
+      approval: "never",
+    });
+    const original = h.children[0]!;
+
+    h.sup.handleSwitchSession({
+      agent_id: agentId,
+      request_id: "sw_405_widen",
+      resume_session_id: otherSession,
+      resume_snapshot: {
+        sandbox: "workspace-write",
+        network_access: true,
+        approval: "never",
+      },
+    });
+
+    expect(original.kills).toBe(0);
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({
+      ok: false,
+      reason: "permission_ceiling_conflict",
+      request_id: "sw_405_widen",
+    });
+  });
+
   it("Codex の async T3 完了までは live child を止めず、成功後に切替える (#100)", async () => {
     let exists: boolean | Promise<boolean> = true;
     const children: FakeChild[] = [];
@@ -1353,6 +1419,87 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
       ],
     });
   });
+
+  it.each(["new", "clear"] as const)(
+    "allows the issue 405 effective full-access snapshot on reset mode %s and relays the raw ceiling",
+    (mode) => {
+      const agentId = `lab-pc-1.antigravity-405-${mode}`;
+      const h = harness();
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: agentId,
+        engine: "antigravity",
+        sandbox: "danger-full-access",
+        approval: "never",
+      });
+      expect(h.configs[0]).toMatchObject({
+        sandbox: "danger-full-access",
+        max_network_access: false,
+      });
+      const original = h.children[0]!;
+
+      h.sup.handleResetSession({
+        agent_id: agentId,
+        mode,
+        request_id: `rs_405_${mode}`,
+        previous_session_id: "sess-old-405",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+          approval: "never",
+        },
+      });
+
+      expect(original.kills).toBe(1);
+      original.exit();
+      expect(h.children).toHaveLength(2);
+      expect(h.resetResults.at(-1)).toMatchObject({ ok: true, mode });
+      expect(h.configs.at(-1)).toMatchObject({
+        sandbox: "danger-full-access",
+        network_access: true,
+        max_network_access: false,
+      });
+    },
+  );
+
+  it.each(["new", "clear"] as const)(
+    "still rejects a real network widening on reset mode %s before killing the old child",
+    (mode) => {
+      const agentId = `lab-pc-1.antigravity-405-widen-${mode}`;
+      const h = harness();
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: agentId,
+        engine: "antigravity",
+        sandbox: "workspace-write",
+        approval: "never",
+      });
+      const original = h.children[0]!;
+
+      h.sup.handleResetSession({
+        agent_id: agentId,
+        mode,
+        request_id: `rs_405_widen_${mode}`,
+        previous_session_id: "sess-old-405",
+        resume_snapshot: {
+          sandbox: "workspace-write",
+          network_access: true,
+          approval: "never",
+        },
+      });
+
+      expect(original.kills).toBe(0);
+      expect(h.children).toHaveLength(1);
+      expect(h.resetResults.at(-1)).toMatchObject({
+        ok: false,
+        mode,
+        reason: "permission_ceiling_conflict",
+        ceiling_conflict: [
+          { axis: "network_access", current: true, ceiling: false },
+        ],
+      });
+    },
+  );
 
   it.each([
     ["is removed", (path: string) => unlinkSync(path)],

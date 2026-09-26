@@ -66,13 +66,17 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   operator selection before the first exec. This is delayed application of an
   authenticated operator request, not an autonomous choice to widen. The launch
   configuration is not a rollback or revocation of that saved request.
-  On Antigravity, a `reset_session` whose resume snapshot exceeds the pinned
-  launch ceiling (`entry.permissionCeiling`) is refused outright, never
-  silently clamped or relaunched at a narrowed value: the runner reports
-  `permission_ceiling_conflict` with the offending axis (current value vs.
-  ceiling) instead (issue #397). This keeps the same invariant the ceiling
-  pin exists for — a relaunch cannot derive a wider effective permission
-  from a snapshot the pointer happens to hold.
+  On Antigravity, `reset_session` and `switch_session` compare resume snapshots
+  with the pinned `entry.permissionCeiling`; an over-ceiling snapshot is
+  refused outright, never silently clamped or relaunched at a narrowed value.
+  The runner reports `permission_ceiling_conflict` with the offending axis
+  (current value vs. ceiling) instead (issue #397). For `network_access`, both
+  the snapshot value and ceiling are first mapped through the sandbox's
+  effective rule: full access forces true, read-only forces false, and
+  workspace-write follows the configured network value. The raw pinned
+  `max_*` values remain stored and relayed, and spawn-time validation continues
+  to check the raw launch values. This keeps resume validation on the same
+  effective basis the wrapper reports without changing operator configuration.
 - MUST: Permission display and resume snapshots distinguish requested/submitted
   configuration from observed effective policy. Unknown execution outcomes do
   not establish rollback, even to a narrower value. A failure after policy

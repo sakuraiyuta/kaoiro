@@ -397,6 +397,26 @@
   function formatCeilingConflictHint(
     axes: PermissionCeilingConflictAxis[],
   ): string {
+    const sandbox = axes.find(
+      (axis) =>
+        axis.axis === "sandbox" && axis.current === "danger-full-access",
+    );
+    const network = axes.find((axis) => axis.axis === "network_access");
+    if (sandbox !== undefined && network !== undefined) {
+      const otherAxes = axes
+        .filter(
+          (axis) => axis.axis !== "sandbox" && axis.axis !== "network_access",
+        )
+        .map(
+          (axis) =>
+            `${axis.axis} を ${String(axis.ceiling)} に狭めてから reset (現在: ${String(axis.current)})`,
+        );
+      return [
+        `現在の sandbox は danger-full-access なので network_access は true に固定されています。先に sandbox を ${String(sandbox.ceiling)} に狭めてください。`,
+        `その後も network_access が上限を超える場合は ${String(network.ceiling)} に狭めてください。`,
+        ...otherAxes,
+      ].join("; ");
+    }
     return axes
       .map(
         (axis) =>
