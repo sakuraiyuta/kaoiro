@@ -1124,13 +1124,15 @@
         e.agent_id !== envelope.agent_id &&
         (e.state === "error" ||
           e.state === "waiting_permission" ||
-          e.state === "waiting_question"),
+          e.state === "waiting_question" ||
+          pendingPermissionFrom(e) !== null ||
+          pendingQuestionFrom(e) !== null),
     ),
   );
   const attentionTone = $derived(
     attention.some((e) => e.state === "error")
       ? "error"
-      : attention.some((e) => e.state === "waiting_permission")
+      : attention.some((e) => e.state === "waiting_permission" || pendingPermissionFrom(e) !== null)
         ? "waiting_permission"
         : "waiting_question",
   );
