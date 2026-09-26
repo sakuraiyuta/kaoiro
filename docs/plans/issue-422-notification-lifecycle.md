@@ -1,7 +1,7 @@
 ---
 title: Claude notification continuation ownership
 description: Option A design for folded and independent background-task notifications.
-status: proposed
+status: implemented
 last_updated: 2026-09-27
 ---
 
