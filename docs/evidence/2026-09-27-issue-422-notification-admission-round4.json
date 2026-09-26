@@ -1,0 +1,231 @@
+{
+  "built": {
+    "claude_cli": {
+      "path": "wrapper/claude-code/dist/cli.js",
+      "sha256": "00daf7dca9da209c99a0dfd64458b3bf1fb3b5ca5c22a6835e33ba245576ba5c"
+    },
+    "claude_host": {
+      "path": "wrapper/claude-code/dist/host.js",
+      "sha256": "d91b139b1f6932b94c2fcc18c7713078b513b8ee9db597a36cdfdde2ffdcb861"
+    },
+    "common_inter_agent": {
+      "path": "wrapper/agent-common/dist/inter_agent.js",
+      "sha256": "035db29fceec8cd14b06e5dce7c9c4cd9548796e1545f25f16370eaef6179aa7"
+    }
+  },
+  "design_correction": "6a3405c4fc8035bad4debfa62d240af82ddfc168",
+  "gates": {
+    "runner_test": 0,
+    "runner_typecheck": 0,
+    "wrapper_build": 0,
+    "wrapper_test": 0,
+    "wrapper_typecheck": 0
+  },
+  "head": "9c66c59eccd1bb0be8103c4e7bc9837b18a843af",
+  "issue": 422,
+  "logs": {
+    "audit_green": {
+      "path": "tmp/fuji-422/r5-audit-green.log",
+      "sha256": "00d7bf4689689634e09c48ff3aa8e201bcbac20320a44c313386381217cec18b"
+    },
+    "audit_negative": {
+      "path": "tmp/fuji-422/r5-audit-negative.log",
+      "sha256": "a30fcac276b203f580ea90f8dc9bf54c0ac90851f13fd4abca1c81fa21db7134"
+    },
+    "kogane_r2": {
+      "path": "tmp/fuji-422/r5-kogane-r2-test.log",
+      "sha256": "93e0197944868fd991cc6056c92c68a684a47745d8addf6b64b51ed219ba12b5"
+    },
+    "runner_test": {
+      "path": "tmp/fuji-422/r5-runner-test.log",
+      "sha256": "cd2359bf89f0b4f5d53b938c8a84a31e3611e749e1b2e78ac48824453cadadbd"
+    },
+    "runner_typecheck": {
+      "path": "tmp/fuji-422/r5-runner-typecheck.log",
+      "sha256": "948c7189144b49515907b1f202822c00019d0cae783d8105e6c6fa78fc0b5609"
+    },
+    "stale_control": {
+      "path": "tmp/fuji-422/r5-stale-control.log",
+      "sha256": "4b9e3d26d3e2c3dfa78c5b48600790b33349f810dca12dfa1e89426b20031b8d"
+    },
+    "wrapper_build": {
+      "path": "tmp/fuji-422/r5-wrapper-build-final.log",
+      "sha256": "215f84a4a300d58175f69a4dde42cfb1bb94e654ef63f1de0e9225bbc6a7a052"
+    },
+    "wrapper_test": {
+      "path": "tmp/fuji-422/r5-wrapper-test.log",
+      "sha256": "c4c292252fa13046eb1b9b87260dc9841ceb2ed1fe2cb514ec747ae5d76a07be"
+    },
+    "wrapper_typecheck": {
+      "path": "tmp/fuji-422/r5-wrapper-typecheck.log",
+      "sha256": "c41f537afaa37e3f3355f4f4618e895abfd2846bc87a2e6e1cd77bfd4a4a5202"
+    }
+  },
+  "model_dispatches": {
+    "after_design_approval": 54,
+    "all_recorded_here": 61,
+    "frame_only": 7
+  },
+  "observer": {
+    "audit": {
+      "path": "tmp/fuji-422/r5-audit.py",
+      "sha256": "e409f7bfc09a34a39400c2e7a41274233265e2324b27e0469533b71ba5695ee2"
+    },
+    "control": {
+      "path": "tmp/fuji-422/r4-observer-control.mjs",
+      "sha256": "e3f1da0ee07b22160cfac9161caac43d5d15e1d3f4505e51379e5c470215be50"
+    },
+    "native": {
+      "path": "tmp/fuji-422/r4-native.mjs",
+      "sha256": "e9639ad692f33a1e5e04ff4e489f2626df4d7b87e45bcfffd555aa6560b61979"
+    },
+    "stale_control": {
+      "path": "tmp/fuji-422/r5-stale-control.mjs",
+      "sha256": "4607b3c3aa71fb407ffa73d0b3a868c254e74337b4c2917a07edb0550b98eda4"
+    },
+    "verify_manifest": {
+      "path": "tmp/fuji-422/r5-verify-manifest.py",
+      "sha256": "e513491ec58d6a2889fb1f47e027f678ef67c86dfe3fb1617d3dac4549573bbd"
+    },
+    "wrappers": {
+      "path": "tmp/fuji-422/r4-observer.mjs",
+      "sha256": "7ea7ac6805175e5470c326c48304581a9a951b150c59ee27fbf6d996c5958657"
+    }
+  },
+  "runs": {
+    "a": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-a-1790458897347-3720764-debug.txt",
+        "sha256": "a9526fa7df1767ac8831c181466cecb9cde6f9392984d3f3d159d24e5c9b09ed"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-a-1790458897347-3720764-events.jsonl",
+        "sha256": "38aeb46b91f06857e3c7ba1670d1f63a25f276218604444080f615eb38233793"
+      },
+      "model_dispatches": 6,
+      "verdict": "accepted"
+    },
+    "agent": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-agent-1790459383797-3722276-debug.txt",
+        "sha256": "ceb02ec0dd833925213724eb0706f49850904d8320577c836fc91e94480373ff"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-agent-1790459383797-3722276-events.jsonl",
+        "sha256": "defbfc5cdd291ececc70da293601bfba64703403a1ae8ed84776cca00fe88b1a"
+      },
+      "model_dispatches": 7,
+      "verdict": "accepted"
+    },
+    "agent_deadline": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-agent-1790458567471-3720200-debug.txt",
+        "sha256": "e2303483c3ffead9620b296f69113ddecb6feeccfd19486a7784051c518a04e8"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-agent-1790458567471-3720200-events.jsonl",
+        "sha256": "a81b8703524e93e1cdb259502e8bdff4f4f3c4e3492a9d3585e323c1d1f73914"
+      },
+      "model_dispatches": 8,
+      "verdict": "excluded_harness_deadline"
+    },
+    "agent_manual": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-agent-1790458792083-3720559-debug.txt",
+        "sha256": "e70478cb5aed9a107faa8dc7e72884faca39393aea923aca2070eaa6d384b2b5"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-agent-1790458792083-3720559-events.jsonl",
+        "sha256": "85c8bdcfd64754c7f8177d70252321aa5606c0fca9c21b06e14165b3157f5e8d"
+      },
+      "model_dispatches": 8,
+      "verdict": "excluded_manual_shutdown"
+    },
+    "b": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-b-1790458994998-3721099-debug.txt",
+        "sha256": "1860124f7b5bf844cc13c979839b23843294d41c6624aa4ffa25c5e394d3b023"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-b-1790458994998-3721099-events.jsonl",
+        "sha256": "9b98d81586f0f76d16a05e788afb6da90cdad1ef8cdae84c8057f731bd5e3452"
+      },
+      "model_dispatches": 6,
+      "verdict": "accepted"
+    },
+    "c": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-c-1790459231785-3721735-debug.txt",
+        "sha256": "bff3fee6f9a833d76fdcf23fe721c78feab33f1718ba9b3964ebdfd9c455783c"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-c-1790459231785-3721735-events.jsonl",
+        "sha256": "fd67a8a2c8d1e15252538aae1767ee35659fcca6bc9cf57784f628938de3c3ff"
+      },
+      "model_dispatches": 5,
+      "verdict": "accepted"
+    },
+    "c_excluded": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-c-1790459098938-3721447-debug.txt",
+        "sha256": "41a973007560c10b2d39e8cc1df41897360d96ae815fa69b3f9ca8d61f421ce5"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-c-1790459098938-3721447-events.jsonl",
+        "sha256": "27d4a3931ca22e219e8616aa1cf8a06a5b38caa7560304b09560eece97daa79d"
+      },
+      "model_dispatches": 6,
+      "verdict": "excluded_no_capture"
+    },
+    "frame_only": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-agent-1790457806931-3696079-debug.txt",
+        "sha256": "021c20e14ac168e8a6b65ce0b110c6a09bba929f0a01183a75740519b0ec9987"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-agent-1790457806931-3696079-events.jsonl",
+        "sha256": "2e01bfd7ac4ce359cae957b7a2325bb26898ca4c731def9290135e7094ce6a08"
+      },
+      "model_dispatches": 7,
+      "verdict": "excluded_design_probe"
+    },
+    "ledger": {
+      "debug": {
+        "path": "tmp/fuji-422/r4-ledger-1790459286184-3721954-debug.txt",
+        "sha256": "c91596f09399d4a503ca53bb8f1f4518803fbc703058da76c894c1d427052d37"
+      },
+      "events": {
+        "path": "tmp/fuji-422/r4-ledger-1790459286184-3721954-events.jsonl",
+        "sha256": "fc9bd356734459df5aecb5aec2ae19083cdd3cca57c7153a7d0eb99c42465fab"
+      },
+      "model_dispatches": 8,
+      "verdict": "accepted"
+    }
+  },
+  "source": {
+    "claude_cli": {
+      "path": "wrapper/claude-code/src/cli.ts",
+      "sha256": "02dce08e3d9aef92c4c119060b6d4a4e0bec255fc7d4163cb878b8aa28aaac90"
+    },
+    "claude_host": {
+      "path": "wrapper/claude-code/src/host.ts",
+      "sha256": "a34f3691820fa0391363aa7fc393cdd028df73b37268637074f1296f144b6419"
+    },
+    "claude_host_test": {
+      "path": "wrapper/claude-code/test/host.test.ts",
+      "sha256": "3c2ede496fe27b33a1f086e3cad5c86e7af5f0480f84f55fdf6ebe2231d59133"
+    },
+    "cli_composition_test": {
+      "path": "wrapper/claude-code/test/cli_delivery_composition.test.ts",
+      "sha256": "7160a697efc8b78ef76c751b3cf5f90f712cb93cfea50694cc3760e3e0a91c74"
+    },
+    "common_inter_agent": {
+      "path": "wrapper/agent-common/src/inter_agent.ts",
+      "sha256": "f381828865e84a63941d0a10b34c3aaed8bb9226c6d47a6643a1fc66a2b2fb48"
+    },
+    "design": {
+      "path": "docs/plans/issue-422-notification-lifecycle.md",
+      "sha256": "512f0c0a8a205b5cc1a8b1ede8563c8e96cb2a7f0f9f4f134876de7b023abfb0"
+    }
+  }
+}
