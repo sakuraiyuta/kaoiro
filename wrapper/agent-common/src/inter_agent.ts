@@ -27,6 +27,7 @@ import type {
   DirectoryRateLimitWindow,
   DirectoryResult,
   InterAgentDeliveryStatus,
+  WrapperBuildIdentity,
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
@@ -44,12 +45,22 @@ import type {
   WrapperConfig,
 } from "./types.js";
 
+const UNKNOWN_WRAPPER_BUILD_IDENTITY: WrapperBuildIdentity = {
+  revision: "unknown",
+  dirty: false,
+  version: "unknown",
+  channel: "dev",
+};
+
 /** Self-identity snapshot returned by the `whoami` tool. Mirrors
  *  `AgentHost#statusSnapshot()` — see host.ts for field semantics. */
 export interface WhoamiSnapshot {
   agent_id: string;
   persona: { id: string; name: string; sprite_set: string };
   state: KaoiroState;
+  /** Optional on the host's intermediate snapshot; the whoami tool always
+   *  adds the local artifact identity, using `unknown` when unavailable. */
+  build?: WrapperBuildIdentity;
   engine?: EngineKind;
   model?: string;
   effort?: string;
@@ -1468,6 +1479,7 @@ export class InterAgentTool {
       agent_id: this.#options.config.agent_id,
       persona: this.#options.config.persona,
       state: this.#options.getState(),
+      build: UNKNOWN_WRAPPER_BUILD_IDENTITY,
     };
     let delivery: InterAgentDeliverySnapshot | null = null;
     try {
@@ -1479,6 +1491,10 @@ export class InterAgentTool {
     const observed = delivery === null
       ? snapshot
       : { ...snapshot, inter_agent_delivery: delivery };
+    const withBuild = {
+      ...observed,
+      build: observed.build ?? UNKNOWN_WRAPPER_BUILD_IDENTITY,
+    };
     return {
       content: [{ type: "text", text: JSON.stringify(observed, null, 2) }],
     };

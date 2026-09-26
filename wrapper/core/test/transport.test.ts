@@ -1519,6 +1519,40 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     await expect(pending).rejects.toThrow(/directory_request timeout/);
   });
 
+  it("keeps only valid nested wrapper build identities", async () => {
+    const valid = await narrowOne({
+      build: {
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        version: "2026.9.123456",
+        channel: "release",
+      },
+    });
+    expect(valid.build).toEqual({
+      revision: "0123456789abcdef0123456789abcdef01234567",
+      dirty: false,
+      version: "2026.9.123456",
+      channel: "release",
+    });
+
+    const unknown = await narrowOne({
+      build: { revision: "unknown", dirty: false, version: "unknown", channel: "dev" },
+    });
+    expect(unknown.build).toEqual({
+      revision: "unknown", dirty: false, version: "unknown", channel: "dev",
+    });
+
+    for (const build of [
+      { revision: "bad", dirty: false, version: "2026.9.0", channel: "dev" },
+      { revision: "0123456789abcdef0123456789abcdef01234567", dirty: false, version: "bad", channel: "dev" },
+      { revision: "unknown", dirty: false, version: "unknown", channel: "release" },
+      { revision: "0123456789abcdef0123456789abcdef01234567", dirty: "false", version: "2026.9.0", channel: "dev" },
+    ]) {
+      const invalid = await narrowOne({ build });
+      expect(invalid).not.toHaveProperty("build");
+    }
+  });
+
   // issue #269 W1 (S2 の本体): directory-only 形状の生 payload が narrow を
   // 通って agents に残ることを pin する。完了条件1の wrapper 側。
   it("directory-only 形状 (persona あり / directory_only: true / last_seen あり / engine 等なし) の payload が agents に残る", async () => {

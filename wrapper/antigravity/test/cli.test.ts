@@ -1,10 +1,12 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
+import { ToolHost } from "../src/toolhost.js";
 
 function config(): WrapperConfig {
   return {
@@ -16,6 +18,82 @@ function config(): WrapperConfig {
 }
 
 describe("Antigravity CLI", () => {
+  it("default composition reports the generated identity through the registered ToolHost whoami handler", async () => {
+    let hostOptions!: Record<string, unknown>;
+    const artifact = JSON.parse(readFileSync(
+      fileURLToPath(new URL("../dist/build-info.json", import.meta.url)), "utf8",
+    )) as { revision: string; dirty: boolean; version: string; channel: "dev" | "release" };
+    const link = { close: () => {}, send: () => {} };
+    const host = {
+      state: "idle" as const,
+      statusExtSnapshot: () => ({ engine: "antigravity" }),
+      statusSnapshot: () => ({
+        agent_id: config().agent_id,
+        persona: config().persona,
+        state: "idle" as const,
+        engine: "antigravity" as const,
+      }),
+      run: async () => {},
+    };
+
+    await runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => config(),
+      createServerLink: (_url, _agentId, options) => {
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, unknown>;
+        return host as never;
+      },
+    });
+
+    const toolHost = await ToolHost.listen(hostOptions.toolDescriptors as ToolDescriptor[]);
+    try {
+      const child = spawn(process.execPath, [
+        fileURLToPath(new URL("../dist/bridge.js", import.meta.url)),
+        "call", "whoami", Buffer.from("{}").toString("base64url"),
+      ], {
+        env: { ...process.env, KAOIRO_BRIDGE_SOCKET: toolHost.socketPath, KAOIRO_BRIDGE_NONCE: toolHost.nonce },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const childPid = child.pid;
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      const resultCode = await new Promise<number | null>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          if (childPid !== undefined) process.kill(childPid, "SIGTERM");
+          reject(new Error("Antigravity bridge call timed out"));
+        }, 5_000);
+        child.once("error", (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        child.once("exit", (code) => {
+          clearTimeout(timeout);
+          resolve(code);
+        });
+      });
+      expect({ resultCode, stderr }).toEqual({ resultCode: 0, stderr: "" });
+      const result = JSON.parse(stdout) as { content: { text: string }[] };
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+        build: {
+          revision: artifact.revision,
+          dirty: artifact.dirty,
+          version: artifact.version,
+          channel: artifact.channel,
+        },
+      });
+    } finally {
+      toolHost.close();
+    }
+  });
+
   it("relays an instruction as one user log before sending it to the host", () => {
     const logs: Envelope[] = [];
     const sent: string[] = [];

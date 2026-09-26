@@ -153,7 +153,7 @@ Out of scope:
   build identities, issue a real `directory_request`, and assert the response
   stays inside `TransportLimits.reply_frame_fits?/2` with the nested values
   intact. Also assert omission for an unreported wrapper and a `directory_only`
-  peer.
+  peer, and preserve the reported `unknown` identity values.
 - Positive self test: drive the production CLI composition through startup to
   invoke its actual `whoami` descriptor. Use the default build-info reader and
   default `InterAgentTool`/MCP descriptor wiring; only stub external config,

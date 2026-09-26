@@ -4593,6 +4593,92 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "directory_request (protocol-inter-agent コンパニオンツール)" do
+    test "live peers get only the validated nested build identity and 32 entries fit the frame budget" do
+      self_id = "test.directory-build-self"
+      self_socket = join_wrapper(self_id)
+      revision = "0123456789abcdef0123456789abcdef01234567"
+
+      identity = %{
+        "build_revision" => revision,
+        "build_dirty" => false,
+        "build_version" => "2026.9.123456",
+        "build_channel" => "release"
+      }
+
+      live_ids = for n <- 1..32, do: "test.directory-build-live-#{n}"
+
+      live_owners =
+        for id <- live_ids do
+          socket = join_wrapper(id)
+          assert_reply push(socket, "envelope", envelope(id, "idle")), :ok
+          assert_reply push(socket, "wrapper_build_info", Map.put(identity, "version", "0")), :ok
+          {id, socket.channel_pid}
+        end
+
+      unreported_id = "test.directory-build-unreported"
+      unreported_socket = join_wrapper(unreported_id)
+      assert_reply push(unreported_socket, "envelope", envelope(unreported_id, "idle")), :ok
+
+      unknown_id = "test.directory-build-unknown"
+      unknown_socket = join_wrapper(unknown_id)
+      assert_reply push(unknown_socket, "envelope", envelope(unknown_id, "idle")), :ok
+
+      assert_reply push(unknown_socket, "wrapper_build_info", %{
+                     "version" => "0",
+                     "build_revision" => "unknown",
+                     "build_dirty" => false,
+                     "build_version" => "unknown",
+                     "build_channel" => "dev"
+                   }),
+                   :ok
+
+      on_exit(fn ->
+        for {id, owner} <- live_owners ++ [{unknown_id, unknown_socket.channel_pid}] do
+          WrapperBuildInfos.delete(id, owner)
+        end
+      end)
+
+      directory_only_id = "test.directory-build-directory-only"
+      AgentDirectory.record(directory_only_id, "ao", "あお")
+      on_exit(fn -> AgentDirectory.delete(directory_only_id) end)
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      projected = Enum.filter(agents, &(&1["agent_id"] in live_ids))
+      assert length(projected) == 32
+
+      assert Enum.all?(projected, fn entry ->
+               entry["build"] == %{
+                 "revision" => revision,
+                 "dirty" => false,
+                 "version" => "2026.9.123456",
+                 "channel" => "release"
+               }
+             end)
+
+      assert production_reply_frame_bytes("wrapper:#{self_id}", %{
+               "agents" => agents,
+               "users" => %{}
+             }) <= TransportLimits.max_frame_bytes() - 1_024
+
+      unreported = Enum.find(agents, &(&1["agent_id"] == unreported_id))
+      refute Map.has_key?(unreported, "build")
+
+      unknown = Enum.find(agents, &(&1["agent_id"] == unknown_id))
+
+      assert unknown["build"] == %{
+               "revision" => "unknown",
+               "dirty" => false,
+               "version" => "unknown",
+               "channel" => "dev"
+             }
+
+      directory_only = Enum.find(agents, &(&1["agent_id"] == directory_only_id))
+      assert directory_only["directory_only"] == true
+      refute Map.has_key?(directory_only, "build")
+    end
+
     test "wire reply が production frame budget を超える directory は拒否する" do
       self_id = "test.directory-too-large-self"
       socket = join_wrapper(self_id)

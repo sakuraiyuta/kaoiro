@@ -574,6 +574,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     peer_index = ConversationStates.peer_index()
     {deliveries, _incomplete?} = DeliveryStates.wire_projection()
     states = AgentStates.snapshot()
+    build_infos = WrapperBuildInfos.snapshot()
 
     live =
       Enum.map(states, fn {id, env} ->
@@ -582,7 +583,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
           env,
           Map.get(activities, id),
           Map.get(peer_index, id, []),
-          Map.get(deliveries, id)
+          Map.get(deliveries, id),
+          Map.get(build_infos, id)
         )
       end)
 
@@ -1322,7 +1324,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp role_string(:admin), do: "admin"
   defp role_string(_other), do: nil
 
-  defp directory_entry(id, envelope, activity, peers, delivery) do
+  defp directory_entry(id, envelope, activity, peers, delivery, build_info) do
     persona =
       case envelope do
         %{"persona" => %{} = p} -> Map.take(p, ["id", "name", "sprite_set"])
@@ -1386,11 +1388,28 @@ defmodule KaoiroServerWeb.WrapperChannel do
     entry = maybe_put_context(entry, ext)
     entry = maybe_put_rate_limits(entry, ext, id)
     entry = maybe_put_disconnect(entry, state, ext["disconnect"])
+    entry = maybe_put_build_identity(entry, build_info)
 
     entry
     |> put_activity_fields(id, envelope, activity)
     |> maybe_put_optional_field("inter_agent_delivery", delivery)
   end
+
+  defp maybe_put_build_identity(entry, %{
+         "build_revision" => revision,
+         "build_dirty" => dirty,
+         "build_version" => version,
+         "build_channel" => channel
+       }) do
+    Map.put(entry, "build", %{
+      "revision" => revision,
+      "dirty" => dirty,
+      "version" => version,
+      "channel" => channel
+    })
+  end
+
+  defp maybe_put_build_identity(entry, _), do: entry
 
   defp maybe_put_disconnect(entry, "disconnected", disconnect) do
     if DisconnectAttribution.valid?(disconnect),
