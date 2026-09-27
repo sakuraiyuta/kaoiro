@@ -69,6 +69,7 @@ phase-N).
 | [issue-413-antigravity-cli-wiring-tmp-race](issue-413-antigravity-cli-wiring-tmp-race.md) | ⏳ | Prevent a shared-temp-directory scan in the runner test from failing when another process removes a listed directory, [issue #413](https://github.com/sakuraiyuta/kaoiro/issues/413) (design approved, not implemented) |
 | [issue-421-pending-attention](issue-421-pending-attention.md) | ✅ | Keep dashboard attention indicators visible while permission / question records are pending, [issue #421](https://github.com/sakuraiyuta/kaoiro/issues/421) |
 | [issue-422-notification-lifecycle](issue-422-notification-lifecycle.md) | ✅ | Bind Claude background-task notification turns to folded or independent inter-agent reply origins, [issue #422](https://github.com/sakuraiyuta/kaoiro/issues/422) |
+| [issue-429-delivery-authority-protocol](issue-429-delivery-authority-protocol.md) | ⏳ | ADR-0063 phase 1 protocol design: delivery intent, capability negotiation, staged delivery records, work records with assignment grants and revisions, `work_control`, [issue #429](https://github.com/sakuraiyuta/kaoiro/issues/429) (design under review, not implemented) |
 
 (The former `persona-personality-injection` was superseded by
 [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) and
