@@ -10,8 +10,9 @@
 if System.get_env("CI") do
   ExUnit.start(
     assert_receive_timeout: 500,
+    exclude: [:dashboard_build],
     formatters: [KaoiroServer.Test.RelayFailureDiagnosticsFormatter, ExUnit.CLIFormatter]
   )
 else
-  ExUnit.start()
+  ExUnit.start(exclude: [:dashboard_build])
 end

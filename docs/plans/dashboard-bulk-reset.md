@@ -138,12 +138,15 @@ Update the task table and plan status after implementation. Update
 `docs/reference/ui/responsive-reachability.md` to record the bulk control's
 operator + connected gate and SettingsDrawer location. The dashboard build
 clears and recreates `server/priv/static/assets`, which are served by the
-server. After the dashboard build, retain the existing static-toggle test and
-add/run a server endpoint check that reads the freshly built `index.html`,
-extracts a referenced hashed asset path, requests that exact path through the
-Phoenix endpoint, and verifies a successful response matching the built file.
-A fixture-only `/assets` test is insufficient because it can pass without the
-dashboard bundle. No broader server change is anticipated.
+server; these generated files are gitignored and may be absent in a server-only
+test job. The endpoint test is tagged `:dashboard_build`, excluded from the
+default suite, and must fail if its generated inputs are absent. Run
+`cd dashboard && pnpm build`, then `cd server && mix test --only dashboard_build`.
+The test reads the freshly built `index.html`, extracts a referenced hashed
+asset path, requests that exact path through the Phoenix endpoint, and verifies
+a successful response matching the built file. A fixture-only `/assets` test
+is insufficient because it can pass without the dashboard bundle. No server
+product code is changed.
 
 ### Tasks
 

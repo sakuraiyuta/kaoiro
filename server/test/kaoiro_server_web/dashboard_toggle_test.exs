@@ -36,6 +36,7 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
     assert get(build_conn(), "/assets/__gate_test__.txt").status == 404
   end
 
+  @tag :dashboard_build
   test "fresh dashboard build の hashed asset を endpoint 経由で配信する", %{conn: conn} do
     static_root = Path.join(:code.priv_dir(:kaoiro_server), "static")
     index = File.read!(Path.join(static_root, "index.html"))
