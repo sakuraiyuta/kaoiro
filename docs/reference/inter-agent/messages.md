@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -64,6 +64,14 @@ Only the `type` value and `payload` schema are new.
 | `owner.kind` | MUST | `"user"` or `"agent"` |
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |
 
+For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer
+turn actually handed to the sender; the server rejects a stale basis before
+accepting the message. An internal `notice_type` identifies one of the two
+validated, non-ordinary notices. A recovery `loss_id` identifies a reported
+delivery loss independently of its transport sequence. Their validation and
+ownership rules live in [reply basis](reply-basis.md#negotiation-and-comparison)
+and [delivery](delivery.md#negotiated-gap-recovery).
+
 ### kind enum (nine values)
 
 Semantics and adoption decisions are in kaoiro repository issue #17
@@ -91,21 +99,24 @@ Covered cases:
 
 ## Constraints
 
-- MUST: The server must not interpret payload semantics (`kind` / `body` /
-  `meta`); it may read only `to` for routing. Carve-out (issue #127): validate
-  `payload.error` structurally (`code` non-empty string, `message` string) but
-  do not interpret values. The server may synthesize `reconnecting` or
-  `disconnected` envelopes on wrapper disconnect and an error-free `reconnected`
-  inform after exact-token planned recovery; these are minimal structural hooks
-  for observability, not semantic interpretation.
+- MUST: Route by `to` without interpreting an agent's `body` or deciding the
+  meaning of its `kind`. Admission does interpret `meta.done` for mutual
+  closure and, for negotiated v1 sends, compares `in_reply_to` with ordinary
+  peer history. The server validates internal `notice_type` and `payload.error`
+  before exempting a notice from that history. This is the implemented boundary
+  in `wrapper_channel.ex` (`preflight_inter_agent`, lines 2479–2491 at
+  87500b55) and `ConversationStates.record_bound_message/8`; see
+  [conversation lifecycle](conversations.md#conversation-lifecycle-and-post-close-handling-issue-167)
+  and [reply basis](reply-basis.md#negotiation-and-comparison). The server also
+  synthesizes reachability notices for peers.
 - SHOULD: Truncate `body` at 16 KB on the wrapper like other protocol fields and
   set `meta.truncated=true`.
 
 ### Reserved `envelope.type` and version
 
-Add `inter_agent_message` to the type list in [protocol.md](../../specs/protocol.md) as a
-**settled addendum** (keep `version` unchanged;
-[ADR-0010](../../adr/0010-protocol-precisification.md) and
+`inter_agent_message` is a settled type in the
+[envelope contract](../protocol/envelope.md#envelope-v0); it keeps `version`
+unchanged ([ADR-0010](../../adr/0010-protocol-precisification.md) and
 [ADR-0015](../../adr/0015-protocol-version-stamping.md)).
 
 | type | status | payload |
@@ -117,7 +128,7 @@ Add `inter_agent_message` to the type list in [protocol.md](../../specs/protocol
 - [Inter-agent messaging](../../architecture/inter-agent-messaging.md).
 - [Inter-agent conversation contract](conversations.md).
 - [Inter-agent conversation admission](conversation-admission.md).
-- [Remaining protocol topics](../../specs/protocol-inter-agent.md), including [approval](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration), and [session-operation tools](session-tools.md).
+- [Approval](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration) and [session-operation tools](session-tools.md).
 - [Delivery confirmation and recovery](delivery.md).
 - [Send and wait](send-and-wait.md).
 - [Coordination monitoring and display](coordination-monitoring.md).
@@ -125,4 +136,5 @@ Add `inter_agent_message` to the type list in [protocol.md](../../specs/protocol
 
 ## Input-bound reply contract
 
-Ordinary negotiated-v1 messages carry `in_reply_to`; internal notices use a closed `notice_type` contract. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
+See [negotiation and comparison](reply-basis.md#negotiation-and-comparison)
+and the [internal notice exception](reply-basis.md#internal-notice-exception).

@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [protocol, antigravity-adapter]
 ---
 
@@ -40,12 +40,17 @@ The hook command receives the tool call on stdin and answers on stdout:
 {"decision":"deny","reason":"kaoiro: operator rejected"}
 ```
 
-- Hook `timeout` is per handler in seconds (default 30). `timeout: 3600`
-  with a handler that blocked for 100 s was honoured: the `run_command` step
-  stayed `ACTIVE` for 110 s and then ran *(measured)*. CLI behaviour on hook
-  timeout is *(unverified)*; the wrapper fails closed (answers `deny`) before
-  its own deadline, and the ordering **gate deadline < hook timeout <
-  `--print-timeout`** is a hard constraint.
+- Hook `timeout` is per handler in seconds (CLI default 30); the wrapper
+  configures 60 minutes and its gate deadline is 55 minutes. If that gate
+  deadline expires, the hook returns `deny`. The current launch sets
+  `--print-timeout 0`, which disables the CLI print timeout, so the effective
+  ordering is **gate deadline < hook timeout**, with the turn watchdog able to
+  terminate a tool earlier. A handler given `timeout: 3600` blocked for 100
+  seconds; the tool stayed `ACTIVE` for 110 seconds before running (measured).
+  The disabled print timeout was measured in
+  [print-mode background-task evidence](../../evidence/antigravity/print-mode-background-tasks.md#--print-timeout-0-issue-377-stage-2).
+  The CLI's fail-closed hook timeout was measured in
+  [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#customization-discovery-persona-hooks-skills).
 - A long `run_command` holds the turn: `sleep 70; echo …` stayed `ACTIVE`
   for 77 s, then `DONE` with output, and the model waited for it
   *(measured; `WaitMsBeforeAsync: 5000` in the args did not detach it)*. A
@@ -198,15 +203,17 @@ reached the `[antigravity-lifecycle]` stream.
 
 ### Tool definition (CLI bridge over the wrapper tool host)
 
-The wrapper reuses the Codex `ToolHost` (NDJSON over a per-agent unix
-socket: `list_tools` / `call_tool`) and ships `dist/bridge.js` as a **CLI**
-bridge. The measured absence of MCP in headless mode is recorded in
+The Antigravity wrapper starts its own `ToolHost` (NDJSON over a socket in a
+private temporary directory: `list_tools` / `call_tool`) and ships
+`dist/bridge.js` as a **CLI** bridge. `ToolHost.listen()` and
+`GateServer.listen()` both complete before the `agy` child starts. The
+measured absence of MCP in headless mode is recorded in
 [Antigravity CLI contract evidence](../../evidence/antigravity/cli-contract.md#mcp-is-not-available-in-headless-mode).
 The bridge accepts these invocations:
 
 ```text
-node <pkg>/dist/bridge.js call <tool_name> '<json input>'   # prints the tool result
-node <pkg>/dist/bridge.js list                              # prints the tool list
+<node absolute path> <bridge absolute path> call <tool_name> <base64url-json>
+<node absolute path> <bridge absolute path> list
 ```
 
 - The model learns the bridge from the always-on rules file (tool names,
@@ -222,7 +229,9 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   the operator answers, which holds the `run_command` step and therefore the
   turn *(a 70 s tool call held the turn, measured)* — the same mechanism
   that makes `waiting_question` hold on Codex (ADR-0032 F6).
-  `--print-timeout` and the hook timeout must both exceed the question wait.
+  The CLI print timeout is disabled by `--print-timeout 0`. A question wait
+  without a configured timeout can reach the 55-minute gate deadline; the
+  configurable turn watchdog can end the turn earlier.
 - `request_session_reset` (issue #396, ADR-0043 Neutral amendment) lets the
   agent ask the operator to start its own session over, the same tool
   Claude Code and Codex already register. Antigravity has no `canUseTool`
@@ -253,11 +262,10 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   return to `tool_running` only after the final owner releases. Broker pending
   metadata updates do not acquire a second owner for the native hook wait.
   Releases from a stale turn cannot restore state over a later turn's state.
-- PreToolUse fired for every tool step observed so far: `write_to_file`,
-  `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
-  `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.
-  `wait_5_seconds` and `finish`, when asked for, produced no `tool` step
-  in the stream.
+- A completed tool step requires its matching PreToolUse gate request;
+  the observed `stepIdx` / `step_index` equality and sample set are recorded
+  in [gate tool-step evidence](../../evidence/antigravity/gate-tool-observations.md)
+  and [ADR-0057 F4b](../../adr/0057-antigravity-adapter.md#f4b--gate-self-verification-on-the-production-path).
 
 ## Constraints
 

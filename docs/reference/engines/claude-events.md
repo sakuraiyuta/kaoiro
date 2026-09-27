@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -14,7 +14,7 @@ related: [protocol, plugin-model, architecture, subagent-tasks]
 Establishes the **actual message/callback specification** of the TypeScript
 Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) used by the Claude Code
 adapter ([adapter contract](adapter-contract.md)), and defines its derivation to
-kaoiro state ([protocol](../../specs/protocol.md)). Verified against the official
+kaoiro state ([protocol](../protocol/state-machine.md)). Verified against the official
 documentation (code.claude.com / platform.claude.com; 2026-06).
 
 ## Definition
@@ -132,14 +132,8 @@ the new wrapper starts. A session reset cannot recover the live `error` state:
 the reset endpoint accepts only `idle` or `waiting_input`. The server's reply
 basis comparison remains in force after restore.
 
-**Observed record (task_notification terminal guarantee, issue #170)**: SDK
-`0.3.220`, captured 2026-08-09. A disposable script captured a real `query()`
-stream and verified that `task_notification` is always emitted along all four
-paths: (a) natural subagent completion, (b) `Query.stopTask(taskId)` (emits a
-`task_notification` with `status: "stopped"`, as documented), (c) parent-session
-interrupt, and (d) `Query.backgroundTasks(toolUseId?)` (emits a
-`task_notification` on settlement after being backgrounded). Paths through
-`task_updated` also always converge on `task_notification` at termination.
+The dated SDK 0.3.220 observation is preserved in
+[Claude SDK boundary evidence](../../evidence/claude/sdk-boundaries-2026.md#task-notification-terminal-paths).
 
 ### Permission callback (canUseTool)
 
@@ -200,24 +194,9 @@ canUseTool → PostToolUse.
 
 #### Commands for manual verification (canUseTool firing boundary)
 
-To verify the broker → permission dialog → client approval path through the
-dashboard on a real machine, a command is needed that reaches `canUseTool`
-without being stopped by the SDK's built-in safe Bash classifier. Observed
-boundaries (2026-06-22, verification for #59):
-
-| Example | Path |
-|---|---|
-| `hostname` / `echo X` / `[ -f X ] && echo Y` | Classifier judges safe → auto-approve |
-| `mkdir -p /tmp/...` | Treated as within the sandbox → auto-approve |
-| `for f in ...; do ...; done` | Cannot statically analyze control syntax → ask → `canUseTool` fires |
-| `curl --version` | Network-command name → ask → `canUseTool` fires |
-
-For the most stable firing with no side effect, use **`curl --version`** (no
-actual communication, small output, always succeeds). With default
-`settingSources`, the SDK does not read `~/.claude/settings.json`, so a user's
-settings allow list and PreToolUse hooks (such as `approve-compound-bash.sh`)
-do not apply to SDK sessions through the wrapper — the boundaries above are
-solely from the SDK's built-in classifier.
+The 2026-06 manual probe used `curl --version` under the wrapper defaults.
+Its classifier paths and SDK setting boundary are in
+[Claude SDK boundary evidence](../../evidence/claude/sdk-boundaries-2026.md#canusetool-firing-boundary).
 
 ### Control (gap 1 settled)
 
@@ -295,7 +274,7 @@ in streaming-input mode. Boundaries settled by a headless live run:
   “session-wide / per next message.”
 - Broker path: the wrapper exposes options in `state_change.ext.models`, and
   receives and applies server → wrapper `set_model` / `set_effort` control
-  ([protocol.md](../../specs/protocol.md)).
+  ([protocol channels](../protocol/channels.md#directional-message-types-v0-settled)).
 
 ### Hooks (SDK surface; kaoiro wires only `CwdChanged`)
 
@@ -385,7 +364,7 @@ None. The common-envelope type/payload design is settled in
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md), [extensions](../../architecture/extensions.md),
+- Related specs: [protocol](../protocol/state-machine.md), [extensions](../../architecture/extensions.md),
   [architecture](../../architecture/system-overview.md), [tasks](../protocol/tasks.md)
 - ADRs: [0001](../../adr/0001-agent-sdk-integration.md),
   [0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)

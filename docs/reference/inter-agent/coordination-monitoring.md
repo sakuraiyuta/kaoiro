@@ -87,7 +87,7 @@ boot rather than reverting to a default nobody chose.
 **`rally_turns` is also runtime-mutable.** `QuagmireSettings` holds the
 operator's pick in its own DETS store
 (`KAOIRO_QUAGMIRE_SETTINGS_PATH`, part of the canonical persistence set in
-[deployment](../../specs/deployment.md)), and precedence is stored > env > `config.exs`.
+[deployment](../configuration/server.md)), and precedence is stored > env > `config.exs`.
 The detector reads it on every sweep and both the notice and the
 `list_conversations` verdict follow it, so one threshold governs all three.
 An unreachable store falls back to the boot value for that sweep rather than

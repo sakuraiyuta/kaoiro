@@ -2,7 +2,7 @@
 title: Engine adapter contract
 description: Exact common lifecycle, control, pending-state, and Tool-conversion contract implemented by concrete engine adapters.
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-27
 related: [extensions, protocol]
 ---
 
@@ -18,15 +18,18 @@ The `EngineAdapter` interface in the common AI-agent layer
 `wrapper/agent-common` ([ADR-0032](../../adr/0032-codex-adapter.md) F1, F4bc, F9)
 declares the contract concrete adapters must implement:
 
-- State derivation: engine-specific event stream (Claude `SDKMessage` /
-  Codex `ThreadEvent`) → common `AdapterEvent`
+- State derivation: engine-specific event stream (Claude `SDKMessage`, Codex
+  `ThreadEvent` or app-server notifications, Antigravity stream-json events)
+  → common `AdapterEvent`
 - Lifecycle and control: `run` / `send` / `interrupt` / `close` /
   `setModel` / `setEffort` / `setPermission` / `setPermissionMode`
 - Pending-state projection: `setPendingPermission` / `setPendingQuestion`
   and revision-fenced `renameDisplayName`
 - Convert the common Tool description layer (JSON Schema + handler pair) to
-  engine-specific APIs (Claude: Zod + `createSdkMcpServer` in-process / Codex:
-  `dynamicTools`)
+  engine-specific APIs (Claude: Zod + `createSdkMcpServer` in-process; Codex:
+  `dynamicTools` or app-server bridge; Antigravity: CLI tool host bridge).
+  See the [Antigravity tool contract](antigravity-tools-permissions.md#tool-definition-cli-bridge-over-the-wrapper-tool-host)
+  for its hook and permission boundary.
 
 ## SIGTERM handling and process-termination timing
 

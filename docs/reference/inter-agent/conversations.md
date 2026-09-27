@@ -314,7 +314,7 @@ Therefore:
 - [Inter-agent messaging](../../architecture/inter-agent-messaging.md).
 - [Inter-agent message contract](messages.md).
 - [Inter-agent conversation admission](conversation-admission.md).
-- [Remaining protocol topics](../../specs/protocol-inter-agent.md), including [approval](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration), and [session-operation tools](session-tools.md).
+- [Approval](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration) and [session-operation tools](session-tools.md).
 - [Delivery confirmation and recovery](delivery.md).
 - [Send and wait](send-and-wait.md).
 - [Coordination monitoring and display](coordination-monitoring.md).
@@ -322,4 +322,4 @@ Therefore:
 
 ## Input-bound reply contract
 
-Ordinary peer history is distinct from transport turn numbering. The server atomically compares the reply basis before advancing history. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
+See [negotiation and comparison](reply-basis.md#negotiation-and-comparison).

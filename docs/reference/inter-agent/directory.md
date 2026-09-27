@@ -44,6 +44,7 @@ report peers that have been inactive for a long time.
 | `last_activity_at` | ISO8601 (UTC) | time the server last accepted an envelope | no envelope accepted yet |
 | `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | latest reported usage-limit snapshot, including an account read before the first turn | no usable source, all windows dropped in projection, or disconnected |
+| `inter_agent_reply_basis` | `"v1"` or `"legacy"` | negotiated server mode; see [reply basis](reply-basis.md#negotiation-and-comparison) | no current negotiation report; absence means unknown, not v1 |
 | `build` | `WrapperBuildIdentity` | validated wrapper artifact identity reported on the live connection | no report is available or the entry is `directory_only` |
 | `disconnect` | `{origin, reason}` | server-observed terminal disconnect attribution using the closed pairs from protocol.md | connected, planned restart, legacy server, or malformed pair |
 | `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
@@ -351,4 +352,4 @@ value peers read through `list_agents`.
 
 ## Input-bound reply contract
 
-`inter_agent_reply_basis` exposes negotiated `v1` or `legacy`. Missing data is unknown. The mode does not prove native-engine measurement coverage. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
+See [negotiation and comparison](reply-basis.md#negotiation-and-comparison).

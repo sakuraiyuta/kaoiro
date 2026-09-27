@@ -72,26 +72,23 @@ added later. Treat an unknown code as `api_error`.
 
 ### `stale_turn` notice structure (issue #212 defect 3)
 
-Unlike other codes, `stale_turn` is both a **notice and a side effect that
-resynchronizes the receiver's turn number to the sender**. Its
-`turn_number` is freshly allocated from the receiving wrapper's
-`track.turnNumber`. The sender's `receiveInbound()` treats the envelope as a
-normal (non-stale) inbound and advances its own track to that value. Its next
-send can therefore use the same `conversation_id` with the skew removed. Keep
-this resynchronization role in mind if the mechanism is reconsidered.
+The receiving wrapper allocates the notice's transport `turn_number` from its
+local conversation track. The sender observes that number, but its tool
+guidance directs a new `conversation_id`: a transport counter update does not
+establish a valid ordinary peer reply basis. Under negotiated v1, this notice
+has `notice_type: "stale_delivery"` and does not advance ordinary peer history;
+see [reply basis](reply-basis.md#internal-notice-exception).
 
 Send the notice when AC9 rejects a stale turn, but not unconditionally:
 
 - **If the target envelope already has `payload.error`** (it is itself a
   notice), replying with another notice could bounce forever between two
-  skewed counters. Advancing the number cannot prevent this because stale
-  comparison uses the receiver's own track. Excluding notices bounds the
-  exchange to one message.
+  skewed counters. Excluding notices bounds the exchange to one message.
 - **If the target conversation is already `closed`**. A late message for a
   closed conversation differs from a stale turn in a live conversation; the
   sender has already (or will on its next send) receive `conversation_closed`
   and the AC10 local rejection. Retrying adds no value and there is no target to
-  resynchronize. Still log the discard so this exception does not create a new
+  reply to. Still log the discard so this exception does not create a new
   silent path.
 
 Engine differences are absorbed in the shared classifier (engine-agnostic,

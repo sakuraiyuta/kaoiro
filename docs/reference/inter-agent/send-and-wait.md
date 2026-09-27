@@ -1,7 +1,7 @@
 ---
 title: Send and wait
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 description: Send and wait contracts and compatibility.
 ---
 
@@ -111,6 +111,16 @@ ledger or either pane. `peer_reconnecting_capacity` is a terminal tool error:
 the message was not accepted and no close notice was scheduled; fixed
 wording asks the sender to retry later with the same conversation_id.
 
+Negotiated v1 also rejects `stale_reply_basis` before delivery and can return
+an inline recovery envelope. Ordinary sends use their live origin's bound
+input snapshot as the default basis. An explicit same-turn override must supply
+both `in_reply_to` and `reply_ticket`; a missing, expired, or mismatched ticket
+then fails locally. Unbound or retired tool origins also fail locally with
+`send_not_attempted: true`.
+Definite temporary refusal can issue a fresh ticket; an unknown send outcome
+cannot. The [reply-basis contract](reply-basis.md#explicit-replies-and-tickets)
+defines the correction path.
+
 - MUST: Reject self-routing where `payload.to == agent_id`.
 
 ## Related topics
@@ -124,4 +134,4 @@ wording asks the sender to retry later with the same conversation_id.
 
 ## Input-bound reply contract
 
-Same-turn waiter and recovery replies copy `in_reply_to` and the single-use `reply_ticket` from `reply_authorization`. Definite transient refusal can return a fresh ticket; unknown delivery cannot. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
+See [explicit replies and tickets](reply-basis.md#explicit-replies-and-tickets).

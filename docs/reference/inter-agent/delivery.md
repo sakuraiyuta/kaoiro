@@ -27,6 +27,8 @@ retains no payloads and does not guarantee retransmission or delivery.
   classified, including terminal reclassification when a queued item reaches
   the peer dispatch or actual engine input boundary. Until then, a gap remains as `issued_seq > acked_seq`;
   `pending_since` is the timestamp of the first divergence.
+  Recovery and waiter inputs follow the same
+  [tool-result handoff boundary](reply-basis.md#inline-recovery-and-ownership).
 - `whoami`, `list_agents` entries, and the operator dashboard's
   `snapshot.deliveries` / `delivery_status` all read the same server ledger. An
   absent field is **unknown** (legacy/disarmed), not zero.
@@ -153,4 +155,4 @@ and diagnostic write failures do not change turn or acknowledgement control.
 
 ## Input-bound reply contract
 
-Recovery and waiter results acknowledge complete envelopes only at the real tool-result handoff. Queue receipt and dispatch acknowledgement do not update the current SDK input snapshot. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
+See [inline recovery and ownership](reply-basis.md#inline-recovery-and-ownership).

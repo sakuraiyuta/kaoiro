@@ -29,7 +29,7 @@ The table above is the policy of the Claude Code adapter
 policy; the **Codex adapter (`wrapper/codex/src/upload.ts`) accepts images
 only**. It advertises `attachment_types: ["image"]` in
 `ext.session_capabilities`, and restricts the UI picker / paste / drop to
-images accordingly ([plugin-model](../../specs/plugin-model.md)). Protocol limits (128 MB /
+images accordingly ([plugin-model](../protocol/capabilities.md)). Protocol limits (128 MB /
 20 in flight / five-minute TTL) are common to both engines.
 
 ### Fit-to-SDK

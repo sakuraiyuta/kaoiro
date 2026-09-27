@@ -24,7 +24,7 @@ Establishes the **actual event/callback specification** of the TypeScript Codex
 SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.156.1 in
 [`pnpm-lock.yaml`](../../../pnpm-lock.yaml))
 ([adapter contract](adapter-contract.md)), and defines its derivation to kaoiro state
-([protocol](../../specs/protocol.md)). This specification is paired with the Claude version
+([protocol](../protocol/state-machine.md)). This specification is paired with the Claude version
 in [agent-sdk-events](claude-events.md) and is converted to the common
 `AdapterEvent`.
 
@@ -42,13 +42,9 @@ The current backend boundary and bridge policy are described separately below.
 
 ## Definition
 
-The opt-in app-server projection is specified separately in
-[the Codex wrapper internals](../../../wrapper/codex/README.md) and
-[ADR-0058 Appendix C](../../adr/0058-codex-app-server-turn-steer.md).
-Normal launch defaults to the exec mapping below; the explicit backend selector
-described above also makes app-server available. The app-server path
-reuses its known-item adapter functions, but preserves phase-aware final text,
-all completed assistant rows, and the app-server terminal status independently.
+The opt-in app-server projection, including final text and assistant-row
+semantics, is specified in [app-server events](codex-app-server-events.md);
+the backend selection rule is in [Backend scope](#backend-scope).
 
 Both backends announce fresh idle immediately, then make a short-lived
 app-server `account/rateLimits/read` without opening a thread or starting a
@@ -144,7 +140,7 @@ through the MCP bridge in [ADR-0032](../../adr/0032-codex-adapter.md) F5.
 
 ### State derivation
 
-Derivation from Codex ThreadEvent → kaoiro state ([protocol](../../specs/protocol.md))
+Derivation from Codex ThreadEvent → kaoiro state ([protocol](../protocol/state-machine.md))
 passes through the common `AdapterEvent` ([adapter contract](adapter-contract.md)):
 
 | ThreadEvent | kaoiro state | Notes |
@@ -160,7 +156,7 @@ passes through the common `AdapterEvent` ([adapter contract](adapter-contract.md
 | `item.started` (mcp_tool_call, server=kaoiro, tool=ask_user_question) | `waiting_question` — `question_request` envelope ([ADR-0027](../../adr/0027-askuserquestion-envelope.md)) issued by bridge → wrapper handler | Valid because the turn blocks until the MCP response |
 | `item.started` (mcp_tool_call, server=kaoiro, tool=send_to_agent, etc.) | `tool_running` | Inter-agent tool, through common Tool description layer |
 | `item.started` (mcp_tool_call, another server) / (web_search) | `tool_running` | |
-| `item.started` / `item.updated` / `item.completed` (todo_list) | No state effect; emit parent agent's `task_type=tasklist` whole-list snapshot | Do not turn into transcript log. Map `completed: boolean` to protocol `pending` / `completed` (issue #178, tasklist addendum in [protocol](../../specs/protocol.md)) |
+| `item.started` / `item.updated` / `item.completed` (todo_list) | No state effect; emit parent agent's `task_type=tasklist` whole-list snapshot | Do not turn into transcript log. Map `completed: boolean` to protocol `pending` / `completed` (issue #178, tasklist addendum in [task envelopes](../protocol/tasks.md#task_type-tasklist-addendum-issue-178-adr-0049-f4)) |
 | `item.completed` (reasoning) | No state effect | Logging is optional (not adopted in MVP) |
 | `item.completed` (error item) | No state effect; record as `log` equivalent | Nonfatal |
 | `turn.completed` | `done` → `waiting_input` — issue envelope `type=result`. Because USD is unavailable, **do not include** `ext.cost` for Codex. Also **do not include** `ext.context` ([ADR-0040](../../adr/0040-context-usage-capability.md) phase-21), because `usage.input_tokens` is only per-turn input and not context utilization. Advertise “unsupported” to UI with `ext.session_capabilities.supports_context_usage=false` | Success `AdapterEvent` consumed by the shared state machine |
@@ -249,7 +245,7 @@ This is the same path as the optimistic-stamp principle of phase-15 15-4b/4c.
 (host verified 2026-07-13). Within `session_capabilities`, the adapter updates
 advertisement as needed according to catalog-resolver output
 ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4,
-[plugin-model](../../specs/plugin-model.md)).
+[plugin-model](../protocol/capabilities.md)).
 
 ### Tool definition (MCP bridge)
 
@@ -325,7 +321,7 @@ engines ([ADR-0032](../../adr/0032-codex-adapter.md) F3).
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md), [extensions](../../architecture/extensions.md),
+- Related specs: [protocol](../protocol/state-machine.md), [extensions](../../architecture/extensions.md),
   [architecture](../../architecture/system-overview.md), [agent-sdk-events](claude-events.md)
   (paired with Claude version)
 - ADR: [ADR-0032](../../adr/0032-codex-adapter.md) (introducing Codex adapter),
