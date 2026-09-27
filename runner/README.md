@@ -48,7 +48,7 @@ See [Runner configuration](../docs/reference/configuration/runner.md#other-runne
 
 ## Setup wizard
 
-The [setup wizard reference](../docs/reference/configuration/setup-wizards.md) covers runner config and environment file generation. When Antigravity is selected, the wizard checks for `agy` and reports its version; the runner's later `agy --version` probe is informational and does not gate startup.
+The [setup wizard reference](../docs/reference/configuration/setup-wizards.md) covers runner config and environment file generation. When Antigravity is selected, the wizard checks for `agy` and reports its version when available; the runner's later `agy --version` probe is informational and does not gate startup.
 
 ## Running as a service (systemd / launchd)
 

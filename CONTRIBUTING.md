@@ -1,7 +1,6 @@
 # Contributing
 
-- **Issues** are welcome — bug reports, questions, and ideas all help,
-  including questions and improvement ideas.
+- **Issues** are welcome for bug reports, questions, and improvement ideas.
 - **Pull requests** are accepted at the maintainer's discretion. Small,
   focused fixes (typos, obvious bugs, broken links) are the most likely
   to be merged. Larger changes (new features, architectural changes)

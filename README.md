@@ -44,7 +44,7 @@ The dashboard interface is currently Japanese-only.
 ## Features
 
 - **State as a face** — each agent's state (`thinking`, `waiting_permission`,
-  `error`, …) is derived from engine SDK events and drawn as a character
+  `error`, …) is derived from engine events and drawn as a character
   expression, not inferred from the text it writes
   ([state machine](docs/reference/protocol/state-machine.md)).
 - **Launch and supervise from the browser** — choose host, persona, engine,
@@ -62,16 +62,14 @@ The dashboard interface is currently Japanese-only.
 - **One merged timeline** — every agent's replies and their messages to each
   other in a single time-ordered pane, with unread marks and click-through to
   the full transcript.
-- **Tuning mid-session** — model, reasoning effort and permission mode are
-  changeable while an agent runs; prompts, interrupts and file attachments
-  travel the same channel.
+- **Engine-aware controls** — prompts and interrupts use a shared control path;
+  other controls and file uploads depend on the selected engine's capabilities.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
   ([deployment architecture](docs/architecture/deployment.md)).
-- **Three engines, one protocol** — Claude Code, Codex, and Antigravity sit
-  behind the same
-  adapter boundary, and the UI branches on declared capabilities rather than on
-  engine names ([adapter contract](docs/reference/engines/adapter-contract.md)).
+- **Three engines, one protocol** — Claude Code, Codex, and Antigravity use one
+  adapter boundary. The UI branches on declared capabilities rather than engine
+  names ([adapter contract](docs/reference/engines/adapter-contract.md)).
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
   from an ingest directory, with a bundled set as the default
   ([persona-pack-format.md](docs/reference/personas/pack-format.md)).
@@ -147,7 +145,7 @@ data flow.
   (`@anthropic-ai/claude-agent-sdk`), Codex SDK, or Antigravity CLI.
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
-  - Aggregates wrapper connections and fans out updates through PubSub.
+  - Fans out updates through PubSub to clients in real time.
 - **Client: Web front end (TypeScript)** (static image variants for rendering)
   - The reference dashboard (Svelte 5 + Vite) is in `dashboard/`. It is an
     independent root and lockfile, not a pnpm workspace member.

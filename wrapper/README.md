@@ -24,6 +24,7 @@ graph TD
   AG["@kaoiro/antigravity"] --> AC
   AC --> CORE["@kaoiro/wrapper-core"]
   CC --> CORE
+  CX --> CORE
   AG --> CORE
   AC -. types .-> P["@kaoiro/protocol"]
   CORE -. types .-> P
@@ -48,9 +49,9 @@ for one package from that package's directory.
 
 - **Typecheck and tests do not require a build**: package TypeScript paths
   and Vitest aliases point to sibling `src/` directories.
-- **Runtime uses `dist/`**: package entry points use built files. The runner
-  spawns `@kaoiro/claude-code/dist/cli.js`; with `KAOIRO_WRAPPER_DEV=1`, it
-  runs `claude-code/src/cli.ts` through `tsx watch`.
+- **Runtime uses `dist/`**: the runner selects the CLI package for the chosen
+  engine and runs its `dist/cli.js`. With `KAOIRO_WRAPPER_DEV=1`, it runs that
+  package's `src/cli.ts` through `tsx watch`.
 
 GitHub Actions runs `pnpm install`, `pnpm typecheck`, `pnpm build`, and
 `pnpm test` ([workflow](../.github/workflows/ci.yml)).
