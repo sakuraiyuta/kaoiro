@@ -1,0 +1,143 @@
+---
+title: Layered inter-agent delivery, authority and continuation admission
+description: Separate early delivery, causal reply basis and mutation authority; two-level interruption with accepted-assignment grants; revision-checked consequential actions; native-lifecycle admission of engine continuations gated by a bounded pilot.
+status: accepted
+date: 2026-09-28
+opened: 2026-09-28
+supersedes: []
+superseded_by: null
+related_specs: [protocol-inter-agent]
+related_adrs: [36, 58, 62]
+---
+
+# ADR-0063 — Layered inter-agent delivery, authority and continuation admission
+
+## Context
+
+Issue 407 bound every inter-agent send to a confirmed live input turn and
+rejected calls without an origin (ADR-0062). Issue 422 then had to admit
+`<task-notification>` continuations, and issue 426 spent six design
+revisions trying to admit subagent hand-backs by proving the provenance of
+each continuation shape. The operator reopened the question on 2026-09-28:
+the 2026-09-26 rejection of "interrupt the receiver when a newer message
+arrives" addressed the mechanism (hard interrupt), not the intent (put the
+newer message in front of the model before it acts further). The open
+question
+[inter-agent-delivery-timing-and-turn-ownership](../open-questions/inter-agent-delivery-timing-and-turn-ownership.md)
+frames the problem; Kogane's two review rounds
+(`tmp/reviews/fundamental-review/kogane-r1.md`, SHA-256 `bff6b0b3…`;
+`kogane-r2-positions.md`, SHA-256 `78785de1…`) supply the constraints
+adopted below. The operator approved the decisions on 2026-09-28.
+
+## Decision
+
+D1. **Three outcomes are kept separate**: (a) earlier availability of
+input, (b) a truthful causal basis for replies, (c) authority to revise or
+cancel work and to apply consequential effects. No single mechanism is
+claimed to deliver all three. Issue 407 incidents 5 and 6 belong to (c).
+
+D2. **Two-level interruption.** Every authenticated sender may request
+*early delivery*: the receiving wrapper puts the message before the model at
+the earliest supported cooperative boundary (Claude fold at the next tool
+boundary; Codex app-server `turn/steer` per ADR-0058; Antigravity
+`PreInvocation` once measured), cancelling nothing. *Stopping work*
+(cooperative yield after the current tool, or hard cancellation) may be
+requested only by the operator or by the director holding an accepted
+assignment grant for that work (D3). The sender declares intent, not
+mechanism; the receiving wrapper chooses the mechanism by engine and policy.
+An engine that supports neither queues the message. Unrestricted hard
+cancellation by priority alone is rejected.
+
+D3. **Assignment grants.** Authority over work is a server-owned record
+`(work_cid, director, assignee, resource scope, authority epoch, state)`
+created when the assignee accepts an assignment request. The operator may
+override or transfer it; transfer or revocation increments the epoch.
+Opening a conversation confers no authority; consultation threads grant
+nothing. The existing `owner` placeholder is not this record.
+
+D4. **Work revision.** The revision unit is one canonical work conversation
+(`work_cid`). Only the director of that work or the operator advances the
+revision, through a typed control (for example `work_control` with
+`expected_revision` and an `operation_id`) that the server applies with
+compare-and-set and deduplication. The first guarantee covers one canonical
+work conversation; cross-conversation resource conflicts (issue 407
+incident 6) are recorded as not mechanically solved. Revision state is
+separate from the reply basis of ADR-0062.
+
+D5. **Consequential actions** (accepting or revoking a verdict, releasing a
+hold, declaring work complete, starting implementation or transferring
+writer authority, merge, push, deploy, landing) carry the expected work
+revision and the subject artifact hash and are checked at the point where
+the effect is applied, through controlled entry points. Arbitrary shell
+effects outside those entry points are outside the guarantee; enforcement
+there is cooperative. Progress reports and questions carry a causal basis
+only and never advance a revision. An accepted revision check cannot undo
+an effect that already committed.
+
+D6. **Native continuations.** Admission of engine-internal continuations
+(task notifications, subagent hand-backs, child `SendMessage`) moves from
+body-grammar provenance to native lifecycle evidence (trusted host hooks,
+session and generation, native call and result identity), conditional on
+the pilot in D8. The completed-input ledger, immutable call bindings,
+root/child isolation, retirement, and the same-ID fold principle are kept.
+The opener-owned terminal rule is kept until a stronger native terminal key
+is established. Per-task occurrence tracking and the candidate idle clock
+cease to be send-admission authority once their replacement is proven and
+remain for UI and diagnostics.
+
+D7. **Reply basis.** ADR-0062 stays. The basis of a call is fixed by the
+model request that generated it; it advances only for calls generated by a
+request proven to include the newer input. If that correlation is not
+observable in production, fixed snapshots and explicit ticket recovery
+remain the rule.
+
+D8. **Pilot I3 is authorized.** Owner: Kogane. Claude only, installed SDK
+and CLI pinned by hash, loopback model endpoint, no real API, no shared
+production server, at most 12 root SDK run attempts and 60 minutes in
+total, schedule R0–R8 as written in `kogane-r2-positions.md`, one
+documented scratch-only instrumentation delta at the host input seam
+(hashed, never landed). Output: *available / unavailable / unmeasured*,
+separately for call epochs and for terminal ownership. A successful pilot
+does not by itself authorize removing issue 426 guards, hard preemption, or
+a multi-engine rollout.
+
+D9. **Unchanged and frozen.** ADR-0036 F6 (no automatic interrupt combined
+with reset) is unchanged. Issue 426 stays frozen and its lifecycle guards
+are not removed before the pilot establishes their replacement. Issue 412
+is absorbed by this decision.
+
+## Phasing
+
+0. Pilot I3 (D8) and its evidence report.
+1. Protocol design: intent field, capability declaration at channel join,
+   staged delivery records (accepted, queued, submitted, included, unknown,
+   settled), assignment grant, `work_control`.
+2. Claude wrapper: early delivery through the native seam, grant-checked
+   stop requests, native continuation admission per the pilot result.
+3. Codex: app-server backend evaluation under ADR-0058 with exec kept as a
+   configured fallback; permission and lifecycle contract review.
+4. Antigravity: `PreInvocation` measurement; honest queue fallback until
+   then.
+
+Each phase lands through the normal design and implementation review flow.
+
+## Alternatives and consequences
+
+Continuing the issue 426 provenance path was rejected: the predicted
+test-case matrix fails the four-Agent, supersede, downgrade-notice,
+operator-input and child-SendMessage cases, and each CLI update can
+invalidate a grammar. Unconditional hard cancellation on receipt was
+rejected again: it cancels useful work on ordinary informs, cannot undo
+committed effects, and differs across engines. Treating the conversation
+opener as director was rejected: a worker opening a clarification thread
+must not gain control over its director. Binding the basis to "the latest
+observed hook" was rejected: a call authored before the newer input arrived
+would falsely claim it.
+
+Consequences: the protocol gains typed intent, capability, staged delivery
+and control fields; the server gains grant and revision state with atomic
+checks; wrappers gain per-engine scheduling policy and downgrade
+reporting. Fairness (bounded queues, duplicate suppression, no automatic
+preemption from synthetic notices) is a design requirement of phase 1.
+Engine differences remain and are made visible to senders rather than
+hidden.

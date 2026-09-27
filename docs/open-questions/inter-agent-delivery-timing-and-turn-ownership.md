@@ -5,7 +5,7 @@ status: open
 urgency: high
 blocks: [issue-426-agent-handback-admission, issue-412]
 opened: 2026-09-28
-decided: null
+decided: 2026-09-28
 ---
 
 ## Background
@@ -30,8 +30,9 @@ decided: null
 - **2026-09-27.** Issue 426 observed: four background Agents; each
   `SubagentHandback` arrives as an `<agent-message>` prompt, unknown markup,
   no owner, send rejected. Six design revisions followed (A, A2, A3, A4, A5',
-  sanitizer withdrawn, A6 pending), each trying to prove the provenance of a
-  continuation shape byte by byte.
+  sanitizer withdrawn, A6 pending). A2 to A4 revised identity, timing and
+  lifecycle assumptions; A5' and the sanitizer round tried to reproduce
+  continuation text byte by byte. (Corrected 2026-09-28 per Kogane r1 M1.)
 
 The CLI's hand-back feature is not new: the `SubagentHandback` implementation
 string is present in every locally available CLI build (2.1.274, 2.1.278,
@@ -74,10 +75,13 @@ alternatives (fold, `priority: 'now'`, Codex `turn/steer`, Antigravity
 `#waitForTurnBoundary` barrier ties turn tokens, delivery acknowledgement,
 settlement and the 407 basis to turn boundaries.
 
-Assessment (kohaku, 2026-09-28): the rejection addressed the *mechanism* (hard
-interrupt), not the *intent* (put y in front of B's model before B acts
-further). The intent was sound. What blocked it was kaoiro's bookkeeping, not
-the engines.
+Assessment (kohaku, 2026-09-28): the rejection addressed the *mechanism*
+(hard interrupt), not the *intent* (put y in front of B's model before B
+acts further). The intent was sound. The immediate regression mechanism was
+the newly imposed host restriction; per Kogane r1 M1 this does not isolate
+every contributing cause (CLI version, hooks and ordering are separate
+dimensions), and incidents 5 and 6 need mutation authority rather than
+faster delivery.
 
 ## Invariants the design must keep
 
@@ -228,7 +232,7 @@ closed by the outcome.
 
 ## Provisional policy
 
-None yet. Process: kogane writes an independent critique of this document
-(disprove its premises, add alternatives outside O1-O4, name the minimal first
-step, e.g. a Claude-only pilot), then a three-way discussion (operator, kohaku,
-kogane), then an ADR. No implementation before the ADR.
+Decided 2026-09-28 by the operator after Kogane's two review rounds:
+[ADR-0063](../adr/0063-layered-delivery-authority-and-continuations.md).
+The invariants above are superseded by the outcome-based set proposed in
+`tmp/reviews/fundamental-review/kogane-r1.md` and adopted in the ADR.
