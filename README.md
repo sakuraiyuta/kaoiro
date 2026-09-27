@@ -62,8 +62,12 @@ The dashboard interface is currently Japanese-only.
 - **One merged timeline** — every agent's replies and their messages to each
   other in a single time-ordered pane, with unread marks and click-through to
   the full transcript.
-- **Engine-aware controls** — prompts and interrupts use a shared control path;
-  other controls and file uploads depend on the selected engine's capabilities.
+- **Tuning mid-session** — model switches are supported on Claude Code and
+  Antigravity, and on Codex when its model catalog is available. Effort switches
+  are available on Claude Code and Codex when advertised, but not Antigravity.
+  Permission controls and file uploads are exposed only where declared by each
+  engine's `ext.session_capabilities`; prompts and interrupts share a control
+  channel across engines.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
   ([deployment architecture](docs/architecture/deployment.md)).
