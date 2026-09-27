@@ -4592,7 +4592,7 @@ describe("AgentHost — SDK notification reply origin", () => {
         yield msg({ type: "system", subtype: "init", session_id: "s" });
         yield msg({ type: "system", subtype: "task_started", session_id: "s", task_id: "task", task_type: "local_bash", is_backgrounded: true });
         yield result("success", { result: "WAITING" });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
         await hooks.UserPromptSubmit!.at(-1)!.hooks[0]!({ hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "reused", prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>" } as never, undefined, signal);
         await hooks.PreToolUse!.at(-1)!.hooks[0]!({ hook_event_name: "PreToolUse", session_id: "s", prompt_id: "reused", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: "late" } as never, "late", signal);
         yield result("success", { result: "late", origin: { kind: "task-notification" } });
@@ -4631,7 +4631,7 @@ describe("AgentHost — SDK notification reply origin", () => {
           hook_event_name: "PreToolUse", session_id: "s", prompt_id: "p2", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: "before-fold",
         } as never, "before-fold", hookSignal);
         if (valid) vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
         if (valid) {
           try { await vi.advanceTimersByTimeAsync(11_000); }
           finally { vi.useRealTimers(); }
@@ -4681,7 +4681,7 @@ describe("AgentHost — SDK notification reply origin", () => {
         yield msg({ type: "system", subtype: "init", session_id: "s1" });
         yield msg({ type: "system", subtype: "task_started", session_id: "s1", task_id: "task-1", task_type: taskType, is_backgrounded: true });
         yield result("success", { result: "WAITING" });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: "/tmp/task-1", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: "/tmp/task-1", summary: "done" });
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s1", prompt_id: "p2", prompt: notification,
         } as never, undefined, { signal: new AbortController().signal });
@@ -4730,7 +4730,7 @@ describe("AgentHost — SDK notification reply origin", () => {
         yield msg({ type: "system", subtype: "init", session_id: "s1" });
         yield msg({ type: "system", subtype: "task_started", session_id: "s1", task_id: "task-1", task_type: "local_agent", is_backgrounded: true });
         yield result("success", { result: "WAITING" });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: frameOutputFile ?? "/tmp/task-1", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: frameOutputFile ?? "/tmp/task-1", summary: "done" });
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: hookSession ?? "s1", prompt_id: "notification",
           prompt: `<task-notification><task-id>task-1</task-id><tool-use-id>${hookToolUseId ?? "parent-1"}</tool-use-id>${outputFile}<status>completed</status><summary>Agent finished</summary><result>done</result></task-notification>`,
@@ -4765,7 +4765,7 @@ describe("AgentHost — SDK notification reply origin", () => {
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "wrapper", prompt: "second",
         } as never, undefined, { signal: new AbortController().signal });
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "notification", prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>",
         } as never, undefined, { signal: new AbortController().signal });
@@ -4811,7 +4811,7 @@ describe("AgentHost — SDK notification reply origin", () => {
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: "next",
         } as never, undefined, hookSignal);
-        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        yield msg({ type: "system", subtype: "task_notification", uuid: "notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
         await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
           hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "foreign",
           prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>",
