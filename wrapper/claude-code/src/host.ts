@@ -2127,8 +2127,11 @@ export class AgentHost implements EngineAdapter {
     const notificationCandidates = notifications === null ? null : this.#matchingNotifications(notifications, input.session_id);
     const notificationMatch = notificationCandidates !== null;
     const handbackCandidate = this.#matchingHandback(input.prompt, input.session_id);
-    const handbackShape = input.prompt.includes("<agent-message");
-    const notificationShape = handbackCandidate === null && input.prompt.includes("<task-notification>");
+    // An exact outer envelope wins over markup quoted inside its report.
+    const handbackShape = handbackCandidate !== null ||
+      (notificationCandidates === null && input.prompt.includes("<agent-message"));
+    const notificationShape = notificationCandidates !== null ||
+      (handbackCandidate === null && input.prompt.includes("<task-notification>"));
     if (owner) {
       if (handbackShape || notificationShape) {
         const sameOwner = !owner.tainted && owner.token === active?.turnToken &&
@@ -2340,6 +2343,18 @@ export class AgentHost implements EngineAdapter {
         const activeTurn = this.#activeTurn;
         if (activeTurn !== null) {
           this.#options.onTurnProgress?.({ turnToken: activeTurn.turnToken });
+        }
+        if (message.type === "result" && activeTurn !== null) {
+          const owner = [...this.#promptOwners.values()].find(candidate => candidate.token === activeTurn.turnToken);
+          const ownerSession = owner?.sessionId ?? this.#sessionId;
+          if (ownerSession !== null &&
+              (typeof message.session_id === "string" ? message.session_id !== ownerSession : this.#handbackEverAdmitted)) {
+            // Session rotation below clears the very owner and fold state needed
+            // to reject this terminal; reject against the original owner first.
+            this.#warn("[kaoiro] SDK result belongs to another session; stopping host admission");
+            this.#failStopForAmbiguousResult();
+            continue;
+          }
         }
         const id = sdkMessageToSessionId(message);
         if (id !== null && id !== this.#sessionId) {
