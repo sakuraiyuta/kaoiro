@@ -31,6 +31,7 @@ Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
 | [lifecycle-timeline-ui](lifecycle-timeline-ui.md) | medium | — | 2026-08-31 |
+| [inter-agent-delivery-timing-and-turn-ownership](inter-agent-delivery-timing-and-turn-ownership.md) | high | issue-426-agent-handback-admission, issue-412 | 2026-09-28 |
 
 ## Deferred
 
