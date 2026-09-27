@@ -57,9 +57,11 @@ peer/CID survive in one batch, its default is N+2. Queue arrival and delivery ac
 alone do not publish input. Inline waiter/recovery results affect future input
 snapshots but never update the current turn's default. Confirmed inputs from a
 completed turn are merged by CID and peer into a session-local ledger. A new
-Claude SDK notification turn copies that ledger; queued or unconfirmed input
-does not enter it. A notification folded into a live wrapper turn keeps that
-turn's earlier snapshot.
+independent Claude SDK task-notification or Agent hand-back continuation copies
+that ledger; queued or unconfirmed input does not enter it. A validated
+same-prompt continuation folded into a live wrapper turn keeps that turn's
+earlier snapshot. Folding creates no ticket and preserves any ticket already
+issued within the owner's token.
 
 The wrapper captures that default through an origin bound to the tool call. It
 checks origin liveness again immediately before the send sink, after asynchronous
@@ -70,12 +72,13 @@ An `unbound_tool_call` means no confirmed live turn owns that call;
 adding a ticket, changing the conversation ID, or retrying within the same
 continuation cannot bind it. A `stale_tool_call` means its owning input ended
 or was cancelled. Neither error attempts a send. A new confirmed wrapper input
-or validated Claude SDK notification prompt is required before retrying either
-call. Unknown notification shapes and reused retired prompt IDs remain unbound.
+or validated Claude SDK notification or Agent hand-back prompt is required
+before retrying either call. Unknown continuation shapes and reused retired
+prompt IDs remain unbound.
 
 | Adapter | Origin binding |
 | --- | --- |
-| Claude | A confirmed root `UserPromptSubmit.prompt_id` owns its `PreToolUse.tool_use_id`; a validated background-task notification either folds into that live owner or starts an independent token from confirmed completed input. The SDK MCP callback resolves `_meta["claudecode/toolUseId"]` and combines native cancellation with turn retirement. |
+| Claude | A confirmed root `UserPromptSubmit.prompt_id` owns its `PreToolUse.tool_use_id`; a validated background-task notification or Agent hand-back folds into that live owner or starts an independent token from confirmed completed input. The SDK MCP callback resolves `_meta["claudecode/toolUseId"]` and combines native cancellation with turn retirement. |
 | Codex exec | A private ToolHost endpoint and captured token per execution turn; endpoint lifetime ends before another turn begins |
 | Codex app-server | Bridge-preserved `x-codex-turn-metadata` thread/turn IDs matched to the authoritative start result and wrapper token; absent/mismatched metadata is rejected |
 | Antigravity | Native engine boundary remains a measurement gate; no full-engine protection claim or v1 activation follows from ToolHost-only measurements |

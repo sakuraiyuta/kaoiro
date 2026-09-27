@@ -107,8 +107,11 @@ reply snapshot and terminal result; a fresh ID with no live owner starts an
 independent notification turn from confirmed completed input. An unknown task,
 subagent call, retired prompt ID, or unmatched result cannot borrow the newest
 wrapper turn. Notification candidates received during a live turn are retained
-until its terminal boundary; unmatched candidates release the next-input
-barrier after a bounded 10-second wait.
+until its terminal boundary. Their 10-second deadline runs only during a
+continuous period when no root turn is live; each new root turn suspends the
+timer, and its end rearms the full interval. An unmatched candidate then
+releases its share of the next-input barrier. Repeated short idle periods can
+delay expiry while root work continues.
 For an Agent notification, the hook may strictly omit `<output-file>` or carry
 the exact path from its SDK `task_notification` frame. Either form requires the
 known one-use background-task candidate, matching session, task and parent tool
@@ -119,6 +122,26 @@ an originless result cannot prove which prompt ended. The host stops admission
 and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
+
+A background Agent's child `PreToolUse:SubagentHandback` can precede the root
+`<agent-message>` prompt. The host requires a registered background
+`task_started` linked to a root `PreToolUse:Agent`, the child hook's matching
+session and `agent_id=task_id`, a new child tool-use ID, and a child prompt ID
+already observed in the same root session. It renders the complete root prompt
+from the child's report and admits only an exact match. Unknown or replayed
+reports remain foreign. A hand-back candidate expires after 30 seconds of
+continuous root idle under the same timer rule as notifications.
+
+Validated hand-backs and notifications with a live owner's prompt ID fold into
+that owner regardless of task. They retain its token, reply snapshot, tickets,
+watchdog, and input barrier. A fresh ID with no live owner opens an independent
+continuation using the completed-input ledger. The opener determines the SDK
+terminal result: a wrapper input requires an originless result, a notification
+requires `origin.kind=task-notification`, and a hand-back requires
+`origin.kind=peer` with the opener task's hand-back identity and report. A
+different task folded later cannot replace that identity. An ambiguous result
+fail-stops admission before settlement. The [admission plan](../../plans/issue-426-agent-handback-admission.md#terminal-decision)
+records the exact owner and rejection table.
 
 ### Recovering a fail-stopped Claude wrapper
 
