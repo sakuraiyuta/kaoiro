@@ -65,9 +65,9 @@ The dashboard interface is currently Japanese-only.
 - **Tuning mid-session** — model switches are supported on Claude Code and
   Antigravity, and on Codex when its model catalog is available. Effort switches
   are available on Claude Code and Codex when advertised, but not Antigravity.
-  Permission controls and file uploads are exposed only where declared by each
-  engine's `ext.session_capabilities`; prompts and interrupts share a control
-  channel across engines.
+  Permission-mode switching and file uploads follow each engine's declared
+  capabilities (`ext.session_capabilities`); prompts and interrupts share one
+  control channel across engines.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
   ([deployment architecture](docs/architecture/deployment.md)).
