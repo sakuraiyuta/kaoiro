@@ -10,7 +10,7 @@ last_updated: 2026-09-26
 Kogane performed this investigation at repository baseline
 `ba696b503261db5c3af9f4806a5579b9f8f8d995`. This is separate from the previously
 reviewed interrupt report. No peer has yet reviewed these new observations.
-The [captured events](2026-09-26-issue-407-call-provenance.json) retain actual SDK
+The [captured events](2026-09-26-call-provenance.json) retain actual SDK
 callback metadata and CLI events, with probe/output hashes. Model responses came
 from local HTTP mocks, not a real model API. This establishes transport behavior
 under the stated conditions, not the correctness of the proposed product guard.

@@ -17,7 +17,7 @@ open for cases 5–6 and operational before/after measurement.
 Branch: `issue-407-message-crossing`, based on
 `ba696b503261db5c3af9f4806a5579b9f8f8d995`. The checked code/test commit is
 `105fdd842c8048abd8ff04590938a75ee9137b6a`. The companion
-[manifest](2026-09-26-issue-407-implementation.json) binds changed source/test
+[manifest](2026-09-26-implementation.json) binds changed source/test
 files, built runtime files, harnesses, result records, and logs by SHA-256.
 Raw records live in `/tmp/kogane407-cross-turn.bUKHrA`, retained by Kogane for
 implementation review. They are not committed transcripts. The prior research

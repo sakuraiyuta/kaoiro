@@ -11,7 +11,7 @@ last_updated: 2026-09-26
 Fresh idle wrappers emit their first `state_change` before either engine's
 current rate-limit refresh runs. Codex's rollout resolver needs a session ID;
 Claude's current refresh needs the first production `Query`. The
-[pre-turn probes](../evidence/2026-09-26-pre-turn-rate-limits.md) show that
+[pre-turn probes](../evidence/issue-408/2026-09-26-pre-turn-rate-limits.md) show that
 Codex's authenticated app-server read and Claude's SDK `/usage` control request
 can each supply an account snapshot before a user turn. Codex's current
 account response has a seven-day window only; the absent five-hour window is

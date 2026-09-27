@@ -1,8 +1,8 @@
 ---
 title: Surface the Antigravity CLI version in runner registration
 description: Add the runner's agy --version result to RunnerRegister, retain it with the live host, and show it to operators.
-status: in_progress
-last_updated: 2026-09-26
+status: implemented
+last_updated: 2026-09-27
 issue: 410
 must_fix_rounds_used: 1
 ---
@@ -142,3 +142,6 @@ runner `pnpm typecheck` / `pnpm test`, server `mix test`, and dashboard
   current CLI version and the no-history boundary.
 - This plan: set `status` and `last_updated` to the accepted implementation
   state when the work lands.
+
+Landed on develop (`1c55d38f`); [issue #410](https://github.com/sakuraiyuta/kaoiro/issues/410)
+closed 2026-09-26.

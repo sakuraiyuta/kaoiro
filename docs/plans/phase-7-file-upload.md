@@ -9,7 +9,7 @@ last_updated: 2026-07-03
 
 # Phase 7 — File Upload (Attachment Ingestion)
 
-Implement [file-upload spec](../specs/file-upload.md) and
+Implement [file-upload spec](../architecture/attachments.md) and
 [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md). Proceed in
 three substages (Stage A → B → C).
 

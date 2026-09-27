@@ -38,7 +38,7 @@ and runner execution.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 4-1 | Finalize the control envelope (spawn/stop/restart/enumerate-sessions) schema | ✅ | Finalized in #66. Added to [protocol](../specs/protocol.md) “runner control messages” and recorded in [ADR-0023](../adr/0023-host-runner-architecture.md). Shared with #22 |
+| 4-1 | Finalize the control envelope (spawn/stop/restart/enumerate-sessions) schema | ✅ | Finalized in #66. Added to [protocol](../reference/protocol/runner-control.md#runner-control-messages-v0-settled-66) “runner control messages” and recorded in [ADR-0023](../adr/0023-host-runner-architecture.md). Shared with #22 |
 | 4-2 | server: host registration/heartbeat endpoint + spawn relay path | ✅ | #67 (03ebca4). host_registry + runner_channel/socket + AgentsChannel relay |
 | 4-3 | server: prevent duplicate launches with runner-local lock integration | ✅ | #67. Server owner fencing + spawn deduplication. Runner-side lock is 4-5 |
 | 4-4-0 | Convert to TS workspace + extract shared `@kaoiro/protocol` + migrate wrapper types (behavior unchanged) | ✅ | Before #68. [ADR-0023](../adr/0023-host-runner-architecture.md) “TS package topology”. Isolated commit with wrapper test/build green |
@@ -74,7 +74,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 - The **runner config** holds the allowlist of selectable cwd values and declares it
   alongside the persona at registration (move complexity to the host,
   [ADR-0023](../adr/0023-host-runner-architecture.md)). The schema is 4-1 /
-  [protocol](../specs/protocol.md) “runner control messages” (finalized in #66).
+  [protocol](../reference/protocol/runner-control.md#runner-control-messages-v0-settled-66) “runner control messages” (finalized in #66).
 - **Spawn request = Option A (server completion, [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))**:
   the client sends only `{ host_id, persona, cwd, initial_prompt?, resume_session_id? }`.
   The server assigns `agent_id` and completes `server_url` + per-agent token. Secrets
@@ -89,7 +89,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   (override persona.name with spawn `name?`), **terminate** (reuse existing `stop`,
   with a warning while running), and **restore** (resume-spawn the same agent_id with
   `restore` control). Seed cwd into SessionPointers at spawn for restoration
-  ([protocol](../specs/protocol.md) “client → server launch control”).
+  ([protocol](../reference/protocol/runner-control.md#client--server-launch-control-22-adr-0024) “client → server launch control”).
 
 ## Followups (in-phase but unfinished)
 
@@ -131,7 +131,7 @@ denylist is [#72](https://github.com/sakuraiyuta/kaoiro/issues/72).
   instance identity), [0014](../adr/0014-session-resume-and-restore.md) (resume unit),
   [0018](../adr/0018-runner-distribution.md) (distribution).
 - Specs: [architecture](../architecture/system-overview.md),
-  [protocol](../specs/protocol.md), [threat-model](../architecture/security-threat-model.md).
+  [protocol](../architecture/message-topology.md), [threat-model](../architecture/security-threat-model.md).
 - Related issues:
   [#23](https://github.com/sakuraiyuta/kaoiro/issues/23) (this phase),
   [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) (launch-instruction UI +

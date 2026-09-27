@@ -23,7 +23,7 @@ art (Phase 2) (decision history: issue #2).
 - [x] The minimal Web display (text/color only) follows state changes in the browser
       (Playwright confirmed tracking and snapshot restoration after reload)
 - [x] A real consumer verifies envelope type/payload and allows
-      [protocol](../specs/protocol.md) to be updated to `accepted`
+      [protocol](../architecture/message-topology.md) to be updated to `accepted`
       ([ADR-0010](../adr/0010-protocol-precisification.md))
 - [x] Decide the client connection method
       ([ADR-0009](../adr/0009-client-transport.md): consolidate on Channels,
@@ -54,7 +54,7 @@ protocol-precisification is resolved by
 
 ## See Also
 
-- Specs: [protocol](../specs/protocol.md),
+- Specs: [protocol](../architecture/message-topology.md),
   [architecture](../architecture/system-overview.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),

@@ -7,11 +7,11 @@ when follow-ups have been spun out into issues.
 | Phase | File | Status | Description |
 |-------|------|--------|------|
 | 0 | [phase-0-project-setup](phase-0-project-setup.md) | ✅ | Project planning and repository setup |
-| 1 | [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md) | 🟡 | One wrapper + state machine. Only live-drive verification (1-5) of `waiting_permission` remains incomplete |
+| 1 | [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md) | ✅ | One wrapper + state machine |
 | 1.5 | [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md) | ✅ | Minimal server + minimal client (vertical slice) |
 | 2 | [phase-2-client-character](phase-2-client-character.md) | ✅ | Client + character + expressions |
 | 3 | [phase-3-server-multiagent](phase-3-server-multiagent.md) | ✅ | Server aggregation + multiple agents + bidirectional communication |
-| 3.5 | [phase-3.5-response-display](phase-3.5-response-display.md) | 🟡 | Response display (making the bundled dashboard practical). Stage polish (R-5–R-7, [issue #21](https://github.com/sakuraiyuta/kaoiro/issues/21)) remains |
+| 3.5 | [phase-3.5-response-display](phase-3.5-response-display.md) | ✅ | Response display (making the bundled dashboard practical). Stage Polish dropped with [issue #21](https://github.com/sakuraiyuta/kaoiro/issues/21) |
 | 3.6 | [phase-3.6-dashboard-separation](phase-3.6-dashboard-separation.md) | ✅ | Separate dashboard directory + bundled cleanup |
 | 4 | [phase-4-host-runner](phase-4-host-runner.md) | ✅ | Host-resident runner (spawn/supervision/host registration, [ADR-0023](../adr/0023-host-runner-architecture.md)). Distribution (4-7) was completed as a self-contained Node-based tarball after withdrawing the single-binary approach ([ADR-0018](../adr/0018-runner-distribution.md) revision). Automating asset uploads to releases is [#140](https://github.com/sakuraiyuta/kaoiro/issues/140) |
 | 5 | [phase-5-i18n](phase-5-i18n.md) | ⏳ | Pre-beta English translation process |
@@ -32,21 +32,19 @@ when follow-ups have been spun out into issues.
 | 20 | [phase-20-engine-catalog-live-probe](phase-20-engine-catalog-live-probe.md) | ✅ | Make the LaunchDialog model catalog live with a short-lived SDK probe + runner memory cache (Option E), [ADR-0039](../adr/0039-engine-catalog-live-probe.md) |
 | 21 | [phase-21-context-usage-capability](phase-21-context-usage-capability.md) | ✅ | Make context-usage display capability-driven and withdraw estimated projection on the Codex side, [ADR-0040](../adr/0040-context-usage-capability.md) |
 | 22 | [phase-22-resume-privilege-restoration](phase-22-resume-privilege-restoration.md) | ✅ | Reapply the three privilege axes (sandbox / network_access / permission_mode) on resume (P0), [ADR-0014](../adr/0014-session-resume-and-restore.md) F1 addendum |
-| 23 | [phase-23-resume-model-effort-restoration](phase-23-resume-model-effort-restoration.md) | 🟡 | Reapply model / effort / `*_source` on resume (P1). Dogfood manual verification (23-9) awaits the master's live confirmation |
-| 24 | [phase-24-codex-auth-mode-explicit](phase-24-codex-auth-mode-explicit.md) | 🟡 | Explicitly declare the Codex auth mode in runner config. Dogfood manual verification (24-7) awaits the master's live confirmation |
+| 23 | [phase-23-resume-model-effort-restoration](phase-23-resume-model-effort-restoration.md) | ✅ | Reapply model / effort / `*_source` on resume (P1) |
+| 24 | [phase-24-codex-auth-mode-explicit](phase-24-codex-auth-mode-explicit.md) | ✅ | Explicitly declare the Codex auth mode in runner config |
 | 25 | [phase-25-fresh-restore-without-session](phase-25-fresh-restore-without-session.md) | ✅ | Fresh-restore of an offline agent without a session_id using only the snapshot, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md) D8 addendum |
-| 26 | [phase-26-oauth-allowlist-login](phase-26-oauth-allowlist-login.md) | 🟡 | Dashboard OAuth login (Google/GitHub/Nextcloud) + text allowlist; token authentication coexists only when KAOIRO_CLIENT_TOKENS is configured, [ADR-0042](../adr/0042-oauth-allowlist-login.md) / [issue #65](https://github.com/sakuraiyuta/kaoiro/issues/65). Implementation tasks 26-1–26-12 are complete and pushed; remaining are provider registration and live E2E by the master. The allowlist role downgrade not affecting active sockets is [#148](https://github.com/sakuraiyuta/kaoiro/issues/148) |
+| 26 | [phase-26-oauth-allowlist-login](phase-26-oauth-allowlist-login.md) | 🟡 | Dashboard OAuth login (Google/GitHub/Nextcloud) + text allowlist; token authentication coexists only when KAOIRO_CLIENT_TOKENS is configured, [ADR-0042](../adr/0042-oauth-allowlist-login.md) / [issue #65](https://github.com/sakuraiyuta/kaoiro/issues/65). Implementation tasks 26-1–26-12 are complete and pushed; remaining are provider registration and live E2E by the master |
 | 27 | [phase-27-list-agents-metadata](phase-27-list-agents-metadata.md) | ✅ | Add 6 operational-status fields to `list_agents` (remaining context / session start / turn count / last activity / IA conversation status / rate_limits), [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6 (inter-agent disclosure) |
 | 28 | [phase-28-agent-initiated-session-ops](phase-28-agent-initiated-session-ops.md) | ✅ | Self-awareness of context fatigue and session reset / compact requested by the agent at the turn boundary, [ADR-0043](../adr/0043-agent-initiated-session-reset.md) / [issue #158](https://github.com/sakuraiyuta/kaoiro/issues/158) |
-| 29 | [P29](phase-29-footer-and-persona-cache.md) | 🟡 | footer / cache |
-| | | | Implementation complete, under review (ADR-0045 / ADR-0046) |
+| 29 | [P29](phase-29-footer-and-persona-cache.md) | ✅ | Footer file externalization and persona-cache relocation, [ADR-0045](../adr/0045-footer-file-externalization.md) / [ADR-0046](../adr/0046-persona-cache-relocation.md) |
 | 30 | [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md) | ✅ | Restart-resilient display history — DETS removal through hydration handshake and IA sidecar, projection-epoch resynchronization, [ADR-0051](../adr/0051-history-restart-resilience.md) (accepted; rollout and dogfood completed 2026-08-08) |
 | 31 | [phase-31-responsive-ui](phase-31-responsive-ui.md) | ⏳ | Equal three-size responsive dashboard — breakpoint and sheet-mechanism foundation, lobby / AgentDetail / surrounding UI, [ADR-0052](../adr/0052-responsive-three-tier-layout.md) |
-| 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | 🟡 | Visualize internal sub-agent/workflow activity — wrapper detection, server aggregation (operator-only), dashboard ring above the agent, [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
-| | | | Implementation complete, under internal review (awaiting こはく confirmation, external review, and commit/push) |
+| 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | ✅ | Visualize internal sub-agent/workflow activity — wrapper detection, server aggregation (operator-only), dashboard ring above the agent, [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
 | 33 | [phase-33-compaction-resume-lifecycle](phase-33-compaction-resume-lifecycle.md) | 🟡 | Automatic resume after compaction (wrapper-local `resume_prompt`) and a server-retained `session_lifecycle` timeline with an operator pull query, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md). Live verification of automatic resume on an actual `compact_boundary` awaits the master's confirmation |
-| 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | ⏳ | Third engine `antigravity` driving the `agy` CLI headless per turn — hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md). Stage 0 HITL (Q1 permission substrate) pending |
-| 35 | [phase-35-docs-migration](phase-35-docs-migration.md) | 🔄 | Move docs/specs into the layered taxonomy (ADR-0060, issue #368) after the semantic sync |
+| 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | 🟡 | Third engine `antigravity` driving the `agy` CLI headless per turn — hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md), live in production. Stage B parity extras ([#387](https://github.com/sakuraiyuta/kaoiro/issues/387), [#389](https://github.com/sakuraiyuta/kaoiro/issues/389), [#410](https://github.com/sakuraiyuta/kaoiro/issues/410) done; [#384](https://github.com/sakuraiyuta/kaoiro/issues/384), [#385](https://github.com/sakuraiyuta/kaoiro/issues/385), [#388](https://github.com/sakuraiyuta/kaoiro/issues/388) open) and Stage C2 (epoch process model, pending review and landing) remain |
+| 35 | [phase-35-docs-migration](phase-35-docs-migration.md) | ✅ | Moved docs/specs into the layered taxonomy (ADR-0060, issue #368) after the semantic sync |
 
 ## Feature-local plans
 
@@ -57,7 +55,18 @@ phase-N).
 | Plan | Status | Description |
 |------|--------|------|
 | [dashboard-bulk-reset](dashboard-bulk-reset.md) | ✅ | Operator `SettingsDrawer` control to bulk-close all conversations and bulk-clear all agent sessions, [ADR-0061](../adr/0061-dashboard-operator-bulk-reset.md) |
-| [issue-365-wrapper-build-identity](issue-365-wrapper-build-identity.md) | ⏳ | Expose validated wrapper build identity through `list_agents` and `whoami`, [issue #365](https://github.com/sakuraiyuta/kaoiro/issues/365) |
+| [issue-362-app-server-stability](issue-362-app-server-stability.md) | 🟡 | App-server lifecycle stability, [issue #362](https://github.com/sakuraiyuta/kaoiro/issues/362) (implementation reviewed, pending landing) |
+| [issue-365-wrapper-build-identity](issue-365-wrapper-build-identity.md) | ✅ | Expose validated wrapper build identity through `list_agents` and `whoami`, [issue #365](https://github.com/sakuraiyuta/kaoiro/issues/365) |
+| [issue-372-doc-duplication](issue-372-doc-duplication.md) | ✅ | Canonical-page and pointer map for the five in-scope documentation deduplication units, [issue #372](https://github.com/sakuraiyuta/kaoiro/issues/372) |
+| [issue-386-antigravity-session-enumeration](issue-386-antigravity-session-enumeration.md) | ✅ | Read Antigravity session metadata from `conversation_summaries.db` for the picker and resume validation, [issue #386](https://github.com/sakuraiyuta/kaoiro/issues/386) |
+| [issue-401-orphan-shutdown](issue-401-orphan-shutdown.md) | ✅ | Bound Claude CLI shutdown before runner reset escalation, [issue #401](https://github.com/sakuraiyuta/kaoiro/issues/401) |
+| [issue-403-test-gitea-numbers](issue-403-test-gitea-numbers.md) | ⏳ | Replace stale private Gitea issue numbers in runner, server, and dashboard tests, [issue #403](https://github.com/sakuraiyuta/kaoiro/issues/403) (design approved, not implemented) |
+| [issue-405-antigravity-reset-ceiling](issue-405-antigravity-reset-ceiling.md) | ✅ | Resolve false permission-ceiling refusals when an Antigravity sandbox determines effective network access, [issue #405](https://github.com/sakuraiyuta/kaoiro/issues/405) |
+| [issue-407-message-crossing](issue-407-message-crossing.md) | ⏳ | Origin-bound replies, one-use reply tickets, bounded inline recovery, and explicit transient-rejection retries for inter-agent message crossing, [issue #407](https://github.com/sakuraiyuta/kaoiro/issues/407) (design approved, not implemented) |
+| [issue-407-rejoin-followup](issue-407-rejoin-followup.md) | 🟡 | Issue #407 reconnect generation and permanent adapter controls (under review) |
+| [issue-408-pre-turn-rate-limits](issue-408-pre-turn-rate-limits.md) | ⏳ | Pre-turn account rate-limit snapshots, [issue #408](https://github.com/sakuraiyuta/kaoiro/issues/408) (design approved, not implemented) |
+| [issue-410-antigravity-cli-version](issue-410-antigravity-cli-version.md) | ✅ | Add the runner's `agy --version` result to `RunnerRegister`, retain it with the live host, and show it to operators, [issue #410](https://github.com/sakuraiyuta/kaoiro/issues/410) |
+| [issue-413-antigravity-cli-wiring-tmp-race](issue-413-antigravity-cli-wiring-tmp-race.md) | ⏳ | Prevent a shared-temp-directory scan in the runner test from failing when another process removes a listed directory, [issue #413](https://github.com/sakuraiyuta/kaoiro/issues/413) (design approved, not implemented) |
 | [issue-421-pending-attention](issue-421-pending-attention.md) | ✅ | Keep dashboard attention indicators visible while permission / question records are pending, [issue #421](https://github.com/sakuraiyuta/kaoiro/issues/421) |
 | [issue-422-notification-lifecycle](issue-422-notification-lifecycle.md) | ✅ | Bind Claude background-task notification turns to folded or independent inter-agent reply origins, [issue #422](https://github.com/sakuraiyuta/kaoiro/issues/422) |
 
@@ -79,4 +88,4 @@ distribution" was settled as a tarball under phase-4's 4-7.)
 - 🟡 mostly done, followups remaining
 - ⚠ partial — important spec items missing
 - ⏳ not started
-- ⛔ blocked
+- ⛔ blocked / dropped

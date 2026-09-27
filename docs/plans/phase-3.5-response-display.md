@@ -4,7 +4,7 @@ description: Relay and display agent response text, making the bundled dashboard
 status: done
 phase: 3.5
 depends_on: [phase-3-server-multiagent]
-last_updated: 2026-07-03
+last_updated: 2026-09-27
 ---
 
 # Phase 3.5 — Response Display (Making the Bundled Dashboard Usable)
@@ -33,7 +33,7 @@ direction and boundaries are defined by [ADR-0012](../adr/0012-response-display-
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| R-1 | protocol: reserve → define `log`/`result` payloads and deliver to operators only | ✅ | [protocol](../specs/protocol.md). `log.kind` = assistant/tool_use/tool_result |
+| R-1 | protocol: reserve → define `log`/`result` payloads and deliver to operators only | ✅ | [protocol](../reference/protocol/events.md#types-and-payload-v0-settled). `log.kind` = assistant/tool_use/tool_result |
 | R-2 | wrapper: relay assistant text, tool_use/tool_result, and result | ✅ | SDK message → `log` type mapping is in [agent-sdk-events](../reference/engines/claude-events.md). `d5d120c` |
 | R-3 | server: in-memory ring-buffer history in `AgentStates`, snapshot + history on join, operator-role filter for log/result | ✅ | No new DB dependency. Persistence is issue #24. `7410d68`/`f7af05f` |
 | R-4 | dashboard: grid → click → full-screen detail (chat-like log, collapsible tools, instruction, approval, blind-spot indicator) | ✅ | Cards display face, name, state, and agent_id (instruction input removed 2026-06-16). Instruction and approval operations are in detail. `8319576` |
@@ -42,24 +42,27 @@ MVP implementation complete (wrapper 68 / server 70 / dashboard 13 tests green).
 Each review-cycle stage was completed. Three surfaced security issues were implemented
 in #26/#28 (`0e81680`).
 
-# 27 remains a candidate for deferral. Real-machine E2E was accepted through dogfooding
-(2026-07-03). Only Stage Polish (issue #21) remains.
+Issue #27 remains a candidate for deferral. Real-machine E2E was accepted through
+dogfooding (2026-07-03). Stage Polish was dropped with issue #21.
 
 ### Stage Polish (issue #21 = game-like UI)
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| R-5 | Tile → detail animation/morph transition | ⏳ | A simple transition is acceptable in the MVP |
-| R-6 | Polish the Wizardry-style border UI | ⏳ | issue #21 |
-| R-7 | Tune the blind-spot indicator color's most-urgent precedence | ⏳ | error > waiting_permission > other |
+| R-5 | Tile → detail animation/morph transition | ⛔ | issue #21 closed 2026-08-23 without implementation; the current UI direction is ADR-0052 (phase-31) |
+| R-6 | Polish the Wizardry-style border UI | ⛔ | issue #21 closed 2026-08-23 without implementation; the current UI direction is ADR-0052 (phase-31) |
+| R-7 | Tune the blind-spot indicator color's most-urgent precedence | ⛔ | issue #21 closed 2026-08-23 without implementation; the current UI direction is ADR-0052 (phase-31) |
 
-Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
+Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked / dropped.
 
-## Followups (in-phase but unfinished)
+## Followups
 
-- Persisting history to disk (resilience across redeployments) is issue #24 (including specification).
-- Three-column grid + latest-response timeline is issue #25.
-- Claude Code-specific token/context visualization is issue #16 (through `ext`).
+None. All three in-phase follow-ups are closed: persisting history to disk
+(resilience across redeployments), [issue #24](https://github.com/sakuraiyuta/kaoiro/issues/24),
+closed 2026-08-23; three-column grid + latest-response timeline,
+[issue #25](https://github.com/sakuraiyuta/kaoiro/issues/25), closed 2026-08-23;
+Claude Code-specific token/context visualization through `ext`,
+[issue #16](https://github.com/sakuraiyuta/kaoiro/issues/16), closed 2026-08-23.
 
 ## Open Questions Blocking This Phase
 
@@ -70,7 +73,7 @@ None (resolved by [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md
 - ADRs: [0012](../adr/0012-response-display-and-dashboard-scope.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
   [0010](../adr/0010-protocol-precisification.md)
-- Specs: [protocol](../specs/protocol.md),
+- Specs: [protocol](../architecture/message-topology.md),
   [non-goals](../architecture/scope.md),
   [threat-model](../architecture/security-threat-model.md)
 - Previous: [phase-3-server-multiagent](phase-3-server-multiagent.md)

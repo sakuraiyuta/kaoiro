@@ -205,6 +205,6 @@ corresponding test fails in each case).
 - Prerequisite ADRs: [0014](../adr/0014-session-resume-and-restore.md),
   [0030](../adr/0030-agent-directory-and-explicit-restore.md),
   [0036](../adr/0036-session-lifecycle-commands.md)
-- Specs: [protocol](../specs/protocol.md),
-  [protocol-inter-agent](../specs/protocol-inter-agent.md),
-  [deployment](../specs/deployment.md)
+- Specs: [protocol](../architecture/message-topology.md),
+  [protocol-inter-agent](../architecture/inter-agent-messaging.md),
+  [deployment](../architecture/deployment.md)

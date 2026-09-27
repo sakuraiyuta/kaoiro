@@ -34,7 +34,7 @@ exercises the MCP-handler guard without the separate `canUseTool` guard;
 the SDK warned that `canUseTool` was shadowed. Authentication remained the
 operator's existing SDK authentication; no credentials were recorded.
 
-[Captured evidence](2026-09-27-issue-422-notification-turn.json) contains selected
+[Captured evidence](2026-09-27-notification-turn.json) contains selected
 raw events, source baseline, SHA-256 values for the built modules, SDK module
 and types, disposable probe programs, and original logs. Thinking blocks,
 signatures, account limits, and unrelated initialization fields were omitted.

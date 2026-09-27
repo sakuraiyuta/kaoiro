@@ -30,6 +30,16 @@ Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
 | [claude-effort-levels-init-transition](claude-effort-levels-init-transition.md) | medium | — | 2026-07-14 |
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |
+| [lifecycle-timeline-ui](lifecycle-timeline-ui.md) | medium | — | 2026-08-31 |
+
+## Deferred
+
+Decided but not promoted to an ADR — the decision was to defer, not to settle
+a design. Kept here (not deleted) so the reason for the deferral stays visible.
+
+| Slug | Decided | Reason |
+|------|---------|--------|
+| [codex-lifecycle-observability](codex-lifecycle-observability.md) | 2026-08-31 | No way to observe Codex compaction locally, so Codex `session_lifecycle` / `resume_prompt` support is deferred (engine-side auto-compaction assumed; out of scope for now) |
 
 ## Recently decided
 

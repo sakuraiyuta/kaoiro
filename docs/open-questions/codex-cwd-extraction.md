@@ -18,7 +18,7 @@ it becomes necessary.
 
 For background, see Claude-side [issue #92](https://github.com/sakuraiyuta/kaoiro/issues/92)
 (the SDK does not persist Bash cd, so CwdChanged does not fire; waiting for an
-upstream bug fix) and `ext.cwd` in [protocol](../specs/protocol.md). The Claude
+upstream bug fix) and `ext.cwd` in [protocol](../reference/engines/claude-events.md). The Claude
 side is also operationally unstable, so Codex-side extraction has the same low
 urgency.
 

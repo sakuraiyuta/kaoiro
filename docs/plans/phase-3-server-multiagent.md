@@ -50,7 +50,7 @@ None.
 ## See Also
 
 - Specs: [architecture](../architecture/system-overview.md),
-  [protocol](../specs/protocol.md)
+  [protocol](../architecture/message-topology.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0003](../adr/0003-persona-identity-persistence.md),
   [0005](../adr/0005-access-control-oauth-stub.md)

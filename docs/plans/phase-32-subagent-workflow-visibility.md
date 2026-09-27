@@ -1,10 +1,10 @@
 ---
 title: Phase 32 — Visibility into internal subagent/workflow activity
 description: Detect the existence and state of subagents/workflows started by Task tools in the wrapper, aggregate them through the server, and visualize them as a ring above the dashboard's agent.
-status: in_progress
+status: done
 phase: 32
 depends_on: []
-last_updated: 2026-08-10
+last_updated: 2026-09-27
 ---
 
 # Phase 32 — Visibility into internal subagent/workflow activity
@@ -21,7 +21,7 @@ are [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 (entity model / transport), [ADR-0047](../adr/0047-task-envelope-schema.md)
 (envelope schema), and [ADR-0048](../adr/0048-task-aggregation-delivery.md)
 (server aggregation / delivery, operator-only). The feature specification is
-[subagent-tasks](../specs/subagent-tasks.md).
+[subagent-tasks](../architecture/subagent-visibility.md).
 
 ## Tasks
 
@@ -30,13 +30,12 @@ are [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 | 32-1 | wrapper: interpret `task_started`/`task_progress`/`task_notification` + emit `task` envelopes | あお | ✅ | `wrapper/claude-code/src/adapter.ts` provides pure function `sdkMessageToTask`, and `wrapper/agent-common` provides `makeTask`. `kind=updated` is throttled in host.ts by 3 seconds + either a 500-token delta or a tool-name change. An unknown subtype (`task_updated`) only emits a fail-visible warning and never affects the concurrent-task count (ADR-0019 addendum, unchanged). Unknown `task_notification` statuses were changed to terminal fallback in the M2 fix round (2026-08-09, ふじ round 1): values other than the known 3 (completed/failed/stopped) are treated as status="failed"; the raw value is retained only as raw_status for logging and is not sent on the wire. This path counts as completed (-1), so the original “never affect the count” rule does not apply to unknown task_notification statuses |
 | 32-2 | server: `TaskStates` GenServer (flat task table) + wrapper_channel/agents_channel wiring | あお | ✅ | New `server/lib/kaoiro_server/task_states.ex`. `WrapperChannel.terminate/2` calls `TaskStates.discard_for_agent/1` only when the owner check of `AgentStates.disconnect/3` succeeds (ADR-0048 F1). Add a `tasks` key to the `AgentsChannel` snapshot push; it is non-empty only for operators (viewers use the existing fail-closed catch-all, which drops even `type: "task"` itself, ADR-0021) |
 | 32-3 | dashboard: receive `task` envelopes + ring above `AgentCard` | あお | ✅ | `protocol.ts` adds `TaskPayload`/`taskOf`/`parseTasks`/`applyTaskEnvelope`. `App.svelte` retains `tasks` as an accumulator separate from `agents` (ADR-0019 F2: do not overwrite the parent's state_change slot). `AgentCard.svelte` wraps `.sprite`/`.face` in `.sprite-slot` (position: relative) + `.task-ring` (elliptical orbit using 12-step `translate`-based keyframes, no image asset; extract to shared `TaskRing.svelte` in 32-5). `prefers-reduced-motion` is covered by the existing global rules in `app.css` (`animation-duration: 0.01ms !important`, etc.); no per-component override. Use activeTaskCount only for on/off and do not display a number (こはく scope decision) |
-| 32-4 | docs: finalize spec/ADR addendum, protocol.md, and this plan | あお | ✅ | Update stages 1–3 of [subagent-tasks](../specs/subagent-tasks.md) to implementation complete; add measured fields (`prompt`/`output_file`/`task_updated`) and the measured record of terminal-notification guarantees to [agent-sdk-events](../reference/engines/claude-events.md); add addenda to ADR-0019/0047/0048 (task_updated out of scope / measured task_type values and no prompt/output_file wiring / operator-only delivery) |
-| 32-5 | follow-up: add the ring above `AgentDetail` (マスター finding, recover the missed scope) | あお | 🔄 | Details are in the “Follow-up” section below. Direction: クロエ; review: ふじ; implementation: あお. Under review |
+| 32-4 | docs: finalize spec/ADR addendum, protocol.md, and this plan | あお | ✅ | Update stages 1–3 of [subagent-tasks](../architecture/subagent-visibility.md) to implementation complete; add measured fields (`prompt`/`output_file`/`task_updated`) and the measured record of terminal-notification guarantees to [agent-sdk-events](../reference/engines/claude-events.md); add addenda to ADR-0019/0047/0048 (task_updated out of scope / measured task_type values and no prompt/output_file wiring / operator-only delivery) |
+| 32-5 | follow-up: add the ring above `AgentDetail` (マスター finding, recover the missed scope) | あお | ✅ | Details are in the “Follow-up” section below. Direction: クロエ; review: ふじ; implementation: あお. Landed on develop (`2e35422d`, 2026-08-10), with further polish rounds for back-button overlap ([issue #180](https://github.com/sakuraiyuta/kaoiro/issues/180) follow-up round2/round3) and root-task dot-count display ([issue #233](https://github.com/sakuraiyuta/kaoiro/issues/233)) |
 
-**Why status is not raised to `done`:** implementation and unit tests for 32-1–32-4
-are complete, but for issue #170 as a whole the completion report to こはく,
-external review (ふじ = wrapper/server; whether クロエ needs UI review is a
-decision for こはく), commit approval, and push are still pending.
+All of 32-1–32-5 landed on develop and [issue #170](https://github.com/sakuraiyuta/kaoiro/issues/170)
+is closed (2026-08-23), including the follow-up review/polish rounds noted
+in 32-5's Notes above.
 
 ## Design decisions confirmed by measurement (recorded with the ADR; read it)
 
@@ -69,7 +68,7 @@ and does not duplicate their content:
   approval and was added in 32-5 (the Follow-up below).
 - Verification of whether child agents spawned by a workflow appear as separate
   `task_started` events (the “needs verification” section of
-  [subagent-tasks](../specs/subagent-tasks.md)) remains unstarted.
+  [subagent-workflow-detection](../evidence/claude/subagent-workflow-detection.md)) remains unstarted.
 
 ## Follow-up: add the ring above `AgentDetail` (2026-08-10)
 
@@ -131,8 +130,8 @@ occur in the same layout. The 8rem cap is enabled only in BottomSheet mode.
 
 ## Related
 
-- Specs: [subagent-tasks](../specs/subagent-tasks.md),
-  [protocol](../specs/protocol.md),
+- Specs: [subagent-tasks](../architecture/subagent-visibility.md),
+  [protocol](../architecture/message-topology.md),
   [agent-sdk-events](../reference/engines/claude-events.md).
 - ADRs: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
   [0047](../adr/0047-task-envelope-schema.md),

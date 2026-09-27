@@ -4,7 +4,7 @@ description: Restore the model / effort / *_source punted from P0 in Phase 22 th
 status: done
 phase: 23
 depends_on: [15, 17, 21, 22]
-last_updated: 2026-08-02
+last_updated: 2026-09-27
 ---
 
 # Phase 23 — Reapplying model / effort / *_source on resume (P1)
@@ -204,7 +204,7 @@ semantics), by fixing the 5-case pair rule.
 | 23-E7 | Docs: ADR-0014 F1 addendum three-tier lookup (confirmed in F1, concrete-miss fail-closed added in G1) + why union was rejected + no synthetic default | ✅ | Synchronize phase-23 plan status with pending dogfood re-verification |
 | 23-F1 | Three-tier lookup fix + fixture revert (Fuji fourth-review must-fix) | ✅ | Revert Haiku levels in claudeBootstrap fixture (restore `host.test.ts:1349` contract); make Codex helper and dashboard exact → real default → intersection three-tier; document real vs synthetic default in ADR; pin real-default fallback / concrete miss / exact missing / Codex null paths; related suites pass |
 | 23-G1 | Do not fall back to intersection on concrete miss (Fuji fifth-review must-fix) | ✅ | Add “concrete key exact miss + no real default → [] fail-closed” to Codex helper and dashboard. A future/stale concrete model is not guaranteed to be among catalog candidates; limit intersection to model=null (account-default) path. Synchronize final docs (ADR/plan), related suites pass |
-| 23-9 | manual dogfood verification | ⏳ | Master verification pending (D+E+F+G+R4-R6 + re-reverification after the [Phase 24](phase-24-codex-auth-mode-explicit.md) fix. Root cause of both buttons being hidden—empty catalog when codex binary is absent from runner PATH—is resolved by Phase 24) |
+| 23-9 | manual dogfood verification | ✅ | closed 2026-08-02 by operator decision (see progress log) — D+E+F+G+R4-R6 + re-reverification after the [Phase 24](phase-24-codex-auth-mode-explicit.md) fix. Root cause of both buttons being hidden—empty catalog when codex binary is absent from runner PATH—was resolved by Phase 24 |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
@@ -279,9 +279,9 @@ Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
   [Phase 24](phase-24-codex-auth-mode-explicit.md)
   (`runner/src/config.ts::CodexConfig` gains `auth_mode?: 'chatgpt' | 'apikey'`,
   and priority `explicit config > doctor detection > "unknown"` resolves the
-  catalog without dependence on runner PATH). Until Phase 24 is complete,
-  23-9 dogfood remains pending; after it, re-verify D+E+F+G+R4-R6+Phase 24
-  together in dogfood.
+  catalog without dependence on runner PATH). Phase 24 completed, and 23-9
+  dogfood (D+E+F+G+R4-R6+Phase 24 together) was verified and closed
+  2026-08-02 by operator decision (see Progress log).
 - **Exact effort_levels lookup and model-representation mismatch (resolved in
   E1-E7 + F1)**: Dogfood re-observed a scenario that hint restoration cannot
   rescue—**the previous session ended before a turn completed, so its snapshot

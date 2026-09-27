@@ -11,7 +11,7 @@ Design investigation at `ba696b503261db5c3af9f4806a5579b9f8f8d995`.
 Kogane measured Codex; Kohaku investigated Claude and Antigravity. Product source
 is unchanged. These are baseline observations, not tests of an implemented
 reply-ticket or origin guard. No live model API was used in the recorded probes.
-The [captured evidence](2026-09-26-issue-407-cross-turn.json) identifies executable,
+The [captured evidence](2026-09-26-cross-turn.json) identifies executable,
 build, harness and raw-output hashes. Findings do not estimate production frequency.
 
 ## Codex: actual host, CLI, bridge and shared tool

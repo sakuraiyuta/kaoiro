@@ -6,8 +6,8 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 |--------|------|
 | [architecture/](architecture/) | How kaoiro is built today and why — start at [overview](architecture/overview.md) and [system-overview](architecture/system-overview.md) |
 | [reference/](reference/) | Exact current contracts (protocol, configuration, engines, ui) and the [glossary](reference/glossary.md) |
-| [specs/](specs/) | Pre-taxonomy feature specifications — dissolved into `architecture/`, `reference/`, `operations/`, `evidence/` and `contributing/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), progress in [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
-| [evidence/](evidence/) | Dated measurements and their limits; [Codex exec](evidence/codex/exec-contract.md) and [model catalog](evidence/codex/model-catalog.md) |
+| [specs/](specs/) | Pre-taxonomy feature specifications — dissolved into `architecture/`, `reference/`, `operations/`, `evidence/` and `contributing/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), completed via [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
+| [evidence/](evidence/) | Dated measurements and their limits — [index](evidence/README.md) |
 | [operations/](operations/) | Operator runbooks |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
@@ -86,6 +86,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0059](adr/0059-launcher-owned-runner-pairing.md) | Launcher-owned runner token pairing for dev.sh and dogfood.sh | accepted |
 | [0060](adr/0060-documentation-taxonomy-and-migration.md) | Layered documentation taxonomy and the migration order for docs/ | accepted |
 | [0061](adr/0061-dashboard-operator-bulk-reset.md) | Dashboard operator bulk close + bulk session reset | accepted |
+| [0062](adr/0062-input-bound-inter-agent-replies.md) | Input-bound inter-agent replies | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.

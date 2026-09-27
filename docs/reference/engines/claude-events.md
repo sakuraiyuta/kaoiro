@@ -67,7 +67,7 @@ usage. A missing account source leaves `rate_limits` absent.
 Closing the host cancels an outstanding startup probe and terminates its
 subprocess through the probe client's existing signal escalation.
 
-The [live measurement](../../evidence/2026-09-26-pre-turn-rate-limits.md)
+The [live measurement](../../evidence/issue-408/2026-09-26-pre-turn-rate-limits.md)
 records the SDK and startup results.
 
 ### Task (subagent/workflow) messages

@@ -27,7 +27,7 @@ edit the page it points at.
 | [protocol-inter-agent](../architecture/inter-agent-messaging.md) | provisional | Inter-agent messaging and its boundaries |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |
 | [agent-sdk-events](../reference/engines/claude-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
-| [codex-exec-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
+| [codex-sdk-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
 | [codex-model-catalog](../reference/engines/codex-model-catalog.md) | accepted | Catalog contract; [model-change procedures](../operations/codex-model-settings.md) and [dated plan/auth/doctor evidence](../evidence/codex/model-catalog.md) |
 | [antigravity-cli-events](../architecture/antigravity-adapter.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
 | [subagent-tasks](../architecture/subagent-visibility.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |

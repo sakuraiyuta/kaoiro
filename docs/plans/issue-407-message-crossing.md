@@ -46,11 +46,11 @@ admission. `receiveInbound()` currently advances transport numbering before
 engine input; monotonic server acceptance alone therefore permits stale replies.
 Delivery acknowledgement is not evidence of model input or understanding.
 
-The [joint research report](../evidence/2026-09-26-issue-407-interrupt-comparison.md)
+The [joint research report](../evidence/issue-407/2026-09-26-interrupt-comparison.md)
 (SHA-256 `7eea0ffc4c73d3556a1464e9441bb3c999fb6c3d5a5d4c81fa2d2c071ee5a782`)
 records input retention and interrupt limits, not rollback or productivity gains.
 Its source/measurement baselines remain unchanged by this plan's rebase. The
-[call-provenance investigation](../evidence/2026-09-26-issue-407-call-provenance.md)
+[call-provenance investigation](../evidence/issue-407/2026-09-26-call-provenance.md)
 records SDK/CLI ID and ordering observations; the fourth review checked its hashes
 and checker, not a product guard. Neither report measures reply_ticket behavior.
 
@@ -217,9 +217,9 @@ the session. Observing a ticket cannot change any of its bound fields.
 
 ## Cross-turn call origin: required admission boundary
 
-The [cross-turn investigation](../evidence/2026-09-26-issue-407-cross-turn.md#codex-actual-host-cli-bridge-and-shared-tool)
+The [cross-turn investigation](../evidence/issue-407/2026-09-26-cross-turn.md#codex-actual-host-cli-bridge-and-shared-tool)
 records the baseline reproductions and their limits; its
-[timeout analysis](../evidence/2026-09-26-issue-407-cross-turn.md#why-the-timeout-paths-differ)
+[timeout analysis](../evidence/issue-407/2026-09-26-cross-turn.md#why-the-timeout-paths-differ)
 separates observed behavior from the source-supported causal interpretation.
 Current-token lookup at ToolHost/shared-handler receipt is insufficient even
 without explicit override. A same-turn-only limitation is not the accepted v1
@@ -319,7 +319,7 @@ before callback creation, token retirement, duplicate IDs and capacity exhaustio
 
 ### Antigravity: engine boundary not established
 
-The [AG evidence](../evidence/2026-09-26-issue-407-cross-turn.md#antigravity-adapter-observations-native-measurement-unmet)
+The [AG evidence](../evidence/issue-407/2026-09-26-cross-turn.md#antigravity-adapter-observations-native-measurement-unmet)
 records three adapter-only controls and the prior preparation stop (0/5 live
 runs); none establishes the native engine boundary. The epoch nonce is not a
 per-turn identity, and closing an endpoint does not cancel an entered handler.

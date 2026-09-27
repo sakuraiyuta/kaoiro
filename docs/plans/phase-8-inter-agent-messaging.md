@@ -16,8 +16,9 @@ of cooperative communication among multiple AI agents) serves as the umbrella
 issue that also organizes prerequisites.
 
 Mechanical specifications such as the envelope schema are split out into the
-[protocol-inter-agent spec](../specs/protocol-inter-agent.md) (to be created in
-follow-up work); this plan covers only the staged implementation plan.
+[protocol-inter-agent spec](../architecture/inter-agent-messaging.md) and
+[message contract](../reference/inter-agent/messages.md); this plan covers
+only the staged implementation plan.
 
 ## Goal
 
@@ -48,8 +49,9 @@ that new envelope types can be added without inconsistency.
 | IN3 | Dashboard log display path and existing log envelope shape | Finalize the rendering policy for `inter_agent_message` on the observation path |
 
 Completion criterion: reflect the research results for the three items above in
-the new spec draft `docs/specs/protocol-inter-agent.md` and finalize the envelope
-schema in a machine-readable form.
+[architecture/inter-agent-messaging.md](../architecture/inter-agent-messaging.md)
+and [reference/inter-agent/messages.md](../reference/inter-agent/messages.md), and
+finalize the envelope schema in a machine-readable form.
 
 ## Stage B — Phase 1: A→B by explicit user instruction (MVP)
 
@@ -107,7 +109,7 @@ Decide whether to proceed to Stage C in a subsequent session.
 
 | Order | Layer | Contents |
 |--|--|--|
-| 1 | spec | Finalize `docs/specs/protocol-inter-agent.md` (envelope / kind / meta / owner / hard-limit defaults) |
+| 1 | spec | Finalize [architecture/inter-agent-messaging.md](../architecture/inter-agent-messaging.md) / [reference/inter-agent/messages.md](../reference/inter-agent/messages.md) (envelope / kind / meta / owner / hard-limit defaults) |
 | 2 | server | Envelope routing + observation broadcast + hard-limit monitoring timer |
 | 3 | wrapper | Define the `send_to_agent` tool, connect it to permission_broker, and inject received envelopes into SDK input |
 | 4 | dashboard | Display `inter_agent_message` in logs and the destination in the permission dialog |
@@ -162,8 +164,8 @@ settled, create it as a separate plan (or an addendum to this plan).
 
 - 2026-08-02: Closed by the master's decision (status: done). Basis:
   - Stages A/B are implemented and operating (`send_to_agent` /
-    [protocol-inter-agent spec](../specs/protocol-inter-agent.md); the originating
-    issue #17 is closed)
+    [protocol-inter-agent spec](../architecture/inter-agent-messaging.md); the
+    originating issue #17 is closed)
   - The unfinished parts of Stage C (approval relaxation such as the conversation
     whitelist) were carried forward early into F2 of
     [ADR-0044](../adr/0044-coordination-injection-hitl.md) (option B finalized and
@@ -174,9 +176,9 @@ settled, create it as a separate plan (or an addendum to this plan).
 
 ## References
 
-- [message contract](../reference/inter-agent/messages.md) (mechanical
-  envelope definition to be created in follow-up work)
-- [protocol spec](../specs/protocol.md) — Existing common envelope foundation
+- [message contract](../reference/inter-agent/messages.md) — mechanical
+  envelope definition
+- [protocol spec](../architecture/message-topology.md) — Existing common envelope foundation
 - [ADR-0010 protocol-precisification](../adr/0010-protocol-precisification.md)
 - [ADR-0019 subagent/workflow entity and task envelope](../adr/0019-subagent-workflow-entity-and-task-envelope.md) — Reference for existing envelope naming conventions
 - kaoiro issue #17 — Main inter-agent messaging work (origin of this plan)

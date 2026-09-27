@@ -8,7 +8,7 @@ last_updated: 2026-09-27
 
 ## Artifact and scope
 
-The source artifact is commit `7e99856141be443c0f3bb1200393e3d71e2d8132` on the landing candidate. These measurements loaded the built Claude SDK host and common inter-agent tool from that artifact. Claude Agent SDK 0.3.280, CLI 2.1.280, actual CLI hooks and MCP callbacks, joined `ServerLink` clients, and a local Phoenix server were used. The model API was called; no result below comes from a simulated model response. The separate [round-3 record](2026-09-27-issue-422-notification-admission-round3.md) contains the controlled fail-stop tests and mutations. This record binds the native normal path to the final send guard.
+The source artifact is commit `7e99856141be443c0f3bb1200393e3d71e2d8132` on the landing candidate. These measurements loaded the built Claude SDK host and common inter-agent tool from that artifact. Claude Agent SDK 0.3.280, CLI 2.1.280, actual CLI hooks and MCP callbacks, joined `ServerLink` clients, and a local Phoenix server were used. The model API was called; no result below comes from a simulated model response. The separate [round-3 record](2026-09-27-notification-admission-round3.md) contains the controlled fail-stop tests and mutations. This record binds the native normal path to the final send guard.
 
 | Built module | SHA-256 |
 | --- | --- |

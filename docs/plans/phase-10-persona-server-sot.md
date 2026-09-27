@@ -83,13 +83,13 @@ following are in place.
       from `provisional` → `accepted`
 - [x] Update [personas](../specs/personas.md) to “creation = zip workflow”
       (completed before starting this phase)
-- [x] Update [persona-personality-injection](../specs/persona-personality-injection.md)
+- [x] Update [persona-personality-injection](../architecture/personality-injection.md)
       to the new model (completed before starting this phase)
 - [x] Remove `personality_prompt_file` / `language` from the wrapper config
-      section of [setup-wizards](../specs/setup-wizards.md) (completed before
+      section of [setup-wizards](../reference/configuration/setup-wizards.md) (completed before
       starting this phase)
 - [x] Add the persona-prompt push message and reject specification to
-      [protocol](../specs/protocol.md) (completed before starting this phase)
+      [protocol](../reference/protocol/persona-delivery.md) (completed before starting this phase)
 
 ### Dev procedure
 
@@ -127,8 +127,8 @@ Follow-ups.
 - ADR: [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
 - Specs: [persona-pack-format](../reference/personas/pack-format.md),
   [personas](../specs/personas.md),
-  [persona-personality-injection](../specs/persona-personality-injection.md),
-  [setup-wizards](../specs/setup-wizards.md),
-  [protocol](../specs/protocol.md)
+  [persona-personality-injection](../architecture/personality-injection.md),
+  [setup-wizards](../reference/configuration/setup-wizards.md),
+  [protocol](../reference/protocol/persona-delivery.md)
 - Superseded ADRs: [ADR-0008](../adr/0008-persona-asset-distribution.md),
   [ADR-0026](../adr/0026-persona-personality-injection.md)

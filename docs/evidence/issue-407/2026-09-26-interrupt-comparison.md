@@ -132,7 +132,7 @@ Antigravity findings here are source inspection and an explicitly identified
 past measurement, not a new live probe. At the inspected versions it has no
 supported in-band interrupt; the wrapper ends the process epoch and respawns
 with the conversation ID while retaining queued turns. The existing
-[print-mode measurement](antigravity/print-mode-background-tasks.md) observed
+[print-mode measurement](../antigravity/print-mode-background-tasks.md) observed
 input recall after SIGINT and resume. It does not establish persistence under
 the current SIGTERM/SIGKILL path. Engine-side partial text persistence and
 conversation-store schema remain unverified. Runner session discovery/resume

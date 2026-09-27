@@ -4,7 +4,7 @@ description: Resolve the regression blocking Phase 23 dogfood re-reverification 
 status: done
 phase: 24
 depends_on: [23]
-last_updated: 2026-08-02
+last_updated: 2026-09-27
 ---
 
 # Phase 24 — Explicitly declaring Codex auth mode in runner config
@@ -141,7 +141,7 @@ note of the Phase 23 [plan](phase-23-resume-model-effort-restoration.md).
 | 24-4 | Add an `auth_mode` example to `runner.config.example.json` (no `scripts/dogfood.sh` change) | ✅ | Avoid development-host misdeclaration |
 | 24-5 | docs: new phase-24 plan + ADR-0035 auth-mode decision section + Phase 23 Risks/23-9 addition | ✅ | Do not force an addition to protocol.md |
 | 24-6 | All package typechecks / tests / diff --check | ✅ | Confirm no Phase 23 code changes |
-| 24-7 | Manual dogfood verification | ⏳ | Pending master real-device verification (after untracked config update) |
+| 24-7 | Manual dogfood verification | ✅ | closed 2026-08-02 by operator decision (see progress log) |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
