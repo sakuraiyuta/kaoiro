@@ -94,9 +94,11 @@ accepted (not completed); definite rejections count as skipped, while timeout
 and `session_reset_pending` count as unknown and are never retried in this run.
 If operator authority or connection identity changes, stop scheduling calls
 immediately, do not apply stale results to the new connection, and suppress the
-old run's summary. Keep a run lock in `App.svelte` so closing/reopening the
-drawer cannot start a second run while the first one's promise is still
-settling; disable the action and confirmation while locked.
+old run's summary. Keep an owner-scoped run lock in `App.svelte`: closing the
+drawer during preparation releases that preparation and invalidates its late
+reply, while closing it during execution keeps the lock until that run settles.
+This prevents an old preparation's `finally` from releasing a newer run's lock.
+Disable the action and confirmation while locked.
 
 Render the action only when both `isOperator` and `status === "connected"`
 with a live connection are present, and also require complete snapshots before
@@ -113,11 +115,14 @@ ADR-0061 F1.
 Add tests for all seven acceptance criteria, including production-default
 `App.svelte` composition with no injected operator/connection substitutes.
 Cover the confirmation snapshot counts and frozen IDs; exact close/reset calls;
-continued processing after one close or reset failure; timeout and
-`session_reset_pending` classified as unknown with exactly one attempt;
-directory-only/offline exclusion; and the summary callback's counts. Also
-exercise identity change and operator loss during a deferred call, complete
-snapshot gating, and the shared run lock across drawer close/reopen.
+continued processing after one close or reset failure; definite reset
+rejections from an explicit reason allowlist; timeout, `session_reset_pending`,
+missing reasons, and future reasons classified as unknown with exactly one
+attempt; directory-only/offline exclusion; and the summary callback's counts.
+Also exercise complete and incomplete conversation snapshots while cached rows
+remain, identity change and operator loss during a deferred call, preparation
+teardown with a late response, execution teardown retaining the lock through
+settlement, and the shared run lock across drawer close/reopen.
 
 Negative controls / mutations: after drawer mount, accept a second conversation
 and prove the fresh confirmation includes both IDs; then fail the fresh query

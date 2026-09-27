@@ -19,6 +19,18 @@
   } from "./protocol";
   import Modal from "./Modal.svelte";
 
+  // A future rejection reason cannot prove that the reset was not accepted.
+  const DEFINITE_SESSION_RESET_REJECTIONS = new Set([
+    "agent_busy",
+    "unsupported_session_reset",
+    "invalid_mode",
+    "unknown_agent",
+    "missing_agent_id",
+    "invalid_agent_id",
+    "payload_too_large",
+    "invalid_payload",
+  ]);
+
   let {
     onClose,
     onLogout = undefined,
@@ -29,8 +41,8 @@
     appConnectionGeneration = 0,
     agentSnapshotComplete = false,
     bulkResetRunning = false,
-    tryBeginBulkReset = () => false,
-    endBulkReset = () => {},
+    tryBeginBulkReset = () => null,
+    endBulkReset = (_token: number) => {},
     onBulkResetSummary = () => {},
   }: {
     onClose: () => void;
@@ -52,8 +64,8 @@
     appConnectionGeneration?: number;
     agentSnapshotComplete?: boolean;
     bulkResetRunning?: boolean;
-    tryBeginBulkReset?: () => boolean;
-    endBulkReset?: () => void;
+    tryBeginBulkReset?: () => number | null;
+    endBulkReset?: (token: number) => void;
     onBulkResetSummary?: (message: string) => void;
     /** Rally threshold in force (issue #307), or null before the first
      *  push. Owned by App.svelte so a change made elsewhere is reflected
@@ -111,9 +123,12 @@
   let bulkResetTargets = $state<{
     connection: KaoiroConnection;
     appGeneration: number;
+    lockToken: number;
     conversationIds: string[];
     agentIds: string[];
   } | null>(null);
+  let bulkResetLockToken: number | null = null;
+  let bulkResetPreparationGeneration = 0;
 
   // View state only; keep it out of the settings store so each drawer open hides closed rows again.
   let showClosedConversations = $state(false);
@@ -178,19 +193,29 @@
     );
   }
 
+  function releaseBulkResetLock(token: number): void {
+    if (bulkResetLockToken !== token) return;
+    bulkResetLockToken = null;
+    endBulkReset(token);
+  }
+
   async function prepareBulkReset(): Promise<void> {
     if (
       !connection ||
       !agentSnapshotComplete ||
       bulkResetRunning ||
-      bulkResetPreparing ||
-      !tryBeginBulkReset()
+      bulkResetPreparing
     ) {
       return;
     }
 
+    const lockToken = tryBeginBulkReset();
+    if (lockToken === null) return;
+    bulkResetLockToken = lockToken;
+
     const capturedConnection = connection;
     const appGeneration = appConnectionGeneration;
+    const preparationGeneration = ++bulkResetPreparationGeneration;
     const agentIds = Object.entries(agents)
       .filter(([, envelope]) => envelope.state !== "disconnected")
       .map(([id]) => id)
@@ -202,6 +227,7 @@
     try {
       const conversations = await capturedConnection.listConversations();
       if (
+        preparationGeneration !== bulkResetPreparationGeneration ||
         connection !== capturedConnection ||
         appConnectionGeneration !== appGeneration
       ) {
@@ -218,6 +244,7 @@
       bulkResetTargets = {
         connection: capturedConnection,
         appGeneration,
+        lockToken,
         conversationIds: conversations
           .filter((item) => item.status === "open")
           .map((item) => item.conversationId),
@@ -233,8 +260,10 @@
           err instanceof Error ? err.message : "会話一覧を更新できませんでした";
       }
     } finally {
-      bulkResetPreparing = false;
-      if (!keepLockForConfirmation) endBulkReset();
+      if (preparationGeneration === bulkResetPreparationGeneration) {
+        bulkResetPreparing = false;
+      }
+      if (!keepLockForConfirmation) releaseBulkResetLock(lockToken);
     }
   }
 
@@ -242,7 +271,9 @@
     if (bulkResetExecuting) return;
     bulkResetTargets = null;
     bulkResetError = null;
-    endBulkReset();
+    if (bulkResetLockToken !== null) {
+      releaseBulkResetLock(bulkResetLockToken);
+    }
   }
 
   $effect(() => {
@@ -337,10 +368,17 @@
                 agentId,
                 err,
               );
-            } else {
+            } else if (DEFINITE_SESSION_RESET_REJECTIONS.has(reason)) {
               resetSkipped += 1;
               console.warn(
                 "一括 session_reset をスキップしました",
+                agentId,
+                err,
+              );
+            } else {
+              resetUnknown += 1;
+              console.warn(
+                "一括 session_reset の結果は不明です。再試行しません",
                 agentId,
                 err,
               );
@@ -357,7 +395,7 @@
     } finally {
       bulkResetExecuting = false;
       bulkResetTargets = null;
-      endBulkReset();
+      releaseBulkResetLock(target.lockToken);
     }
   }
 
@@ -419,10 +457,17 @@
     return () => {
       refreshSeq += 1;
       connectionGeneration += 1;
-      if (!bulkResetExecuting && bulkResetTargets) {
+      bulkResetPreparationGeneration += 1;
+      if (
+        !bulkResetExecuting &&
+        (bulkResetPreparing || bulkResetTargets)
+      ) {
+        bulkResetPreparing = false;
         bulkResetTargets = null;
         bulkResetError = null;
-        endBulkReset();
+        if (bulkResetLockToken !== null) {
+          releaseBulkResetLock(bulkResetLockToken);
+        }
       }
       // issue #276 review follow-up (こはく advisory, round4): the seq
       // bump above invalidates an in-flight REPLY, but leaves whatever

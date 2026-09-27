@@ -301,14 +301,21 @@
   // touches localStorage, no server round-trip).
   let showSettings = $state(false);
   let bulkResetRunning = $state(false);
+  // A released or stale drawer must not unlock a later run's owner token.
+  let nextBulkResetLockToken = 0;
+  let activeBulkResetLockToken: number | null = null;
 
-  function tryBeginBulkReset(): boolean {
-    if (bulkResetRunning) return false;
+  function tryBeginBulkReset(): number | null {
+    if (activeBulkResetLockToken !== null) return null;
+    const token = ++nextBulkResetLockToken;
+    activeBulkResetLockToken = token;
     bulkResetRunning = true;
-    return true;
+    return token;
   }
 
-  function endBulkReset(): void {
+  function endBulkReset(token: number): void {
+    if (activeBulkResetLockToken !== token) return;
+    activeBulkResetLockToken = null;
     bulkResetRunning = false;
   }
   // Persona pack detail modal (issue #232): the persona id whose detail

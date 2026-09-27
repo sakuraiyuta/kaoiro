@@ -115,6 +115,13 @@ async function openSettings(): Promise<void> {
   await tick();
 }
 
+async function closeSettings(): Promise<void> {
+  document.querySelector<HTMLButtonElement>(
+    ".settings-drawer-content button.close",
+  )!.click();
+  await tick();
+}
+
 async function waitForConversationCalls(count: number): Promise<void> {
   await vi.waitFor(() => {
     const list = captured.api?.listConversations as ReturnType<typeof vi.fn>;
@@ -267,12 +274,134 @@ describe("SettingsDrawer bulk operator action (issue #423)", () => {
     expect(api.closeConversation).not.toHaveBeenCalled();
   });
 
+  it("fresh queryがincompleteなら古い表示があっても確認を開かない", async () => {
+    const h = await mountApp();
+    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle") });
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      conversations([conversation("c-old")]),
+    );
+    await openSettings();
+    await waitForConversationCalls(1);
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      conversations([conversation("c-partial")], true),
+    );
+
+    document.querySelector<HTMLButtonElement>(".bulk-reset button")!.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector(".bulk-reset [role=status]")?.textContent).toContain(
+        "不完全",
+      );
+    });
+
+    expect(document.querySelector(".conv-cid")?.textContent).toContain("c-old");
+    expect(
+      document.querySelector('dialog[aria-label="一括クリーンアップ確認"]'),
+    ).toBeNull();
+    expect(api.closeConversation).not.toHaveBeenCalled();
+  });
+
+  it("準備中にdrawerを閉じるとlockを解放し、遅い応答から確認を作らない", async () => {
+    const h = await mountApp();
+    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle") });
+    await openSettings();
+    await waitForConversationCalls(1);
+    const api = captured.api!;
+    const preparation = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      preparation.promise,
+    );
+
+    document.querySelector<HTMLButtonElement>(".bulk-reset button")!.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector<HTMLButtonElement>(".bulk-reset button")?.disabled).toBe(
+        true,
+      ),
+    );
+    await closeSettings();
+    expect(document.querySelector(".bulk-reset")).toBeNull();
+
+    await openSettings();
+    await waitForConversationCalls(3);
+    expect(
+      document.querySelector('dialog[aria-label="一括クリーンアップ確認"]'),
+    ).toBeNull();
+    const reopenedButton = document.querySelector<HTMLButtonElement>(".bulk-reset button")!;
+    expect(reopenedButton.disabled).toBe(false);
+
+    const newPreparation = deferred<ConversationList>();
+    (api.listConversations as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      newPreparation.promise,
+    );
+    reopenedButton.click();
+    await vi.waitFor(() => expect(api.listConversations).toHaveBeenCalledTimes(4));
+    expect(reopenedButton.disabled).toBe(true);
+
+    preparation.resolve(conversations([conversation("c-late")]));
+    await tick();
+    expect(
+      document.querySelector('dialog[aria-label="一括クリーンアップ確認"]'),
+    ).toBeNull();
+    expect(reopenedButton.disabled).toBe(true);
+
+    newPreparation.resolve(conversations([conversation("c-new-run")]));
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('dialog[aria-label="一括クリーンアップ確認"]'),
+      ).not.toBeNull(),
+    );
+  });
+
+  it("実行中にdrawerを閉じてもsettleまでlockを保持し二重実行させない", async () => {
+    const h = await mountApp();
+    makeOperator(h, { "host-a.p": envelope("host-a.p", "idle") });
+    await openSettings();
+    await waitForConversationCalls(1);
+    const api = captured.api!;
+    (api.listConversations as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      conversations([conversation("c-one")]),
+    );
+    const closePending = deferred<void>();
+    const resetPending = deferred<void>();
+    (api.closeConversation as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      closePending.promise,
+    );
+    (api.sendSessionReset as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      resetPending.promise,
+    );
+
+    const dialog = await prepareBulk();
+    dialog.querySelector<HTMLButtonElement>("button.danger")!.click();
+    await vi.waitFor(() => expect(api.closeConversation).toHaveBeenCalledTimes(1));
+    await closeSettings();
+    await openSettings();
+    await waitForConversationCalls(3);
+
+    const reopenedButton = document.querySelector<HTMLButtonElement>(".bulk-reset button")!;
+    expect(reopenedButton.disabled).toBe(true);
+    reopenedButton.click();
+    await tick();
+    expect(api.listConversations).toHaveBeenCalledTimes(3);
+    expect(api.closeConversation).toHaveBeenCalledTimes(1);
+
+    closePending.resolve(undefined);
+    await vi.waitFor(() => expect(api.sendSessionReset).toHaveBeenCalledTimes(1));
+    expect(reopenedButton.disabled).toBe(true);
+    resetPending.resolve(undefined);
+    await vi.waitFor(() => expect(reopenedButton.disabled).toBe(false));
+    expect(api.closeConversation).toHaveBeenCalledTimes(1);
+    expect(api.sendSessionReset).toHaveBeenCalledTimes(1);
+  });
+
   it("失敗後も続行し、曖昧なresetは一度だけ試してsummaryに分ける", async () => {
     const h = await mountApp();
     makeOperator(h, {
       "host-a.p": envelope("host-a.p", "idle"),
       "host-b.p": envelope("host-b.p", "idle"),
       "host-c.p": envelope("host-c.p", "idle"),
+      "host-d.p": envelope("host-d.p", "idle"),
+      "host-e.p": envelope("host-e.p", "idle"),
+      "host-f.p": envelope("host-f.p", "idle"),
     });
     await openSettings();
     await waitForConversationCalls(1);
@@ -286,22 +415,28 @@ describe("SettingsDrawer bulk operator action (issue #423)", () => {
     (api.sendSessionReset as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(new Error("timeout"))
       .mockRejectedValueOnce(new Error("session_reset_pending"))
+      .mockRejectedValueOnce(new Error("unrecognized_future_reason"))
+      .mockRejectedValueOnce(new Error("error"))
+      .mockRejectedValueOnce(new Error("agent_busy"))
       .mockResolvedValueOnce(undefined);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const dialog = await prepareBulk();
     dialog.querySelector<HTMLButtonElement>('button.danger')!.click();
     await vi.waitFor(() => {
-      expect(document.querySelector(".spawn-notice")?.textContent).toContain("結果不明 2");
+      expect(document.querySelector(".spawn-notice")?.textContent).toContain("結果不明 4");
     });
     expect(api.closeConversation).toHaveBeenCalledTimes(2);
-    expect(api.sendSessionReset).toHaveBeenCalledTimes(3);
+    expect(api.sendSessionReset).toHaveBeenCalledTimes(6);
     expect(api.sendSessionReset).toHaveBeenNthCalledWith(1, "host-a.p", "clear");
     expect(api.sendSessionReset).toHaveBeenNthCalledWith(2, "host-b.p", "clear");
     expect(api.sendSessionReset).toHaveBeenNthCalledWith(3, "host-c.p", "clear");
+    expect(api.sendSessionReset).toHaveBeenNthCalledWith(4, "host-d.p", "clear");
+    expect(api.sendSessionReset).toHaveBeenNthCalledWith(5, "host-e.p", "clear");
+    expect(api.sendSessionReset).toHaveBeenNthCalledWith(6, "host-f.p", "clear");
     expect(document.querySelector(".spawn-notice")?.textContent).toContain("close (skip 1)");
-    expect(document.querySelector(".spawn-notice")?.textContent).toContain("reset 受付 (skip 0");
-    expect(warn).toHaveBeenCalledTimes(3);
+    expect(document.querySelector(".spawn-notice")?.textContent).toContain("reset 受付 (skip 1");
+    expect(warn).toHaveBeenCalledTimes(6);
   });
 
   it("directory-onlyとdisconnected agentをreset対象に含めない", async () => {
