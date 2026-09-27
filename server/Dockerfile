@@ -12,7 +12,7 @@
 #   - Ex: docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim
 #
 # Keep these in step with the Elixir/OTP the CI `server` job runs the suite on
-# (.gitea/workflows/ci.yml) — they diverged once, and OTP 26 turned out to be
+# (.github/workflows/ci.yml) — they diverged once, and OTP 26 turned out to be
 # unable to compile this suite's Japanese test names at all (issue #143).
 ARG ELIXIR_VERSION=1.20.1
 ARG OTP_VERSION=29.0.2

@@ -7,7 +7,7 @@
 // generates one from the other). What DOES need to stay in sync is the SET
 // OF CODES: a code added to only one side is exactly the drift #131's
 // review warned about (#134). This test is that sync check; it rides the
-// existing `pnpm test` step in `.gitea/workflows/ci.yml`'s `wrapper` job,
+// existing `pnpm test` step in `.github/workflows/ci.yml`'s `wrapper` job,
 // so no new CI job or script was added.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
