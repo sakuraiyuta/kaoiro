@@ -412,10 +412,13 @@ Rules, in order:
   "granted": "early",
   "downgrade": "yield_not_authorized",
   "work_id": "wrk_…",
-  "authority_epoch": 3,
-  "yield_token": "yld_…"
+  "authority_epoch": 3
 }
 ```
+
+`yield_token` is present only when `granted` is `yield` (see [Consumption of
+a yield](#consumption-of-a-yield)); a downgraded request, as in this
+example, carries none.
 
 `downgrade` is one of `unsupported_by_recipient`, `yield_not_authorized`,
 `yield_interval`, `yield_capacity`, `early_quota`, `recipient_legacy`. It is absent when
@@ -445,7 +448,8 @@ issue #426.
 **Server claim: one atomic decision in `WorkStore`.** Admission of a granted
 yield (step 4 of [admission](#server-reducer-and-atomicity)) writes a yield
 token `{yield_token, recipient, conversation_id, turn_number, work_id,
-authority_epoch, state: unclaimed, claimed_by?, claimed_at?}` into `WorkStore` together with the op
+authority_epoch, admitted_at, expires_at, state: unclaimed, claimed_by?,
+claimed_at?}` into `WorkStore` together with the op
 decision. `yield_token` is 128 random bits, generated there and stamped into
 the relayed `delivery_authority`; the delivery sequence is not used as the
 key because it is issued only later, at step 6. If the message is then not
@@ -671,8 +675,10 @@ A recipient's delivery facts in `DeliveryStates` are kept in two structures
 with separate rules. The bookkeeping stays in the recipient's existing DETS
 object. The stage history is a separate object in the same table, keyed by
 `(recipient, incarnation)`, so that acks and ordinary bookkeeping writes do
-not rewrite up to 2,000 history records, and a stage report rewrites only the
-history object:
+not rewrite up to 2,000 history records. A query-only stage report (`queued`,
+`settled`, `unknown`, `included`, a `yield_disposition`) rewrites only the
+history object. A resolution-changing report is written through the commit
+point defined below:
 
 | Part | Contents | Read by | Lifetime |
 | --- | --- | --- | --- |
@@ -685,6 +691,37 @@ in `skipped`, or `seq` is in `resolved`. Resolution moves the sequence from
 it can no longer be reported lost. Both `metadata` and `resolved` entries
 count against the existing 1,000 unresolved slots until the prefix passes
 them, so `resolved` cannot grow without bound behind a stuck earlier item.
+
+**Commit point of a resolution-changing report.** A recorded `submitted`
+report for a sequence above the prefix changes the loss predicate, so it is
+committed as one coupled update of both objects:
+
+1. `DeliveryStates` validates the report (owner, incarnation, generation,
+   issued sequence) and computes the next bookkeeping (sequence moved from
+   `metadata` to `resolved`) and the next history object, without changing
+   its in-memory state.
+2. It writes both with one `:dets.insert(table, [bookkeeping_record,
+   history_record])` followed by `:dets.sync/1`, the pattern the store
+   already uses to write a retirement together with its loss intents
+   (`persist_with_losses`, `delivery_states.ex:600-604`).
+3. Only after the sync succeeds does it replace its in-memory state and reply
+   `ok` to the report. The reply is the acknowledgement boundary: an
+   acknowledged report is durable in both objects.
+4. If the write or sync fails, it keeps the previous in-memory state and
+   replies with an error; the wrapper keeps the report unconfirmed and
+   resends it (reports are idempotent under the set merge). A crash before
+   the reply has the same effect: the report is unconfirmed and is resent
+   after a same-generation rejoin.
+
+That the list insertion is atomic under a crash is not established by this
+design; the precedent is a pattern, not a proof. The design therefore relies
+only on the ordering above. If a crash leaves the history half written and
+the bookkeeping half unwritten, the report was never acknowledged, the
+sequence is still unresolved, and only the history shows `submitted`. On
+restart the server does not infer resolution from history, which is not
+authoritative. The wrapper's resend then resolves it; if a retirement or
+generation boundary comes first, the item is reported lost under the stated
+limit below, and the sender sees both facts.
 
 Every existing path in `delivery_states.ex` uses the closed predicate:
 
@@ -1305,7 +1342,7 @@ injected path or options, checks that it opens the path listed in
 | V3 | Yield role check | Assignee sends a yield to the director in the work's conversation, with the current epoch and interval elapsed | Remove the `(director, assignee)` check | Stamped `granted` is not `yield` |
 | V4 | Admission epoch fence | Operator transfers director A → B → A (epoch 3); A, the current director, sends a yield with `expected_authority_epoch: 1` | Remove the epoch comparison | `granted` is `early` with `yield_not_authorized` |
 | V5 | Claim epoch fence | Yield admitted at epoch E; operator transfers director A → B → A before the claim; the claimer is still the assignee | Remove the claim-time epoch check | Claim refused with `grant_changed` |
-| V6 | Claim is one-use | `yield_min_interval_ms` set to 0 for the test; the same admitted yield claimed twice by the assignee | Remove the claimed flag | Second claim refused with `already_claimed` |
+| V6 | Claim is one-use | `yield_min_interval_ms` set to 0 for the test; the assignee claims an admitted yield, then sends the same claim again (same `yield_token`, pair, incarnation and generation) | Remove the claimed flag (the second call is evaluated as a new claim) | Exactly one grant: the second reply is `granted: true, repeated: true`, and the token's `claimed_at` and the recipient's last claim time are unchanged by it. `already_claimed` is reserved for a claim whose identity differs from `claimed_by`, which the channel fence normally stops first; it is not asserted here |
 | V7 | Yield interval per recipient | Assignee of W1 and W2 (different directors); valid yields on W1 and W2 both admitted before either claim; then W1 claimed, then W2 claimed within 120 s | Make the interval per work, at admission and at claim | W2's claim refused with `yield_interval` |
 | V8 | Synthetic never early | A negotiated wrapper sends a validated internal notice that is admitted, with `delivery_intent: early`, to a recipient declaring `early: fold` | Remove rule 1 | The admitted notice is stamped `granted: normal` |
 | V9 | Early pair quota | Five early items from one sender to one recipient, none submitted | Remove the pair cap | Fifth stamped `normal` with `early_quota` |
@@ -1352,6 +1389,7 @@ injected path or options, checks that it opens the path listed in
 | V30e | Prefix crosses resolved entries | Same; then x acknowledged | Advance only across `skipped` | `acked_seq` becomes 2 in the same step |
 | V30f | Old-channel report | y reported by the previous channel owner | Remove the owner fence for reports | Rejected; `resolved` unchanged |
 | V30g | Reconnect and restart | y resolved; same-generation reconnect; then server restart; then x acknowledged | Keep `resolved` in memory only | After restart y is still resolved; x's ack moves the prefix to 2; no loss for y |
+| V30j | Report commit point | x (seq 1) queued; y (seq 2) `submitted` report. Three cuts: (a) crash before the insertion; (b) crash after insertion and sync, before the reply; (c) injected failure of the bookkeeping half with the history half written. After each: restart, then a same-generation range retirement over 1–2 and, separately, a generation retirement | Persist only the history half of a resolution-changing report | (b): y resolved after restart and never reported lost in either retirement; x reported lost once. (a) and (c): report unacknowledged; after the wrapper's resend y is resolved; if a retirement comes first, y is reported lost under the stated limit. Under the mutant, (b) reports y lost |
 | V30h | History after reclamation and TTL | After V30e, query y; then advance past its history bound and query again | Delete stage history with the bookkeeping | First query returns y's stages; second returns `expired`; no loss recorded |
 | V30i | History eviction with unresolved metadata | x (seq 1) unresolved; its stage-history record passes the 24 h age bound; then a terminal intentional disconnect (`retire_owned_generation`) | Let history eviction delete bookkeeping | x's `delivery_status` returns `expired`, and a loss intent with reason `interrupted` exists for x after the disconnect |
 | V32 | Stage set merge | `settled` reported before `submitted`, then a duplicate `queued` | Store one rank and overwrite | `submitted` timestamp retained |
@@ -1389,7 +1427,7 @@ production-visible fields.
 | W1a | Cut after a granted claim | Director's granted yield, eligible turn, claim granted | (positive) | One terminal after the running tool; the message starts the next turn |
 | W1b | No cut without a granted claim | Same, but the server refuses the claim; and separately, the claim reply is withheld past 2,000 ms | Cut regardless of the claim result | Turn not cut; disposition `downgraded` with the refusal reason, or `claim_timeout` |
 | W2 | Mixed-work turn | Turn input contains W1 and W2 deliveries; valid W1 yield | Remove the mixed-turn check | Turn not cut; disposition `downgraded: mixed_turn` |
-| W3a | Activation requires the eligible owner (host decision) | Host-level test of the receipt activation decision, driven by a callback sequence recorded from a native run and changed only in `prompt_id`: the fold was pushed while T1 was live (`eligible_owner` T1); the hook arrives with T2's `prompt_id` while T2 is the live owner | Compare the hook's owner with the current live owner instead of `eligible_owner` | Receipt `voided`, stage `unknown`, no ticket activated. Labelled as a host-decision test; the native order is not claimed |
+| W3a | Activation requires the eligible owner (decision-level) | Unit test of the host's receipt activation decision. All other conjuncts true: same session, generation and Query; prompt digest matches; receipt `pending`; `eligible_owner` T1 still live with provisional tickets. The hook presents a `prompt_id` that is not T1's | Bypass only the `prompt_id == eligible_owner` equality | The decision returns `voided` (under the mutant it returns `activated`). Scope: the receipt decision only, not an end-to-end schedule and not downstream ticket use; native and retirement behavior are covered by W3b, W4 and W5 |
 | W3b | Tickets retire with their turn (regression) | Fold y into T and activate its ticket; T ends | Keep T's tickets after T retires | White-box: T's ticket table is empty after retirement. A later turn presenting the ticket is also rejected, but that is guaranteed by the token comparison in `capture` either way, so it is not this row's assertion |
 | W4 | Default snapshot preserved (conditional on E2) | Native two-call schedule: the model response to request 1 (which lacks y) emits calls A and B; the host holds B's MCP handler before `capture`; y is folded while A runs and T stays live; y's fold receipt activates while B is still held; B is released and sends with its default basis | Advance T's default snapshot when the fold activates | B's send is rejected `stale_reply_basis`. The loopback endpoint's captured request 1 body is the independent proof that A and B were generated before y. If E2 shows that the fold hook cannot fire while B is held, the row is reported unmeasurable, not green |
 | W5 | Receipt leaves `pending` once | After activation in T1, T1 ends; a new root prompt whose text is byte-identical to the fold text arrives with a new `prompt_id` and no live turn | Remove the pending-state check | Receipt stays `activated`; the new root turn's snapshot does not gain the folded envelopes from the receipt; no second `submitted` report. (Ticket re-activation is refused by the existing provisional-only rule either way, so this row asserts the receipt transition, not tickets) |
@@ -1399,7 +1437,7 @@ production-visible fields.
 | W8b | Reservation before push | Two early batches reach the scheduler together when one slot is left | Count the slot at the hook instead of at reservation | Exactly one push; the other waits for a root boundary |
 | W9 | Final recheck: other-work fold during claim | T eligible for W1; `yield_claim` reply withheld; a W2-linked early batch folds into T; reply released as granted | Recheck only that T is the same live owner | No cut; disposition `downgraded: eligibility_changed` |
 | W10 | Final recheck: operator fold during claim | Same, with an operator instruction folded during the wait | Same mutation | No cut; disposition `downgraded: eligibility_changed` |
-| W11 | Claimed cut survives a later transfer | Claim granted; the claim reply is withheld until the transfer's `work_notice` has reached the wrapper; T still eligible | Cancel the cut when a transfer is observed | T is cut after its running tool, as ordered by the claim |
+| W11 | Claimed cut survives a later transfer | Claim granted; the claim reply is withheld until the transfer's `work_notice` has reached the wrapper, and released before the 2,000 ms wait expires (a later release is correctly a timeout downgrade); T still eligible | Cancel the cut when a transfer is observed | T is cut after its running tool, as ordered by the claim |
 
 ## Implementation split proposal
 
@@ -1431,6 +1469,31 @@ following review r1 S3:
 | Keep the preview call? | Yes. It is not a lock and does not replace final admission; the partial and unknown outcomes stay explicit | [Server reducer and atomicity](#server-reducer-and-atomicity) |
 | Do `hold` and `release` advance the revision? | Yes; transfer acknowledgements have their own fence | [Revision](#revision), [Transfer obligations](#transfer-obligations) |
 | Record the land target ref now? | Yes, as optional typed audit data, explicitly unenforced | [Consequential actions](#consequential-actions-and-where-each-is-checked) |
+
+## Carried to implementation issues
+
+Design review r3 (Kogane) raised three should items. The director decided
+(conversation `b5b30f71`, turn 12) to carry them into the implementation
+issues rather than change the design now:
+
+- **Operator view of claimed cuts after a transfer (r3 S1).** The transfer
+  result lists claimed tokens, but `delivery_status` is authorized only for
+  the original sender. Define an operator-authorized read or projection of
+  those tokens' `yield_disposition`, and an explicit `expired` / unknown
+  disposition when stage history expired before the token's retention;
+  absence must not mean "no cut".
+- **Yield-token lifecycle and channel replacement (r3 S2).** Tests for
+  expiry and cap downgrade, orphan cleanup, and a repeated response without
+  an interval restart, across receipt lookup and server restart. Persist the
+  recipient interval consistently with the claimed state. Test the exact
+  old-channel / same-generation rebind race and state why a stale response
+  cannot schedule a cut; the statement that rebinding implies a replaced
+  wrapper process is too strong for same-generation reconnects.
+- **Scheduler serialization and native labels (r3 S3).** The recipient
+  scheduler must serialize every input entry point, including operator
+  input, not only peer folds. Keep W3a labelled decision-level and W3b
+  white-box; label W5 and W9–W11 native only when their real schedules
+  occur. E1–E5 remain mandatory before phase-2 capabilities are advertised.
 
 ## Appendix A — ADR-0063 amendment draft
 
