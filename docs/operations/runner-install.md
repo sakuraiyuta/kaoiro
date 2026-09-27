@@ -2,7 +2,7 @@
 title: Runner install and distribution
 description: Build and distribute runner tarballs to agent hosts, install and switch releases, and run the runner as a systemd/launchd service.
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -210,13 +210,34 @@ KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
 Either replace with `gtimeout` from `brew install coreutils`, or omit `timeout` and
 stop with Ctrl-C.
 
+### Antigravity presence check and version reporting
+
+When the `antigravity` capability is selected during `kaoiro-runner-setup.sh`
+(`runner/src/setup.ts:180-192`), the wizard presence-checks the `agy` executable
+on `PATH` (`runner/src/setup.ts:205-220`). If `agy` is not found, the wizard throws
+`ConfigError` with an install hint and fails closed rather than writing an
+unverified configuration. On runner process startup and configuration reload,
+the runner probes `agy --version` (`runner/src/antigravity-version.ts:1-5`,
+`runner/src/runner-cli.ts:185-209, 350-362`). If resolved, it writes
+`runner: antigravity agy version <version>` to stderr and advertises the version
+in the `RunnerRegister` payload under `antigravity_cli_version`
+(`runner/src/config.ts:704-706`) for server and dashboard visibility (issue
+#410). This startup version probe is for operator reporting and observability
+only; failure to resolve a version does not gate runner startup. A version
+change detected during configuration reload emits a stderr warning
+(`runner: warn — antigravity agy version changed`).
+
 ### Antigravity session index
 
 The runner reads Antigravity session metadata from
-`~/.gemini/antigravity-cli/conversation_summaries.db`. If the session picker is
-empty after an `agy` update, check the runner journal for an Antigravity schema
-warning and inspect the database's `user_version` before concluding that no
-sessions exist. A schema mismatch fails closed for Antigravity listing and
+`~/.gemini/antigravity-cli/conversation_summaries.db` (`runner/src/sessions.ts:57-63, 195-214`).
+If the session picker is empty after an `agy` update, check the runner journal
+for an Antigravity schema warning (`runner: antigravity session index unavailable: schema_mismatch ...`).
+The runner expects `PRAGMA user_version = 3` and requires the table
+`conversation_summaries` to contain columns `conversation_id`, `title`,
+`last_modified_time`, `workspace_uris`, and `nesting_depth`. If `user_version`
+differs or any required column is missing, schema validation fails closed
+(`runner/src/sessions.ts:252-257`), disabling Antigravity session listing and
 resume validation. The first SQLite use in each runner process may also emit
 Node's `ExperimentalWarning` to the journal; this is harmless log noise.
 Mixed UTC offsets produce a warning that picker order may be wrong and call for

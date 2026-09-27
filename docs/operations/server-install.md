@@ -2,7 +2,7 @@
 title: Server install runbook
 description: Issue authentication tokens, create the server .env, and start with docker compose.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -22,9 +22,9 @@ For public operation on an arbitrary host, configure all three
 `openssl rand -hex 32` (32-byte hex).
 
 ```sh
-openssl rand -hex 32   # KAOIRO_CLIENT_TOKENS の token 部分に使う
-openssl rand -hex 32   # KAOIRO_WRAPPER_TOKENS の token 部分に使う
-openssl rand -hex 32   # KAOIRO_RUNNER_TOKENS の token 部分に使う
+openssl rand -hex 32   # Used for the token part of KAOIRO_CLIENT_TOKENS
+openssl rand -hex 32   # Used for the token part of KAOIRO_WRAPPER_TOKENS
+openssl rand -hex 32   # Used for the token part of KAOIRO_RUNNER_TOKENS
 ```
 
 ### 1.2 Create `.env`

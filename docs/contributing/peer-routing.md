@@ -6,7 +6,7 @@ last_updated: 2026-09-18
 
 # Peer routing
 
-#### Destination-resolution guidance
+## Destination-resolution guidance
 
 `send_to_agent.to` requires an **agent_id** (charset `[A-Za-z0-9._-]`). If an
 operator names a persona such as `@あお`, the model must resolve it with

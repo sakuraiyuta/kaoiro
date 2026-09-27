@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -18,7 +18,7 @@ self-test verification procedure and its dated measurement are in
 This page covers the runner side; the interleaved server-side steps are in
 [Server update and rollback](server-update-and-rollback.md).
 
-### 4.6 Migrate to the release profile and update thereafter (issue #219)
+## 4.6 Migrate to the release profile and update thereafter (issue #219)
 
 [ADR-0018](../adr/0018-runner-distribution.md) (revised 2026-08-16) defines
 immutable releases with an atomic switch. **The 4.1 in-place-build limit is
@@ -84,39 +84,39 @@ systemctl --user start kaoiro-runner
 If that is unavailable, leave the runner stopped. **Do not start it with a
 partial `dist`.**
 
-#### 4.6.1 Migrate from checkout-direct (operator action, once per host)
+### 4.6.1 Migrate from checkout-direct (operator action, once per host)
 
 **Only step (6) touches the running runner.** Agents disconnect only when it is
 restarted there (the warning in section 2 “Run as a service” applies).
 
 ```sh
-# 1. 現在の稼働状態を記録する。移行後に比較する基準になる
+# 1. Record current operating state as a baseline for post-migration comparison
 systemctl --user show -p ExecStart --value kaoiro-runner
 <repo-path>/runner/dist/cli.js --version
 
-# 2. repo から tarball を作る。runner は稼働したまま
+# 2. Build tarball from repo while runner remains active
 cd <repo-path>
-git status --porcelain   # 空であること (dirty だと id に -dirty が付く)
+git status --porcelain   # Must be empty (dirty checkout appends -dirty to id)
 ./scripts/build-runner-tarball.sh --target linux-x64
 
-# 3. release として install する。稼働中の dist には触れない
+# 3. Install as a release without touching running dist
 ./runner/deploy/kaoiro-runner-install.sh \
   dist-tarball/kaoiro-runner-<rev>-linux-x64.tar.gz
 
-# 4. current を作る。unit はまだ旧 path を指しているので無影響
+# 4. Create current symlink. Unit still points to old path so no disruption
 ./runner/deploy/kaoiro-runner-switch.sh <release-id>
 
-# 5. unit の ExecStart を current 経由へ張り替える
+# 5. Retarget unit's ExecStart to point via current
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
 sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
   runner/deploy/kaoiro-runner.service \
   > ~/.config/systemd/user/kaoiro-runner.service
 systemctl --user daemon-reload
 
-# 6. ここで初めて停止が起きる。配下のエージェントは全て切断される
+# 6. First stop happens here. All subordinate agents disconnect
 systemctl --user restart kaoiro-runner
 
-# 7. 確認する
+# 7. Verify
 systemctl --user status kaoiro-runner
 "$install_root/current/deploy/kaoiro-runner-launch.sh" --version
 ```
@@ -127,7 +127,7 @@ Confirm (7)'s `--version` matches the value recorded in (1) and `status` is
 **After migration, the repo's `dist` is no longer the live path.** The repo is a
 build source; `pnpm -C runner build` does not affect the running runner.
 
-#### 4.6.2 Subsequent updates
+### 4.6.2 Subsequent updates
 
 Advance the repo to the target SHA, then run the update as **one command**.
 
@@ -135,7 +135,7 @@ Advance the repo to the target SHA, then run the update as **one command**.
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
 git -C <repo-path> fetch origin
 git -C <repo-path> merge --ff-only <target-sha>
-git -C <repo-path> status --porcelain   # 空であること
+git -C <repo-path> status --porcelain   # Must be empty
 
 "$install_root/current/deploy/kaoiro-runner-update.sh" \
   --from-repo <repo-path> --detach
@@ -185,6 +185,8 @@ Main options:
 |---|---|---|
 | `--from-repo <path>` | — | Build a tarball from the repo and install it |
 | `--tarball <path>` | — | Install an existing tarball (for distribution hosts) |
+| `--target <os-arch>` | — | Build target, only with `--from-repo` (`darwin-arm64` or `linux-x64`) |
+| `--detach` | — | Queue update as a transient systemd user service via `systemd-run --user --no-block` |
 | `--service <name>` | `kaoiro-runner` | Target systemd user unit |
 | `--keep <n>` | `3` | Generations to retain; excludes `current` / `previous` |
 | `--install-dir <dir>` | Above default | Install root |
@@ -195,7 +197,7 @@ Never delete the release referenced by `current` / `previous`, regardless of
 spawn**, so the active release continues to be read after startup; deleting it
 breaks a spawn that has not happened yet.
 
-#### 4.6.3 Rollback
+### 4.6.3 Rollback
 
 If a problem appears after switching, return to the previous release.
 

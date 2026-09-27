@@ -1,7 +1,7 @@
 ---
 title: Documentation rules — where a page goes and how it moves
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 description: The layered docs/ taxonomy (architecture / operations / reference / adr / evidence / contributing), the placement test for a new page, and the sync-then-move order for reorganizing existing pages.
 ---
 
@@ -24,8 +24,11 @@ the migration of the pre-2026-09 tree is tracked in
 | `contributing/` | How do I change the project? | Build, test, review and change procedures, including this page | Operator runbooks |
 | `plans/`, `open-questions/` | What is in progress or undecided? | Phase plans with live status; unresolved questions until they become ADRs | Finished work presented as current (re-home pending items, then demote) |
 
-`specs/` is the pre-taxonomy folder and is being dissolved into
-`architecture/` and `reference/`; do not add new pages there.
+`specs/` is the pre-taxonomy folder and has been dissolved into
+`architecture/`, `operations/`, `reference/`, and `evidence/`
+(Phase 35, ADR-0060, issue #368). Only backwards-compatibility redirect stubs
+and the three kept pages (`personas`, `agent-operations`, and provisional
+`protocol-external-human`) remain there; do not add new pages there.
 
 ## Placement test
 

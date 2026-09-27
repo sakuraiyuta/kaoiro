@@ -2,7 +2,7 @@
 title: Network and login runbook
 description: nginx reverse proxy, the direct-VPN deployment alternative, and configuring OAuth login.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -14,7 +14,7 @@ mechanism and boundary norms are in
 [Authentication and authorization](../reference/security/authentication-authorization.md)
 and are linked here, not repeated.
 
-### 1.4 nginx reverse proxy
+## 1.4 nginx reverse proxy
 
 Terminate TLS at nginx and forward the WebSocket Upgrade/Connection headers.
 Set `proxy_read_timeout` longer than the channel heartbeat (30 seconds).
@@ -49,7 +49,7 @@ connections that bypass nginx are not supported** (only `localhost`/`127.0.0.1`
 `wss://` through nginx. The VPN direct deployment (1.5) disables `force_ssl` at
 build time, so this constraint does not apply.
 
-### 1.5 Direct VPN deployment (no nginx, plain HTTP, 2026-07-26)
+## 1.5 Direct VPN deployment (no nginx, plain HTTP, 2026-07-26)
 
 For hosts reachable only inside a VPN (WireGuard), you may deploy without nginx
 and connect directly to `http://<host>:<port>`. Tokens and cookies travel in
@@ -63,7 +63,7 @@ Add these two variables to `.env` (all other steps are the same as 1.1–1.3):
 | `KAOIRO_PLAIN_HTTP` | `true` | Build time: disable `force_ssl` and Secure cookies (compile-time). Runtime: switch URL generation and `check_origin` to `http://PHX_HOST:PORT`. Compose wires the same value to both build arg and runtime env; mismatch raises at server startup |
 | `KAOIRO_PUBLISH_IP` | Host's VPN-side interface IP | Compose bind address (default `127.0.0.1`); restrict to the VPN interface rather than publishing on all interfaces |
 
-#### Boot order for a VPN publish address
+### Boot order for a VPN publish address
 
 If `KAOIRO_PUBLISH_IP` is an address that appears late during boot, such as a
 VPN address, `docker.service` **MUST** start after the unit that creates that
@@ -120,7 +120,7 @@ changing `PHX_HOST` / `PORT` follows automatically and never puts a loopback WS
 target on an external-host page. Conversely, **CSP rejects changes that bring
 scripts, styles, or images from external origins into the dashboard**.
 
-### 1.6 Configure OAuth login (optional, ADR-0042 / issue #65)
+## 1.6 Configure OAuth login (optional, ADR-0042 / issue #65)
 
 The dashboard can add Google / GitHub / Nextcloud OAuth login. See
 [ADR-0042](../adr/0042-oauth-allowlist-login.md) for mechanism and design
@@ -133,8 +133,8 @@ endpoint `url`, so register exactly this form):
 
 ```text
 {scheme}://{PHX_HOST}[:{PORT}]/auth/{provider}/callback
-# 例: https://kaoiro.example.com/auth/github/callback
-#     http://localhost:4000/auth/google/callback   (dev)
+# Example: https://kaoiro.example.com/auth/github/callback
+#          http://localhost:4000/auth/google/callback   (dev)
 ```
 
 **Register a client for each provider** (paths current as of 2026-07):
@@ -177,7 +177,7 @@ nextcloud:alice:operator
 ```
 
 For compose, put the file in `server/`. The bundled `docker-compose.yaml`
-already mounts it read-only (`server/docker-compose.yaml:112`); no compose
+already mounts it read-only (`server/docker-compose.yaml:113`); no compose
 edit is needed, only creating the plain file at that path.
 
 **Verify**:

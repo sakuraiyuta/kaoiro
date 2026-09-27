@@ -1,3 +1,10 @@
+---
+title: Production deployment manual
+status: accepted
+last_updated: 2026-09-27
+description: Step-by-step manual for operators bringing up or updating a production deployment
+---
+
 # Production deployment manual
 
 ## Purpose
@@ -49,7 +56,9 @@ below is the operator-facing subset — every key in it defaults to the value
 shown, so a config file only needs to state what it overrides. (One more
 key, `allow_docker_override`, exists only so the test suite can fake the
 docker binary; it has no legitimate production use and is deliberately
-omitted here.)
+omitted here.) See
+[Server deploy configuration](../reference/configuration/server-deploy.md#config-keys)
+for the complete schema and key descriptions.
 
 | Key | Default |
 |---|---|
@@ -146,7 +155,7 @@ production (issue #242).
 
 Stuck? → the per-script manual path (install/switch + systemd/launchd by
 hand), exit codes, and log locations are in [runner install
-runbook](runner-install.md) "常駐化(systemd / launchd)", which also covers the
+runbook](runner-install.md#running-as-a-service-systemd--launchd) "Running as a service (systemd / launchd)", which also covers the
 multi-host specifics.
 
 ## 3. Verify
@@ -200,13 +209,19 @@ node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
 ```
 
 Then update the runner (one command; builds, installs, switches, and
-restarts):
+restarts). Set `install_root` for your OS (if `KAOIRO_RUNNER_INSTALL_DIR` is
+set, it takes precedence):
 
 ```sh
-kaoiro-runner-update.sh --from-repo <repo-path> --target <os-arch>
+# Linux:
+install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro}"
+# macOS:
+# install_root="${KAOIRO_RUNNER_INSTALL_DIR:-$HOME/Library/Application Support/kaoiro}"
+
+"$install_root/current/deploy/kaoiro-runner-update.sh" --from-repo <repo-path> --target <os-arch>
 ```
 
-or, from a pre-built tarball: `kaoiro-runner-update.sh --tarball <path>`.
+or, from a pre-built tarball: `"$install_root/current/deploy/kaoiro-runner-update.sh" --tarball <path>`.
 
 Stuck? → [Server update and rollback § 4.4](server-update-and-rollback.md#44-failure-handling).
 
@@ -229,10 +244,16 @@ node server/deploy/kaoiro-server-deploy.mjs rollback \
 ```
 
 Runner side (reverts `current` to whatever was activated before it, no
-transaction id needed):
+transaction id needed). Set `install_root` for your OS (if
+`KAOIRO_RUNNER_INSTALL_DIR` is set, it takes precedence):
 
 ```sh
-kaoiro-runner-switch.sh --rollback
+# Linux:
+install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro}"
+# macOS:
+# install_root="${KAOIRO_RUNNER_INSTALL_DIR:-$HOME/Library/Application Support/kaoiro}"
+
+"$install_root/previous/deploy/kaoiro-runner-switch.sh" --rollback
 ```
 
 Stuck? → [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
@@ -247,15 +268,14 @@ Confirm it reads that way before trusting the CLI with a real update:
 node server/deploy/kaoiro-server-deploy.mjs status
 ```
 
-Expect `container.running: true` and `doneTransactions: []`. Also confirm
-`health.build_revision` matches `git rev-parse HEAD` in this checkout — the
-CLI derives `old_sha` from the repo HEAD, not from what the running
-container was actually built from, so a checkout that has since moved would
-silently record the wrong `old_sha`. If they disagree, `git checkout` the
-commit `health.build_revision` names before running anything else. Then
-preview an update as in step 4 (`--dry-run`) before running one for real.
-There is nothing else to migrate — the CLI works from whatever is currently
-running, the same way a first-ever `update` on a brand-new host would.
+Expect `container.running: true` and `doneTransactions: []`. The CLI
+derives `old_sha` directly from `/app/build-info.json` inside the running
+container image (`server/deploy/kaoiro-server-deploy.mjs:112-133`), so a checkout
+that has since moved does not corrupt rollback metadata. However, the running
+image must have been built with valid build arguments containing a commit
+`revision`. Then preview an update as in step 4 (`--dry-run`) before running
+one for real. There is nothing else to migrate — the CLI works from whatever is
+currently running, the same way a first-ever `update` on a brand-new host would.
 
 ## 6. Troubleshooting
 
@@ -280,14 +300,6 @@ setup wizard never having run. See
 address is not yet present on any interface when docker starts — the same
 class as the reboot issue above; the fix is the same boot-order drop-in.
 
-## Codex backend selection and rollback
-
-See [Codex backend switching and rollback](codex-backend-switch.md#codex-backend-selection-and-rollback).
-
-### Release note
-
-The release note is retained in the [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118).
-
 ## See Also
 
 - [Deployment documentation](../README.md#deployment-documentation) — the
@@ -296,8 +308,5 @@ The release note is retained in the [Stage 6 landing record](https://github.com/
   `kaoiro-runner-setup.sh` ask and why
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
+- [Codex backend switching and rollback](codex-backend-switch.md) — backend selection, verification, and rollback (release note in [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
 - Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)
-
-## Input-bound inter-agent replies
-
-See [the reply-basis contract](../reference/inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

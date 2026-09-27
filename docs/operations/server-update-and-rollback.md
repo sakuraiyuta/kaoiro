@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -15,7 +15,7 @@ CLI config keys and transaction states are documented in full in
 build-identity provenance verification is in
 [Transactions and identity](../reference/deployment/transactions-and-identity.md).
 This page covers the server side; the interleaved runner-side steps are in
-[Runner update and rollback](../operations/runner-update-and-rollback.md).
+[Runner update and rollback](runner-update-and-rollback.md).
 
 Sections 1–2 cover **initial deployment**. This section is canonical for moving
 an already-running deployment to a new version.
@@ -23,7 +23,7 @@ an already-running deployment to a new version.
 > **The server side is a CLI** (`server/deploy/kaoiro-server-deploy.mjs`,
 > issue #306), driven by a transaction manifest + journal — [4.3](#43-update-procedure)/[4.4](#44-failure-handling) below
 > document it. **The runner side remains a separate, still-manual (or
-> checkout-direct) procedure** interleaved with the CLI calls; [4.6](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219) covers the
+> checkout-direct) procedure** interleaved with the CLI calls; [4.6](runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219) covers the
 > release-profile automation for it. Automation does not remove the [4.1](../architecture/deployment.md#build-and-restart-boundaries)
 > limits by itself — they remain until their own resolving condition is met.
 
@@ -56,6 +56,8 @@ is one `current` symlink, so **build and expansion never touch a running runner*
 This remains **a host installation-shape issue** rather than a code-only fix:
 hosts whose `ExecStart` points directly to a repo checkout retain the limit until
 they complete the 4.6 migration.
+
+## 4. Update and rollback
 
 ### 4.2 Preconditions
 
@@ -326,9 +328,9 @@ resume with --transaction <transaction-id> --target <target-sha> --maintenance-a
 once the operator has approved the maintenance window
 ```
 
-**(3) Stop the runner** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
+**(3) Stop the runner** -- see [Runner update and rollback](runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
-**(4) Advance local to the target and build** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
+**(4) Advance local to the target and build** -- see [Runner update and rollback](runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 **(5) Stop the server and determine whether it stopped cleanly (automatic)**
 
@@ -371,7 +373,7 @@ deployment that fixes compose discard the current ledger.** Do this once,
 before step (5)'s commit call, while the old container is still running:
 
 ```sh
-# 1. running container の実効 path を確認する (空なら unset = fallback 使用中)
+# 1. Check running container's effective path (empty means unset = fallback in use)
 docker inspect <container> \
   --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "KAOIRO_USERS_PATH"}}{{.}}{{end}}{{end}}'
 ```
@@ -380,29 +382,29 @@ Empty output means unset and the fallback path is in use. **If already
 configured, skip this step** (and all later deployments do the same).
 
 ```sh
-# 2. running container から ledger を退避し、checksum と numeric owner を記録する
-#    (docker cp は running container に対しても動くので、停止前に実行できる)
+# 2. Evacuate ledger from running container and record checksum and numeric owner
+#    (docker cp works on a running container, so run before stopping)
 docker cp <container>:/tmp/kaoiro_users.dets <backup-dir>/users-migrate-<timestamp>.dets
 sha256sum <backup-dir>/users-migrate-<timestamp>.dets
 
-# 復元すべき numeric owner を、既知の既存 DETS から決定的に取得する
+# Deterministically retrieve numeric owner from known existing DETS
 docker run --rm -v <volume>:/data:ro alpine stat -c "%u:%g" /data/agent_directory.dets
 
-# 3. volume 側に users.dets が既に無いことを確認する
+# 3. Confirm users.dets does not already exist on volume side
 docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1
 
-# 4. volume へ配置する。owner は必ず numeric で指定する
-#    alpine の `nogroup` は GID 65533 だが runtime の DETS は別 GID であり、
-#    名前指定 (nobody:nogroup) では group が食い違う
+# 4. Place into volume. Owner must be specified numerically
+#    Alpine nogroup is GID 65533 but runtime DETS has different GID;
+#    named specification (nobody:nogroup) results in group mismatch
 docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
   alpine sh -c "cp /backup/users-migrate-<timestamp>.dets /data/users.dets \
     && chown <uid>:<gid> /data/users.dets && chmod 600 /data/users.dets"
 
-# 5. 配置後、退避元と bit 同一であることを確認する
+# 5. After placement, confirm bit-identity with evacuated source
 docker run --rm -v <volume>:/data:ro alpine sha256sum /data/users.dets
-# → 2 で記録した SHA-256 と一致すること
+# -> Must match SHA-256 recorded in step 2
 docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets
-# → owner / group / mode が既存 DETS と揃っていること
+# -> Owner / group / mode must match existing DETS
 ```
 
 **A successful copy alone does not guarantee bit identity with the authority.**
@@ -454,7 +456,7 @@ prunes old transactions (`keep_generations`/`retention_days`). Any failure
 from here on cannot resume via `--transaction` — see 4.4 (3) once a manifest
 exists (it does, written in (5-c) before this step runs).
 
-**(7) Start the runner** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
+**(7) Start the runner** -- see [Runner update and rollback](runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 For the `status` command's output fields, the transaction phase table, and the container-branch classification, see [Server deploy configuration](../reference/configuration/server-deploy.md#transaction-states-and-status).
 
@@ -526,7 +528,7 @@ got — read the failing command's own error message, which names the phase.
   --confirm-restore` — is the supported recovery once you decide not to keep
   retrying forward.
 
-**(2) Runner build failed** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
+**(2) Runner build failed** -- see [Runner update and rollback](runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 **(3) Roll back a committed transaction** (4.3 step 6)
 

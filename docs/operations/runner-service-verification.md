@@ -2,13 +2,13 @@
 title: Runner service verification
 description: A one-time-per-host manual self-test proving systemd-run --no-block starts the runner update in a separate cgroup from its caller, so stopping the runner does not kill an in-flight --detach update.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
 # Runner service verification
 
-#### 4.6.4 What tests do not guarantee (verify once on real hardware)
+## 4.6.4 What tests do not guarantee (verify once on real hardware)
 
 Deterministic tests pin the arguments passed by the update script to `systemd-run`
 (`--user` / `--no-block` / a dedicated unit name / **no `--scope`** / no `PartOf` /
@@ -22,7 +22,7 @@ checks once on real hardware**, but **never use the production runner**; a
 disposable probe unit is sufficient.
 
 ```sh
-# 1. caller unit を作り、その中から updater と同じ形で worker を queue する
+# 1. Create a caller unit and queue a worker from inside it in the same form as the updater
 rm -f "$HOME/kaoiro-selftest.sentinel"
 systemd-run --user --unit=kaoiro-selftest-caller \
   --description='kaoiro #229 self-stop probe (caller)' \
@@ -31,22 +31,21 @@ systemd-run --user --unit=kaoiro-selftest-caller \
       -- /bin/sh -c "sleep 20; date > $HOME/kaoiro-selftest.sentinel"; \
     sleep 300'
 
-# 2. 2 つの unit の cgroup が別であることを確認する (ここが本題)
+# 2. Confirm that the cgroups of the two units are separate (the key property)
 systemctl --user show -p ControlGroup --value kaoiro-selftest-caller.service
 systemctl --user show -p ControlGroup --value kaoiro-selftest-worker.service
-# → 異なる値であること。同一なら caller の停止で worker も死ぬ
+# -> Must be different values. If identical, stopping the caller would kill the worker too
 
-# 3. caller を停止する (KillMode=control-group が caller の cgroup を皆殺しに
-#    する。本番 runner の停止と同じ機構)
+# 3. Stop the caller (KillMode=control-group kills the caller's cgroup, matching production runner stop mechanism)
 systemctl --user stop kaoiro-selftest-caller.service
 
-# 4. worker が完走することを確認する
+# 4. Confirm the worker finishes to completion
 sleep 25
-cat "$HOME/kaoiro-selftest.sentinel"          # 時刻が書かれていること
+cat "$HOME/kaoiro-selftest.sentinel"          # Must contain timestamp
 systemctl --user show -p Result --value kaoiro-selftest-worker.service
-# → success
+# -> success
 
-# 5. 後片付け
+# 5. Cleanup
 systemctl --user reset-failed kaoiro-selftest-caller.service \
   kaoiro-selftest-worker.service 2>/dev/null || true
 rm -f "$HOME/kaoiro-selftest.sentinel"
@@ -58,7 +57,13 @@ argv contract tests above ensure it starts in the same form. **Neither the
 production runner service nor the `kaoiro-runner-update` unit is touched**, so run
 this check at any time.
 
+For hosts with Antigravity enabled, also verify in the live service journal
+(`journalctl --user -u kaoiro-runner`) that `runner: antigravity agy version <version>`
+is emitted and matches `agy --version`, confirming CLI resolution and version
+reporting (`antigravity_cli_version`) succeed without warnings.
+
 ## See Also
 
 - [Runner update and rollback](runner-update-and-rollback.md).
 - [Runner service isolation](../evidence/deployment/runner-service-isolation.md) -- the dated measurement this procedure produced.
+- [Runner install and distribution](runner-install.md#antigravity-presence-check-and-version-reporting).
