@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 ---
 
 # Security boundaries
@@ -64,8 +64,9 @@ allow rules.
 
 ## See Also
 
-- Related specs: [protocol](../specs/protocol.md), [threat-model](security-threat-model.md),
-  [architecture](system-overview.md), [protocol-inter-agent](../specs/protocol-inter-agent.md)
+- Related specs: [message-topology](message-topology.md),
+  [threat-model](security-threat-model.md), [architecture](system-overview.md),
+  [inter-agent-messaging](inter-agent-messaging.md)
 - ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) (wrapper token),
   [0012](../adr/0012-response-display-and-dashboard-scope.md) (log/result delivery),
   [0013](../adr/0013-user-token-cookie-persistence.md) (cookie / ticket),

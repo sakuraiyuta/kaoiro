@@ -1,7 +1,7 @@
 ---
 title: Security threat model
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 ---
 
 # Security threat model
@@ -19,7 +19,7 @@ records threats and mitigations before full operation or external release
 
 | Layer | Defense | Source |
 |---|---|---|
-| Transport | TLS terminated at a reverse proxy. Plain HTTP is permitted only for VPN-limited deployments (`KAOIRO_PLAIN_HTTP`, [deployment](../specs/deployment.md) 1.5 — tokens/cookies travel unencrypted within the VPN, so transport secrecy is delegated to the VPN (WireGuard)) | Decision 2026-06-11 / VPN direct-connection mode 2026-07-26 |
+| Transport | TLS terminated at a reverse proxy. Plain HTTP is permitted only for VPN-limited deployments (`KAOIRO_PLAIN_HTTP`, [network-and-login](../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26) — tokens/cookies travel unencrypted within the VPN, so transport secrecy is delegated to the VPN (WireGuard)) | Decision 2026-06-11 / VPN direct-connection mode 2026-07-26 |
 | Wrapper connection | Token per agent_id | [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) |
 | Client connection | User token + role (only operators can instruct/approve; tokens are retained in httpOnly + encrypted cookies) | Same as above / [ADR-0013](../adr/0013-user-token-cookie-persistence.md) |
 
@@ -56,7 +56,7 @@ records threats and mitigations before full operation or external release
 |---|---|
 | Limit instructions and approvals to the operator role | Implemented in Phase 3 |
 | Fail closed for token authentication when `KAOIRO_CLIENT_TOKENS` is unset (reject all on that token path) — prevents an operator being defenselessly exposed by misconfiguration (warning log on startup). The OAuth path also rejects all on an unset, missing, or mismatched allowlist | Phase 3.5 ([issue #28](https://github.com/sakuraiyuta/kaoiro/issues/28)) / OAuth in phase-26 |
-| Size limit on `permission_request.input` (truncate at 16KB; mark `truncated`) | Implemented in Phase 3 ([protocol](../specs/protocol.md)) |
+| Size limit on `permission_request.input` (truncate at 16KB; mark `truncated`) | Implemented in Phase 3 ([permission-requests](../reference/protocol/permission-requests.md)) |
 | Wrapper-side `allowedTools` ceiling — even when instructions arrive, wrapper configuration is the ceiling on executable tools (not extensible by server/client) | Guaranteed by wrapper design (the server cannot override canUseTool) |
 | Instruction audit log (who sent what to which agent and when) | Future (when SQLite is introduced) |
 | Tool-input masking (redaction of secret patterns) | Future |
@@ -66,7 +66,7 @@ records threats and mitigations before full operation or external release
 | Operator-only envelopes such as log/result are broadcast in plaintext to `agents:lobby` and `AgentsChannel.handle_out` filters them per subscriber (not a gate at subscription). Secure this with the invariant that `AgentsChannel` is the only subscriber to `agents:lobby`; do not adopt a separate operator-only topic | #27 (evaluated and **kept the current design**; see MUST below for new subscribers) |
 | Define **agent-to-agent disclosure** (the peer directory) as a third principal on an axis separate from viewers/operators; allow-list only explicitly enumerated fields in `directory_entry` to agents. Do not pass nested `ext` keys through; project only canonical keys. Continue excluding cwd / permission / `session_id` / `pending_permission` / `session_capabilities`, etc. | #150 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6 (“peer-directory information boundary” in [peer directory](../reference/inter-agent/directory.md) is field SoT) |
 | Retain user tokens in httpOnly + encrypted session cookies (unreadable by JS even under XSS, secret in the cookie jar). Mitigate CSRF with SameSite=Lax + production `check_origin` | Phase 3.5 ([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
-| Add browser-side defense-in-depth headers (CSP / `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: strict-origin-when-cross-origin`) **before endpoint static delivery** (`KaoiroServerWeb.SecurityHeaders`). `index.html` and built assets bypass the router, so the `:browser` pipeline does not protect the SPA itself. CSP uses `script-src 'self'` (removes a route that relied solely on DOMPurify for untrusted agent output rendered with `{@html}`), `frame-ancestors 'none'` (operator-action inducement through clickjacking), and maps only `check_origin` entries matching the response origin to `ws:`/`wss:` in `connect-src` (`check_origin` means “origins permitted to open a socket”; `connect-src` means “destinations this page may connect to,” so their trust axes differ and not every entry is copied). In TLS reverse-proxy deployments, `rewrite_on: [:x_forwarded_proto]` rewrites only the scheme and leaves the internal port in conn; recover and compare the port from the endpoint's `:url` only when its external scheme/host match. Headers always contain configuration strings; the request Host is used only for comparison. In a VPN direct deployment without nginx ([deployment](../specs/deployment.md) 1.5), only the server can add them. | Implemented in #145 |
+| Add browser-side defense-in-depth headers (CSP / `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: strict-origin-when-cross-origin`) **before endpoint static delivery** (`KaoiroServerWeb.SecurityHeaders`). `index.html` and built assets bypass the router, so the `:browser` pipeline does not protect the SPA itself. CSP uses `script-src 'self'` (removes a route that relied solely on DOMPurify for untrusted agent output rendered with `{@html}`), `frame-ancestors 'none'` (operator-action inducement through clickjacking), and maps only `check_origin` entries matching the response origin to `ws:`/`wss:` in `connect-src` (`check_origin` means “origins permitted to open a socket”; `connect-src` means “destinations this page may connect to,” so their trust axes differ and not every entry is copied). In TLS reverse-proxy deployments, `rewrite_on: [:x_forwarded_proto]` rewrites only the scheme and leaves the internal port in conn; recover and compare the port from the endpoint's `:url` only when its external scheme/host match. Headers always contain configuration strings; the request Host is used only for comparison. In a VPN direct deployment without nginx ([network-and-login](../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)), only the server can add them. | Implemented in #145 |
 | OAuth individual authentication + allowlist (Google / GitHub / Nextcloud). Re-resolve a role from the allowlist on every connection and operation, so demotion also applies to live sockets. **Apply changes in a change-driven way even to passive sockets that never operate** (`OAuthAllowlistWatcher` detects allowlist-file changes by checkpoint diff and disconnects only affected identities; periodic reconciliation bounds lost events; `AgentsChannel.join/3` closes the connect-join race by revalidation) | Implemented in phase-26 ([ADR-0042](../adr/0042-oauth-allowlist-login.md) / [#148](https://github.com/sakuraiyuta/kaoiro/issues/148)). Passive sockets in [#160](https://github.com/sakuraiyuta/kaoiro/issues/160). Role refinement (approver, etc.) and multi-tenant isolation are future work ([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
 | Expose JSONL metadata returned by the runner when summoning a session (such as an initial-prompt summary) only minimally and to operators (T2, [ADR-0014](../adr/0014-session-resume-and-restore.md)) | Implemented in Phase 4 (4-5) |
 | Verify that a resumed session_id exists under the cwd bound to its agent; reject resumes to another cwd/arbitrary path (T3, verified by runner). Re-verify the replacement target of `switch_session` under the same cwd | Implemented in Phase 4 (4-5) |
@@ -81,7 +81,8 @@ records threats and mitigations before full operation or external release
 
 ## See Also
 
-- Related specs: [protocol](../specs/protocol.md), [architecture](system-overview.md)
+- Related specs: [message-topology](message-topology.md),
+  [architecture](system-overview.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),

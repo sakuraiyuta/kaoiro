@@ -1,7 +1,7 @@
 ---
 title: Inter-agent messaging
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 description: Inter-agent messaging and its boundaries.
 ---
 
@@ -15,8 +15,8 @@ issue #17; see [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-mess
 for the staged implementation plan and kaoiro issues #87 and #17
 issuecomment-5384349594 for design rationale.
 
-Add envelope `type: "inter_agent_message"` as a reserved supplement to
-[protocol](../specs/protocol.md) (same `version`), per
+Add envelope `type: "inter_agent_message"` as a reserved supplement to the
+[envelope contract](../reference/protocol/envelope.md) (same `version`), per
 [ADR-0010](../adr/0010-protocol-precisification.md).
 
 ### Overview

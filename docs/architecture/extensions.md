@@ -2,7 +2,7 @@
 title: Extensions
 description: The adapter and filter extension points, their common event boundary, and the package structure that keeps core agent-independent.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol, adapter-contract, claude-model-catalog]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -51,7 +51,7 @@ into which both are inserted. Overall composition is in
 ### Common event boundary
 
 The boundary into which adapters and filters are inserted is itself the common
-event / envelope ([protocol](../specs/protocol.md)).
+event / envelope ([event types and payloads](../reference/protocol/events.md)).
 
 ```
 [Agent native] --(Adapter: SDK→common)--> [Common event v0]
@@ -106,5 +106,6 @@ field contract, stamp timing, and per-engine advertised values.
 
 ## See Also
 
-- Related specs: [architecture](system-overview.md), [protocol](../specs/protocol.md)
+- Related specs: [architecture](system-overview.md),
+  [event types and payloads](../reference/protocol/events.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md), [0037](../adr/0037-claude-model-catalog-live-refresh.md)

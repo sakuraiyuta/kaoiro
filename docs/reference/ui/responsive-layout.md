@@ -2,7 +2,7 @@
 title: Responsive layout specification
 description: Breakpoint definitions, area-specific layout rules, sheet mechanism, and safe-area handling that make the dashboard equally viable at PC, tablet, and smartphone sizes.
 status: provisional
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [design, protocol, responsive-reachability]
 ---
 
@@ -200,7 +200,7 @@ None.
 
 - Related specs: [design](design.md),
   [responsive-reachability](responsive-reachability.md),
-  [protocol](../../specs/protocol.md)
+  [state-machine](../protocol/state-machine.md)
 - ADRs: [0052-responsive-three-tier-layout](../../adr/0052-responsive-three-tier-layout.md),
   [0012-response-display-and-dashboard-scope](../../adr/0012-response-display-and-dashboard-scope.md)
 - Implementation plan: [phase-31-responsive-ui](../../plans/phase-31-responsive-ui.md)

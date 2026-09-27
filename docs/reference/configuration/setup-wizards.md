@@ -2,7 +2,7 @@
 title: Setup wizards (configuration / env generation)
 description: Exact contract for the interactive wizards that generate the server .env and runner configuration (runner.config.json / runner.env).
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [deployment]
 ---
 
@@ -33,7 +33,8 @@ snippet, to avoid two sources of truth).
 - For each of the three token types, repeatedly ask “add one?” and “add another?”
   to build multiple entries. In production, all three are required (missing
   values reject connections, issue #133).
-- **Do not ask for the nine DETS paths**. The bundled `docker-compose.yaml`
+- **Do not ask for the DETS paths** (12 as of this writing,
+  `PersistencePaths.stores/0`). The bundled `docker-compose.yaml`
   already sets them under `environment:`; they are needed only outside Compose.
   Keep them as comments in generated files and defer their meaning and inventory
   to the deployment guide (#137).
@@ -124,8 +125,10 @@ startup**.
   ([ADR-0023](../../adr/0023-host-runner-architecture.md) /
   [ADR-0024](../../adr/0024-agent-instance-identity-and-spawn-auth.md)), so people
   write it only for standalone development launches. Engine-specific examples
-  (`wrapper/kaoiro.config.claude-code.example.json`, etc.) exist for that. It is
-  deferred as **development-only and low priority**.
+  exist for `claude-code` and `codex`
+  (`wrapper/kaoiro.config.claude-code.example.json`,
+  `wrapper/kaoiro.config.codex.example.json`); no example config ships yet for
+  `antigravity`. It is deferred as **development-only and low priority**.
 - **Non-interactive mode** (flags in bulk)—
   [#141](https://github.com/sakuraiyuta/kaoiro/issues/141).
 - **Automatic token handoff between the two wizards**—independent operation

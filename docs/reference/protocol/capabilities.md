@@ -1,7 +1,7 @@
 ---
 title: Session capabilities contract
 status: accepted
-last_updated: 2026-09-21
+last_updated: 2026-09-27
 description: The ext.session_capabilities shape, stamp timing, and per-engine advertised values.
 ---
 
@@ -71,17 +71,12 @@ cannot represent.
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Model and effort state](model-effort.md).
-- [Permission requests](permission-requests.md).
-- [Extension architecture](../../architecture/extensions.md).
 - [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).
 
 ## Input-bound inter-agent replies
 

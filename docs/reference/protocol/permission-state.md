@@ -1,7 +1,7 @@
 ---
 title: Permission state contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The ext.permission two-axis model and the requested/submitted/effective state machine for a permission change.
 ---
 
@@ -255,16 +255,9 @@ their new picker alone does not correct their legacy fallback.
 
 ## Related protocol topics
 
-- [Envelope contract](envelope.md).
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Permission requests](permission-requests.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
 - [Permission control (two-axis model)](../../architecture/security-boundaries.md#permission-control-two-axis-model).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).

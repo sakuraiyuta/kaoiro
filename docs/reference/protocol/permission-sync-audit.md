@@ -1,7 +1,7 @@
 ---
 title: Permission synchronization and audit
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: Persisted permission settings, join synchronization after wrapper reconnect, and the permission lifecycle audit trail.
 ---
 
@@ -219,16 +219,9 @@ not a guaranteed durable security journal.
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).

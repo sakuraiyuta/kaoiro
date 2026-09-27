@@ -2,8 +2,8 @@
 title: Architecture
 description: A three-layer structure of wrapper (TS/engine SDK), server (Elixir/Phoenix), and client (Web), with a host-resident runner, and its data flow.
 status: accepted
-last_updated: 2026-09-19
-related: [plugin-model, protocol]
+last_updated: 2026-09-27
+related: [plugin-model, protocol, antigravity-adapter, codex-backends]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -13,7 +13,7 @@ related: [plugin-model, protocol]
 
 Defines the three-layer structure, each layer's responsibilities, and the data
 flow. See [extensions](extensions.md) for the plugin extension model and
-[protocol](../specs/protocol.md) for event formats.
+[event types and payloads](../reference/protocol/events.md) for event formats.
 
 ## Definition
 
@@ -33,12 +33,20 @@ The wrapper is a five-package pnpm workspace (`core` / `agent-common` /
   adapter
 - **`wrapper/codex` (`@kaoiro/codex`)** — concrete Codex CLI adapter
   (implemented in
-  [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md))
+  [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)); see
+  [codex-backends](codex-backends.md) for its two transport backends
+  (`exec` default, `app-server` opt-in,
+  [ADR-0058](../adr/0058-codex-app-server-turn-steer.md))
+- **`wrapper/antigravity` (`@kaoiro/antigravity`)** — concrete Antigravity
+  (`agy` CLI) adapter, driving the CLI headless with a hook-based permission
+  gate ([ADR-0057](../adr/0057-antigravity-adapter.md)); see
+  [antigravity-adapter](antigravity-adapter.md)
 
 The runner resolves engine selection through `SpawnMessage.engine` (values:
-`claude-code` / `codex`; the runner control message in
-[protocol](../specs/protocol.md)). LaunchDialog shows an engine selector only when the
-host's `capabilities` field lists at least two engine types.
+`claude-code` / `codex` / `antigravity`; the runner control message in
+[runner-control](../reference/protocol/runner-control.md)). LaunchDialog shows
+an engine selector only when the host's `capabilities` field lists at least
+two engine types.
 
 ### Three-layer structure
 
@@ -47,12 +55,14 @@ flowchart LR
   subgraph Agents[AI Agents]
     CC1[Claude Code #1]
     CX[Codex #2]
+    AGY[Antigravity #3]
   end
   subgraph Host["Host (resident runner)"]
     RUN[runner<br/>spawn / supervision / host registration]
-    subgraph Wrappers["Wrapper layer (TS + engine SDK / local)"]
+    subgraph Wrappers["Wrapper layer (TS + engine SDK/CLI / local)"]
       W1[Wrapper #1<br/>Adapter+Filters]
       W2[Wrapper #2]
+      W3[Wrapper #3]
     end
   end
   subgraph Server[Server layer: Elixir/Phoenix]
@@ -64,10 +74,13 @@ flowchart LR
   end
   CC1 <-->|Agent SDK| W1
   CX  <-->|Adapter| W2
+  AGY <-->|CLI + hook gate| W3
   RUN -.->|spawn/stop/restart supervision| W1
   RUN -.->|supervision| W2
+  RUN -.->|supervision| W3
   W1 -->|"WebSocket / common events (direct)"| REG
   W2 -- WebSocket --> REG
+  W3 -- WebSocket --> REG
   RUN -- WebSocket / host registration and control --> REG
   REG --> PS --> UI
   UI -- instructions / approval --> REG --> W1
@@ -75,19 +88,24 @@ flowchart LR
 
 ### Integration approach: hosting engine SDKs
 
-The wrapper hosts each engine's official SDK and uses one mechanism for
+The wrapper hosts each engine's official SDK or CLI and uses one mechanism for
 observation, control, and permission routing. Claude Code uses the Claude
-Agent SDK (TS: `@anthropic-ai/claude-agent-sdk`) and Codex uses the Codex SDK;
-both sit behind the `EngineAdapter` interface. For why PTY scraping was not
-chosen and what alternatives were considered, see
+Agent SDK (TS: `@anthropic-ai/claude-agent-sdk`); Codex uses the Codex SDK
+(`exec` transport, default) or an opt-in app-server JSON-RPC transport
+([ADR-0058](../adr/0058-codex-app-server-turn-steer.md)); Antigravity has no
+Node/TS SDK, so it drives the `agy` CLI headless
+([ADR-0057](../adr/0057-antigravity-adapter.md)). All three sit behind the
+`EngineAdapter` interface. For why PTY scraping was not chosen and what
+alternatives were considered, see
 [ADR-0001](../adr/0001-agent-sdk-integration.md); for the Codex decision, see
-[ADR-0032](../adr/0032-codex-adapter.md).
+[ADR-0032](../adr/0032-codex-adapter.md); for the Antigravity decision, see
+[ADR-0057](../adr/0057-antigravity-adapter.md).
 
 | Use | SDK implementation |
 |---|---|
-| State observation | Derive state from typed message sequences ([protocol](../specs/protocol.md)) |
+| State observation | Derive state from typed message sequences ([events](../reference/protocol/events.md)) |
 | Instruction injection | Session resume / streaming input |
-| Waiting for permission | Route `canUseTool` (Claude) / tool host bridge (Codex) to the external UI |
+| Waiting for permission | Route `canUseTool` (Claude) / tool host bridge (Codex) / PreToolUse hook to a unix socket, advisory sandbox (Antigravity) to the external UI |
 
 Differences between engines are advertised as `ext.session_capabilities` in an
 envelope. The UI determines feature availability from this capability rather
@@ -137,7 +155,8 @@ details. Each host's runner also remains connected to the server for host
 registration, liveness notifications, and spawn/stop/restart control. This is
 a separate path from the data path
 ([ADR-0023](../adr/0023-host-runner-architecture.md)). See
-[protocol](../specs/protocol.md) for the concrete control-message forms.
+[runner-control](../reference/protocol/runner-control.md) for the concrete
+control-message forms.
 
 ### Access control
 
@@ -206,7 +225,10 @@ None.
 
 ## See Also
 
-- Related specs: [extensions](extensions.md), [protocol](../specs/protocol.md),
+- Related pages: [extensions](extensions.md),
+  [antigravity-adapter](antigravity-adapter.md),
+  [codex-backends](codex-backends.md),
+  [event types and payloads](../reference/protocol/events.md),
   [persona-pack-format](../reference/personas/pack-format.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0002](../adr/0002-local-wrapper-websocket-topology.md),
@@ -220,4 +242,6 @@ None.
   [0030](../adr/0030-agent-directory-and-explicit-restore.md),
   [0032](../adr/0032-codex-adapter.md),
   [0034](../adr/0034-session-capabilities-advertisement.md),
-  [0042](../adr/0042-oauth-allowlist-login.md)
+  [0042](../adr/0042-oauth-allowlist-login.md),
+  [0057](../adr/0057-antigravity-adapter.md),
+  [0058](../adr/0058-codex-app-server-turn-steer.md)

@@ -2,7 +2,7 @@
 title: Attachments
 description: Dashboard-to-agent attachment intake -- layer responsibilities, the deferred-upload UI model, and why rendering stays wrapper-internal.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol, architecture]
 ---
 
@@ -11,8 +11,9 @@ related: [protocol, architecture]
 ## Purpose
 
 Defines how an operator can pass attachments from the dashboard to an agent
-(initially Claude Code / Claude Agent SDK). Wire details are in
-[protocol](../specs/protocol.md); the decision rationale is
+(initially Claude Code / Claude Agent SDK). Wire details are in the
+[attachment wire contract](../reference/protocol/attachments.md); the decision
+rationale is
 [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md).
 
 ### Responsibilities

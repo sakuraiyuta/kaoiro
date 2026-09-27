@@ -1,7 +1,7 @@
 ---
 title: Permission request contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The set_permission wire contract -- request validation, relay, and acknowledgement.
 ---
 
@@ -96,16 +96,9 @@ serialize their exclusion: neither can pass a check and commit across the other.
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Permission state](permission-state.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).

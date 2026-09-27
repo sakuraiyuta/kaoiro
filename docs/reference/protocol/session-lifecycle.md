@@ -1,7 +1,7 @@
 ---
 title: Session lifecycle contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: Planned wrapper disconnect/reconnect cycles, session visibility semantics, resume/restore, and identity fields.
 ---
 
@@ -156,6 +156,21 @@ settled in the runner table below ([#66](https://github.com/sakuraiyuta/kaoiro/i
 The earlier phase-0 protocol change only added top-level `session_id` to the envelope; the
 wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)` pointer.
 
+### Session reset failure diagnostics (issue #397)
+
+`reset_session` checks the requested/resumed axes (`sandbox` / `approval` /
+`network_access`) against the immutable per-agent `permissionCeiling` pinned
+at spawn/restore. A conflict there reports the `SessionResetErrorReason`
+value `permission_ceiling_conflict`, plus a structured
+`PermissionCeilingConflictAxis[]` (`axis`, current value, ceiling value)
+carried through `SessionResetResult` / `SessionResetFailed`
+(`protocol/src/index.ts`), naming the exact axis and value the operator needs
+to narrow. Previously this collapsed into the generic `spawn_failed` with no
+operator-visible detail; reset semantics themselves are unchanged (no
+clamp-on-reset). See [Channels](channels.md) for the `session_reset_result` /
+`session_reset_failed` wire rows and [Runner control](runner-control.md) for
+the `reset_session` command shape.
+
 ### Identity and persona (must)
 
  - `agent_id` is a stable ID fixed in configuration; do not use volatile runtime IDs.
@@ -170,12 +185,9 @@ wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)`
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [State machine](state-machine.md).
-- [Model and effort state](model-effort.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).
+- [Channels and directional messages](channels.md).

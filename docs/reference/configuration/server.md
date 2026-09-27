@@ -14,7 +14,7 @@ related: [deployment]
 | `PHX_HOST` | Required | Public hostname. Unset raises at startup (fail-fast, issue #134) |
 | `PORT` | Optional | Defaults to 4000 |
 | `KAOIRO_BIND_IP` | Optional | Effective only in :prod; defaults to all interfaces, which is normally fine (issue #134) |
-| `KAOIRO_CLIENT_TOKENS` | Required | `<token>:<role>,...` (role = `operator`/`viewer`); unset rejects every client |
+| `KAOIRO_CLIENT_TOKENS` | Required | `<token>:<role>,...` (role = `admin`/`operator`/`viewer`; `admin` is the only config-only bootstrap path for the first admin, ADR-0050 D2); unset rejects every client |
 | `KAOIRO_WRAPPER_TOKENS` | Optional | `<agent_id>:<token>,...` (reverse order from client). Not needed when runners deploy only through spawn—authenticate with server-minted signed tokens (ADR-0024, revised 2026-08-02). Set only to pre-register fixed wrappers |
 | `KAOIRO_RUNNER_TOKENS` | Required | `<host_id>:<token>,...`; pair the token issued in 1.1 with `KAOIRO_RUNNER_TOKEN` in the runner's `runner.env` |
 | `KAOIRO_PERSONA_DIR` | Optional | Container path for persona-pack import; may be mounted read-only |

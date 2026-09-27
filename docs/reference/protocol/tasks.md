@@ -2,7 +2,7 @@
 title: Task and tasklist envelopes
 description: The dedicated task envelope for subagent/workflow lifecycle, its task_type = "tasklist" addendum for an agent's own todo, and their operator-only delivery.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol]
 ---
 
@@ -47,8 +47,9 @@ schema is settled in [ADR-0047](../../adr/0047-task-envelope-schema.md):
   see that ADR's addendum). Future additions such as task lists are possible.
   Receivers fall back to a generic display for unknown values.
 
-[protocol](../../specs/protocol.md) includes it as a settled extension (with the same
-`version`). The wrapper throttles `kind=updated` by interval plus change
+[Event types and payloads](events.md#types-and-payload-v0-settled) includes it
+as a settled extension (with the same `version`). The wrapper throttles
+`kind=updated` by interval plus change
 threshold (`started` / `completed` are immediate,
 [ADR-0048](../../adr/0048-task-aggregation-delivery.md) F2). The implementation
 uses three seconds plus either a token delta of at least 500 or a tool-name
@@ -129,7 +130,8 @@ are **operator-only** and are not delivered to viewers
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md), [agent-sdk-events](../engines/claude-events.md)
+- Related specs: [events](events.md),
+  [agent-sdk-events](../engines/claude-events.md)
 - ADR: [0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)
   (entity model and transport),
   [0047](../../adr/0047-task-envelope-schema.md) (envelope schema),
@@ -137,21 +139,9 @@ are **operator-only** and are not delivered to viewers
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Event types and payloads](events.md).
-- [Channels and directional messages](channels.md).
-- [Versioning policy](versioning.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Permission requests](permission-requests.md).
-- [Permission state](permission-state.md).
-- [Permission synchronization and audit](permission-sync-audit.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Wrapper configuration](../configuration/wrapper.md).
 - [Subagent visibility](../../architecture/subagent-visibility.md).
-- [Persona delivery](persona-delivery.md).

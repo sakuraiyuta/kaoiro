@@ -1,7 +1,7 @@
 ---
 title: State machine contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The v0 agent state set, its SDK derivation, and the settled state transition diagram.
 ---
 
@@ -57,11 +57,9 @@ stateDiagram-v2
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Session lifecycle](session-lifecycle.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).
+- [Event types and payloads](events.md).

@@ -1,7 +1,7 @@
 ---
 title: IA sidecar and display restoration
 status: provisional
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The wrapper-host IA sidecar's on-disk format, compaction, and the replay_ia restore path.
 related: [protocol-inter-agent]
 ---
@@ -108,7 +108,8 @@ host**, not the server (`InterAgentHistory` DETS is retired).
   (transcript/sidecar) in place.
  - **Restore**: a wrapper instructed to replay by the hydration verdict reads
   its sidecar and reprojects its pane's display rows through the `replay_ia`
-  event ([protocol](../../specs/protocol.md) event table). No routing or SDK injection
+  event ([events](../protocol/events.md) event table). No routing or SDK
+  injection
   occurs. Hide cleared rows by comparing their stored `ingress_stamp` with
   durable `ClearWatermarks`; discard rows without a stamp (fail-closed).
   Accepted restored rows are broadcast to `agents:lobby` as
@@ -126,7 +127,7 @@ host**, not the server (`InterAgentHistory` DETS is retired).
   single split is **dropped rather than sent**; sending it would repeat the
   frame-reject / missing-complete / rejoin loop, the same fail-closed decision
   as a corrupt sidecar row (Fujino 30-10 round-2 should, 2026-08-08). See the
-  `replay_ia` row in [protocol](../../specs/protocol.md) for details.
+  `replay_ia` row in [events](../protocol/events.md) for details.
 - **Relation to resume reconstruction**: do **not** reproject IA injection
   framing text from the SDK transcript into the `kind=user` log. Structured
   display is provided by sidecar-derived `replay_ia`, preventing duplicates.

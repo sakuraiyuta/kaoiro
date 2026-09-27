@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 related: [protocol, architecture]
 ---
 
@@ -52,8 +52,7 @@ Dashboard pushes also all carry `version` through the single `pushVersioned` fun
 
 `restart` still lacks a dashboard push producer, but implementation will use the funnel above
 and therefore stamp `version` automatically. See
-"[Version inventory](../../specs/protocol.md#version-inventory-issue-208)" in protocol for
-coverage.
+"[Version inventory](versioning.md#version-inventory-issue-208)" for coverage.
 
 **Safety** (spawn is effectively remote code execution): accepting spawn / resume /
 resume_session / stop / restart is **operator-only**. Runner T3 verifies that the resume
@@ -112,20 +111,9 @@ and lifetime are defined by ADR-0024. Full runner-less direct `node wrapper` sup
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
-- [Event types and payloads](events.md).
-- [Channels and directional messages](channels.md).
-- [Versioning policy](versioning.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Permission requests](permission-requests.md).
-- [Permission state](permission-state.md).
-- [Permission synchronization and audit](permission-sync-audit.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Wrapper configuration](../configuration/wrapper.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).
+- [Session capabilities](capabilities.md).

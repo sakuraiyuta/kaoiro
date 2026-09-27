@@ -1,7 +1,7 @@
 ---
 title: Protocol versioning policy
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The flat outer-version stamping policy and the staged completion inventory for every wrapper/server/client/runner route.
 ---
 
@@ -135,19 +135,9 @@ server state.
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Envelope contract](envelope.md).
 - [Event types and payloads](events.md).
 - [Channels and directional messages](channels.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Permission requests](permission-requests.md).
-- [Permission state](permission-state.md).
-- [Permission synchronization and audit](permission-sync-audit.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).

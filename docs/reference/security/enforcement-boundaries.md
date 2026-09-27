@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-27
 ---
 
 # Security enforcement boundaries
@@ -11,7 +11,8 @@ Related security topics: [Security boundaries](../../architecture/security-bound
 ## Constraints
 
 - MUST: Accept instructions and approvals only from the operator role
-  ([protocol](../../specs/protocol.md)).
+  ([operator-only
+  inbound](authentication-authorization.md#operator-only-inbound-handle_in)).
 - MUST: Deliver response logs (`log`/`result`) only to the operator role
   ([ADR-0012](../../adr/0012-response-display-and-dashboard-scope.md)).
 - MUST: Deliver envelope `ext` (statusline metadata: cwd / model / context /

@@ -1,7 +1,7 @@
 ---
 title: Envelope contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 description: The common envelope's outer frame keys, wire shape, and the ext.engine identifier.
 ---
 
@@ -92,19 +92,9 @@ identity. **Never infer feature availability from the engine name** ([ADR-0034](
 
 ## Related protocol topics
 
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Message topology](../../architecture/message-topology.md).
 - [Event types and payloads](events.md).
 - [Channels and directional messages](channels.md).
-- [Versioning policy](versioning.md).
-- [Permission requests](permission-requests.md).
-- [Permission state](permission-state.md).
-- [Permission synchronization and audit](permission-sync-audit.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).

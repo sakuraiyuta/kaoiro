@@ -2,7 +2,7 @@
 title: Wrapper configuration (runner-relayed fields)
 description: WrapperConfig fields the runner sources from runner.config.json, distinct from the fields mirrored verbatim from the spawn payload.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol]
 ---
 
@@ -43,6 +43,17 @@ blocks, since nothing else in this spec names `WrapperConfig`.
   server/dashboard error vocabulary. The wrapper snapshots them at launch;
   path resolution or probe failure is reported only by an existing bounded,
   redacted local diagnostic.
+
+- `max_sandbox` / `max_approval` / `max_network_access` — runner-local
+  values derived from `antigravity.max_sandbox` /
+  `antigravity.max_approval` / `antigravity.max_network_access`
+  ([ADR-0057](../../adr/0057-antigravity-adapter.md) F4c Stage B0, issue
+  #359). These are the host-local permission-switch
+  ceilings for that agent: the wrapper (and the server, redundantly) reject
+  a `set_permission` widening any axis past its ceiling with
+  `exceeds_launch_ceiling`. See [Runner configuration](runner.md)'s
+  "Antigravity configuration" section for the declaration syntax and
+  defaulting rules.
 
 ## See Also
 

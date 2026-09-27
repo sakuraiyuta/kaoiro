@@ -17,6 +17,7 @@ shown, so a file only needs to state what it overrides):
 |---|---|---|
 | `backup_root` | `~/kaoiro-deploy` | Absolute path; transaction directories live under it |
 | `keep_generations` / `retention_days` | `5` / `30` | DONE transactions kept regardless of age / max age beyond that |
+| `capacity_multiplier` | `10` | Preflight refuses `update`/`rollback` when `backup_root`'s filesystem has less free space than `capacity_multiplier` × the current DETS volume's size; lower via `--config` if the check is too conservative |
 | `health_poll_interval_ms` / `health_poll_timeout_ms` | `2000` / `60000` | `update`/`rollback`'s own health poll after `compose up` |
 | `stability_window_ms` | `30000` | How long the container must stay `running` with an unchanged restart count after health passes, before `update` calls itself done |
 | `health_url` | `null` (derived via `docker compose port <service> 4000`) | Override only if the derived URL is wrong for this host |

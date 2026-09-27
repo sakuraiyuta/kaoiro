@@ -2,7 +2,7 @@
 title: Persona pack format
 description: Internal structure and manifest.json schema of the persona-pack ZIP distribution unit.
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 related: [personas, persona-personality-injection, protocol]
 ---
 
@@ -197,5 +197,6 @@ None. Decided by ADR-0029.
   illustration design policy),
   [personality-prompt injection](../../architecture/personality-injection.md)
   (personality-prompt delivery and injection),
-  [protocol](../../specs/protocol.md) (`/api/personas` response format)
+  [persona delivery](../protocol/persona-delivery.md)
+  (`/api/personas` response format)
 - Plan: [phase-10-persona-server-sot](../../plans/phase-10-persona-server-sot.md)

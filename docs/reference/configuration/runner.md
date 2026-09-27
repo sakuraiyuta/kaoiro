@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 ---
 
 # Runner configuration
@@ -202,6 +202,25 @@ settings (phase-34 Stage B6, issue #292).
     "extra_models": [
       { "value": "gemini-4-nova", "display_name": "Gemini 4 Nova" }
     ]
+  }
+  ```
+
+- `max_sandbox` (`"read-only" | "workspace-write" | "danger-full-access"`),
+  `max_approval` (`"untrusted" | "on-request" | "local" | "never"`), and
+  `max_network_access` (boolean) are host-local runtime permission-switch
+  ceilings ([ADR-0057](../../adr/0057-antigravity-adapter.md) F4c Stage B0,
+  issue #359). Each optional axis caps how far a server-originated
+  `set_permission` may widen this agent's cell beyond its launch value. An
+  absent axis defaults to the launch value (`sandbox` / `network_access`) or
+  `permissive_max(launch, "local")` (`approval`). A ceiling narrower than the
+  launch value is a contradiction and is rejected at spawn. Relayed to the
+  wrapper as `WrapperConfig.max_sandbox` / `max_approval` /
+  `max_network_access`.
+  ```json
+  "antigravity": {
+    "max_sandbox": "workspace-write",
+    "max_approval": "on-request",
+    "max_network_access": false
   }
   ```
 

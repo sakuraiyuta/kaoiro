@@ -2,7 +2,7 @@
 title: Attachment wire contract
 description: The attach_open/attach_chunk/attach_close wire, binary frame layout, limits, and the reject path.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol, architecture]
 ---
 
@@ -118,8 +118,9 @@ A wrapper that receives an unsupported MIME returns
 
 ### Transfer wire
 
-For wire details, see the "Direction-specific message types" and "File-upload
-wire" sections of [protocol](../../specs/protocol.md). Overview:
+For the directional wire-message ordering, see
+[channels](channels.md#directional-message-types-v0-settled). Overview of this
+page's own file-upload wire:
 
 - `attach_open` (text/JSON, client → server → wrapper) announces an upload.
 - `attach_chunk` (binary frame, same direction) transfers bytes in chunks. It
@@ -203,7 +204,7 @@ client failures / instructions that never arrive.
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md),
+- Related specs: [channels](channels.md), [envelope](envelope.md),
   [architecture](../../architecture/system-overview.md), [non-goals](../../architecture/scope.md),
   [threat-model](../../architecture/security-threat-model.md)
 - ADRs:
@@ -216,10 +217,9 @@ client failures / instructions that never arrive.
 
 ## Related protocol topics
 
-- [Envelope contract](envelope.md).
-- [Channels and directional messages](channels.md).
-- [Attachments](../../architecture/attachments.md).
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Persona delivery](persona-delivery.md).
+- [Channels and directional messages](channels.md).
+- [Event types and payloads](events.md).

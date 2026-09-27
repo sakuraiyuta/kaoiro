@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-27
 related: [responsive-layout, design]
 ---
 

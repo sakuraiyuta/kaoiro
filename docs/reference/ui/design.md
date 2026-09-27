@@ -2,7 +2,7 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [overview, personas, protocol, responsive-layout, responsive-reachability]
 format: stitch-design-md
 version: alpha
@@ -554,6 +554,8 @@ intentional and may be ignored:
 - Implementation: [dashboard/src/app.css](../../../dashboard/src/app.css), [App.svelte](../../../dashboard/src/App.svelte), [AgentCard.svelte](../../../dashboard/src/lib/AgentCard.svelte), [AgentDetail.svelte](../../../dashboard/src/lib/AgentDetail.svelte), [LaunchDialog.svelte](../../../dashboard/src/lib/LaunchDialog.svelte)
 - Dimensions and layout switching: [responsive-layout.md](responsive-layout.md) (breakpoints / region rules / sheet mechanism)
 - Per-size reachability: [responsive-reachability.md](responsive-reachability.md) (element paths / scroll owners)
-- State definitions: [protocol.md](../../specs/protocol.md) (one-to-one state palette)
+- State definitions:
+  [state-machine.md](../protocol/state-machine.md#state-machine-state-set-v0-draft)
+  (one-to-one state palette)
 - Expressions and persona portraits: [personas.md](../../specs/personas.md)
 - Format specification: [DESIGN.md (Google, alpha)](https://github.com/google/design.md)

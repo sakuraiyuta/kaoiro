@@ -2,7 +2,7 @@
 title: Persona delivery
 description: The persona asset HTTP API and the WS-handshake personality-prompt push, including the wire's reject/fail-closed guarantees.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 related: [protocol, personas]
 ---
 
@@ -142,24 +142,9 @@ inside the persona-pack ZIP.
 
 ## Related protocol topics
 
-- [Envelope contract](envelope.md).
-- [Event types and payloads](events.md).
-- [Channels and directional messages](channels.md).
-- [Versioning policy](versioning.md).
-- [Message topology](../../architecture/message-topology.md).
-- [Permission requests](permission-requests.md).
-- [Permission state](permission-state.md).
-- [Permission synchronization and audit](permission-sync-audit.md).
-- [Model and effort state](model-effort.md).
-- [Session capabilities](capabilities.md).
-- [Session lifecycle](session-lifecycle.md).
-- [State machine](state-machine.md).
-- [Attachment wire contract](attachments.md).
-- [Attachment rendering by engine](../engines/attachment-rendering.md).
-- [Runner control and launch](runner-control.md).
-- [Wrapper configuration](../configuration/wrapper.md).
-- [Task and tasklist envelopes](tasks.md).
-- [Subagent visibility](../../architecture/subagent-visibility.md).
+See [Protocol documentation](../../README.md#protocol-documentation) for the
+full topic index.
+
 - [Personality-prompt injection by engine](../engines/personality-injection.md).
 - [Personality configuration](../configuration/personality.md).
 - [Personality-prompt injection (design)](../../architecture/personality-injection.md).
