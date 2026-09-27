@@ -1,0 +1,1267 @@
+{
+  "baseline": "b71674a28baa0b1e4b113dca40ce02b220e6373c",
+  "sdk": "0.3.280",
+  "cli": "2.1.280",
+  "host_platform": "Linux",
+  "artifact_sha256": {
+    "wrapper/claude-code/dist/host.js": "744a41fdecc232a0c7f7e5ba2c21fc8422f20bc08d5c0e9de2cb9eeddedb44cd",
+    "wrapper/claude-code/dist/inter_agent_sdk.js": "fd29313da93fb54cec3dde732819da10a0beeb1ab236a8c1e949e3689dc0c323",
+    "wrapper/agent-common/dist/inter_agent.js": "010d614a144cd3fb7a11148ffc8dc4b5ba73127429924103c3f7dc0343df7666",
+    "wrapper/agent-common/dist/tool_origins.js": "2ef9ca01af53a6fe531a4b02c8fc848f388ef4f754c95dfd401d00867716435a",
+    "wrapper/agent-common/dist/reply_basis.js": "58d7001ac11a6417f2770acbedc12e871f9e9c174ba9899e4a834f1f61d4f7ae",
+    "wrapper/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs": "ef4c2c0fc286d8c7dab7771516cf95206f9f670e99e74dc62f245b7fc8224955",
+    "wrapper/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts": "b7ac9c0ed0db5c1792a5394e72c75d69d85f4ce9edc0279487ec55d32eabfa76",
+    "tmp/kogane-422/probe.mjs": "1017d056802db567ca6616661bfc0d5ed5d32fe781811b15529430afbbb62114",
+    "tmp/kogane-422/probe-replay.mjs": "6767e08ea788a7a5d8dc1dfeb22d0e268622975d4a59ba7f153373651124b223"
+  },
+  "runs": [
+    {
+      "name": "events.jsonl",
+      "raw_sha256": "30ce0bb0c878f6b0896b139e2071fe14da457097734d1d091a4bd9ed4145162f",
+      "records": [
+        {
+          "seq": 1,
+          "time": "2026-09-26T15:27:31.693Z",
+          "phase": "control",
+          "kind": "start",
+          "baseline": "b71674a28baa0b1e4b113dca40ce02b220e6373c",
+          "sdk": "0.3.280"
+        },
+        {
+          "seq": 2,
+          "time": "2026-09-26T15:27:31.694Z",
+          "phase": "control",
+          "kind": "query",
+          "model": "sonnet"
+        },
+        {
+          "seq": 3,
+          "time": "2026-09-26T15:27:31.713Z",
+          "phase": "control",
+          "kind": "host_start",
+          "turnToken": "2d45ed85-97ce-4727-8603-178c4278d55b"
+        },
+        {
+          "seq": 5,
+          "time": "2026-09-26T15:27:33.645Z",
+          "phase": "control",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "init",
+            "uuid": "98261dd1-7232-46fa-9fec-c63618e1f91c",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "model": "claude-sonnet-5",
+            "claude_code_version": "2.1.280",
+            "permissionMode": "bypassPermissions"
+          }
+        },
+        {
+          "seq": 6,
+          "time": "2026-09-26T15:27:36.143Z",
+          "phase": "control",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "924b4a6b-d565-4730-b0b8-26cd4e59515d",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHa3CiW8aBqzRC7Vm6d",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01Tx5W5xDG4c59xUbtaQxpCh",
+                  "name": "mcp__kaoiro__send_to_agent",
+                  "input": {
+                    "to": "probe.peer",
+                    "conversation_id": "probe-cid",
+                    "kind": "response",
+                    "body": "CONTROL"
+                  },
+                  "caller": {
+                    "type": "direct"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 7,
+          "time": "2026-09-26T15:27:36.152Z",
+          "phase": "control",
+          "kind": "resolve",
+          "id": "toolu_01Tx5W5xDG4c59xUbtaQxpCh",
+          "token": "2d45ed85-97ce-4727-8603-178c4278d55b",
+          "aborted": false
+        },
+        {
+          "seq": 8,
+          "time": "2026-09-26T15:27:36.154Z",
+          "phase": "control",
+          "kind": "transport",
+          "payload": {
+            "to": "probe.peer",
+            "conversation_id": "probe-cid",
+            "turn_number": 1,
+            "kind": "response",
+            "body": "CONTROL",
+            "meta": {
+              "done": false,
+              "propose_next": ""
+            },
+            "owner": {
+              "kind": "user",
+              "id": "operator"
+            },
+            "new_conversation": false,
+            "in_reply_to": 1
+          }
+        },
+        {
+          "seq": 9,
+          "time": "2026-09-26T15:27:36.154Z",
+          "phase": "control",
+          "kind": "tool_result",
+          "args": {
+            "to": "probe.peer",
+            "body": "CONTROL",
+            "kind": "response",
+            "conversation_id": "probe-cid"
+          },
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "sent to probe.peer (conversation_id=probe-cid, turn_number=1)"
+              }
+            ]
+          }
+        },
+        {
+          "seq": 10,
+          "time": "2026-09-26T15:27:37.576Z",
+          "phase": "control",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "tool_use_id": "toolu_01Tx5W5xDG4c59xUbtaQxpCh",
+                  "type": "tool_result",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "sent to probe.peer (conversation_id=probe-cid, turn_number=1)"
+                    },
+                    {
+                      "type": "text",
+                      "text": "{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}"
+                    }
+                  ]
+                }
+              ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "uuid": "1393262f-33b0-47da-9832-61f407153b31",
+            "timestamp": "2026-09-26T15:27:37.573Z",
+            "tool_use_result": [
+              {
+                "type": "text",
+                "text": "sent to probe.peer (conversation_id=probe-cid, turn_number=1)"
+              },
+              {
+                "type": "text",
+                "text": "{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}"
+              }
+            ]
+          }
+        },
+        {
+          "seq": 11,
+          "time": "2026-09-26T15:27:38.338Z",
+          "phase": "control",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "2e63776f-2a0b-46cd-8c42-589bbdc1a8a5",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHaL3VBKxsZnnXJp4DT",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "CONTROL_DONE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 12,
+          "time": "2026-09-26T15:27:38.347Z",
+          "phase": "control",
+          "kind": "sdk",
+          "msg": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "num_turns": 2,
+            "result": "CONTROL_DONE",
+            "uuid": "b35dadb5-a6cb-41a0-9a65-5fecde4b2263",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "result_index": 0,
+            "modelUsage": {
+              "claude-haiku-4-5-20251001": {
+                "inputTokens": 950,
+                "outputTokens": 21,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0,
+                "costUSD": 0.001055,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-haiku-4-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              },
+              "claude-sonnet-5": {
+                "inputTokens": 4,
+                "outputTokens": 151,
+                "cacheReadInputTokens": 25849,
+                "cacheCreationInputTokens": 26107,
+                "webSearchRequests": 0,
+                "costUSD": 0.1111158,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 64000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-sonnet-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              }
+            },
+            "total_cost_usd": 0.1121708
+          }
+        },
+        {
+          "seq": 13,
+          "time": "2026-09-26T15:27:38.348Z",
+          "phase": "control",
+          "kind": "host_end",
+          "turnToken": "2d45ed85-97ce-4727-8603-178c4278d55b",
+          "conversationIds": []
+        },
+        {
+          "seq": 14,
+          "time": "2026-09-26T15:27:38.350Z",
+          "phase": "background",
+          "kind": "host_start",
+          "turnToken": "8f047440-fcf4-463b-af8f-b7af4708b2c8"
+        },
+        {
+          "seq": 15,
+          "time": "2026-09-26T15:27:39.937Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "init",
+            "uuid": "c818204e-c7cd-4f05-9d65-88d241b43020",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "model": "claude-sonnet-5",
+            "claude_code_version": "2.1.280",
+            "permissionMode": "bypassPermissions"
+          }
+        },
+        {
+          "seq": 16,
+          "time": "2026-09-26T15:27:41.672Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "09dfba2e-c640-438a-bb54-d54b771113c5",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHaXJuHxTNYn1qoZ1MS",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01V5hdiZzPeoreqrityMT2fv",
+                  "name": "Bash",
+                  "input": {
+                    "command": "sleep 12; printf BACKGROUND_DONE",
+                    "description": "Sleep 12 seconds then print marker",
+                    "run_in_background": true
+                  },
+                  "caller": {
+                    "type": "direct"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 17,
+          "time": "2026-09-26T15:27:41.729Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "background_tasks_changed",
+            "tasks": [
+              {
+                "task_id": "bghfcgbs1",
+                "task_type": "local_bash",
+                "description": "Sleep 12 seconds then print marker"
+              }
+            ],
+            "uuid": "1c17f488-1da8-4a83-a0df-2bd7f181f6e6",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb"
+          }
+        },
+        {
+          "seq": 18,
+          "time": "2026-09-26T15:27:41.730Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "bghfcgbs1",
+            "tool_use_id": "toolu_01V5hdiZzPeoreqrityMT2fv",
+            "description": "Sleep 12 seconds then print marker",
+            "is_backgrounded": true,
+            "task_type": "local_bash",
+            "uuid": "79d894bd-d46d-4a86-a238-49da8acf4a6b",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb"
+          }
+        },
+        {
+          "seq": 19,
+          "time": "2026-09-26T15:27:41.730Z",
+          "phase": "background",
+          "kind": "host_task",
+          "payload": {
+            "kind": "started",
+            "task_id": "bghfcgbs1",
+            "task_type": "local_bash",
+            "status": "running",
+            "description": "Sleep 12 seconds then print marker",
+            "agent_id": "probe.self"
+          }
+        },
+        {
+          "seq": 20,
+          "time": "2026-09-26T15:27:41.736Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "tool_use_id": "toolu_01V5hdiZzPeoreqrityMT2fv",
+                  "type": "tool_result",
+                  "content": "Command running in background with ID: bghfcgbs1. Output is being written to: /tmp/claude-1000/-home-yuta-git-kaoiro-worktrees-kogane-422-tmp-kogane-422-cwd/a5ec2b77-5a09-4783-bac6-0a8162e04cfb/tasks/bghfcgbs1.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+                  "is_error": false
+                }
+              ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "uuid": "be1bfb98-f760-411a-8965-06c5f3d2ae40",
+            "timestamp": "2026-09-26T15:27:41.735Z",
+            "tool_use_result": {
+              "stdout": "",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false,
+              "backgroundTaskId": "bghfcgbs1"
+            }
+          }
+        },
+        {
+          "seq": 21,
+          "time": "2026-09-26T15:27:42.456Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "bcd0f7ba-94ec-4084-9031-1a92514637b4",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHado5C6dw5Vvj3c93R",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "WAITING"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 22,
+          "time": "2026-09-26T15:27:42.481Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "num_turns": 2,
+            "result": "WAITING",
+            "uuid": "89e23c76-c4ec-455a-923c-d7ef64ceb028",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "result_index": 1,
+            "modelUsage": {
+              "claude-haiku-4-5-20251001": {
+                "inputTokens": 950,
+                "outputTokens": 21,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0,
+                "costUSD": 0.001055,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-haiku-4-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              },
+              "claude-sonnet-5": {
+                "inputTokens": 8,
+                "outputTokens": 281,
+                "cacheReadInputTokens": 78303,
+                "cacheCreationInputTokens": 26660,
+                "webSearchRequests": 0,
+                "costUSD": 0.1251266,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 64000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-sonnet-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              }
+            },
+            "total_cost_usd": 0.1261816
+          }
+        },
+        {
+          "seq": 23,
+          "time": "2026-09-26T15:27:42.482Z",
+          "phase": "background",
+          "kind": "host_end",
+          "turnToken": "8f047440-fcf4-463b-af8f-b7af4708b2c8",
+          "conversationIds": [
+            "probe-cid"
+          ]
+        },
+        {
+          "seq": 24,
+          "time": "2026-09-26T15:27:53.739Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "background_tasks_changed",
+            "tasks": [],
+            "uuid": "98f46330-3552-4632-a27d-8563bc81d47e",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb"
+          }
+        },
+        {
+          "seq": 25,
+          "time": "2026-09-26T15:27:53.739Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "bghfcgbs1",
+            "patch": {
+              "status": "completed",
+              "end_time": 1790436473737
+            },
+            "uuid": "0e317911-cc01-4dff-9d2c-3444987e4cd2",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb"
+          }
+        },
+        {
+          "seq": 26,
+          "time": "2026-09-26T15:27:53.740Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "bghfcgbs1",
+            "tool_use_id": "toolu_01V5hdiZzPeoreqrityMT2fv",
+            "status": "completed",
+            "output_file": "/tmp/claude-1000/-home-yuta-git-kaoiro-worktrees-kogane-422-tmp-kogane-422-cwd/a5ec2b77-5a09-4783-bac6-0a8162e04cfb/tasks/bghfcgbs1.output",
+            "summary": "Background command \"Sleep 12 seconds then print marker\" completed (exit code 0)",
+            "uuid": "77d74304-032c-4474-a591-87f15b2189ae",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb"
+          }
+        },
+        {
+          "seq": 27,
+          "time": "2026-09-26T15:27:53.740Z",
+          "phase": "background",
+          "kind": "host_task",
+          "payload": {
+            "kind": "completed",
+            "task_id": "bghfcgbs1",
+            "task_type": "local_bash",
+            "status": "completed",
+            "summary": "Background command \"Sleep 12 seconds then print marker\" completed (exit code 0)",
+            "agent_id": "probe.self"
+          }
+        },
+        {
+          "seq": 28,
+          "time": "2026-09-26T15:27:53.763Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "init",
+            "uuid": "6d9d8669-f749-41d3-9811-f490881ccd87",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "model": "claude-sonnet-5",
+            "claude_code_version": "2.1.280",
+            "permissionMode": "bypassPermissions"
+          }
+        },
+        {
+          "seq": 29,
+          "time": "2026-09-26T15:27:55.003Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "443739c7-7056-4a88-af32-3a8c0fe7a19c",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHbXCEVpEqbX9QWbFyd",
+              "model": "claude-sonnet-5",
+              "content": []
+            }
+          }
+        },
+        {
+          "seq": 30,
+          "time": "2026-09-26T15:27:55.738Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "96cbe69f-e476-4921-90fa-5ab1fb258ee6",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHbXCEVpEqbX9QWbFyd",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01Xv5ENjqpKgiQMvWRRCatgr",
+                  "name": "mcp__kaoiro__send_to_agent",
+                  "input": {
+                    "to": "probe.peer",
+                    "conversation_id": "probe-cid",
+                    "kind": "response",
+                    "body": "BACKGROUND"
+                  },
+                  "caller": {
+                    "type": "direct"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 31,
+          "time": "2026-09-26T15:27:55.742Z",
+          "phase": "background",
+          "kind": "resolve",
+          "id": "toolu_01Xv5ENjqpKgiQMvWRRCatgr"
+        },
+        {
+          "seq": 32,
+          "time": "2026-09-26T15:27:55.742Z",
+          "phase": "background",
+          "kind": "tool_result",
+          "args": {
+            "to": "probe.peer",
+            "body": "BACKGROUND",
+            "kind": "response",
+            "conversation_id": "probe-cid"
+          },
+          "result": {
+            "isError": true,
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}"
+              }
+            ]
+          }
+        },
+        {
+          "seq": 33,
+          "time": "2026-09-26T15:27:55.747Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "content": "{\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}\n{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}",
+                  "is_error": true,
+                  "tool_use_id": "toolu_01Xv5ENjqpKgiQMvWRRCatgr"
+                }
+              ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "uuid": "c98d06ff-1e63-422f-b8e2-baa94348efa3",
+            "timestamp": "2026-09-26T15:27:55.745Z",
+            "tool_use_result": "Error: {\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}\n{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}"
+          }
+        },
+        {
+          "seq": 34,
+          "time": "2026-09-26T15:27:56.874Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "ec6d0073-d41a-4416-9b69-bf6863d97ab5",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHbfihFecKyGZHHgMf2",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "The send failed (unbound_tool_call \u2014 authorization expired for this async continuation). Per instructions, not retrying.\n\nPROBE_DONE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 35,
+          "time": "2026-09-26T15:27:56.881Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "num_turns": 2,
+            "result": "The send failed (unbound_tool_call \u2014 authorization expired for this async continuation). Per instructions, not retrying.\n\nPROBE_DONE",
+            "origin": {
+              "kind": "task-notification"
+            },
+            "uuid": "5151b328-a99b-4dbb-b81d-82b76757df59",
+            "session_id": "a5ec2b77-5a09-4783-bac6-0a8162e04cfb",
+            "result_index": 2,
+            "modelUsage": {
+              "claude-haiku-4-5-20251001": {
+                "inputTokens": 950,
+                "outputTokens": 21,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0,
+                "costUSD": 0.001055,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-haiku-4-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              },
+              "claude-sonnet-5": {
+                "inputTokens": 12,
+                "outputTokens": 508,
+                "cacheReadInputTokens": 132024,
+                "cacheCreationInputTokens": 27399,
+                "webSearchRequests": 0,
+                "costUSD": 0.1411048,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 64000,
+                "thinkingTokens": 35,
+                "canonicalModel": "claude-sonnet-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              }
+            },
+            "total_cost_usd": 0.1421598
+          }
+        },
+        {
+          "seq": 36,
+          "time": "2026-09-26T15:27:56.882Z",
+          "phase": "background",
+          "kind": "host_end",
+          "conversationIds": []
+        },
+        {
+          "seq": 37,
+          "time": "2026-09-26T15:27:58.826Z",
+          "phase": "background",
+          "kind": "finish",
+          "results": 3,
+          "sends": 1
+        }
+      ]
+    },
+    {
+      "name": "replay-events.jsonl",
+      "raw_sha256": "d32e675322539a3a36732c04366a9802e3bb9fb5fd41229fb809313dace5d4f5",
+      "records": [
+        {
+          "seq": 1,
+          "time": "2026-09-26T15:29:20.015Z",
+          "phase": "background",
+          "kind": "start",
+          "baseline": "b71674a28baa0b1e4b113dca40ce02b220e6373c",
+          "sdk": "0.3.280"
+        },
+        {
+          "seq": 2,
+          "time": "2026-09-26T15:29:20.016Z",
+          "phase": "background",
+          "kind": "query",
+          "model": "sonnet"
+        },
+        {
+          "seq": 3,
+          "time": "2026-09-26T15:29:20.034Z",
+          "phase": "background",
+          "kind": "host_start",
+          "turnToken": "185eb7e7-b0e5-49a9-aa98-ea9259486b67"
+        },
+        {
+          "seq": 5,
+          "time": "2026-09-26T15:29:21.915Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "init",
+            "uuid": "4f670bc7-46b4-4238-bfee-ee4c879fdb04",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "model": "claude-sonnet-5",
+            "claude_code_version": "2.1.280",
+            "permissionMode": "bypassPermissions"
+          }
+        },
+        {
+          "seq": 6,
+          "time": "2026-09-26T15:29:25.321Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": "Reproduction probe. Use Bash exactly once to run `sleep 12; printf BACKGROUND_DONE` with run_in_background=true. Do not use TaskOutput, poll, or send yet. End your response immediately with WAITING. When the automatic background task completion notification arrives, call mcp__kaoiro__send_to_agent once with to=\"probe.peer\", conversation_id=\"probe-cid\", kind=\"response\", body=\"BACKGROUND\". If it fails, do not retry. End with PROBE_DONE. The notification is an authorized continuation of this instruction."
+            },
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "uuid": "33847728-da93-4940-8000-93f991a1425b",
+            "timestamp": "2026-09-26T15:29:21.891Z",
+            "isReplay": true
+          }
+        },
+        {
+          "seq": 7,
+          "time": "2026-09-26T15:29:25.322Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "dc1078c6-689e-4a54-820d-6b8db5f7910e",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHi2EPMifNFeGHUdyE7",
+              "model": "claude-sonnet-5",
+              "content": []
+            }
+          }
+        },
+        {
+          "seq": 8,
+          "time": "2026-09-26T15:29:25.327Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "de6c5757-49bd-4f46-8187-9cc99f38434b",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHi2EPMifNFeGHUdyE7",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01A9bHtCzUbnC8TSs5kK4372",
+                  "name": "Bash",
+                  "input": {
+                    "command": "sleep 12; printf BACKGROUND_DONE",
+                    "run_in_background": true
+                  },
+                  "caller": {
+                    "type": "direct"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 9,
+          "time": "2026-09-26T15:29:25.383Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "background_tasks_changed",
+            "tasks": [
+              {
+                "task_id": "bsyzdkrri",
+                "task_type": "local_bash",
+                "description": "sleep 12; printf BACKGROUND_DONE"
+              }
+            ],
+            "uuid": "a518822e-a306-4fef-8003-479799adf136",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1"
+          }
+        },
+        {
+          "seq": 10,
+          "time": "2026-09-26T15:29:25.383Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "bsyzdkrri",
+            "tool_use_id": "toolu_01A9bHtCzUbnC8TSs5kK4372",
+            "description": "sleep 12; printf BACKGROUND_DONE",
+            "is_backgrounded": true,
+            "task_type": "local_bash",
+            "uuid": "3d719bc0-eaa0-4e99-b7b8-b4857817cb14",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1"
+          }
+        },
+        {
+          "seq": 11,
+          "time": "2026-09-26T15:29:25.384Z",
+          "phase": "background",
+          "kind": "host_task",
+          "payload": {
+            "kind": "started",
+            "task_id": "bsyzdkrri",
+            "task_type": "local_bash",
+            "status": "running",
+            "description": "sleep 12; printf BACKGROUND_DONE",
+            "agent_id": "probe.self"
+          }
+        },
+        {
+          "seq": 12,
+          "time": "2026-09-26T15:29:25.392Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "tool_use_id": "toolu_01A9bHtCzUbnC8TSs5kK4372",
+                  "type": "tool_result",
+                  "content": "Command running in background with ID: bsyzdkrri. Output is being written to: /tmp/claude-1000/-home-yuta-git-kaoiro-worktrees-kogane-422-tmp-kogane-422-cwd/a4b52666-200c-4932-8d99-c76403cdd7e1/tasks/bsyzdkrri.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+                  "is_error": false
+                }
+              ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "uuid": "c1f36f98-0fa6-4bd6-832e-99f098abfee3",
+            "timestamp": "2026-09-26T15:29:25.390Z",
+            "tool_use_result": {
+              "stdout": "",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false,
+              "backgroundTaskId": "bsyzdkrri"
+            }
+          }
+        },
+        {
+          "seq": 13,
+          "time": "2026-09-26T15:29:28.077Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "85f97ebe-5d90-4ed8-856b-d85471b91b46",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHiGsDLqzjSECmBDtr2",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "WAITING"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 14,
+          "time": "2026-09-26T15:29:28.086Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "num_turns": 2,
+            "result": "WAITING",
+            "uuid": "6e838037-d323-46c2-b3c5-0fc554f1e466",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "result_index": 0,
+            "modelUsage": {
+              "claude-haiku-4-5-20251001": {
+                "inputTokens": 1018,
+                "outputTokens": 11,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0,
+                "costUSD": 0.001073,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-haiku-4-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              },
+              "claude-sonnet-5": {
+                "inputTokens": 4,
+                "outputTokens": 142,
+                "cacheReadInputTokens": 44267,
+                "cacheCreationInputTokens": 7964,
+                "webSearchRequests": 0,
+                "costUSD": 0.042137400000000005,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 64000,
+                "thinkingTokens": 44,
+                "canonicalModel": "claude-sonnet-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              }
+            },
+            "total_cost_usd": 0.043210399999999996
+          }
+        },
+        {
+          "seq": 15,
+          "time": "2026-09-26T15:29:28.087Z",
+          "phase": "background",
+          "kind": "host_end",
+          "turnToken": "185eb7e7-b0e5-49a9-aa98-ea9259486b67",
+          "conversationIds": []
+        },
+        {
+          "seq": 16,
+          "time": "2026-09-26T15:29:37.391Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "background_tasks_changed",
+            "tasks": [],
+            "uuid": "10a322ef-a5b4-4de7-a269-7bd4ae45c3bc",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1"
+          }
+        },
+        {
+          "seq": 17,
+          "time": "2026-09-26T15:29:37.392Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "bsyzdkrri",
+            "patch": {
+              "status": "completed",
+              "end_time": 1790436577390
+            },
+            "uuid": "75d3837c-8f79-4c0e-b080-b444fcf81c46",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1"
+          }
+        },
+        {
+          "seq": 18,
+          "time": "2026-09-26T15:29:37.392Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "bsyzdkrri",
+            "tool_use_id": "toolu_01A9bHtCzUbnC8TSs5kK4372",
+            "status": "completed",
+            "output_file": "/tmp/claude-1000/-home-yuta-git-kaoiro-worktrees-kogane-422-tmp-kogane-422-cwd/a4b52666-200c-4932-8d99-c76403cdd7e1/tasks/bsyzdkrri.output",
+            "summary": "Background command \"sleep 12; printf BACKGROUND_DONE\" completed (exit code 0)",
+            "uuid": "cbbee2c2-697b-402b-bcce-b9c41f1b117d",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1"
+          }
+        },
+        {
+          "seq": 19,
+          "time": "2026-09-26T15:29:37.393Z",
+          "phase": "background",
+          "kind": "host_task",
+          "payload": {
+            "kind": "completed",
+            "task_id": "bsyzdkrri",
+            "task_type": "local_bash",
+            "status": "completed",
+            "summary": "Background command \"sleep 12; printf BACKGROUND_DONE\" completed (exit code 0)",
+            "agent_id": "probe.self"
+          }
+        },
+        {
+          "seq": 20,
+          "time": "2026-09-26T15:29:37.472Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "system",
+            "subtype": "init",
+            "uuid": "1f533f06-ef2e-442c-aad1-2fa3096563d7",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "model": "claude-sonnet-5",
+            "claude_code_version": "2.1.280",
+            "permissionMode": "bypassPermissions"
+          }
+        },
+        {
+          "seq": 21,
+          "time": "2026-09-26T15:29:54.305Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "7e0b1d9d-122c-4fb6-b37b-f441fd0eec2c",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHjB2FiuPg9H7wvLCAq",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "toolu_01PJwLrsrM1Rd3A9x7wiVQ3U",
+                  "name": "mcp__kaoiro__send_to_agent",
+                  "input": {
+                    "to": "probe.peer",
+                    "conversation_id": "probe-cid",
+                    "kind": "response",
+                    "body": "BACKGROUND"
+                  },
+                  "caller": {
+                    "type": "direct"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 22,
+          "time": "2026-09-26T15:29:54.314Z",
+          "phase": "background",
+          "kind": "resolve",
+          "id": "toolu_01PJwLrsrM1Rd3A9x7wiVQ3U"
+        },
+        {
+          "seq": 23,
+          "time": "2026-09-26T15:29:54.315Z",
+          "phase": "background",
+          "kind": "tool_result",
+          "args": {
+            "to": "probe.peer",
+            "body": "BACKGROUND",
+            "kind": "response",
+            "conversation_id": "probe-cid"
+          },
+          "result": {
+            "isError": true,
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}"
+              }
+            ]
+          }
+        },
+        {
+          "seq": 24,
+          "time": "2026-09-26T15:29:54.323Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "user",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "content": "{\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}\n{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}",
+                  "is_error": true,
+                  "tool_use_id": "toolu_01PJwLrsrM1Rd3A9x7wiVQ3U"
+                }
+              ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "uuid": "db474534-9c13-4fd6-acba-c6753431a1c6",
+            "timestamp": "2026-09-26T15:29:54.320Z",
+            "tool_use_result": "Error: {\"error\":\"unbound_tool_call\",\"send_not_attempted\":true,\"guidance\":\"Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.\"}\n{\"inter_agent_reply_basis\":\"v1\",\"unread_count\":0,\"advisory\":\"Unread count is advice, not a send guard.\"}"
+          }
+        },
+        {
+          "seq": 25,
+          "time": "2026-09-26T15:29:56.878Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "assistant",
+            "uuid": "9607fc2f-bd04-49c5-8cc8-ba1fa4572a53",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "parent_tool_use_id": null,
+            "message": {
+              "id": "msg_011CfSHkQn1eS2DRTpoYvXyC",
+              "model": "claude-sonnet-5",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "PROBE_DONE"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "seq": 26,
+          "time": "2026-09-26T15:29:56.904Z",
+          "phase": "background",
+          "kind": "sdk",
+          "msg": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "num_turns": 2,
+            "result": "PROBE_DONE",
+            "origin": {
+              "kind": "task-notification"
+            },
+            "uuid": "dd720c42-75a5-49ed-a50c-97bf03792b36",
+            "session_id": "a4b52666-200c-4932-8d99-c76403cdd7e1",
+            "result_index": 1,
+            "modelUsage": {
+              "claude-haiku-4-5-20251001": {
+                "inputTokens": 1018,
+                "outputTokens": 11,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0,
+                "costUSD": 0.001073,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000,
+                "thinkingTokens": 0,
+                "canonicalModel": "claude-haiku-4-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              },
+              "claude-sonnet-5": {
+                "inputTokens": 8,
+                "outputTokens": 294,
+                "cacheReadInputTokens": 97223,
+                "cacheCreationInputTokens": 8670,
+                "webSearchRequests": 0,
+                "costUSD": 0.05708060000000001,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 64000,
+                "thinkingTokens": 44,
+                "canonicalModel": "claude-sonnet-5",
+                "provider": "firstParty",
+                "costBasis": "list"
+              }
+            },
+            "total_cost_usd": 0.0581536
+          }
+        },
+        {
+          "seq": 27,
+          "time": "2026-09-26T15:29:56.905Z",
+          "phase": "background",
+          "kind": "host_end",
+          "conversationIds": []
+        },
+        {
+          "seq": 28,
+          "time": "2026-09-26T15:29:58.849Z",
+          "phase": "background",
+          "kind": "finish",
+          "results": 2,
+          "sends": 0
+        }
+      ]
+    }
+  ],
+  "replay_api_dispatch_lines": [
+    "2026-09-26T15:29:20.883Z [DEBUG] [API:timing] dispatching to firstParty model=claude-haiku-4-5-20251001",
+    "2026-09-26T15:29:21.936Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5",
+    "2026-09-26T15:29:25.409Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5",
+    "2026-09-26T15:29:37.481Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5",
+    "2026-09-26T15:29:54.339Z [DEBUG] [API:timing] dispatching to firstParty model=claude-sonnet-5"
+  ],
+  "replay_debug_sha256": "a405aba1438cba3b92be59391c5b43dd2af54dd7da7b86b7abe713cf67513151"
+}

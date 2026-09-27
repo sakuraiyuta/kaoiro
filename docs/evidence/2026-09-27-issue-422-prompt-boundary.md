@@ -9,7 +9,7 @@ last_updated: 2026-09-27
 
 ## Baseline and method
 
-This extends [the original actual-host reproduction](https://github.com/sakuraiyuta/kaoiro/blob/f7035c18a909bcdca5376387d7942cd57dc6fc0a/docs/evidence/2026-09-27-issue-422-notification-turn.md) without changing product source. The worktree is based on `b1d9b2e5`; `pnpm --filter @kaoiro/claude-code... build` exited 0. The three disposable probes copied the original `probe-replay.mjs` into `tmp/fuji-422/`, removed replay mode, and registered `UserPromptSubmit`, `PreToolUse`, and `Stop` hooks through the actual `AgentHost.queryOptions`. They used SDK 0.3.280, CLI 2.1.280, an isolated cwd, the real MCP registration, and the existing model account. The peer transport was a recorder. No real peer received a send. The inherited `start.baseline` field in the probe's event log still names `b71674a2`; it is a copied label, while the built source for these runs was `b1d9b2e5`.
+This extends [the original actual-host reproduction](2026-09-27-issue-422-notification-turn.md) without changing product source. The worktree is based on `b1d9b2e5`; `pnpm --filter @kaoiro/claude-code... build` exited 0. The three disposable probes copied the original `probe-replay.mjs` into `tmp/fuji-422/`, removed replay mode, and registered `UserPromptSubmit`, `PreToolUse`, and `Stop` hooks through the actual `AgentHost.queryOptions`. They used SDK 0.3.280, CLI 2.1.280, an isolated cwd, the real MCP registration, and the existing model account. The peer transport was a recorder. No real peer received a send. The inherited `start.baseline` field in the probe's event log still names `b71674a2`; it is a copied label, while the built source for these runs was `b1d9b2e5`.
 
 Reproduction commands, from `worktrees/fuji-422`:
 
