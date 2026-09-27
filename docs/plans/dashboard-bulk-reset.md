@@ -1,10 +1,10 @@
 ---
 title: Dashboard operator bulk reset
 description: SettingsDrawer control to bulk-close all conversations and bulk-clear all agent sessions
-status: planned
+status: pending-review
 phase: 0
 depends_on: []
-last_updated: 2026-09-24
+last_updated: 2026-09-27
 ---
 
 # Dashboard operator bulk reset
@@ -23,23 +23,23 @@ An operator can, in one confirmed action from the dashboard's
 
 ### Acceptance Criteria
 
-- [ ] The `SettingsDrawer` operator section (gated the same way as the
+- [x] The `SettingsDrawer` operator section (gated the same way as the
       existing conversation-list / user-list controls: `isOperator` +
       a live connection) gains a bulk-reset action.
-- [ ] Triggering it shows a confirmation modal naming the target
+- [x] Triggering it shows a confirmation modal naming the target
       counts ("Close N conversations and reset M agents — proceed?").
-- [ ] On confirm, the dashboard calls the existing `closeConversation`
+- [x] On confirm, the dashboard calls the existing `closeConversation`
       for every currently active conversation ID, and
       `sendSessionReset(id, "clear")` for every currently online agent.
       No new server command is introduced.
-- [ ] A per-target failure is logged and skipped; it does not stop
+- [x] A per-target failure is logged and skipped; it does not stop
       processing of the remaining targets (applies to both the close
       pass and the reset pass).
-- [ ] A `session_reset` result that is ambiguous (push timeout, or
+- [x] A `session_reset` result that is ambiguous (push timeout, or
       `session_reset_pending`) is treated as unknown, logged as such,
       and is not retried within the same run.
-- [ ] Offline (directory-only) agents are excluded from the reset pass.
-- [ ] After the run completes, a summary is shown (e.g. a toast) with
+- [x] Offline (directory-only) agents are excluded from the reset pass.
+- [x] After the run completes, a summary is shown (e.g. a toast) with
       success/skip counts for both the close pass and the reset pass.
 
 ### Implementation design
@@ -149,15 +149,15 @@ dashboard bundle. No broader server change is anticipated.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 0-1 | Add the bulk-reset action + confirmation modal to `SettingsDrawer` | ⏳ | Reuses existing operator-gate pattern |
-| 0-2 | Client-side orchestration: loop over active conversations / online agents, skip-and-continue, no retry on ambiguous reset result | ⏳ | No new wire command |
-| 0-3 | Post-run summary feedback (success/skip counts) | ⏳ | |
+| 0-1 | Add the bulk-reset action + confirmation modal to `SettingsDrawer` | ✅ | Reuses existing operator-gate pattern |
+| 0-2 | Client-side orchestration: loop over active conversations / online agents, skip-and-continue, no retry on ambiguous reset result | ✅ | No new wire command |
+| 0-3 | Post-run summary feedback (success/skip counts) | ✅ | |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ### Followups (in-phase but unfinished)
 
-(empty — none yet; phase 0 has not started)
+(empty — none)
 
 ### Open Questions Blocking This Phase
 

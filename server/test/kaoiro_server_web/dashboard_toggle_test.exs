@@ -35,4 +35,22 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
     # NoRouteError is rendered as 404 by the endpoint's render_errors.
     assert get(build_conn(), "/assets/__gate_test__.txt").status == 404
   end
+
+  test "fresh dashboard build の hashed asset を endpoint 経由で配信する", %{conn: conn} do
+    static_root = Path.join(:code.priv_dir(:kaoiro_server), "static")
+    index = File.read!(Path.join(static_root, "index.html"))
+
+    asset_path =
+      Regex.run(~r/(?:src|href)="(\/assets\/[^\"]+-[A-Za-z0-9_-]{8,}\.(?:js|css))"/, index,
+        capture: :all_but_first
+      )
+      |> List.first()
+
+    assert asset_path
+    expected = File.read!(Path.join(static_root, String.replace_prefix(asset_path, "/", "")))
+
+    response = get(conn, asset_path)
+    assert response.status == 200
+    assert response.resp_body == expected
+  end
 end
