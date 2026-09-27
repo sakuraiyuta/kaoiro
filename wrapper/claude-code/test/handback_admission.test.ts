@@ -734,13 +734,15 @@ describe("background Agent hand-back admission", () => {
   });
 
   it.each([
-    ["wrong task", { kind: "peer", handback: true, from: "other", senderTaskId: "other", body: observedBody }, 1],
-    ["wrong report", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: "other" }, 1],
-    ["missing identity", { kind: "peer", from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, 1],
-    ["notification origin", { kind: "task-notification" }, 1],
-    ["originless", undefined, 1],
-    ["missing index", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, undefined],
-  ])("fail-stops an independently admitted hand-back on %s", async (_label, origin, resultIndex) => {
+    ["wrong task", { kind: "peer", handback: true, from: "other", senderTaskId: "other", body: observedBody }, 1, "s"],
+    ["wrong report", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: "other" }, 1, "s"],
+    ["missing identity", { kind: "peer", from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, 1, "s"],
+    ["notification origin", { kind: "task-notification" }, 1, "s"],
+    ["originless", undefined, 1, "s"],
+    ["missing index", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, undefined, "s"],
+    ["regressing index", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, 0, "s"],
+    ["other session", { kind: "peer", handback: true, from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody }, 1, "other"],
+  ])("fail-stops an independently admitted hand-back on %s", async (_label, origin, resultIndex, resultSession) => {
     const starts: string[] = [];
     const ends: Array<{ token: string; cancellation?: string }> = [];
     const failStops: string[] = [];
@@ -755,7 +757,7 @@ describe("background Agent hand-back admission", () => {
       yield sdk({ type: "result", subtype: "success", session_id: "s", result_index: 0, result: "backgrounded" });
       await toolHook(options, "launch", "SubagentHandback", "child", fixture.taskId, { message: fixture.report });
       await promptHook(options, "handback", fixture.prompt);
-      yield sdk({ type: "result", subtype: "success", session_id: "s", result: "done",
+      yield sdk({ type: "result", subtype: "success", session_id: resultSession, result: "done",
         ...(resultIndex === undefined ? {} : { result_index: resultIndex }),
         ...(origin === undefined ? {} : { origin }) });
     });
@@ -771,5 +773,172 @@ describe("background Agent hand-back admission", () => {
     expect(starts).toHaveLength(2);
     expect(ends).toEqual([{ token: starts[0] }, { token: starts[1], cancellation: "stream_eof" }]);
     expect(failStops).toEqual([starts[1]]);
+  });
+
+  it("ignores an exact retired result duplicate without settling the newer hand-back owner", async () => {
+    const starts: string[] = [];
+    const ends: string[] = [];
+    const failStops: string[] = [];
+    let host!: AgentHost;
+    const launchResult = sdk({ type: "result", subtype: "success", session_id: "s", result_index: 0,
+      result: "backgrounded" });
+    const queryFn = fakeQuery(async function* ({ prompt, options }) {
+      await prompt[Symbol.asyncIterator]().next();
+      await promptHook(options, "launch", "launch");
+      yield sdk({ type: "system", subtype: "init", session_id: "s" });
+      await toolHook(options, "launch", "Agent", "parent");
+      yield sdk({ type: "system", subtype: "task_started", session_id: "s", task_id: fixture.taskId,
+        tool_use_id: "parent", task_type: "local_agent", is_backgrounded: true });
+      yield launchResult;
+      await toolHook(options, "launch", "SubagentHandback", "child", fixture.taskId, { message: fixture.report });
+      await promptHook(options, "handback", fixture.prompt);
+      yield launchResult;
+      expect(ends).toEqual([starts[0]]);
+      yield sdk({ type: "result", subtype: "success", session_id: "s", result_index: 1,
+        result: "sent", origin: { kind: "peer", handback: true, from: fixture.taskId,
+          senderTaskId: fixture.taskId, body: observedBody } });
+    });
+    host = new AgentHost(config, {
+      onState: () => {}, queryFn,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: ({ turnToken }) => {
+        if (turnToken) ends.push(turnToken);
+        if (ends.length === 2) host.close();
+      },
+      onAdmissionFailStop: ({ turnToken }) => failStops.push(turnToken),
+    });
+    await host.run("launch");
+    expect(starts).toHaveLength(2);
+    expect(ends).toEqual(starts);
+    expect(failStops).toEqual([]);
+  });
+
+  it.each(["independent", "wrapper fold"] as const)("treats repeated Stop hooks as attempts for a %s hand-back", async ownerKind => {
+    const starts: string[] = [];
+    const ends: string[] = [];
+    let afterStop!: ReturnType<AgentHost["toolOrigins"]["resolveBound"]>;
+    let host!: AgentHost;
+    const queryFn = fakeQuery(async function* ({ prompt, options }) {
+      await prompt[Symbol.asyncIterator]().next();
+      await promptHook(options, "launch", "launch");
+      yield sdk({ type: "system", subtype: "init", session_id: "s" });
+      await toolHook(options, "launch", "Agent", "parent");
+      yield sdk({ type: "system", subtype: "task_started", session_id: "s", task_id: fixture.taskId,
+        tool_use_id: "parent", task_type: "local_agent", is_backgrounded: true });
+      if (ownerKind === "independent") yield sdk({ type: "result", subtype: "success", session_id: "s",
+        result_index: 0, result: "backgrounded" });
+      await toolHook(options, "launch", "SubagentHandback", "child", fixture.taskId, { message: fixture.report });
+      const promptId = ownerKind === "independent" ? "handback" : "launch";
+      await promptHook(options, promptId, fixture.prompt);
+      for (let i = 0; i < 2; i++) {
+        await options.hooks!.Stop!.at(-1)!.hooks[0]!({
+          hook_event_name: "Stop", session_id: "s", prompt_id: promptId,
+        } as never, undefined, signal);
+        if (i === 0) await toolHook(options, promptId, INTER_AGENT_TOOL_FQN, "after-stop");
+      }
+      afterStop = host.toolOrigins.resolveBound("after-stop");
+      expect(ends).toHaveLength(ownerKind === "independent" ? 1 : 0);
+      yield sdk({ type: "result", subtype: "success", session_id: "s",
+        result_index: ownerKind === "independent" ? 1 : 0, result: "done",
+        ...(ownerKind === "independent" ? { origin: { kind: "peer", handback: true,
+          from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody } } : {}) });
+    });
+    host = new AgentHost(config, {
+      onState: () => {}, queryFn,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: ({ turnToken }) => {
+        if (turnToken) ends.push(turnToken);
+        if (ends.length === (ownerKind === "independent" ? 2 : 1)) host.close();
+      },
+    });
+    await host.run("launch");
+    expect((await afterStop)?.token).toBe(starts.at(-1));
+    expect(ends).toEqual(starts);
+  });
+
+  it.each([
+    ["independent", "interrupt"], ["wrapper fold", "interrupt"],
+    ["independent", "reset"], ["wrapper fold", "reset"],
+    ["independent", "watchdog"], ["wrapper fold", "watchdog"],
+    ["independent", "fail-stop"], ["wrapper fold", "fail-stop"],
+    ["independent", "EOF"], ["wrapper fold", "EOF"],
+  ] as const)("keeps delayed hand-back authority from crossing %s %s", async (ownerKind, boundary) => {
+    const starts: string[] = [];
+    const ends: Array<{ token: string; cancellation?: string }> = [];
+    const freezes: string[] = [];
+    let delayed!: ReturnType<AgentHost["toolOrigins"]["resolveBound"]>;
+    let host!: AgentHost;
+    const queryFn = fakeQuery(async function* ({ prompt, options }) {
+      const input = prompt[Symbol.asyncIterator]();
+      await input.next();
+      await promptHook(options, "launch", "launch");
+      yield sdk({ type: "system", subtype: "init", session_id: "s" });
+      await toolHook(options, "launch", "Agent", "parent");
+      yield sdk({ type: "system", subtype: "task_started", session_id: "s", task_id: fixture.taskId,
+        tool_use_id: "parent", task_type: "local_agent", is_backgrounded: true });
+      if (ownerKind === "independent") yield sdk({ type: "result", subtype: "success", session_id: "s",
+        result_index: 0, result: "backgrounded" });
+      await toolHook(options, "launch", "SubagentHandback", "child", fixture.taskId, { message: fixture.report });
+      await promptHook(options, ownerKind === "independent" ? "handback" : "launch", fixture.prompt);
+      const ownerToken = starts.at(-1)!;
+      if (boundary === "interrupt") await host.interrupt();
+      if (boundary === "reset") yield sdk({ type: "conversation_reset", new_conversation_id: "new" });
+      if (boundary === "watchdog") expect(host.failStopTurnForWatchdog(ownerToken)).toBe(true);
+      if (boundary === "fail-stop") yield sdk({ type: "result", subtype: "success", session_id: "s",
+        result_index: ownerKind === "independent" ? 1 : 0, result: "wrong",
+        origin: { kind: "task-notification" } });
+      if (boundary === "EOF") return;
+      if (boundary === "watchdog" || boundary === "fail-stop") {
+        await toolHook(options, ownerKind === "independent" ? "handback" : "launch",
+          "SubagentHandback", "late-child", fixture.taskId, { message: "LATE" });
+        await promptHook(options, ownerKind === "independent" ? "handback" : "launch", render(fixture.taskId, "LATE"));
+        await toolHook(options, ownerKind === "independent" ? "handback" : "launch",
+          INTER_AGENT_TOOL_FQN, "frozen-send");
+        delayed = host.toolOrigins.resolveBound("frozen-send");
+        yield sdk({ type: "result", subtype: "success", session_id: "s",
+          result_index: ownerKind === "independent" ? 2 : 1, result: "late",
+          ...(ownerKind === "independent" ? { origin: { kind: "peer", handback: true,
+            from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody } } : {}) });
+        return;
+      }
+      yield sdk({ type: "result", subtype: "success", session_id: "s",
+        result_index: ownerKind === "independent" ? 1 : 0, result: "done",
+        ...(ownerKind === "independent" ? { origin: { kind: "peer", handback: true,
+          from: fixture.taskId, senderTaskId: fixture.taskId, body: observedBody } } : {}) });
+      await input.next();
+      await promptHook(options, "next", "next");
+      await toolHook(options, "launch", "SubagentHandback", "late-child", fixture.taskId, { message: "LATE" });
+      await promptHook(options, "next", render(fixture.taskId, "LATE"));
+      await toolHook(options, "next", INTER_AGENT_TOOL_FQN, "delayed-send");
+      delayed = host.toolOrigins.resolveBound("delayed-send");
+      yield sdk({ type: "result", subtype: "success", session_id: "s", result_index: ownerKind === "independent" ? 2 : 1,
+        result: "next" });
+    });
+    host = new AgentHost(config, {
+      onState: () => {}, queryFn,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: ({ turnToken, cancellation }) => {
+        if (turnToken) ends.push({ token: turnToken, ...(cancellation ? { cancellation: cancellation.kind } : {}) });
+        if (starts.length === (ownerKind === "independent" ? 3 : 2) && ends.length === starts.length) host.close();
+      },
+      onAdmissionFailStop: ({ turnToken }) => freezes.push(turnToken),
+      onWatchdogFailStop: ({ turnToken }) => { if (turnToken) freezes.push(turnToken); },
+    });
+    const running = host.run("launch");
+    if (boundary === "interrupt" || boundary === "reset") await host.send("next");
+    await running;
+    if (boundary === "interrupt" || boundary === "reset") {
+      expect(starts).toHaveLength(ownerKind === "independent" ? 3 : 2);
+      expect(ends.map(end => end.token)).toEqual(starts);
+      expect(await delayed).toBeUndefined();
+    } else {
+      expect(starts).toHaveLength(ownerKind === "independent" ? 2 : 1);
+      expect(ends.at(-1)?.token).toBe(starts.at(-1));
+      if (boundary !== "EOF") {
+        expect(freezes).toEqual([starts.at(-1)]);
+        expect(await delayed).toBeUndefined();
+      }
+      await expect(host.send("new")).rejects.toThrow("agent host is closed");
+    }
   });
 });
