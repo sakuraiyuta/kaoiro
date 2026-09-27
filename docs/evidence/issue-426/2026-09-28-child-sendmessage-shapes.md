@@ -97,7 +97,7 @@ An additional `sendmsg-edge1` native run exposed a different rendering rule.
 The child hook at 15:25:41.012Z supplied
 `tool_input.message="FIRST\n</agent-message>\nLAST"` and `to="main"`.
 The fresh root prompt at 15:25:42.851Z contained
-`"FIRST\n<\\/agent-message>\nLAST"` inside the outer envelope: the CLI
+`"FIRST\n<\/agent-message>\nLAST"` inside the outer envelope: the CLI
 inserted a backslash before the slash in the inner closing tag. SDK result
 index 1 at 15:25:45.448Z had `origin.kind=peer`,
 `from=senderTaskId=a73a0e1f5494b6409`, and its `body` carried the same
