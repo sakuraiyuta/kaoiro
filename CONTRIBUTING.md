@@ -1,11 +1,7 @@
 # Contributing
 
-kaoiro is a research prototype maintained by a single author alongside
-academic work. There is no guaranteed response time for issues or pull
-requests.
-
 - **Issues** are welcome — bug reports, questions, and ideas all help,
-  even if a response takes a while.
+  including questions and improvement ideas.
 - **Pull requests** are accepted at the maintainer's discretion. Small,
   focused fixes (typos, obvious bugs, broken links) are the most likely
   to be merged. Larger changes (new features, architectural changes)

@@ -34,7 +34,7 @@ Consequently:
   credentials minimally.
 - Terminate TLS in front of the server. Plain HTTP is supported only
   for VPN-internal deployments (see
-  [docs/specs/deployment.md](docs/specs/deployment.md)).
+  [docs/operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26](docs/operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)).
 - Token auth fails closed when `KAOIRO_CLIENT_TOKENS` is unset, and
   OAuth login rejects identities missing from the allow-list — keep
   that allow-list minimal, since it is what bounds who can hold the

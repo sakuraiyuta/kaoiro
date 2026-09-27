@@ -42,78 +42,51 @@ node dist/cli.js [configPath]   # configPath 既定 = runner.config.json
 wrapper のようなサーバ署名トークン経路が無いため、issue #133)。設定例は
 [runner.config.example.json](runner.config.example.json) を参照。
 
-Moved to [Runner configuration](../docs/reference/configuration/runner.md#other-runnerconfigjson-and-env-fields) (`KAOIRO_RUNNER_SERVER_URL` の優先順位、`context_work_budget_percent`、`KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS`)。
+## Configuration
 
-## 設定ウィザード
+See [Runner configuration](../docs/reference/configuration/runner.md#other-runnerconfigjson-and-env-fields) for the remaining runner config fields and environment variables.
 
-`runner.config.json` と `runner.env` を対話生成する(issue #139、
-[setup-wizards](../docs/reference/configuration/setup-wizards.md))。手で書くより取り違えが
-少ないので、初回はこちらを使う。
+## Setup wizard
 
-```sh
-./deploy/kaoiro-runner-setup.sh   # 配布物・リポジトリのどちらからでも
-node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
-```
+The [setup wizard reference](../docs/reference/configuration/setup-wizards.md) covers runner config and environment file generation. When Antigravity is selected, the wizard checks for `agy` and reports its version; the runner's later `agy --version` probe is informational and does not gate startup.
 
-聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
-Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
-`codex.chatgpt_plan` / `codex.extra_models` / `codex.internal_subagents` /
-`antigravity.extra_models` / `antigravity.cli_path` /
-`antigravity.probe_timeout_ms` / `context_work_budget_percent` は
-ウィザードでは聞かず、必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
-`${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
-`~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
-起動シムが読む場所と同じ。
-
-- トークンは「手入力 / 自動生成(32 バイト hex)」を選べる。`runner.env` は 0600
-  で書き、**config JSON にトークンは入らない**
-- 書き出す前に runner のローダ(`parseRunnerConfig`)を通すので、起動時に
-  reject される設定は生成されない
-- 既存ファイルは上書き前に確認する(断ればそのファイルは保持される)
-- **対話専用**。TTY が無い環境では exit 78 で止まる(systemd / launchd から
-  呼ばれたときに無応答で固まるのを防ぐため)。無人配備向けのフラグ指定は
-  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141)
-- server 側の `.env` は別ウィザード(`mix kaoiro.env`、
-  [server/README.md](../server/README.md))。トークンは自動連携しないので、
-  表示された値を server 側の `KAOIRO_RUNNER_TOKENS` に貼る
-
-## 常駐化(systemd / launchd)
+## Running as a service (systemd / launchd)
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#running-as-a-service-systemd--launchd).
 
-### 共通の準備
+### Common preparation
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#common-preparation).
 
-### 設置形態(issue #219、[ADR-0018](../docs/adr/0018-runner-distribution.md))
+### Deployment forms (issue #219, [ADR-0018](../docs/adr/0018-runner-distribution.md))
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#deployment-forms-issue-219-adr-0018).
 
-### Linux(systemd user unit)
+### Linux (systemd user unit)
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#linux-systemd-user-unit).
 
-### macOS(launchd LaunchAgent)
+### macOS (launchd LaunchAgent)
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#macos-launchd-launchagent).
 
-### 再起動ポリシーと終了コード
+### Restart policy and exit codes
 
-Moved: the rollout-ordering rationale to [Multi-host deployment architecture](../docs/architecture/deployment.md#rollout-ordering); the exit-code and manifest-verification contract to [Runner artifacts](../docs/reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes).
+See [rollout ordering](../docs/architecture/deployment.md#rollout-ordering) and the [runner artifact contract](../docs/reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes).
 
-### 動作確認
+### Verification
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#verification).
 
-### nvm / fnm / asdf を使っている場合
+### When using nvm / fnm / asdf
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#when-using-nvm--fnm--asdf).
 
-## 配布物の作成(tarball)
+## Creating distribution tarballs
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#creating-distribution-tarballs).
 
-### 配布先での設置
+### Installation on the target host
 
 Moved to [Runner install and distribution](../docs/operations/runner-install.md#installation-on-the-target-host).
 
@@ -121,7 +94,7 @@ Moved to [Runner install and distribution](../docs/operations/runner-install.md#
 
 Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-backend-selection).
 
-## Codex 設定
+## Codex configuration
 
 Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-configuration).
 
@@ -129,7 +102,7 @@ Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-
 
 Moved to [Runner configuration](../docs/reference/configuration/runner.md#antigravity-configuration).
 
-## 開発
+## Development
 
 ```sh
 pnpm -C runner typecheck
@@ -137,5 +110,4 @@ pnpm -C runner test
 pnpm -C runner build
 ```
 
-dev.sh のホットリロード運用は
-[Runner development](../docs/contributing/runner-development.md) が正本。
+See [Runner development](../docs/contributing/runner-development.md) for dev.sh hot reload.

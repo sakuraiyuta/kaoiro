@@ -11,13 +11,13 @@
 > hosts, and read [SECURITY.md](SECURITY.md) before deploying.
 
 A system for **running, watching and orchestrating several CLI AI agents at
-once** (such as Claude Code and Codex). kaoiro launches agents on any host it
-supervises, derives each agent's state from engine SDK events and draws it as
-a character with changing expressions, routes the permission requests and
-questions they raise to the browser, and carries the messages they send each
-other. With faces, names that persist across sessions and a shared place to
-talk, running several agents is closer to keeping a small virtual AI office
-than to cycling through terminals — and easier to grow attached to.
+once** (such as Claude Code, Codex, and Antigravity). kaoiro launches agents
+on any host it supervises, derives each agent's state from engine events and
+draws it as a character with changing expressions, routes permission requests
+and questions to the browser, and carries the messages agents send each other.
+With faces, names that persist across sessions, and a shared place to talk,
+running several agents is closer to keeping a small virtual AI office than to
+cycling through terminals — and easier to grow attached to.
 
 ![kaoiro dashboard: four agents rendered as character cards next to a
 conversation timeline, one card badged as waiting for
@@ -68,7 +68,8 @@ The dashboard interface is currently Japanese-only.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
   ([deployment architecture](docs/architecture/deployment.md)).
-- **Two engines, one protocol** — Claude Code and Codex sit behind the same
+- **Three engines, one protocol** — Claude Code, Codex, and Antigravity sit
+  behind the same
   adapter boundary, and the UI branches on declared capabilities rather than on
   engine names ([adapter contract](docs/reference/engines/adapter-contract.md)).
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
@@ -126,10 +127,9 @@ troubleshooting) hold the full procedures.
 
 Three layers plus a host-resident supervision layer (the runner):
 
-- **Wrapper** — launches agents and mediates their input and output. For
-  Claude Code, it hosts the official **Claude Agent SDK** for observation,
-  control, and permission routing, and translates agent-specific output into a
-  common event format. Plugins extend it.
+- **Wrapper** — launches agents and mediates their input and output. It hosts
+  the Claude Agent SDK for Claude Code, the Codex SDK for Codex, and the
+  Antigravity CLI, translating engine-specific events into a common format.
 - **Server** — aggregates multiple wrappers, keeps their state, delivers it to
   clients in real time, and routes instructions to the appropriate agent.
 - **Client** — a Web front end that visualizes each agent's state through its
@@ -143,16 +143,11 @@ data flow.
 
 ### Technology stack
 
-- **Wrapper: TypeScript + Claude Agent SDK**
-  (`@anthropic-ai/claude-agent-sdk`)
-  - Runs locally alongside each agent. One SDK path handles observation,
-    control, and permission approval.
+- **Wrapper: TypeScript** — engine packages host the Claude Agent SDK
+  (`@anthropic-ai/claude-agent-sdk`), Codex SDK, or Antigravity CLI.
 - **Server: Elixir / OTP + Phoenix**
   - Aggregates wrappers through WebSocket (Phoenix Channels).
-  - Keeps the latest state in one shared, supervised `AgentStates`
-    GenServer, keyed by `agent_id`; each wrapper connection is its own
-    Phoenix Channel process that writes into it.
-  - Fans out through PubSub and sends updates to clients in real time.
+  - Aggregates wrapper connections and fans out updates through PubSub.
 - **Client: Web front end (TypeScript)** (static image variants for rendering)
   - The reference dashboard (Svelte 5 + Vite) is in `dashboard/`. It is an
     independent root and lockfile, not a pnpm workspace member.
@@ -163,11 +158,12 @@ data flow.
 
 ### Target agents
 
-Claude Code was implemented first, followed by the **Codex** adapter. The
+The supported engines are **Claude Code**, **Codex**, and **Antigravity**. The
 engine is selectable at launch. Engine-specific differences are represented by
 `ext.session_capabilities` in the envelope, so the UI does not branch on engine
-names. Additional agents use the same **adapter/plugin** boundary
-(`docs/architecture/extensions.md`).
+names. Additional engines can use the same adapter boundary
+([extensions](docs/architecture/extensions.md)). Codex supports both exec and
+app-server backends ([backend design](docs/architecture/codex-backends.md)).
 
 ## Documentation
 

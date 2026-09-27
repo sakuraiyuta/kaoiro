@@ -1,61 +1,59 @@
-# wrapper — kaoiro ラッパー層 (pnpm 4 パッケージ)
+# Wrapper — kaoiro agent adapters (five pnpm packages)
 
-kaoiro のラッパー層(TypeScript)。AI エージェント CLI をホストし、SDK
-イベント列から kaoiro の状態を導出して共通エンベロープへ翻訳する。
-[ADR-0017](../docs/adr/0017-wrapper-multientity-packages.md) /
-[ADR-0032](../docs/adr/0032-codex-adapter.md) F1 に基づき、phase-13 で
-次の 4 パッケージに分割された (workspace メンバは repo root の
-`pnpm-workspace.yaml` で宣言)。
+The TypeScript wrapper packages host agent CLIs, derive kaoiro state from
+engine events, and translate them into the common envelope. The workspace
+contains five packages ([ADR-0017](../docs/adr/0017-wrapper-multientity-packages.md),
+[ADR-0032](../docs/adr/0032-codex-adapter.md), [ADR-0057](../docs/adr/0057-antigravity-adapter.md)).
 
-## パッケージ構成
+## Packages
 
-| パッケージ | ディレクトリ | 役割 |
+| Package | Directory | Role |
 |---|---|---|
-| `@kaoiro/wrapper-core` | `core/` | エンティティ非依存の基盤: サーバ transport (`ServerLink`)、config 読込/検証、CLI 引数解析 |
-| `@kaoiro/agent-common` | `agent-common/` | AI エージェント共通層: 状態機械 (`stepState`)・エンベロープ生成、`EngineAdapter` interface、permission / question broker、共通 Tool 記述層 (`ToolDescriptor`) |
-| `@kaoiro/claude-code` | `claude-code/` | Claude Code アダプタ (旧 `@kaoiro/wrapper`): `AgentHost` の `query()` 配線、SDK メッセージ → `AdapterEvent` 変換、file upload、inter-agent tools、CLI 本体 |
-| `@kaoiro/codex` | `codex/` | Codex アダプタ (phase-14 で実装済み): Codex SDK の thread/turn イベント → `AdapterEvent` 変換、tool host bridge、rollout からの session 復元、model catalog、file upload、CLI 本体 |
+| `@kaoiro/wrapper-core` | `core/` | Engine-independent foundation: server transport (`ServerLink`), config loading and validation, and CLI argument parsing |
+| `@kaoiro/agent-common` | `agent-common/` | Shared state machine (`stepState`), envelope creation, `EngineAdapter`, permission and question brokers, and tool descriptors |
+| `@kaoiro/claude-code` | `claude-code/` | Claude Code adapter: SDK event mapping, file uploads, inter-agent tools, and CLI |
+| `@kaoiro/codex` | `codex/` | Codex adapter: thread and turn event mapping, tool host bridge, session restore, model catalog, file uploads, and CLI |
+| `@kaoiro/antigravity` | `antigravity/` | Antigravity adapter: CLI event mapping, tool bridge, and CLI |
 
-依存グラフ (上が下に依存):
+Dependency graph (arrows point to dependencies):
 
 ```mermaid
 graph TD
   CC["@kaoiro/claude-code"] --> AC["@kaoiro/agent-common"]
   CX["@kaoiro/codex"] --> AC
+  AG["@kaoiro/antigravity"] --> AC
   AC --> CORE["@kaoiro/wrapper-core"]
   CC --> CORE
+  AG --> CORE
   AC -. types .-> P["@kaoiro/protocol"]
   CORE -. types .-> P
 ```
 
-仕様: [docs/specs/protocol.md](../docs/specs/protocol.md)、
-[docs/reference/engines/claude-events.md](../docs/reference/engines/claude-events.md) (Claude)、
-[docs/specs/codex-sdk-events.md](../docs/reference/engines/codex-exec-events.md) (Codex)。
+See the [envelope contract](../docs/reference/protocol/envelope.md#envelope-v0),
+[Claude events](../docs/reference/engines/claude-events.md), and
+[Codex exec events](../docs/reference/engines/codex-exec-events.md).
 
-## 開発
+## Development
 
 ```sh
-pnpm install    # repo root で (workspace 一括)
+pnpm install    # from the repository root
 cd wrapper
-pnpm test       # 4 パッケージへ fan-out (vitest)
-pnpm typecheck  # 同上 (tsc --noEmit)
-pnpm build      # 依存順に各パッケージの dist/ を生成
+pnpm test       # runs all five packages (vitest)
+pnpm typecheck  # runs all five packages (tsc --noEmit)
+pnpm build      # builds dist/ in dependency order
 ```
 
-`wrapper/package.json` は workspace 非メンバの fan-out shim。個別に回す
-場合は各パッケージディレクトリで `pnpm test` 等を実行する。
+`wrapper/package.json` is a fan-out shim outside the workspace. Run a command
+for one package from that package's directory.
 
-- **typecheck / test は build 不要**: 各パッケージの `tsconfig.json` の
-  `paths` と `vitest.config.ts` の alias が隣接パッケージの `src/` を直接
-  参照する。
-- **runtime は dist**: 各 `package.json` の `main` は `dist/index.js`。
-  runner が spawn する実体は `@kaoiro/claude-code/dist/cli.js`
-  (`pnpm build` が依存順に生成)。`KAOIRO_WRAPPER_DEV=1` の dev spawn は
-  `claude-code/src/cli.ts` を tsx watch で実行する。
+- **Typecheck and tests do not require a build**: package TypeScript paths
+  and Vitest aliases point to sibling `src/` directories.
+- **Runtime uses `dist/`**: package entry points use built files. The runner
+  spawns `@kaoiro/claude-code/dist/cli.js`; with `KAOIRO_WRAPPER_DEV=1`, it
+  runs `claude-code/src/cli.ts` through `tsx watch`.
 
-`pnpm test` / `pnpm typecheck` は push / PR ごとに Gitea Actions
-([.gitea/workflows/ci.yml](../.gitea/workflows/ci.yml))でも実行する
-(ダッシュボード `dashboard/` の `check` / `build` も同 CI で回す)。
+GitHub Actions runs `pnpm install`, `pnpm typecheck`, `pnpm build`, and
+`pnpm test` ([workflow](../.github/workflows/ci.yml)).
 
 ## 設定(kaoiro.config.json)
 

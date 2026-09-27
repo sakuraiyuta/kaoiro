@@ -4,9 +4,9 @@ kaoiro のサーバ層(Elixir/Phoenix)。ラッパーからの共通エンベロ
 WebSocket(Phoenix Channels, vsn=2.0.0)で受け、最新状態を保持して
 クライアントへ配信する。
 
-仕様: [docs/architecture/system-overview.md](../docs/architecture/system-overview.md),
-[docs/specs/protocol.md](../docs/specs/protocol.md)。
-接続方式の決定: [docs/adr/0009-client-transport.md](../docs/adr/0009-client-transport.md)。
+See [system overview](../docs/architecture/system-overview.md) and the
+[envelope contract](../docs/reference/protocol/envelope.md#envelope-v0).
+Connection transport decision: [ADR-0009](../docs/adr/0009-client-transport.md).
 
 ## 現状
 
