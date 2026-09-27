@@ -121,6 +121,7 @@ describe("App.svelte rally threshold operator gate (issue #307)", () => {
   it("shows the control to an operator (onHosts received)", async () => {
     const h = await mountApp();
     h.onHosts?.([], false);
+    h.onStatus("connected");
     h.onQuagmireSettings?.({ rallyTurns: 16, source: "default" });
     await tick();
     await openSettings();
@@ -138,6 +139,7 @@ describe("App.svelte rally threshold operator gate (issue #307)", () => {
   it("withdraws it when a rejoin downgrades the role (onJoined)", async () => {
     const h = await mountApp();
     h.onHosts?.([], false);
+    h.onStatus("connected");
     h.onQuagmireSettings?.({ rallyTurns: 16, source: "default" });
     await tick();
     await openSettings();

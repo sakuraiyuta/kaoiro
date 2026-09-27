@@ -26,6 +26,12 @@
     quagmireSettings = null,
     agents = {},
     directory = {},
+    appConnectionGeneration = 0,
+    agentSnapshotComplete = false,
+    bulkResetRunning = false,
+    tryBeginBulkReset = () => false,
+    endBulkReset = () => {},
+    onBulkResetSummary = () => {},
   }: {
     onClose: () => void;
     /** Logout relay (phase-31 31-7): on smartphone the header hides its
@@ -41,6 +47,14 @@
     connection?: KaoiroConnection | undefined;
     agents?: Record<string, Envelope>;
     directory?: Record<string, DirectoryEntry>;
+    /** Reactive App join epoch; Phoenix may rejoin through the same client
+     *  object, so connection identity alone is not a generation check. */
+    appConnectionGeneration?: number;
+    agentSnapshotComplete?: boolean;
+    bulkResetRunning?: boolean;
+    tryBeginBulkReset?: () => boolean;
+    endBulkReset?: () => void;
+    onBulkResetSummary?: (message: string) => void;
     /** Rally threshold in force (issue #307), or null before the first
      *  push. Owned by App.svelte so a change made elsewhere is reflected
      *  here without the drawer holding its own copy. */
@@ -91,6 +105,15 @@
   let conversations = $state<ConversationSummary[] | null>(null);
   let conversationsError = $state<string | null>(null);
   let conversationsIncomplete = $state(false);
+  let bulkResetPreparing = $state(false);
+  let bulkResetError = $state<string | null>(null);
+  let bulkResetExecuting = $state(false);
+  let bulkResetTargets = $state<{
+    connection: KaoiroConnection;
+    appGeneration: number;
+    conversationIds: string[];
+    agentIds: string[];
+  } | null>(null);
 
   // View state only; keep it out of the settings store so each drawer open hides closed rows again.
   let showClosedConversations = $state(false);
@@ -123,20 +146,219 @@
   function refreshConversations(): void {
     if (!connection) return;
     const seq = ++refreshSeq;
+    const appGeneration = appConnectionGeneration;
     connection
       .listConversations()
       .then((list) => {
-        if (seq === refreshSeq) {
+        if (
+          seq === refreshSeq &&
+          appGeneration === appConnectionGeneration
+        ) {
           conversations = list;
           conversationsError = null;
           conversationsIncomplete = list.incomplete;
         }
       })
       .catch((err: unknown) => {
-        if (seq === refreshSeq) {
+        if (
+          seq === refreshSeq &&
+          appGeneration === appConnectionGeneration
+        ) {
           conversationsError = err instanceof Error ? err.message : "error";
         }
       });
+  }
+
+  function bulkRunIsCurrent(
+    target: NonNullable<typeof bulkResetTargets>,
+  ): boolean {
+    return (
+      connection === target.connection &&
+      appConnectionGeneration === target.appGeneration
+    );
+  }
+
+  async function prepareBulkReset(): Promise<void> {
+    if (
+      !connection ||
+      !agentSnapshotComplete ||
+      bulkResetRunning ||
+      bulkResetPreparing ||
+      !tryBeginBulkReset()
+    ) {
+      return;
+    }
+
+    const capturedConnection = connection;
+    const appGeneration = appConnectionGeneration;
+    const agentIds = Object.entries(agents)
+      .filter(([, envelope]) => envelope.state !== "disconnected")
+      .map(([id]) => id)
+      .sort();
+    let keepLockForConfirmation = false;
+    bulkResetPreparing = true;
+    bulkResetError = null;
+
+    try {
+      const conversations = await capturedConnection.listConversations();
+      if (
+        connection !== capturedConnection ||
+        appConnectionGeneration !== appGeneration
+      ) {
+        return;
+      }
+      if (conversations.incomplete) {
+        bulkResetError = "会話一覧が不完全なため、一括操作を確認できません";
+        return;
+      }
+      if (!agentSnapshotComplete) {
+        bulkResetError = "エージェント一覧を取得できていません";
+        return;
+      }
+      bulkResetTargets = {
+        connection: capturedConnection,
+        appGeneration,
+        conversationIds: conversations
+          .filter((item) => item.status === "open")
+          .map((item) => item.conversationId),
+        agentIds,
+      };
+      keepLockForConfirmation = true;
+    } catch (err) {
+      if (
+        connection === capturedConnection &&
+        appConnectionGeneration === appGeneration
+      ) {
+        bulkResetError =
+          err instanceof Error ? err.message : "会話一覧を更新できませんでした";
+      }
+    } finally {
+      bulkResetPreparing = false;
+      if (!keepLockForConfirmation) endBulkReset();
+    }
+  }
+
+  function cancelBulkReset(): void {
+    if (bulkResetExecuting) return;
+    bulkResetTargets = null;
+    bulkResetError = null;
+    endBulkReset();
+  }
+
+  $effect(() => {
+    if (
+      bulkResetTargets &&
+      bulkResetTargets.appGeneration !== appConnectionGeneration
+    ) {
+      cancelBulkReset();
+    }
+  });
+
+  async function confirmBulkReset(): Promise<void> {
+    const target = bulkResetTargets;
+    if (!target || !bulkRunIsCurrent(target) || !agentSnapshotComplete) {
+      cancelBulkReset();
+      return;
+    }
+
+    const current = (): boolean =>
+      bulkRunIsCurrent(target) && agentSnapshotComplete;
+    let closed = 0;
+    let closeSkipped = 0;
+    let accepted = 0;
+    let resetSkipped = 0;
+    let resetUnknown = 0;
+    let stopped = false;
+
+    bulkResetError = null;
+    bulkResetExecuting = true;
+
+    try {
+      for (const conversationId of target.conversationIds) {
+        if (!current()) {
+          stopped = true;
+          break;
+        }
+        try {
+          await target.connection.closeConversation(conversationId);
+          if (!current()) {
+            stopped = true;
+            break;
+          }
+          closed += 1;
+        } catch (err) {
+          if (!current()) {
+            stopped = true;
+            break;
+          }
+          if (err instanceof Error && err.message === "forbidden") {
+            console.warn("一括操作の実行中に operator 権限を失いました", err);
+            stopped = true;
+            break;
+          }
+          closeSkipped += 1;
+          console.warn("一括 close をスキップしました", conversationId, err);
+        }
+      }
+
+      if (!stopped) {
+        for (const agentId of target.agentIds) {
+          if (!current()) {
+            stopped = true;
+            break;
+          }
+          const envelope = agents[agentId];
+          if (!envelope || envelope.state === "disconnected") {
+            resetSkipped += 1;
+            continue;
+          }
+          try {
+            await target.connection.sendSessionReset(agentId, "clear");
+            if (!current()) {
+              stopped = true;
+              break;
+            }
+            accepted += 1;
+          } catch (err) {
+            if (!current()) {
+              stopped = true;
+              break;
+            }
+            const reason = err instanceof Error ? err.message : "error";
+            if (reason === "forbidden") {
+              console.warn("一括操作の実行中に operator 権限を失いました", err);
+              stopped = true;
+              break;
+            }
+            if (reason === "timeout" || reason === "session_reset_pending") {
+              resetUnknown += 1;
+              console.warn(
+                "一括 session_reset の結果は不明です。再試行しません",
+                agentId,
+                err,
+              );
+            } else {
+              resetSkipped += 1;
+              console.warn(
+                "一括 session_reset をスキップしました",
+                agentId,
+                err,
+              );
+            }
+          }
+        }
+      }
+
+      if (current() && !stopped) {
+        onBulkResetSummary(
+          `一括操作: 会話を ${closed} 件 close (skip ${closeSkipped})、セッションを ${accepted} 件 reset 受付 (skip ${resetSkipped}、結果不明 ${resetUnknown})`,
+        );
+      }
+    } finally {
+      bulkResetExecuting = false;
+      bulkResetTargets = null;
+      endBulkReset();
+    }
   }
 
   // issue #207: a SEPARATE sequence counter from `refreshSeq` above, not
@@ -197,6 +419,11 @@
     return () => {
       refreshSeq += 1;
       connectionGeneration += 1;
+      if (!bulkResetExecuting && bulkResetTargets) {
+        bulkResetTargets = null;
+        bulkResetError = null;
+        endBulkReset();
+      }
       // issue #276 review follow-up (こはく advisory, round4): the seq
       // bump above invalidates an in-flight REPLY, but leaves whatever
       // is already RENDERED alone. A connection-identity change (e.g.
@@ -526,6 +753,22 @@
       {/if}
     </section>
 
+    <section class="bulk-reset">
+      <h3>一括クリーンアップ</h3>
+      <p class="hint">開いている会話を閉じ、接続中のエージェントのセッションを clear します。</p>
+      <button
+        type="button"
+        class="danger"
+        onclick={prepareBulkReset}
+        disabled={!agentSnapshotComplete || bulkResetRunning || bulkResetPreparing}
+      >
+        {bulkResetPreparing ? "対象を確認中…" : "一括 close + session reset"}
+      </button>
+      {#if bulkResetError}
+        <p class="conv-status" role="status">一括操作を準備できませんでした: {bulkResetError}</p>
+      {/if}
+    </section>
+
     <section class="conversations">
       <div class="conversations-header">
         <h3>会話一覧</h3>
@@ -732,6 +975,44 @@
             {closing ? "閉じています…" : "閉じる"}
           </button>
         </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
+  {#if connection && bulkResetTargets && bulkResetTargets.appGeneration === appConnectionGeneration}
+    <Modal
+      ariaLabel="一括クリーンアップ確認"
+      onClose={cancelBulkReset}
+    >
+      {#snippet children()}
+        {#if bulkResetTargets}
+          <p>
+            会話 {bulkResetTargets.conversationIds.length} 件を閉じ、エージェント
+            {bulkResetTargets.agentIds.length} 体のセッションを clear します。続けますか?
+          </p>
+          <div class="confirm-actions">
+            <!-- svelte-ignore a11y_autofocus -- Modal opens a native
+                 dialog with showModal(), where autofocus selects the
+                 non-destructive cancel action. -->
+            <button
+              type="button"
+              class="cancel"
+              onclick={cancelBulkReset}
+              disabled={bulkResetExecuting}
+              autofocus
+            >
+              キャンセル
+            </button>
+            <button
+              type="button"
+              class="danger"
+              onclick={confirmBulkReset}
+              disabled={bulkResetExecuting}
+            >
+              {bulkResetExecuting ? "処理中…" : "実行"}
+            </button>
+          </div>
+        {/if}
       {/snippet}
     </Modal>
   {/if}
@@ -950,6 +1231,40 @@
   .refresh:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  .bulk-reset {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .bulk-reset h3 {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .bulk-reset .hint {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--fg-dim);
+  }
+
+  .bulk-reset button {
+    align-self: flex-start;
+    padding: 0.35rem 0.8rem;
+    font-size: var(--fs-body-sm);
+    color: var(--danger, #c62828);
+    background: transparent;
+    border: 1px solid var(--danger, #c62828);
+    border-radius: 0.4rem;
+    cursor: pointer;
+  }
+
+  .bulk-reset button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   /* issue #207: .user-status/.user-list/etc. share these declarations

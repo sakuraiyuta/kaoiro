@@ -35,6 +35,7 @@ Terminology:
 | Connection state (`p.conn`) | Authenticated | Always | Always (may reduce to a dot only) |
 | Settings (`button.settings-toggle`) | Authenticated | Always | Always |
 | Launch (`button.launch`) | Authenticated, operator, and connected | Always | Always |
+| Bulk close + session reset | Authenticated, operator, and connected; within SettingsDrawer | Always in drawer | Always in drawer |
 | Logout (`button.logout`) | Authenticated | Always | May move into SettingsDrawer |
 | Spawn notice (`p.spawn-notice`) | Authenticated and a notice exists | Always | Always |
 | Login screen | Unauthenticated | Always | Always (one vertical column) |

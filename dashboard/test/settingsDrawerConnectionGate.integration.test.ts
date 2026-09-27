@@ -141,6 +141,7 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
   it("operator (onHosts 受信済み) では会話一覧・ユーザー一覧セクションを出す", async () => {
     const handlers = await mountApp();
     handlers.onHosts?.([] as HostInfo[]);
+    handlers.onStatus("connected");
     await tick();
     openSettings();
     await tick();
@@ -162,6 +163,7 @@ describe("SettingsDrawer connection gate (issue #276)", () => {
   it("同一 connection 上で hosts 無しの再 join (viewer への降格) が起きると会話一覧・ユーザー一覧が消え、再取得もしない", async () => {
     const handlers = await mountApp();
     handlers.onHosts?.([] as HostInfo[]);
+    handlers.onStatus("connected");
     await tick();
     openSettings();
     await tick();

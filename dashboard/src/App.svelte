@@ -223,7 +223,7 @@
   // them straight back into the baseline — resurrecting the exact ghosts
   // D4 exists to kill. `connectionGeneration` bumps on every channel join
   // and `awaitingHistory` is the open/closed flag for the window.
-  let connectionGeneration = 0;
+  let connectionGeneration = $state(0);
   let awaitingHistory = false;
   let awaitingSnapshot = $state(false);
   let liveSinceJoin: Record<string, Envelope[]> = {};
@@ -300,6 +300,17 @@
   // Client-side settings drawer (#85, operator- and viewer-visible: it only
   // touches localStorage, no server round-trip).
   let showSettings = $state(false);
+  let bulkResetRunning = $state(false);
+
+  function tryBeginBulkReset(): boolean {
+    if (bulkResetRunning) return false;
+    bulkResetRunning = true;
+    return true;
+  }
+
+  function endBulkReset(): void {
+    bulkResetRunning = false;
+  }
   // Persona pack detail modal (issue #232): the persona id whose detail
   // is open, or null. issue #232 MF-1 (director decision): the server
   // endpoint (GET /api/personas/:id) is operator/admin only — a custom
@@ -472,8 +483,9 @@
   // whether a session exists.
   let authChecked = $state(false);
 
-  // Connection lifecycle refs shared by mount / login / logout. Plain refs:
-  // only their effects (connection, status) need to be reactive.
+  // Connection lifecycle refs shared by mount / login / logout. The join
+  // epoch is reactive so child controls can invalidate work on same-object
+  // channel rejoin; timers and DOM handlers remain plain refs.
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let destroyed = false;
   // Handlers for tab-visibility / network-online wake-ups (issue #119).
@@ -1912,7 +1924,17 @@
   <SettingsDrawer
     onClose={() => (showSettings = false)}
     onLogout={logout}
-    connection={isOperator ? (connection ?? undefined) : undefined}
+    connection={
+      isOperator && status === "connected"
+        ? (connection ?? undefined)
+        : undefined
+    }
+    appConnectionGeneration={connectionGeneration}
+    agentSnapshotComplete={!awaitingSnapshot && !snapshotIncomplete}
+    {bulkResetRunning}
+    {tryBeginBulkReset}
+    {endBulkReset}
+    onBulkResetSummary={showNotice}
     {agents}
     {directory}
     {quagmireSettings}
