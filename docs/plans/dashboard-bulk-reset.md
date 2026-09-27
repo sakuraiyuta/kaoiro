@@ -1,7 +1,7 @@
 ---
 title: Dashboard operator bulk reset
 description: SettingsDrawer control to bulk-close all conversations and bulk-clear all agent sessions
-status: pending-review
+status: done
 phase: 0
 depends_on: []
 last_updated: 2026-09-27
