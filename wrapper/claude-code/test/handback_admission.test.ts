@@ -486,6 +486,48 @@ describe("background Agent hand-back admission", () => {
     expect((await rootCall)?.token).toBe(starts[0]);
   });
 
+  it("consumes distinct reports from one task separately and rejects an exact replay", async () => {
+    const starts: string[] = [];
+    let first!: ReturnType<AgentHost["toolOrigins"]["resolveBound"]>;
+    let second!: ReturnType<AgentHost["toolOrigins"]["resolveBound"]>;
+    let replay!: ReturnType<AgentHost["toolOrigins"]["resolveBound"]>;
+    let host!: AgentHost;
+    const queryFn = fakeQuery(async function* ({ prompt, options }) {
+      await prompt[Symbol.asyncIterator]().next();
+      await promptHook(options, "launch", "launch");
+      yield sdk({ type: "system", subtype: "init", session_id: "s" });
+      await toolHook(options, "launch", "Agent", "parent");
+      yield sdk({ type: "system", subtype: "task_started", session_id: "s", task_id: fixture.taskId,
+        tool_use_id: "parent", task_type: "local_agent", is_backgrounded: true });
+      await toolHook(options, "launch", "SubagentHandback", "child-one", fixture.taskId,
+        { message: fixture.report });
+      await promptHook(options, "launch", fixture.prompt);
+      await toolHook(options, "launch", INTER_AGENT_TOOL_FQN, "first-send");
+      first = host.toolOrigins.resolveBound("first-send");
+      await toolHook(options, "launch", "SubagentHandback", "child-two", fixture.taskId,
+        { message: "SECOND" });
+      await promptHook(options, "launch", render(fixture.taskId, "SECOND"));
+      await toolHook(options, "launch", INTER_AGENT_TOOL_FQN, "second-send");
+      second = host.toolOrigins.resolveBound("second-send");
+      await toolHook(options, "launch", "SubagentHandback", "child-replay", fixture.taskId,
+        { message: fixture.report });
+      await promptHook(options, "launch", fixture.prompt);
+      await toolHook(options, "launch", INTER_AGENT_TOOL_FQN, "replay-send");
+      replay = host.toolOrigins.resolveBound("replay-send");
+      yield sdk({ type: "result", subtype: "success", session_id: "s", result_index: 0, result: "done" });
+    });
+    host = new AgentHost(config, {
+      onState: () => {}, queryFn,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: () => host.close(),
+    });
+    await host.run("launch");
+    expect(starts).toHaveLength(1);
+    expect((await first)?.token).toBe(starts[0]);
+    expect((await second)?.token).toBe(starts[0]);
+    expect(await replay).toBeUndefined();
+  });
+
   it("keeps the wrapper snapshot and an issued same-token ticket across other-task folds", async () => {
     const basis = new ReplyBasis();
     const starts: string[] = [];
