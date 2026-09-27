@@ -32,7 +32,36 @@ All four tasks had distinct root `PreToolUse:Agent` parents, matching background
 
 Five root `PreToolUse:mcp__kaoiro__send_to_agent` hooks occurred under that prompt ID. Only the first led to a wrapper send attempt. The CLI transcript contains four later tool results with `error=unbound_tool_call` and `send_not_attempted=true`; the event recorder contains no later wrapper attempt, server acceptance, or peer delivery. The prototype accepts a same-ID hand-back fold into an independent **notification** owner, but its owner branch does not accept a second hand-back into an independent **hand-back** owner, so a later hand-back shape taints that owner. This source-level explanation is consistent with the observed local rejections; the root result for the joined turn was not measured.
 
-The driver was stopped by PID-specific SIGTERM at 11:48:06 after the repeated local rejections. The `turn_end` at 11:48:06.472 records `stream_eof` from that stop, **not** a native terminal settlement. The recorder has only result index 0 for the initial wrapper turn and no SDK result for token `0f00c5c3…`. The hand-back opener plus other-task folds needs a separate untruncated run to determine its terminal origin and report identity.
+The driver was stopped by PID-specific SIGTERM at 11:48:06 after the repeated local rejections. The `turn_end` at 11:48:06.472 records `stream_eof` from that stop, **not** a native terminal settlement. The recorder has only result index 0 for the initial wrapper turn and no SDK result for token `0f00c5c3…`. A separate untruncated run below measures the terminal origin and report identity.
+
+## Four7 terminal recorder
+
+The second run used the same built host bytes and four read-only background Agents with new root and peer IDs. The driver added one instruction to end the turn without retrying a failed send, and closed the host **after** the SDK result and matching `turn_end` had been recorded. It made no admission or terminal source change. The root wrapper input used prompt `0be03237-ef72-4134-97ba-ce494bf4aef7` and ended with result index 0 at 11:53:19.575. Its four `Agent` parent hooks and four matching background `task_started` frames preceded four child `SubagentHandback` hooks; the child hooks all carried the root session `36668690-b156-4d08-8330-56c6e52fd334` and recorder generation 0.
+
+At 11:53:20.080, the hand-back from task `ad5c207b74e2729db` opened fresh prompt `6a300cb1-015d-41ee-a1b2-d4ca99191b3c` and independent token `58ed7e6d-b818-450d-a6a6-377656350728`. The later joins all reused that prompt ID:
+
+| UTC | Same-ID continuation |
+| --- | --- |
+| 11:53:24.559 | Notification for opener task `ad5c207b74e2729db`. |
+| 11:53:26.637 | Hand-back from `a99f51ae17b5416d9`. |
+| 11:53:26.673 | Hand-back from `a1b7fae757caa9136`. |
+| 11:53:26.709 | Notification for `a99f51ae17b5416d9`. |
+| 11:53:26.745 | Notification for `a1b7fae757caa9136`. |
+| 11:53:52.261 | Hand-back from `a34b3fb7d0456d929`. |
+| 11:53:52.297 | Notification for `a34b3fb7d0456d929`. |
+
+There were **zero** fresh-ID continuation prompts arriving during the live independent turn in this run. Four root `send_to_agent` hooks occurred after the other-task joins; all four returned local `unbound_tool_call` with `send_not_attempted=true` in stderr. The event log records no wrapper send attempt, server acceptance, or peer delivery for four7. This run records terminal shape; it is not a successful send gate.
+
+At 11:54:16.525 the SDK emitted **one** result for that independent turn: `result_index=1`, `origin.kind=peer`, `origin.handback=true`, and `origin.from=origin.senderTaskId=ad5c207b74e2729db`, the **opener** task rather than any later joined task. Its `origin.body` ends with the exact line-indented report from the opener's child `SubagentHandback` tool input. The host emitted one `turn_end` for token `58ed7e6d…` at 11:54:16.526 without an admission fail-stop. This is direct terminal evidence for the hand-back-opener case with other-task hand-backs and notifications folded into the same root prompt ID. It does not show that those later hand-backs were admitted: the prototype tainted the owner and rejected every attempted send.
+
+| Four7 artifact | SHA-256 |
+| --- | --- |
+| `tmp/fuji-426/native-four7-recorder-events.jsonl` | `287f598db699fc696562a6a0c832183e8281289897df534119e30059dceb6861` |
+| `tmp/fuji-426/native-four7-recorder.stdout` | `414cfca16c9a49359431e150115c1bb36e86406bb8ed7818b096718ee3389480` |
+| `tmp/fuji-426/native-four7-recorder.stderr` | `2d5ad44f257a1bd253b8645c11f8bca19ad10da44a8490d808d1f1638bab77c7` |
+| Claude root transcript `~/.claude/projects/-home-yuta-git-kaoiro-tmp-fuji-426-native-cwd/36668690-b156-4d08-8330-56c6e52fd334.jsonl` | `01fd61e80e1847fdb442ff7a2be952975ecab478c7677f7927b8841cac1ce95b` |
+| Opener child transcript `~/.claude/projects/-home-yuta-git-kaoiro-tmp-fuji-426-native-cwd/36668690-b156-4d08-8330-56c6e52fd334/subagents/agent-ad5c207b74e2729db.jsonl` | `58ce074e45d470066fc147100c5dd38753e89cc275caa01f045e31e899587fe4` |
+| Temporary `tmp/fuji-426/native-run.mjs` for four7 | `44de3a9b04ce246fbf886ec992627484e82d9fc0cfddc272523cace00d72a082` |
 
 ## Bound artifacts and limits
 
