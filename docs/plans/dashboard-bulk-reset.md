@@ -48,12 +48,15 @@ Evidence checked at base `7ff1875b`:
 
 - `App.svelte` maintains live agent envelopes in `agents`, marks the join
   snapshot with `awaitingSnapshot` / `snapshotIncomplete`, and already has a
-  transient `showNotice()` channel. Directory entries are separate and include
-  offline agents, so they are not a reset target source.
+  transient `showNotice()` channel. Its `connectionGeneration` increments in
+  `onJoined`, including channel rejoin on the same connection object. Directory
+  entries are separate and include offline agents, so they are not a reset
+  target source.
 - `SettingsDrawer.svelte` already loads conversations through
   `connection.listConversations()`, whose result distinguishes open/closed and
-  can be incomplete. Its single-close flow captures connection generation and
-  avoids applying a stale completion after the connection changes.
+  can be incomplete. That list is fetched on mount and explicit refresh only;
+  there is no live conversation push. Its single-close flow captures a local
+  connection generation, which does not detect a same-object channel rejoin.
 - `protocol.ts` declares `sendSessionReset()` as `Promise<void>`: resolve means
   server acceptance, not completion. Its `pushAsync()` rejects on server error
   and push timeout. In particular `session_reset_pending` and timeout do not
@@ -63,16 +66,26 @@ Evidence checked at base `7ff1875b`:
   `close_conversation`; the existing server authorization remains the second
   gate.
 
-Use the operator's `listConversations()` result as the conversation snapshot
-(only `status === "open"`), and the current live `agents` map as the online
-snapshot (only entries whose state is not `disconnected`). Never derive online
-targets from `directory`. Do not offer confirmation until the conversation
-list is loaded and complete and the live-agent snapshot is ready and complete;
-an incomplete source cannot provide a truthful "all" count. Opening the modal
-freezes both target ID lists and displays those exact counts. New targets that
-appear afterward are not added. Before each call, recheck the operator/live
-connection generation; for reset, also skip an agent that is no longer live.
-Targets that disappeared or were already closed are recorded as skipped.
+When the operator invokes the bulk action, capture the authoritative
+`App.svelte` channel-join generation and request a fresh
+`connection.listConversations()` response. Do not open the modal from cached
+rows: only a successful, complete response bound to the same connection and
+join generation can supply the open conversation IDs (`status === "open"`). A
+failed, incomplete, or superseded request leaves the modal closed and reports
+that targets could not be refreshed, even if older rows remain visible. This
+captures conversations accepted after drawer mount and avoids presenting a
+stale count as current. Capture the online target IDs at the same action start
+from the live `agents` map (only entries whose state is not `disconnected`),
+and never derive reset targets from `directory`. Freeze both target lists for
+the confirmation; targets appearing after this snapshot are outside this run.
+Before confirmation, on confirmation, before each dispatch, and after each
+await, verify operator authority, connected status, connection identity, and
+the captured App join generation. This generation must be passed from App to
+the drawer/run; the drawer's local prop-reference generation is insufficient
+because `onJoined` can fire again on the same connection object. For reset,
+also skip an agent that is no longer live. Targets that disappeared or were
+already closed are recorded as skipped. A rejoin or authority loss invalidates
+the modal/run and prevents further dispatches or a stale summary.
 
 Run the close pass and then the reset pass sequentially, catching and logging
 each target independently so a failure never blocks later targets. A resolved
@@ -106,12 +119,17 @@ directory-only/offline exclusion; and the summary callback's counts. Also
 exercise identity change and operator loss during a deferred call, complete
 snapshot gating, and the shared run lock across drawer close/reopen.
 
-Negative controls / mutations: remove the combined operator + connected render
-gate and prove a viewer or disconnected composition exposes no action; include
-an offline directory-only agent and prove it is never called; make one target
-reject and prove subsequent targets still run; mutate ambiguous-result handling
-to retry and prove the one-attempt assertion fails; remove the generation check
-and run-lock guard and prove their race tests fail. Existing server tests that
+Negative controls / mutations: after drawer mount, accept a second conversation
+and prove the fresh confirmation includes both IDs; then fail the fresh query
+while an older successful list remains rendered and prove no modal opens.
+Rejoin the same connection object during a deferred call and prove there are no
+later calls or stale summary; independently drop operator authority and prove
+the run stops. Remove the combined operator + connected render gate and prove
+a viewer or disconnected composition exposes no action; include an offline
+directory-only agent and prove it is never called; make one target reject and
+prove subsequent targets still run; mutate ambiguous-result handling to retry
+and prove the one-attempt assertion fails; remove the generation check and
+run-lock guard and prove their race tests fail. Existing server tests that
 viewer calls to both `close_conversation` and `session_reset` are forbidden
 remain the authorization negative controls; no server code or wire command is
 planned.
@@ -120,8 +138,12 @@ Update the task table and plan status after implementation. Update
 `docs/reference/ui/responsive-reachability.md` to record the bulk control's
 operator + connected gate and SettingsDrawer location. The dashboard build
 clears and recreates `server/priv/static/assets`, which are served by the
-server, so after the dashboard build run the server static-serving test against
-those generated assets; no broader server change is anticipated.
+server. After the dashboard build, retain the existing static-toggle test and
+add/run a server endpoint check that reads the freshly built `index.html`,
+extracts a referenced hashed asset path, requests that exact path through the
+Phoenix endpoint, and verifies a successful response matching the built file.
+A fixture-only `/assets` test is insufficient because it can pass without the
+dashboard bundle. No broader server change is anticipated.
 
 ### Tasks
 
