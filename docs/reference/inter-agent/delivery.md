@@ -233,9 +233,12 @@ at most `folds_per_turn` fold batches (default 3) may enter one turn. A fold
 whose pushed receipt becomes void or unknown still consumes its reserved
 slot; operator roots do not reset the peer overtake count.
 If another fold receipt is pending after a claim grant, the scheduler waits
-up to `pending_receipt_root_timeout_ms` for its decision, then rechecks the
-owner and all folded work input before cutting. A changed owner or
-eligibility downgrades the yield. One pushed text is limited to ten peer
+within one `pending_receipt_root_timeout_ms` deadline for successive receipt
+decisions, then rechecks the owner and all folded work input before cutting.
+The deadline is not extended by another fold. Expiry reports
+`yield_disposition` as `downgraded: receipt_wait_timeout`; the claim and its
+interval remain consumed. A changed owner or eligibility downgrades the
+yield. One pushed text is limited to ten peer
 messages and 16,384 UTF-8 bytes, counting its full SDK user-message text,
 including the preamble, `fold_id`, and ticket lines. Oversized text stays in
 the root queue; the attempted fold does not consume a turn slot or activate
