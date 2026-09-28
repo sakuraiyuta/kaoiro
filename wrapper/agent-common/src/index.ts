@@ -19,6 +19,8 @@ export type {
   DeliveryAcknowledgementWiring,
   DeliveryTurnSource,
 } from "./delivery_ack.js";
+export { DeliveryStageReporter } from "./delivery_stages.js";
+export type { DeliveryStageIdentity, DeliveryStageSender } from "./delivery_stages.js";
 export type {
   HistoryReplayerOptions,
   HydrationVerdict,
@@ -177,3 +179,5 @@ export { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, handoffToolResult
 export type { ReplyOrigin, ReplyAttempt, ReplyAuthorization } from "./reply_basis.js";
 
 export { ToolOrigins } from "./tool_origins.js";
+export { workToolDescriptors } from "./work_tools.js";
+export type { WorkToolHandlers } from "./work_tools.js";

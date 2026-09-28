@@ -1663,10 +1663,15 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     ext: {},
   } as unknown as Envelope);
 
-  const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
+  const fire: Record<Exclude<VersionedWrapperEvent, "yield_claim">, (link: ServerLink) => void> = {
     delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
     disconnect_intent: (link) => void link.reportDisconnectIntent("stop"),
     delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
+    delivery_stage: (link) => link.reportDeliveryStage({ incarnation: "inc-1", delivery_seq: 1, stage: "queued", at: "2026-09-28T00:00:00Z" }),
+    work_transfer_ack: (link) => void link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" }),
+    work_op_result_request: (link) => void link.requestWorkOpResult({ operation_id: "op_1_abcdefghijklmnopqrstuv" }),
+    work_status_request: (link) => void link.requestWorkStatus({ work_id: "wrk_1" }),
+    work_check_request: (link) => void link.requestWorkCheck({ work_id: "wrk_1", action: "start", expected_revision: 1 }),
     delivery_resync: (link) => void link.requestInterAgentDeliveryResync({ request_id: "request", cutoff: 1, missing_ranges: [[1, 1]] }),
     history_reset: (link) => link.sendHistoryReset("r"),
     replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
@@ -1679,37 +1684,36 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
         undefined,
         "2026-08-31T00:00:00Z",
       ),
-    wrapper_build_info: () => mock.joinReceivers.get("ok")?.({}),
+    wrapper_build_info: () => {},
   };
 
-  it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
-    expect(Object.keys(fire).sort()).toEqual(versioned());
+  it("T1-1: policy includes reserved yield_claim and fire table covers every active event", () => {
+    expect(WRAPPER_CONTROL_EVENT_POLICY.yield_claim).toBe("versioned");
+    expect(Object.keys(fire).sort()).toEqual(versioned().filter(event => event !== "yield_claim"));
   });
 
-  it("T1-2: 10種すべてを実際に送る", () => {
+  it("T1-2: all 15 active versioned events are actually sent", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      buildInfo: {
-        revision: "0123456789012345678901234567890123456789",
-        dirty: false,
-        version: "2026.9.0",
-        channel: "dev",
-      },
+      interAgentReplyBasis: "v1",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+      workControl: "v1",
+      buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1" });
     for (const trigger of Object.values(fire)) trigger(link);
-    expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
+    expect(mock.pushes.map((push) => push.event).sort()).toEqual(Object.keys(fire).sort());
   });
 
-  it("T1-3: 10種すべての payload に flat version を stamp する", () => {
+  it("T1-3: all active versioned payloads carry a flat version", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      buildInfo: {
-        revision: "0123456789012345678901234567890123456789",
-        dirty: false,
-        version: "2026.9.0",
-        channel: "dev",
-      },
+      interAgentReplyBasis: "v1",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+      workControl: "v1",
+      buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1" });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
   });
@@ -1732,6 +1736,22 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       build_version: "unknown",
       build_channel: "dev",
     });
+  });
+
+  it("reports delivery stages only with the server-issued join incarnation", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    expect(link.deliveryIncarnation()).toBeNull();
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1" });
+    expect(link.deliveryIncarnation()).toBeNull();
+    link.reportDeliveryStage({ incarnation: "invented", delivery_seq: 1, stage: "queued", at: "T" });
+    expect(mock.pushes.some(push => push.event === "delivery_stage")).toBe(false);
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "server-incarnation" });
+    expect(link.deliveryIncarnation()).toBe("server-incarnation");
+    link.reportDeliveryStage({ incarnation: link.deliveryIncarnation()!, delivery_seq: 1, stage: "queued", at: "T" });
+    expect(mock.lastPush).toMatchObject({ event: "delivery_stage", payload: { incarnation: "server-incarnation", generation: expect.any(String) } });
   });
 
   it("T1-4: control call site は funnel を迂回しない", async () => {
@@ -2216,6 +2236,23 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
 
     await expect(pending).resolves.toEqual({ kind: "accepted", stamp: [9, 1] });
     expect(acks).toEqual([[9, 1]]);
+  });
+
+  it("decodes advisory fields additively and normalizes unknown mechanisms", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("ok")?.({
+      ingress_stamp: [9, 2],
+      delivery_authority: { requested: "early", granted: "normal", downgrade: "early_quota" },
+      delivery: { advisory: { recipient_state: "thinking", granted: "normal", mechanism: "future-mechanism", unresolved_count: 4, guidance: "accepted; do not resend" } },
+      work_control_result: { op: "revise", operation_id: "op_1_abcdefghijklmnopqrstuv", outcome: "applied" },
+    });
+    await expect(pending).resolves.toMatchObject({
+      kind: "accepted", stamp: [9, 2],
+      delivery_authority: { requested: "early", granted: "normal" },
+      delivery: { advisory: { mechanism: "unknown", guidance: "accepted; do not resend" } },
+      work_control_result: { op: "revise", outcome: "applied" },
+    });
   });
 
   it("sendInterAgent は error で rejected + reason を返し、記録はしない", async () => {

@@ -17,6 +17,8 @@ export interface InterAgentMessageHandlerContext {
   /** Completes intentional non-injection paths only. Injected messages are
    * confirmed by the host's actual SDK turn-start callback. */
   acknowledgeDelivery?: (envelope: Envelope) => void;
+  reportQueued?: (envelope: Envelope) => void;
+  settleStage?: (envelope: Envelope, reason: "terminal_skip" | "stale_skip") => void;
   retireDelivery?: (envelope: Envelope) => boolean;
   inject: (envelope: Envelope, mode: InboundReplyMode) => void;
   log: (line: string) => void;
@@ -38,6 +40,7 @@ export async function handleInterAgentMessage(
       // Retirement must precede any acknowledgement: an offline ack could
       // otherwise erase routing metadata before the loss is reported.
       if (!context.retireDelivery?.(envelope)) context.acknowledgeDelivery?.(envelope);
+      context.settleStage?.(envelope, "terminal_skip");
       context.log(
         `  inter_agent_message terminal ingress skipped before receive: ${envelope.agent_id}\n`,
       );
@@ -53,18 +56,21 @@ export async function handleInterAgentMessage(
       // likewise a retirement; legacy servers retain intentional-non-injection
       // acknowledgement because they do not support explicit loss.
       if (!context.retireDelivery?.(envelope)) context.acknowledgeDelivery?.(envelope);
+      context.settleStage?.(envelope, "terminal_skip");
       context.log(
         `  inter_agent_message terminal ingress skipped after receive: ${envelope.agent_id}\n`,
       );
       return;
     }
     if (disposition.consumed) {
+      context.settleStage?.(envelope, "terminal_skip");
       if (!disposition.deferAck) context.acknowledgeDelivery?.(envelope);
       context.log(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
       return;
     }
     if (!disposition.inject) {
       context.acknowledgeDelivery?.(envelope);
+      context.settleStage?.(envelope, disposition.mode === "terminal" ? "terminal_skip" : "stale_skip");
       if (disposition.mode === "terminal") {
         context.log(`  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`);
       } else if (disposition.notice) {
@@ -80,6 +86,7 @@ export async function handleInterAgentMessage(
       return;
     }
     context.log(`  inter_agent_message: ${envelope.agent_id}\n`);
+    context.reportQueued?.(envelope);
     context.inject(envelope, disposition.mode);
   } finally {
     context.ingress.finish(ingressLease);

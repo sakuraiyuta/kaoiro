@@ -641,7 +641,7 @@ weaker than inclusion:
 | --- | --- | --- | --- |
 | Claude, root input | `prompt_hook` | Trusted `UserPromptSubmit` whose `prompt_id` becomes the turn owner (the existing issue-407 origin binding) | The CLI accepted the prompt; no model request is proven. `onTurnStart` (before the SDK yield, `host.ts:3943-3954`) is not used: input can still fail or be interrupted after it |
 | Claude, fold | `fold_hook` | Trusted `UserPromptSubmit` that activates the fold receipt ([Claude fold handoff](#claude-fold-handoff)) | Same limit |
-| Codex exec, root input | `exec_input_written` | `runStreamed` started and the input was written to the child | Process may still fail before a model request |
+| Codex exec, root input | `exec_input_written` | First `iterator.next()` on `runStreamed(input).events` resolves with the child’s first stdout JSONL value. The SDK has already spawned the child, written the input, and closed stdin; `runStreamed()` itself resolves before spawn. The name is historical: the evidence is first-event receipt. | Process may still fail before a model request |
 | Waiter or recovery | `tool_result` | The existing tool-result handoff ([reply-basis](../reference/inter-agent/reply-basis.md#inline-recovery-and-ownership)) | Dispatch boundary, not reading |
 
 Input that fails or is interrupted before its handoff event is not

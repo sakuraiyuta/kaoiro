@@ -11,6 +11,8 @@ export interface InterAgentMessageHandlerContext {
   /** Completes intentional non-injection paths only. Injected messages wait
    * for the host's actual SDK turn-start boundary. */
   acknowledgeDelivery?: (envelope: Envelope) => void;
+  reportQueued?: (envelope: Envelope) => void;
+  settleStage?: (envelope: Envelope, reason: "terminal_skip" | "stale_skip") => void;
   inject: (envelope: Envelope, mode: InboundReplyMode) => void;
   log: (line: string) => void;
 }
@@ -31,12 +33,14 @@ export async function handleInterAgentMessage(
     mode: "reply-owed" as const,
   };
   if (disposition.consumed) {
+    context.settleStage?.(envelope, "terminal_skip");
     if (!disposition.deferAck) context.acknowledgeDelivery?.(envelope);
     context.log(`  inter_agent_message reply consumed: ${envelope.agent_id}\n`);
     return;
   }
   if (!disposition.inject) {
     context.acknowledgeDelivery?.(envelope);
+    context.settleStage?.(envelope, disposition.mode === "terminal" ? "terminal_skip" : "stale_skip");
     if (disposition.mode === "terminal") {
       context.log(`  inter_agent_message terminal, no reply owed: ${envelope.agent_id}\n`);
     } else if (disposition.notice) {
@@ -54,5 +58,6 @@ export async function handleInterAgentMessage(
     return;
   }
   context.log(`  inter_agent_message: ${envelope.agent_id}\n`);
+  context.reportQueued?.(envelope);
   context.inject(envelope, disposition.mode);
 }

@@ -358,6 +358,8 @@ export interface CodexHostOptions {
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#237). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  /** First exec child stdout event proves stdin was written and closed. */
+  onInputHandedOff?: (info: { turnToken: string }) => void;
   /** Synchronous final input check. Undefined preserves the queued input;
    * null skips it without starting an SDK turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -1849,8 +1851,8 @@ export class CodexHost implements EngineAdapter {
               this.#threadOptions(attempted),
             );
     // Creating/resuming the SDK thread is the last synchronous boundary
-    // before `runStreamed()` hands the input to Codex. Confirm #237 delivery
-    // here, never when its coordinator merely accepted the queue item.
+    // before the SDK call. Confirm #237 delivery here, never when its
+    // coordinator merely accepted the queue item.
     if (!retryAfterRepair) {
       this.#options.onLifecycle?.({ kind: "turn_start", turnToken });
       this.#options.onTurnStart?.({ turnToken, conversationIds });
@@ -1875,6 +1877,7 @@ export class CodexHost implements EngineAdapter {
       const iterator = events[Symbol.asyncIterator]();
       let terminalDrainDeadlineMs: number | null = null;
       let terminalEventSeen = false;
+      let inputHandedOff = false;
       while (true) {
         let next: IteratorResult<ThreadEvent>;
         if (terminalDrainDeadlineMs === null) {
@@ -1911,6 +1914,10 @@ export class CodexHost implements EngineAdapter {
             terminalSeen: terminalEventSeen,
           });
           break;
+        }
+        if (!inputHandedOff && this.historyBackend === "exec") {
+          inputHandedOff = true;
+          this.#options.onInputHandedOff?.({ turnToken });
         }
         const event = next.value;
         const isUsable = isUsableThreadEvent(event);

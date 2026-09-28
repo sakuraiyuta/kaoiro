@@ -121,6 +121,7 @@ export async function runAntigravityCli(
   applyAntigravitySources(config, { modelSource, effortSource });
 
   let host: AntigravityHost | undefined;
+  const pendingWorkNotices: string[] = [];
   let link: ServerLink | undefined;
   // issue #359 M1: permission_sync negotiation state. onSync can fire before the
   // host is created (during the join / persona-prompt await), so hold the
@@ -163,7 +164,28 @@ export async function runAntigravityCli(
     },
     log: (text) => writeRedactedStderr(`${text}\n`),
   });
+  const workTools = {
+    workControlSupported: () => typeof link?.workControlSupported === "function" && link.workControlSupported(),
+    deliveryModesSupported: () => typeof link?.deliveryModes === "function" && link.deliveryModes() !== null,
+    deliveryModes: () => typeof link?.deliveryModesState === "function" ? link.deliveryModesState() : "pending",
+    workStatus: (input: { work_id?: string | undefined }) => link
+      ? link.requestWorkStatus(input.work_id === undefined ? {} : { work_id: input.work_id })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workCheck: (input: { work_id: string; action: "start" | "land"; expected_revision: number; subject_hash?: string | undefined }) => link
+      ? link.requestWorkCheck({ work_id: input.work_id, action: input.action, expected_revision: input.expected_revision, ...(input.subject_hash === undefined ? {} : { subject_hash: input.subject_hash }) })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workTransferAck: (input: { work_id: string; transfer_id: string }) => link
+      ? link.acknowledgeWorkTransfer(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    workOpResult: (input: { operation_id: string }) => link
+      ? link.requestWorkOpResult(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    deliveryStatus: (input: { conversation_id?: string | undefined; turn_number?: number | undefined }) => link
+      ? link.requestDeliveryStatus(input.conversation_id === undefined || input.turn_number === undefined ? {} : { conversation_id: input.conversation_id, turn_number: input.turn_number })
+      : Promise.reject(new Error("work_control_unavailable")),
+  };
   const interAgent = new InterAgentTool({
+    workTools,
     config,
     getState: () => host?.state ?? "idle",
     getActiveInterAgentTurnToken: () =>
@@ -321,6 +343,12 @@ export async function runAntigravityCli(
     ...(config.server_token === undefined ? {} : { token: config.server_token }),
     ...(config.transition_id === undefined ? {} : { transitionId: config.transition_id }),
     buildInfo,
+    workControl: "v1",
+    onWorkNotice: notice => {
+      const text = `Work notice: ${JSON.stringify(notice)}`;
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host!.send(text)).catch(() => {});
+    },
     // issue #359 M1: negotiate permission_sync so the server seeds this
     // session's permission ledger and relays a durable control/next on
     // reconnect. Gates the supports_permission_switch advertisement.

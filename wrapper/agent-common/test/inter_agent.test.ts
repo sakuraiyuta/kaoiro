@@ -159,6 +159,32 @@ describe("InterAgentTool", () => {
     expect(INTER_AGENT_TOOL_FQN).toBe("mcp__kaoiro__send_to_agent");
   });
 
+  it("V38: old-server capability absence blocks work-control sends locally", async () => {
+    const sent: Envelope[] = [];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: envelope => sent.push(envelope),
+      workTools: {
+        workControlSupported: () => false,
+        deliveryModesSupported: () => false,
+        deliveryModes: () => "legacy",
+        workStatus: async () => ({ works: [], pending_transfers: [] }),
+        workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
+        workTransferAck: async () => ({}),
+        workOpResult: async () => ({ error: "unknown_operation" }),
+        deliveryStatus: async () => ({ status: "expired" }),
+      },
+    });
+    const result = await tool.invoke({
+      to: "peer.agent", body: "assign work", kind: "request",
+      work_control: { op: "assign", operation_id: "op_1_abcdefghijklmnopqrstuv", title: "Task" },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: "work_control_unavailable", send_not_attempted: true });
+    expect(sent).toEqual([]);
+  });
+
   it("conversation_id 未指定で新規 UUID を割当て、turn_number=1 を採番する", async () => {
     const { tool, capture } = makeTool("agent-a");
     const { result } = await callTool(tool, {
@@ -1923,6 +1949,28 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     expect(sent).toHaveLength(1);
     expect(result.isError).toBeUndefined();
     expect(result.content[0]!.text).toContain("sent to peer.agent");
+  });
+
+  it("accepted ack surfaces the immediate delivery advisory", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"), getState: () => "tool_running", send: () => {},
+      workTools: {
+        workControlSupported: () => true, deliveryModesSupported: () => true, deliveryModes: () => "legacy",
+        workStatus: async () => ({ works: [], pending_transfers: [] }),
+        workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
+        workTransferAck: async () => ({}), workOpResult: async () => ({ error: "unknown_operation" }),
+        deliveryStatus: async () => ({ status: "expired" }),
+      },
+      sendInterAgent: async () => ({
+        kind: "accepted", stamp: [1, 1],
+        delivery_authority: { requested: "early", granted: "normal", downgrade: "early_quota" },
+        delivery: { advisory: { recipient_state: "thinking", granted: "normal", mechanism: "queue", unresolved_count: 2, guidance: "accepted; do not resend" } },
+      }),
+      now: () => "T", newId: () => "cnv-advisory",
+    });
+    const result = await tool.invoke({ to: "peer.agent", body: "hi", kind: "inform", delivery_intent: "early" });
+    expect(result.content[0]!.text).toContain("accepted; do not resend");
+    expect(result.content[0]!.text).toContain("early_quota");
   });
 
   it("server が reject したら error result にし、reason を載せる", async () => {

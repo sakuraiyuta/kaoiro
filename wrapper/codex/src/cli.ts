@@ -20,6 +20,7 @@ import type {
 } from "@kaoiro/protocol";
 import {
   createDeliveryAcknowledgementRuntime,
+  DeliveryStageReporter,
   IaSidecar,
   InterAgentTool,
   PermissionBroker,
@@ -263,6 +264,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   }
 
   let host: CodexHost;
+  const pendingWorkNotices: string[] = [];
   let permissionBroker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
@@ -304,6 +306,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
       );
       deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
+      deliveryStages?.settleEnvelope(item.envelope, "terminal_skip");
     },
     onDispatch: (batch) => {
       const range = interAgentTurns.deliverySequenceRangeForTurn(batch.turnToken);
@@ -510,7 +513,28 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     log: (text) => writeRedactedStderr(`${text}\n`),
   });
   let replySessionId: string | undefined;
+  const workTools = {
+    workControlSupported: () => typeof link?.workControlSupported === "function" && link.workControlSupported(),
+    deliveryModesSupported: () => typeof link?.deliveryModes === "function" && link.deliveryModes() !== null,
+    deliveryModes: () => typeof link?.deliveryModesState === "function" ? link.deliveryModesState() : "pending",
+    workStatus: (input: { work_id?: string | undefined }) => link
+      ? link.requestWorkStatus(input.work_id === undefined ? {} : { work_id: input.work_id })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workCheck: (input: { work_id: string; action: "start" | "land"; expected_revision: number; subject_hash?: string | undefined }) => link
+      ? link.requestWorkCheck({ work_id: input.work_id, action: input.action, expected_revision: input.expected_revision, ...(input.subject_hash === undefined ? {} : { subject_hash: input.subject_hash }) })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workTransferAck: (input: { work_id: string; transfer_id: string }) => link
+      ? link.acknowledgeWorkTransfer(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    workOpResult: (input: { operation_id: string }) => link
+      ? link.requestWorkOpResult(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    deliveryStatus: (input: { conversation_id?: string | undefined; turn_number?: number | undefined }) => link
+      ? link.requestDeliveryStatus(input.conversation_id === undefined || input.turn_number === undefined ? {} : { conversation_id: input.conversation_id, turn_number: input.turn_number })
+      : Promise.reject(new Error("work_control_unavailable")),
+  };
   interAgent = new InterAgentTool({
+    workTools,
     replyBasisMode: () => replyBasisMode,
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
     waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
@@ -608,13 +632,30 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     interAgentTurns,
   );
 
+  const deliveryStages = new DeliveryStageReporter({
+    send: report => link?.reportDeliveryStage(report),
+    identity: () => {
+      if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
+      const incarnation = link.deliveryIncarnation();
+      return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+    },
+    turns: interAgentTurns,
+  });
+
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
+    interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    workControl: "v1",
     onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
     buildInfo,
+    onWorkNotice: notice => {
+      const text = `Work notice: ${JSON.stringify(notice)}`;
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
+    },
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),
@@ -726,6 +767,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           recordInboundIa,
+          reportQueued: envelope => deliveryStages.queued(envelope),
+          settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
           send: (notice) => interAgent?.sendInternalNotice(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
@@ -822,6 +865,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
+    onInputHandedOff: ({ turnToken }) => deliveryStages.submitted(turnToken, "exec_input_written"),
     // issue #127: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
     // extended issue #211 段階3 for a coalesced turn's multiple cids). On
@@ -838,6 +882,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       terminal,
       abandoned,
     }) => {
+      deliveryStages.settled(turnToken);
       // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
       // is the reset boundary. `terminal` is set by the host on exactly
       // those two paths; a cancellation, a terminal-less EOF or a rejected
@@ -976,6 +1021,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
+  for (const notice of pendingWorkNotices.splice(0)) {
+    instructionChain = instructionChain.then(() => host.send(notice)).catch(() => {});
+  }
 
   if (pendingPermissionSync !== undefined) {
     host.applyPermissionSync(pendingPermissionSync);

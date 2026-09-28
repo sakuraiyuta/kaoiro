@@ -11,6 +11,28 @@ Structure is defined by `Envelope`, `InterAgentMessagePayload`, and
 `InterAgentMessageKind` in [@kaoiro/protocol](../../../protocol/src/index.ts);
 this page specifies the corresponding semantics.
 
+## Send result
+
+An accepted send returns the existing `ingress_stamp: [us, seq]` plus additive
+`delivery_authority`, `delivery.advisory`, and, when an operation was carried,
+`work_control_result`. Older servers omit the additive keys; wrappers preserve
+legacy acceptance and show no advisory. The advisory contains
+`recipient_state`, `granted`, optional `downgrade`, `mechanism`,
+`unresolved_count`, and guidance. `mechanism` is `queue`, `fold`, `cut`,
+`steer`, `hook`, or `unknown`; receivers normalize unrecognized values to
+`unknown`. Guidance describes the accepted delivery and does not ask the sender
+to resend it.
+
+A `work_operation_deduplicated` rejection has no `ingress_stamp` and sets
+`send_not_attempted: true`; its details carry the operation receipt and
+delivery knowledge (`recorded`, `not_recorded`, or `unknown`). The body was not
+sent by this attempt, so the sender must consult that delivery knowledge and
+explicitly decide whether to start a new delivery. A `work_outcome_unknown`
+rejection also has no `ingress_stamp`; it carries the `operation_id`. Query
+`work_op_result` with that ID and retry with the same ID only if it was not
+applied. A yield-only WorkStore timeout is downgraded and proceeds as an
+accepted send, rather than returning `work_outcome_unknown`.
+
 ### envelope.type: "inter_agent_message"
 
 The common envelope outer shape in [protocol.md](../protocol/envelope.md#terms-and-hierarchy)

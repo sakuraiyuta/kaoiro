@@ -44,6 +44,35 @@ export interface DeliveryAuthority {
   yield_token?: string;
 }
 
+export interface DeliveryAdvisory {
+  recipient_state: string;
+  granted: DeliveryIntent;
+  downgrade?: DeliveryDowngrade;
+  /** Unknown future values must be projected as `unknown` by the reader. */
+  mechanism: "queue" | "fold" | "cut" | "steer" | "hook" | "unknown";
+  unresolved_count: number;
+  guidance: string;
+}
+
+/** Successful wrapper-channel acknowledgement for an inter-agent send.
+ *  New fields are optional so a current wrapper can still read an older server reply. */
+export interface InterAgentSendReply {
+  ingress_stamp: [number, number];
+  delivery_authority?: DeliveryAuthority;
+  delivery?: { advisory: DeliveryAdvisory };
+  work_control_result?: WorkControlResult;
+}
+
+export interface InterAgentSendRejection {
+  reason: string;
+  send_not_attempted?: true;
+  details?: {
+    operation_id?: string;
+    delivery?: "recorded" | "not_recorded" | "unknown";
+    work_control_result?: WorkControlResult;
+  };
+}
+
 export interface WorkStamp {
   work_id: string;
   revision: number;
@@ -197,6 +226,7 @@ export interface WorkControlResult {
   op: WorkControlOp;
   operation_id: string;
   outcome: "applied";
+  deduplicated?: true;
   work?: WorkStamp;
   claimed_yield_tokens?: string[];
 }

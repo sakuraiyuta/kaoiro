@@ -43,6 +43,7 @@ import {
 import {
   HistoryReplayer,
   createDeliveryAcknowledgementRuntime,
+  DeliveryStageReporter,
   IaSidecar,
   InterAgentTool,
   classifyInterAgentError,
@@ -252,6 +253,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const prompt = promptArg;
 
   let host: AgentHost;
+  const pendingWorkNotices: string[] = [];
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
@@ -364,6 +366,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
       );
       deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
+      deliveryStages?.settleEnvelope(item.envelope, "terminal_skip");
     },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
@@ -546,7 +549,28 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
   });
   let replySessionId: string | undefined;
+  const workTools = {
+    workControlSupported: () => typeof link?.workControlSupported === "function" && link.workControlSupported(),
+    deliveryModesSupported: () => typeof link?.deliveryModes === "function" && link.deliveryModes() !== null,
+    deliveryModes: () => typeof link?.deliveryModesState === "function" ? link.deliveryModesState() : "pending",
+    workStatus: (input: { work_id?: string | undefined }) => link
+      ? link.requestWorkStatus(input.work_id === undefined ? {} : { work_id: input.work_id })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workCheck: (input: { work_id: string; action: "start" | "land"; expected_revision: number; subject_hash?: string | undefined }) => link
+      ? link.requestWorkCheck({ work_id: input.work_id, action: input.action, expected_revision: input.expected_revision, ...(input.subject_hash === undefined ? {} : { subject_hash: input.subject_hash }) })
+      : Promise.reject(new Error("work_control_unavailable")),
+    workTransferAck: (input: { work_id: string; transfer_id: string }) => link
+      ? link.acknowledgeWorkTransfer(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    workOpResult: (input: { operation_id: string }) => link
+      ? link.requestWorkOpResult(input)
+      : Promise.reject(new Error("work_control_unavailable")),
+    deliveryStatus: (input: { conversation_id?: string | undefined; turn_number?: number | undefined }) => link
+      ? link.requestDeliveryStatus(input.conversation_id === undefined || input.turn_number === undefined ? {} : { conversation_id: input.conversation_id, turn_number: input.turn_number })
+      : Promise.reject(new Error("work_control_unavailable")),
+  };
   interAgent = new InterAgentTool({
+    workTools,
     replyBasisMode: () => replyBasisMode,
     canSendInterAgent: () => !admissionFailStopped,
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
@@ -645,13 +669,30 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     interAgentTurns,
   );
 
+  const deliveryStages = new DeliveryStageReporter({
+    send: report => link?.reportDeliveryStage(report),
+    identity: () => {
+      if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
+      const incarnation = link.deliveryIncarnation();
+      return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+    },
+    turns: interAgentTurns,
+  });
+
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
+    interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    workControl: "v1",
     onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
     buildInfo,
+    onWorkNotice: notice => {
+      const text = `Work notice: ${JSON.stringify(notice)}`;
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
+    },
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),
@@ -836,6 +877,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           ingress: interAgentIngress,
           recordInboundIa,
           retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+          reportQueued: envelope => deliveryStages.queued(envelope),
+          settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
           send: (notice) => interAgent?.sendInternalNotice(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
@@ -921,12 +964,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       turnWatchdog.progress(turnToken);
     },
     onPromptAdmitted: (turnToken) => {
+      deliveryStages.submitted(turnToken, "prompt_hook");
       interAgent?.confirmReplyInput(turnToken);
     },
     // issue #236: settle by the immutable opaque generation token. CIDs are
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, kind, error, cancellation }) => {
+      if (turnToken !== undefined) deliveryStages.settled(turnToken);
       if (kind === "sdk_notification" && turnToken !== undefined) {
         resolveInterAgentConversationIds(turnToken, interAgent?.pendingConversationIdsForTurn(turnToken) ?? [], error);
         interAgent?.endReplyInput(turnToken);
@@ -1118,6 +1163,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
+  for (const notice of pendingWorkNotices.splice(0)) {
+    instructionChain = instructionChain.then(() => host.send(notice)).catch(() => {});
+  }
 
   // Apply the after_join set_permission_mode that arrived before host was
   // constructed. host.ts (#58) uses `#permissionMode` set before run() as

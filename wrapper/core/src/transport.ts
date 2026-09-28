@@ -19,6 +19,11 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  DeliveryAdvisory,
+  DeliveryAuthority,
+  DeliveryModes,
+  DeliveryModesJoinRequest,
+  InterAgentSendReply,
   EngineKind,
   Envelope,
   InterAgentDeliveryStatus,
@@ -30,6 +35,18 @@ import type {
   WrapperPermissionLifecycleMessage,
   UserDirectoryEntry,
   UserRole,
+  WorkCheckRequest,
+  WorkCheckResult,
+  WorkControlResult,
+  WorkOpResult,
+  WorkOpResultRequest,
+  WorkStatusRequest,
+  WorkStatusResult,
+  WorkTransferAckRequest,
+  WorkNotice,
+  DeliveryStatusRequest,
+  DeliveryStatusResult,
+  DeliveryStageReport,
 } from "@kaoiro/protocol";
 import {
   isWrapperBuildIdentityValid,
@@ -106,8 +123,8 @@ export interface ReplayIaItem {
  *  ack: the message may well have been delivered, so the caller must not
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
-  | { kind: "accepted"; stamp: [number, number] | null }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id: string; expected_peer_turn: number; supplied_basis: number } }
+  | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -214,6 +231,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
   attach_close: "checked",
   envelope: "checked",
   delivery_status: "checked",
+  work_notice: "checked",
   session_reset_failed: "checked",
 } as const satisfies Record<string, "checked" | "binaryFrame" | "phoenixControl">;
 
@@ -223,6 +241,12 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   wrapper_build_info: "versioned",
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
+  delivery_stage: "versioned",
+  yield_claim: "versioned",
+  work_transfer_ack: "versioned",
+  work_op_result_request: "versioned",
+  work_status_request: "versioned",
+  work_check_request: "versioned",
   delivery_resync: "versioned",
   disconnect_intent: "versioned",
   history_reset: "versioned",
@@ -281,7 +305,12 @@ export function chunkReplayIaItems(
 
 export interface ServerLinkOptions {
   interAgentReplyBasis?: "v1";
+  interAgentDeliveryModes?: DeliveryModesJoinRequest;
+  workControl?: "v1";
   onReplyBasisMode?: (mode: "v1" | "legacy" | "pending") => void;
+  onInterAgentDeliveryModes?: (supported: boolean, modes: DeliveryModes | null) => void;
+  onWorkControl?: (supported: boolean) => void;
+  onWorkNotice?: (notice: WorkNotice) => void;
   /** persona.id declared to the server at join time (ADR-0029 F3).
    *  The server rejects the join when this id is not in its pack manifest
    *  (or the reserved `default`); the wrapper then never opens its SDK
@@ -1105,6 +1134,63 @@ function ingressStampFrom(reply: unknown): [number, number] | null {
   return [stamp[0] as number, stamp[1] as number];
 }
 
+function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAcceptance, { kind: "accepted" }>, "delivery_authority" | "delivery" | "work_control_result"> {
+  if (!isObject(reply)) return {};
+  const raw = reply as Partial<InterAgentSendReply>;
+  const intents = ["normal", "early", "yield"] as const;
+  const downgrades = ["unsupported_by_recipient", "yield_not_authorized", "yield_interval", "yield_capacity", "early_quota", "recipient_legacy"] as const;
+  const authority = isObject(raw.delivery_authority) ? raw.delivery_authority : null;
+  const requested = authority?.requested;
+  const granted = authority?.granted;
+  const validAuthority = authority !== null && intents.includes(requested as typeof intents[number]) &&
+    intents.includes(granted as typeof intents[number]);
+  const delivery = isObject(raw.delivery) && isObject(raw.delivery.advisory) ? raw.delivery.advisory : null;
+  const advisoryGranted = delivery?.granted;
+  const validAdvisory = delivery !== null && typeof delivery.recipient_state === "string" &&
+    intents.includes(advisoryGranted as typeof intents[number]) &&
+    Number.isSafeInteger(delivery.unresolved_count) && (delivery.unresolved_count as number) >= 0 &&
+    typeof delivery.guidance === "string";
+  const workResult = isObject(raw.work_control_result) ? raw.work_control_result : null;
+  const validResult = workResult !== null && typeof workResult.op === "string" &&
+    typeof workResult.operation_id === "string" && workResult.outcome === "applied";
+  return {
+    ...(validAuthority ? { delivery_authority: {
+      requested: requested as DeliveryAuthority["requested"],
+      granted: granted as DeliveryAuthority["granted"],
+      ...(typeof authority?.downgrade === "string" && downgrades.includes(authority.downgrade as typeof downgrades[number])
+        ? { downgrade: authority.downgrade as NonNullable<DeliveryAuthority["downgrade"]> }
+        : {}),
+      ...(typeof authority?.work_id === "string" ? { work_id: authority.work_id } : {}),
+      ...(Number.isSafeInteger(authority?.authority_epoch) && (authority?.authority_epoch as number) >= 0
+        ? { authority_epoch: authority.authority_epoch as number }
+        : {}),
+      ...(typeof authority?.yield_token === "string" ? { yield_token: authority.yield_token } : {}),
+    } } : {}),
+    ...(validAdvisory ? { delivery: { advisory: {
+      recipient_state: delivery.recipient_state as string,
+      granted: advisoryGranted as DeliveryAdvisory["granted"],
+      ...(typeof delivery.downgrade === "string" && downgrades.includes(delivery.downgrade as typeof downgrades[number])
+        ? { downgrade: delivery.downgrade as NonNullable<DeliveryAdvisory["downgrade"]> }
+        : {}),
+      mechanism: ["queue", "fold", "cut", "steer", "hook", "unknown"].includes(String(delivery.mechanism))
+        ? delivery.mechanism as DeliveryAdvisory["mechanism"]
+        : "unknown",
+      unresolved_count: delivery.unresolved_count as number,
+      guidance: delivery.guidance as string,
+    } } } : {}),
+    ...(validResult ? { work_control_result: {
+      op: workResult.op as WorkControlResult["op"],
+      operation_id: workResult.operation_id as string,
+      outcome: "applied",
+      ...(workResult.deduplicated === true ? { deduplicated: true } : {}),
+      ...(isObject(workResult.work) ? { work: workResult.work as unknown as NonNullable<WorkControlResult["work"]> } : {}),
+      ...(Array.isArray(workResult.claimed_yield_tokens) && workResult.claimed_yield_tokens.every(value => typeof value === "string")
+        ? { claimed_yield_tokens: workResult.claimed_yield_tokens as string[] }
+        : {}),
+    } } : {}),
+  };
+}
+
 /** Closed-vocabulary reason from a rejected push reply. The channel always
  *  answers `{reason: "..."}`; anything else is normalised rather than
  *  interpolated into the tool result verbatim. */
@@ -1114,9 +1200,31 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
   const result: Omit<Extract<InterAgentAcceptance, { kind: "rejected" }>, "kind"> = {
     reason: typeof reason === "string" && reason !== "" ? reason : "unknown",
   };
+  if (reply.send_not_attempted === true) result.send_not_attempted = true;
   if (reason === "stale_reply_basis" && typeof reply.conversation_id === "string" &&
       Number.isSafeInteger(reply.expected_peer_turn) && Number.isSafeInteger(reply.supplied_basis)) {
     result.details = { conversation_id: reply.conversation_id, expected_peer_turn: reply.expected_peer_turn as number, supplied_basis: reply.supplied_basis as number };
+  }
+  const details = isObject(reply.details) ? reply.details : null;
+  const workResult = details && isObject(details.work_control_result) ? details.work_control_result : null;
+  if (workResult && typeof workResult.op === "string" && typeof workResult.operation_id === "string" && workResult.outcome === "applied") {
+    result.details = {
+      ...(result.details ?? {}),
+      work_control_result: {
+        op: workResult.op as WorkControlResult["op"],
+        operation_id: workResult.operation_id,
+        outcome: "applied",
+        ...(workResult.deduplicated === true ? { deduplicated: true } : {}),
+        ...(isObject(workResult.work) ? { work: workResult.work as unknown as NonNullable<WorkControlResult["work"]> } : {}),
+        ...(Array.isArray(workResult.claimed_yield_tokens) && workResult.claimed_yield_tokens.every(value => typeof value === "string") ? { claimed_yield_tokens: workResult.claimed_yield_tokens as string[] } : {}),
+      },
+    };
+  }
+  if (details && typeof details.operation_id === "string") {
+    result.details = { ...(result.details ?? {}), operation_id: details.operation_id };
+  }
+  if (details && (details.delivery === "recorded" || details.delivery === "not_recorded" || details.delivery === "unknown")) {
+    result.details = { ...(result.details ?? {}), delivery: details.delivery };
   }
   const disconnect = disconnectFrom((reply as { disconnect?: unknown }).disconnect);
   return disconnect === undefined ? result : { ...result, disconnect };
@@ -1195,6 +1303,10 @@ export class ServerLink {
   #permissionSyncNegotiated: Promise<boolean>;
   #resolvePermissionSyncNegotiated!: (supported: boolean) => void;
   #permissionSyncNegotiationSettled = false;
+  #deliveryModes: DeliveryModes | null = null;
+  #deliveryModesSettled = false;
+  #workControlSupported = false;
+  #deliveryIncarnation: string | null = null;
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -1236,6 +1348,10 @@ export class ServerLink {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
+      ...(options.interAgentDeliveryModes
+        ? { inter_agent_delivery_modes: options.interAgentDeliveryModes }
+        : {}),
+      ...(options.workControl ? { work_control: options.workControl } : {}),
       delivery_generation: this.#deliveryGeneration,
       delivery_resync: "skip-v1",
       ...(this.#permissionSync === undefined
@@ -1484,6 +1600,11 @@ export class ServerLink {
       this.#deliveryRecovery.observe(status);
       options.onInterAgentDeliveryStatus?.(status);
     });
+    this.#bindServerEvent("work_notice", (payload: unknown) => {
+      if (!isObject(payload) || payload.version !== "0" || !isObject(payload.work) ||
+          typeof payload.op !== "string" || typeof payload.reason !== "string") return;
+      options.onWorkNotice?.(payload as unknown as WorkNotice);
+    });
     // #248: a self-reset's request reply proves only that the server acquired
     // its lock. If the runner later cannot terminate this old wrapper, the
     // server sends the terminal failure back to this topic. Correlation stays
@@ -1501,6 +1622,12 @@ export class ServerLink {
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
     const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
+      this.#deliveryModes = null;
+      this.#deliveryModesSettled = false;
+      this.#workControlSupported = false;
+      this.#deliveryIncarnation = null;
+      options.onInterAgentDeliveryModes?.(false, null);
+      options.onWorkControl?.(false);
       this.#failReplyBasis(terminal, releaseWaiters);
     };
     this.#bindServerEvent("phx_error", () => invalidateReplyBasis());
@@ -1531,6 +1658,16 @@ export class ServerLink {
         this.#replyBasisGeneration++;
         this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
         options.onReplyBasisMode?.(this.#replyBasisMode);
+        this.#deliveryModes = isObject(reply) && reply.inter_agent_delivery_modes === "v1"
+          ? options.interAgentDeliveryModes ?? null
+          : null;
+        this.#deliveryModesSettled = true;
+        options.onInterAgentDeliveryModes?.(this.#deliveryModes !== null, this.#deliveryModes);
+        this.#workControlSupported = isObject(reply) && reply.work_control === "v1";
+        this.#deliveryIncarnation = isObject(reply) && typeof reply.inter_agent_delivery_incarnation === "string" && reply.inter_agent_delivery_incarnation.length > 0
+          ? reply.inter_agent_delivery_incarnation
+          : null;
+        options.onWorkControl?.(this.#workControlSupported);
         for (const release of this.#replyBasisWaiters) release(this.#replyBasisMode);
         if (options.interAgentReplyBasis && this.#replyBasisMode === "legacy") writeRedactedStderr("inter-agent reply basis: legacy (server protection unavailable)\n");
         if (options.buildInfo !== undefined) {
@@ -1658,6 +1795,26 @@ export class ServerLink {
     return this.#sessionId;
   }
 
+  deliveryModes(): DeliveryModes | null {
+    return this.#deliveryModes;
+  }
+
+  deliveryModesState(): DeliveryModes | "legacy" | "pending" {
+    return this.#deliveryModesSettled ? this.#deliveryModes ?? "legacy" : "pending";
+  }
+
+  workControlSupported(): boolean {
+    return this.#workControlSupported;
+  }
+
+  deliveryGeneration(): string {
+    return this.#deliveryGeneration;
+  }
+
+  deliveryIncarnation(): string | null {
+    return this.#deliveryIncarnation;
+  }
+
   /** Records contiguous SDK-dispatch completion.  The server treats a stale,
    * future, or duplicate watermark as a harmless no-op. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
@@ -1739,6 +1896,51 @@ export class ServerLink {
     });
   }
 
+  reportDeliveryStage(
+    report: Omit<DeliveryStageReport, "version" | "generation"> & { generation?: string },
+  ): void {
+    if (this.#deliveryModes?.stage_reports !== true || this.#deliveryIncarnation === null || report.incarnation !== this.#deliveryIncarnation) return;
+    this.#pushVersioned("delivery_stage", {
+      ...report,
+      generation: report.generation ?? this.#deliveryGeneration,
+    });
+  }
+
+  acknowledgeWorkTransfer(request: Omit<WorkTransferAckRequest, "version">): Promise<Record<string, unknown>> {
+    return this.#requestWorkEvent("work_transfer_ack", request);
+  }
+
+  requestWorkOpResult(request: Omit<WorkOpResultRequest, "version">): Promise<WorkOpResult> {
+    return this.#requestWorkEvent("work_op_result_request", request) as Promise<WorkOpResult>;
+  }
+
+  requestWorkStatus(request: Omit<WorkStatusRequest, "version"> = {}): Promise<WorkStatusResult> {
+    return this.#requestWorkEvent("work_status_request", request) as Promise<WorkStatusResult>;
+  }
+
+  requestWorkCheck(request: Omit<WorkCheckRequest, "version">): Promise<WorkCheckResult> {
+    return this.#requestWorkEvent("work_check_request", request) as Promise<WorkCheckResult>;
+  }
+
+  requestDeliveryStatus(request: Omit<DeliveryStatusRequest, "version">): Promise<DeliveryStatusResult> {
+    if (this.#deliveryModes === null) return Promise.reject(new Error("work_control_unavailable"));
+    return this.#requestVersioned("delivery_status_request", request) as Promise<DeliveryStatusResult>;
+  }
+
+  #requestWorkEvent(event: VersionedWrapperEvent, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!this.#workControlSupported) return Promise.reject(new Error("work_control_unavailable"));
+    return this.#requestVersioned(event, payload);
+  }
+
+  #requestVersioned(event: VersionedWrapperEvent, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      this.#pushVersioned(event, payload)
+        .receive("ok", (reply: unknown) => resolve(isObject(reply) ? reply : {}))
+        .receive("error", (reason: unknown) => reject(new Error(`${event} failed: ${JSON.stringify(reason)}`)))
+        .receive("timeout", () => reject(new Error(`${event} timeout`)));
+    });
+  }
+
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
     if (this.#protectReplyBasis && envelope.type === "inter_agent_message") {
@@ -1768,6 +1970,13 @@ export class ServerLink {
    *  Promise is about the tool result, and they settle at the same moment
    *  only in the accepted case. */
   sendInterAgent(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+    const payload = envelope.type === "inter_agent_message" ? envelope.payload : null;
+    if (payload && ((payload.work_control !== undefined || payload.work_id !== undefined) && !this.#workControlSupported)) {
+      return Promise.resolve({ kind: "rejected", reason: "work_control_unavailable", send_not_attempted: true });
+    }
+    if (payload && payload.delivery_intent !== undefined && payload.delivery_intent !== "normal" && this.#deliveryModes === null) {
+      return Promise.resolve({ kind: "rejected", reason: "work_control_unavailable", send_not_attempted: true });
+    }
     // Keep this check and push synchronous: Phoenix otherwise buffers an old
     // wire representation and flushes it before the next join callback runs.
     if (this.#protectReplyBasis && (replyBasisGeneration !== this.#replyBasisGeneration ||
@@ -1778,7 +1987,11 @@ export class ServerLink {
     return new Promise((resolve) => {
       push
         .receive("ok", (reply: unknown) => {
-          resolve({ kind: "accepted", stamp: this.#recordInterAgentAck(wire, reply) });
+          resolve({
+            kind: "accepted",
+            stamp: this.#recordInterAgentAck(wire, reply),
+            ...interAgentSendReplyFields(reply),
+          });
         })
         .receive("error", (reply: unknown) => {
           resolve({ kind: "rejected", ...pushRejection(reply) });

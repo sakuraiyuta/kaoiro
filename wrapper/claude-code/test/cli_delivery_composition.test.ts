@@ -3,6 +3,7 @@ import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-comm
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -397,6 +398,112 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       }
     },
   );
+
+  it("routes onPromptAdmitted through the shared submitted-stage reporter", async () => {
+    const reports: Record<string, unknown>[] = [];
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    let startHost!: () => void;
+    const ready = new Promise<void>(resolve => { startHost = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _id, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryIncarnation: () => "server-incarnation",
+          deliveryGeneration: () => "wrapper-generation",
+          reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
+          acknowledgeInterAgentDelivery: () => {}, close: () => {}, currentSessionId: () => null, send: () => {},
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          run: async () => { startHost(); await finished; },
+          send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+            const prepared = hostOptions.prepareInput(token);
+            expect(prepared).toBeDefined();
+            hostOptions.onTurnStart({ turnToken: token, kind: "wrapper_input" });
+            hostOptions.onPromptAdmitted(token);
+          },
+        } as never;
+      },
+    });
+    try {
+      await ready;
+      expect(linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "none", yield: "none", stage_reports: true });
+      await linkOptions.onInterAgentMessage(inboundEnvelope(41));
+      await vi.waitFor(() => expect(reports.map(report => report.stage)).toContain("submitted"));
+      expect(reports).toEqual(expect.arrayContaining([
+        expect.objectContaining({ incarnation: "server-incarnation", generation: "wrapper-generation", delivery_seq: 41, stage: "queued" }),
+        expect.objectContaining({ incarnation: "server-incarnation", generation: "wrapper-generation", delivery_seq: 41, stage: "submitted", handoff: "prompt_hook" }),
+      ]));
+    } finally {
+      finishHost();
+      await running;
+    }
+  });
+
+  it("default ServerLink and CLI reporter negotiate and report the first turn stages", async () => {
+    const wire = await phoenixLoopback(() => ({
+      inter_agent_reply_basis: "v1",
+      inter_agent_delivery_modes: "v1",
+      inter_agent_delivery_incarnation: "server-incarnation",
+      work_control: "v1",
+    }));
+    let hostOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let startHost!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { startHost = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, server_url: wire.url }),
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          run: async () => { startHost(); await finished; },
+          send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+            const prepared = hostOptions.prepareInput(token);
+            expect(prepared).toBeDefined();
+            hostOptions.onTurnStart({ turnToken: token, conversationIds: prepared.conversationIds, kind: "wrapper_input" });
+            hostOptions.onPromptAdmitted(token);
+            hostOptions.onTurnEnd({ turnToken: token, conversationIds: prepared.conversationIds, kind: "wrapper_input" });
+          },
+          close: () => {},
+        } as never;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(wire.joins).toBe(1));
+      expect(wire.received.find(item => item.event === "phx_join")?.payload).toMatchObject({
+        inter_agent_reply_basis: "v1",
+        inter_agent_delivery_modes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+        work_control: "v1",
+      });
+      wire.push("persona_prompt", { prompt: "system prompt" });
+      await ready;
+      wire.push("envelope", inboundEnvelope(42) as unknown as Record<string, unknown>);
+      await vi.waitFor(() => expect(wire.received.filter(item => item.event === "delivery_stage").map(item => item.payload.stage)).toEqual(["queued", "submitted", "settled"]));
+      const stages = wire.received.filter(item => item.event === "delivery_stage").map(item => item.payload);
+      expect(stages).toEqual([
+        expect.objectContaining({ incarnation: "server-incarnation", delivery_seq: 42, stage: "queued" }),
+        expect.objectContaining({ incarnation: "server-incarnation", delivery_seq: 42, stage: "submitted", handoff: "prompt_hook" }),
+        expect.objectContaining({ incarnation: "server-incarnation", delivery_seq: 42, stage: "settled", reason: "turn_end" }),
+      ]);
+    } finally {
+      finishHost();
+      await running;
+      await wire.close();
+    }
+  });
 
   it("actual entrypoint connects status, handler, and host turn-start to one acknowledgement flow", async () => {
     const acknowledgements: number[] = [];

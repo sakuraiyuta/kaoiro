@@ -18,7 +18,7 @@
 // turns inside one conversation. turn_number is monotonic per conversation
 // (server tracks them for the hard limits).
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
   DisconnectExt,
@@ -26,7 +26,14 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  DeliveryIntent,
+  DeliveryModes,
   InterAgentDeliveryStatus,
+  WorkControl,
+  WorkCheckResult,
+  WorkOpResult,
+  WorkStatusResult,
+  DeliveryStatusResult,
   WrapperBuildIdentity,
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
@@ -34,6 +41,7 @@ import { makeInterAgentMessage } from "./state.js";
 import { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
+import { workToolDescriptors, type WorkToolHandlers } from "./work_tools.js";
 import type {
   Envelope,
   EngineKind,
@@ -87,6 +95,7 @@ export interface WhoamiSnapshot {
   /** Server-observed dispatch confirmation watermark (issue #237). Omitted
    * when the server/capability cannot vouch for it. */
   inter_agent_delivery?: InterAgentDeliverySnapshot;
+  delivery_modes?: DeliveryModes | "legacy" | "pending";
   /** Own rate-limit windows (issue #244), in the same shape and keyed the
    *  same way a peer reads via `list_agents` (`DirectoryRateLimitWindow`).
    *
@@ -116,6 +125,42 @@ export type InterAgentDeliverySnapshot = InterAgentDeliveryStatus;
 /** The common ToolResult shape (tooling.ts); alias kept so the existing
  *  method signatures and tests read unchanged. */
 type InterAgentToolResult = ToolResult;
+
+function acceptedDeliveryFields(
+  acceptance: InterAgentAcceptance,
+  operationId?: string,
+): Record<string, unknown> {
+  if (acceptance.kind !== "accepted") {
+    return operationId === undefined ? {} : { operation_id: operationId };
+  }
+  return {
+    ...(acceptance.delivery_authority === undefined ? {} : { delivery_authority: acceptance.delivery_authority }),
+    ...(acceptance.delivery === undefined ? {} : { delivery: acceptance.delivery }),
+    ...(operationId === undefined && acceptance.work_control_result === undefined ? {} : {
+      work_control: {
+        ...(operationId === undefined ? {} : { operation_id: operationId }),
+        ...(acceptance.work_control_result === undefined ? {} : { result: acceptance.work_control_result }),
+      },
+    }),
+  };
+}
+
+function workOperationRejectionResult(
+  acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>,
+): InterAgentToolResult {
+  const guidance = acceptance.reason === "work_operation_deduplicated"
+    ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
+    : "Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id.";
+  return {
+    isError: true,
+    content: [{ type: "text", text: JSON.stringify({
+      error: acceptance.reason,
+      send_not_attempted: acceptance.send_not_attempted === true,
+      ...(acceptance.details ?? {}),
+      guidance,
+    }, null, 2) }],
+  };
+}
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const INTER_AGENT_TOOL_FQN = "mcp__kaoiro__send_to_agent";
@@ -350,6 +395,35 @@ export function classifyInterAgentError(
  * it to the master-approved hard maximum below for a long-running peer. */
 const DEFAULT_REPLY_TIMEOUT_MS = 300_000;
 const MAX_REPLY_TIMEOUT_MS = 300_000;
+function makeOperationId(nowMs: number): string {
+  return `op_${Math.trunc(nowMs)}_${randomBytes(16).toString("base64url")}`;
+}
+const WORK_REVISION = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const WORK_PRINCIPAL_SCHEMA = z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1).max(256) }).strict();
+const WORK_SUBJECT_SCHEMA = z.object({ hash: z.string().min(1).max(256), label: z.string().min(1).max(256) }).strict();
+const WORK_VERDICT_REF_SCHEMA = z.object({ work_id: z.string().min(1).max(128), verdict_id: z.string().min(1).max(128) }).strict();
+const OPERATION_ID = z.string().regex(/^op_[0-9]{1,16}_[A-Za-z0-9_-]{22}$/);
+const OPERATION_ID_OPTIONAL = { operation_id: OPERATION_ID.optional() };
+const EXISTING_WORK = { work_id: z.string().min(1).max(128) };
+const REVISION_WORK = { ...EXISTING_WORK, expected_revision: WORK_REVISION };
+const BASIS_WORK = { ...EXISTING_WORK, basis_revision: WORK_REVISION };
+const WORK_CONTROL_SCHEMA = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("assign"), ...OPERATION_ID_OPTIONAL, title: z.string().min(1).max(256), assignee: z.string().min(1).max(256).optional(), director: WORK_PRINCIPAL_SCHEMA.optional(), reviews: z.string().min(1).max(128).optional(), resource_scope: z.array(z.string().min(1).max(256)).max(64).optional(), requires_verdict: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal("accept_assignment"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
+  z.object({ op: z.literal("decline"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
+  z.object({ op: z.literal("revise"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK }).strict(),
+  z.object({ op: z.literal("hold"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, reason: z.string().min(1).max(512) }).strict(),
+  z.object({ op: z.literal("release"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, hold_id: z.string().min(1).max(128), subject_hash: z.string().min(1).max(256).optional() }).strict(),
+  z.object({ op: z.literal("submit"), ...OPERATION_ID_OPTIONAL, ...BASIS_WORK, subject: WORK_SUBJECT_SCHEMA }).strict(),
+  z.object({ op: z.literal("verdict"), ...OPERATION_ID_OPTIONAL, ...BASIS_WORK, subject: z.object({ work_id: z.string().min(1).max(128), hash: z.string().min(1).max(256) }).strict(), outcome: z.enum(["approve", "request_changes", "reject"]) }).strict(),
+  z.object({ op: z.literal("withdraw_verdict"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK, verdict_id: z.string().min(1).max(128) }).strict(),
+  z.object({ op: z.literal("accept_verdict"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, verdict_ref: WORK_VERDICT_REF_SCHEMA, subject_hash: z.string().min(1).max(256) }).strict(),
+  z.object({ op: z.literal("revoke_verdict"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, verdict_ref: WORK_VERDICT_REF_SCHEMA }).strict(),
+  z.object({ op: z.literal("complete"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, subject_hash: z.string().min(1).max(256) }).strict(),
+  z.object({ op: z.literal("cancel"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK }).strict(),
+  z.object({ op: z.literal("transfer"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, director: WORK_PRINCIPAL_SCHEMA.optional(), assignee: z.string().min(1).max(256).optional() }).strict(),
+  z.object({ op: z.literal("release_transfer"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, transfer_id: z.string().min(1).max(128) }).strict(),
+]);
 
 /** Maximum number of pending inbound envelopes coalesced into one SDK turn
  *  (issue #211 段階3, direction 2 — coalescing unit is same-peer, クロエ
@@ -402,6 +476,8 @@ export function canAddToCoalescedBatch(
 export const SEND_TO_AGENT_INPUT_SHAPE = {
   in_reply_to: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe("For an intentional same-turn reply, copy in_reply_to and reply_ticket together from reply_authorization."),
   reply_ticket: z.string().max(256).optional().describe("One-use authorization copied from a tool result; never predict or reuse it."),
+  // Reply authorization metadata is copied from SDK results as a whole; expiry is informational and is not sent on the wire.
+  expires_in_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   to: z
     .string()
     .min(1)
@@ -461,10 +537,21 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
     .describe(
       "Maximum synchronous wait in milliseconds when wait_for_response=true (default and maximum 300000).",
     ),
+  delivery_intent: z.enum(["normal", "early", "yield"]).optional().describe("Requested delivery mode. The server may downgrade it; non-normal requests require negotiated delivery modes."),
+  work_id: z.string().min(1).max(128).optional().describe("Work targeted by a yield. Required with delivery_intent=yield."),
+  expected_authority_epoch: WORK_REVISION.optional().describe("Authority epoch observed in the work stamp; required with delivery_intent=yield."),
+  work_control: WORK_CONTROL_SCHEMA.optional().describe("One revision-checked work operation to apply before admitting this message."),
 };
 
 /** Compiled Zod object for validation + JSON Schema derivation. */
-const SEND_TO_AGENT_SCHEMA = z.object(SEND_TO_AGENT_INPUT_SHAPE);
+const SEND_TO_AGENT_SCHEMA = z.object(SEND_TO_AGENT_INPUT_SHAPE).strict().superRefine((value, context) => {
+  if (value.delivery_intent === "yield") {
+    if (value.work_id === undefined) context.addIssue({ code: "custom", path: ["work_id"], message: "work_id is required with delivery_intent=yield" });
+    if (value.expected_authority_epoch === undefined) context.addIssue({ code: "custom", path: ["expected_authority_epoch"], message: "expected_authority_epoch is required with delivery_intent=yield" });
+  } else if (value.work_id !== undefined || value.expected_authority_epoch !== undefined) {
+    context.addIssue({ code: "custom", path: ["work_id"], message: "work_id and expected_authority_epoch require delivery_intent=yield" });
+  }
+});
 
 /** JSON Schema for the zero-argument tools. */
 const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
@@ -786,6 +873,7 @@ export interface InterAgentToolOptions {
    *  review round 2, "open track の unbounded 経路"); injectable for
    *  tests. Default {@link DEFAULT_MAX_TRACKS}. */
   maxTracks?: number;
+  workTools?: WorkToolHandlers;
 }
 
 /** Result of `invoke()`'s locked segment (issue #167 review M1) — decides
@@ -797,7 +885,7 @@ export interface InterAgentToolOptions {
  *  see `#withCidLock()`) needs to finish building the tool result. */
 type InvokeLockOutcome =
   | { kind: "local-reject"; message: string }
-  | { kind: "rejected"; message: string }
+  | { kind: "rejected"; message: string; acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }> }
   | { kind: "peer-error"; result: InterAgentToolResult }
   | {
       kind: "dispatched";
@@ -1508,6 +1596,7 @@ export class InterAgentTool {
         inputSchema: EMPTY_OBJECT_SCHEMA,
         handler: async () => this.#withReplyAdvice(await this.whoami()),
       },
+      ...(this.#options.workTools === undefined ? [] : workToolDescriptors(this.#options.workTools)),
     ];
   }
 
@@ -1563,6 +1652,7 @@ export class InterAgentTool {
       ...observed,
       build: observed.build ?? UNKNOWN_WRAPPER_BUILD_IDENTITY,
       ...(this.#options.replyBasisMode ? { inter_agent_reply_basis: this.#options.replyBasisMode() } : {}),
+      ...(this.#options.workTools ? { delivery_modes: this.#options.workTools.deliveryModes() } : {}),
     };
     return {
       content: [{ type: "text", text: JSON.stringify(withBuild, null, 2) }],
@@ -1579,6 +1669,16 @@ export class InterAgentTool {
     context?: ToolHandlerContext,
   ): Promise<InterAgentToolResult> {
     if (this.#options.canSendInterAgent?.() === false) return this.#localReplyError("admission_fail_stop");
+    const requestedIntent = args.delivery_intent ?? "normal";
+    const capabilities = this.#options.workTools;
+    if ((args.work_control !== undefined || args.work_id !== undefined) &&
+        capabilities?.workControlSupported() !== true) return this.#localReplyError("work_control_unavailable");
+    if (requestedIntent !== "normal" && capabilities?.deliveryModesSupported() !== true) {
+      return this.#localReplyError("work_control_unavailable");
+    }
+    const workControl = args.work_control === undefined
+      ? undefined
+      : { ...args.work_control, operation_id: args.work_control.operation_id ?? makeOperationId(this.#nowMs()) } as WorkControl;
     if (args.to === this.#options.config.agent_id) {
       return errorResult(
         "send_to_agent failed: cannot send to self (payload.to == agent_id)",
@@ -1775,6 +1875,10 @@ export class InterAgentTool {
           owner: { kind: "user", id: "operator" },
           new_conversation: isNewConversation,
           ...(captured && mode === "v1" ? { in_reply_to: captured.basis } : {}),
+          ...(args.delivery_intent === undefined ? {} : { delivery_intent: args.delivery_intent as DeliveryIntent }),
+          ...(args.work_id === undefined ? {} : { work_id: args.work_id }),
+          ...(args.expected_authority_epoch === undefined ? {} : { expected_authority_epoch: args.expected_authority_epoch }),
+          ...(workControl === undefined ? {} : { work_control: workControl }),
         };
 
         const envelope = makeInterAgentMessage(
@@ -2111,7 +2215,7 @@ export class InterAgentTool {
               if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
               return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message) };
             }
-            return { kind: "rejected", message };
+            return { kind: "rejected", message, acceptance };
           }
 
           return {
@@ -2137,9 +2241,13 @@ export class InterAgentTool {
     if (outcome.kind === "peer-error") {
       return outcome.result;
     }
-    if (outcome.kind !== "dispatched") {
+    if (outcome.kind === "rejected") {
+      if (outcome.acceptance.reason === "work_operation_deduplicated" || outcome.acceptance.reason === "work_outcome_unknown") {
+        return workOperationRejectionResult(outcome.acceptance);
+      }
       return errorResult(outcome.message);
     }
+    if (outcome.kind !== "dispatched") return errorResult(outcome.message);
     const { acceptance, sentTurnNumber, sent, reply, timeoutMs } = outcome;
 
     // ふじ 30-10 R3: a peer reply that has ALREADY landed is proof the
@@ -2167,23 +2275,8 @@ export class InterAgentTool {
             text:
               `send_to_agent delivery unknown: ${sent}; the server never ` +
               `acknowledged it (${acceptance.reason}). It may or may not ` +
-              `have been delivered — resending could duplicate it.`,
-          },
-        ],
-      };
-    }
-
-    if (!reply) {
-      return { content: [{ type: "text", text: sent }] };
-    }
-
-    const inbound = settledReply ?? (await reply);
-    if (!inbound) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${sent}; reply_pending=true (timeout_ms=${timeoutMs})`,
+              `have been delivered — resending could duplicate it.` +
+              (workControl === undefined ? "" : ` work_outcome_unknown; operation_id=${workControl.operation_id}; query work_op_result before retrying.`),
           },
         ],
       };
@@ -2193,7 +2286,28 @@ export class InterAgentTool {
       to: args.to,
       conversation_id: conversationId,
       turn_number: sentTurnNumber,
+      ...acceptedDeliveryFields(acceptance, workControl?.operation_id),
     };
+    if (!reply) {
+      const { to: _to, conversation_id: _conversationId, turn_number: _turnNumber, ...extra } = sentAck;
+      return Object.keys(extra).length === 0
+        ? { content: [{ type: "text", text: sent }] }
+        : { content: [{ type: "text", text: JSON.stringify({ sent: sentAck }, null, 2) }] };
+    }
+
+    const inbound = settledReply ?? (await reply);
+    if (!inbound) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${sent}; reply_pending=true (timeout_ms=${timeoutMs})` +
+              (Object.keys(sentAck).length === 3 ? "" : `\n${JSON.stringify(sentAck, null, 2)}`),
+          },
+        ],
+      };
+    }
+
     const inboundPayload = inbound.payload as Partial<InterAgentMessagePayload>;
     // issue #127: a peer-unresponsive-error notice is distinguished from an
     // ordinary reply by peer_error (not reply) so the caller can tell
@@ -2267,7 +2381,11 @@ export class InterAgentTool {
 
   #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string): InterAgentToolResult {
     this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
-    const fields = { error: acceptance.reason.slice(0, 128), message: acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details };
+    const fields = { error: acceptance.reason.slice(0, 128), message: acceptance.reason === "work_operation_deduplicated"
+      ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
+      : acceptance.reason === "work_outcome_unknown"
+      ? "The message was not sent. Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id."
+      : acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details };
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
@@ -2492,6 +2610,8 @@ function localReplyError(code: string): InterAgentToolResult {
   return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: code, send_not_attempted: true,
     guidance: code === "reply_basis_closed"
       ? "The server channel is closed. A new wrapper connection is required before sending again."
+      : code === "work_control_unavailable"
+      ? "The server did not negotiate the requested work control or delivery modes. No message or control was sent."
       : code === "invalid_reply_ticket" || code === "reply_ticket_required"
       ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
       : code === "unbound_tool_call"

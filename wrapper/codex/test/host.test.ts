@@ -362,6 +362,63 @@ function makeClient(turns: ScriptedTurn[]): {
   return { client, calls };
 }
 
+describe("exec input handoff evidence", () => {
+  it("fires after runStreamed resolves and the first iterator value arrives", async () => {
+    const order: string[] = [];
+    const ended = deferred<void>();
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        order.push("runStreamed-resolved");
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          order.push("first-value-ready");
+          yield { type: "thread.started", thread_id: "fixture" };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const client: CodexClientLike = { startThread: () => thread, resumeThread: () => thread };
+    const host = new CodexHost(CONFIG, {
+      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onTurnStart: () => order.push("turn-start"),
+      onInputHandedOff: () => order.push("input-handed-off"),
+      onTurnEnd: () => ended.resolve(),
+    });
+    const running = host.run("prompt");
+    await ended.promise;
+    expect(order.indexOf("turn-start")).toBeLessThan(order.indexOf("runStreamed-resolved"));
+    expect(order.indexOf("runStreamed-resolved")).toBeLessThan(order.indexOf("first-value-ready"));
+    expect(order.indexOf("first-value-ready")).toBeLessThan(order.indexOf("input-handed-off"));
+    expect(order.filter(value => value === "input-handed-off")).toHaveLength(1);
+    host.close();
+    await running;
+  });
+
+  it.each(["throw", "empty"] as const)("does not report handoff when first next() is %s", async behavior => {
+    let handoffs = 0;
+    const ended = deferred<void>();
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          if (behavior === "throw") throw new Error("spawn failed");
+        }
+        return { events: events() };
+      },
+    };
+    const client: CodexClientLike = { startThread: () => thread, resumeThread: () => thread };
+    const host = new CodexHost(CONFIG, {
+      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onInputHandedOff: () => { handoffs += 1; },
+      onTurnEnd: () => ended.resolve(),
+    });
+    const running = host.run("prompt");
+    await ended.promise;
+    expect(handoffs).toBe(0);
+    host.close();
+    await running;
+  });
+});
+
 describe("host-queued inter-agent input preparation (SDK backend)", () => {
   it("does not emit ready when input preparation closes the host before a skip", async () => {
     const { client } = makeClient([]);

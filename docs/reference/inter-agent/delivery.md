@@ -148,6 +148,29 @@ from the same callback, with the acknowledgement logged first. Server ledger
 status remains the confirmation source. These records omit message bodies,
 and diagnostic write failures do not change turn or acknowledgement control.
 
+## Delivery intent and staged delivery (ADR-0063)
+
+A wrapper that joins with `inter_agent_delivery_modes` and receives the `"v1"`
+echo declares its early and yield mechanisms and reports per-sequence stages.
+The server stamps the granted intent into the relayed payload and send result.
+Stages are `accepted`, `queued`, `submitted` (with mode and the named handoff
+event), optional `included` (evidence `ticket_used` in v1), `settled`,
+`unknown`, `lost`, and, on query, `expired`; a yield also has a set-once
+`yield_disposition`. Stage history is bounded and query-only, keyed by
+`(recipient, incarnation, generation, delivery_seq)` and indexed by
+`(conversation_id, turn_number)` for the sender. It remains separate from
+`delivery_ack`: an out-of-order submitted sequence joins the resolved set, is
+not retired or reported lost, and the prefix crosses it when earlier gaps close.
+Stage changes are never injected into model input.
+
+For Codex exec, `exec_input_written` means the first `iterator.next()` on
+`runStreamed(input).events` resolves with the child’s first stdout JSONL value.
+By then the SDK has spawned the child, written the input, and closed stdin;
+`runStreamed()` itself resolves before spawn. The name is historical: the
+evidence is first-event receipt. The wrapper reports stages only when the join
+reply supplies the server-issued `inter_agent_delivery_incarnation`; it never
+fabricates one.
+
 ## Related topics
 
 - [Message fields](messages.md).
