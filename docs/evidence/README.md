@@ -91,3 +91,9 @@ authority protocol ([plan](../plans/issue-429-delivery-authority-protocol.md)).
 - [2026-09-28-claude-fold-measurements.md](issue-429/2026-09-28-claude-fold-measurements.md) — E1–E4 established on SDK 0.3.280 / CLI 2.1.280 (fold text verbatim inside a `tool_result` system-reminder, fold hook identity, fresh-root fallback, `priority: now`); E5 deferred, E6 unmeasured.
 
 - [2026-09-29-claude-2-1-284-remeasurement.md](issue-429/2026-09-29-claude-2-1-284-remeasurement.md) — explicit 1M request indication and E1–E4 established on SDK 0.3.284 / CLI 2.1.284; E5 and production-settings R3 deferred.
+
+## issue-427/
+
+Claude Agent SDK 0.3.284 model-catalog rollout.
+
+- [2026-09-29-agent-sdk-0.3.284.md](claude/issue-427/2026-09-29-agent-sdk-0.3.284.md) — catalog, model-report, request-header, AGENTS-only input, and scripted state-projection observations.
