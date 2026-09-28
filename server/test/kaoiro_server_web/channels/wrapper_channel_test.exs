@@ -2622,6 +2622,88 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       _ = :sys.get_state(SessionPointers)
       assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
     end
+
+    test "an incoming envelope with both ext.effective and permission_control retains effort (issue #442)" do
+      agent_id = "test.permsync-effort-retained"
+      seed_snapshot(agent_id, "gpt-5")
+
+      socket = join_wrapper(agent_id)
+
+      cell = %{
+        "sandbox" => "danger-full-access",
+        "network_access" => true
+      }
+
+      applied = %{
+        "revision" => 0,
+        "requested" => cell,
+        "status" => "applied",
+        "constraints" => %{"approval" => "never", "enforcement" => "advisory"},
+        "submitted" => %{"revision" => 0, "requested" => cell, "execution_id" => "e0"},
+        "effective" => %{
+          "revision" => 0,
+          "requested" => cell,
+          "execution_id" => "e0",
+          "session_id" => "sess-codex-1",
+          "turn_id" => "t0",
+          "permission" => %{
+            "sandbox" => "danger-full-access",
+            "approval" => "never",
+            "enforcement" => "advisory"
+          },
+          "network_access" => true
+        }
+      }
+
+      env =
+        envelope(agent_id, "idle")
+        |> Map.put("session_id", "sess-codex-1")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "effective" => %{
+            "model" => "gpt-5",
+            "model_source" => "launch",
+            "effort" => "high",
+            "effort_source" => "launch",
+            "sandbox" => "danger-full-access",
+            "network_access" => true
+          },
+          "permission_control" => applied
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply(ref, :ok)
+
+      :ok =
+        wait_until(fn ->
+          snap = SessionPointers.get(agent_id).snapshot
+          is_map(snap) and Map.get(snap, "effort") == "high"
+        end)
+
+      pointer = SessionPointers.get(agent_id)
+      snap = pointer.snapshot
+      assert snap["effort"] == "high"
+      assert snap["effort_source"] == "launch"
+      assert snap["model"] == "gpt-5"
+      assert snap["model_source"] == "launch"
+      assert snap["sandbox"] == "danger-full-access"
+      assert snap["network_access"] == true
+      assert pointer.effort_revision != nil
+
+      # Cross-language fixture binding (#432 pattern):
+      # Write the real persisted snapshot to runner/test/fixtures/issue-442-persisted-snapshot.json
+      # and assert byte-for-byte identity to prevent drift.
+      fixture_path =
+        Path.expand("../runner/test/fixtures/issue-442-persisted-snapshot.json", File.cwd!())
+
+      encoded_snap = Jason.encode!(snap, pretty: true) <> "\n"
+
+      if File.exists?(fixture_path) do
+        assert File.read!(fixture_path) == encoded_snap
+      else
+        File.write!(fixture_path, encoded_snap)
+      end
+    end
   end
 
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do

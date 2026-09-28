@@ -1,6 +1,9 @@
 // Unit tests for the resume snapshot validate + apply helpers
 // (ADR-0014 F1 追補, resume-privilege-restoration).
 
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { EngineKind } from "@kaoiro/protocol";
 import type { ParsedSpawn } from "../src/supervisor.js";
@@ -461,6 +464,51 @@ describe("applyResumeSnapshot (藤 D1/D2 engine-aware apply)", () => {
       expect(next.networkAccess).toBe(true);
       expect(next.model).toBe("gpt-5.6-terra");
       expect(next.modelSource).toBe("config");
+    });
+  });
+
+  describe("issue #442 cross-language persisted snapshot fixture binding", () => {
+    const fixturePath = path.resolve(__dirname, "fixtures/issue-442-persisted-snapshot.json");
+
+    test("実 server が永続化した snapshot fixture を消費して effort pair を復元する (issue #442)", () => {
+      const raw = fs.readFileSync(fixturePath, "utf8");
+      const sha = crypto.createHash("sha256").update(raw).digest("hex");
+      // SHA-256 drift check (pinned to server output)
+      expect(sha).toBe("eb2b8b431d442f626b5647ebb0a2a478ea42a9c4394768880031fdcfc480b233");
+
+      const snapshot = JSON.parse(raw);
+      expect(snapshot.effort).toBe("high");
+      expect(snapshot.effort_source).toBe("launch");
+
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+      };
+
+      const applied = applyResumeSnapshot(parsed, snapshot, "codex");
+      // Explicit pick restored as a pin
+      expect(applied.effort).toBe("high");
+      expect(applied.effortSource).toBe("launch");
+      expect(applied.model).toBe("gpt-5");
+      expect(applied.modelSource).toBe("launch");
+      expect(applied.sandbox).toBe("danger-full-access");
+      expect(applied.networkAccess).toBe(true);
+    });
+
+    test("default source の場合は pin せず model 既定に委任する (operator decision, negative control)", () => {
+      const raw = fs.readFileSync(fixturePath, "utf8");
+      const snapshot = JSON.parse(raw);
+      snapshot.effort_source = "default";
+
+      const parsed: ParsedSpawn = {
+        ...makeParsed("codex"),
+      };
+
+      const applied = applyResumeSnapshot(parsed, snapshot, "codex");
+      // Default source drops effort (Case 2), delegating to model default
+      expect(applied.effort).toBeUndefined();
+      expect(applied.effortSource).toBeUndefined();
+      expect(applied.model).toBe("gpt-5");
+      expect(applied.modelSource).toBe("launch");
     });
   });
 });

@@ -84,9 +84,27 @@ defmodule KaoiroServer.SessionPointers do
   effort is not a "committed effort change". `launch_defaults` in
   `agents_channel.ex` uses this to pick the most recently effort-set agent
   across a persona's history.
+
+  Callers performing a partial observation projection (such as
+  `record_confirmed_permission_snapshot/3`) that must not touch the replace
+  pair pass `preserve_replace_fields: true` in `opts`. Full effective reports
+  from the wrapper pass no option (default `preserve_replace_fields: false`),
+  keeping the #305 M4 absent-clears-pair semantics (issue #442).
   """
-  def record_snapshot(agent_id, snapshot, server \\ __MODULE__) do
-    GenServer.cast(server, {:record_snapshot, agent_id, snapshot})
+  def record_snapshot(agent_id, snapshot) do
+    record_snapshot(agent_id, snapshot, [], __MODULE__)
+  end
+
+  def record_snapshot(agent_id, snapshot, server) when is_atom(server) or is_pid(server) do
+    record_snapshot(agent_id, snapshot, [], server)
+  end
+
+  def record_snapshot(agent_id, snapshot, opts) when is_list(opts) do
+    record_snapshot(agent_id, snapshot, opts, __MODULE__)
+  end
+
+  def record_snapshot(agent_id, snapshot, opts, server) when is_list(opts) do
+    GenServer.cast(server, {:record_snapshot, agent_id, snapshot, opts})
   end
 
   @doc "Latest pointer `%{session_id, cwd, engine, snapshot, effort_revision}` for the agent, or nil."
@@ -274,6 +292,10 @@ defmodule KaoiroServer.SessionPointers do
   end
 
   def handle_cast({:record_snapshot, agent_id, snapshot}, state) do
+    handle_cast({:record_snapshot, agent_id, snapshot, []}, state)
+  end
+
+  def handle_cast({:record_snapshot, agent_id, snapshot, opts}, state) do
     case sanitize_snapshot(snapshot) do
       nil ->
         # Non-map snapshot: defensive drop (fail-closed). The wrapper_channel
@@ -289,10 +311,10 @@ defmodule KaoiroServer.SessionPointers do
             {:noreply, state}
 
           existing ->
-            merged = merge_snapshot(existing.snapshot || %{}, sanitized)
+            merged = merge_snapshot(existing.snapshot || %{}, sanitized, opts)
 
             {effort_revision, next_effort_revision} =
-              bump_effort_revision(existing, merged, state.next_effort_revision)
+              bump_effort_revision(existing, merged, state.next_effort_revision, opts)
 
             new_pointer = %{
               existing
@@ -383,7 +405,8 @@ defmodule KaoiroServer.SessionPointers do
   # additionally re-validates effort at read time (defensive skip of
   # malformed/empty entries), so a revision left stale by such a transition
   # is simply not selected there rather than pointing at nothing.
-  defp bump_effort_revision(existing, merged, next_revision) do
+  defp bump_effort_revision(existing, merged, next_revision, opts) do
+    preserve? = Keyword.get(opts, :preserve_replace_fields, false) == true
     old_snapshot = existing.snapshot || %{}
     old_pair = {Map.get(old_snapshot, "effort"), Map.get(old_snapshot, "effort_source")}
     new_effort = Map.get(merged, "effort")
@@ -394,7 +417,7 @@ defmodule KaoiroServer.SessionPointers do
       valid_new_effort? and old_pair != new_pair ->
         {next_revision, next_revision + 1}
 
-      is_nil(existing.effort_revision) and valid_new_effort? ->
+      not preserve? and is_nil(existing.effort_revision) and valid_new_effort? ->
         {next_revision, next_revision + 1}
 
       true ->
@@ -440,10 +463,19 @@ defmodule KaoiroServer.SessionPointers do
   # `sanitized` on top preserves every field `sanitized` omits EXCEPT
   # `@snapshot_replace_fields`, which `sanitized` decides outright (absent
   # there means absent in the result, i.e. cleared).
-  defp merge_snapshot(existing, sanitized) do
-    existing
-    |> Map.drop(@snapshot_replace_fields)
-    |> Map.merge(sanitized)
+  # Callers performing a partial projection pass `preserve_replace_fields: true`
+  # in opts to retain existing effort/effort_source (issue #442).
+  defp merge_snapshot(existing, sanitized, opts) do
+    preserve? = Keyword.get(opts, :preserve_replace_fields, false) == true
+
+    base =
+      if preserve? do
+        existing
+      else
+        Map.drop(existing, @snapshot_replace_fields)
+      end
+
+    Map.merge(base, sanitized)
   end
 
   defp sanitize_snapshot(snapshot) when is_map(snapshot) do

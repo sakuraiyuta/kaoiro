@@ -1,0 +1,8 @@
+{
+  "effort": "high",
+  "effort_source": "launch",
+  "model": "gpt-5",
+  "model_source": "launch",
+  "network_access": true,
+  "sandbox": "danger-full-access"
+}

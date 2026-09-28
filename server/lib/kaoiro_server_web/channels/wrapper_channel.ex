@@ -2231,7 +2231,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     SessionPointers.record_snapshot(
       agent_id,
       %{"sandbox" => sandbox, "network_access" => network_access}
-      |> put_snapshot_approval(approval)
+      |> put_snapshot_approval(approval),
+      preserve_replace_fields: true
     )
   end
 

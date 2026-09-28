@@ -9,6 +9,8 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
+import fs from "node:fs";
+import path from "node:path";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -2137,6 +2139,84 @@ describe("CodexHost", () => {
       expect(host.statusExtSnapshot().effort_reset).toBeUndefined();
       await runOneTurn(host, "hi", client);
       expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
+    });
+
+    it("issue #442: 実 server が永続化した snapshot fixture の effort が初回 dispatch に届く", async () => {
+      const fixturePath = path.resolve(__dirname, "../../../runner/test/fixtures/issue-442-persisted-snapshot.json");
+      const raw = fs.readFileSync(fixturePath, "utf8");
+      const snapshot = JSON.parse(raw);
+      expect(snapshot.effort).toBe("high");
+      expect(snapshot.effort_source).toBe("launch");
+
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "thread-442" }, usageEvent()],
+      ]);
+
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: snapshot.model,
+          effort: snapshot.effort,
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: snapshot.model_source,
+          effortSource: snapshot.effort_source,
+          resumeSnapshot: snapshot,
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+
+      await runOneTurn(host, "hi", client);
+
+      // 初回 dispatch に明示 pick された effort が届く
+      expect(calls.options[0]?.modelReasoningEffort).toBe("high");
+      // effort_reset は engage しない (適合モデル)
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(false);
+    });
+
+    it("issue #442 負の対照: カタログ不適合モデルとの組合せでは Phase-23 reset が作動する", async () => {
+      const fixturePath = path.resolve(__dirname, "../../../runner/test/fixtures/issue-442-persisted-snapshot.json");
+      const raw = fs.readFileSync(fixturePath, "utf8");
+      const snapshot = JSON.parse(raw);
+      // luna は ultra 不適合 (plus プラン)
+      snapshot.model = "gpt-5.6-luna";
+      snapshot.effort = "ultra";
+
+      const states: Envelope[] = [];
+      const { client, calls } = makeClient([
+        [{ type: "thread.started", thread_id: "thread-442-neg" }, usageEvent()],
+      ]);
+
+      const host = new CodexHost(
+        {
+          ...CONFIG,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: "plus",
+          model: snapshot.model,
+          effort: snapshot.effort,
+        },
+        {
+          onState: (event) => states.push(event),
+          appendSystemPrompt: "p",
+          modelSource: snapshot.model_source,
+          effortSource: snapshot.effort_source,
+          resumeSnapshot: snapshot,
+          codexFactory: () => client,
+          now: () => "T",
+        },
+      );
+
+      await runOneTurn(host, "hi", client);
+
+      // 不適合なので reset が発動し、dispatch で skip される
+      expect(calls.options[0]?.modelReasoningEffort).toBeUndefined();
+      expect(states.some((e) => e.ext.effort_reset === true)).toBe(true);
     });
   });
 

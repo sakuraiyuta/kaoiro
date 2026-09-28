@@ -813,4 +813,102 @@ defmodule KaoiroServer.SessionPointersTest do
       GenServer.stop(name2)
     end
   end
+
+  describe "preserve_replace_fields (issue #442)" do
+    test "preserve_replace_fields: true の部分更新は既存の effort / effort_source を保持する", %{server: server} do
+      SessionPointers.record("a.preserve.1", "s1", "/w", "codex", server)
+
+      SessionPointers.record_snapshot(
+        "a.preserve.1",
+        %{"model" => "gpt-5", "effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      assert %{snapshot: %{"effort" => "high", "effort_source" => "launch"}} =
+               SessionPointers.get("a.preserve.1", server)
+
+      # Permission observation partial update with preserve_replace_fields: true
+      SessionPointers.record_snapshot(
+        "a.preserve.1",
+        %{"sandbox" => "danger-full-access", "network_access" => true},
+        [preserve_replace_fields: true],
+        server
+      )
+
+      assert %{
+               snapshot: %{
+                 "model" => "gpt-5",
+                 "effort" => "high",
+                 "effort_source" => "launch",
+                 "sandbox" => "danger-full-access",
+                 "network_access" => true
+               }
+             } = SessionPointers.get("a.preserve.1", server)
+    end
+
+    test "preserve_replace_fields: false (既定) の更新は effort absent なら消去する (issue #305 M4)", %{
+      server: server
+    } do
+      SessionPointers.record("a.preserve.2", "s2", "/w", "claude-code", server)
+
+      SessionPointers.record_snapshot(
+        "a.preserve.2",
+        %{"model" => "opus", "effort" => "high", "effort_source" => "launch"},
+        server
+      )
+
+      assert %{snapshot: %{"effort" => "high"}} = SessionPointers.get("a.preserve.2", server)
+
+      # Full report omitting effort clears the replace pair
+      SessionPointers.record_snapshot(
+        "a.preserve.2",
+        %{"model" => "haiku"},
+        server
+      )
+
+      %{snapshot: snap} = SessionPointers.get("a.preserve.2", server)
+      assert snap["model"] == "haiku"
+      refute Map.has_key?(snap, "effort")
+      refute Map.has_key?(snap, "effort_source")
+    end
+
+    test "legacy pointer (effort_revision nil) に対する preserve_replace_fields: true の部分更新は revision を進めない (ふじ S1)",
+         %{server: server, path: path} do
+      :ok = GenServer.stop(server)
+
+      # Seed legacy DETS row with valid effort but nil effort_revision
+      {:ok, table} = :dets.open_file(:legacy_test_dets, file: String.to_charlist(path))
+
+      :ok =
+        :dets.insert(
+          table,
+          {"a.legacy.partial", "s", "/w", nil, %{"effort" => "high", "effort_source" => "launch"},
+           nil}
+        )
+
+      :ok = :dets.close(table)
+
+      name2 = :"sp_legacy_partial_#{System.unique_integer([:positive])}"
+      {:ok, _pid} = SessionPointers.start_link(name: name2, path: path)
+
+      assert %{effort_revision: nil, snapshot: %{"effort" => "high"}} =
+               SessionPointers.get("a.legacy.partial", name2)
+
+      # Partial update with preserve_replace_fields: true should NOT advance revision
+      SessionPointers.record_snapshot(
+        "a.legacy.partial",
+        %{"sandbox" => "read-only"},
+        [preserve_replace_fields: true],
+        name2
+      )
+
+      assert %{effort_revision: nil, snapshot: snap} =
+               SessionPointers.get("a.legacy.partial", name2)
+
+      assert snap["effort"] == "high"
+      assert snap["sandbox"] == "read-only"
+
+      GenServer.stop(name2)
+    end
+  end
 end
