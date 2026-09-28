@@ -314,14 +314,17 @@ class: a required persistence var missing from compose can silently escape
 backup).
 
 A newly added store has a narrower `never_existed` outcome. The OLD image
-must answer its manifest probe and omit that store; `docker exec <container>
-test -e <old-effective-path>` must find no file; and the resolved compose
+must answer its manifest probe and omit that store; `docker exec` runs the
+container's Debian `stat` with `LC_ALL=C` and must report `No such file or
+directory` for that exact old effective path; and the resolved compose
 declaration must put the new path under the `/var/lib/kaoiro` named volume.
 Only then does `update` accept the mismatch and record
 `first_application: "never_existed"`, `file_probe_path`, and
 `file_probe_result: "absent"` in that store's `env_consistency` entry. A
 present file still requires 5-b; an old image that cannot answer its manifest
-does not qualify; and a failed file probe aborts rather than assuming absence.
+does not qualify. Permission denied, command failure, or an unrecognized probe
+answer records `file_probe_result: "undetermined"` with `file_probe_reason` in
+the error detail and aborts before the stop window; it never proves absence.
 This exception does not change the existing path-equality check for stores
 already at the compose location.
 
@@ -425,7 +428,10 @@ absent, the ledger is already lost.** Record this and let the operator decide;
 **do not silently create an empty ledger**. For a newly introduced store, an
 absent file is `never_existed` only after all three observations in step (2)
 are recorded. Such a store has no old data to evacuate; a present file or an
-old image that lists the store still needs migration or investigation.
+old image that lists the store still needs migration or investigation. If the
+probe says `undetermined`, inspect the recorded reason and restore path
+visibility or the probe command before retrying; it does not authorize an
+empty store or a 5-b copy.
 
 **Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
 reference-only** — the target compose's own `environment:` entry is what
