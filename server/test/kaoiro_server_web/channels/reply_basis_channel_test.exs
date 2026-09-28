@@ -1,6 +1,6 @@
 defmodule KaoiroServerWeb.ReplyBasisChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
-  alias KaoiroServer.{AgentDirectory, AgentStates, ConversationStates}
+  alias KaoiroServer.{AgentDirectory, AgentStates, ConversationStates, DeliveryStates}
 
   defp envelope(agent_id, state) do
     %{
@@ -165,5 +165,56 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
     assert ConversationStates.get(cid).ordinary_turns == %{b => 3}
     ref = push(sender, "envelope", inter_envelope(a, b, cid: cid, turn: 4))
     assert_reply ref, :error, %{reason: "invalid_reply_basis"}
+  end
+
+  test "V8a internal notices reject delivery intent before admission" do
+    suffix = System.unique_integer([:positive])
+    a = "test.notice-intent-a-#{suffix}"
+    b = "test.notice-intent-b-#{suffix}"
+    modes = %{"version" => "v1", "early" => "fold", "yield" => "none", "stage_reports" => true}
+
+    params = fn id ->
+      %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_generation" => id,
+        "delivery_resync" => "skip-v1",
+        "inter_agent_reply_basis" => "v1",
+        "inter_agent_delivery_modes" => modes
+      }
+    end
+
+    on_exit(fn ->
+      DeliveryStates.delete(b)
+      Enum.each([a, b], &AgentDirectory.delete/1)
+    end)
+
+    sender = join_wrapper(a, "default", params.(a))
+    recipient = join_wrapper(b, "default", params.(b))
+    assert_reply push(sender, "envelope", envelope(a, "idle")), :ok
+    assert_reply push(recipient, "envelope", envelope(b, "idle")), :ok
+
+    first = inter_envelope(b, a)
+    cid = first["payload"]["conversation_id"]
+    assert_reply push(recipient, "envelope", put_in(first, ["payload", "in_reply_to"], 0)), :ok
+
+    notice =
+      inter_envelope(a, b,
+        cid: cid,
+        turn: 2,
+        new_conversation: false,
+        error: %{"code" => "interrupted", "message" => "the peer's turn was interrupted"},
+        body: "peer error (interrupted): the peer's turn was interrupted"
+      )
+      |> put_in(["payload", "notice_type"], "turn_failure")
+
+    before = ConversationStates.get(cid)
+    assert {0, 0} = DeliveryStates.pending_early(a, b)
+
+    for intent <- ~w(early yield) do
+      ref = push(sender, "envelope", put_in(notice, ["payload", "delivery_intent"], intent))
+      assert_reply ref, :error, %{reason: "invalid_internal_notice"}
+      assert ConversationStates.get(cid) == before
+      assert {0, 0} = DeliveryStates.pending_early(a, b)
+    end
   end
 end

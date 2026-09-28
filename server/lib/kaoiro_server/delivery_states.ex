@@ -101,6 +101,21 @@ defmodule KaoiroServer.DeliveryStates do
   def get(agent_id, server \\ __MODULE__) when is_binary(agent_id),
     do: GenServer.call(server, {:get, agent_id})
 
+  def incarnation(agent_id, server \\ __MODULE__) when is_binary(agent_id),
+    do: GenServer.call(server, {:incarnation, agent_id})
+
+  def report_stage(agent_id, generation, owner, report, server \\ __MODULE__),
+    do: GenServer.call(server, {:report_stage, agent_id, generation, owner, report})
+
+  def message_status(sender, conversation_id, turn_number, server \\ __MODULE__),
+    do: GenServer.call(server, {:message_status, sender, conversation_id, turn_number})
+
+  def pending_early(sender, recipient, server \\ __MODULE__),
+    do: GenServer.call(server, {:pending_early, sender, recipient})
+
+  def owns_delivery?(agent_id, generation, owner, incarnation, server \\ __MODULE__),
+    do: GenServer.call(server, {:owns_delivery, agent_id, generation, owner, incarnation})
+
   def all(server \\ __MODULE__), do: GenServer.call(server, :all)
 
   @doc "A bounded join-time projection; the DETS-backed observation store is unchanged."
@@ -158,10 +173,18 @@ defmodule KaoiroServer.DeliveryStates do
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
 
+    entries = load_entries(table)
+
+    stages =
+      Enum.reduce(entries, %{}, fn {_, entry}, acc ->
+        Map.merge(acc, entry.stage_history)
+      end)
+
     {:ok,
      %{
        table: table,
-       entries: load_entries(table),
+       entries: entries,
+       stages: stages,
        owners: %{},
        reservations: %{},
        losses: load_losses(table)
@@ -200,7 +223,7 @@ defmodule KaoiroServer.DeliveryStates do
 
     entry =
       if entry.resync,
-        do: %{entry | acked_seq: entry.issued_seq, pending_since: nil, skipped: []},
+        do: %{entry | acked_seq: entry.issued_seq, pending_since: nil, skipped: [], resolved: []},
         else: entry
 
     entry = Map.put(entry, :resync, false)
@@ -228,7 +251,8 @@ defmodule KaoiroServer.DeliveryStates do
           generation: generation,
           issued_seq: issued,
           acked_seq: issued,
-          pending_since: nil
+          pending_since: nil,
+          stage_history: if(old, do: old.stage_history, else: %{})
         })
       end
       |> Map.put(:resync, true)
@@ -265,7 +289,14 @@ defmodule KaoiroServer.DeliveryStates do
       true ->
         requested = for [first, last] <- ranges, seq <- first..last, do: seq
         previous = MapSet.new(entry.skipped)
-        added = Enum.reject(requested, &(&1 <= entry.acked_seq or MapSet.member?(previous, &1)))
+        resolved = MapSet.new(entry.resolved)
+
+        added =
+          Enum.reject(
+            requested,
+            &(&1 <= entry.acked_seq or MapSet.member?(previous, &1) or
+                MapSet.member?(resolved, &1))
+          )
 
         next = %{
           entry
@@ -320,12 +351,13 @@ defmodule KaoiroServer.DeliveryStates do
     if owns_recovery?(state, agent_id, generation, owner) do
       entry = state.entries[agent_id]
       already_skipped = MapSet.new(entry.skipped)
+      resolved = MapSet.new(entry.resolved)
 
       unresolved =
         if entry.acked_seq < entry.issued_seq do
           Enum.reject(
             (entry.acked_seq + 1)..entry.issued_seq,
-            &MapSet.member?(already_skipped, &1)
+            &(MapSet.member?(already_skipped, &1) or MapSet.member?(resolved, &1))
           )
         else
           []
@@ -375,7 +407,8 @@ defmodule KaoiroServer.DeliveryStates do
      %{
        state
        | entries: Map.delete(state.entries, agent_id),
-         owners: Map.delete(state.owners, agent_id)
+         owners: Map.delete(state.owners, agent_id),
+         stages: drop_agent_stages(state.stages, agent_id)
      }}
   end
 
@@ -387,7 +420,7 @@ defmodule KaoiroServer.DeliveryStates do
       entry == nil or not entry.resync ->
         {:reply, {:ok, nil}, state}
 
-      map_size(entry.metadata) + used >= 1000 ->
+      map_size(entry.metadata) + length(entry.resolved) + used >= 1000 ->
         {:reply, {:error, :delivery_backlog}, state}
 
       true ->
@@ -417,6 +450,123 @@ defmodule KaoiroServer.DeliveryStates do
 
   def handle_call({:issue_synthetic, agent_id, descriptor}, _from, state),
     do: issue_with_metadata(agent_id, descriptor, state)
+
+  def handle_call({:owns_delivery, agent_id, generation, owner, incarnation}, _from, state) do
+    entry = state.entries[agent_id]
+
+    result =
+      owns_recovery?(state, agent_id, generation, owner) and
+        entry.incarnation == incarnation
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:message_status, sender, cid, turn}, _from, state) do
+    state = prune_stages(state)
+
+    record =
+      Enum.find_value(state.stages, fn {_key, by_seq} ->
+        Enum.find_value(by_seq, fn {_seq, stage} ->
+          if (is_nil(sender) or stage.sender == sender) and stage.conversation_id == cid and
+               stage.turn_number == turn,
+             do: stage
+        end)
+      end)
+
+    {:reply, if(record, do: {:ok, record}, else: {:ok, %{status: "expired"}}), state}
+  end
+
+  def handle_call({:pending_early, sender, recipient}, _from, state) do
+    entry = state.entries[recipient]
+    by_seq = if entry, do: state.stages[{recipient, entry.incarnation}] || %{}, else: %{}
+
+    pending =
+      for {_seq, record} <- by_seq,
+          record[:mode] == "early" and
+            not Enum.any?(
+              ~w(submitted settled unknown lost),
+              &Map.has_key?(record.stages, &1)
+            ),
+          do: record
+
+    {:reply, {Enum.count(pending, &(&1.sender == sender)), length(pending)}, state}
+  end
+
+  def handle_call({:report_stage, agent_id, generation, owner, report}, _from, state) do
+    entry = state.entries[agent_id]
+    seq = report["delivery_seq"]
+    key = if entry, do: {agent_id, entry.incarnation}
+    stage = if key, do: get_in(state.stages, [key, seq])
+    disposition = report["yield_disposition"]
+
+    cond do
+      entry != nil and report["incarnation"] != entry.incarnation ->
+        {:reply, {:error, :stale_channel}, state}
+
+      not owns_recovery?(state, agent_id, generation, owner) ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      report["generation"] != generation or
+        not is_integer(seq) or seq <= 0 or seq > entry.issued_seq or stage == nil ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      report["stage"] not in ~w(queued submitted included settled unknown) ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      not valid_stage_report?(report) ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      stage[:yield_disposition] != nil and disposition != nil and
+          disposition != stage.yield_disposition ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      true ->
+        at = report["at"] || DateTime.utc_now() |> DateTime.to_iso8601()
+        stages = Map.put_new(stage.stages, report["stage"], at)
+
+        next_stage =
+          stage
+          |> Map.put(:stages, stages)
+          |> Map.put(:changed_at, at)
+          |> maybe_put(:yield_disposition, disposition)
+          |> maybe_put(:mode, report["mode"])
+          |> maybe_put(:handoff, report["handoff"])
+          |> maybe_put(:evidence, report["evidence"])
+          |> maybe_put(:reason, report["reason"])
+
+        histories =
+          entry.stage_history
+          |> Map.put(key, Map.put(entry.stage_history[key] || %{}, seq, next_stage))
+          |> bound_stage_histories()
+
+        resolving? =
+          report["stage"] == "submitted" and seq > entry.acked_seq and
+            seq not in entry.resolved and seq not in entry.skipped
+
+        next_entry = %{entry | stage_history: histories}
+
+        next_entry =
+          if resolving?,
+            do: %{
+              next_entry
+              | metadata: Map.delete(entry.metadata, seq),
+                resolved: [seq | entry.resolved]
+            },
+            else: next_entry
+
+        with :ok <- :dets.insert(state.table, entry_record(agent_id, next_entry)),
+             :ok <- :dets.sync(state.table) do
+          {:reply, :ok,
+           %{
+             state
+             | entries: Map.put(state.entries, agent_id, next_entry),
+               stages: replace_agent_stages(state.stages, agent_id, histories)
+           }}
+        else
+          error -> {:reply, {:error, error}, state}
+        end
+    end
+  end
 
   def handle_call(:pending_losses, _from, state), do: {:reply, Map.values(state.losses), state}
 
@@ -459,6 +609,9 @@ defmodule KaoiroServer.DeliveryStates do
 
   def handle_call({:get, agent_id}, _from, state),
     do: {:reply, state.entries[agent_id] && public(state.entries[agent_id]), state}
+
+  def handle_call({:incarnation, agent_id}, _from, state),
+    do: {:reply, get_in(state.entries, [agent_id, :incarnation]), state}
 
   def handle_call(:all, _from, state),
     do: {:reply, Map.new(state.entries, fn {id, entry} -> {id, public(entry)} end), state}
@@ -533,8 +686,41 @@ defmodule KaoiroServer.DeliveryStates do
             pending_since: entry.pending_since || DateTime.to_iso8601(DateTime.utc_now())
         }
 
-        persist(state.table, agent_id, next)
-        {:reply, seq, %{state | entries: Map.put(state.entries, agent_id, next)}}
+        key = {agent_id, next.incarnation}
+
+        histories =
+          if is_map(descriptor) do
+            at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+            stage = %{
+              sender: descriptor[:sender],
+              conversation_id: descriptor[:conversation_id],
+              turn_number: descriptor[:turn_number],
+              recipient: agent_id,
+              incarnation: next.incarnation,
+              generation: next.generation,
+              delivery_seq: seq,
+              stages: %{"accepted" => at},
+              changed_at: at,
+              mode: descriptor[:mode]
+            }
+
+            Map.update(entry.stage_history, key, %{seq => stage}, &Map.put(&1, seq, stage))
+          else
+            entry.stage_history
+          end
+
+        histories = bound_stage_histories(histories)
+        next = %{next | stage_history: histories}
+        :ok = :dets.insert(state.table, entry_record(agent_id, next))
+        :ok = :dets.sync(state.table)
+
+        {:reply, seq,
+         %{
+           state
+           | entries: Map.put(state.entries, agent_id, next),
+             stages: replace_agent_stages(state.stages, agent_id, histories)
+         }}
     end
   end
 
@@ -564,6 +750,26 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   defp record_losses(agent_id, entry, seqs, reason, state) do
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+    key = {agent_id, entry.incarnation}
+    by_seq = entry.stage_history[key] || %{}
+
+    by_seq =
+      Enum.reduce(seqs, by_seq, fn seq, records ->
+        Map.update(records, seq, nil, fn record ->
+          %{record | stages: Map.put_new(record.stages, "lost", at), changed_at: at}
+        end)
+      end)
+
+    by_seq = Map.reject(by_seq, fn {_seq, record} -> is_nil(record) end)
+
+    histories =
+      entry.stage_history
+      |> Map.put(key, by_seq)
+      |> bound_stage_histories()
+
+    state = %{state | stages: replace_agent_stages(state.stages, agent_id, histories)}
+
     losses =
       Enum.reduce(seqs, state.losses, fn seq, acc ->
         case entry.metadata[seq] do
@@ -594,12 +800,14 @@ defmodule KaoiroServer.DeliveryStates do
         end
       end)
 
-    {%{entry | metadata: Map.drop(entry.metadata, seqs)}, %{state | losses: losses}}
+    {%{entry | metadata: Map.drop(entry.metadata, seqs), stage_history: histories},
+     %{state | losses: losses}}
   end
 
   defp persist_with_losses(state, agent_id, entry) do
     # The retirement and its notification intent share one DETS insertion.
     records = Enum.map(state.losses, fn {id, loss} -> {{:loss, id}, loss} end)
+
     :ok = :dets.insert(state.table, [entry_record(agent_id, entry) | records])
     :ok = :dets.sync(state.table)
   end
@@ -615,13 +823,116 @@ defmodule KaoiroServer.DeliveryStates do
     )
   end
 
+  defp valid_stage_report?(report) do
+    valid_time?(report["at"]) and
+      (report["mode"] == nil or report["mode"] in ~w(normal early yield)) and
+      (report["handoff"] == nil or
+         report["handoff"] in ~w(prompt_hook fold_hook exec_input_written tool_result)) and
+      (report["evidence"] == nil or report["evidence"] == "ticket_used") and
+      (report["reason"] == nil or is_binary(report["reason"])) and
+      (report["stage"] != "submitted" or is_binary(report["handoff"])) and
+      (report["stage"] != "included" or report["evidence"] == "ticket_used") and
+      valid_yield_disposition?(report["yield_disposition"])
+  end
+
+  defp valid_yield_disposition?(nil), do: true
+
+  defp valid_yield_disposition?(%{"outcome" => outcome, "at" => at} = value)
+       when outcome in ~w(cut downgraded) do
+    valid_time?(at) and (value["reason"] == nil or is_binary(value["reason"]))
+  end
+
+  defp valid_yield_disposition?(_), do: false
+
+  defp valid_time?(value) when is_binary(value),
+    do: match?({:ok, _, _}, DateTime.from_iso8601(value))
+
+  defp valid_time?(_), do: false
+
+  defp bound_stage_histories(histories) do
+    config = Application.get_env(:kaoiro_server, :delivery_intent, [])
+    now = System.system_time(:millisecond)
+    max_age = Keyword.get(config, :delivery_stage_max_age_ms, 86_400_000)
+    settled_age = Keyword.get(config, :delivery_stage_retention_ms, 3_600_000)
+    max_records = Keyword.get(config, :delivery_stage_max_records, 2_000)
+
+    live =
+      histories
+      |> Enum.flat_map(fn {key, by_seq} ->
+        Enum.map(by_seq, fn {seq, record} -> {key, seq, record} end)
+      end)
+      |> Enum.reject(fn {_key, _seq, record} ->
+        changed = stage_time_ms(record.changed_at)
+
+        terminal? =
+          Map.has_key?(record.stages, "settled") or
+            Map.has_key?(record.stages, "lost")
+
+        now - changed > if(terminal?, do: settled_age, else: max_age)
+      end)
+
+    overflow = max(length(live) - max_records, 0)
+
+    live
+    |> Enum.sort_by(fn {_key, _seq, record} ->
+      {if(Map.has_key?(record.stages, "settled") or Map.has_key?(record.stages, "lost"),
+         do: 0,
+         else: 1
+       ), stage_time_ms(record.changed_at)}
+    end)
+    |> Enum.drop(overflow)
+    |> Enum.reduce(%{}, fn {key, seq, record}, acc ->
+      Map.update(acc, key, %{seq => record}, &Map.put(&1, seq, record))
+    end)
+  end
+
+  defp stage_time_ms(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, time, _offset} -> DateTime.to_unix(time, :millisecond)
+      _ -> 0
+    end
+  end
+
+  defp prune_stages(state) do
+    entries =
+      Map.new(state.entries, fn {agent_id, entry} ->
+        histories = bound_stage_histories(entry.stage_history)
+
+        if histories != entry.stage_history do
+          entry = %{entry | stage_history: histories}
+          persist(state.table, agent_id, entry)
+          {agent_id, entry}
+        else
+          {agent_id, entry}
+        end
+      end)
+
+    stages =
+      Enum.reduce(entries, %{}, fn {_, entry}, acc ->
+        Map.merge(acc, entry.stage_history)
+      end)
+
+    %{state | entries: entries, stages: stages}
+  end
+
+  defp drop_agent_stages(stages, agent_id),
+    do: Map.reject(stages, fn {{id, _incarnation}, _by_seq} -> id == agent_id end)
+
+  defp replace_agent_stages(stages, agent_id, histories),
+    do: Map.merge(drop_agent_stages(stages, agent_id), histories)
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   defp recovery_defaults do
     %{
       schema_version: 1,
       incarnation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
       metadata: %{},
+      stage_history: %{},
       resync: false,
       skipped: [],
+      resolved: [],
       lost_count: 0,
       last_loss: nil
     }
@@ -654,12 +965,14 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp advance_skipped(entry) do
     skipped = MapSet.new(entry.skipped)
-    acked = consume_skipped(entry.acked_seq, skipped)
+    resolved = MapSet.new(entry.resolved)
+    acked = consume_skipped(entry.acked_seq, MapSet.union(skipped, resolved))
 
     %{
       entry
       | acked_seq: acked,
         skipped: Enum.reject(entry.skipped, &(&1 <= acked)),
+        resolved: Enum.reject(entry.resolved, &(&1 <= acked)),
         pending_since: if(acked == entry.issued_seq, do: nil, else: entry.pending_since)
     }
   end
@@ -684,8 +997,10 @@ defmodule KaoiroServer.DeliveryStates do
        :schema_version,
        :incarnation,
        :metadata,
+       :stage_history,
        :resync,
        :skipped,
+       :resolved,
        :lost_count,
        :last_loss
      ])}

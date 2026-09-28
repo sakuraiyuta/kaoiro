@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import KaoiroServer.OAuthAllowlistFixture
+  import KaoiroServer.TestTeardown
   import ExUnit.CaptureLog
 
   alias KaoiroServer.AgentDirectory
@@ -109,6 +110,238 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       )
 
     {reply, socket}
+  end
+
+  test "delivery join echoes current incarnation after same-generation reconnect" do
+    Process.flag(:trap_exit, true)
+    id = "test.delivery-incarnation-join"
+    on_exit(fn -> DeliveryStates.delete(id) end)
+
+    params = %{
+      "inter_agent_delivery_ack" => "dispatch-v1",
+      "delivery_resync" => "skip-v1",
+      "delivery_generation" => "generation"
+    }
+
+    {first, socket} = join_wrapper_with_reply(id, "default", params)
+    assert is_binary(first["inter_agent_delivery_incarnation"])
+    assert first["inter_agent_delivery_incarnation"] == DeliveryStates.incarnation(id)
+    :ok = close(socket)
+    {second, _socket} = join_wrapper_with_reply(id, "default", params)
+    assert second["inter_agent_delivery_incarnation"] == first["inter_agent_delivery_incarnation"]
+  end
+
+  test "V46b old incarnation cannot claim a current yield token" do
+    Process.flag(:trap_exit, true)
+    recipient = "test.yield-incarnation-recipient"
+    director = "test.yield-incarnation-director"
+    cid = "yield-incarnation-#{System.unique_integer([:positive])}"
+    on_exit(fn -> DeliveryStates.delete(recipient) end)
+
+    {reply, channel} =
+      join_wrapper_with_reply(recipient, "default", %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_resync" => "skip-v1",
+        "delivery_generation" => "generation"
+      })
+
+    incarnation = reply["inter_agent_delivery_incarnation"]
+    director_principal = %{"kind" => "agent", "id" => director}
+    recipient_principal = %{"kind" => "agent", "id" => recipient}
+
+    op_id = fn ->
+      "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+    end
+
+    assert {:ok, %{work: nomination}} =
+             KaoiroServer.WorkStore.apply(
+               director_principal,
+               %{"op" => "assign", "operation_id" => op_id.(), "title" => cid},
+               %{
+                 recipient: recipient,
+                 conversation_id: cid,
+                 turn_number: 1,
+                 new_conversation?: true
+               }
+             )
+
+    assert {:ok, %{work: active}} =
+             KaoiroServer.WorkStore.apply(
+               recipient_principal,
+               %{
+                 "op" => "accept_assignment",
+                 "operation_id" => op_id.(),
+                 "work_id" => nomination.work_id
+               },
+               %{recipient: director, conversation_id: cid, turn_number: 2}
+             )
+
+    assert {:ok, token} =
+             KaoiroServer.WorkStore.admit_yield(
+               director_principal,
+               recipient,
+               cid,
+               3,
+               active.work_id,
+               active.authority_epoch
+             )
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               recipient,
+               %{sender: director, conversation_id: cid, turn_number: 3}
+             )
+
+    request = %{
+      "version" => "0",
+      "generation" => "generation",
+      "incarnation" => "old-incarnation",
+      "yield_token" => token.yield_token,
+      "conversation_id" => cid,
+      "turn_number" => 3,
+      "work_id" => active.work_id,
+      "authority_epoch" => active.authority_epoch
+    }
+
+    assert_reply push(channel, "yield_claim", request), :ok, %{
+      granted: false,
+      reason: :stale_channel
+    }
+
+    assert :sys.get_state(KaoiroServer.WorkStore).yield_tokens[token.yield_token].state ==
+             "unclaimed"
+
+    assert_reply push(channel, "yield_claim", %{request | "incarnation" => incarnation}), :ok, %{
+      granted: true
+    }
+
+    claimed_at =
+      :sys.get_state(KaoiroServer.WorkStore).yield_tokens[token.yield_token].claimed_at_ms
+
+    :ok = close(channel)
+
+    {rejoined_reply, rejoined_channel} =
+      join_wrapper_with_reply(recipient, "default", %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_resync" => "skip-v1",
+        "delivery_generation" => "generation"
+      })
+
+    assert rejoined_reply["inter_agent_delivery_incarnation"] == incarnation
+
+    assert_reply push(rejoined_channel, "yield_claim", %{request | "incarnation" => incarnation}),
+                 :ok,
+                 %{granted: true, repeated: true}
+
+    assert :sys.get_state(KaoiroServer.WorkStore).yield_tokens[token.yield_token].claimed_at_ms ==
+             claimed_at
+  end
+
+  test "V46 previous generation cannot claim its unclaimed yield token" do
+    Process.flag(:trap_exit, true)
+    recipient = "test.yield-old-generation-recipient"
+    director = "test.yield-old-generation-director"
+    cid = "yield-old-generation-#{System.unique_integer([:positive])}"
+    on_exit(fn -> DeliveryStates.delete(recipient) end)
+
+    {_reply, old_channel} =
+      join_wrapper_with_reply(recipient, "default", %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_resync" => "skip-v1",
+        "delivery_generation" => "old-generation"
+      })
+
+    director_principal = %{"kind" => "agent", "id" => director}
+    recipient_principal = %{"kind" => "agent", "id" => recipient}
+
+    op_id = fn ->
+      "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+    end
+
+    assert {:ok, %{work: nomination}} =
+             KaoiroServer.WorkStore.apply(
+               director_principal,
+               %{"op" => "assign", "operation_id" => op_id.(), "title" => cid},
+               %{
+                 recipient: recipient,
+                 conversation_id: cid,
+                 turn_number: 1,
+                 new_conversation?: true
+               }
+             )
+
+    assert {:ok, %{work: active}} =
+             KaoiroServer.WorkStore.apply(
+               recipient_principal,
+               %{
+                 "op" => "accept_assignment",
+                 "operation_id" => op_id.(),
+                 "work_id" => nomination.work_id
+               },
+               %{recipient: director, conversation_id: cid, turn_number: 2}
+             )
+
+    assert {:ok, token} =
+             KaoiroServer.WorkStore.admit_yield(
+               director_principal,
+               recipient,
+               cid,
+               3,
+               active.work_id,
+               active.authority_epoch
+             )
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               recipient,
+               %{sender: director, conversation_id: cid, turn_number: 3}
+             )
+
+    :ok = close(old_channel)
+
+    {reply, new_channel} =
+      join_wrapper_with_reply(recipient, "default", %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_resync" => "skip-v1",
+        "delivery_generation" => "new-generation"
+      })
+
+    assert_reply push(new_channel, "yield_claim", %{
+                   "version" => "0",
+                   "generation" => "old-generation",
+                   "incarnation" => reply["inter_agent_delivery_incarnation"],
+                   "yield_token" => token.yield_token,
+                   "conversation_id" => cid,
+                   "turn_number" => 3,
+                   "work_id" => active.work_id,
+                   "authority_epoch" => active.authority_epoch
+                 }),
+                 :ok,
+                 %{granted: false, reason: :stale_channel}
+
+    assert :sys.get_state(KaoiroServer.WorkStore).yield_tokens[token.yield_token].state ==
+             "unclaimed"
+  end
+
+  test "work operation result reads distinguish unknown from expired identity" do
+    sender = join_wrapper("test.work-result-read", "default", %{"work_control" => "v1"})
+
+    fresh =
+      "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+    assert_reply push(sender, "work_op_result_request", %{
+                   "version" => "0",
+                   "operation_id" => fresh
+                 }),
+                 :ok,
+                 %{"error" => "unknown_operation"}
+
+    assert_reply push(sender, "work_op_result_request", %{
+                   "version" => "0",
+                   "operation_id" => "op_0_AAAAAAAAAAAAAAAAAAAAAA"
+                 }),
+                 :ok,
+                 %{"error" => "operation_id_expired"}
   end
 
   defp seed_snapshot(agent_id, model) do
@@ -2392,6 +2625,996 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do
+    test "unavailable yield token write keeps the message and reports its downgrade" do
+      from = "test.token-unavailable-director"
+      to = "test.token-unavailable-assignee"
+      cid = "token-unavailable-#{System.unique_integer([:positive])}"
+
+      modes = %{
+        "version" => "v1",
+        "early" => "fold",
+        "yield" => "tool_boundary",
+        "stage_reports" => true
+      }
+
+      params = fn id ->
+        %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => id,
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1",
+          "inter_agent_delivery_modes" => modes,
+          "work_control" => "v1"
+        }
+      end
+
+      sender = join_wrapper(from, "default", params.(from))
+      recipient = join_wrapper(to, "default", params.(to))
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      assert_reply push(recipient, "envelope", envelope(to, "idle")), :ok
+      on_exit(fn -> DeliveryStates.delete(to) end)
+
+      id = fn ->
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+      end
+
+      director = %{"kind" => "agent", "id" => from}
+      assignee = %{"kind" => "agent", "id" => to}
+
+      assert {:ok, %{work: nomination}} =
+               KaoiroServer.WorkStore.apply(
+                 director,
+                 %{"op" => "assign", "operation_id" => id.(), "title" => cid},
+                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
+               )
+
+      assert {:ok, %{work: active}} =
+               KaoiroServer.WorkStore.apply(
+                 assignee,
+                 %{
+                   "op" => "accept_assignment",
+                   "operation_id" => id.(),
+                   "work_id" => nomination.work_id
+                 },
+                 %{recipient: from, conversation_id: cid, turn_number: 2}
+               )
+
+      fake = :"token_unavailable_read_only_#{System.unique_integer([:positive])}"
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{fake}.dets"])
+      File.rm(path)
+      {:ok, ^fake} = :dets.open_file(fake, file: String.to_charlist(path))
+      :ok = :dets.close(fake)
+      {:ok, ^fake} = :dets.open_file(fake, file: String.to_charlist(path), access: :read)
+      original_table = :sys.get_state(KaoiroServer.WorkStore).table
+
+      :sys.replace_state(KaoiroServer.WorkStore, fn state -> %{state | table: fake} end)
+
+      try do
+        env = inter_envelope(from, to, cid: cid)
+
+        payload =
+          env["payload"]
+          |> Map.put("delivery_intent", "yield")
+          |> Map.put("in_reply_to", 0)
+          |> Map.put("work_id", active.work_id)
+          |> Map.put("expected_authority_epoch", active.authority_epoch)
+
+        assert_reply push(sender, "envelope", %{env | "payload" => payload}), :ok, %{
+          "delivery_authority" => %{
+            requested: "yield",
+            granted: "early",
+            downgrade: "yield_token_unavailable"
+          }
+        }
+
+        assert ConversationStates.get(cid) != nil
+
+        refute Enum.any?(:sys.get_state(KaoiroServer.WorkStore).yield_tokens, fn {_id, token} ->
+                 token.work_id == active.work_id
+               end)
+      after
+        :sys.replace_state(KaoiroServer.WorkStore, fn state ->
+          %{state | table: original_table}
+        end)
+
+        :ok = :dets.close(fake)
+        File.rm(path)
+      end
+    end
+
+    test "V9 fifth unresolved early item from one pair is downgraded" do
+      from = "test.early-quota-sender"
+      to = "test.early-quota-recipient"
+      modes = %{"version" => "v1", "early" => "fold", "yield" => "none", "stage_reports" => true}
+
+      params = fn id ->
+        %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => id,
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1",
+          "inter_agent_delivery_modes" => modes
+        }
+      end
+
+      sender = join_wrapper(from, "default", params.(from))
+      recipient = join_wrapper(to, "default", params.(to))
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      assert_reply push(recipient, "envelope", envelope(to, "idle")), :ok
+      on_exit(fn -> DeliveryStates.delete(to) end)
+
+      for index <- 1..5 do
+        env = inter_envelope(from, to)
+
+        payload =
+          env["payload"]
+          |> Map.put("delivery_intent", "early")
+          |> Map.put("in_reply_to", 0)
+
+        ref = push(sender, "envelope", %{env | "payload" => payload})
+
+        if index < 5 do
+          assert_reply ref, :ok, %{"delivery_authority" => %{granted: "early"}}
+        else
+          assert_reply ref, :ok, %{
+            "delivery_authority" => %{
+              granted: "normal",
+              downgrade: "early_quota"
+            }
+          }
+        end
+      end
+
+      assert {4, 4} = DeliveryStates.pending_early(from, to)
+    end
+
+    test "V2 V3 V4 capability role and epoch bound yield" do
+      Process.flag(:trap_exit, true)
+      from = "test.delivery-capability-director"
+      to = "test.delivery-capability-assignee"
+      cid = "yield-capability-#{System.unique_integer([:positive])}"
+
+      sender_modes = %{
+        "version" => "v1",
+        "early" => "fold",
+        "yield" => "tool_boundary",
+        "stage_reports" => true
+      }
+
+      recipient_modes = %{sender_modes | "early" => "none", "yield" => "none"}
+
+      join = fn id, modes ->
+        join_wrapper(id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => id,
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1",
+          "inter_agent_delivery_modes" => modes,
+          "work_control" => "v1"
+        })
+      end
+
+      sender = join.(from, sender_modes)
+      recipient = join.(to, recipient_modes)
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      assert_reply push(recipient, "envelope", envelope(to, "idle")), :ok
+      on_exit(fn -> DeliveryStates.delete(to) end)
+
+      op_id = fn ->
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+      end
+
+      director = %{"kind" => "agent", "id" => from}
+      assignee = %{"kind" => "agent", "id" => to}
+
+      assert {:ok, %{work: nominated}} =
+               KaoiroServer.WorkStore.apply(
+                 director,
+                 %{"op" => "assign", "operation_id" => op_id.(), "title" => cid},
+                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
+               )
+
+      assert {:ok, %{work: active}} =
+               KaoiroServer.WorkStore.apply(
+                 assignee,
+                 %{
+                   "op" => "accept_assignment",
+                   "operation_id" => op_id.(),
+                   "work_id" => nominated.work_id
+                 },
+                 %{recipient: from, conversation_id: cid, turn_number: 2}
+               )
+
+      @endpoint.subscribe("wrapper:" <> to)
+      env = inter_envelope(from, to, cid: cid)
+
+      payload =
+        env["payload"]
+        |> Map.put("delivery_intent", "yield")
+        |> Map.put("in_reply_to", 0)
+        |> Map.put("work_id", active.work_id)
+        |> Map.put("expected_authority_epoch", active.authority_epoch)
+
+      ref = push(sender, "envelope", %{env | "payload" => payload})
+
+      assert_reply ref, :ok, %{
+        "delivery_authority" => %{
+          requested: "yield",
+          granted: "normal",
+          downgrade: "unsupported_by_recipient"
+        }
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to,
+        event: "envelope",
+        payload: %{
+          "payload" => %{
+            "delivery_authority" => %{granted: "normal", downgrade: "unsupported_by_recipient"}
+          }
+        }
+      }
+
+      reverse = inter_envelope(to, from, cid: cid, turn: 2, new_conversation: false)
+
+      reverse_payload =
+        reverse["payload"]
+        |> Map.put("delivery_intent", "yield")
+        |> Map.put("in_reply_to", 1)
+        |> Map.put("work_id", active.work_id)
+        |> Map.put("expected_authority_epoch", active.authority_epoch)
+
+      assert_reply push(recipient, "envelope", %{reverse | "payload" => reverse_payload}), :ok, %{
+        "delivery_authority" => %{
+          requested: "yield",
+          granted: "early",
+          downgrade: "yield_not_authorized"
+        }
+      }
+
+      operator = %{"kind" => "user", "id" => "yield-capability-operator"}
+
+      for {revision, next_director} <- [{1, "temporary-director"}, {2, from}] do
+        assert {:ok, _} =
+                 KaoiroServer.WorkStore.apply(
+                   operator,
+                   %{
+                     "op" => "transfer",
+                     "operation_id" => op_id.(),
+                     "work_id" => active.work_id,
+                     "expected_revision" => revision,
+                     "director" => %{"kind" => "agent", "id" => next_director}
+                   },
+                   %{operator: true}
+                 )
+      end
+
+      :ok = close(recipient)
+      receiving = join.(to, %{recipient_modes | "early" => "fold"})
+      assert_reply push(receiving, "envelope", envelope(to, "idle")), :ok
+      stale_epoch = inter_envelope(from, to, cid: cid, turn: 3, new_conversation: false)
+
+      stale_payload =
+        stale_epoch["payload"]
+        |> Map.put("delivery_intent", "yield")
+        |> Map.put("in_reply_to", 2)
+        |> Map.put("work_id", active.work_id)
+        |> Map.put("expected_authority_epoch", active.authority_epoch)
+
+      assert_reply push(sender, "envelope", %{stale_epoch | "payload" => stale_payload}), :ok, %{
+        "delivery_authority" => %{
+          requested: "yield",
+          granted: "early",
+          downgrade: "yield_not_authorized"
+        }
+      }
+    end
+
+    test "sender cannot supply delivery authority before conversation admission" do
+      from = "test.work-forged-from"
+      to = "test.work-forged-to"
+      _recipient = seed_known(to)
+      sender = seed_known(from)
+      env = inter_envelope(from, to)
+
+      payload =
+        Map.put(env["payload"], "delivery_authority", %{
+          "requested" => "yield",
+          "granted" => "yield"
+        })
+
+      ref = push(sender, "envelope", %{env | "payload" => payload})
+      assert_reply ref, :error, %{reason: "invalid value: payload.delivery_authority"}
+      assert ConversationStates.get(payload["conversation_id"]) == nil
+    end
+
+    test "V35 work control requires join negotiation" do
+      from = "test.work-unnegotiated-from"
+      to = "test.work-unnegotiated-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from)
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+
+      env = inter_envelope(from, to)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "assign",
+          "operation_id" =>
+            "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}",
+          "title" => "Unnegotiated work"
+        })
+
+      assert_reply push(sender, "envelope", env), :error, %{
+        reason: "invalid value: payload.work_control"
+      }
+
+      assert ConversationStates.get(env["payload"]["conversation_id"]) == nil
+    end
+
+    test "V27d applied receipt without delivery outcome reports unknown" do
+      from = "test.work-unknown-delivery-from"
+      to = "test.work-unknown-delivery-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      operation = %{
+        "op" => "assign",
+        "operation_id" => operation_id,
+        "title" => "Unknown delivery"
+      }
+
+      env = inter_envelope(from, to)
+
+      assert {:ok, _} =
+               KaoiroServer.WorkStore.apply(
+                 %{"kind" => "agent", "id" => from},
+                 operation,
+                 %{
+                   recipient: to,
+                   conversation_id: env["payload"]["conversation_id"],
+                   turn_number: 1,
+                   new_conversation?: true
+                 }
+               )
+
+      assert_reply push(sender, "envelope", put_in(env, ["payload", "work_control"], operation)),
+                   :error,
+                   %{
+                     reason: "work_operation_deduplicated",
+                     send_not_attempted: true,
+                     details: %{delivery: "unknown"}
+                   }
+
+      assert ConversationStates.get(env["payload"]["conversation_id"]) == nil
+    end
+
+    test "work receipt hit rejects without an ingress stamp or another relay" do
+      from = "test.work-receipt-from"
+      to = "test.work-receipt-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      operation = %{
+        "op" => "assign",
+        "operation_id" => operation_id,
+        "title" => "Receipt test",
+        "requires_verdict" => false
+      }
+
+      env = inter_envelope(from, to)
+      env = put_in(env, ["payload", "work_control"], operation)
+
+      assert_reply push(sender, "envelope", env), :ok, %{
+        "ingress_stamp" => _,
+        "work_control_result" => %{operation_id: ^operation_id}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to,
+        event: "envelope",
+        payload: first_relay
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to,
+        event: "envelope",
+        payload: second_relay
+      }
+
+      assert Enum.any?([first_relay, second_relay], fn relay ->
+               get_in(relay, ["payload", "work_control_result", :operation_id]) == operation_id
+             end)
+
+      for relay <- [first_relay, second_relay] do
+        refute Map.has_key?(relay["payload"], "work_control")
+      end
+
+      retry_env = put_in(env, ["payload", "turn_number"], 2)
+
+      assert_reply push(sender, "envelope", retry_env),
+                   :error,
+                   %{
+                     reason: "work_operation_deduplicated",
+                     send_not_attempted: true,
+                     details: %{work_control_result: %{operation_id: ^operation_id}}
+                   } = rejection
+
+      refute Map.has_key?(rejection, :ingress_stamp)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"},
+                     20
+
+      assert %{turns: 1} = ConversationStates.get(env["payload"]["conversation_id"])
+
+      assert {:ok, %{delivery: %{status: "recorded"}}} =
+               KaoiroServer.WorkStore.op_result(%{"kind" => "agent", "id" => from}, operation_id)
+    end
+
+    test "unknown work outcome rejects without an ingress stamp" do
+      from = "test.work-unknown-from"
+      to = "test.work-unknown-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      env = inter_envelope(from, to)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "assign",
+          "operation_id" => operation_id,
+          "title" => "Unknown outcome"
+        })
+
+      :ok = :sys.suspend(ConversationStates)
+
+      on_exit(fn ->
+        :sys.resume(ConversationStates)
+        :sys.resume(KaoiroServer.WorkStore)
+      end)
+
+      ref = push(sender, "envelope", env)
+
+      assert wait_for_work_preview()
+      :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "work_outcome_unknown",
+                     send_not_attempted: true,
+                     details: %{operation_id: ^operation_id}
+                   } = rejection,
+                   TestTimeouts.slow_path(600)
+
+      refute Map.has_key?(rejection, :ingress_stamp)
+      assert ConversationStates.get(env["payload"]["conversation_id"]) == nil
+      :ok = :sys.resume(KaoiroServer.WorkStore)
+    end
+
+    test "V26 K1 definite work rejection records no conversation turn" do
+      from = "test.work-definite-failure-from"
+      to = "test.work-definite-failure-to"
+      cid = "work-definite-#{System.unique_integer([:positive])}"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      director = %{"kind" => "agent", "id" => from}
+      assignee = %{"kind" => "agent", "id" => to}
+
+      id = fn ->
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+      end
+
+      assert {:ok, %{work: nomination}} =
+               KaoiroServer.WorkStore.apply(
+                 director,
+                 %{"op" => "assign", "operation_id" => id.(), "title" => cid},
+                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
+               )
+
+      assert {:ok, %{work: active}} =
+               KaoiroServer.WorkStore.apply(
+                 assignee,
+                 %{
+                   "op" => "accept_assignment",
+                   "operation_id" => id.(),
+                   "work_id" => nomination.work_id
+                 },
+                 %{recipient: from, conversation_id: cid, turn_number: 2}
+               )
+
+      operation_id = id.()
+      env = inter_envelope(from, to, cid: cid)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "revise",
+          "operation_id" => operation_id,
+          "work_id" => active.work_id,
+          "expected_revision" => 0
+        })
+
+      assert_reply push(sender, "envelope", env), :error, %{reason: "stale_work_revision"}
+      assert ConversationStates.get(cid) == nil
+
+      assert {:error, :unknown_operation} =
+               KaoiroServer.WorkStore.op_result(director, operation_id)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}, 20
+    end
+
+    test "V26 K2 store crash before apply write records no conversation turn" do
+      from = "test.work-crash-before-write-from"
+      to = "test.work-crash-before-write-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      env = inter_envelope(from, to)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "assign",
+          "operation_id" => operation_id,
+          "title" => "Crash before write"
+        })
+
+      :ok = :sys.suspend(ConversationStates)
+      on_exit(fn -> :sys.resume(ConversationStates) end)
+      ref = push(sender, "envelope", env)
+      assert wait_for_work_preview()
+      old_store = Process.whereis(KaoiroServer.WorkStore)
+      :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      assert wait_for_work_call(KaoiroServer.WorkStore, fn
+               {:apply, _, _, _} -> true
+               _ -> false
+             end)
+
+      Process.exit(old_store, :kill)
+      assert_reply ref, :error, %{reason: "work_outcome_unknown", send_not_attempted: true}
+      assert wait_for_new_work_store(old_store)
+      assert ConversationStates.get(env["payload"]["conversation_id"]) == nil
+
+      assert {:error, :unknown_operation} =
+               KaoiroServer.WorkStore.op_result(%{"kind" => "agent", "id" => from}, operation_id)
+
+      refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}, 20
+    end
+
+    test "V26 K3 store crash after sync keeps receipt without a conversation turn" do
+      Process.flag(:trap_exit, true)
+      from = "test.work-crash-after-sync-from"
+      to = "test.work-crash-after-sync-to"
+      cid = "work-crash-after-sync-#{System.unique_integer([:positive])}"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      director = %{"kind" => "agent", "id" => from}
+      assignee = %{"kind" => "agent", "id" => to}
+
+      id = fn ->
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+      end
+
+      assert {:ok, %{work: nomination}} =
+               KaoiroServer.WorkStore.apply(
+                 director,
+                 %{"op" => "assign", "operation_id" => id.(), "title" => cid},
+                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
+               )
+
+      assert {:ok, %{work: active}} =
+               KaoiroServer.WorkStore.apply(
+                 assignee,
+                 %{
+                   "op" => "accept_assignment",
+                   "operation_id" => id.(),
+                   "work_id" => nomination.work_id
+                 },
+                 %{recipient: from, conversation_id: cid, turn_number: 2}
+               )
+
+      store_path = :sys.get_state(KaoiroServer.WorkStore).path
+      assert :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.WorkStore)
+
+      {:ok, injected} =
+        KaoiroServer.WorkStore.start_link(
+          name: KaoiroServer.WorkStore,
+          path: store_path,
+          test_after_apply_sync: fn -> Process.exit(self(), :kill) end
+        )
+
+      on_exit(fn ->
+        if Process.alive?(injected), do: stop_quietly(injected)
+
+        case Enum.find(
+               Supervisor.which_children(KaoiroServer.Supervisor),
+               &(elem(&1, 0) == KaoiroServer.WorkStore)
+             ) do
+          {KaoiroServer.WorkStore, :undefined, _, _} ->
+            Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.WorkStore)
+
+          _ ->
+            :ok
+        end
+      end)
+
+      operation_id = id.()
+      env = inter_envelope(from, to, cid: cid)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "revise",
+          "operation_id" => operation_id,
+          "work_id" => active.work_id,
+          "expected_revision" => 1
+        })
+
+      assert_reply push(sender, "envelope", env), :error, %{
+        reason: "work_outcome_unknown",
+        send_not_attempted: true,
+        details: %{operation_id: ^operation_id}
+      }
+
+      assert {:ok, _} = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.WorkStore)
+      assert :sys.get_state(KaoiroServer.WorkStore).test_after_apply_sync == nil
+
+      assert {:ok, %{operation_id: ^operation_id} = receipt} =
+               KaoiroServer.WorkStore.op_result(director, operation_id)
+
+      refute Map.has_key?(receipt, :delivery)
+
+      assert {:ok, %{work: %{revision: 2}}} =
+               KaoiroServer.WorkStore.status(director, active.work_id)
+
+      assert ConversationStates.get(cid) == nil
+      refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}, 20
+    end
+
+    test "applied work with a raced conversation rejection has no ingress stamp" do
+      from = "test.work-race-from"
+      to = "test.work-race-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      env = inter_envelope(from, to)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "assign",
+          "operation_id" => operation_id,
+          "title" => "Raced admission"
+        })
+
+      payload = env["payload"]
+      :ok = :sys.suspend(ConversationStates)
+
+      on_exit(fn ->
+        :sys.resume(ConversationStates)
+        :sys.resume(KaoiroServer.WorkStore)
+      end)
+
+      ref = push(sender, "envelope", env)
+      assert wait_for_work_preview()
+      :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      assert :ok =
+               ConversationStates.record_bound_message(
+                 payload["conversation_id"],
+                 from,
+                 to,
+                 "competing turn",
+                 1,
+                 false,
+                 true,
+                 :legacy
+               )
+
+      :ok = :sys.resume(KaoiroServer.WorkStore)
+
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "work_applied_message_rejected",
+                     send_not_attempted: true,
+                     details: %{
+                       work_control_result: %{operation_id: ^operation_id},
+                       conversation_error: "stale_turn"
+                     }
+                   } = rejection
+
+      refute Map.has_key?(rejection, :ingress_stamp)
+
+      assert {:ok, %{delivery: %{status: "not_recorded"}}} =
+               KaoiroServer.WorkStore.op_result(%{"kind" => "agent", "id" => from}, operation_id)
+    end
+
+    test "V49 rejected yield work message deletes its unclaimed token" do
+      from = "test.work-yield-rejected-from"
+      to = "test.work-yield-rejected-to"
+      cid = "work-yield-rejected-#{System.unique_integer([:positive])}"
+
+      modes = %{
+        "version" => "v1",
+        "early" => "fold",
+        "yield" => "tool_boundary",
+        "stage_reports" => true
+      }
+
+      join = fn id ->
+        join_wrapper(id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => id,
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1",
+          "inter_agent_delivery_modes" => modes,
+          "work_control" => "v1"
+        })
+      end
+
+      sender = join.(from)
+      recipient = join.(to)
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      assert_reply push(recipient, "envelope", envelope(to, "idle")), :ok
+      on_exit(fn -> DeliveryStates.delete(to) end)
+
+      director = %{"kind" => "agent", "id" => from}
+      assignee = %{"kind" => "agent", "id" => to}
+
+      op_id = fn ->
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+      end
+
+      assert {:ok, %{work: nomination}} =
+               KaoiroServer.WorkStore.apply(
+                 director,
+                 %{"op" => "assign", "operation_id" => op_id.(), "title" => cid},
+                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
+               )
+
+      assert {:ok, %{work: active}} =
+               KaoiroServer.WorkStore.apply(
+                 assignee,
+                 %{
+                   "op" => "accept_assignment",
+                   "operation_id" => op_id.(),
+                   "work_id" => nomination.work_id
+                 },
+                 %{recipient: from, conversation_id: cid, turn_number: 2}
+               )
+
+      operation_id = op_id.()
+      env = inter_envelope(from, to, cid: cid)
+
+      env =
+        Map.update!(env, "payload", fn payload ->
+          payload
+          |> Map.put("delivery_intent", "yield")
+          |> Map.put("in_reply_to", 0)
+          |> Map.put("work_id", active.work_id)
+          |> Map.put("expected_authority_epoch", active.authority_epoch)
+          |> Map.put("work_control", %{
+            "op" => "revise",
+            "operation_id" => operation_id,
+            "work_id" => active.work_id,
+            "expected_revision" => 1
+          })
+        end)
+
+      :ok = :sys.suspend(ConversationStates)
+
+      on_exit(fn ->
+        :sys.resume(ConversationStates)
+        :sys.resume(KaoiroServer.WorkStore)
+      end)
+
+      ref = push(sender, "envelope", env)
+      assert wait_for_work_preview()
+      :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      assert :ok =
+               ConversationStates.record_bound_message(
+                 cid,
+                 from,
+                 to,
+                 "competing turn",
+                 1,
+                 false,
+                 true,
+                 :legacy
+               )
+
+      :ok = :sys.resume(KaoiroServer.WorkStore)
+
+      assert_reply ref, :error, %{
+        reason: "work_applied_message_rejected",
+        details: %{work_control_result: %{operation_id: ^operation_id}}
+      }
+
+      assert {:ok, %{delivery: %{status: "not_recorded"}}} =
+               KaoiroServer.WorkStore.op_result(director, operation_id)
+
+      refute Enum.any?(:sys.get_state(KaoiroServer.WorkStore).yield_tokens, fn {_id, token} ->
+               token.work_id == active.work_id and token.state == "unclaimed"
+             end)
+    end
+
+    test "V27b V27c recorded turn before relay has unknown delivery outcome" do
+      assert_partial_work_cut(:before_relay)
+    end
+
+    test "V26 K6 relay before receipt update has unknown delivery outcome" do
+      assert_partial_work_cut(:after_relay)
+    end
+
+    defp assert_partial_work_cut(cut) do
+      Process.flag(:trap_exit, true)
+      from = "test.work-cut-#{cut}-from"
+      to = "test.work-cut-#{cut}-to"
+      _recipient = seed_known(to)
+      sender = join_wrapper(from, "default", %{"work_control" => "v1"})
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      operation_id =
+        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+
+      env = inter_envelope(from, to)
+
+      env =
+        put_in(env, ["payload", "work_control"], %{
+          "op" => "assign",
+          "operation_id" => operation_id,
+          "title" => "Partial cut"
+        })
+
+      :ok = :sys.suspend(ConversationStates)
+
+      on_exit(fn ->
+        :sys.resume(ConversationStates)
+        :sys.resume(KaoiroServer.WorkStore)
+        :sys.resume(KaoiroServer.IngressOrder)
+      end)
+
+      _ref = push(sender, "envelope", env)
+      assert wait_for_work_preview()
+      :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      assert wait_for_work_call(KaoiroServer.WorkStore, fn
+               {:apply, _, _, _} -> true
+               _ -> false
+             end)
+
+      :ok = :sys.suspend(ConversationStates)
+      :ok = :sys.resume(KaoiroServer.WorkStore)
+
+      assert wait_for_work_call(ConversationStates, fn
+               {:record, _, _, _, _, _, _, _, _} -> true
+               _ -> false
+             end)
+
+      if cut == :before_relay, do: :ok = :sys.suspend(KaoiroServer.IngressOrder)
+      if cut == :after_relay, do: :ok = :sys.suspend(KaoiroServer.WorkStore)
+      :ok = :sys.resume(ConversationStates)
+
+      if cut == :before_relay do
+        assert wait_for_work_call(KaoiroServer.IngressOrder, &(&1 == :allocate))
+        refute_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}, 20
+      else
+        assert_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}
+        assert_receive %Phoenix.Socket.Broadcast{topic: "wrapper:" <> ^to, event: "envelope"}
+
+        assert wait_for_work_call(KaoiroServer.WorkStore, fn
+                 {:status, _, _} -> true
+                 _ -> false
+               end)
+      end
+
+      assert %{turns: 1} = ConversationStates.get(env["payload"]["conversation_id"])
+      :ok = close(sender)
+      :ok = :sys.resume(KaoiroServer.IngressOrder)
+      :ok = :sys.resume(KaoiroServer.WorkStore)
+
+      assert {:ok, receipt} =
+               KaoiroServer.WorkStore.op_result(%{"kind" => "agent", "id" => from}, operation_id)
+
+      refute Map.has_key?(receipt, :delivery)
+    end
+
+    defp wait_for_work_call(module, predicate) do
+      Enum.any?(1..100, fn _ ->
+        queued =
+          case Process.info(Process.whereis(module), :messages) do
+            {:messages, messages} ->
+              Enum.any?(messages, fn
+                {:"$gen_call", _caller, request} -> predicate.(request)
+                _ -> false
+              end)
+
+            _ ->
+              false
+          end
+
+        if queued,
+          do: true,
+          else:
+            (
+              Process.sleep(10)
+              false
+            )
+      end)
+    end
+
+    defp wait_for_new_work_store(previous) do
+      Enum.any?(1..100, fn _ ->
+        current = Process.whereis(KaoiroServer.WorkStore)
+
+        if current && current != previous,
+          do: true,
+          else:
+            (
+              Process.sleep(10)
+              false
+            )
+      end)
+    end
+
+    defp wait_for_work_preview do
+      Enum.any?(1..100, fn _ ->
+        queued =
+          case Process.info(Process.whereis(ConversationStates), :messages) do
+            {:messages, messages} ->
+              Enum.any?(messages, fn
+                {:"$gen_call", _caller, {:preview, _, _, _, _, _, _, _, _}} -> true
+                _ -> false
+              end)
+
+            _ ->
+              false
+          end
+
+        if queued,
+          do: true,
+          else:
+            (
+              Process.sleep(10)
+              false
+            )
+      end)
+    end
+
     defp inter_envelope(agent_id, to, opts \\ []) do
       meta =
         opts[:meta] ||
@@ -2461,7 +3684,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       {us, seq}
     end
 
-    defp with_stamp(env, {us, seq}), do: Map.put(env, "ingress_stamp", [us, seq])
+    defp with_stamp(env, {us, seq}, reply) do
+      env
+      |> Map.put("ingress_stamp", [us, seq])
+      |> Map.update!("payload", &Map.put(&1, "delivery_authority", reply["delivery_authority"]))
+    end
 
     # ADR-0051 D3-1 の中心不変条件 / ふじ 30-10 should S1: a rejected IA must
     # leave BOTH panes untouched. `ia_projection/0` omits panes whose `ia` map
@@ -2491,7 +3718,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :ok, reply
       stamp = stamp_of(reply)
-      stamped = with_stamp(env, stamp)
+      stamped = with_stamp(env, stamp, reply)
 
       assert_broadcast "envelope", ^stamped
       # ルーティング先(wrapper:<to>)にも stamp 付きで届く (受信側 wrapper が
@@ -3723,7 +4950,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn -> DeliveryStates.delete(to_id) end)
     end
 
-    test "a routed message loss reaches its sender without raw body disclosure" do
+    test "V8b delivery_lost stays synthetic and never consumes early quota" do
       to_id = "test.delivery-loss-recipient"
       from_id = "test.delivery-loss-sender"
 
@@ -3735,14 +4962,31 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         })
 
       assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
-      sender = seed_known(from_id)
+
+      sender =
+        join_wrapper(from_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "loss-sender-process",
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1",
+          "inter_agent_delivery_modes" => %{
+            "version" => "v1",
+            "early" => "fold",
+            "yield" => "none",
+            "stage_reports" => true
+          }
+        })
+
+      assert_reply push(sender, "envelope", envelope(from_id, "idle")), :ok
       topic = "wrapper:" <> from_id
       cid = "loss-#{System.unique_integer([:positive])}"
+
+      outgoing = inter_envelope(from_id, to_id, cid: cid, body: "secret original content")
 
       assert_reply push(
                      sender,
                      "envelope",
-                     inter_envelope(from_id, to_id, cid: cid, body: "secret original content")
+                     put_in(outgoing, ["payload", "in_reply_to"], 0)
                    ),
                    :ok
 
@@ -3772,6 +5016,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       assert is_binary(loss_id)
       refute inspect(payload) =~ "secret original content"
+      refute Map.has_key?(payload, "delivery_intent")
+      refute Map.has_key?(payload, "delivery_authority")
+      assert {0, 0} = DeliveryStates.pending_early("server", from_id)
       assert_reply push(recipient, "delivery_resync", request), :ok
       KaoiroServerWeb.DeliveryLossDispatcher.flush()
 
@@ -3781,7 +5028,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         payload: %{"payload" => %{"loss_id" => ^loss_id}}
       }
 
-      on_exit(fn -> DeliveryStates.delete(to_id) end)
+      on_exit(fn -> Enum.each([to_id, from_id], &DeliveryStates.delete/1) end)
     end
 
     test "negotiated recovery retires a dropped route and broadcasts the new prefix" do
@@ -4242,7 +5489,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :ok, reply
-      stamped = with_stamp(env, stamp_of(reply))
+      stamped = with_stamp(env, stamp_of(reply), reply)
 
       # server は error の意味を解釈せず、構造検証のみで素通しする
       # (ingress stamp の付与だけが server 側の追記)。

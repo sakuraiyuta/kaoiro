@@ -105,6 +105,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.Users
+  alias KaoiroServer.WorkStore
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
   alias KaoiroServerWeb.PeerConnectivity
@@ -177,7 +178,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # broadcasts it to every already-joined operator, and viewers must
     # not receive AgentDirectory contents (ADR-0030 D10) — same
     # operator-only gate as `history_cleared`.
-    "directory"
+    "directory",
+    "work_changed",
+    "work_scope_overlap"
   ])
 
   # Every server -> client event must leave through `push_versioned/3`.
@@ -189,6 +192,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     history_replay_envelope agent_deleted delivery_status quagmire_notice
     quagmire_settings
     session_reset_started session_reset_completed session_reset_failed
+    work_changed work_scope_overlap
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
   ))
 
@@ -236,7 +240,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    invalid_payload agent_unavailable
                    unsupported_permission_switch permission_not_ready
                    persistence_failed timeout invalid_rally_turns
-                   exceeds_launch_ceiling)a
+                   exceeds_launch_ceiling stale_work_revision work_not_authorized
+                   unknown_work work_state_conflict subject_mismatch
+                   work_link_conflict work_carriage_invalid operation_id_conflict
+                   operation_id_expired unknown_operation work_capacity
+                   transfer_pending verdict_not_effective)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -534,7 +542,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "delivery_status",
              "quagmire_notice",
              "quagmire_settings",
-             "wrapper_build_info"
+             "wrapper_build_info",
+             "work_changed",
+             "work_scope_overlap"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
       push_versioned(socket, event, payload)
@@ -583,7 +593,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
     role = current_role(socket)
 
     with :ok <- reject_reserved_session_command(payload),
-         :ok <- guard_against_reset_pending(role, payload) do
+         :ok <- guard_against_reset_pending(role, payload),
+         :ok <- valid_operator_intent(payload["delivery_intent"]) do
+      payload =
+        if Map.has_key?(payload, "delivery_intent") do
+          payload
+        else
+          modes = KaoiroServer.WorkStore.modes(payload["agent_id"])
+          intent = if modes && modes["early"] != "none", do: "early", else: "normal"
+          Map.put(payload, "delivery_intent", intent)
+        end
+
       relay(
         socket,
         payload,
@@ -594,6 +614,129 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("work_control", %{"work_control" => operation} = payload, socket)
+      when is_map(operation) do
+    with :ok <- require_operator(socket, payload, "work_control"),
+         {:ok, principal} <- resolve_permission_actor(socket),
+         {:ok, result} <- WorkStore.apply(principal, operation, %{operator: true}) do
+      work_id = result.work.work_id
+      {:ok, %{work: work}} = WorkStore.status(principal, work_id)
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_changed", %{"work" => work})
+
+      if operation["op"] == "assign" do
+        Enum.each(WorkStore.scope_overlaps(work_id), fn overlap ->
+          KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_scope_overlap", overlap)
+        end)
+      end
+
+      pending_old =
+        for transfer <- work.transfers,
+            transfer.state == "pending",
+            do: transfer.old_assignee["id"]
+
+      for id <- Enum.uniq([work.assignee["id"], work.director["id"] | pending_old]),
+          is_binary(id) and AgentStates.connected?(id) and WorkStore.work_control_enabled?(id) do
+        notice = %{
+          "version" => "0",
+          "work" => work,
+          "op" => operation["op"],
+          "reason" => "operator_control"
+        }
+
+        notice =
+          if operation["op"] == "transfer" do
+            case work.transfers do
+              [%{state: "pending", transfer_id: transfer_id} | _] ->
+                Map.put(notice, "transfer_id", transfer_id)
+
+              _ ->
+                notice
+            end
+          else
+            notice
+          end
+
+        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{id}", "work_notice", notice)
+      end
+
+      {:reply, {:ok, %{"work_control_result" => result}}, socket}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+
+      {:duplicate, receipt} ->
+        {:reply,
+         {:error,
+          %{
+            reason: "work_operation_deduplicated",
+            details: %{work_control_result: Map.put(receipt.result, :deduplicated, true)}
+          }}, socket}
+    end
+  end
+
+  def handle_in("work_control", payload, socket) do
+    with :ok <- require_operator(socket, payload, "work_control") do
+      {:reply, {:error, %{reason: "invalid_payload"}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("work_yield_status", %{"work_id" => work_id} = payload, socket)
+      when is_binary(work_id) do
+    with :ok <- require_operator(socket, payload, "work_yield_status"),
+         {:ok, _} <- WorkStore.status(%{"kind" => "user", "id" => "operator"}, work_id) do
+      tokens = WorkStore.yield_tokens(work_id)
+
+      tokens =
+        if is_binary(payload["yield_token"]),
+          do: Enum.filter(tokens, &(&1.yield_token == payload["yield_token"])),
+          else: tokens
+
+      outcomes =
+        Enum.map(tokens, fn token ->
+          stage = DeliveryStates.message_status(nil, token.conversation_id, token.turn_number)
+
+          disposition =
+            case stage do
+              {:ok, %{yield_disposition: value}} -> value
+              {:ok, %{status: "expired"}} -> %{outcome: "expired"}
+              _ -> %{outcome: "unknown"}
+            end
+
+          %{
+            yield_token: token.yield_token,
+            work_id: work_id,
+            disposition: disposition,
+            claimed_at_ms: token.claimed_at_ms
+          }
+        end)
+
+      outcomes =
+        if is_binary(payload["yield_token"]) and outcomes == [],
+          do: [
+            %{
+              yield_token: payload["yield_token"],
+              work_id: work_id,
+              disposition: %{outcome: "expired"}
+            }
+          ],
+          else: outcomes
+
+      {:reply, {:ok, %{"claimed_yields" => outcomes}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("work_yield_status", payload, socket) do
+    with :ok <- require_operator(socket, payload, "work_yield_status") do
+      {:reply, {:error, %{reason: "invalid_payload"}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -1827,6 +1970,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
     |> Map.delete("agent_id")
     |> Map.put("version", "0")
   end
+
+  defp valid_operator_intent(nil), do: :ok
+  defp valid_operator_intent(value) when value in ~w(normal early yield), do: :ok
+  defp valid_operator_intent(_), do: {:error, :invalid_payload}
 
   defp relay(socket, payload, event, key_checks, role) do
     with :ok <- require_operator(role, payload, event, "relaying"),

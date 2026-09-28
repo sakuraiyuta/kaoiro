@@ -226,6 +226,23 @@ defmodule KaoiroServer.ConversationStates do
     GenServer.call(server, {:record, cid, from, to, body, turn, done?, new?, admission})
   end
 
+  def preview_bound_message(
+        cid,
+        from,
+        to,
+        body,
+        turn,
+        done?,
+        new?,
+        admission,
+        server \\ __MODULE__
+      )
+      when is_boolean(new?) and
+             (admission in [:legacy, :notice] or
+                (is_integer(admission) and admission in 0..9_007_199_254_740_991)) do
+    GenServer.call(server, {:preview, cid, from, to, body, turn, done?, new?, admission})
+  end
+
   @doc "Returns the current entry for inspection (test helper)."
   def get(conversation_id, server \\ __MODULE__) do
     GenServer.call(server, {:get, conversation_id})
@@ -402,100 +419,15 @@ defmodule KaoiroServer.ConversationStates do
 
   @impl true
   def handle_call(
-        {:record, cid, from, to, body, turn_number, done?, new_conversation?, admission},
+        {action, cid, from, to, body, turn_number, done?, new_conversation?, admission},
         _from,
         state
-      ) do
-    now = state.clock.()
-    limits = state.limits
-    existing = Map.get(state.conversations, cid)
+      )
+      when action in [:record, :preview] do
+    {:reply, result, next} =
+      decide_record(cid, from, to, body, turn_number, done?, new_conversation?, admission, state)
 
-    cond do
-      # issue #167: a CLOSED tombstone accepts no further messages at all —
-      # checked before the participants check so a reused/delayed message
-      # from ANY sender gets the same conversation_closed answer, not a
-      # misleading participants_mismatch.
-      existing != nil and existing.status == :closed ->
-        {:reply, {:error, :conversation_closed}, state}
-
-      # Cross-conversation pollution defense: an existing OPEN entry only
-      # accepts messages from its declared participants. A third party
-      # reusing a known cid would otherwise grow the agents set past
-      # max_concurrent_agents and wipe the legitimate counters via the
-      # :exceeded branch.
-      existing != nil and not MapSet.subset?(MapSet.new([from, to]), existing.agents) ->
-        {:reply, {:error, :participants_mismatch}, state}
-
-      existing == nil and not new_conversation? ->
-        {:reply, {:error, :unknown_conversation_id}, state}
-
-      is_integer(admission) and admission != ordinary_turn(existing, to) ->
-        {:reply,
-         {:error,
-          %{
-            reason: "stale_reply_basis",
-            conversation_id: cid,
-            expected_peer_turn: ordinary_turn(existing, to),
-            supplied_basis: admission
-          }}, state}
-
-      # issue #167 review M1: a turn_number no greater than the highest
-      # already recorded for this OPEN conversation is late, duplicate, or
-      # out-of-order — reject before it can corrupt turns/tokens. Checked
-      # after participants_mismatch (only meaningful once from/to are
-      # confirmed legitimate) and before the brand-new-conversation cap
-      # (existing is never nil here).
-      existing != nil and turn_number <= existing.max_turn_number ->
-        {:reply, {:error, :stale_turn}, state}
-
-      existing == nil and map_size(state.conversations) >= limits.max_conversations ->
-        # Bound total in-flight conversations so a malicious wrapper streaming
-        # fresh cids cannot grow the map without limit. Existing entries
-        # (open or tombstoned) are unaffected.
-        {:reply, {:error, :too_many_conversations}, state}
-
-      true ->
-        # `existing`, if present here, is guaranteed OPEN — the :closed case
-        # already returned above.
-        entry =
-          existing ||
-            %{
-              status: :open,
-              turns: 0,
-              max_turn_number: 0,
-              ordinary_turns: %{},
-              tokens: 0,
-              started_at: now,
-              # Wallclock counterpart of `started_at` for operator display
-              # (issue #276) — `now` is monotonic ms with no fixed epoch.
-              started_at_wall: DateTime.utc_now() |> DateTime.to_iso8601(),
-              agents: MapSet.new(),
-              done_by: MapSet.new(),
-              notified_unreachable: MapSet.new()
-            }
-
-        agents = entry.agents |> MapSet.put(from) |> MapSet.put(to)
-        done_by = if done?, do: MapSet.put(entry.done_by, from), else: entry.done_by
-
-        next = %{
-          entry
-          | turns: entry.turns + 1,
-            max_turn_number: turn_number,
-            ordinary_turns:
-              if(admission == :notice,
-                do: entry.ordinary_turns,
-                else: Map.put(entry.ordinary_turns, from, turn_number)
-              ),
-            tokens: entry.tokens + token_estimate(body),
-            agents: agents,
-            done_by: done_by,
-            # `from` just spoke here, so any earlier "unreachable" mark for it
-            # is stale: a later disconnect must notify its peers again.
-            notified_unreachable: MapSet.delete(entry.notified_unreachable, from)
-        }
-
-        evaluate(state, cid, next, limits, now)
-    end
+    {:reply, result, if(action == :preview, do: state, else: next)}
   end
 
   def handle_call({:get, cid}, _from, state) do
@@ -713,6 +645,99 @@ defmodule KaoiroServer.ConversationStates do
       {:tombstone, close_entry(entry, :open_conversation_ttl, now)}
     else
       :keep
+    end
+  end
+
+  defp decide_record(cid, from, to, body, turn_number, done?, new_conversation?, admission, state) do
+    now = state.clock.()
+    limits = state.limits
+    existing = Map.get(state.conversations, cid)
+
+    cond do
+      # issue #167: a CLOSED tombstone accepts no further messages at all —
+      # checked before the participants check so a reused/delayed message
+      # from ANY sender gets the same conversation_closed answer, not a
+      # misleading participants_mismatch.
+      existing != nil and existing.status == :closed ->
+        {:reply, {:error, :conversation_closed}, state}
+
+      # Cross-conversation pollution defense: an existing OPEN entry only
+      # accepts messages from its declared participants. A third party
+      # reusing a known cid would otherwise grow the agents set past
+      # max_concurrent_agents and wipe the legitimate counters via the
+      # :exceeded branch.
+      existing != nil and not MapSet.subset?(MapSet.new([from, to]), existing.agents) ->
+        {:reply, {:error, :participants_mismatch}, state}
+
+      existing == nil and not new_conversation? ->
+        {:reply, {:error, :unknown_conversation_id}, state}
+
+      is_integer(admission) and admission != ordinary_turn(existing, to) ->
+        {:reply,
+         {:error,
+          %{
+            reason: "stale_reply_basis",
+            conversation_id: cid,
+            expected_peer_turn: ordinary_turn(existing, to),
+            supplied_basis: admission
+          }}, state}
+
+      # issue #167 review M1: a turn_number no greater than the highest
+      # already recorded for this OPEN conversation is late, duplicate, or
+      # out-of-order — reject before it can corrupt turns/tokens. Checked
+      # after participants_mismatch (only meaningful once from/to are
+      # confirmed legitimate) and before the brand-new-conversation cap
+      # (existing is never nil here).
+      existing != nil and turn_number <= existing.max_turn_number ->
+        {:reply, {:error, :stale_turn}, state}
+
+      existing == nil and map_size(state.conversations) >= limits.max_conversations ->
+        # Bound total in-flight conversations so a malicious wrapper streaming
+        # fresh cids cannot grow the map without limit. Existing entries
+        # (open or tombstoned) are unaffected.
+        {:reply, {:error, :too_many_conversations}, state}
+
+      true ->
+        # `existing`, if present here, is guaranteed OPEN — the :closed case
+        # already returned above.
+        entry =
+          existing ||
+            %{
+              status: :open,
+              turns: 0,
+              max_turn_number: 0,
+              ordinary_turns: %{},
+              tokens: 0,
+              started_at: now,
+              # Wallclock counterpart of `started_at` for operator display
+              # (issue #276) — `now` is monotonic ms with no fixed epoch.
+              started_at_wall: DateTime.utc_now() |> DateTime.to_iso8601(),
+              agents: MapSet.new(),
+              done_by: MapSet.new(),
+              notified_unreachable: MapSet.new()
+            }
+
+        agents = entry.agents |> MapSet.put(from) |> MapSet.put(to)
+        done_by = if done?, do: MapSet.put(entry.done_by, from), else: entry.done_by
+
+        next = %{
+          entry
+          | turns: entry.turns + 1,
+            max_turn_number: turn_number,
+            ordinary_turns:
+              if(admission == :notice,
+                do: entry.ordinary_turns,
+                else: Map.put(entry.ordinary_turns, from, turn_number)
+              ),
+            tokens: entry.tokens + token_estimate(body),
+            agents: agents,
+            done_by: done_by,
+            # `from` just spoke here, so any earlier "unreachable" mark for it
+            # is stale: a later disconnect must notify its peers again.
+            notified_unreachable: MapSet.delete(entry.notified_unreachable, from)
+        }
+
+        evaluate(state, cid, next, limits, now)
     end
   end
 

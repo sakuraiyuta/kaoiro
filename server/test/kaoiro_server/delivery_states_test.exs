@@ -19,6 +19,622 @@ defmodule KaoiroServer.DeliveryStatesTest do
     %{name: name, path: path}
   end
 
+  test "submitted later sequence closes without crossing an earlier gap", %{
+    name: name,
+    path: path
+  } do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    internal = :sys.get_state(name).entries["recipient"]
+
+    for turn <- 1..2 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "cid", turn_number: turn},
+                 name
+               )
+    end
+
+    report = %{
+      "incarnation" => internal.incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 2,
+      "stage" => "submitted",
+      "handoff" => "prompt_hook",
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    assert :ok = DeliveryStates.report_stage("recipient", "generation", owner, report, name)
+    assert %{acked_seq: 0} = DeliveryStates.get("recipient", name)
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "cid", 2, name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    assert %{acked_seq: 2} = DeliveryStates.acknowledge("recipient", "generation", owner, 1, name)
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "cid", 2, name)
+  end
+
+  test "V30j submission persists history and resolution in one recipient object", %{
+    name: name,
+    path: path
+  } do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    for turn <- 1..2 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "joint-stage-cid", turn_number: turn},
+                 name
+               )
+    end
+
+    table = :sys.get_state(name).table
+    assert [{"recipient", _, _, _, _, before}] = :dets.lookup(table, "recipient")
+    assert before.resolved == []
+
+    refute Map.has_key?(
+             before.stage_history[{"recipient", incarnation}][2].stages,
+             "submitted"
+           )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => incarnation,
+                 "generation" => "generation",
+                 "delivery_seq" => 2,
+                 "stage" => "submitted",
+                 "handoff" => "prompt_hook",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert [{"recipient", _, _, _, _, persisted}] = :dets.lookup(table, "recipient")
+    assert persisted.resolved == [2]
+    assert persisted.metadata[2] == nil
+    assert persisted.stage_history[{"recipient", incarnation}][2].stages["submitted"]
+    assert [] = :dets.lookup(table, {:stage, {"recipient", incarnation}})
+
+    GenServer.stop(name)
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+
+    assert {:ok, %{acked_seq: 2, lost_count: 1}} =
+             DeliveryStates.resync("recipient", "generation", owner, 2, [[1, 2]], name)
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "joint-stage-cid", 2, name)
+  end
+
+  test "V30j stage commit calls DETS with one recipient object", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "single-insert-cid", turn_number: 1},
+               name
+             )
+
+    report = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "stage" => "submitted",
+      "handoff" => "prompt_hook",
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    parent = self()
+
+    tracer =
+      spawn(fn ->
+        receive do
+          event -> send(parent, {:dets_trace, event})
+        end
+      end)
+
+    pid = Process.whereis(name)
+    :erlang.trace_pattern({:dets, :insert, 2}, true, [])
+    :erlang.trace(pid, true, [:call, {:tracer, tracer}])
+
+    try do
+      assert :ok = DeliveryStates.report_stage("recipient", "generation", owner, report, name)
+      assert_receive {:dets_trace, {:trace, ^pid, :call, {:dets, :insert, [^name, object]}}}
+      refute is_list(object)
+      assert elem(object, 0) == "recipient"
+    after
+      :erlang.trace(pid, false, [:call])
+      :erlang.trace_pattern({:dets, :insert, 2}, false, [])
+    end
+  end
+
+  test "stage history never enters public delivery projections", %{name: name} do
+    DeliveryStates.bind_resync("recipient", "generation", self(), name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "private-stage-cid", turn_number: 1},
+               name
+             )
+
+    assert is_map(:sys.get_state(name).entries["recipient"].stage_history)
+
+    for projection <- [
+          DeliveryStates.get("recipient", name),
+          DeliveryStates.all(name)["recipient"]
+        ] do
+      refute Map.has_key?(projection, :stage_history)
+      refute Map.has_key?(projection, "stage_history")
+    end
+
+    {wire, false} = DeliveryStates.wire_projection(DeliveryStates.all(name), MapSet.new())
+    refute Map.has_key?(wire["recipient"], :stage_history)
+  end
+
+  test "history remains bounded across generations without changing the ledger", %{name: name} do
+    previous = Application.fetch_env!(:kaoiro_server, :delivery_intent)
+
+    Application.put_env(
+      :kaoiro_server,
+      :delivery_intent,
+      Keyword.put(previous, :delivery_stage_max_records, 2)
+    )
+
+    on_exit(fn -> Application.put_env(:kaoiro_server, :delivery_intent, previous) end)
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation-one", owner, name)
+
+    for turn <- 1..2 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "history-cap-cid", turn_number: turn},
+                 name
+               )
+
+      assert %{acked_seq: ^turn} =
+               DeliveryStates.acknowledge("recipient", "generation-one", owner, turn, name)
+
+      Process.sleep(2)
+    end
+
+    DeliveryStates.bind_resync("recipient", "generation-two", owner, name)
+
+    assert 3 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "history-cap-cid", turn_number: 3},
+               name
+             )
+
+    assert {:ok, %{status: "expired"}} =
+             DeliveryStates.message_status("sender", "history-cap-cid", 1, name)
+
+    assert {:ok, %{stages: %{"accepted" => _}}} =
+             DeliveryStates.message_status("sender", "history-cap-cid", 2, name)
+
+    entry = :sys.get_state(name).entries["recipient"]
+    assert entry.issued_seq == 3
+    assert map_size(entry.metadata) == 1
+    assert entry.resolved == []
+    assert entry.stage_history |> Map.values() |> Enum.map(&map_size/1) |> Enum.sum() == 2
+  end
+
+  test "V33 incarnation mismatch is stale and does not change stage history", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+    assert is_binary(incarnation)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "stale-stage-cid", turn_number: 1},
+               name
+             )
+
+    report = %{
+      "incarnation" => "old-incarnation",
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "stage" => "submitted",
+      "handoff" => "prompt_hook",
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    assert {:error, :stale_channel} =
+             DeliveryStates.report_stage("recipient", "generation", owner, report, name)
+
+    assert {:ok, %{stages: stages}} =
+             DeliveryStates.message_status("sender", "stale-stage-cid", 1, name)
+
+    refute Map.has_key?(stages, "submitted")
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{report | "incarnation" => incarnation},
+               name
+             )
+  end
+
+  test "V30f old channel owner cannot resolve a current sequence", %{name: name} do
+    old_owner = self()
+
+    new_owner =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn -> send(new_owner, :stop) end)
+    DeliveryStates.bind_resync("recipient", "generation", old_owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "old-owner-cid", turn_number: 1},
+               name
+             )
+
+    DeliveryStates.bind_resync("recipient", "generation", new_owner, name)
+
+    report = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "stage" => "submitted",
+      "handoff" => "prompt_hook",
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage("recipient", "generation", old_owner, report, name)
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               new_owner,
+               %{report | "generation" => "old-generation"},
+               name
+             )
+
+    assert :sys.get_state(name).entries["recipient"].resolved == []
+    assert :ok = DeliveryStates.report_stage("recipient", "generation", new_owner, report, name)
+  end
+
+  test "range retirement counts only unresolved work and preserves submitted history", %{
+    name: name
+  } do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = :sys.get_state(name).entries["recipient"].incarnation
+
+    for turn <- 1..2 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "range-cid", turn_number: turn},
+                 name
+               )
+    end
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => incarnation,
+                 "generation" => "generation",
+                 "delivery_seq" => 2,
+                 "stage" => "submitted",
+                 "handoff" => "prompt_hook",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert {:ok, %{acked_seq: 2, lost_count: 1, last_loss: %{count: 1, reason: "delivery_lost"}}} =
+             DeliveryStates.resync("recipient", "generation", owner, 2, [[1, 2]], name)
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "range-cid", 2, name)
+  end
+
+  test "V30b V30c generation retirement loses only the unresolved sequence", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    for turn <- 1..2 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "owned-retirement-cid", turn_number: turn},
+                 name
+               )
+    end
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => incarnation,
+                 "generation" => "generation",
+                 "delivery_seq" => 2,
+                 "stage" => "submitted",
+                 "handoff" => "prompt_hook",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert {:ok, %{acked_seq: 2, lost_count: 1, last_loss: %{count: 1}}} =
+             DeliveryStates.retire_owned_generation("recipient", "generation", owner, name)
+
+    assert {:ok, %{stages: stages}} =
+             DeliveryStates.message_status("sender", "owned-retirement-cid", 2, name)
+
+    assert Map.has_key?(stages, "submitted")
+    refute Map.has_key?(stages, "lost")
+    DeliveryStates.bind_resync("recipient", "new-generation", owner, name)
+
+    assert {:ok, %{stages: stages}} =
+             DeliveryStates.message_status("sender", "owned-retirement-cid", 2, name)
+
+    refute Map.has_key?(stages, "lost")
+  end
+
+  test "yield disposition is set once while stage timestamps merge", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = :sys.get_state(name).entries["recipient"].incarnation
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "disposition-cid", turn_number: 1},
+               name
+             )
+
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    base = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "at" => at
+    }
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.merge(base, %{
+                 "stage" => "settled",
+                 "yield_disposition" => %{
+                   "outcome" => "downgraded",
+                   "reason" => "mixed_turn",
+                   "at" => at
+                 }
+               }),
+               name
+             )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.merge(base, %{"stage" => "submitted", "handoff" => "prompt_hook"}),
+               name
+             )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.put(base, "stage", "queued"),
+               name
+             )
+
+    later = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.to_iso8601()
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               base |> Map.put("stage", "queued") |> Map.put("at", later),
+               name
+             )
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.merge(base, %{
+                 "stage" => "unknown",
+                 "yield_disposition" => %{"outcome" => "cut", "at" => at}
+               }),
+               name
+             )
+
+    assert {:ok,
+            %{
+              stages: %{"settled" => ^at, "submitted" => ^at, "queued" => ^at},
+              yield_disposition: %{"outcome" => "downgraded"}
+            }} =
+             DeliveryStates.message_status("sender", "disposition-cid", 1, name)
+  end
+
+  test "old stage history expires without clearing unresolved delivery metadata", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = :sys.get_state(name).entries["recipient"].incarnation
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "expired-stage-cid", turn_number: 1},
+               name
+             )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => incarnation,
+                 "generation" => "generation",
+                 "delivery_seq" => 1,
+                 "stage" => "queued",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    key = {"recipient", incarnation}
+    assert %{^key => %{1 => _}} = :sys.get_state(name).entries["recipient"].stage_history
+
+    :sys.replace_state(name, fn state ->
+      entry = state.entries["recipient"]
+      old = "2020-01-01T00:00:00Z"
+      entry = put_in(entry.stage_history[key][1].changed_at, old)
+
+      %{
+        state
+        | entries: Map.put(state.entries, "recipient", entry),
+          stages: put_in(state.stages[key][1].changed_at, old)
+      }
+    end)
+
+    assert {:ok, %{status: "expired"}} =
+             DeliveryStates.message_status("sender", "expired-stage-cid", 1, name)
+
+    assert {:ok, %{lost_count: 1}} =
+             DeliveryStates.retire_owned_generation("recipient", "generation", owner, name)
+
+    assert [%{reason: "interrupted", descriptor: %{conversation_id: "expired-stage-cid"}}] =
+             DeliveryStates.pending_losses(name)
+  end
+
+  test "V30h resolved history expires after prefix reclamation without a loss", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "resolved-expiry-cid", turn_number: 1},
+               name
+             )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => incarnation,
+                 "generation" => "generation",
+                 "delivery_seq" => 1,
+                 "stage" => "submitted",
+                 "handoff" => "prompt_hook",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert %{acked_seq: 1} =
+             DeliveryStates.acknowledge("recipient", "generation", owner, 1, name)
+
+    assert %{acked_seq: 1, lost_count: 0} = DeliveryStates.get("recipient", name)
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "resolved-expiry-cid", 1, name)
+
+    key = {"recipient", incarnation}
+
+    :sys.replace_state(name, fn state ->
+      entry = state.entries["recipient"]
+      old = "2020-01-01T00:00:00Z"
+      entry = put_in(entry.stage_history[key][1].changed_at, old)
+
+      %{
+        state
+        | entries: Map.put(state.entries, "recipient", entry),
+          stages: put_in(state.stages[key][1].changed_at, old)
+      }
+    end)
+
+    assert {:ok, %{status: "expired"}} =
+             DeliveryStates.message_status("sender", "resolved-expiry-cid", 1, name)
+
+    assert %{acked_seq: 1, lost_count: 0} = DeliveryStates.get("recipient", name)
+  end
+
+  test "V34a stage history retains exactly the newest 2000 records", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+
+    assert Application.fetch_env!(:kaoiro_server, :delivery_intent)[:delivery_stage_max_records] ==
+             2_000
+
+    for turn <- 1..2_001 do
+      assert ^turn =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "stage-bound-cid", turn_number: turn},
+                 name
+               )
+
+      assert %{acked_seq: ^turn} =
+               DeliveryStates.acknowledge("recipient", "generation", owner, turn, name)
+    end
+
+    history = :sys.get_state(name).entries["recipient"].stage_history
+
+    assert 2_000 ==
+             Enum.reduce(history, 0, fn {_key, records}, count -> count + map_size(records) end)
+
+    assert {:ok, %{status: "expired"}} =
+             DeliveryStates.message_status("sender", "stage-bound-cid", 1, name)
+
+    assert {:ok, %{stages: %{"accepted" => _}}} =
+             DeliveryStates.message_status("sender", "stage-bound-cid", 2_001, name)
+  end
+
   test "legacy DETS watermarks migrate without inventing sender information", %{
     name: name,
     path: path

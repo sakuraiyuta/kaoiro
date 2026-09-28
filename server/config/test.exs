@@ -87,6 +87,13 @@ config :kaoiro_server,
          "kaoiro_test_delivery_states_#{run_nonce}.dets"
        )
 
+config :kaoiro_server,
+       :work_store_path,
+       Path.join(
+         test_dets_dir,
+         "kaoiro_test_work_store_#{run_nonce}.dets"
+       )
+
 # Per-run throwaway DETS file for the session_lifecycle timeline (ADR-0055,
 # phase-33 Stage B). Same isolation reason as the stores above — without
 # it, the app-started singleton shares the default

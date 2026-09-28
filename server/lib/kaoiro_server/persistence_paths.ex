@@ -93,6 +93,12 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_DELIVERY_STATES_PATH",
       default_file: "delivery_states.dets"
     },
+    %{
+      store: "work_store",
+      config_key: :work_store_path,
+      env: "KAOIRO_WORK_STORE_PATH",
+      default_file: "work_store.dets"
+    },
     # Authoritative store of revoked agent_ids for fail-closed auth (ふじ
     # issue #116 must-fix 1, 2026-07-25): a lost entry silently re-grants a
     # revoked identity.

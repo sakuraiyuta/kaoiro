@@ -39,6 +39,30 @@ config :kaoiro_server,
     # wrapper's CLOSED_TRACK_TTL_MS (24h) so a late message cannot land on
     # a conversation_id reused before the wrapper itself has forgotten it.
     tombstone_ttl_ms: 86_400_000
+  ],
+  delivery_intent: [
+    early_pending_per_pair: 4,
+    early_pending_per_recipient: 16,
+    yield_min_interval_ms: 120_000,
+    yield_tokens_per_recipient: 64,
+    yield_token_ttl_ms: 86_400_000,
+    delivery_stage_max_records: 2_000,
+    delivery_stage_max_age_ms: 86_400_000,
+    delivery_stage_retention_ms: 3_600_000
+  ],
+  work_store: [
+    work_active_per_assignee: 16,
+    work_nominated_per_principal: 16,
+    work_nomination_ttl_ms: 86_400_000,
+    work_max_records: 4_096,
+    work_terminal_retention_ms: 2_592_000_000,
+    operation_validity_ms: 86_400_000,
+    work_receipts_per_work_principal: 64,
+    work_receipts_per_principal: 1_024,
+    work_verdicts_per_work: 64,
+    work_accepted_verdicts_per_work: 64,
+    work_pending_transfers: 8,
+    work_checks_per_work: 64
   ]
 
 # Review-quagmire detection (issue #273). Advisory only: nothing here

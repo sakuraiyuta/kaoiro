@@ -21,6 +21,224 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.TransportLimits
   alias KaoiroServerWeb.AgentsChannel
   alias KaoiroServerWeb.PeerConnectivity
+  alias KaoiroServer.WorkStore
+
+  test "viewer cannot create work through operator control" do
+    socket = join_as(:viewer)
+
+    operation = %{
+      "op" => "assign",
+      "operation_id" => work_operation_id(),
+      "title" => "Forbidden work",
+      "assignee" => "forbidden-assignee",
+      "director" => %{"kind" => "agent", "id" => "forbidden-director"}
+    }
+
+    before = map_size(WorkStore.all())
+
+    assert_reply push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
+                 :error,
+                 %{reason: "forbidden"}
+
+    assert map_size(WorkStore.all()) == before
+  end
+
+  test "operator creates a durable active work" do
+    socket = join_as(:operator)
+
+    operation = %{
+      "op" => "assign",
+      "operation_id" => work_operation_id(),
+      "title" => "Operator work",
+      "assignee" => "operator-assignee",
+      "director" => %{"kind" => "agent", "id" => "operator-director"},
+      "requires_verdict" => false
+    }
+
+    assert_reply push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
+                 :ok,
+                 %{"work_control_result" => %{work: %{work_id: work_id, state: "active"}}}
+
+    assert {:ok, %{work: %{work_id: ^work_id, state: "active"}}} =
+             WorkStore.status(%{"kind" => "user", "id" => "operator"}, work_id)
+  end
+
+  test "V8b operator work_notice stays outside intent admission" do
+    suffix = System.unique_integer([:positive])
+    assignee = "work-notice-assignee-#{suffix}"
+    @endpoint.subscribe("wrapper:" <> assignee)
+
+    {:ok, _reply, wrapper} =
+      KaoiroServerWeb.WrapperSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> assignee, %{
+        "persona_id" => "default",
+        "work_control" => "v1",
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_generation" => "notice-generation-#{suffix}",
+        "delivery_resync" => "skip-v1",
+        "inter_agent_reply_basis" => "v1",
+        "inter_agent_delivery_modes" => %{
+          "version" => "v1",
+          "early" => "fold",
+          "yield" => "none",
+          "stage_reports" => true
+        }
+      })
+
+    assert_reply push(wrapper, "envelope", %{
+                   "version" => "0",
+                   "agent_id" => assignee,
+                   "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
+                   "ts" => "2026-09-28T00:00:00Z",
+                   "type" => "state_change",
+                   "state" => "idle",
+                   "payload" => %{},
+                   "ext" => %{}
+                 }),
+                 :ok
+
+    on_exit(fn -> DeliveryStates.delete(assignee) end)
+    assert AgentStates.connected?(assignee)
+    assert WorkStore.work_control_enabled?(assignee)
+
+    operator = join_as(:operator)
+
+    operation = %{
+      "op" => "assign",
+      "operation_id" => work_operation_id(),
+      "title" => "Synthetic work notice",
+      "assignee" => assignee,
+      "director" => %{"kind" => "agent", "id" => "work-notice-director-#{suffix}"}
+    }
+
+    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+                 :ok
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "wrapper:" <> ^assignee,
+      event: "work_notice",
+      payload: notice
+    }
+
+    assert notice["op"] == "assign"
+    refute Map.has_key?(notice, "delivery_intent")
+    refute Map.has_key?(notice, "delivery_authority")
+    assert {0, 0} = DeliveryStates.pending_early("server", assignee)
+  end
+
+  test "operator work_yield_status accepts a work ID and optional token filter" do
+    suffix = System.unique_integer([:positive])
+    cid = "yield-status-cid-#{suffix}"
+    director = %{"kind" => "agent", "id" => "yield-status-director-#{suffix}"}
+    assignee = %{"kind" => "agent", "id" => "yield-status-assignee-#{suffix}"}
+
+    assert {:ok, %{work: nomination}} =
+             WorkStore.apply(
+               director,
+               %{"op" => "assign", "operation_id" => work_operation_id(), "title" => cid},
+               %{
+                 recipient: assignee["id"],
+                 conversation_id: cid,
+                 turn_number: 1,
+                 new_conversation?: true
+               }
+             )
+
+    assert {:ok, %{work: work}} =
+             WorkStore.apply(
+               assignee,
+               %{
+                 "op" => "accept_assignment",
+                 "operation_id" => work_operation_id(),
+                 "work_id" => nomination.work_id
+               },
+               %{recipient: director["id"], conversation_id: cid, turn_number: 2}
+             )
+
+    assert {:ok, token} =
+             WorkStore.admit_yield(
+               director,
+               assignee["id"],
+               cid,
+               3,
+               work.work_id,
+               work.authority_epoch
+             )
+
+    DeliveryStates.bind_resync(assignee["id"], "yield-status-generation", self())
+    on_exit(fn -> DeliveryStates.delete(assignee["id"]) end)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(assignee["id"], %{
+               sender: director["id"],
+               conversation_id: cid,
+               turn_number: 3
+             })
+
+    assert {:ok, %{granted: true}} =
+             WorkStore.claim(assignee, %{
+               "yield_token" => token.yield_token,
+               "conversation_id" => cid,
+               "turn_number" => 3,
+               "work_id" => work.work_id,
+               "authority_epoch" => work.authority_epoch,
+               "incarnation" => "yield-status-incarnation",
+               "generation" => "yield-status-generation"
+             })
+
+    operator = join_as(:operator)
+    request = %{"version" => "0", "work_id" => work.work_id}
+
+    assert_reply push(operator, "work_yield_status", request), :ok, %{
+      "claimed_yields" => [%{yield_token: issued, disposition: %{outcome: "unknown"}}]
+    }
+
+    assert issued == token.yield_token
+
+    assert_reply push(
+                   operator,
+                   "work_yield_status",
+                   Map.put(request, "yield_token", token.yield_token)
+                 ),
+                 :ok,
+                 %{"claimed_yields" => [%{yield_token: ^issued}]}
+
+    assert_reply push(
+                   operator,
+                   "work_yield_status",
+                   Map.put(request, "yield_token", "yld_missing")
+                 ),
+                 :ok,
+                 %{"claimed_yields" => [%{disposition: %{outcome: "expired"}}]}
+
+    :sys.replace_state(DeliveryStates, fn state ->
+      entry = state.entries[assignee["id"]]
+      key = {assignee["id"], entry.incarnation}
+
+      history =
+        Map.update!(entry.stage_history, key, fn by_seq ->
+          Map.update!(by_seq, 1, &%{&1 | changed_at: "2020-01-01T00:00:00Z"})
+        end)
+
+      %{
+        state
+        | entries: Map.put(state.entries, assignee["id"], %{entry | stage_history: history})
+      }
+    end)
+
+    assert_reply push(operator, "work_yield_status", request), :ok, %{
+      "claimed_yields" => [%{yield_token: ^issued, disposition: %{outcome: "expired"}}]
+    }
+
+    assert_reply push(join_as(:viewer), "work_yield_status", request), :error, %{
+      reason: "forbidden"
+    }
+  end
+
+  defp work_operation_id do
+    "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+  end
 
   defp put_agent(agent_id) do
     :ok =
@@ -8385,8 +8603,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "T4-7: policy は21種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      # 22 since issue #307 added quagmire_settings beside quagmire_notice.
-      assert MapSet.size(policy) == 22
+      assert MapSet.size(policy) == 24
       assert MapSet.member?(policy, "quagmire_notice")
       assert MapSet.member?(policy, "quagmire_settings")
       refute MapSet.member?(policy, "not_declared")
