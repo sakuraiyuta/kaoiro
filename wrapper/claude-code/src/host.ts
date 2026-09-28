@@ -5,7 +5,7 @@ import { ToolOrigins } from "@kaoiro/agent-common";
 // Authentication is inherited from the local Claude Code runtime; no API key is
 // required or handled here.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AbortError, query } from "@anthropic-ai/claude-agent-sdk";
 import { readClaudeTasklist } from "./tasklist.js";
 import type { TasklistReadResult } from "./tasklist.js";
@@ -390,6 +390,16 @@ export interface AgentHostOptions {
   }) => void;
   /** Confirms that a wrapper input reached the SDK's pre-model prompt hook. */
   onPromptAdmitted?: (turnToken: string) => void;
+  /** Phase-2 receipt decisions are made only by the trusted prompt hook. */
+  onPushedInputDecision?: (decision: {
+    kind: "fold" | "root" | "unknown";
+    pushKind: "fold" | "cut";
+    turnToken?: string;
+    reason?: string;
+    envelopes: readonly Envelope[];
+    ticketValues: readonly string[];
+  }) => void;
+  pendingReceiptRootTimeoutMs?: number;
   /** Synchronous final check before an input is yielded to the SDK. Undefined
    * keeps the queued input; null consumes it without starting a turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -429,7 +439,7 @@ export interface AgentHostOptions {
     kind?: "wrapper_input" | "sdk_notification";
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
-    cancellation?: { kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop"; started: boolean };
+    cancellation?: { kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop" | "receipt_timeout_fail_stop"; started: boolean };
   }) => void;
   /** Invoked when the inactivity watchdog's abort grace expires, or when the
    * watchdog detects a token-attribution invariant failure. The host stops
@@ -444,7 +454,7 @@ export interface AgentHostOptions {
   }) => void;
   /** An SDK result cannot be assigned to the live wrapper input after a
    * competing notification prompt was rejected without a result origin. */
-  onAdmissionFailStop?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  onAdmissionFailStop?: (info: { turnToken?: string; conversationIds: readonly string[] }) => void;
   /** Invoked exactly once after the host has terminally settled every turn it
    *  accepted (including queued cancellations). It runs before the CLI closes
    *  its ServerLink, so ownership layers outside AgentHost can synchronously
@@ -591,6 +601,27 @@ interface QueuedTurn {
   message: SDKUserMessage;
   turnToken: string;
   conversationIds: readonly string[];
+  inputSource?: "operator" | "peer" | "synthetic";
+  urgent?: boolean;
+  inputEnvelopes?: readonly Envelope[];
+  operatorFolded?: boolean;
+}
+
+interface PushedReceipt {
+  foldId: string;
+  digest: string;
+  sessionId: string;
+  generation: string;
+  query: Query;
+  eligibleOwner: string;
+  ownerPromptId: string;
+  kind: "fold" | "cut";
+  message: SDKUserMessage;
+  envelopes: readonly Envelope[];
+  ticketValues: readonly string[];
+  conversationIds: readonly string[];
+  operatorInput?: boolean;
+  written: boolean;
 }
 
 interface NotificationTurn {
@@ -675,6 +706,16 @@ export class AgentHost implements EngineAdapter {
   #gcTimer: ReturnType<typeof setInterval> | null = null;
 
   readonly #queue: QueuedTurn[] = [];
+  readonly #pushedQueue: PushedReceipt[] = [];
+  #pendingPushedReceipt: PushedReceipt | null = null;
+  readonly #hostRunGeneration = randomUUID();
+  #pendingRootDeadline: number | null = null;
+  #pendingRootRemaining: number | null = null;
+  #pendingRootTimer: ReturnType<typeof setTimeout> | null = null;
+  #receiptTimeoutCount = 0;
+  #notificationClockPauses = 0;
+  #urgentRootStreak = 0;
+  readonly #foldsUsedByTurn = new Map<string, number>();
   /** The one SDK input currently awaiting its terminal result or explicit
    * abort. #input() will not yield another queued input until this becomes
    * null, applying wrapper-side backpressure to the SDK's eager pull. */
@@ -1035,6 +1076,105 @@ export class AgentHost implements EngineAdapter {
     return this.#activeTurn?.turnToken ?? null;
   }
 
+  canPushLiveInput(): boolean {
+    return !this.#closed && !this.#admissionFailStopped &&
+      this.#activeTurn !== null && this.#activeTurn.kind !== "sdk_notification" &&
+      this.#query !== null && this.#sessionId !== null &&
+      this.#pendingPushedReceipt === null && this.#pushedQueue.length === 0 &&
+      [...this.#promptOwners.values()].some(owner =>
+        owner.token === this.#activeTurn?.turnToken &&
+        owner.sessionId === this.#sessionId && !owner.tainted);
+  }
+
+  canFoldLiveInput(): boolean {
+    const token = this.#activeTurn?.turnToken;
+    return token !== undefined && this.canPushLiveInput() &&
+      (this.#foldsUsedByTurn.get(token) ?? 0) < 3;
+  }
+
+  removeQueuedInput(turnToken: string): boolean {
+    const index = this.#queue.findIndex(turn => turn.turnToken === turnToken);
+    if (index < 0) return false;
+    this.#queue.splice(index, 1);
+    return true;
+  }
+
+  hasQueuedInput(turnToken: string): boolean {
+    return this.#queue.some(turn => turn.turnToken === turnToken);
+  }
+
+  yieldEligibility(workId: string): "no_work_input" | "mixed_turn" | "continuation_turn" | null {
+    const turn = this.#activeTurn;
+    if (turn === null || turn.kind === "sdk_notification") return "continuation_turn";
+    if (turn.inputSource === "operator" || turn.operatorFolded) return "mixed_turn";
+    const linked = (turn.inputEnvelopes ?? []).map(envelope =>
+      (envelope.payload as { work?: { work_id?: unknown } }).work?.work_id)
+      .filter((value): value is string => typeof value === "string");
+    if (!linked.includes(workId)) return "no_work_input";
+    return linked.some(link => link !== workId) ? "mixed_turn" : null;
+  }
+
+  canReserveYieldOvertake(): boolean {
+    return this.#urgentRootStreak < 2 ||
+      !this.#queue.some(turn => turn.inputSource === "peer" && !turn.urgent);
+  }
+
+  pushLiveInput(options: {
+    kind: "fold" | "cut";
+    text: (foldId: string) => string;
+    envelopes: readonly Envelope[];
+    ticketValues?: readonly string[];
+    conversationIds: readonly string[];
+    operatorInput?: boolean;
+  }): boolean {
+    if (!this.canPushLiveInput()) return false;
+    const active = this.#activeTurn!;
+    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= 3) return false;
+    const ownerPromptId = [...this.#promptOwners].find(([, owner]) =>
+      owner.token === active.turnToken && owner.sessionId === this.#sessionId && !owner.tainted)?.[0];
+    if (ownerPromptId === undefined) return false;
+    const foldId = randomBytes(16).toString("hex");
+    const text = options.text(foldId);
+    if (!text.includes(foldId)) throw new Error("pushed input lacks its receipt identifier");
+    const message: SDKUserMessage = {
+      type: "user",
+      session_id: "",
+      parent_tool_use_id: null,
+      message: { role: "user", content: text },
+      ...(options.kind === "cut" ? { priority: "now" as const } : {}),
+    };
+    const receipt: PushedReceipt = {
+      foldId,
+      digest: createHash("sha256").update(text, "utf8").digest("hex"),
+      sessionId: this.#sessionId!,
+      generation: this.#hostRunGeneration,
+      query: this.#query!,
+      eligibleOwner: active.turnToken,
+      ownerPromptId,
+      kind: options.kind,
+      message,
+      envelopes: options.envelopes,
+      ticketValues: options.ticketValues ?? [],
+      conversationIds: options.conversationIds,
+      ...(options.operatorInput === undefined ? {} : { operatorInput: options.operatorInput }),
+      written: false,
+    };
+    this.#pendingPushedReceipt = receipt;
+    if (options.kind === "fold") {
+      this.#foldsUsedByTurn.set(active.turnToken, (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) + 1);
+      if (active.kind !== "sdk_notification") active.inputEnvelopes = [...(active.inputEnvelopes ?? []), ...options.envelopes];
+      if (active.kind !== "sdk_notification" && options.operatorInput) active.operatorFolded = true;
+    }
+    this.#pushedQueue.push(receipt);
+    this.#wakeTurnBoundary();
+    this.#wake();
+    return true;
+  }
+
+  receiptDiagnostics(): { root_hook_timeout: number; notification_clock_pauses: number } {
+    return { root_hook_timeout: this.#receiptTimeoutCount, notification_clock_pauses: this.#notificationClockPauses };
+  }
+
   /** Snapshot of the calling agent's identity and current status (used by the
    *  `mcp__kaoiro__whoami` tool, docs/reference/inter-agent/directory.md). Reads only
    *  local state — no server round-trip, since the wrapper holds the freshest
@@ -1125,6 +1265,7 @@ export class AgentHost implements EngineAdapter {
     attachmentIds?: string[],
     interAgentConversationIds?: readonly string[],
     turnToken: string = randomUUID(),
+    inputPolicy?: { source: "operator" | "peer" | "synthetic"; urgent?: boolean; envelopes?: readonly Envelope[] },
   ): Promise<void> {
     this.#assertCanQueue();
 
@@ -1215,6 +1356,11 @@ export class AgentHost implements EngineAdapter {
       },
       turnToken,
       conversationIds: interAgentConversationIds ?? [],
+      ...(inputPolicy === undefined ? {} : {
+        inputSource: inputPolicy.source,
+        urgent: inputPolicy.urgent === true,
+        inputEnvelopes: inputPolicy.envelopes ?? [],
+      }),
     });
     // Optimistic `sending` state (#32): raised here, where the host knows the
     // instruction was accepted, rather than waiting for an SDK message that
@@ -1520,7 +1666,7 @@ export class AgentHost implements EngineAdapter {
   #failStopAdmission(
     activeTurn: QueuedTurn | NotificationTurn | null,
     detail: string,
-    cancellationKind: "watchdog_fail_stop" | "admission_fail_stop",
+    cancellationKind: "watchdog_fail_stop" | "admission_fail_stop" | "receipt_timeout_fail_stop",
     onFreeze: () => void,
   ): boolean {
     this.#admissionFailStopped = true;
@@ -1874,6 +2020,43 @@ export class AgentHost implements EngineAdapter {
   #admitPrompt(input: HookInput): void {
     if (input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id || input.agent_id || this.#closed ||
         this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192) return;
+    const pushed = this.#pendingPushedReceipt;
+    if (pushed?.written && input.prompt.includes(pushed.foldId)) {
+      const sameContext = pushed.sessionId === input.session_id &&
+        pushed.generation === this.#hostRunGeneration && pushed.query === this.#query;
+      const sameText = createHash("sha256").update(input.prompt, "utf8").digest("hex") === pushed.digest;
+      if (!sameContext || !sameText) {
+        this.#resolvePushedReceipt(pushed, "unknown", sameText ? "receipt_context_mismatch" : "digest_mismatch");
+        return;
+      }
+      if (input.prompt_id === pushed.ownerPromptId &&
+          this.#activeTurn?.turnToken === pushed.eligibleOwner && pushed.kind === "fold") {
+        this.#resolvePushedReceipt(pushed, "fold", undefined, pushed.eligibleOwner);
+        return;
+      }
+      if (input.prompt_id !== pushed.ownerPromptId && this.#activeTurn === null) {
+        const turnToken = randomUUID();
+        const turn: QueuedTurn = {
+          kind: "wrapper_input",
+          turnToken,
+          conversationIds: pushed.conversationIds,
+          message: pushed.message,
+          inputSource: pushed.operatorInput ? "operator" : "peer",
+          inputEnvelopes: pushed.envelopes,
+        };
+        this.#activeTurn = turn;
+        this.#urgentRootStreak += 1;
+        this.toolOrigins.begin(turnToken);
+        this.#everStartedTurn = true;
+        this.#resolvePushedReceipt(pushed, "root", undefined, turnToken);
+        this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turnToken, kind: "wrapper_input" });
+        this.#options.onTurnStart?.({ turnToken, conversationIds: pushed.conversationIds, kind: "wrapper_input" });
+        this.#options.onPromptAdmitted?.(turnToken);
+        return;
+      }
+      this.#resolvePushedReceipt(pushed, "unknown", "owner_still_live");
+      return;
+    }
     const active = this.#activeTurn;
     const owner = this.#promptOwners.get(input.prompt_id);
     const wrapperContent = active?.kind !== "sdk_notification" ? active?.message.message.content : undefined;
@@ -1924,10 +2107,87 @@ export class AgentHost implements EngineAdapter {
     }
     const turn: NotificationTurn = { kind: "sdk_notification", turnToken: randomUUID(), conversationIds: [], promptId: input.prompt_id };
     this.#activeTurn = turn;
+    this.#pausePendingRootClock();
     this.#everStartedTurn = true;
     this.toolOrigins.beginIndependent(turn.turnToken);
     this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turn.turnToken, kind: turn.kind });
     this.#options.onTurnStart?.({ turnToken: turn.turnToken, conversationIds: [], kind: turn.kind });
+  }
+
+  #resolvePushedReceipt(
+    receipt: PushedReceipt,
+    kind: "fold" | "root" | "unknown",
+    reason?: string,
+    turnToken?: string,
+  ): void {
+    if (this.#pendingPushedReceipt !== receipt) return;
+    this.#pendingPushedReceipt = null;
+    this.#clearPendingRootClock();
+    this.#options.onPushedInputDecision?.({
+      kind,
+      pushKind: receipt.kind,
+      ...(turnToken === undefined ? {} : { turnToken }),
+      ...(reason === undefined ? {} : { reason }),
+      envelopes: receipt.envelopes,
+      ticketValues: receipt.ticketValues,
+    });
+    this.#wakeTurnBoundary();
+    this.#wake();
+  }
+
+  #clearPendingRootClock(): void {
+    if (this.#pendingRootTimer !== null) clearTimeout(this.#pendingRootTimer);
+    this.#pendingRootTimer = null;
+    this.#pendingRootDeadline = null;
+    this.#pendingRootRemaining = null;
+  }
+
+  #startPendingRootClock(): void {
+    if (this.#pendingPushedReceipt === null || this.#admissionFailStopped) return;
+    if (this.#pendingRootRemaining === null) {
+      this.#pendingRootRemaining = this.#options.pendingReceiptRootTimeoutMs ?? 2_000;
+    }
+    this.#resumePendingRootClock();
+  }
+
+  #pausePendingRootClock(): void {
+    if (this.#pendingRootDeadline === null) return;
+    this.#pendingRootRemaining = Math.max(0, this.#pendingRootDeadline - this.#nowMs());
+    this.#pendingRootDeadline = null;
+    if (this.#pendingRootTimer !== null) clearTimeout(this.#pendingRootTimer);
+    this.#pendingRootTimer = null;
+    this.#notificationClockPauses += 1;
+    writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "notification_clock_pause", count: this.#notificationClockPauses })}\n`);
+  }
+
+  #resumePendingRootClock(): void {
+    if (this.#pendingPushedReceipt === null || this.#pendingRootRemaining === null ||
+        this.#activeTurn?.kind === "sdk_notification") return;
+    const remaining = this.#pendingRootRemaining;
+    this.#pendingRootDeadline = this.#nowMs() + remaining;
+    if (this.#pendingRootTimer !== null) clearTimeout(this.#pendingRootTimer);
+    this.#pendingRootTimer = setTimeout(() => this.tickPendingReceiptRootTimeout(), remaining);
+    this.#pendingRootTimer.unref?.();
+  }
+
+  tickPendingReceiptRootTimeout(): boolean {
+    if (this.#pendingRootDeadline === null || this.#nowMs() < this.#pendingRootDeadline ||
+        this.#pendingPushedReceipt === null || this.#admissionFailStopped) return false;
+    const receipt = this.#pendingPushedReceipt;
+    this.#receiptTimeoutCount += 1;
+    writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "root_hook_timeout", count: this.#receiptTimeoutCount })}\n`);
+    this.#resolvePushedReceipt(receipt, "unknown", "root_hook_timeout");
+    this.#pushedQueue.length = 0;
+    this.#unattributedTerminalFrozen = true;
+    this.#failStopAdmission(this.#activeTurn,
+      "pushed input root hook timed out; host admission stopped pending operator recovery",
+      "receipt_timeout_fail_stop", () => {
+        this.#options.onAdmissionFailStop?.({
+          ...(this.#activeTurn === null ? {} : { turnToken: this.#activeTurn.turnToken }),
+          conversationIds: this.#activeTurn?.conversationIds ?? [],
+        });
+      });
+    return true;
   }
 
   #observePromptTool(input: HookInput, toolUseId: string | undefined): void {
@@ -2102,6 +2362,9 @@ export class AgentHost implements EngineAdapter {
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
           if (hadPriorSession) {
+            if (this.#pendingPushedReceipt !== null) {
+              this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "session_changed");
+            }
             this.#clearNotificationCandidates();
             this.#promptOwners.clear();
             this.#retiredPromptIds.clear();
@@ -3924,10 +4187,29 @@ export class AgentHost implements EngineAdapter {
 
   async *#input(): AsyncGenerator<SDKUserMessage> {
     while (true) {
-      while (this.#queue.length > 0) {
+      const pushed = this.#pushedQueue.shift();
+      if (pushed !== undefined) {
+        if (this.#pendingPushedReceipt !== pushed || this.#closed) continue;
+        pushed.written = true;
+        yield pushed.message;
+        continue;
+      }
+      if (this.#activeTurn !== null) {
+        if (this.#closed && this.#queue.length === 0) return;
+        await this.#waitForTurnBoundary(this.#activeTurn.turnToken);
+        continue;
+      }
+      if (this.#pendingPushedReceipt !== null) {
+        await new Promise<void>((resolve) => {
+          if (this.#pendingPushedReceipt === null || this.#closed) resolve();
+          else this.#turnBoundaryNotify = resolve;
+        });
+        continue;
+      }
+      if (this.#queue.length > 0) {
         await this.#waitForNotificationBoundary();
         if (this.#closed && this.#queue.length === 0) return;
-        const turn = this.#queue.shift() as QueuedTurn;
+        const turn = this.#pickNextRoot();
         const prepared = this.#options.prepareInput?.(turn.turnToken);
         if (prepared === null) {
           if (this.#queue.length === 0 && !this.#closed) {
@@ -3940,6 +4222,10 @@ export class AgentHost implements EngineAdapter {
           turn.message.message.content = prepared.text;
           turn.conversationIds = prepared.conversationIds;
         }
+        if (turn.inputSource === "peer") {
+          if (turn.urgent) this.#urgentRootStreak += 1;
+          else this.#urgentRootStreak = 0;
+        }
         this.#activeTurn = turn;
         this.toolOrigins.begin(turn.turnToken);
         this.#everStartedTurn = true;
@@ -3951,16 +4237,24 @@ export class AgentHost implements EngineAdapter {
           conversationIds: turn.conversationIds,
         });
         yield turn.message;
-        // The SDK may immediately pull again before it emits this turn's
-        // result. Do not let that eager pull replace a turn's correlation
-        // identity: the terminal result or an explicit abort opens this gate.
-        await this.#waitForTurnBoundary(turn.turnToken);
+        continue;
       }
       if (this.#closed) return;
       await new Promise<void>((resolve) => {
         this.#notify = resolve;
       });
     }
+  }
+
+  #pickNextRoot(): QueuedTurn {
+    const operatorIndex = this.#queue.findIndex(turn => turn.inputSource === "operator");
+    const ordinaryIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && !turn.urgent);
+    const urgentIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && turn.urgent);
+    const selectedIndex = operatorIndex >= 0 ? operatorIndex
+      : ordinaryIndex >= 0 && this.#urgentRootStreak >= 2 ? ordinaryIndex
+      : urgentIndex >= 0 ? urgentIndex
+      : ordinaryIndex >= 0 ? ordinaryIndex : 0;
+    return this.#queue.splice(selectedIndex, 1)[0]!;
   }
 
   /** Wait without consuming the first queued turn. #input() will drain it
@@ -3981,6 +4275,7 @@ export class AgentHost implements EngineAdapter {
 
   async #waitForTurnBoundary(turnToken: string): Promise<void> {
     while (this.#activeTurn?.turnToken === turnToken) {
+      if (this.#pushedQueue.length > 0) return;
       // close() ends the input stream after the current turn drains. A fake
       // SDK used by tests may model that drain by merely consuming input and
       // returning (without a result); allow that iterator to finish, while
@@ -3992,6 +4287,7 @@ export class AgentHost implements EngineAdapter {
         // the waiter. Re-check in the same turn so no wake is missed.
         if (
           this.#activeTurn?.turnToken !== turnToken ||
+          this.#pushedQueue.length > 0 ||
           (this.#closed && this.#queue.length === 0)
         ) {
           resolve();
@@ -4018,7 +4314,7 @@ export class AgentHost implements EngineAdapter {
     error: { reason?: string; detail?: string } | undefined,
     notifyWhenAbsent: boolean,
     cancellation?: {
-      kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop";
+      kind: "stream_eof" | "watchdog_fail_stop" | "admission_fail_stop" | "receipt_timeout_fail_stop";
       started: boolean;
     },
   ): void {
@@ -4042,6 +4338,11 @@ export class AgentHost implements EngineAdapter {
       }
     }
     this.#activeTurn = null;
+    if (turn !== null) this.#foldsUsedByTurn.delete(turn.turnToken);
+    if (this.#pendingPushedReceipt !== null) {
+      if (turn?.kind === "sdk_notification") this.#resumePendingRootClock();
+      else this.#startPendingRootClock();
+    }
     this.#unresolvedForeignPromptIds.clear();
     for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
     if (turn !== null) {
@@ -4083,6 +4384,10 @@ export class AgentHost implements EngineAdapter {
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     this.#closed = true;
+    if (this.#pendingPushedReceipt !== null) {
+      this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "stream_eof");
+    }
+    this.#pushedQueue.length = 0;
     this.#clearNotificationCandidates();
     this.#startupProbeAbort.abort();
     this.#abortActiveTurn(error);

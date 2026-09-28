@@ -34,6 +34,348 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it.each(["success", "error"] as const)("folds a granted early delivery from the same peer while its work turn is live (%s)", async outcome => {
+    vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+    const stages: Array<Record<string, unknown>> = [];
+    const acknowledged: number[] = [];
+    const pushedInputs: string[] = [];
+    const notices: Envelope[] = [];
+    let linkOptions!: Record<string, any>;
+    let host!: AgentHost;
+    let ready!: () => void;
+    const rootReady = new Promise<void>(resolve => { ready = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+          deliveryIncarnation: () => "inc",
+          deliveryGeneration: () => "gen",
+          reportDeliveryStage: (stage: Record<string, unknown>) => stages.push(stage),
+          acknowledgeInterAgentDelivery: (seq: number) => acknowledged.push(seq),
+          retireInterAgentDeliveries: () => true,
+          flushInterAgentRetirements: async () => {},
+          sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          setSessionId: () => {}, reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (cfg, options) => {
+        host = new AgentHost(cfg, {
+          ...options,
+          queryFn: (({ prompt, options: sdkOptions }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+            const stream = (async function* (): AsyncGenerator<SDKMessage> {
+              const input = prompt[Symbol.asyncIterator]();
+              const signal = { signal: new AbortController().signal };
+              const root = (await input.next()).value!;
+              const rootText = root.message.content as string;
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: rootText,
+              }, undefined, signal);
+              yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+              ready();
+              const fold = (await input.next()).value!;
+              const foldText = fold.message.content as string;
+              pushedInputs.push(foldText);
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: foldText,
+              }, undefined, signal);
+              yield outcome === "error"
+                ? { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["failed"] } as SDKMessage
+                : { type: "result", subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+            })();
+            return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+          }) as never,
+        });
+        host.probeRateLimits = async () => {};
+        return host;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(host).toBeDefined());
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      await linkOptions.onInterAgentMessage(inboundEnvelope(1));
+      await rootReady;
+      const inbound = inboundEnvelope(2);
+      inbound.payload.delivery_authority = { requested: "early", granted: "early" };
+      await linkOptions.onInterAgentMessage(inbound);
+      await running;
+      expect(pushedInputs).toHaveLength(1);
+      expect(pushedInputs[0]).toContain("Mid-turn peer delivery");
+      expect(stages).toContainEqual(expect.objectContaining({ stage: "submitted", handoff: "fold_hook" }));
+      expect(acknowledged).toEqual([1, 2]);
+      if (outcome === "error") {
+        await vi.waitFor(() => expect(notices.filter(envelope => envelope.payload.conversation_id === "c-2")).toHaveLength(1));
+        expect(notices.find(envelope => envelope.payload.conversation_id === "c-2")?.payload.notice_type).toBe("turn_failure");
+      }
+    } finally { host?.close(); await running; vi.unstubAllEnvs(); }
+  });
+
+  it("keeps a cut root F active for its peer until F settles before dispatching the next same-CID item", async () => {
+    vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+    const notices: Envelope[] = [];
+    const dispatched: string[] = [];
+    const stages: Array<Record<string, unknown>> = [];
+    let linkOptions!: Record<string, any>;
+    let host!: AgentHost;
+    let rootReady!: () => void;
+    let cutReady!: () => void;
+    let finishCut!: () => void;
+    const rootStarted = new Promise<void>(resolve => { rootReady = resolve; });
+    const cutStarted = new Promise<void>(resolve => { cutReady = resolve; });
+    const cutFinished = new Promise<void>(resolve => { finishCut = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+          deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+          requestYieldClaim: async () => ({ granted: true }),
+          reportDeliveryStage: (stage: Record<string, unknown>) => stages.push(stage),
+          acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
+          flushInterAgentRetirements: async () => {},
+          sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          setSessionId: () => {}, reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (cfg, options) => {
+        host = new AgentHost(cfg, {
+          ...options,
+          queryFn: (({ prompt, options: sdkOptions }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+            const stream = (async function* (): AsyncGenerator<SDKMessage> {
+              const input = prompt[Symbol.asyncIterator]();
+              const signal = { signal: new AbortController().signal };
+              const first = (await input.next()).value!;
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: first.message.content as string,
+              }, undefined, signal);
+              yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+              rootReady();
+              const cut = (await input.next()).value!;
+              expect(cut.priority).toBe("now");
+              yield { type: "result", subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: cut.message.content as string,
+              }, undefined, signal);
+              cutReady();
+              await cutFinished;
+              yield { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["F failed"] } as SDKMessage;
+              const later = (await input.next()).value!;
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p3", prompt: later.message.content as string,
+              }, undefined, signal);
+              yield { type: "result", subtype: "success", session_id: "s", result: "R done" } as SDKMessage;
+            })();
+            return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+          }) as never,
+        });
+        const send = host.send.bind(host);
+        host.send = async (...args) => { if (args[4]?.source === "peer") dispatched.push(args[3]!); return send(...args); };
+        host.probeRateLimits = async () => {};
+        return host;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(host).toBeDefined());
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      const work = inboundEnvelope(1);
+      work.payload.work = { work_id: "W", revision: 1, authority_epoch: 1, state: "active" };
+      await linkOptions.onInterAgentMessage(work);
+      await rootStarted;
+      const yieldMessage = inboundEnvelope(2);
+      yieldMessage.payload.delivery_authority = {
+        requested: "yield", granted: "yield", work_id: "W", authority_epoch: 1, yield_token: "token",
+      };
+      await linkOptions.onInterAgentMessage(yieldMessage);
+      await cutStarted;
+      const later = inboundEnvelope(3, 2);
+      later.payload.conversation_id = yieldMessage.payload.conversation_id;
+      await linkOptions.onInterAgentMessage(later);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(dispatched).toHaveLength(2); // T and the queued lease; R has not dispatched.
+      finishCut();
+      await running;
+      expect(dispatched).toHaveLength(3);
+      expect(notices.filter(envelope => envelope.payload.conversation_id === yieldMessage.payload.conversation_id && envelope.payload.notice_type === "turn_failure")).toHaveLength(1);
+      expect(stages).toContainEqual(expect.objectContaining({ stage: "submitted", handoff: "prompt_hook" }));
+    } finally { finishCut(); host?.close(); await running; vi.unstubAllEnvs(); }
+  });
+
+  it.each([
+    { name: "mixed work", eligibility: "mixed_turn", claim: "none", reason: "mixed_turn", cuts: 0 },
+    { name: "claim refusal", eligibility: null, claim: "refuse", reason: "yield_interval", cuts: 0 },
+    { name: "claim timeout", eligibility: null, claim: "timeout", reason: "claim_timeout", cuts: 0 },
+    { name: "eligibility changes during claim", eligibility: null, claim: "changed", reason: "eligibility_changed", cuts: 0 },
+    { name: "transfer after claim", eligibility: null, claim: "transfer", reason: undefined, cuts: 1 },
+  ] as const)("decides yield from the final live input and claim result ($name)", async scenario => {
+    vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+    const dispositions: Array<Record<string, unknown>> = [];
+    const pushes: string[] = [];
+    const deliveredNotices: string[] = [];
+    const queued = new Set<string>();
+    let eligibility: string | null = scenario.eligibility;
+    let claimCalls = 0;
+    let resolveClaim!: (value: unknown) => void;
+    const delayedClaim = new Promise<unknown>(resolve => { resolveClaim = resolve; });
+    let linkOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, yield_claim_timeout_ms: scenario.claim === "timeout" ? 5 : 2_000 }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+          deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+          requestYieldClaim: async () => {
+            claimCalls += 1;
+            return scenario.claim === "refuse" ? { granted: false, reason: "yield_interval" } : delayedClaim;
+          },
+          reportDeliveryStage: (report: Record<string, unknown>) => dispositions.push(report),
+          acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
+          sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_cfg, options) => ({
+        state: "thinking", statusExtSnapshot: () => ({}),
+        run: async () => { started(); await finished; },
+        send: async (text: string, _attachments: unknown, _cids: readonly string[], token: string, policy?: { source?: string }) => {
+          if (policy?.source === "peer") queued.add(token);
+          else if (text.startsWith("Work notice:")) deliveredNotices.push(text);
+        },
+        activeInterAgentTurnToken: () => "T",
+        canPushLiveInput: () => true, canFoldLiveInput: () => false,
+        yieldEligibility: () => eligibility,
+        canReserveYieldOvertake: () => true,
+        hasQueuedInput: (token: string) => queued.has(token),
+        removeQueuedInput: (token: string) => queued.delete(token),
+        pushLiveInput: (input: { kind: string }) => { pushes.push(input.kind); return true; },
+      }) as never,
+    });
+    try {
+      await ready;
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      const yieldMessage = inboundEnvelope(1);
+      yieldMessage.payload.delivery_authority = {
+        requested: "yield", granted: "yield", work_id: "W", authority_epoch: 1, yield_token: "token",
+      };
+      await linkOptions.onInterAgentMessage(yieldMessage);
+      if (scenario.claim === "changed" || scenario.claim === "transfer") {
+        await vi.waitFor(() => expect(claimCalls).toBe(1));
+        if (scenario.claim === "changed") eligibility = "mixed_turn";
+        else {
+          linkOptions.onWorkNotice({ version: "0", work: { work_id: "W" }, op: "transfer" });
+          await vi.waitFor(() => expect(deliveredNotices).toHaveLength(1));
+        }
+        resolveClaim({ granted: true });
+      }
+      await vi.waitFor(() => expect(dispositions.some(report =>
+        (report.yield_disposition as { outcome?: string } | undefined)?.outcome === (scenario.cuts ? "cut" : "downgraded"))).toBe(true));
+      const last = [...dispositions].reverse().find(report => report.yield_disposition !== undefined)!.yield_disposition as { reason?: string };
+      expect(last.reason).toBe(scenario.reason);
+      expect(pushes.filter(kind => kind === "cut")).toHaveLength(scenario.cuts);
+      expect(claimCalls).toBe(scenario.claim === "none" ? 0 : 1);
+    } finally { finishHost(); await running; vi.unstubAllEnvs(); }
+  });
+
+  it("keeps an unpushed early lease urgent and lets same-peer ordinary input reach the root scheduler", async () => {
+    vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+    const inputs: Array<{ text: string; urgent?: boolean }> = [];
+    let linkOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+          deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+          reportDeliveryStage: () => {}, acknowledgeInterAgentDelivery: () => {},
+          sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: () => ({
+        state: "idle", statusExtSnapshot: () => ({}),
+        run: async () => { started(); await finished; },
+        send: async (text: string, _attachments: unknown, _cids: readonly string[], _token: string,
+          policy?: { urgent?: boolean }) => { inputs.push({ text, urgent: policy?.urgent ?? false }); },
+        canFoldLiveInput: () => false, hasQueuedInput: () => false,
+      }) as never,
+    });
+    try {
+      await ready;
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      const early = inboundEnvelope(1);
+      early.payload.delivery_authority = { requested: "early", granted: "early" };
+      await linkOptions.onInterAgentMessage(early);
+      await linkOptions.onInterAgentMessage(inboundEnvelope(2));
+      await vi.waitFor(() => expect(inputs).toHaveLength(2));
+      expect(inputs.map(input => input.urgent)).toEqual([true, false]);
+      expect(inputs[0]!.text).toContain("c-1");
+      expect(inputs[1]!.text).toContain("c-2");
+    } finally { finishHost(); await running; vi.unstubAllEnvs(); }
+  });
+
+  it("sends a failure notice for a queued peer turn cancelled before its first hook", async () => {
+    const notices: Envelope[] = [];
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_cfg, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "error", statusExtSnapshot: () => ({}),
+          run: async () => { started(); await finished; },
+          send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+            hostOptions.onTurnEnd({ turnToken: token, error: { reason: "timeout" },
+              cancellation: { kind: "receipt_timeout_fail_stop", started: false } });
+          },
+        } as never;
+      },
+    });
+    try {
+      await ready;
+      await linkOptions.onInterAgentMessage(inboundEnvelope(1));
+      await vi.waitFor(() => expect(notices.filter(envelope => envelope.payload.conversation_id === "c-1")).toHaveLength(1));
+      expect(notices[0]!.payload.notice_type).toBe("turn_failure");
+    } finally { finishHost(); await running; }
+  });
   it("connects a real Host watchdog fail-stop to the CLI send decision", async () => {
     const outbound: Envelope[] = [];
     const states: string[] = [];
@@ -402,6 +744,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
 
   it("decision-level test: onPromptAdmitted reaches the injected ServerLink seam", async () => {
     const reports: Record<string, unknown>[] = [];
+    let beforeHookStages: unknown[] = [];
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
     let finishHost!: () => void;
@@ -431,6 +774,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
             const prepared = hostOptions.prepareInput(token);
             expect(prepared).toBeDefined();
             hostOptions.onTurnStart({ turnToken: token, kind: "wrapper_input" });
+            beforeHookStages = reports.map(report => report.stage);
             hostOptions.onPromptAdmitted(token);
           },
         } as never;
@@ -441,6 +785,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect(linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "none", yield: "none", stage_reports: true });
       await linkOptions.onInterAgentMessage(inboundEnvelope(41));
       await vi.waitFor(() => expect(reports.map(report => report.stage)).toContain("submitted"));
+      expect(beforeHookStages).toEqual(["queued"]);
       expect(reports).toEqual(expect.arrayContaining([
         expect.objectContaining({ incarnation: "server-incarnation", generation: "wrapper-generation", delivery_seq: 41, stage: "queued" }),
         expect.objectContaining({ incarnation: "server-incarnation", generation: "wrapper-generation", delivery_seq: 41, stage: "submitted", handoff: "prompt_hook" }),

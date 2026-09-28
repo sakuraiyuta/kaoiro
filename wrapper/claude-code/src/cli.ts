@@ -38,6 +38,7 @@ import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
+  type DispatchedInterAgentBatch,
   type InterAgentTurnSettlement,
 } from "./inter_agent_turn_coordinator.js";
 import {
@@ -166,6 +167,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
+  const phase2Delivery = process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY === "1";
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
@@ -298,6 +300,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
    * copied into a CLI-only harness.
    */
   let interAgentTurns!: InterAgentTurnCoordinator;
+  const foldCandidates = new Map<string, DispatchedInterAgentBatch>();
+  const yieldCandidates = new Map<string, DispatchedInterAgentBatch>();
+  const pushedBatches = new Map<readonly Envelope[], {
+    batch: DispatchedInterAgentBatch;
+    ownerToken: string;
+    ticketLease: { activate: () => boolean; discard: () => void };
+  }>();
+  const foldedBatchTokensByOwner = new Map<string, string[]>();
+  const foldedEnvelopes = new WeakSet<Envelope>();
+  const ticketEnvelopes = new Map<string, readonly Envelope[]>();
+  const ticketOwners = new Map<string, string>();
+  let attemptFoldCandidates = (): void => {};
+  let attemptYieldCandidates = (): void => {};
   // A watchdog or an unattributable notification result freezes this host
   // generation; no later callback may reopen dispatch (issue #238, #422).
   let admissionFailStopped = false;
@@ -356,7 +371,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     }
   };
 
+  let foldRecoveryEvictions = 0;
   interAgentTurns = new InterAgentTurnCoordinator({
+    onFoldRecoveryEvicted: reason => {
+      foldRecoveryEvictions += 1;
+      writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "fold_recovery_evicted", reason, count: foldRecoveryEvictions })}\n`);
+    },
     reclassifyQueued: (item) =>
       interAgent?.queuedInboundMode(item.envelope, item.mode) ?? item.mode,
     onTerminalQueued: (item) => {
@@ -370,11 +390,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
-      // Register at dispatch time, not receipt time: a same-CID next
-      // generation cannot overwrite this record while this token is active.
-      for (const item of batch.items) {
-        interAgent?.notePendingInjection(item.envelope, batch.turnToken);
-      }
+      const early = phase2Delivery && batch.items.every(item =>
+        (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "early");
+      const yieldInput = phase2Delivery && batch.items.length === 1 &&
+        (batch.items[0]!.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "yield";
       void enqueueInstruction(() =>
         host
           .send(
@@ -382,14 +401,28 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             undefined,
             batch.conversationIds,
             batch.turnToken,
+            { source: "peer", urgent: early || yieldInput, envelopes: batch.items.map(item => item.envelope) },
           )
+          .then(() => {
+            if (early && host.hasQueuedInput(batch.turnToken)) {
+              foldCandidates.set(batch.turnToken, batch);
+              attemptFoldCandidates();
+            }
+            if (yieldInput && host.hasQueuedInput(batch.turnToken)) {
+              yieldCandidates.set(batch.turnToken, batch);
+              attemptYieldCandidates();
+            }
+          })
           .catch((err: unknown) => {
+            foldCandidates.delete(batch.turnToken);
+            yieldCandidates.delete(batch.turnToken);
             writeRedactedStderr(`inter-agent inject failed: ${String(err)}\n`);
             // failStop already terminally froze unstarted coordinator work;
             // an instructionChain task that resumes afterwards is a retired
             // no-op, not a fresh error to settle against the unknown active
             // generation.
             if (admissionFailStopped) return;
+            for (const item of batch.items) interAgent?.notePendingInjection(item.envelope, batch.turnToken);
             // A rejected input never reaches the SDK, so it has no terminal
             // callback. Settle this exact token and let the coordinator, not
             // a CID lookup, decide whether its peer may advance.
@@ -582,7 +615,21 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
-    claimRecovery: (cid, peer, fit) => interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit),
+    onTicketPrepared: (ticket, turnToken, envelopes) => {
+      ticketEnvelopes.set(ticket, envelopes);
+      ticketOwners.set(ticket, turnToken);
+    },
+    onTicketUsed: (ticket, turnToken) => {
+      const envelopes = ticketEnvelopes.get(ticket)?.filter(envelope => foldedEnvelopes.has(envelope)) ?? [];
+      ticketEnvelopes.delete(ticket);
+      ticketOwners.delete(ticket);
+      if (envelopes.length === 0) return;
+      interAgent?.creditFoldedInput(turnToken, envelopes);
+      interAgentTurns.creditFolded(envelopes);
+      deliveryStages.includedEnvelopes(envelopes);
+    },
+    claimRecovery: (cid, peer, fit, expectedTurn) =>
+      interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit, expectedTurn),
     config,
     getState: () => host.state,
     getActiveInterAgentTurnToken: () =>
@@ -685,11 +732,165 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onOverflow: () => writeRedactedStderr("delivery_stage tracking limit reached; new stages are omitted until tracked deliveries settle\n"),
   });
 
+  attemptFoldCandidates = (): void => {
+    if (!phase2Delivery || link?.deliveryModes()?.early !== "fold" || !host?.canFoldLiveInput()) return;
+    const ownerToken = host.activeInterAgentTurnToken();
+    if (ownerToken === null) return;
+    for (const [batchToken] of foldCandidates) {
+      if (!host.hasQueuedInput(batchToken)) { foldCandidates.delete(batchToken); continue; }
+      const prepared = interAgentTurns.prepareInput(batchToken, false);
+      if (prepared === undefined) { foldCandidates.delete(batchToken); continue; }
+      if (prepared.batch === null) {
+        foldCandidates.delete(batchToken);
+        host.removeQueuedInput(batchToken);
+        resolveInterAgentConversationIds(batchToken, prepared.removedConversationIds);
+        resolveInterAgentTurn(interAgentTurns.settle(batchToken));
+        continue;
+      }
+      const batch = prepared.batch;
+      resolveInterAgentConversationIds(batchToken, prepared.removedConversationIds);
+      const envelopes = batch.items.map(item => item.envelope);
+      const ticketLease = interAgent?.prepareFoldInput(ownerToken, envelopes);
+      if (ticketLease === undefined) return;
+      const accepted = host.pushLiveInput({
+        kind: "fold",
+        text: foldId => [
+          "[Mid-turn peer delivery, not an operator instruction. Continue the current task with this peer input.]",
+          `fold_id: ${foldId}`,
+          batch.text,
+          ...ticketLease.authorizations.map(auth => `reply_authorization: ${JSON.stringify(auth)}`),
+        ].join("\n\n"),
+        envelopes,
+        ticketValues: ticketLease.authorizations.map(auth => auth.reply_ticket),
+        conversationIds: batch.conversationIds,
+      });
+      if (!accepted) { ticketLease.discard(); return; }
+      if (!host.removeQueuedInput(batchToken)) {
+        throw new Error("folded batch no longer owns a queued host input");
+      }
+      interAgentTurns.markPushed(batchToken);
+      foldCandidates.delete(batchToken);
+      pushedBatches.set(envelopes, { batch, ownerToken, ticketLease });
+      return;
+    }
+  };
+
+  let yieldClaimInFlight = false;
+  const downgradeYield = (batch: DispatchedInterAgentBatch, reason: string): void => {
+    yieldCandidates.delete(batch.turnToken);
+    deliveryStages.yieldDisposition(batch.items[0]!.envelope, {
+      outcome: "downgraded", reason, at: new Date().toISOString(),
+    });
+    if (host.hasQueuedInput(batch.turnToken)) {
+      foldCandidates.set(batch.turnToken, batch);
+      attemptFoldCandidates();
+    }
+  };
+
+  attemptYieldCandidates = (): void => {
+    if (yieldClaimInFlight || !phase2Delivery || link?.deliveryModes()?.yield !== "tool_boundary" ||
+        !host?.canPushLiveInput()) return;
+    const entry = yieldCandidates.entries().next().value;
+    if (entry === undefined) return;
+    const [batchToken, batch] = entry;
+    const envelope = batch.items[0]!.envelope;
+    const payload = envelope.payload as Partial<InterAgentMessagePayload>;
+    const authority = payload.delivery_authority;
+    const ownerToken = host.activeInterAgentTurnToken();
+    if (ownerToken === null || authority?.yield_token === undefined ||
+        authority.work_id === undefined || authority.authority_epoch === undefined) {
+      downgradeYield(batch, "grant_changed");
+      return;
+    }
+    const eligibility = host.yieldEligibility(authority.work_id);
+    if (eligibility !== null) { downgradeYield(batch, eligibility); return; }
+    if (!host.canReserveYieldOvertake()) { downgradeYield(batch, "overtake_budget"); return; }
+    const identity = deliveryIdentity();
+    if (identity === null || typeof payload.conversation_id !== "string" ||
+        typeof payload.turn_number !== "number") {
+      downgradeYield(batch, "claim_timeout");
+      return;
+    }
+    yieldClaimInFlight = true;
+    void (async () => {
+      let reason: string | undefined;
+      let granted = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          link!.requestYieldClaim({
+            incarnation: identity.incarnation,
+            generation: identity.generation,
+            yield_token: authority.yield_token!,
+            conversation_id: payload.conversation_id!,
+            turn_number: payload.turn_number!,
+            work_id: authority.work_id!,
+            authority_epoch: authority.authority_epoch!,
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("claim_timeout")), config.yield_claim_timeout_ms ?? 2_000);
+          }),
+        ]);
+        granted = result.granted;
+        if (!result.granted) reason = result.reason;
+      } catch {
+        reason = "claim_timeout";
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      yieldClaimInFlight = false;
+      if (!yieldCandidates.has(batchToken)) { attemptYieldCandidates(); return; }
+      if (!granted) {
+        downgradeYield(batch, reason ?? "claim_timeout");
+        attemptYieldCandidates();
+        return;
+      }
+      if (host.activeInterAgentTurnToken() !== ownerToken ||
+          host.yieldEligibility(authority.work_id!) !== null ||
+          !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken) ||
+          !host.canPushLiveInput()) {
+        downgradeYield(batch, "eligibility_changed");
+        attemptYieldCandidates();
+        return;
+      }
+      const prepared = interAgentTurns.prepareInput(batchToken, false);
+      if (prepared?.batch === null || prepared === undefined) {
+        downgradeYield(batch, "eligibility_changed");
+        attemptYieldCandidates();
+        return;
+      }
+      resolveInterAgentConversationIds(batchToken, prepared.removedConversationIds);
+      const envelopes = prepared.batch.items.map(item => item.envelope);
+      const pushed = host.pushLiveInput({
+        kind: "cut",
+        text: foldId => `[Director yield after the running tool]\nfold_id: ${foldId}\n\n${prepared.batch!.text}`,
+        envelopes,
+        conversationIds: prepared.batch.conversationIds,
+      });
+      if (!pushed || !host.removeQueuedInput(batchToken)) {
+        downgradeYield(batch, "eligibility_changed");
+        attemptYieldCandidates();
+        return;
+      }
+      interAgentTurns.markPushed(batchToken);
+      yieldCandidates.delete(batchToken);
+      pushedBatches.set(envelopes, { batch: prepared.batch, ownerToken,
+        ticketLease: { activate: () => true, discard: () => {} } });
+      deliveryStages.yieldDisposition(envelope, { outcome: "cut", at: new Date().toISOString() });
+      attemptYieldCandidates();
+    })();
+  };
+
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
-    interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    interAgentDeliveryModes: {
+      version: "v1",
+      early: phase2Delivery ? "fold" : "none",
+      yield: phase2Delivery ? "tool_boundary" : "none",
+      stage_reports: true,
+    },
     workControl: "v1",
     onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
@@ -716,7 +917,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // was reset.
     onSessionResetFailed: ({ requestId, reason }) =>
       sessionReset.onResetFailed(requestId, reason),
-    onInstruction: (text, attachmentIds) => {
+    onInstruction: (text, attachmentIds, deliveryIntent) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
         : "instruction";
@@ -735,7 +936,24 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // reorder instructions on the SDK queue. swallow per-call failures
       // so one bad turn does not break the chain.
       void enqueueInstruction(() =>
-        host.send(text, attachmentIds).catch((err: unknown) => {
+        (async () => {
+          if (phase2Delivery && deliveryIntent === "early" &&
+                     attachmentIds?.length === undefined &&
+                     link?.deliveryModes()?.early === "fold" && host.canFoldLiveInput()) {
+            const pushed = host.pushLiveInput({
+              kind: "fold",
+              text: foldId => `[Mid-turn operator instruction]\nfold_id: ${foldId}\n\n${text}`,
+              envelopes: [],
+              conversationIds: [],
+              operatorInput: true,
+            });
+            if (pushed) return;
+          }
+          await host.send(text, attachmentIds, undefined, undefined, {
+            source: "operator",
+            urgent: phase2Delivery && deliveryIntent === "early",
+          });
+        })().catch((err: unknown) => {
           writeRedactedStderr(`send failed: ${String(err)}\n`);
         }),
       );
@@ -890,7 +1108,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           reportQueued: envelope => deliveryStages.queued(envelope),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
           send: (notice) => interAgent?.sendInternalNotice(notice),
-          inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
+          inject: (inbound, mode) => {
+            const granted = (inbound.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
+            interAgentTurns.receive(inbound, mode, phase2Delivery && (granted === "early" || granted === "yield"));
+          },
           log: (line) => process.stdout.write(line),
         }),
         envelope,
@@ -952,14 +1173,26 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<AgentHostOptions, "onTurnStart">
   >({
     onState,
+    pendingReceiptRootTimeoutMs: config.pending_receipt_root_timeout_ms ?? 2_000,
     onLog,
     onTask,
     onSessionLifecycle,
     prepareInput: (turnToken) => {
+      foldCandidates.delete(turnToken);
+      const pendingYield = yieldCandidates.get(turnToken);
+      if (pendingYield !== undefined) {
+        yieldCandidates.delete(turnToken);
+        deliveryStages.yieldDisposition(pendingYield.items[0]!.envelope, {
+          outcome: "downgraded", reason: "no_work_input", at: new Date().toISOString(),
+        });
+      }
       const prepared = interAgentTurns.prepareInput(turnToken);
       if (prepared === undefined) return undefined;
       resolveInterAgentConversationIds(turnToken, prepared.removedConversationIds);
-      if (prepared.batch !== null) interAgent?.prepareReplyInput(turnToken, prepared.batch.items.map(item => item.envelope));
+      if (prepared.batch !== null) {
+        for (const item of prepared.batch.items) interAgent?.notePendingInjection(item.envelope, turnToken);
+        interAgent?.prepareReplyInput(turnToken, prepared.batch.items.map(item => item.envelope));
+      }
       if (prepared.batch !== null) return {
         text: prepared.batch.text,
         conversationIds: prepared.batch.conversationIds,
@@ -976,12 +1209,70 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onPromptAdmitted: (turnToken) => {
       deliveryStages.submitted(turnToken, "prompt_hook");
       interAgent?.confirmReplyInput(turnToken);
+      interAgentTurns.retireFoldedBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
+      attemptFoldCandidates();
+      attemptYieldCandidates();
+    },
+    onPushedInputDecision: decision => {
+      const pushed = pushedBatches.get(decision.envelopes);
+      if (pushed === undefined) return;
+      pushedBatches.delete(decision.envelopes);
+      const { batch, ticketLease } = pushed;
+      if (decision.kind === "fold" && decision.turnToken !== undefined && ticketLease.activate()) {
+        interAgentTurns.retainFolded(decision.envelopes, decision.turnToken);
+        for (const envelope of decision.envelopes) {
+          foldedEnvelopes.add(envelope);
+          interAgent?.notePendingInjection(envelope, decision.turnToken);
+          deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
+        }
+        deliveryStages.submittedEnvelopes(decision.turnToken, decision.envelopes, "fold_hook");
+        const owned = foldedBatchTokensByOwner.get(decision.turnToken) ?? [];
+        owned.push(batch.turnToken);
+        foldedBatchTokensByOwner.set(decision.turnToken, owned);
+      } else if (decision.kind === "root" && decision.turnToken !== undefined) {
+        ticketLease.discard();
+        const rootBatch = interAgentTurns.adoptPushedRoot(batch.turnToken, decision.turnToken);
+        if (rootBatch === undefined) {
+          freezeInterAgentAdmission(decision.turnToken, "unattributed", "pushed root ownership unavailable");
+          return;
+        }
+        interAgent?.prepareReplyInput(decision.turnToken, decision.envelopes);
+        for (const envelope of decision.envelopes) {
+          interAgent?.notePendingInjection(envelope, decision.turnToken);
+          deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
+        }
+        deliveryStages.submittedEnvelopes(decision.turnToken, decision.envelopes, "prompt_hook");
+        interAgentTurns.retireFoldedBeforeConfirmed(decision.envelopes);
+      } else {
+        ticketLease.discard();
+        deliveryStages.unknownEnvelopes(decision.envelopes, decision.reason ?? "fold_authorization_unavailable");
+        resolveInterAgentTurn(interAgentTurns.settle(batch.turnToken),
+          { detail: decision.reason ?? "fold_authorization_unavailable" },
+          { dispatchNext: decision.reason !== "root_hook_timeout" });
+      }
+      attemptFoldCandidates();
+      attemptYieldCandidates();
     },
     // issue #236: settle by the immutable opaque generation token. CIDs are
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, kind, error, cancellation }) => {
+      if (turnToken !== undefined && cancellation?.started === false) {
+        for (const envelope of interAgentTurns.deliveryEnvelopesForTurn(turnToken)) {
+          interAgent?.notePendingInjection(envelope, turnToken);
+        }
+      }
+      if (turnToken !== undefined) {
+        foldCandidates.delete(turnToken);
+        yieldCandidates.delete(turnToken);
+      }
       if (turnToken !== undefined) deliveryStages.settled(turnToken);
+      if (turnToken !== undefined) {
+        for (const [ticket, owner] of ticketOwners) if (owner === turnToken) {
+          ticketOwners.delete(ticket);
+          ticketEnvelopes.delete(ticket);
+        }
+      }
       if (kind === "sdk_notification" && turnToken !== undefined) {
         resolveInterAgentConversationIds(turnToken, interAgent?.pendingConversationIdsForTurn(turnToken) ?? [], error);
         interAgent?.endReplyInput(turnToken);
@@ -997,9 +1288,18 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         // peer to dispatch a successor into a terminal host. onHostEnd drains
         // the coordinator's remaining batches and enqueues their notices
         // before link.close (transport acceptance is not awaited).
-        resolveInterAgentTurn(settlement, error, {
-          dispatchNext: cancellation === undefined && !admissionFailStopped,
-        });
+        const peersToDispatch = new Set<string>();
+        if (settlement.kind === "settled") peersToDispatch.add(settlement.batch.peer);
+        resolveInterAgentTurn(settlement, error, { dispatchNext: false });
+        for (const batchToken of foldedBatchTokensByOwner.get(turnToken) ?? []) {
+          const folded = interAgentTurns.settle(batchToken);
+          if (folded.kind === "settled") peersToDispatch.add(folded.batch.peer);
+          resolveInterAgentTurn(folded, error, { dispatchNext: false });
+        }
+        foldedBatchTokensByOwner.delete(turnToken);
+        if (cancellation === undefined && !admissionFailStopped) {
+          for (const peer of peersToDispatch) interAgentTurns.dispatchNextForPeer(peer);
+        }
       }
       if (cancellation === undefined && !admissionFailStopped) {
         // phase-28 C2 / ADR-0043 D3: a real ResultMessage is the wrapper's
@@ -1052,7 +1352,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onAttachRejected: (envelope) => link?.send(envelope),
     onInstructionRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => {
-      if (replySessionId !== undefined && replySessionId !== id) interAgent?.resetReplyInput();
+      if (replySessionId !== undefined && replySessionId !== id) {
+        interAgent?.resetReplyInput();
+        interAgentTurns.resetFoldedRecovery();
+        ticketEnvelopes.clear();
+        ticketOwners.clear();
+      }
       replySessionId = id;
       link?.setSessionId(id);
       // Binds (or re-binds) the sidecar to this session's file, carrying
