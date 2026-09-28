@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-29
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -186,7 +186,7 @@ The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
 field was added.
 
-## The model list ships inside the bundled CLI, not kaoiro (issue #398, measured 2026-09-23)
+## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-09-29)
 
 kaoiro declares no Claude model of its own: the bootstrap floor is the single
 `default` row, and both catalog paths read what the Claude Code CLI bundled with
@@ -194,42 +194,86 @@ kaoiro declares no Claude model of its own: the bootstrap floor is the single
 kaoiro through an SDK version bump, not a catalog edit — the same conclusion the
 Fable 5.1 rollout reached.
 
-`wrapper/claude-code/src/probe.ts` was run directly on this host, `ok: true` and
-`source: "init"` in both runs:
+`wrapper/claude-code/src/probe.ts` was run directly on this host against SDK
+0.3.284 / CLI 2.1.284 on 2026-09-29. It returned `ok: true`,
+`source: "init"`, and these 12 rows:
 
-| `value` | `resolved_model` on SDK 0.3.258 (CLI 2.1.258) | `resolved_model` on SDK 0.3.280 (CLI 2.1.280) |
+| `value` | `resolved_model` | `effort_levels` |
 |---|---|---|
-| `default` | `claude-opus-5[1m]` | `claude-opus-5-5[1m]` |
-| `opus[1m]` | `claude-opus-5[1m]` | `claude-opus-5-5[1m]` |
-| `claude-fable-5-1[1m]` | `claude-fable-5-1` | `claude-fable-5-1` |
-| `sonnet` | `claude-sonnet-5` | `claude-sonnet-5` |
-| `haiku` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` |
+| `default` | `claude-opus-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `opus` | `claude-opus-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-fable-5-1` | `claude-fable-5-1` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `sonnet` | `claude-sonnet-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `haiku` | `claude-haiku-4-5-20251001` | — |
+| `claude-sonnet-5` | `claude-sonnet-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-opus-5` | `claude-opus-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-fable-5` | `claude-fable-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-opus-4-8` | `claude-opus-4-8` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-opus-4-7` | `claude-opus-4-7` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-opus-4-6` | `claude-opus-4-6` | `low`, `medium`, `high`, `max` |
+| `claude-sonnet-4-6` | `claude-sonnet-4-6` | `low`, `medium`, `high`, `max` |
 
-Claude Opus 5.5 arrives as a change of an existing alias' `resolvedModel`, not as
-a new row. Two consequences follow from the two-pass matching above:
+On SDK 0.3.258 and 0.3.280, the default probe instead listed
+`opus[1m] -> claude-opus-5[1m]` and `sonnet -> claude-sonnet-5`; the 0.3.280
+default probe listed `default -> claude-opus-5-5[1m]`. SDK 0.3.284 changes the
+default and `opus` rows to the unsuffixed `claude-opus-5-5`, and changes Sonnet
+to `claude-sonnet-5-5`.
 
-- A pin written as the **alias** (`opus[1m]`, `default`) keeps matching and
-  silently moves to the newer model.
-- A pin written in the **canonical** spelling (`claude-opus-5[1m]`) also keeps
-  working, and stays on the older model. This was predicted the other way round
-  when the bump landed — that the pin would match nothing and degrade through
-  `#validatePersistModelAgainstCatalog()` — and the prediction was wrong.
+With SDK 0.3.284, a query started with `Options.model: "opus[1m]"` still returns
+the same 12-row catalog, without an exact `opus[1m]` row. The captured fixture
+is [the SDK 0.3.284 query result](../../../wrapper/claude-code/test/fixtures/claude-agent-sdk-0.3.284-opus-1m.models.json)
+(SHA-256 `b1f649a21e14e58e516375b6cbcbc511e574ca19fa084a6725d4bfb9d3b86fe7`). In
+that query, the real CLI's `system/init` event and `getContextUsage()` both
+reported `claude-opus-5-5[1m]`. The event spelling was captured with a
+loopback-only API stub; no external model API was called. Therefore the wrapper
+keeps a persisted `opus[1m]` pin and passes its exact spelling to `Options.model`,
+while using the measured base `opus` alias row only for metadata and comparison.
+The comparison treats `[1m]` as part of model identity: the suffix must be an
+exact lowercase match on both the pin and the engine report before comparing
+their base IDs. A report without the suffix is not considered the same model.
 
-**Measured on the released runner, 2026-09-23** (issue #398 acceptance). The
-SDK's catalog is not a fixed list: it **appends the session's pinned model as
-its own row**. Running the probe with `options.model` set to
-`"claude-opus-5[1m]"` returns six rows — the five above plus
-`claude-opus-5[1m] -> claude-opus-5[1m]`. `#findCatalogEntries()` therefore gets
-a value-exact hit, validation does not fire, and the session keeps its pin.
+Anthropic's [model configuration reference](https://code.claude.com/docs/en/model-config#extended-context)
+defines `opus[1m]` as Opus with a 1M context window and says Claude Code strips
+the suffix before sending the model ID to the provider. It also states that
+Opus 4.7 and later use a native 1M window on the Anthropic API, while gateways
+and third-party providers can differ. A loopback request capture of CLI 2.1.284
+reported `model: "claude-opus-5-5"` for both `Options.model: "opus[1m]"` and
+`"opus"`, but only the suffixed option sent the
+`context-1m-2025-08-07` `anthropic-beta` value. The capture's
+`CLAUDE_CODE_DISABLE_1M_CONTEXT=1` control removed that value. This establishes
+what the CLI sent, not whether the upstream provider accepted the request; see
+[the SDK 0.3.284 rollout record](../../evidence/claude/issue-427/2026-09-29-agent-sdk-0.3.284.md)
+and the [issue #427 measurement report](https://github.com/sakuraiyuta/kaoiro/issues/427).
 
-Observed on this host: every Claude agent resumed after the runner moved to the
-bumped SDK, `kuroe` among them with `resume_snapshot.model:
-"claude-opus-5[1m]"`. The wrapper logged
-`model=claude-opus-5[1m](source=config)` and no `persist_alias_unknown` /
-`switch_error` appeared in the runner journal. The session ran turns normally on
-Opus 5.
+The base `opus` row's effort domain was checked against SDK 0.3.280 data: a
+query pinned to `opus[1m]` returned `low`, `medium`, `high`, `xhigh`, `max`, and
+a separate query pinned to `opus` returned the same list. The 0.3.284 base row
+reports that same list. This supports using its effort metadata for the
+persisted `opus[1m]` pin.
 
-The practical consequence is the opposite of the earlier prediction: an alias
-pin follows the generation change, a canonical pin pins the generation. Neither
-degrades. `persist_alias_unknown` still exists for a pin naming a model the
-account cannot serve at all, which is a different case.
+Canonical pin behavior also changed. SDK 0.3.284 returns no exact row for
+`Options.model: "claude-opus-5[1m]"`; the 12-row catalog is unchanged. That
+canonical pin is not mapped to the `opus` alias because its base row is
+self-resolving, so the existing persisted-model validation falls back to
+`default` and reports `persist_alias_unknown`.
+
+**Menu limitation on SDK 0.3.284:** `AgentDetail` and `LaunchDialog` list the
+catalog rows returned by the SDK; neither can offer `opus[1m]` while that row is
+absent. An existing persisted pin is retained, but after a user chooses `opus`
+the current menus cannot select `opus[1m]` again. This change does not add a
+synthetic catalog row or dashboard control. A separate request capture
+measured the outgoing 1M header for `opus[1m]`; the dashboard follow-up is
+separate from this wrapper change. Anthropic's [Sonnet 5.5 context notes](https://code.claude.com/docs/en/model-config#sonnet-5-5-and-sonnet-5-context-window)
+say Sonnet 5.5 always has a native 1M window on the Anthropic API and does not
+use a `[1m]` suffix there.
+
+An SDK 0.3.284 query started with
+`Options.model: "claude-fable-5-1[1m]"` returns that value as an exact catalog
+row; its `system/init` and `getContextUsage()` reports also retain the suffix.
+That existing pin does not need the base-alias compatibility path described for
+`opus[1m]`.
+
+SDK 0.3.280 had a different pin-catalog behavior. Its probe with
+`Options.model: "claude-opus-5[1m]"` returned six rows, including that exact
+canonical pin, so validation retained it at the time. Do not apply that 0.3.280
+observation to SDK 0.3.284, which omits the row.

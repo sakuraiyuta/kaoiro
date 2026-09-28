@@ -40,7 +40,8 @@ The `result` row's payload scope does not exclude this wrapper-owned
 diagnostic sink. In the normal child-error relay path,
 `@openai/codex-sdk` 0.156.1 pipes child stderr into the SDK error message and
 `@anthropic-ai/claude-agent-sdk` 0.3.280 pipes it into its callback or error
-tail; Kaoiro does not pass the Claude callback. SDK-owned debug output, such
+tail (measured on 0.3.280; not remeasured on 0.3.284); Kaoiro does not pass
+the Claude callback. SDK-owned debug output, such
 as `DEBUG_CLAUDE_AGENT_SDK`, is outside this sink and its policy.
 
 ## Related protocol topics
