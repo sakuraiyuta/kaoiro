@@ -1,8 +1,8 @@
 ---
-title: Claude phase-2 prerequisite measurements E1–E5
-description: Native loopback measurements of fold delivery, prompt identity, priority now, and default-wrapper stage reporting.
+title: Claude phase-2 prerequisite measurements E1–E5 and R3 timing
+description: Native loopback measurements of fold delivery, prompt identity, priority now, default-wrapper stage reporting, and production-settings receipt-root timing.
 status: measured
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 ---
 
 # Claude phase-2 prerequisite measurements
@@ -19,6 +19,7 @@ For the pinned SDK 0.3.280 / native CLI 2.1.280 and the schedules below:
 | E4: `priority: now` waits for the running tool, ends the turn once, and starts the input as a new turn | **Established for the measured running Bash** | P1's tool end marker precedes result index 0; a different prompt ID and request 2 follow; result index 1 ends that new turn. |
 | E5: default wrapper negotiation and first-turn stage reports | **Established for the measured ordinary first turn** | E5/P1 and E5/P2 use the unmodified default wrapper with a real local server; accepted, queued, submitted (`prompt_hook`) and settled are recorded. E5/N1 disables negotiation and suppresses wrapper stages while retaining native completion and dispatch ACK. See the separate E5 measurement below. |
 | E6: generic production input-to-model-request correlation | **Unmeasured** | Request capture is an independent reference, not a field exposed to the production host. No generic epoch/correlation claim is made. |
+| R3/S1: receipt-root delay with production settings | **Established for the measured tool-free schedule** | Three phase-2 runs on `c658b69f` measured 7, 6 and 8 ms from wrapper result emission to submitted (`prompt_hook`), with real operator settings loaded. See the separate R3 measurement below for the clock definition and limits. |
 
 No measured premise was refuted. These are native mechanics measured against a scripted local model, not guarantees for every engine schedule or evidence of model comprehension. In particular, no result authorizes removal of existing admission/terminal guards or proves that a fresh SDK prompt has a send-capable wrapper owner.
 
@@ -164,3 +165,192 @@ The initial checker had two field-path mistakes: `stages` instead of `stage_repo
 ### Cleanup
 
 All three invocation sessions exited; each owned wrapper and server exited 0. The enclosing PID namespaces bounded descendant lifetime. `cleanup-processes.json` records zero remaining owned native/wrapper processes. No shared process was killed. After preserving and pushing this docs-only report, the dedicated worktree, dependencies, isolated persistence, config/cwd and build outputs are removed; `cleanup-final.json` records that final check. The raw logs, native transcripts, scripts, server delta and manifests remain intentionally as evidence. No instrumentation is committed.
+
+## R3/S1: production-settings receipt-root timing (2026-09-29 JST)
+
+**Established for the measured configuration and schedule:** the three valid
+T1-shaped runs measured **7, 6 and 8 ms**, minimum **6 ms**, maximum **8 ms**,
+against the unchanged **2,000 ms** `pending_receipt_root_timeout_ms` default.
+No valid run emitted `root_hook_timeout`. This supports retaining the operating
+margin for this configuration; three observations do not establish a tail
+latency bound or success rate under arbitrary machine load or hook changes.
+
+Decision owner: Kohaku; measurement owner: Kogane. Authorization is conversation
+`c80982b9-4435-4178-b74f-d7211e98fe1b`, including the side-effect decisions in
+turns 4/6 and sender-capability repair and clock definition approved in turn 8.
+The gate is [issue 434, design v3.1 S1](https://github.com/sakuraiyuta/kaoiro/issues/434#issuecomment-5871817486).
+The measured product commit is `c658b69f506033ae76a35f5a75de025e68b85e74`.
+This section establishes S1's timing prerequisite, not every R3 assertion:
+there was no third queued root R, and the pending-root hold/fail-stop guards
+were not mutated in this native measurement. Capability rollout is a separate
+decision; this docs-only change does not enable it by default.
+
+### Composition and the measured clock
+
+The executable is the unmodified default `claude-code/dist/cli.js`, with the
+real SDK, native CLI, Host, ServerLink and local Phoenix server. All positive
+runs set `KAOIRO_CLAUDE_PHASE2_DELIVERY=1`; N1 sets it to `0`. No Host factory,
+SDK callback, Query iterator, input seam or admission guard is injected or
+changed. Two owned local sender connections submit the ordinary and early
+messages through the server. Server-only instrumentation appends received
+wire payloads without changing them; a read-only observer snapshots the
+actual delivery ledger. The model endpoint independently captures requests.
+
+The interval is **`submitted.at - previous result-envelope.ts`**. Both values
+come from the wrapper's own millisecond-resolution wall clock, not from server
+receive timestamps or polling. The first endpoint is the existing result
+processing/emission point, not the first byte received from SDK stdout; the
+second is the synchronous stage report from the admitted root hook. The gate
+owner explicitly accepted this quantity as the timeout basis. It does not
+measure the entire push-to-hook interval, initial settings startup, or Stop
+hooks completed before the old result. T4's preliminary 6 ms progress update
+used the settled timestamp by mistake; the raw result timestamp yields **7 ms**.
+
+Each run uses fresh user/network/PID namespaces, only loopback enabled, and no
+external route. Real provider API calls are impossible in that namespace. The
+explicit child environment contains a dummy local API key and loopback base
+URL; inherited credential environment variables are omitted. Real HOME is
+available to the CLI as required for settings; credential files are not copied
+into evidence. No runner, existing peer process or production server is used.
+The local server has separate persistence paths. Namespace process lifetime
+bounds descendants, and direct children are stopped by retained handles.
+
+### Production settings and side effects
+
+`HOME=/home/yuta`; no scratch HOME or `CLAUDE_CONFIG_DIR` replaces the operator
+configuration. `/home/yuta/.claude/settings.json` resolves to
+`/home/yuta/git/ai-settings/claude/settings.json`, SHA-256
+`817a66b3da1a0a928e54327d681d0cbc9301e2480f19ec55022deb518a90b789`.
+**Difference from production: `USAGE_LOG_PATH` points into the R3 evidence
+scratch directory.** Settings and hook bytes are unchanged. The model is pinned
+to `claude-sonnet-4-6`; `allowed_tools: ["Bash"]` permits the single bounded
+optional tool schedule. These settings do not characterize other models,
+permission choices, hooks or ambient workloads.
+
+The following is the configured hook inventory, not a claim that every matcher
+fired. Process observations show the worklog, model-profile start/prompt,
+carefully-coding reminder, compound-Bash, secret-dump, Stop and SessionEnd
+commands. Native transcript attachments separately show the SessionStart date
+hook, and Stop summaries contain both `stop-validate.sh` and the SDK callback.
+Process sampling can miss short-lived hook commands.
+
+| Event / matcher | Configured command(s), under `~/.claude/hooks/` unless stated |
+| --- | --- |
+| SessionStart | Date/additionalContext shell command; `worklog-session-start.sh`; `model-profile.sh start` |
+| UserPromptSubmit | `carefully-coding-reminder.sh`; `model-profile.sh prompt` |
+| PreToolUse: Bash | `git-herestring-guard.sh`; `approve-compound-bash.sh` |
+| PreToolUse: Bash or Read | `secret-dump-guard.py` |
+| PreToolUse: Write or Edit | `carefully-coding-gate.sh check` |
+| PreToolUse: Skill | `carefully-coding-gate.sh mark` |
+| PreToolUse: WebFetch | `webfetch-auto-allow.sh` |
+| PreToolUse: asset submit MCP tools | `asset-library-reminder.sh` |
+| PostToolUse: Write or Edit | `post-lint.sh` |
+| PostModelSwitch | `model-profile.sh switch` |
+| Stop | `stop-validate.sh` |
+| SessionEnd | `usage-log.py` |
+
+The configured status line is `~/.claude/statusline.sh`; this is a print/SDK
+run, and no status-line invocation was observed. Enabled plugin entries are
+rust-analyzer-lsp, Context7 and cli-anything. Their inspected cache trees expose
+no additional hook files. Context7's configured remote MCP endpoint has no
+external route in the measurement namespace. Configuration presence does not
+establish a successful plugin or MCP connection.
+
+The Skill marker hook can delete other sessions' files older than seven days.
+That branch was excluded by fixed model responses containing only text and the
+one measured Bash call. **Native transcripts contain Bash: 1, Skill: 0, other
+tool_use: 0 across all six SDK runs.** No Agent child is created. Pre/post cache
+inventories include names, mtimes and hashes: additions **0**, changes **0**,
+deletions **0**. Session-specific model marker creation was authorized, but no
+such new marker was observed. The pre-existing shared cache is unchanged.
+
+### Runs, reference and prediction
+
+**6/6 SDK runs consumed**, including the invalid sender-setup run. There are
+**12 model requests**, no real model API requests. The window from the first
+wrapper launch at `2026-09-28T18:05:20.168Z` to final cleanup event at
+`18:09:44.257Z` is **264.089 seconds**. Every SDK invocation is below five
+minutes and below its 20-request cap. Two earlier server-only preparation
+attempts, T1/T2, failed before wrapper/SDK launch because the isolated MIX_HOME
+lacked Hex; those logs remain, and neither consumed an SDK run. The installed
+Hex archive was copied into scratch before proceeding.
+
+| Run | Schedule | Requests / results | Duration (ms) | Invocation / checker exit | Result-to-submitted (ms) |
+| --- | --- | --- | ---: | --- | ---: |
+| T3 | Invalid: sender omitted delivery-mode capability; early send rejected locally | 2 / 1 | 38239 | 1 / not classified | — |
+| T4 | Hold text-only response, send early input, finish old turn, admit fresh root | 2 / 2 | 7485 | 0 / 0 | 7 |
+| T5 | Repeat T4 | 2 / 2 | 7361 | 0 / 0 | 6 |
+| N1 | Same schedule, phase-2 flag off | 2 / 2 | 7254 | 0 / 0 | 17 (ordinary queued root) |
+| F1 | Send early input while bounded Bash is running | 2 / 1 | 8586 | 0 / 0 | Not a new-root interval |
+| T6 | Repeat T4 after the negative control | 2 / 2 | 7344 | 0 / 0 | 8 |
+
+T3 is a probe setup failure, not a receiving-wrapper defect. Its sender's
+ServerLink rejected `delivery_intent: early` with `work_control_unavailable`
+and `send_not_attempted: true`. The approved repair adds the sender's valid
+`interAgentDeliveryModes` and `workControl` declarations; only unused run labels
+were added otherwise. Receiver bytes, hooks, input path and schedule remain
+unchanged. Both probe versions and raw logs are retained. The invalid run also
+records an observer shutdown race (`DeliveryStates` already stopped); all five
+valid runs have wrapper/server exit 0. The expected SDK Bash auto-approval
+warning is recorded; no valid run reports an unhandled exception.
+
+| Run | Wrapper observation / prediction | Independent reference |
+| --- | --- | --- |
+| T4 | Result `18:07:21.491Z`; seq 2 submitted/prompt_hook `18:07:21.498Z` | Native transcript has two distinct root prompt IDs; request 2 contains the early body with the real `fold_id`/reply-authorization input. |
+| T5 | Result `18:07:42.181Z`; submitted `18:07:42.187Z` | Two distinct root IDs and two results; request 2 contains the receipt-bearing input. |
+| T6 | Result `18:09:42.000Z`; submitted `18:09:42.008Z` | Same independent checks as T4/T5. |
+| N1 | Negotiated early mode `none`; requested early is granted normal; prompt_hook follows ordinary queueing | Two native root IDs, but no receipt-bearing mid-turn input in either request. |
+| F1 | Seq 2 submitted/fold_hook `18:09:05.962Z`; sole result `18:09:06.081Z` | Native transcript has one root prompt ID and one Bash call; request 2 carries the mid-turn input in tool-result content. |
+
+All valid early deliveries reach settled with `reason: turn_end`; no unknown
+stage or timeout is recorded. Reported `included` is not required: the scripted
+model never spends a reply ticket. Captured requests are the input-inclusion
+reference, not evidence that a model understood that input. The timestamp and
+identity assertions are evaluated against actual wire/transcript records.
+
+### Negative control, artifact binding and cleanup
+
+N1 keeps the same product, settings and input schedule, with the phase-2 flag
+off. Its negative-scenario checker exits **0**. Applying the positive root
+receipt checker to those same native logs exits **1** (receipt text, early
+grant and advertisement assertions fail); restored T6 exits **0**. Raw logs are
+never edited to manufacture this contrast. The checker is a disposable raw-log
+reader; no product test suite or guard mutation is claimed by this measurement.
+
+Evidence is retained at
+`/home/yuta/git/kaoiro/tmp/reviews/issue-429/e/R3/`. `schedule-counts.json`,
+`native-summary.json`, per-run `*.check.json` and `negative-controls.json`
+contain the counted results. The server observation delta is retained and not
+committed. Offline install, protocol typecheck and dependency-order core →
+agent-common → claude-code builds, plus the scratch server build, all exited 0.
+Protocol is type-only. Installed SDK is **0.3.280**; every native transcript
+reports CLI **2.1.280**. Node is **24.3.0** at the pinned absolute path.
+
+| Binding | SHA-256 |
+| --- | --- |
+| `run-manifest.json` — 122 retained evidence files | `64fb23cd5046ec29dedbb0bde98441c5b1b7e52907a1003224e0a01b8773902d` |
+| `artifacts-final.json` — final source/build/SDK/CLI/probe/checker bindings | `34949c3179948d54e39049dfdb7b203d927692aeba24537443e3b79e29ce17d5` |
+| Original `probe-v1.mjs` | `ff9ebcf1e06c512cf083d5ef38fb05a8214107bdda8baa1aaf2744cae3ea4faa` |
+| Corrected `probe.mjs` | `890f638e44ffccfda50ceb63ac26f031de3356b1c2f544f86301e504d05d08a7` |
+| `check.py` | `971e71043d0bda0f993561cca69751bb6f883d7ce2b6308ce871288adc8f12b8` |
+| Server observation patch | `8e761c1287bfbcd2d4670d54c4797edcd09f91dc70cab3b5a270fc0dc4ddf247` |
+| Built `claude-code/dist/cli.js` | `00bf0e9c824cd632f3bedb79de8792e09ef892b862b00b568e938161b1e7fb70` |
+| Built `claude-code/dist/host.js` | `6b0458db84993d58c46d7f4a0e389d8817e6eb42159be3b1a9a16294dbe9ec75` |
+| SDK `sdk.mjs` | `ef4c2c0fc286d8c7dab7771516cf95206f9f670e99e74dc62f245b7fc8224955` |
+| Executed Linux x64 CLI | `1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b` |
+
+Before cleanup, all 273 frozen artifact comparisons matched except the one
+explicitly authorized probe revision; unexpected mismatches were zero. The
+final artifact manifest binds the corrected probe and checker. Product output
+and real settings/hook bytes did not change between runs.
+
+Cleanup removed the six scratch-cwd project directories and six corresponding
+session-env directories under real HOME after preserving their transcripts.
+No model marker needed deletion; history.jsonl was not edited (any CLI append
+is retained). `owned-home-artifacts.json` enumerates the exact paths and session
+IDs. `cleanup-home-processes.json` records their absence, unchanged settings
+and shared cache, and zero remaining owned wrapper/native processes. The
+scratch worktree `worktrees/kogane-434-r3-native`, dependencies, build outputs
+and separate server persistence were removed; `cleanup-final.json` records
+that check. Only the intentionally retained evidence remains. No shared
+process was signalled or shared session artifact removed.
