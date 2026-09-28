@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type {
   EffortLevel,
   ModelInfo,
@@ -41,6 +43,16 @@ const config: WrapperConfig = {
   display_name: "P",
   server_url: "ws://localhost:4000/wrapper",
 };
+
+const sdk0284ModelInfoBytes = readFileSync(
+  new URL(
+    "./fixtures/claude-agent-sdk-0.3.284-opus-1m.models.json",
+    import.meta.url,
+  ),
+);
+const sdk0284ModelInfo = JSON.parse(
+  sdk0284ModelInfoBytes.toString("utf8"),
+) as ModelInfo[];
 
 describe("initialStatusExt", () => {
   it("initial idle に engine と capabilities を stamp する (#107)", () => {
@@ -8141,7 +8153,9 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     const feed = signalQueue();
     const queued: SDKMessage[] = [];
     let usageModel = params.usageModel;
+    let seenOptions: Options | undefined;
     const queryFn = makeQueryFn((args: QueryArgs) => {
+      seenOptions = args.options;
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: params.initModel, cwd: "/repo" });
         initConsumed.resolve();
@@ -8189,7 +8203,18 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
           expect.arrayContaining([expect.objectContaining({ value: "opus[1m]" })]),
         ),
       );
-    return { host, envs, logs, warnings, initConsumed, push, finish, setUsageModel, catalogLanded };
+    return {
+      host,
+      envs,
+      logs,
+      warnings,
+      initConsumed,
+      push,
+      finish,
+      setUsageModel,
+      catalogLanded,
+      seenOptions: () => seenOptions,
+    };
   }
 
   it("t1: an init report that differs from an explicit pick is displayed as fallback while effective keeps the pick", async () => {
@@ -8307,6 +8332,216 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
     expect(h.envs.some((e) => e.ext?.model === "claude-opus-5[1m]")).toBe(false);
     expect(h.envs.some((e) => (e.ext?.effective as { model?: unknown } | undefined)?.model === "claude-opus-5[1m]")).toBe(false);
+  });
+
+  it("SDK 0.3.284 catalog fixture is measured bytes and distinguishes aliases structurally", () => {
+    expect(
+      createHash("sha256").update(sdk0284ModelInfoBytes).digest("hex"),
+    ).toBe("b1f649a21e14e58e516375b6cbcbc511e574ca19fa084a6725d4bfb9d3b86fe7");
+    expect(sdk0284ModelInfo).toHaveLength(12);
+    expect(sdk0284ModelInfo.some((model) => model.value === "opus[1m]")).toBe(
+      false,
+    );
+    const opus = sdk0284ModelInfo.find((model) => model.value === "opus");
+    expect(opus).toMatchObject({
+      value: "opus",
+      resolvedModel: "claude-opus-5-5",
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    });
+    expect(opus?.value).not.toBe(opus?.resolvedModel);
+    const canonical = sdk0284ModelInfo.find(
+      (model) => model.value === "claude-opus-5",
+    );
+    expect(canonical?.value).toBe(canonical?.resolvedModel);
+  });
+
+  it("uses the measured base alias effort domain for a suffixed model pick", async () => {
+    const startupCatalog = sdk0284ModelInfo.map((model) => ({
+      value: model.value,
+      display_name: model.displayName,
+      description: model.description,
+      ...(model.supportedEffortLevels === undefined
+        ? {}
+        : { effort_levels: [...model.supportedEffortLevels] }),
+      ...(model.resolvedModel === undefined
+        ? {}
+        : { resolved_model: model.resolvedModel }),
+    }));
+    const host = new AgentHost(
+      { ...config, claude_engine_catalog: startupCatalog },
+      {
+        onState: () => {},
+        modelSource: "config",
+        effortSource: "config",
+        queryOptions: { model: "opus", effort: "max" },
+      },
+    );
+
+    await expect(host.setModel("opus[1m]")).resolves.toBeUndefined();
+    expect(host.statusSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "config",
+      effort: "max",
+      effort_source: "config",
+    });
+    expect(host.statusExtSnapshot().session_capabilities).toMatchObject({
+      supports_effort_switch: true,
+    });
+  });
+
+  it("SDK 0.3.284 keeps an opus[1m] persisted pin and compares the measured suffixed reports", async () => {
+    // Captured from an SDK 0.3.284 query's init.models with Options.model
+    // set to opus[1m]. Fixture SHA-256 is pinned above; no catalog row was
+    // synthesized. The model spelling in init and context usage was observed
+    // separately from the real CLI through a loopback-only API stub.
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-5-5[1m]",
+      usageModel: "claude-opus-5-5[1m]",
+      catalog: sdk0284ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().context).toBeDefined(),
+    );
+    expect(h.seenOptions()?.model).toBe("opus[1m]");
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "config",
+      effective: { model: "opus[1m]", model_source: "config" },
+      session_capabilities: { supports_effort_switch: true },
+    });
+    expect(h.host.statusExtSnapshot()).not.toHaveProperty("switch_error");
+    expect(h.envs.some((env) => env.ext?.model_source === "fallback")).toBe(
+      false,
+    );
+    await h.finish();
+  });
+
+  it("SDK 0.3.284 still reports a refusal fallback for an opus[1m] pin", async () => {
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-5-5[1m]",
+      catalog: sdk0284ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    h.push(
+      refusalFallback({
+        original_model: "claude-opus-5-5[1m]",
+        fallback_model: "claude-opus-4-8",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().model_source).toBe("fallback"),
+    );
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    await h.finish();
+  });
+
+  it("does not treat an unsuffixed 5.5 report as an opus[1m] match", async () => {
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-5-5",
+      usageModel: "claude-opus-5-5",
+      catalog: sdk0284ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().model_source).toBe("fallback"),
+    );
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-5-5",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    await h.finish();
+  });
+
+  it("keeps an unqualified Opus 4.8 report different from an opus[1m] pin", async () => {
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-4-8",
+      usageModel: "claude-opus-4-8",
+      catalog: sdk0284ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().model_source).toBe("fallback"),
+    );
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    await h.finish();
+  });
+
+  it("keeps a different suffixed Opus report different from an opus[1m] pin", async () => {
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-4-8[1m]",
+      usageModel: "claude-opus-4-8[1m]",
+      catalog: sdk0284ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().model_source).toBe("fallback"),
+    );
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8[1m]",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    await h.finish();
+  });
+
+  it("the suffixed canonical pin and uppercase suffix do not match the base alias", async () => {
+    for (const pin of ["claude-opus-5[1m]", "opus[1M]"]) {
+      const h = liveHost({
+        pin,
+        source: "config",
+        initModel: "claude-opus-5-5[1m]",
+        catalog: sdk0284ModelInfo,
+      });
+      await h.initConsumed.promise;
+      await vi.waitFor(() =>
+        expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+      );
+      expect(h.host.statusExtSnapshot()).toMatchObject({
+        model: "default",
+        model_source: "default",
+      });
+      expect(
+        h.envs.find((env) => env.ext?.switch_error !== undefined)?.ext
+          .switch_error,
+      ).toMatchObject({
+        requested: pin,
+        reason: "persist_alias_unknown",
+        rolled_back_to: "default",
+      });
+      await h.finish();
+    }
   });
 
   it("t9: with no usable catalog a differing report is held as undecided — the pick is kept and nothing is called a fallback", async () => {

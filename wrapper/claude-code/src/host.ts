@@ -741,8 +741,9 @@ export class AgentHost implements EngineAdapter {
    *  the wrapper drives a single long-lived Query, unlike Codex's
    *  per-turn AbortController. Aborting it triggers the SDK's internal
    *  stdin-EOF -> ~2000ms SIGTERM -> ~5000ms SIGKILL escalation
-   *  (`ProcessTransport.close()`, measured against `@anthropic-ai/claude-agent-sdk`
-   *  0.3.280's bundle); an unhandled `return` of the prompt generator alone
+   *  (`ProcessTransport.close()`, measured against
+   *  `@anthropic-ai/claude-agent-sdk` 0.3.280's bundle; not remeasured on
+   *  0.3.284); an unhandled `return` of the prompt generator alone
    *  only closes stdin, with no escalation if the child never exits on its
    *  own. */
   #abort: AbortController | null = null;
@@ -1585,11 +1586,11 @@ export class AgentHost implements EngineAdapter {
     // late tool_result/result for that same turn must retain its token.
     if (this.#queue.length === 0) this.#wakeTurnBoundary();
     this.#wake();
-    // issue #391: bound the SDK-managed `claude` CLI subprocess. Returning
-    // the prompt generator (above) only closes stdin on the SDK's own
-    // schedule, with no guarantee the child ever exits if it does not honor
-    // EOF; aborting triggers the SDK's own stdin-EOF -> SIGTERM -> SIGKILL
-    // escalation regardless of queue state.
+    // issue #391: bound the SDK-managed `claude` CLI subprocess. On SDK
+    // 0.3.280, returning the prompt generator only closed stdin on the SDK's
+    // schedule, with no guarantee the child exited if it ignored EOF; this
+    // was not remeasured on 0.3.284. Aborting triggers the SDK's stdin-EOF ->
+    // SIGTERM -> SIGKILL escalation regardless of queue state.
     this.#abort?.abort();
   }
 
@@ -1761,7 +1762,7 @@ export class AgentHost implements EngineAdapter {
    *  same string into the first Query's Options. */
   async setModel(value: string): Promise<void> {
     const current = this.#query;
-    const nextModels = this.#findCatalogEntries(value);
+    const nextModels = this.#findPinnedCatalogEntries(value);
     const nextEffortLevels = this.#effortLevelsForCatalogEntries(nextModels);
     const invalidEffort =
       this.#effort !== null &&
@@ -1881,7 +1882,9 @@ export class AgentHost implements EngineAdapter {
   async setEffort(level: string): Promise<void> {
     const current = this.#query;
     if (current === null) {
-      const activeModels = this.#findCatalogEntries(this.#model ?? "default");
+      const activeModels = this.#findPinnedCatalogEntries(
+        this.#model ?? "default",
+      );
       const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
       if (!activeEffortLevels.includes(level as EffortLevel)) {
         this.#switchErrorOnce = {
@@ -2637,7 +2640,8 @@ export class AgentHost implements EngineAdapter {
       // issue #391: close() aborts #abort, and the SDK's ProcessTransport
       // rejects the in-flight readMessages() iteration with an AbortError
       // ("Claude Code process aborted by user") as part of that same abort
-      // (measured against @anthropic-ai/claude-agent-sdk 0.3.280: the
+      // (measured against @anthropic-ai/claude-agent-sdk 0.3.280; not
+      // remeasured on 0.3.284: the
       // rejection's constructor is the SDK's own exported `AbortError`).
       // That rejection is an expected SIDE EFFECT of our own close(), not a
       // failure — propagating it would make a runner-initiated SIGTERM
@@ -2993,7 +2997,7 @@ export class AgentHost implements EngineAdapter {
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
     if (this.#models !== null && this.#model !== null) {
-      const activeModels = this.#findCatalogEntries(this.#model);
+      const activeModels = this.#findPinnedCatalogEntries(this.#model);
       if (activeModels.length > 0) {
         const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
         const caps = ext.session_capabilities as Record<string, unknown>;
@@ -3127,32 +3131,40 @@ export class AgentHost implements EngineAdapter {
     ]);
   }
 
-  /** Whether `reported` names the same model as the explicit pick #model,
-   *  modulo spelling: an alias pick (`opus[1m]`) is reported back in its
-   *  resolved form (`claude-opus-5[1m]`, measured on SDK 0.3.258 — init and
-   *  context usage both use the catalog's resolvedModel spelling). Equal
-   *  strings are the same model. Otherwise the verdict needs a catalog that
-   *  knows what the pick resolves to (the SDK's or the runner-transported
-   *  one): while the pick is unknown to the catalog, or its rows carry no
-   *  resolved id — the bootstrap catalog's bare `default` row — the answer
-   *  is "unknown", never "different", so a resolved spelling cannot read as
-   *  a switch. With the pick resolvable, a report that matches none of its
-   *  spellings is a different model even when the catalog does not list it
-   *  (a safeguard fallback lands on an older generation the catalog omits). */
+  /** Whether `reported` names the same model as the explicit pick #model.
+   *  SDK 0.3.284 reports `claude-opus-5-5[1m]` from init/context usage while
+   *  its catalog exposes only the base `opus` alias row. For `[1m]` picks,
+   *  require the exact lowercase suffix on both sides, then compare the
+   *  suffix-free report with the selected alias row's resolved ID. Without a
+   *  resolvable pick (the bootstrap catalog's bare `default` row), the answer
+   *  remains "unknown", never "different". A report matching none of the
+   *  selected row's spellings is different even when the catalog omits it; a
+   *  safeguard fallback may target an older generation absent from the list. */
   #compareWithPin(reported: string): "same" | "different" | "unknown" {
     const pin = this.#model;
     if (pin === null || pin === reported) return "same";
-    const pinRows = this.#findCatalogEntries(pin);
+    const pinIsOneM = pin.endsWith("[1m]");
+    const reportedIsOneM = reported.endsWith("[1m]");
+    // The SDK may strip [1m] from its catalog alias while retaining it in
+    // init/context reports. Treat the suffix as part of model identity: only
+    // compare the base IDs when both sides carry the exact lowercase suffix.
+    if (pinIsOneM !== reportedIsOneM) return "different";
+    const pinRows = this.#findPinnedCatalogEntries(pin);
     const ids = new Set<string>();
     let resolvable = false;
+    const comparisonId = (value: string): string =>
+      pinIsOneM && value.endsWith("[1m]") ? value.slice(0, -4) : value;
     for (const row of pinRows) {
-      ids.add(row.value);
+      ids.add(comparisonId(row.value));
       if (typeof row.resolved_model === "string" && row.resolved_model !== "") {
-        ids.add(row.resolved_model);
+        ids.add(comparisonId(row.resolved_model));
         resolvable = true;
       }
     }
     if (!resolvable) return "unknown";
+    if (pinIsOneM) {
+      return ids.has(comparisonId(reported)) ? "same" : "different";
+    }
     const reportedRows = this.#findCatalogEntries(reported);
     if (reportedRows.length === 0) return "different";
     return reportedRows.some(
@@ -3387,6 +3399,27 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  /** Resolves a requested model against the measured catalog, with one
+   *  compatibility case for persisted 1M aliases. SDK 0.3.284 can omit a
+   *  [1m] alias row such as `opus[1m]` from supportedModels() while startup
+   *  options and reports retain the suffix; use the exact base alias row for
+   *  metadata without rewriting the requested string. Canonical rows do not
+   *  qualify as aliases. */
+  #findPinnedCatalogEntries(key: string): SupportedModel[] {
+    const matches = this.#findCatalogEntries(key);
+    if (matches.length > 0 || !key.endsWith("[1m]")) return matches;
+    const base = key.slice(0, -4);
+    const row = this.#models.find((model) => model.value === base);
+    if (
+      row === undefined ||
+      typeof row.resolved_model !== "string" ||
+      row.value === row.resolved_model
+    ) {
+      return [];
+    }
+    return [row];
+  }
+
   /** Validates a persisted `#model` (spawn config / env / resume snapshot)
    *  against the SDK's measured catalog once #refreshSupportedModels() has
    *  populated it (ADR-0037 F8, phase-18-7). A persisted alias or canonical
@@ -3408,7 +3441,7 @@ export class AgentHost implements EngineAdapter {
     // refresh cycle. Manual retry that legitimately wants to re-validate
     // could re-seed #persistedModel; the current UX has no such path.
     this.#persistedModel = null;
-    if (this.#findCatalogEntries(requested).length > 0) return;
+    if (this.#findPinnedCatalogEntries(requested).length > 0) return;
     this.#model = "default";
     // Paired reset: the explicit source (config / env / launch) that
     // supplied the alias no longer owns the effective value, mirroring the

@@ -600,6 +600,39 @@ describe("adapter + state machine", () => {
     ]);
   });
 
+  it("scripted Sonnet 5.5 thinking blocks between tool calls leave the coarse state trace unchanged", () => {
+    // Compare the adapter/state-machine outcome for the two block shapes; this
+    // does not claim that SDK 0.3.284 emitted either shape from a Sonnet 5.5 API turn.
+    const traceFor = (blockType: "text" | "thinking") => {
+      const stream: SDKMessage[] = [
+        msg({ type: "system", subtype: "init" }),
+        assistant([{ type: blockType, text: "working" }]),
+        assistant([
+          { type: blockType, text: "next tool" },
+          { type: "tool_use", id: "tu_1", name: "Read" },
+        ]),
+        user([{ type: "tool_result", tool_use_id: "tu_1", content: "ok" }]),
+        assistant([{ type: blockType, text: "continue" }]),
+        msg({ type: "result", subtype: "success" }),
+      ];
+      return reduceStates(stream.flatMap(sdkMessageToEvents));
+    };
+
+    expect(traceFor("thinking")).toEqual(traceFor("text"));
+    expect(traceFor("thinking")).toEqual([
+      "idle",
+      "thinking",
+      "tool_running",
+      "thinking",
+      "thinking",
+      "done",
+      "waiting_input",
+    ]);
+    expect(
+      sdkMessageToLogs(assistant([{ type: "thinking", thinking: "internal" }])),
+    ).toEqual([]);
+  });
+
   it("並列ツールターン: 全 tool_result が揃うまで tool_running を維持する", () => {
     const stream: SDKMessage[] = [
       msg({ type: "system", subtype: "init" }),
