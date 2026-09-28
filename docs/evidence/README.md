@@ -77,6 +77,12 @@ Claude background-task notification-lifecycle investigation (issue #422), oldest
 - [2026-09-27-notification-admission-round4.md](issue-422/2026-09-27-notification-admission-round4.md) — measurement contract before implementation
 - [2026-09-27-implementation-gate.md](issue-422/2026-09-27-implementation-gate.md) — implementation-gate result: the uncommitted option-A candidate did not pass
 
+## issue-426/
+
+Background Agent continuation observations.
+
+- [2026-09-29-cli-2-1-284-shapes.md](issue-426/2026-09-29-cli-2-1-284-shapes.md) — task notifications observed; hand-back shape unmeasured under the bounded loopback schedules.
+
 ## issue-429/
 
 Claude phase-2 prerequisite measurements for the ADR-0063 delivery and
@@ -84,3 +90,4 @@ authority protocol ([plan](../plans/issue-429-delivery-authority-protocol.md)).
 
 - [2026-09-28-claude-fold-measurements.md](issue-429/2026-09-28-claude-fold-measurements.md) — E1–E4 established on SDK 0.3.280 / CLI 2.1.280 (fold text verbatim inside a `tool_result` system-reminder, fold hook identity, fresh-root fallback, `priority: now`); E5 deferred, E6 unmeasured.
 
+- [2026-09-29-claude-2-1-284-remeasurement.md](issue-429/2026-09-29-claude-2-1-284-remeasurement.md) — explicit 1M request indication and E1–E4 established on SDK 0.3.284 / CLI 2.1.284; E5 and production-settings R3 deferred.
