@@ -76,3 +76,11 @@ Claude background-task notification-lifecycle investigation (issue #422), oldest
 - [2026-09-27-notification-admission-round3-native.md](issue-422/2026-09-27-notification-admission-round3-native.md) — native-gate artifact and scope, supersedes round 3's test-only inference
 - [2026-09-27-notification-admission-round4.md](issue-422/2026-09-27-notification-admission-round4.md) — measurement contract before implementation
 - [2026-09-27-implementation-gate.md](issue-422/2026-09-27-implementation-gate.md) — implementation-gate result: the uncommitted option-A candidate did not pass
+
+## issue-429/
+
+Claude phase-2 prerequisite measurements for the ADR-0063 delivery and
+authority protocol ([plan](../plans/issue-429-delivery-authority-protocol.md)).
+
+- [2026-09-28-claude-fold-measurements.md](issue-429/2026-09-28-claude-fold-measurements.md) — E1–E4 established on SDK 0.3.280 / CLI 2.1.280 (fold text verbatim inside a `tool_result` system-reminder, fold hook identity, fresh-root fallback, `priority: now`); E5 deferred, E6 unmeasured.
+
