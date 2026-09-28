@@ -1206,9 +1206,12 @@ Existing bounds stay: 1,000 unresolved metadata slots per recipient with
 `delivery_backlog`, and the batch caps of 10 messages and 16,384 bytes.
 Synthetic notices keep bypassing the slot cap and are never early.
 The final supported delivery mode is decided before the early quota check.
-`DeliveryStates` serializes early-slot reservations with issued sequences;
-both accepted early metadata and in-flight reservations count against the
-pair and recipient bounds. Rejected messages release their reservations.
+`DeliveryStates` serializes early-slot reservations with issued sequences.
+Each accepted early sequence owns one persisted quota slot independently of
+dispatch-ack metadata reclamation, alongside in-flight reservations. Slots
+count toward pair and recipient bounds until `submitted`, `settled`, `unknown`,
+`lost`, or recipient-generation replacement. Rejected messages release their
+reservations.
 
 Duplicate suppression: receipts for work ops; the existing `stale_turn`
 and `(conversation_id, turn_number)` uniqueness for messages. Distinct
