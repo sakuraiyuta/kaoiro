@@ -255,7 +255,8 @@ writer starts. Phase 1 provides the acknowledgement as a durable obligation:
   accepted only from the obligation's `old_assignee` while the obligation is
   `pending`, and it resolves only that `transfer_id`. It restores no other
   authority. The old assignee's `work_status()` lists its pending obligations
-  and nothing else of the work.
+  and nothing else of the work. The ack reply contains only
+  `{work_id, transfer_id, state: "acknowledged"}`.
 - Repeated transfers create one obligation each. After A → B → C, C is fenced
   until both obligations are resolved; A's delayed acknowledgement resolves
   only A's obligation, and B acknowledges B's.
@@ -263,8 +264,12 @@ writer starts. Phase 1 provides the acknowledgement as a durable obligation:
   expected_revision}` as an explicit override (for an unreachable old
   assignee). It advances the revision. It is not a substitute for the ordinary
   acknowledgement path.
-- The server sends the old assignee a best-effort `work_notice` naming the
-  `transfer_id`. Nothing stops the old assignee's shell.
+- The server sends the old assignee a best-effort `work_notice` naming its
+  `transfer_id`. While an obligation remains pending, later operator updates
+  send that assignee only `{work_id, access: "transfer_pending",
+  pending_transfers}` with its own pending obligations, never the full work.
+  A later transfer's `transfer_id` is included only for its old assignee.
+  Nothing stops the old assignee's shell.
 
 A transfer that changes only the director creates no obligation; the writer
 is unchanged.
@@ -1022,12 +1027,16 @@ replaces it with `work_control_result {op, operation_id, outcome}`.
   `(principal, operation_id) → work_id` covers every receipt; it is in memory
   and rebuilt from records at startup.
 - **No replay by eviction.** A receipt is kept at least until its ID leaves
-  the validity window. Live receipts are capped per (work, principal) at 64
+  the validity window: expiry uses the parsed ID timestamp plus
+  `operation_validity_ms`, including time accepted under the 300-second
+  forward-skew allowance. It does not use the server's acceptance time.
+  Live receipts are capped per (work, principal) at 64
   and per principal at 1,024, so one principal's op loop cannot exhaust the
   receipts another principal needs on the same work (an assignee's `submit`
   loop cannot block the director's `hold`). At a cap the new op is rejected
-  with `work_capacity`, and no live receipt is evicted. Terminal records are removed only after all their
-  receipts have left the window (30 days ≫ 24 h). Within the window an ID is
+  with `work_capacity`, and no live receipt is evicted. Terminal records are removed only after their
+  retention period and after all receipts have left the validity window.
+  Within the window an ID is
   therefore either found or new; outside it, it is rejected.
 - **Lookup is separate from apply.** Step 2 runs before carriage, state and
   revision checks, because a successful op changes exactly those (a retried
@@ -1196,6 +1205,10 @@ configuration with the same names under the wrapper's delivery options.
 Existing bounds stay: 1,000 unresolved metadata slots per recipient with
 `delivery_backlog`, and the batch caps of 10 messages and 16,384 bytes.
 Synthetic notices keep bypassing the slot cap and are never early.
+The final supported delivery mode is decided before the early quota check.
+`DeliveryStates` serializes early-slot reservations with issued sequences;
+both accepted early metadata and in-flight reservations count against the
+pair and recipient bounds. Rejected messages release their reservations.
 
 Duplicate suppression: receipts for work ops; the existing `stale_turn`
 and `(conversation_id, turn_number)` uniqueness for messages. Distinct
@@ -1589,7 +1602,7 @@ None is applied by this plan.
 | wrapper → server | `delivery_status_request` | Gains optional `{conversation_id, turn_number}`: replies with that sent message's stage set when the caller is its sender. |
 | client → server | `work_control` | Operator-only. `{version, work_control}` with the same op shapes as the inter-agent field; the server applies it with the same reducer and sends `work_notice` to the director (if an agent) and the assignee. |
 | client → server | `work_yield_status` | Operator-only read. `{version, work_id, yield_token?}` returns claimed tokens for the work (all when token omitted) with an explicit `cut`, `downgraded`, `unknown`, or `expired` disposition. |
-| server → wrapper | `work_notice` | Negotiated by `work_control: "v1"`. `{version, work, op, reason, transfer_id?}`; best-effort; the wrapper queues it as ordinary input. Not an inter-agent message: no conversation, turn or basis. |
+| server → wrapper | `work_notice` | Negotiated by `work_control: "v1"`. `{version, work, op, reason, transfer_id?}`; `work` is the complete record for the current director or assignee, or `{work_id, access: "transfer_pending", pending_transfers}` for a former assignee with only its own pending obligations. Best-effort ordinary input, not an inter-agent message: no conversation, turn or basis. |
 | client → server | `instruction` | Gains optional `delivery_intent` (`normal`, `early`, `yield`). Absent means `early` when the recipient declares an early mechanism, else `normal`. |
 | server → client | `work_changed` | Operator-only. `{work}` after every applied op. |
 | server → client | `work_scope_overlap` | Operator-only. `{work_id, other_work_id, scopes}` once when a grant becomes active with an overlapping declared scope. |

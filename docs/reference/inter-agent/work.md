@@ -44,6 +44,13 @@ therefore have no delivered message. The receipt's `delivery` field reports
 work result. `work_status_request` gives the caller's current authorized view;
 the old assignee can retrieve only its own pending transfer obligations, each
 with `work_id`, through either the full list or a named restricted view.
+Its `work_transfer_ack` reply confirms only `{work_id, transfer_id,
+state: "acknowledged"}`. Operator notices sent while an old assignee's
+obligation remains pending carry that restricted view, including only its
+own obligations, instead of the full work record.
+Receipts remain until their ID timestamp plus the configured validity window
+has passed, including IDs accepted ahead of server time. Terminal retention
+does not delete a work while it still holds a live receipt.
 
 `work_check` is a preflight for an assignee and records a bounded audit entry.
 `start` requires active
