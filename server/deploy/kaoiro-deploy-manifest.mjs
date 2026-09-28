@@ -84,6 +84,7 @@ export function isPathSha(value) {
 function isEnvConsistencyEntry(value) {
   const probePathPresent = Object.hasOwn(value ?? {}, "file_probe_path");
   const probeResultPresent = Object.hasOwn(value ?? {}, "file_probe_result");
+  const probeReasonPresent = Object.hasOwn(value ?? {}, "file_probe_reason");
   const firstApplicationPresent = Object.hasOwn(value ?? {}, "first_application");
   return (
     typeof value === "object" &&
@@ -102,7 +103,11 @@ function isEnvConsistencyEntry(value) {
     probePathPresent === probeResultPresent &&
     (!probePathPresent ||
       (value.file_probe_path === value.container_effective &&
-        (value.file_probe_result === "present" || value.file_probe_result === "absent"))) &&
+        (value.file_probe_result === "present" || value.file_probe_result === "absent" || value.file_probe_result === "undetermined"))) &&
+    (probeReasonPresent === (value.file_probe_result === "undetermined")) &&
+    (!probeReasonPresent ||
+      ["unexpected_output", "permission_denied", "probe_command_failed"].includes(value.file_probe_reason)) &&
+    (value.file_probe_result !== "undetermined" || value.match === false) &&
     (!firstApplicationPresent ||
       (value.first_application === "never_existed" && value.file_probe_result === "absent" && value.match === true)) &&
     (value.file_probe_result !== "absent" || firstApplicationPresent) &&

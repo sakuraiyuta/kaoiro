@@ -888,17 +888,22 @@ function containerEffectiveEnv(bin, container) {
   return env;
 }
 
-function containerPathExists(bin, container, path) {
+function probeContainerPath(bin, container, path) {
   try {
-    const output = runDocker(bin, ["exec", container, "test", "-e", path]);
-    if (output !== "") fail(`container path probe printed unexpected output for ${path}: ${JSON.stringify(output)}`);
-    return true;
+    const output = runDocker(bin, ["exec", container, "env", "LC_ALL=C", "stat", "--printf=present", "--", path]);
+    return output === "present"
+      ? { file_probe_result: "present" }
+      : { file_probe_result: "undetermined", file_probe_reason: "unexpected_output" };
   } catch (err) {
-    // `test -e` has no output on a negative result. Docker/exec failures
-    // must not be mistaken for absence merely because they also exit 1.
-    if (err.status === 1 && String(err.stdout ?? "") === "" && String(err.stderr ?? "") === "") return false;
-    if (err instanceof DeployError) throw err;
-    fail(`could not probe ${path} in container ${container}: ${err.message}`);
+    const stderr = String(err.stderr ?? "");
+    const statError = (reason) => `stat: cannot statx '${path}': ${reason}\n`;
+    if (err.status === 1 && String(err.stdout ?? "") === "" && stderr === statError("No such file or directory")) {
+      return { file_probe_result: "absent" };
+    }
+    return {
+      file_probe_result: "undetermined",
+      file_probe_reason: stderr === statError("Permission denied") ? "permission_denied" : "probe_command_failed",
+    };
   }
 }
 
@@ -982,7 +987,7 @@ function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsB
       }
       fileProbe = {
         file_probe_path: containerEffective,
-        file_probe_result: containerPathExists(bin, container, containerEffective) ? "present" : "absent",
+        ...probeContainerPath(bin, container, containerEffective),
       };
       if (fileProbe.file_probe_result === "absent") match = true;
     }
@@ -2085,6 +2090,8 @@ export function runUpdate(flags, config) {
               .map(([envName, e]) =>
                 e.compose === null
                   ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
+                  : e.file_probe_result === "undetermined"
+                    ? `${envName}: could not probe the running container's path ${JSON.stringify(e.file_probe_path)} (${e.file_probe_reason}); absence is unverified`
                   : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
               );
             fail(

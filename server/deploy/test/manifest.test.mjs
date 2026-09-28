@@ -66,6 +66,21 @@ test("isValidManifestShape accepts a measured never-existed store without changi
   assert.equal(isValidManifestShape(manifest), true);
 });
 
+test("isValidManifestShape binds an undetermined probe to its reason and refuses first application", () => {
+  const manifest = validManifest();
+  const entry = manifest.env_consistency.entries.KAOIRO_CLIENT_TOKENS;
+  entry.match = false;
+  entry.file_probe_path = entry.container_effective;
+  entry.file_probe_result = "undetermined";
+  entry.file_probe_reason = "permission_denied";
+  assert.equal(isValidManifestShape(manifest), true);
+  entry.first_application = "never_existed";
+  assert.equal(isValidManifestShape(manifest), false);
+  delete entry.first_application;
+  delete entry.file_probe_reason;
+  assert.equal(isValidManifestShape(manifest), false);
+});
+
 test("isValidManifestShape rejects an unbound first-application observation", () => {
   const manifest = validManifest();
   const entry = manifest.env_consistency.entries.KAOIRO_CLIENT_TOKENS;

@@ -263,9 +263,17 @@ case "$1" in
     exit 0
     ;;
   exec)
-    if [ "$3" != test ] || [ "$4" != -e ]; then exit 125; fi
+    if [ "$3" != env ] || [ "$4" != LC_ALL=C ] || [ "$5" != stat ] || [ "$6" != --printf=present ] || [ "$7" != -- ]; then exit 125; fi
+    if [ "$KAOIRO_TEST_FILE_PROBE_REAL" = 1 ]; then
+      env LC_ALL=C stat --printf=present -- "$8"
+      exit $?
+    fi
     if [ -n "$KAOIRO_TEST_FILE_PROBE_STDOUT" ]; then printf '%s\\n' "$KAOIRO_TEST_FILE_PROBE_STDOUT"; fi
     if [ -n "$KAOIRO_TEST_FILE_PROBE_STDERR" ]; then printf '%s\\n' "$KAOIRO_TEST_FILE_PROBE_STDERR" >&2; fi
+    if [ "$KAOIRO_TEST_FILE_PROBE_EXIT" = 0 ] && [ -z "$KAOIRO_TEST_FILE_PROBE_STDOUT" ]; then printf 'present'; fi
+    if [ "$KAOIRO_TEST_FILE_PROBE_EXIT" = 1 ] && [ -z "$KAOIRO_TEST_FILE_PROBE_STDERR" ]; then
+      printf "stat: cannot statx '%s': No such file or directory\\n" "$8" >&2
+    fi
     exit "\${KAOIRO_TEST_FILE_PROBE_EXIT:-0}"
     ;;
   inspect)
@@ -928,6 +936,7 @@ function withEnvConsistencyFixture(
     probeExit,
     probeStdout,
     probeStderr,
+    probeReal,
   } = {},
   fn,
 ) {
@@ -953,6 +962,7 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_FILE_PROBE_EXIT: probeExit,
     KAOIRO_TEST_FILE_PROBE_STDOUT: probeStdout,
     KAOIRO_TEST_FILE_PROBE_STDERR: probeStderr,
+    KAOIRO_TEST_FILE_PROBE_REAL: probeReal,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -2019,7 +2029,7 @@ test("runUpdate accepts and records a store absent from the old manifest and con
   });
   assert.ok(result, "the first application must finish");
   assert.equal(result.phase, "done");
-  assert.ok(calls.includes(`exec kaoiro-c1 test -e ${WORK_STORE_DEFAULT}`));
+  assert.ok(calls.includes(`exec kaoiro-c1 env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`));
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
   assert.equal(entry.match, true);
@@ -2027,6 +2037,49 @@ test("runUpdate accepts and records a store absent from the old manifest and con
   assert.equal(entry.file_probe_path, WORK_STORE_DEFAULT);
   assert.equal(entry.file_probe_result, "absent");
   assert.equal(entry.assumed_default_source, "target_image");
+});
+
+test("runUpdate accepts a missing path observed by the real stat probe", () => {
+  const parent = join(root, "accessible-store-parent");
+  mkdirSync(parent);
+  const missingPath = join(parent, "work_store.dets");
+  const result = withScenario("running-clean-stop", () => withNewWorkStore({
+    containerEnvJson: JSON.stringify([`KAOIRO_WORK_STORE_PATH=${missingPath}`]),
+    probeReal: "1",
+  }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())));
+  assert.equal(result.phase, "done");
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
+    .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
+  assert.equal(entry.file_probe_path, missingPath);
+  assert.equal(entry.file_probe_result, "absent");
+  assert.equal(entry.first_application, "never_existed");
+});
+
+test("runUpdate refuses an existing store behind an inaccessible parent", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("the permission-denied probe needs an unprivileged test process");
+    return;
+  }
+  const parent = join(root, "inaccessible-store-parent");
+  mkdirSync(parent);
+  const existingPath = join(parent, "work_store.dets");
+  writeFileSync(existingPath, "existing-store-data");
+  chmodSync(parent, 0);
+  try {
+    assert.throws(
+      () => withScenario("running", () => withNewWorkStore({
+        containerEnvJson: JSON.stringify([`KAOIRO_WORK_STORE_PATH=${existingPath}`]),
+        probeReal: "1",
+      }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
+      (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+        err.message.includes('"file_probe_result":"undetermined"') &&
+        err.message.includes('"file_probe_reason":"permission_denied"') &&
+        !err.message.includes('"first_application":"never_existed"'),
+    );
+  } finally {
+    chmodSync(parent, 0o700);
+  }
+  assert.equal(readFileSync(existingPath, "utf8"), "existing-store-data");
 });
 
 test("runUpdate keeps the 5-b failure when the old container has the new store's file", () => {
@@ -2107,22 +2160,40 @@ test("runUpdate refuses to infer absence from a diagnostic exit 1", () => {
   );
 });
 
+test("runUpdate refuses an absent answer for a different path", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({
+      probeExit: "1",
+      probeStderr: "stat: cannot statx '/tmp/other-store.dets': No such file or directory",
+    }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
+    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+      err.message.includes('"file_probe_reason":"probe_command_failed"'),
+  );
+});
+
 test("runUpdate refuses unexpected output from the container path probe", () => {
   assert.throws(
     () => withScenario("running", () => withNewWorkStore({
       probeExit: "0", probeStdout: "unexpected",
     }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("printed unexpected output"),
+    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+      err.message.includes('"file_probe_reason":"unexpected_output"'),
   );
 });
 
 test("runUpdate does not probe an old image that cannot answer the manifest query", () => {
-  assert.throws(
-    () => withScenario("running", () => withNewWorkStore({ oldBeamAbsent: "1" }, () =>
-      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
-    )),
-    (err) => err instanceof DeployError && err.message.includes("first-application migration"),
-  );
+  let caught;
+  const calls = withCallLog("running", () => {
+    try {
+      withNewWorkStore({ oldBeamAbsent: "1" }, () =>
+        runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+    } catch (err) {
+      caught = err;
+    }
+  });
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("first-application migration"));
+  assert.equal(calls.includes(`exec kaoiro-c1 env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`), false);
 });
 
 test("runUpdate leaves an already matching new store outside the first-application probe", () => {
