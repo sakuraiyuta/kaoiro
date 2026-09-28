@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InterAgentTool, classifyInterAgentError, handoffToolResult } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { InterAgentIngressGate, InterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
@@ -32,6 +33,181 @@ function inbound(peer: string, conversationId: string, turnNumber: number): Enve
 }
 
 describe("InterAgentTurnCoordinator (issue #246)", () => {
+  it("keeps T's same-CID obligation while folded y needs a recovery ticket", async () => {
+    const coordinator = new InterAgentTurnCoordinator({ onDispatch: () => {}, createTurnToken: () => "T" });
+    const old = inbound("peer", "same-cid", 1);
+    const folded = inbound("peer", "same-cid", 2);
+    coordinator.receive(old, "reply-owed");
+    coordinator.prepareInput("T");
+    const tool = new InterAgentTool({
+      config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+      claimRecovery: (cid, peer, fit, expectedTurn) => coordinator.claimRecovery(cid, peer, "T", fit, expectedTurn),
+      sendInterAgent: async envelope => {
+        expect(envelope.payload.in_reply_to).toBe(1);
+        return { kind: "rejected", reason: "stale_reply_basis", details: { expected_peer_turn: 2 } };
+      },
+    });
+    tool.prepareReplyInput("T", [old]);
+    tool.beginReplyInput("T");
+    tool.confirmReplyInput("T");
+    expect(tool.notePendingInjection(old, "T")).toBe(true);
+    const lease = tool.prepareFoldInput("T", [folded])!;
+    expect(lease.activate()).toBe(true);
+    coordinator.retainFolded([folded], "T");
+    expect(tool.notePendingInjection(folded, "T")).toBe(true);
+    const result = await tool.invoke({ to: "peer", conversation_id: "same-cid", kind: "response", body: "default reply" }, { origin: { token: "T" } });
+    const fields = JSON.parse(result.content[0]!.text);
+    expect(fields).toMatchObject({ error: "stale_reply_basis", folded_earlier: true, recovery: [folded], reply_authorization: { in_reply_to: 2 } });
+    expect(handoffToolResult(result, () => {})).toBe(true);
+    expect(tool.resolveTurnEnd("T", ["same-cid"], classifyInterAgentError({ reason: "api_error" }))).toHaveLength(1);
+    expect(tool.pendingConversationIdsForTurn("T")).toEqual([]);
+  });
+
+  it("dispatches a same-peer priority lease while T is live and holds the ordinary successor", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: batch => dispatched.push(batch.turnToken),
+    });
+    coordinator.receive(inbound("peer", "work", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "yield", 1), "reply-owed", true);
+    coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
+    expect(dispatched).toEqual(["token-1", "token-2"]);
+    coordinator.prepareInput("token-2", false);
+    coordinator.markPushed("token-2");
+    expect(coordinator.settle("token-1").kind).toBe("settled");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toHaveLength(2);
+    expect(coordinator.settle("token-2").kind).toBe("settled");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
+  });
+
+  it("offers ordinary input to the root scheduler beside an unpushed priority lease", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: batch => dispatched.push(batch.turnToken),
+    });
+    coordinator.receive(inbound("peer", "T", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "early", 1), "reply-owed", true);
+    coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
+    coordinator.settle("token-1");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
+    expect(coordinator.prepareInput("token-3")?.batch?.conversationIds).toEqual(["ordinary"]);
+    expect(coordinator.settle("token-3").kind).toBe("settled");
+    expect(coordinator.prepareInput("token-2")?.batch?.conversationIds).toEqual(["early"]);
+  });
+
+  it("turns a matched priority root into the peer's active batch and settles its envelopes", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: batch => dispatched.push(batch.turnToken),
+    });
+    coordinator.receive(inbound("peer", "work", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "cut", 1), "reply-owed", true);
+    coordinator.receive(inbound("peer", "later", 1), "reply-owed");
+    coordinator.markPushed("token-2");
+    coordinator.settle("token-1");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toHaveLength(2);
+    const root = coordinator.adoptPushedRoot("token-2", "root-F");
+    expect(root).toMatchObject({ turnToken: "root-F", conversationIds: ["cut"] });
+    expect(coordinator.deliveryEnvelopesForTurn("root-F")).toEqual(root!.items.map(item => item.envelope));
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toHaveLength(2);
+    expect(coordinator.settle("root-F")).toMatchObject({ kind: "settled", batch: { turnToken: "root-F" } });
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
+  });
+
+  it("restores an already queued ordinary batch after a pushed root ends", () => {
+    const dispatched: string[] = [];
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: batch => dispatched.push(batch.turnToken),
+    });
+    coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "cut", 1), "reply-owed", true);
+    coordinator.receive(inbound("peer", "after", 1), "reply-owed");
+    coordinator.markPushed("token-2");
+    coordinator.adoptPushedRoot("token-2", "root-F");
+    expect(coordinator.settle("root-F").kind).toBe("settled");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toHaveLength(2);
+    expect(coordinator.settle("token-1").kind).toBe("settled");
+    coordinator.dispatchNextForPeer("peer");
+    expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
+  });
+
+  it("settles a cancelled suspended ordinary batch without releasing its live pushed root", () => {
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: () => {},
+    });
+    coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "cut", 1), "reply-owed", true);
+    coordinator.markPushed("token-2");
+    coordinator.adoptPushedRoot("token-2", "root-F");
+    expect(coordinator.settle("token-1")).toMatchObject({ kind: "settled", batch: { conversationIds: ["ordinary"] } });
+    expect(coordinator.settle("root-F")).toMatchObject({ kind: "settled", batch: { conversationIds: ["cut"] } });
+  });
+
+  it("drains a priority lease and ordinary peer work in arrival order after T retires", () => {
+    let sequence = 0;
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `token-${++sequence}`,
+      onDispatch: () => {},
+    });
+    coordinator.receive(inbound("peer", "T", 1), "reply-owed");
+    coordinator.receive(inbound("peer", "early", 1), "reply-owed", true);
+    coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
+    coordinator.settle("token-1");
+    expect(coordinator.closeAndDrain().map(batch => batch.conversationIds)).toEqual([["early"], ["ordinary"]]);
+  });
+
+  it("re-hands a folded body after its original turn retires until confirmed input supersedes it", () => {
+    const coordinator = new InterAgentTurnCoordinator({ onDispatch: () => {} });
+    const folded = inbound("peer", "folded-cid", 2);
+    coordinator.retainFolded([folded], "original-turn");
+
+    const rehand = coordinator.claimRecovery("folded-cid", "peer", "notification-turn", () => true, 2);
+    expect(rehand).toMatchObject({ envelopes: [folded], foldedEarlier: true });
+    rehand?.commit();
+    expect(coordinator.claimRecovery("folded-cid", "peer", "later-turn", () => true, 2)?.envelopes).toEqual([folded]);
+
+    coordinator.retireFoldedBeforeConfirmed([inbound("peer", "folded-cid", 3)]);
+    expect(coordinator.claimRecovery("folded-cid", "peer", "later-turn", () => true, 2)).toBeUndefined();
+  });
+
+  it("retires a folded recovery body once its ticket is used", () => {
+    const coordinator = new InterAgentTurnCoordinator({ onDispatch: () => {} });
+    const folded = inbound("peer", "folded-cid", 2);
+    coordinator.retainFolded([folded], "original-turn");
+    coordinator.creditFolded([folded]);
+    expect(coordinator.claimRecovery("folded-cid", "peer", "later-turn", () => true, 2)).toBeUndefined();
+  });
+
+  it("bounds retained folded recovery bodies and counts capacity eviction by reason", () => {
+    const reasons: string[] = [];
+    const coordinator = new InterAgentTurnCoordinator({
+      onDispatch: () => {}, onFoldRecoveryEvicted: reason => reasons.push(reason),
+    });
+    for (let index = 0; index < 257; index += 1) {
+      coordinator.retainFolded([inbound("peer", `cid-${index}`, 1)], "T");
+    }
+    expect(reasons).toEqual(["fold_recovery_capacity"]);
+    expect(coordinator.claimRecovery("cid-0", "peer", "N", () => true, 1)).toBeUndefined();
+    expect(coordinator.claimRecovery("cid-256", "peer", "N", () => true, 1)?.foldedEarlier).toBe(true);
+  });
+
   it("retires pending and late ingress after its terminal generation closes", () => {
     const ingress = new InterAgentIngressGate();
     const first = inbound("peer", "pending", 1);

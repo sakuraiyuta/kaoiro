@@ -10,6 +10,7 @@ import {
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
+  ordinaryPeerInput,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -47,16 +48,24 @@ interface PendingBatch {
   bytes: number;
 }
 
+interface FoldedRecoveryRecord {
+  envelope: Envelope;
+  ownerToken: string;
+}
+
+const MAX_FOLDED_RECOVERY_RECORDS = 256;
+
 export type InterAgentTurnSettlement =
   | { kind: "settled"; batch: DispatchedInterAgentBatch }
   | { kind: "stale"; turnToken: string }
   | { kind: "untracked"; turnToken: string };
 
 export interface InterAgentTurnCoordinatorOptions {
-  /** Called synchronously once a free peer's oldest batch owns a turn. */
+  /** Called synchronously for an ordinary free-peer batch or a priority lease. */
   onDispatch: (batch: DispatchedInterAgentBatch) => void;
   reclassifyQueued?: (item: InterAgentBatchItem) => InboundReplyMode;
   onTerminalQueued?: (item: InterAgentBatchItem) => void;
+  onFoldRecoveryEvicted?: (reason: "fold_recovery_capacity") => void;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
 }
@@ -120,9 +129,13 @@ export class InterAgentTurnCoordinator {
   #nextReceiveOrder = 0;
   readonly #inputStarted = new Set<string>();
   readonly #recoveryLeases = new Set<readonly Envelope[]>();
+  readonly #foldedRecovery = new Map<string, FoldedRecoveryRecord>();
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
   readonly #batchByTurnToken = new Map<string, DispatchedInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
+  readonly #priorityLeases = new Set<string>();
+  readonly #pushedPriorityLeases = new Set<string>();
+  readonly #suspendedTokenByPeer = new Map<string, string>();
   /** Tokens that once belonged to us. Retain a bounded history solely so a
    * late callback is diagnosable rather than indistinguishable from an
    * ordinary operator turn. */
@@ -130,6 +143,7 @@ export class InterAgentTurnCoordinator {
   readonly #onDispatch: (batch: DispatchedInterAgentBatch) => void;
   readonly #reclassifyQueued: ((item: InterAgentBatchItem) => InboundReplyMode) | undefined;
   readonly #onTerminalQueued: ((item: InterAgentBatchItem) => void) | undefined;
+  readonly #onFoldRecoveryEvicted: ((reason: "fold_recovery_capacity") => void) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
 
@@ -137,12 +151,13 @@ export class InterAgentTurnCoordinator {
     this.#onDispatch = options.onDispatch;
     this.#reclassifyQueued = options.reclassifyQueued;
     this.#onTerminalQueued = options.onTerminalQueued;
+    this.#onFoldRecoveryEvicted = options.onFoldRecoveryEvicted;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
-  /** Adds one accepted inbound envelope and starts it immediately when that
-   * peer has no active generation. Later arrivals for a busy peer accumulate
-   * behind its active turn, preserving the issue #211 busy-trigger behaviour.
+  /** Ordinary input waits behind a busy peer; priority input gets its own
+   * lease so it can be folded into that peer's live turn. The lease has no
+   * SDK turn token until a matched root hook adopts it.
    */
   unreadCount(activeToken: string | null): number {
     return [...this.#batchByTurnToken.values()].filter(batch => batch.turnToken !== activeToken).reduce((n, batch) => n + batch.items.length, 0)
@@ -150,7 +165,15 @@ export class InterAgentTurnCoordinator {
       + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
   }
 
-  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean): { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined {
+  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number): { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; commit: () => void; rollback: () => void } | undefined {
+    if (expectedTurn !== undefined) {
+      const folded = this.#foldedRecovery.get(JSON.stringify([cid, peer, expectedTurn]));
+      if (folded !== undefined) {
+        const envelopes = [folded.envelope];
+        if (!fit(envelopes)) return { envelopes: [], oversizedPending: true, foldedEarlier: true, commit: () => {}, rollback: () => {} };
+        return { envelopes, foldedEarlier: true, commit: () => {}, rollback: () => {} };
+      }
+    }
     const selected: InterAgentBatchItem[] = [];
     const candidates = [
       ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken)).flatMap(batch => batch.items),
@@ -206,13 +229,67 @@ export class InterAgentTurnCoordinator {
     };
   }
 
-  receive(envelope: Envelope, mode: InboundReplyMode): void {
+  retainFolded(envelopes: readonly Envelope[], ownerToken: string): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      const key = JSON.stringify([payload.conversation_id, envelope.agent_id, payload.turn_number]);
+      if (this.#foldedRecovery.has(key)) continue;
+      if (this.#foldedRecovery.size >= MAX_FOLDED_RECOVERY_RECORDS) {
+        const oldest = this.#foldedRecovery.keys().next().value;
+        if (typeof oldest === "string") this.#foldedRecovery.delete(oldest);
+        this.#onFoldRecoveryEvicted?.("fold_recovery_capacity");
+      }
+      this.#foldedRecovery.set(key, { envelope, ownerToken });
+    }
+  }
+
+  creditFolded(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      this.#foldedRecovery.delete(JSON.stringify([payload.conversation_id, envelope.agent_id, payload.turn_number]));
+    }
+  }
+
+  retireFoldedBeforeConfirmed(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      for (const [key, record] of this.#foldedRecovery) {
+        const prior = record.envelope.payload as unknown as InterAgentMessagePayload;
+        if (record.envelope.agent_id === envelope.agent_id && prior.conversation_id === payload.conversation_id && prior.turn_number < payload.turn_number) {
+          this.#foldedRecovery.delete(key);
+        }
+      }
+    }
+  }
+
+  resetFoldedRecovery(): void {
+    this.#foldedRecovery.clear();
+  }
+
+  receive(envelope: Envelope, mode: InboundReplyMode, priority = false): void {
     if (this.#closed) {
       throw new Error("inter-agent turn coordinator is closed");
     }
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: InterAgentBatchItem = { envelope, mode };
+    if (priority) {
+      const turnToken = this.#createTurnToken();
+      const cid = (envelope.payload as Partial<InterAgentMessagePayload>).conversation_id;
+      const batch: DispatchedInterAgentBatch = {
+        turnToken, peer, items: [item],
+        conversationIds: typeof cid === "string" ? [cid] : [],
+        text: formatInboundMessages([item]),
+      };
+      this.#batchByTurnToken.set(turnToken, batch);
+      this.#priorityLeases.add(turnToken);
+      this.#onDispatch(batch);
+      this.#dispatchNext(peer);
+      return;
+    }
     const itemBytes = Buffer.byteLength(
       formatInboundMessage(envelope, { mode }),
       "utf8",
@@ -249,16 +326,49 @@ export class InterAgentTurnCoordinator {
 
     this.#batchByTurnToken.delete(turnToken);
     this.#inputStarted.delete(turnToken);
+    const priorityLease = this.#priorityLeases.delete(turnToken);
+    this.#pushedPriorityLeases.delete(turnToken);
     this.#retire(turnToken);
     // A mismatched active token is an invariant violation. Do not free the
     // peer: its current generation might still be live. The old token is now
     // retired, so any repeated callback becomes an explicit stale no-op.
     if (this.#activeTokenByPeer.get(batch.peer) !== turnToken) {
-      return { kind: "stale", turnToken };
+      if (this.#suspendedTokenByPeer.get(batch.peer) === turnToken) {
+        this.#suspendedTokenByPeer.delete(batch.peer);
+        return { kind: "settled", batch };
+      }
+      return priorityLease ? { kind: "settled", batch } : { kind: "stale", turnToken };
     }
 
-    this.#activeTokenByPeer.delete(batch.peer);
+    const suspended = this.#suspendedTokenByPeer.get(batch.peer);
+    this.#suspendedTokenByPeer.delete(batch.peer);
+    if (suspended !== undefined && this.#batchByTurnToken.has(suspended)) {
+      this.#activeTokenByPeer.set(batch.peer, suspended);
+    } else {
+      this.#activeTokenByPeer.delete(batch.peer);
+    }
     return { kind: "settled", batch };
+  }
+
+  /** A matched pushed root is an SDK turn. Its lease becomes that peer's
+   * active generation before a later ordinary batch may be dispatched. */
+  adoptPushedRoot(leaseToken: string, rootToken: string): DispatchedInterAgentBatch | undefined {
+    const batch = this.#batchByTurnToken.get(leaseToken);
+    if (batch === undefined || this.#batchByTurnToken.has(rootToken)) return undefined;
+    this.#batchByTurnToken.delete(leaseToken);
+    this.#inputStarted.delete(leaseToken);
+    this.#priorityLeases.delete(leaseToken);
+    this.#pushedPriorityLeases.delete(leaseToken);
+    this.#retire(leaseToken);
+    const current = this.#activeTokenByPeer.get(batch.peer);
+    if (current !== undefined && current !== leaseToken) {
+      this.#suspendedTokenByPeer.set(batch.peer, current);
+    }
+    const root = { ...batch, turnToken: rootToken };
+    this.#batchByTurnToken.set(rootToken, root);
+    this.#inputStarted.add(rootToken);
+    this.#activeTokenByPeer.set(batch.peer, rootToken);
+    return root;
   }
 
   /** Starts the peer's next pending batch after the caller has resolved the
@@ -270,10 +380,15 @@ export class InterAgentTurnCoordinator {
   }
 
   /** Rechecks a host-queued batch synchronously at the SDK input boundary. */
-  prepareInput(turnToken: string): { batch: DispatchedInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
+  prepareInput(turnToken: string, asRoot = true): { batch: DispatchedInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return undefined;
-    this.#inputStarted.add(turnToken);
+    if (asRoot && this.#priorityLeases.delete(turnToken) && this.#activeTokenByPeer.get(batch.peer) !== turnToken) {
+      const current = this.#activeTokenByPeer.get(batch.peer);
+      if (current !== undefined) this.#suspendedTokenByPeer.set(batch.peer, current);
+      this.#activeTokenByPeer.set(batch.peer, turnToken);
+    }
+    if (asRoot) this.#inputStarted.add(turnToken);
     const items: InterAgentBatchItem[] = [];
     const removed: InterAgentBatchItem[] = [];
     for (const item of batch.items) {
@@ -290,6 +405,13 @@ export class InterAgentTurnCoordinator {
     const prepared = { ...batch, items, conversationIds, text: formatInboundMessages(items) };
     this.#batchByTurnToken.set(turnToken, prepared);
     return { batch: prepared, removedConversationIds };
+  }
+
+  markPushed(turnToken: string): void {
+    if (this.#batchByTurnToken.has(turnToken)) {
+      this.#inputStarted.add(turnToken);
+      if (this.#priorityLeases.has(turnToken)) this.#pushedPriorityLeases.add(turnToken);
+    }
   }
 
   /** The queue has accepted these items, but only the host turn-start boundary
@@ -340,6 +462,9 @@ export class InterAgentTurnCoordinator {
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
+    this.#priorityLeases.clear();
+    this.#pushedPriorityLeases.clear();
+    this.#suspendedTokenByPeer.clear();
     return { droppedDispatched, droppedPending };
   }
 
@@ -361,6 +486,7 @@ export class InterAgentTurnCoordinator {
     const peers = new Set([
       ...this.#activeTokenByPeer.keys(),
       ...this.#pendingBatches.keys(),
+      ...[...this.#batchByTurnToken.values()].map(batch => batch.peer),
     ]);
 
     for (const peer of peers) {
@@ -373,8 +499,21 @@ export class InterAgentTurnCoordinator {
           this.#retire(activeToken);
         }
       }
-      for (const pending of this.#pendingBatches.get(peer) ?? []) {
-        drained.push(this.#drainedBatch(peer, pending));
+      const waiting: Array<{ order: number; dispatched?: DispatchedInterAgentBatch; pending?: PendingBatch }> = [
+        ...[...this.#batchByTurnToken.values()]
+          .filter(batch => batch.peer === peer && !emittedTokens.has(batch.turnToken))
+          .map(batch => ({ order: batch.items[0] === undefined ? Number.MAX_SAFE_INTEGER : this.#receiveOrder.get(batch.items[0].envelope) ?? Number.MAX_SAFE_INTEGER, dispatched: batch })),
+        ...(this.#pendingBatches.get(peer) ?? [])
+          .map(pending => ({ order: pending.items[0] === undefined ? Number.MAX_SAFE_INTEGER : this.#receiveOrder.get(pending.items[0].envelope) ?? Number.MAX_SAFE_INTEGER, pending })),
+      ].sort((a, b) => a.order - b.order);
+      for (const item of waiting) {
+        if (item.dispatched !== undefined) {
+          drained.push(item.dispatched);
+          emittedTokens.add(item.dispatched.turnToken);
+          this.#retire(item.dispatched.turnToken);
+        } else if (item.pending !== undefined) {
+          drained.push(this.#drainedBatch(peer, item.pending));
+        }
       }
     }
 
@@ -390,12 +529,16 @@ export class InterAgentTurnCoordinator {
     this.#activeTokenByPeer.clear();
     this.#batchByTurnToken.clear();
     this.#pendingBatches.clear();
+    this.#priorityLeases.clear();
+    this.#pushedPriorityLeases.clear();
+    this.#suspendedTokenByPeer.clear();
     return drained;
   }
 
   #dispatchNext(peer: string): void {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
+    if ([...this.#pushedPriorityLeases].some(token => this.#batchByTurnToken.get(token)?.peer === peer)) return;
     let items: InterAgentBatchItem[];
     while (true) {
       const queue = this.#pendingBatches.get(peer);

@@ -4782,7 +4782,7 @@ describe("AgentHost — SDK notification reply origin", () => {
       onState: () => {}, queryFn,
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
       onTurnEnd: ({ turnToken }) => { if (turnToken) ends.push(turnToken); },
-      onAdmissionFailStop: ({ turnToken }) => freezes.push(turnToken),
+      onAdmissionFailStop: ({ turnToken }) => { if (turnToken !== undefined) freezes.push(turnToken); },
     });
     const running = host.run();
     await host.send("first");
@@ -4829,7 +4829,7 @@ describe("AgentHost — SDK notification reply origin", () => {
       onState: () => {}, queryFn,
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
       onTurnEnd: ({ turnToken, error }) => { if (turnToken) ends.push({ token: turnToken, ...(error?.detail ? { error: error.detail } : {}) }); },
-      onAdmissionFailStop: ({ turnToken }) => freezes.push(turnToken),
+      onAdmissionFailStop: ({ turnToken }) => { if (turnToken !== undefined) freezes.push(turnToken); },
     });
     const running = host.run();
     await host.send("launch");
@@ -8443,4 +8443,420 @@ it.each([false, true])("binds permission-before-assistant observation to the sam
     permission.resolve({ allow: true }); await run;
     expect(verdict).toBe(cancel ? "deny" : "allow");
   } finally { permission.resolve({ allow: false }); host.close(); await run; }
+});
+
+describe("AgentHost phase-2 pushed input receipts", () => {
+  it("classifies a root with two work links as mixed before any yield claim", async () => {
+    const ready = deferred();
+    const release = deferred();
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: "T",
+        } as never, undefined, { signal: new AbortController().signal });
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        await release.promise;
+        yield result("success", { result: "done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      const envelopes = ["W1", "W2"].map(work_id => ({ payload: { work: { work_id } } }) as unknown as Envelope);
+      await host.send("T", undefined, [], undefined, { source: "peer", envelopes });
+      await ready.promise;
+      expect(host.yieldEligibility("W1")).toBe("mixed_turn");
+    } finally { release.resolve(); host.close(); await running; }
+  });
+
+  it.each(["other work", "operator"] as const)("revokes yield eligibility when %s folds during claim", async source => {
+    const ready = deferred();
+    const workEnvelope = (workId: string) => ({ payload: { work: { work_id: workId } } }) as unknown as Envelope;
+    const work = workEnvelope("W1");
+    const other = workEnvelope("W2");
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        const pushed = (await input.next()).value!;
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: pushed.message.content as string,
+        } as never, undefined, signal);
+        yield result("success", { result: "done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T", undefined, ["work-owner"], undefined, { source: "peer", envelopes: [work] });
+      await ready.promise;
+      expect(host.yieldEligibility("W1")).toBe(null);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: source === "other work" ? [other] : [],
+        conversationIds: [], operatorInput: source === "operator" })).toBe(true);
+      expect(host.yieldEligibility("W1")).toBe("mixed_turn");
+      await running;
+    } finally { host.close(); await running; }
+  });
+
+  it("serves ordinary peer input by the third root boundary despite operator input", async () => {
+    const order: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn(({ prompt }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        for (let index = 0; index < 5; index += 1) {
+          order.push((await input.next()).value!.message.content as string);
+          yield result("success", { result: `turn ${index}` });
+        }
+      })())),
+    });
+    await host.send("urgent-1", undefined, [], undefined, { source: "peer", urgent: true });
+    await host.send("operator", undefined, [], undefined, { source: "operator" });
+    await host.send("urgent-2", undefined, [], undefined, { source: "peer", urgent: true });
+    await host.send("urgent-3", undefined, [], undefined, { source: "peer", urgent: true });
+    await host.send("ordinary", undefined, [], undefined, { source: "peer", urgent: false });
+    try {
+      await host.run();
+      expect(order).toEqual(["operator", "urgent-1", "urgent-2", "ordinary", "urgent-3"]);
+    } finally { host.close(); }
+  });
+  it("charges voided fold receipts against the three-slot turn budget", async () => {
+    const ready = deferred();
+    const releaseResult = deferred();
+    const decisions: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        for (let index = 0; index < 3; index += 1) {
+          const pushed = (await input.next()).value!;
+          await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+            hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root",
+            prompt: `${pushed.message.content as string} changed`,
+          } as never, undefined, signal);
+        }
+        await releaseResult.promise;
+        yield result("success", { result: "done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      for (let index = 0; index < 3; index += 1) {
+        await vi.waitFor(() => expect(host.canFoldLiveInput()).toBe(true));
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+        await vi.waitFor(() => expect(decisions).toHaveLength(index + 1));
+      }
+      expect(host.canFoldLiveInput()).toBe(false);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(false);
+      releaseResult.resolve();
+      await running;
+      expect(decisions).toEqual(Array(3).fill("unknown:digest_mismatch"));
+    } finally { releaseResult.resolve(); host.close(); await running; }
+  });
+  it("accepts at most three activated fold batches in one turn", async () => {
+    const ready = deferred();
+    const releaseResult = deferred();
+    const decisions: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onPushedInputDecision: decision => decisions.push(decision.kind),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        for (let index = 0; index < 3; index += 1) {
+          const pushed = (await input.next()).value!;
+          await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+            hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: pushed.message.content as string,
+          } as never, undefined, signal);
+        }
+        await releaseResult.promise;
+        yield result("success", { result: "done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      for (let index = 0; index < 3; index += 1) {
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+        await vi.waitFor(() => expect(decisions).toHaveLength(index + 1));
+      }
+      for (let index = 0; index < 2; index += 1) {
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(false);
+      }
+      releaseResult.resolve();
+      await running;
+      expect(decisions).toEqual(["fold", "fold", "fold"]);
+    } finally { releaseResult.resolve(); host.close(); await running; }
+  });
+  it.each([
+    { name: "exact", textMismatch: false, ownerMismatch: false, contextMismatch: false, expected: { kind: "fold" } },
+    { name: "digest mismatch", textMismatch: true, ownerMismatch: false, contextMismatch: false, expected: { kind: "unknown", reason: "digest_mismatch" } },
+    { name: "owner mismatch", textMismatch: false, ownerMismatch: true, contextMismatch: false, expected: { kind: "unknown", reason: "owner_still_live" } },
+    { name: "context mismatch", textMismatch: false, ownerMismatch: false, contextMismatch: true, expected: { kind: "unknown", reason: "receipt_context_mismatch" } },
+  ])("decides a live fold only from the exact trusted hook ($name)", async ({ textMismatch, ownerMismatch, contextMismatch, expected }) => {
+    const ready = deferred();
+    const decisions: Array<{ kind: string; reason?: string }> = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onPushedInputDecision: decision => decisions.push({ kind: decision.kind, ...(decision.reason ? { reason: decision.reason } : {}) }),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        expect((await input.next()).value?.message.content).toBe("root");
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root-id", prompt: "root",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        const pushed = (await input.next()).value!;
+        const text = pushed.message.content as string;
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: contextMismatch ? "foreign-s" : "s", prompt_id: ownerMismatch ? "foreign-id" : "root-id",
+          prompt: textMismatch ? `${text} extra` : text,
+        } as never, undefined, signal);
+        yield result("success", { result: "done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("root");
+      await ready.promise;
+      await vi.waitFor(() => expect(host.canFoldLiveInput()).toBe(true));
+      expect(host.pushLiveInput({
+        kind: "fold", text: id => `fold_id: ${id}\npeer body`, envelopes: [], conversationIds: [],
+      })).toBe(true);
+      await running;
+      expect(decisions).toEqual([expected]);
+    } finally { host.close(); await running; }
+  });
+
+  it("cannot reactivate a consumed fold receipt from a later identical root hook", async () => {
+    const ready = deferred();
+    const decisions: string[] = [];
+    const starts: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onPushedInputDecision: decision => decisions.push(decision.kind),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        const pushed = (await input.next()).value!;
+        const text = pushed.message.content as string;
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: text,
+        } as never, undefined, signal);
+        yield result("success", { result: "T done" });
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: text,
+        } as never, undefined, signal);
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      await running;
+      expect(decisions).toEqual(["fold"]);
+      expect(starts).toHaveLength(1);
+    } finally { host.close(); await running; }
+  });
+
+  it("holds the queued root after the old result until the pushed input's new root hook", async () => {
+    const ready = deferred();
+    const oldEnded = deferred();
+    const releaseHook = deferred();
+    let nextInputResolved = false;
+    const starts: string[] = [];
+    const decisions: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: () => { if (starts.length === 1) oldEnded.resolve(); },
+      onPushedInputDecision: decision => decisions.push(decision.kind),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        const pushed = (await input.next()).value!;
+        yield result("success", { result: "T finished" });
+        const next = input.next().then(value => { nextInputResolved = true; return value; });
+        await releaseHook.promise;
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2",
+          prompt: pushed.message.content as string,
+        } as never, undefined, signal);
+        yield result("success", { result: "pushed root finished" });
+        expect((await next).value?.message.content).toBe("R");
+        yield result("success", { result: "R finished" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+      await host.send("R");
+      await oldEnded.promise;
+      await new Promise(resolve => setTimeout(resolve, 15));
+      expect(nextInputResolved).toBe(false);
+      releaseHook.resolve();
+      await running;
+      expect(decisions).toEqual(["root"]);
+      expect(starts).toHaveLength(3);
+    } finally { releaseHook.resolve(); host.close(); await running; }
+  });
+
+  it("pauses the pending root receipt clock during a live task-notification turn", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const ready = deferred();
+    const notificationReady = deferred();
+    const releaseNotification = deferred();
+    const decisions: string[] = [];
+    let now = 0;
+    const host = new AgentHost(config, {
+      onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+      onPushedInputDecision: decision => decisions.push(decision.kind),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        yield msg({ type: "system", subtype: "task_started", session_id: "s", task_id: "task", task_type: "local_agent", is_backgrounded: true });
+        ready.resolve();
+        const pushed = (await input.next()).value!;
+        yield result("success", { result: "T done" });
+        yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "notification",
+          prompt: "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><summary>Agent finished</summary><result>done</result></task-notification>",
+        } as never, undefined, signal);
+        notificationReady.resolve();
+        await releaseNotification.promise;
+        yield result("success", { result: "notification done", origin: { kind: "task-notification" } });
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: pushed.message.content as string,
+        } as never, undefined, signal);
+        yield result("success", { result: "F done" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      await notificationReady.promise;
+      expect(host.receiptDiagnostics().notification_clock_pauses).toBe(1);
+      expect(stderr.mock.calls.some(([line]) => String(line).includes('"event":"notification_clock_pause","count":1'))).toBe(true);
+      now = 5_000;
+      expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      expect(host.state).not.toBe("error");
+      releaseNotification.resolve();
+      await running;
+      expect(decisions).toEqual(["root"]);
+      expect(host.receiptDiagnostics().root_hook_timeout).toBe(0);
+    } finally { releaseNotification.resolve(); host.close(); await running; stderr.mockRestore(); }
+  });
+
+  it("fail-stops a missing root hook and cancels the queued input before it reaches Query", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const ready = deferred();
+    const oldEnded = deferred();
+    const release = deferred();
+    let now = 0;
+    let nextInputResolved = false;
+    let requirePendingClosure = true;
+    const cancellations: string[] = [];
+    const decisions: string[] = [];
+    const loggedResults: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+      onLog: envelope => { if (envelope.type === "result") loggedResults.push("result"); },
+      onTurnEnd: ({ cancellation }) => {
+        if (cancellation?.kind) cancellations.push(cancellation.kind);
+        else oldEnded.resolve();
+      },
+      onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        await input.next();
+        yield result("success", { result: "T finished" });
+        const pending = input.next().then(value => { nextInputResolved = true; return value; });
+        await release.promise;
+        if (requirePendingClosure) expect((await pending).done).toBe(true);
+        yield result("success", { result: "late unattributed result" });
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+      await host.send("R");
+      await oldEnded.promise;
+      now = 2_001;
+      const timedOut = host.tickPendingReceiptRootTimeout();
+      requirePendingClosure = timedOut;
+      const inputResolvedBeforeRelease = nextInputResolved;
+      release.resolve();
+      await running;
+      expect(timedOut).toBe(true);
+      expect(host.state).toBe("error");
+      expect(inputResolvedBeforeRelease).toBe(false);
+      expect(cancellations).toContain("receipt_timeout_fail_stop");
+      expect(decisions).toEqual(["unknown:root_hook_timeout"]);
+      expect(loggedResults).toEqual(["result"]);
+      expect(stderr.mock.calls.some(([line]) => String(line).includes('"event":"root_hook_timeout","count":1'))).toBe(true);
+    } finally { release.resolve(); host.close(); await running; stderr.mockRestore(); }
+  });
 });
