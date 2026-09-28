@@ -1088,6 +1088,23 @@ export class AgentHost implements EngineAdapter {
         owner.sessionId === this.#sessionId && !owner.tainted);
   }
 
+  captureLiveInputContext(ownerToken: string): { sessionId: string; query: Query } | null {
+    if (this.#activeTurn?.turnToken !== ownerToken || !this.canPushLiveInput()) return null;
+    return { sessionId: this.#sessionId!, query: this.#query! };
+  }
+
+  matchesLiveInputContext(ownerToken: string, context: { sessionId: string; query: Query }): boolean {
+    return !this.#closed && !this.#admissionFailStopped &&
+      this.#activeTurn?.turnToken === ownerToken &&
+      this.#sessionId === context.sessionId && this.#query === context.query &&
+      [...this.#promptOwners.values()].some(owner =>
+        owner.token === ownerToken && owner.sessionId === context.sessionId && !owner.tainted);
+  }
+
+  hasPendingPushedReceipt(): boolean {
+    return this.#pendingPushedReceipt !== null;
+  }
+
   async waitForPushedReceipt(ownerToken: string, timeoutMs: number): Promise<boolean> {
     if (this.#pendingPushedReceipt === null) return this.#activeTurn?.turnToken === ownerToken && !this.#closed;
     return await new Promise<boolean>(resolve => {
