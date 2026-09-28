@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 related: [deployment]
 ---
 
@@ -307,11 +307,23 @@ raw env cannot change before the very deploy the check is gating recreates
 the container. Comparing against the effective path instead asks the right
 question: compose merely starting to declare EXPLICITLY what was already the
 default needs no migration (match); compose naming a genuinely different
-location means a real first-application migration is needed (5-b, below) —
-`update` aborts with a message naming the store and both paths. Compose not
+location normally means a real first-application migration is needed (5-b,
+below) — `update` aborts with a message naming the store and both paths. Compose not
 declaring a required store AT ALL is its own, always-failing case (the #217
 class: a required persistence var missing from compose can silently escape
 backup).
+
+A newly added store has a narrower `never_existed` outcome. The OLD image
+must answer its manifest probe and omit that store; `docker exec <container>
+test -e <old-effective-path>` must find no file; and the resolved compose
+declaration must put the new path under the `/var/lib/kaoiro` named volume.
+Only then does `update` accept the mismatch and record
+`first_application: "never_existed"`, `file_probe_path`, and
+`file_probe_result: "absent"` in that store's `env_consistency` entry. A
+present file still requires 5-b; an old image that cannot answer its manifest
+does not qualify; and a failed file probe aborts rather than assuming absence.
+This exception does not change the existing path-equality check for stores
+already at the compose location.
 
 Either failure aborts before the stop window: `latest` is retagged back to
 the old image and the retag verified by read-back automatically — nothing to
@@ -408,9 +420,12 @@ docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets
 ```
 
 **A successful copy alone does not guarantee bit identity with the authority.**
-Always compare SHA-256. **If the source file is absent, the ledger is already
-lost.** Record this and let the operator decide; **do not silently create an
-empty ledger**—distinguish “lost” from “never existed.”
+Always compare SHA-256. **If this existing user ledger's source file is
+absent, the ledger is already lost.** Record this and let the operator decide;
+**do not silently create an empty ledger**. For a newly introduced store, an
+absent file is `never_existed` only after all three observations in step (2)
+are recorded. Such a store has no old data to evacuate; a present file or an
+old image that lists the store still needs migration or investigation.
 
 **Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
 reference-only** — the target compose's own `environment:` entry is what
