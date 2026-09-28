@@ -38,7 +38,7 @@ import type {
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
-import { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin } from "./reply_basis.js";
+import { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import { workToolDescriptors, type WorkToolHandlers } from "./work_tools.js";
@@ -838,9 +838,11 @@ export interface InterAgentToolOptions {
   canSendInterAgent?: () => boolean;
   replyBasisGeneration?: () => number | undefined;
   onInputHandoff?: (envelopes: readonly Envelope[], turnToken: string) => void;
+  onTicketPrepared?: (ticket: string, turnToken: string, envelopes: readonly Envelope[]) => void;
+  onTicketUsed?: (ticket: string, turnToken: string) => void;
   returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
   onReplyDiagnostic?: (event: Record<string, unknown>) => void;
-  claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined;
+  claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; commit: () => void; rollback: () => void } | undefined;
   config: WrapperConfig;
   /** Current wrapper state — stamped onto the outer envelope frame. */
   getState: () => KaoiroState;
@@ -927,6 +929,60 @@ export class InterAgentTool {
     this.replyBasis.begin(token, envelopes, signal, deferInputConfirmation);
   }
   confirmReplyInput(token: string): void { this.replyBasis.confirmInput(token); }
+  prepareFoldInput(token: string, envelopes: readonly Envelope[]): {
+    authorizations: readonly ReplyAuthorization[];
+    activate: () => boolean;
+    discard: () => void;
+  } | undefined {
+    const origin = { token };
+    if (this.replyBasis.live(origin) !== undefined) return undefined;
+    const latest = new Map<string, Envelope>();
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      const key = JSON.stringify([payload.conversation_id, envelope.agent_id]);
+      const prior = latest.get(key);
+      if (prior === undefined || (prior.payload as unknown as InterAgentMessagePayload).turn_number < payload.turn_number) {
+        latest.set(key, envelope);
+      }
+    }
+    const tickets: Array<{ ticket: NonNullable<ReturnType<ReplyBasis["prepare"]>>; envelope: Envelope }> = [];
+    for (const envelope of latest.values()) {
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      const ticket = this.replyBasis.prepare(origin, payload.conversation_id, envelope.agent_id, payload.turn_number);
+      if (ticket === undefined) {
+        for (const prepared of tickets) prepared.ticket.discard();
+        return undefined;
+      }
+      tickets.push({ ticket, envelope });
+    }
+    let decided = false;
+    return {
+      authorizations: tickets.map(({ ticket }) => ticket.authorization),
+      activate: () => {
+        if (decided) return false;
+        decided = true;
+        if (tickets.some(({ ticket }) => !ticket.valid())) {
+          for (const { ticket } of tickets) ticket.discard();
+          return false;
+        }
+        for (const { ticket, envelope } of tickets) {
+          if (!ticket.activate()) return false;
+          this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, token, [envelope]);
+        }
+        this.replyBasis.observeFolded(envelopes);
+        return true;
+      },
+      discard: () => {
+        if (decided) return;
+        decided = true;
+        for (const { ticket } of tickets) ticket.discard();
+      },
+    };
+  }
+  creditFoldedInput(token: string, envelopes: readonly Envelope[]): void {
+    this.replyBasis.creditFolded(envelopes, token);
+  }
   beginNotificationReplyInput(token: string, signal?: AbortSignal): void { this.replyBasis.beginFromCompleted(token, signal); }
   endReplyInput(token: string): void { this.#preparedInputs.delete(token); this.replyBasis.retire(token); }
   resetReplyInput(): void { this.#preparedInputs.clear(); this.replyBasis.reset(); }
@@ -1435,34 +1491,24 @@ export class InterAgentTool {
     return { consumed: false, inject: true, mode };
   }
 
-  /** Records that an inbound inter-agent message is about to be injected
-   *  into the SDK as ordinary user input (cli.ts's formatInboundMessage
-   *  branch — i.e. `receiveInbound` did NOT consume it as a waiter reply),
-   *  so this wrapper now owes a reply on the conversation. Called by cli.ts
-   *  right before it queues the injection (the same call also tags the queued
-   *  turn with this conversation_id and immutable `turnToken` — see
-   *  AgentHost#send / CodexHost#send). If the SPECIFIC turn that injection
-   *  started ends without an outbound reply clearing the entry (see
-   *  `invoke()`), `resolveTurnEnd()` resolves it (issue #127).
-   *
-   *  Call-site timing matters (issue #211 段階3 MF-1, ふじレビュー差し戻し):
-   *  cli.ts calls this at DISPATCH time — inside `trySendNextBatch()`,
-   *  immediately before the actual `host.send()` — not at receipt time.
-   *  This map is keyed by conversation_id, one entry each, so registering
-   *  eagerly on arrival would let a second same-cid message queued into a
-   *  LATER coalesced batch (peer still busy on an EARLIER one) overwrite
-   *  that earlier batch's still-pending entry before its turn even
-   *  completes; the earlier turn's `resolveTurnEnd()` would then delete the
-   *  wrong (later) registration, silently breaking the later turn's own
-   *  resolution on failure. Registering per-item at dispatch time ties each
-   *  cid's entry one-for-one to the batch actually being sent. */
-  notePendingInjection(envelope: Envelope, turnToken: string): void {
+  /** Records the turn-failure notice obligation for an input the SDK owns.
+   *  Claude registers at root input start or a matched fold hook; a queued
+   *  priority lease has no obligation yet. Other adapters may register at
+   *  dispatch, but no caller may replace an unresolved CID owned by another
+   *  token. resolveTurnEnd clears that owner before a later generation can
+   *  acquire the CID. */
+  notePendingInjection(envelope: Envelope, turnToken: string): boolean {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
-    if (typeof payload.conversation_id !== "string") return;
+    if (typeof payload.conversation_id !== "string") return false;
+    const existing = this.#pendingInjections.get(payload.conversation_id);
+    // A later input may be queued while the current owner is live. The
+    // current owner must resolve first, even when both inputs share a CID.
+    if (existing !== undefined) return existing.turnToken === turnToken;
     this.#pendingInjections.set(payload.conversation_id, {
       from: envelope.agent_id,
       turnToken,
     });
+    return true;
   }
 
   pendingConversationIdsForTurn(turnToken: string): string[] {
@@ -2032,6 +2078,9 @@ export class InterAgentTool {
           // delivery is still unconfirmed auto-allow every later send to
           // that peer.
           if (acceptance.kind === "accepted") {
+            if (captured?.ticket && args.reply_ticket !== undefined) {
+              this.#options.onTicketUsed?.(args.reply_ticket, captured.origin.token);
+            }
             if (track.closed) this.replyBasis.forget(conversationId);
             track.autoAllowedPeer = args.to;
           }
@@ -2382,7 +2431,8 @@ export class InterAgentTool {
       live: () => !returned && this.replyBasis.live(origin) === undefined && (ticket?.valid() ?? true),
       commit: () => {
         origin.signal?.removeEventListener("abort", abort); returned = true;
-        ticket?.activate(); this.replyBasis.observe(ordinary, origin.token);
+        const activated = ticket?.activate(); this.replyBasis.observe(ordinary, origin.token);
+        if (activated && ticket) this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, origin.token, ordinary);
         if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
         lease?.commit();
         this.#options.onInputHandoff?.(envelopes, origin.token);
@@ -2413,9 +2463,9 @@ export class InterAgentTool {
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
-      const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit);
+      const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit, acceptance.details?.expected_peer_turn);
       const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - (lease?.envelopes.length ?? 0));
-      if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes }, lease.envelopes, lease);
+      if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes, ...(lease.foldedEarlier ? { folded_earlier: true } : {}) }, lease.envelopes, lease);
       lease?.rollback();
       return { isError: true, content: [{ type: "text", text: JSON.stringify({ ...fields, recovery: [], unread_remaining: unread, more_pending: unread > 0,
         ...(lease?.oversizedPending ? { oversized_pending: true } : { awaiting_delivery: true }) }) }] };

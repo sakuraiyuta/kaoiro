@@ -207,6 +207,10 @@ export interface WrapperConfig {
    *  operator decides, matching the SDK's canUseTool behaviour). A
    *  finite value opts into fail-closed deny after that many ms. */
   permission_timeout_ms?: number;
+  /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
+  yield_claim_timeout_ms?: number;
+  /** Claude phase-2 wait for the root hook after the old result. */
+  pending_receipt_root_timeout_ms?: number;
   /** Optional soft work-budget denominator as a percentage of the SDK's
    * authoritative context window. The Claude adapter defaults this to 60
    * when absent, then derives the actual token denominator from each

@@ -281,6 +281,19 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
   }
 
+  for (const [key, envName] of [
+    ["yield_claim_timeout_ms", "KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS"],
+    ["pending_receipt_root_timeout_ms", "KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS"],
+  ] as const) {
+    const value = raw[key] ?? process.env[envName];
+    if (value === undefined || value === "") continue;
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 60_000) {
+      throw new ConfigError(`${key} must be an integer from 1 through 60000`);
+    }
+    config[key] = parsed;
+  }
+
   // issue #254: a soft work budget is a positive share of the SDK-reported
   // context window. It must not exceed that window: an over-100 setting
   // would name an unreachable denominator as a normal stopping point.
