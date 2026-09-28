@@ -19,6 +19,8 @@ defmodule KaoiroServer.DeliveryStates do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.TransportLimits
 
+  @early_release_stages ~w(submitted settled unknown lost)
+
   @wire_projection_bytes TransportLimits.snapshot_payload_budget(
                            "delivery_snapshot",
                            "deliveries",
@@ -595,6 +597,11 @@ defmodule KaoiroServer.DeliveryStates do
         next_entry = %{entry | stage_history: histories}
 
         next_entry =
+          if report["stage"] in @early_release_stages,
+            do: %{next_entry | early_pending: Map.delete(entry.early_pending, seq)},
+            else: next_entry
+
+        next_entry =
           if resolving?,
             do: %{
               next_entry
@@ -732,6 +739,11 @@ defmodule KaoiroServer.DeliveryStates do
           entry
           | issued_seq: seq,
             metadata: metadata,
+            early_pending:
+              if(is_map(descriptor) and descriptor[:mode] == "early",
+                do: Map.put(entry.early_pending, seq, descriptor[:sender]),
+                else: entry.early_pending
+              ),
             pending_since: entry.pending_since || DateTime.to_iso8601(DateTime.utc_now())
         }
 
@@ -786,19 +798,7 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp early_counts(state, sender, recipient) do
     entry = state.entries[recipient]
-    by_seq = if entry, do: state.stages[{recipient, entry.incarnation}] || %{}, else: %{}
-
-    accepted =
-      if entry do
-        for {seq, descriptor} <- entry.metadata,
-            descriptor[:mode] == "early",
-            record = by_seq[seq],
-            record == nil or
-              not Enum.any?(~w(submitted settled unknown lost), &Map.has_key?(record.stages, &1)),
-            do: descriptor[:sender]
-      else
-        []
-      end
+    accepted = if entry, do: Map.values(entry.early_pending), else: []
 
     held =
       for {_token, reservation} <- state.reservations,
@@ -874,8 +874,12 @@ defmodule KaoiroServer.DeliveryStates do
         end
       end)
 
-    {%{entry | metadata: Map.drop(entry.metadata, seqs), stage_history: histories},
-     %{state | losses: losses}}
+    {%{
+       entry
+       | metadata: Map.drop(entry.metadata, seqs),
+         early_pending: Map.drop(entry.early_pending, seqs),
+         stage_history: histories
+     }, %{state | losses: losses}}
   end
 
   defp persist_with_losses(state, agent_id, entry) do
@@ -1003,6 +1007,7 @@ defmodule KaoiroServer.DeliveryStates do
       schema_version: 1,
       incarnation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
       metadata: %{},
+      early_pending: %{},
       stage_history: %{},
       resync: false,
       skipped: [],
@@ -1071,6 +1076,7 @@ defmodule KaoiroServer.DeliveryStates do
        :schema_version,
        :incarnation,
        :metadata,
+       :early_pending,
        :stage_history,
        :resync,
        :skipped,
@@ -1089,9 +1095,7 @@ defmodule KaoiroServer.DeliveryStates do
     case :dets.foldl(
            fn
              {id, generation, issued, acked, pending, recovery}, acc when is_map(recovery) ->
-               Map.put(
-                 acc,
-                 id,
+               entry =
                  Map.merge(
                    recovery_defaults(),
                    Map.merge(recovery, %{
@@ -1101,7 +1105,13 @@ defmodule KaoiroServer.DeliveryStates do
                      pending_since: pending
                    })
                  )
-               )
+
+               entry =
+                 if Map.has_key?(recovery, :early_pending),
+                   do: entry,
+                   else: %{entry | early_pending: legacy_early_pending(id, entry)}
+
+               Map.put(acc, id, entry)
 
              {id, generation, issued, acked, pending}, acc
              when is_binary(id) and is_binary(generation) and is_integer(issued) and issued >= 0 and
@@ -1127,6 +1137,27 @@ defmodule KaoiroServer.DeliveryStates do
       entries when is_map(entries) -> entries
       _ -> %{}
     end
+  end
+
+  defp legacy_early_pending(id, entry) do
+    pending =
+      Enum.reduce(entry.metadata, %{}, fn {seq, descriptor}, acc ->
+        if descriptor[:mode] == "early" and is_binary(descriptor[:sender]),
+          do: Map.put(acc, seq, descriptor[:sender]),
+          else: acc
+      end)
+
+    entry.stage_history
+    |> Map.get({id, entry.incarnation}, %{})
+    |> Enum.reduce(pending, fn {seq, record}, acc ->
+      if record[:mode] == "early" and is_binary(record[:sender]) do
+        if Enum.any?(@early_release_stages, &Map.has_key?(record[:stages] || %{}, &1)),
+          do: Map.delete(acc, seq),
+          else: Map.put(acc, seq, record[:sender])
+      else
+        acc
+      end
+    end)
   end
 
   defp open_table(name, path) do

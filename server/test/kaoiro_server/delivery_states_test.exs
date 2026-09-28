@@ -52,6 +52,165 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert {0, 0} = DeliveryStates.pending_early("other-sender", "early-recipient", name)
   end
 
+  @tag :r2_fix
+  test "M5 dispatch acknowledgement retains early pair slots until stage or generation", %{
+    name: name,
+    path: path
+  } do
+    recipient = "early-ack-recipient"
+    sender = "early-ack-sender"
+    owner = self()
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+    incarnation = DeliveryStates.incarnation(recipient, name)
+
+    for seq <- 1..4 do
+      assert {:ok, token} = DeliveryStates.reserve(recipient, owner, name)
+      assert :ok = DeliveryStates.reserve_early(sender, recipient, token, 4, 16, name)
+
+      assert ^seq =
+               DeliveryStates.issue_reserved(
+                 recipient,
+                 token,
+                 %{sender: sender, conversation_id: "early-ack", turn_number: seq, mode: "early"},
+                 name
+               )
+    end
+
+    assert {4, 4} = DeliveryStates.pending_early(sender, recipient, name)
+    assert %{acked_seq: 4} = DeliveryStates.acknowledge(recipient, "generation", owner, 4, name)
+
+    assert {:ok, %{stages: %{"accepted" => _}}} =
+             DeliveryStates.message_status(sender, "early-ack", 4, name)
+
+    [{^recipient, _, _, _, _, %{early_pending: persisted}}] = :dets.lookup(name, recipient)
+    assert map_size(persisted) == 4
+    assert {4, 4} = DeliveryStates.pending_early(sender, recipient, name)
+    assert {:ok, fifth} = DeliveryStates.reserve(recipient, owner, name)
+
+    assert {:error, :early_quota} =
+             DeliveryStates.reserve_early(sender, recipient, fifth, 4, 16, name)
+
+    assert :ok = DeliveryStates.release(fifth, name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+    assert {4, 4} = DeliveryStates.pending_early(sender, recipient, name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+
+    [{^recipient, generation, issued, acked, pending_since, recovery}] =
+      :dets.lookup(name, recipient)
+
+    :ok =
+      :dets.insert(
+        name,
+        {recipient, generation, issued, acked, pending_since,
+         Map.delete(recovery, :early_pending)}
+      )
+
+    :ok = :dets.sync(name)
+    :ok = :dets.close(name)
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+    assert {4, 4} = DeliveryStates.pending_early(sender, recipient, name)
+
+    for {seq, stage, remaining} <- [{1, "submitted", 3}, {2, "settled", 2}, {3, "unknown", 1}] do
+      report = %{
+        "incarnation" => incarnation,
+        "generation" => "generation",
+        "delivery_seq" => seq,
+        "stage" => stage,
+        "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      report =
+        if stage == "submitted", do: Map.put(report, "handoff", "prompt_hook"), else: report
+
+      assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, report, name)
+      assert {^remaining, ^remaining} = DeliveryStates.pending_early(sender, recipient, name)
+    end
+
+    DeliveryStates.bind(recipient, "new-generation", name)
+    assert {0, 0} = DeliveryStates.pending_early(sender, recipient, name)
+    DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
+    assert {0, 0} = DeliveryStates.pending_early(sender, recipient, name)
+  end
+
+  @tag :r2_fix
+  test "M5 dispatch acknowledgement retains the recipient cap and loss releases it", %{name: name} do
+    recipient = "early-recipient-ack"
+    owner = self()
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+
+    for seq <- 1..16 do
+      sender = "sender-#{seq}"
+      assert {:ok, token} = DeliveryStates.reserve(recipient, owner, name)
+      assert :ok = DeliveryStates.reserve_early(sender, recipient, token, 4, 16, name)
+
+      assert ^seq =
+               DeliveryStates.issue_reserved(
+                 recipient,
+                 token,
+                 %{
+                   sender: sender,
+                   conversation_id: "early-recipient",
+                   turn_number: seq,
+                   mode: "early"
+                 },
+                 name
+               )
+    end
+
+    assert %{acked_seq: 16} = DeliveryStates.acknowledge(recipient, "generation", owner, 16, name)
+    assert {0, 16} = DeliveryStates.pending_early("seventeenth", recipient, name)
+    assert {:ok, token} = DeliveryStates.reserve(recipient, owner, name)
+
+    assert {:error, :early_quota} =
+             DeliveryStates.reserve_early("seventeenth", recipient, token, 4, 16, name)
+
+    assert :ok = DeliveryStates.release(token, name)
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               recipient,
+               "generation",
+               owner,
+               %{
+                 "incarnation" => DeliveryStates.incarnation(recipient, name),
+                 "generation" => "generation",
+                 "delivery_seq" => 1,
+                 "stage" => "unknown",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert {0, 15} = DeliveryStates.pending_early("seventeenth", recipient, name)
+    assert {:ok, token} = DeliveryStates.reserve(recipient, owner, name)
+    assert :ok = DeliveryStates.reserve_early("seventeenth", recipient, token, 4, 16, name)
+
+    assert 17 =
+             DeliveryStates.issue_reserved(
+               recipient,
+               token,
+               %{
+                 sender: "seventeenth",
+                 conversation_id: "early-recipient",
+                 turn_number: 17,
+                 mode: "early"
+               },
+               name
+             )
+
+    assert {1, 16} = DeliveryStates.pending_early("seventeenth", recipient, name)
+    assert {:ok, _} = DeliveryStates.resync(recipient, "generation", owner, 17, [[17, 17]], name)
+    assert {0, 15} = DeliveryStates.pending_early("seventeenth", recipient, name)
+    DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
+    assert {0, 0} = DeliveryStates.pending_early("seventeenth", recipient, name)
+  end
+
   @tag :r1_fix
   test "S1 non-prefix resolution is excluded from the unresolved count", %{name: name} do
     owner = self()

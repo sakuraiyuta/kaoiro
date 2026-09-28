@@ -3482,7 +3482,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_partial_work_cut(:after_relay)
     end
 
-    defp assert_partial_work_cut(cut) do
+    @tag :r2_fix
+    test "S2 live channel returns the stamped reply after post-relay status timeout" do
+      assert_partial_work_cut(:after_relay, true)
+    end
+
+    defp assert_partial_work_cut(cut, live_channel? \\ false) do
       Process.flag(:trap_exit, true)
       from = "test.work-cut-#{cut}-from"
       to = "test.work-cut-#{cut}-to"
@@ -3511,7 +3516,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         :sys.resume(KaoiroServer.IngressOrder)
       end)
 
-      _ref = push(sender, "envelope", env)
+      ref = push(sender, "envelope", env)
       assert wait_for_work_preview()
       :ok = :sys.suspend(KaoiroServer.WorkStore)
       :ok = :sys.resume(ConversationStates)
@@ -3545,6 +3550,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                  _ -> false
                end)
       end
+
+      if live_channel?,
+        do: assert_reply(ref, :ok, %{"ingress_stamp" => _}, 7 * TestTimeouts.slow_path())
 
       assert %{turns: 1} = ConversationStates.get(env["payload"]["conversation_id"])
       :ok = close(sender)
