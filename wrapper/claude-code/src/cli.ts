@@ -884,6 +884,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           attemptYieldCandidates();
           return;
         }
+        if (performance.now() >= receiptDeadline) {
+          yieldClaimInFlight = false;
+          downgradeYield(batch, "receipt_wait_timeout");
+          attemptYieldCandidates();
+          return;
+        }
         if (!host.hasPendingPushedReceipt()) {
           if (host.canPushLiveInput()) break;
           yieldClaimInFlight = false;
