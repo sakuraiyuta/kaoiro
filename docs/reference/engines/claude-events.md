@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -120,6 +120,49 @@ and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
 
+### Live delivery receipts and root ownership
+
+With [Claude phase-2 delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls)
+enabled and delivery modes v1 negotiated, the host can push an early peer
+batch into a live streaming-input `Query` without starting another wrapper
+turn. A server-granted yield first needs a successful `yield_claim`; the host
+then pushes its message with `priority: "now"`. The running tool finishes
+before the current turn's result, and the pushed message starts a root prompt
+with a new turn owner. Ordinary input from that peer remains serialized
+behind the root until it settles. See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
+for reply tickets, stages, and scheduling bounds.
+This receipt path grants a new root owner only for a hook matching the one-use
+receipt. Unmatched continuation hooks retain the existing admission guards;
+phase 2 does not admit an arbitrary new prompt ID.
+
+Each push has a one-use receipt bound to the current session, host generation,
+`Query`, eligible turn, and exact text digest. The trusted
+`UserPromptSubmit` hook decides whether it was folded into the live turn,
+started a new root, or has an unknown handoff. The root branch voids its
+provisional fold tickets. A hook with the `fold_id` but a different digest is
+recorded as `unknown(digest_mismatch)` and creates no owner. The original
+turn's default reply snapshot does not advance for a fold; only a ticket
+spent by an actual call credits that input to completed history.
+
+After the old result, the input iterator holds the next queued root while a
+pushed receipt is pending. A live task-notification turn pauses that receipt's
+deadline. If the root hook remains absent past
+`pending_receipt_root_timeout_ms`, the host records
+`unknown(root_hook_timeout)` for the pushed item, cancels queued roots with
+`receipt_timeout_fail_stop`, freezes tool origins and admission, and enters
+`error`. Queued roots were not handed to the engine and settle with
+`failed_before_handoff`. Late results cannot reopen the failed host. Stderr
+diagnostics count root-hook timeouts and notification clock pauses; folded
+recovery capacity evictions carry a reason and count.
+
+The [E1–E4 native measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
+establish the measured running-tool fold, byte-identical hook text, new root
+after a text-only result, and `priority: "now"` cut under isolated settings.
+They do not establish the phase-2 wrapper's complete behavior under the
+operator's production settings. Keep mode advertisement off until the
+production-settings R3 result-to-hook measurement supports the configured
+root-hook timeout.
+
 ### Recovering a fail-stopped Claude wrapper
 
 The operator uses the dashboard's **終了** action on the affected agent card to
@@ -131,6 +174,10 @@ The old wrapper's unresolved owner is settled on stream teardown, once, before
 the new wrapper starts. A session reset cannot recover the live `error` state:
 the reset endpoint accepts only `idle` or `waiting_input`. The server's reply
 basis comparison remains in force after restore.
+The `root_hook_timeout` path uses this same operator restart procedure; it
+does not exchange the `Query` automatically. The old `Query` never receives
+the cancelled root. A fresh wrapper generation can admit new input only after
+its own join and reply-basis negotiation succeed.
 
 The dated SDK 0.3.220 observation is preserved in
 [Claude SDK boundary evidence](../../evidence/claude/sdk-boundaries-2026.md#task-notification-terminal-paths).

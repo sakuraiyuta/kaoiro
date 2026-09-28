@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -96,6 +96,15 @@ reads the result. Turn retirement and session replacement invalidate tickets.
 Closed conversations cannot send. At most 256 ticket records are held per turn.
 New authorization supersedes unused authorization for the same peer/CID.
 
+Claude phase-2 fold text carries provisional tickets. An exact, trusted
+`UserPromptSubmit` hook activates them only for the live turn that owned the
+push; a receipt that starts a new root voids them. A fold leaves that turn's
+default snapshot fixed. The next ordinary or receipt-created root copies
+confirmed and completed input plus its own root envelopes, excluding any
+earlier fold whose ticket has not been used. Spending a ticket credits its
+folded input to completed history without changing the current turn's
+default snapshot. See [Claude recipient handoff](delivery.md#claude-recipient-handoff).
+
 Tickets appear in tool results and transcripts; confidentiality is not a
 requirement. Unpredictability before issuance and origin/binding checks are the
 requirements. Do not repeat tickets in diagnostics.
@@ -123,6 +132,14 @@ authorization and unread advice. An oversized oldest message stays queued and
 produces `oversized_pending`; later messages cannot skip it. If a newer accepted
 message has not arrived locally, the result reports `awaiting_delivery`.
 `unread_remaining` and `more_pending` describe queued work after this handoff.
+
+For Claude folds, `stale_reply_basis` can also return a previously folded
+envelope with `folded_earlier: true` and a fresh ticket, including after its
+original turn retires. The coordinator retains at most 256 recovery bodies;
+ticket use, a newer confirmed turn for the same peer/CID, or a session-ledger
+reset retires a body. Capacity eviction drops the oldest body and records a
+counted `fold_recovery_capacity` reason. Recovery does not advance an
+uncredited fold into a later root's default snapshot.
 
 The coordinator claims exact items from pending or host-queued input. Claimed
 items cannot also enter an SDK input. Result handoff activates authorization,
