@@ -399,7 +399,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     },
   );
 
-  it("routes onPromptAdmitted through the shared submitted-stage reporter", async () => {
+  it("decision-level test: onPromptAdmitted reaches the injected ServerLink seam", async () => {
     const reports: Record<string, unknown>[] = [];
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
@@ -450,7 +450,12 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     }
   });
 
-  it("default ServerLink and CLI reporter negotiate and report the first turn stages", async () => {
+  /**
+   * Default composition except for the engine Host; the real Host is covered
+   * by E5 (issue #433). ServerLink, negotiation, tools, and reporter remain
+   * the runClaudeCli defaults, and stage evidence is read from the wire.
+   */
+  it("default composition except engine Host negotiates and reports first-turn stages", async () => {
     const wire = await phoenixLoopback(() => ({
       inter_agent_reply_basis: "v1",
       inter_agent_delivery_modes: "v1",
