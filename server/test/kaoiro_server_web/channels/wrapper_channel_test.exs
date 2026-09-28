@@ -2690,15 +2690,25 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert snap["network_access"] == true
       assert pointer.effort_revision != nil
 
-      # Cross-language fixture binding (#432 pattern):
-      # Write the real persisted snapshot to runner/test/fixtures/issue-442-persisted-snapshot.json
+      # Cross-language fixture binding:
+      # Compare the real persisted snapshot with runner/test/fixtures/issue-442-persisted-snapshot.json
       # and assert byte-for-byte identity to prevent drift.
       fixture_path =
         Path.expand("../runner/test/fixtures/issue-442-persisted-snapshot.json", File.cwd!())
 
       encoded_snap = Jason.encode!(snap, pretty: true) <> "\n"
 
-      assert File.read!(fixture_path) == encoded_snap
+      if System.get_env("KAOIRO_WRITE_FIXTURES") == "1" do
+        File.write!(fixture_path, encoded_snap)
+      end
+
+      if File.exists?(fixture_path) do
+        assert File.read!(fixture_path) == encoded_snap
+      else
+        flunk(
+          "Fixture file missing at #{fixture_path}. Re-generate with KAOIRO_WRITE_FIXTURES=1 mix test test/kaoiro_server_web/channels/wrapper_channel_test.exs:2676"
+        )
+      end
     end
   end
 
