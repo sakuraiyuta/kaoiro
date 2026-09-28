@@ -78,6 +78,13 @@ does not activate the control. A successful work operation can precede a
 failed message admission, so its receipt and message-delivery knowledge must
 be reported separately.
 
+A former assignee may read only its pending transfer obligations through
+`work_status`. Each such obligation includes `work_id` and `transfer_id`, so
+the former assignee can call `work_transfer_ack` even if the best-effort
+`work_notice` was lost. A named lookup returns
+`{work_id, access: "transfer_pending", pending_transfers}` instead of a
+complete work record for this role.
+
 For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer
 turn actually handed to the sender; the server rejects a stale basis before
 accepting the message. An internal `notice_type` identifies one of the two

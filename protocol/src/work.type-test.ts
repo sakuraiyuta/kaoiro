@@ -1,4 +1,11 @@
-import type { OutboundInterAgentMessagePayload, WorkControl, WorkErrorCode } from "./index.js";
+import type {
+  OutboundInterAgentMessagePayload,
+  WorkControl,
+  WorkErrorCode,
+  WorkRecord,
+  WorkStatusResult,
+  WorkTransferAckRequest,
+} from "./index.js";
 
 const base: OutboundInterAgentMessagePayload = {
   to: "peer",
@@ -31,7 +38,29 @@ const staleSubmit: WorkControl = { op: "submit", work_id: "wrk_123", operation_i
 // @ts-expect-error Error codes are a closed Appendix B vocabulary.
 const unknownError: WorkErrorCode = "made_up_work_error";
 
+type WorkListResult = Extract<WorkStatusResult, { works: WorkRecord[] }>;
+type RestrictedTransferResult = Extract<WorkStatusResult, { access: "transfer_pending" }>;
+
+function acknowledgeFromStatus(status: WorkListResult): WorkTransferAckRequest {
+  const pending = status.pending_transfers[0]!;
+  return { version: "0", work_id: pending.work_id, transfer_id: pending.transfer_id };
+}
+
+const restricted: RestrictedTransferResult = {
+  work_id: "wrk_123",
+  access: "transfer_pending",
+  pending_transfers: [],
+};
+
+const restrictedWithFullRecord: RestrictedTransferResult = {
+  ...restricted,
+  // @ts-expect-error Former assignees cannot receive a complete work record.
+  work: {} as WorkRecord,
+};
+
 void stamped;
 void submit;
 void staleSubmit;
 void unknownError;
+void acknowledgeFromStatus;
+void restrictedWithFullRecord;

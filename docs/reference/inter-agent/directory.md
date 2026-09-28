@@ -282,6 +282,13 @@ tools are `work_transfer_ack({work_id, transfer_id})`,
 for the negotiated work and delivery implementation, not additions to the
 read-only auto-allow set above.
 
+The no-argument `work_status()` view carries
+`pending_transfers: Array<WorkTransferObligation & {work_id}>`. A former
+assignee can use that pair directly for `work_transfer_ack` without relying
+on a notice. With a named `work_id`, a caller whose sole access is a pending
+transfer receives `{work_id, access: "transfer_pending", pending_transfers}`
+without a complete work record.
+
 Build `whoami` local fields from the shared host `EffectiveStatusSnapshot` and
 cache rather than a separate state envelope. Return model/effort/source and
 network_access only when known; permission is engine-neutral `{sandbox,

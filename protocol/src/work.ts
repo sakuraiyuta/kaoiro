@@ -1,5 +1,6 @@
 /** Wire vocabulary for ADR-0063 phase 1. The server owns every grant and receipt. */
 export type DeliveryIntent = "normal" | "early" | "yield";
+export type WorkId = string;
 export type DeliveryEarlyMode = "fold" | "steer" | "hook" | "none";
 export type DeliveryYieldMode = "tool_boundary" | "none";
 
@@ -67,6 +68,9 @@ export interface WorkTransferObligation {
   new_assignee: WorkPrincipal;
   state: WorkTransferState;
 }
+
+/** A former assignee can acknowledge a transfer without seeing the work record. */
+export type PendingWorkTransfer = WorkTransferObligation & { work_id: WorkId };
 
 export interface WorkGrant {
   work_id: string;
@@ -298,7 +302,8 @@ export interface WorkOpResultRequest { version: "0"; operation_id: string }
 export interface WorkStatusRequest { version: "0"; work_id?: string }
 export type WorkStatusResult =
   | { work: WorkRecord }
-  | { works: WorkRecord[]; pending_transfers: WorkTransferObligation[] };
+  | { work_id: WorkId; access: "transfer_pending"; pending_transfers: PendingWorkTransfer[]; work?: never }
+  | { works: WorkRecord[]; pending_transfers: PendingWorkTransfer[] };
 export type WorkOpResult = { receipt: WorkOperationReceipt } | { error: "unknown_operation" | "operation_id_expired" };
 export interface WorkCheckRequest { version: "0"; work_id: string; action: WorkCheckAction; subject_hash?: string; expected_revision: number }
 export type WorkCheckResult = { ok: true; work: WorkRecord } | { ok: false; reason: WorkErrorCode; work: WorkRecord };

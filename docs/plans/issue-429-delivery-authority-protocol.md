@@ -1098,6 +1098,11 @@ An old assignee with a pending obligation sees only that obligation. Others
 receive `unknown_work` (no existence disclosure). `work_status()` without an
 argument lists the caller's non-terminal works as director or assignee and
 its pending transfer obligations.
+The restricted view serialization was fixed for issue #430 on 2026-09-28:
+each pending obligation includes `work_id`; a named lookup available only
+through an old-assignee obligation returns
+`{work_id, access: "transfer_pending", pending_transfers}` without a work
+record.
 
 ## Fairness and bounds
 
