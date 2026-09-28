@@ -43,6 +43,14 @@ describe("DeliveryAcknowledger (issue #247)", () => {
     expect(ledger.complete(2)).toBeNull();
   });
 
+  it("bounds out-of-order completions and fails closed until the prefix drains", () => {
+    const ledger = new DeliveryAcknowledger();
+    for (let seq = 2; seq <= 1_001; seq += 1) expect(ledger.complete(seq)).toBeNull();
+    expect(ledger.complete(1_002)).toBeNull();
+    expect(ledger.complete(1)).toBe(1_001);
+    expect(ledger.complete(1_002)).toBe(1_002);
+  });
+
   function productionWiring(sequences: Record<string, readonly number[]>) {
     const sent: number[] = [];
     const wiring = createDeliveryAcknowledgementWiring(
@@ -73,6 +81,20 @@ describe("DeliveryAcknowledger (issue #247)", () => {
 
     wiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
     wiring.onTurnStart("sdk-turn");
+    expect(sent).toEqual([1]);
+  });
+
+  it("preserves legacy dispatch acknowledgements when the server has no incarnation", () => {
+    const sent: number[] = [];
+    const envelope = { delivery_seq: 1 } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
+      () => null,
+    );
+    runtime.withServerLinkOptions({}).onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(envelope);
+    runtime.acknowledgeDelivery(envelope);
     expect(sent).toEqual([1]);
   });
 
@@ -123,5 +145,113 @@ describe("DeliveryAcknowledger (issue #247)", () => {
 
     host.onTurnStart({ turnToken: "new-turn", kind: "wrapper_input" });
     expect(sent).toEqual([1]);
+  });
+
+  it("replays a completed watermark after a same-identity rejoin", async () => {
+    const sent: number[] = [];
+    const originalIdentity = { incarnation: "i", generation: "g" };
+    let identity: { incarnation: string; generation: string } | null = originalIdentity;
+    const envelope = { delivery_seq: 1 } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
+      () => identity,
+    );
+    const status = runtime.withServerLinkOptions({});
+    const host = runtime.withHostOptions({});
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(envelope);
+
+    identity = null;
+    host.onTurnStart({ turnToken: "turn" });
+    expect(sent).toEqual([]);
+
+    identity = originalIdentity;
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    await Promise.resolve();
+    expect(sent).toEqual([1]);
+  });
+
+  it("retires a disconnected watermark when a different identity joins", async () => {
+    const sent: number[] = [];
+    let identity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const old = { delivery_seq: 1 } as unknown as Envelope;
+    const fresh = { delivery_seq: 1 } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      {
+        deliverySequencesForTurn: () => [1],
+        deliveryEnvelopesForTurn: token => token === "old" ? [old] : [fresh],
+      },
+      () => identity,
+    );
+    const status = runtime.withServerLinkOptions({});
+    const host = runtime.withHostOptions({});
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(old);
+    identity = null;
+    host.onTurnStart({ turnToken: "old" });
+
+    identity = { incarnation: "new", generation: "g" };
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+
+    runtime.captureDelivery(fresh);
+    host.onTurnStart({ turnToken: "fresh" });
+    expect(sent).toEqual([1]);
+  });
+
+  it("does not replay a watermark already covered by the rejoin status", async () => {
+    const sent: number[] = [];
+    let identity: { incarnation: string; generation: string } | null = {
+      incarnation: "i", generation: "g",
+    };
+    const envelope = { delivery_seq: 1 } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
+      () => identity,
+    );
+    const status = runtime.withServerLinkOptions({});
+    const host = runtime.withHostOptions({});
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(envelope);
+    identity = null;
+    host.onTurnStart({ turnToken: "turn" });
+    expect(sent).toEqual([]);
+    identity = { incarnation: "i", generation: "g" };
+    status.onInterAgentDeliveryStatus({ acked_seq: 1 });
+    await Promise.resolve();
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+  });
+
+  it("cancels a queued replay if the live identity changes before it runs", async () => {
+    const sent: number[] = [];
+    let identity: { incarnation: string; generation: string } | null = {
+      incarnation: "i", generation: "g",
+    };
+    const envelope = { delivery_seq: 1 } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
+      () => identity,
+    );
+    const status = runtime.withServerLinkOptions({});
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(envelope);
+    identity = null;
+    runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+
+    identity = { incarnation: "i", generation: "g" };
+    status.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    identity = { incarnation: "replacement", generation: "g" };
+    await Promise.resolve();
+    expect(sent).toEqual([]);
   });
 });

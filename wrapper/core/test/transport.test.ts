@@ -103,8 +103,10 @@ import {
   chunkReplayIaItems,
   hydrationVerdictFrom,
 } from "../src/transport.js";
+import type { ServerLinkOptions } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
 import type { VersionedWrapperEvent } from "../src/transport.js";
+import { createDeliveryAcknowledgementRuntime } from "../../agent-common/src/delivery_ack.js";
 
 function emit(event: string, payload: unknown): void {
   const bound = mock.handlers.get(event);
@@ -2750,5 +2752,96 @@ describe("reply-basis negotiation", () => {
     const link = new ServerLink("ws://test", "self", { personaId: "p", interAgentReplyBasis: "v1" });
     try { const abort = new AbortController(); const waiting = link.waitForReplyBasisMode(abort.signal); abort.abort(); expect(await waiting).toBe("pending"); }
     finally { link.close(); }
+  });
+});
+
+describe("delivery ACK reconnect through production ServerLink", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+    mock.joinReceivers.clear();
+    mock.connected = true;
+    mock.channelState = "joined";
+    mock.onClose = null;
+  });
+
+  function setup() {
+    let link!: ServerLink;
+    const envelope = {
+      version: "0", agent_id: "a.agent", persona: { id: "p", name: "P", sprite_set: "p" },
+      display_name: "P", ts: "T", type: "inter_agent_message", state: "idle",
+      payload: { to: "self", conversation_id: "cid", turn_number: 1, kind: "inform", body: "hi" },
+      delivery_seq: 1,
+    } as unknown as Envelope;
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => link.acknowledgeInterAgentDelivery(seq),
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
+      () => {
+        const incarnation = link?.deliveryIncarnation() ?? null;
+        return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+      },
+    );
+    const options: ServerLinkOptions = runtime.withServerLinkOptions({
+      personaId: "p",
+      onInterAgentMessage: (received: Envelope) => runtime.captureDelivery(received),
+    });
+    link = new ServerLink("ws://x/wrapper", "a.agent", options);
+    const joined = (incarnation: string, issuedSeq = 1) => {
+      mock.connected = true;
+      mock.channelState = "joined";
+      mock.joinReceivers.get("ok")?.({
+        delivery_resync: "skip-v1",
+        inter_agent_delivery_incarnation: incarnation,
+        delivery: {
+          issued_seq: issuedSeq,
+          acked_seq: 0,
+          lost_count: 0,
+          ...(issuedSeq === 0 ? {} : { pending_since: "T" }),
+        },
+      });
+    };
+    const disconnect = () => {
+      mock.connected = false;
+      mock.channelState = "closed";
+      mock.onClose?.({ code: 1006 });
+    };
+    return { disconnect, envelope, joined, link, runtime };
+  }
+
+  it("replays the completed turn watermark after same-identity socket rejoin", async () => {
+    const { disconnect, envelope, joined, link, runtime } = setup();
+    try {
+      joined("same", 0);
+      expect(link.deliveryIncarnation()).toBe("same");
+      emit("envelope", envelope);
+      disconnect();
+      expect(link.deliveryIncarnation()).toBeNull();
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+      expect(mock.pushes.filter(push => push.event === "delivery_ack")).toEqual([]);
+
+      joined("same");
+      await Promise.resolve();
+      expect(mock.pushes.filter(push => push.event === "delivery_ack").map(push => push.payload))
+        .toEqual([expect.objectContaining({ delivery_seq: 1 })]);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("does not replay a pending old-identity watermark after replacement join", async () => {
+    const { disconnect, envelope, joined, link, runtime } = setup();
+    try {
+      joined("old", 0);
+      emit("envelope", envelope);
+      disconnect();
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+
+      joined("new");
+      await Promise.resolve();
+      expect(mock.pushes.filter(push => push.event === "delivery_ack")).toEqual([]);
+    } finally {
+      link.close();
+    }
   });
 });

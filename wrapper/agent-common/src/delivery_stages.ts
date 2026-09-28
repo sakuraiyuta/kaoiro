@@ -53,6 +53,8 @@ export class DeliveryStageReporter {
   readonly #onOverflow: (() => void) | undefined;
   readonly #deliveries = new Map<string, TrackedDelivery>();
   readonly #deliveriesByTurn = new Map<string, Map<string, TrackedDelivery>>();
+  /** A rejected capture still owns its first join identity; a late callback must not borrow a reused sequence. */
+  readonly #capturedIdentityByEnvelope = new WeakMap<Envelope, DeliveryStageIdentity | null>();
   readonly #deliveryByEnvelope = new WeakMap<Envelope, TrackedDelivery>();
   #lastIdentity: DeliveryStageIdentity | null = null;
   #warnedOverflow = false;
@@ -82,11 +84,13 @@ export class DeliveryStageReporter {
   }
 
   capture(envelope: Envelope): void {
-    this.#observeIdentity();
-    if (this.#deliveryByEnvelope.has(envelope)) return;
     const sequence = sequenceOf(envelope);
     if (sequence === undefined) return;
-    const delivery = this.#track(sequence, modeOf(envelope));
+    if (this.#capturedIdentityByEnvelope.has(envelope)) return;
+    const capturedIdentity = this.#observeIdentity();
+    const receiptIdentity = capturedIdentity === null ? null : { ...capturedIdentity };
+    this.#capturedIdentityByEnvelope.set(envelope, receiptIdentity);
+    const delivery = this.#track(sequence, modeOf(envelope), receiptIdentity);
     if (delivery !== null) this.#deliveryByEnvelope.set(envelope, delivery);
   }
 
@@ -155,8 +159,11 @@ export class DeliveryStageReporter {
     return this.#lastIdentity;
   }
 
-  #track(sequence: number, mode?: DeliveryIntent): TrackedDelivery | null {
-    const capturedIdentity = this.#observeIdentity();
+  #track(
+    sequence: number,
+    mode: DeliveryIntent | undefined,
+    capturedIdentity: DeliveryStageIdentity | null,
+  ): TrackedDelivery | null {
     const key = deliveryKey(capturedIdentity, sequence);
     const existing = this.#deliveries.get(key);
     if (existing !== undefined) return existing;

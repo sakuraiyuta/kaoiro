@@ -285,4 +285,38 @@ describe("DeliveryStageReporter", () => {
     expect(reports).toHaveLength(512);
     expect(onOverflow).toHaveBeenCalledOnce();
   });
+
+  it("does not let an overflow-rejected old envelope borrow a reused sequence", () => {
+    const reports: Record<string, unknown>[] = [];
+    let currentIdentity: { incarnation: string; generation: string } = {
+      incarnation: "old", generation: "g",
+    };
+    const old = envelope(513);
+    const fresh = envelope(513);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => currentIdentity,
+      turns: {
+        deliveryEnvelopesForTurn: token => token === "old-turn" ? [old] : [fresh],
+      },
+      now: () => "T",
+    });
+
+    for (let sequence = 1; sequence <= 512; sequence += 1) reporter.capture(envelope(sequence));
+    reporter.capture(old);
+    currentIdentity = { incarnation: "new", generation: "g" };
+    reporter.queued(fresh);
+    reporter.submitted("old-turn", "prompt_hook");
+    reporter.settled("old-turn");
+    expect(reports).toEqual([
+      expect.objectContaining({ incarnation: "new", delivery_seq: 513, stage: "queued" }),
+    ]);
+
+    reporter.submitted("new-turn", "prompt_hook");
+    reporter.settled("new-turn");
+    expect(reports.slice(1)).toEqual([
+      expect.objectContaining({ incarnation: "new", delivery_seq: 513, stage: "submitted" }),
+      expect.objectContaining({ incarnation: "new", delivery_seq: 513, stage: "settled" }),
+    ]);
+  });
 });

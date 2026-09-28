@@ -1,5 +1,8 @@
 import type { Envelope } from "./types.js";
 
+/** Match the server's 1,000 unresolved delivery metadata slots per recipient. */
+const MAX_PENDING_ACK_COMPLETIONS = 1_000;
+
 /** Client-side contiguous-prefix tracker for issue #237.  Server state is
  * authoritative; this object only prevents a later coalesced batch from
  * acknowledging an earlier one that has not reached a real SDK turn yet. */
@@ -23,6 +26,15 @@ export class DeliveryAcknowledger {
       seq <= this.#acked ||
       seq <= 0
     ) return null;
+    if (
+      seq !== this.#acked + 1 &&
+      !this.#completed.has(seq) &&
+      this.#completed.size >= MAX_PENDING_ACK_COMPLETIONS
+    ) {
+      // Match the server's unresolved-slot ceiling; overflowing must not
+      // acknowledge past a gap, and retaining more could grow without bound.
+      return null;
+    }
     this.#completed.add(seq);
     return this.#advance();
   }
@@ -66,6 +78,8 @@ export class DeliveryAcknowledgement {
   readonly #capturedIdentity = new WeakMap<Envelope, DeliveryAcknowledgementIdentity | null>();
   #activeIdentity: DeliveryAcknowledgementIdentity | null = null;
   #identityObserved = false;
+  #pendingAck: number | null = null;
+  #replayScheduled = false;
 
   constructor(
     send: (deliverySeq: number) => void,
@@ -79,10 +93,17 @@ export class DeliveryAcknowledgement {
   observe(status: { acked_seq: number; skipped_ranges?: [number, number][] } | null): void {
     if (this.#identity !== undefined) {
       const current = this.#snapshotIdentity(this.#identity());
-      if (!this.#identityObserved || !this.#sameNullableIdentity(current, this.#activeIdentity)) {
+      const unavailableObservation = current === null && this.#identityObserved && this.#activeIdentity !== null;
+      if (
+        !this.#identityObserved ||
+        unavailableObservation ||
+        (current !== null && !this.#sameNullableIdentity(current, this.#activeIdentity))
+      ) {
         this.#ledger = new DeliveryAcknowledger();
         this.#activeIdentity = current;
         this.#identityObserved = true;
+        this.#pendingAck = null;
+        this.#replayScheduled = false;
       }
     }
     if (status === null) return;
@@ -92,6 +113,7 @@ export class DeliveryAcknowledgement {
         this.#sendIfAdvanced(this.#ledger.complete(seq));
       }
     }
+    this.#reconcilePendingAck(status.acked_seq);
   }
 
   /** Capture the join identity before a handler can await. The server ACK wire
@@ -104,8 +126,15 @@ export class DeliveryAcknowledgement {
   /** Intentional non-injection has completed locally and cannot reach SDK. */
   readonly acknowledgeEnvelope = (envelope: Envelope): void => {
     const seq = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
-    if (!this.#identityAllows(envelope)) return;
-    this.#sendIfAdvanced(this.#ledger.complete(seq));
+    const disconnected = this.#identityAllows(envelope);
+    if (!disconnected.allowed) return;
+    const advanced = this.#ledger.complete(seq);
+    if (advanced === null) return;
+    if (disconnected.disconnected) {
+      this.#pendingAck = Math.max(this.#pendingAck ?? 0, advanced);
+      return;
+    }
+    this.#send(advanced);
   };
 
   /** Actual SDK turn start is the confirmation point for injected batches. */
@@ -122,14 +151,28 @@ export class DeliveryAcknowledgement {
     }
   };
 
-  #identityAllows(envelope: Envelope): boolean {
-    if (this.#identity === undefined) return true;
-    if (!this.#capturedIdentity.has(envelope)) return false;
+  #identityAllows(envelope: Envelope): { allowed: boolean; disconnected: boolean } {
+    if (this.#identity === undefined) return { allowed: true, disconnected: false };
+    if (!this.#capturedIdentity.has(envelope)) return { allowed: false, disconnected: false };
     const captured = this.#capturedIdentity.get(envelope) ?? null;
     const live = this.#snapshotIdentity(this.#identity());
-    return this.#identityObserved &&
-      this.#sameNullableIdentity(live, this.#activeIdentity) &&
-      this.#sameNullableIdentity(captured, live);
+    if (!this.#identityObserved) {
+      return { allowed: false, disconnected: false };
+    }
+    if (this.#activeIdentity === null) {
+      return {
+        allowed: captured === null && live === null,
+        disconnected: false,
+      };
+    }
+    if (!sameAcknowledgementIdentity(captured, this.#activeIdentity)) {
+      return { allowed: false, disconnected: false };
+    }
+    if (live === null) return { allowed: true, disconnected: true };
+    return {
+      allowed: sameAcknowledgementIdentity(live, this.#activeIdentity),
+      disconnected: false,
+    };
   }
 
   #snapshotIdentity(identity: DeliveryAcknowledgementIdentity | null): DeliveryAcknowledgementIdentity | null {
@@ -145,6 +188,32 @@ export class DeliveryAcknowledgement {
 
   #sendIfAdvanced(ack: number | null): void {
     if (ack !== null) this.#send(ack);
+  }
+
+  #reconcilePendingAck(joinAckedSeq: number): void {
+    if (!Number.isSafeInteger(joinAckedSeq) || joinAckedSeq < 0 || this.#pendingAck === null) return;
+    if (this.#pendingAck <= joinAckedSeq) {
+      this.#pendingAck = null;
+      this.#replayScheduled = false;
+      return;
+    }
+    if (this.#identity === undefined || this.#replayScheduled) return;
+    const replayIdentity = this.#activeIdentity === null ? null : { ...this.#activeIdentity };
+    if (replayIdentity === null) return;
+    this.#replayScheduled = true;
+    // ServerLink invokes this status callback before DeliveryRecovery.join().
+    // Replay after the complete synchronous join callback so the real recovery
+    // ledger has rebound before acknowledgeInterAgentDelivery confirms a seq.
+    queueMicrotask(() => {
+      this.#replayScheduled = false;
+      if (
+        this.#pendingAck === null ||
+        this.#pendingAck <= joinAckedSeq ||
+        !sameAcknowledgementIdentity(this.#snapshotIdentity(this.#identity?.() ?? null), replayIdentity) ||
+        !sameAcknowledgementIdentity(this.#activeIdentity, replayIdentity)
+      ) return;
+      this.#send(this.#pendingAck);
+    });
   }
 }
 
