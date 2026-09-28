@@ -2698,11 +2698,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       encoded_snap = Jason.encode!(snap, pretty: true) <> "\n"
 
-      if File.exists?(fixture_path) do
-        assert File.read!(fixture_path) == encoded_snap
-      else
-        File.write!(fixture_path, encoded_snap)
-      end
+      assert File.read!(fixture_path) == encoded_snap
     end
   end
 
