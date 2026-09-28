@@ -58,10 +58,23 @@ below are process-local options, not runner-relayed fields.
 ### Claude phase-2 delivery controls
 
 `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` in the Claude wrapper process environment
-enables advertising `early: "fold"` and `yield: "tool_boundary"` at join. The
-default is off; any other value leaves both modes unadvertised. The server
+enables advertising `early: "fold"` and `yield: "tool_boundary"` at join for
+every Claude peer. `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS=ao,other` instead
+enables only wrappers whose `persona.id` appears in that comma-separated list.
+Each item is trimmed and compared exactly, including case; glob patterns,
+empty items, and ids outside the persona-id character set invalidate the
+whole list. An empty or invalid list enables nobody. If the global flag is
+`1`, it wins over the list; other flag values do not enable phase 2 by
+themselves. With neither condition met, both modes remain unadvertised.
+The wrapper logs one startup line with `source=flag`, `source=persona_list`,
+or `source=off`, without printing the list or unrelated environment values.
+
+The runner passes its environment to every wrapper, without a per-peer env
+override or config relay for these controls. A runner-managed single-peer
+canary therefore sets only the persona list in `runner.env` and restarts the
+runner; setting the global flag to `1` enables every Claude peer. The server
 must also echo delivery modes v1 before the wrapper uses either mode. Keep
-the flag off until the production-settings native R3 measurement has
+phase 2 off until the production-settings native R3 measurement has
 established the result-to-root-hook delay for the deployed Claude settings.
 The existing normal stage reports remain available when phase 2 is off.
 

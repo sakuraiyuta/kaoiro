@@ -154,6 +154,18 @@ function printLog(envelope: Envelope): void {
   }
 }
 
+function phase2DeliverySource(
+  personaId: string,
+  flag: string | undefined,
+  rawPersonas: string | undefined,
+): "flag" | "persona_list" | "off" {
+  if (flag === "1") return "flag";
+  if (rawPersonas === undefined) return "off";
+  const personas = rawPersonas.split(",").map(id => id.trim());
+  if (!personas.every(id => /^[A-Za-z0-9._-]+$/.test(id))) return "off";
+  return personas.includes(personaId) ? "persona_list" : "off";
+}
+
 export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;
@@ -167,7 +179,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
-  const phase2Delivery = process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY === "1";
+  const phase2Source = phase2DeliverySource(
+    config.persona.id,
+    process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY,
+    process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS,
+  );
+  const phase2Delivery = phase2Source !== "off";
+  writeRedactedStderr(`[claude phase2 delivery] source=${phase2Source}\n`);
   const earlyNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.early === "fold";
   const yieldNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.yield === "tool_boundary";
   const buildInfo = readBuildInfo(
