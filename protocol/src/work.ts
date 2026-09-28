@@ -18,6 +18,7 @@ export interface WorkJoinRequest {
 
 export interface WorkJoinReply {
   inter_agent_delivery_modes?: "v1";
+  inter_agent_delivery_incarnation?: string;
   work_control?: "v1";
 }
 
@@ -32,6 +33,7 @@ export type DeliveryDowngrade =
   | "yield_not_authorized"
   | "yield_interval"
   | "yield_capacity"
+  | "yield_token_unavailable"
   | "early_quota"
   | "recipient_legacy";
 
@@ -328,6 +330,12 @@ export type YieldClaimResult =
   | { granted: false; reason: "unknown_yield" | "already_claimed" | "work_not_active" | "not_assignee" | "grant_changed" | "yield_interval" | "stale_channel" };
 
 export interface WorkTransferAckRequest { version: "0"; work_id: string; transfer_id: string }
+export interface WorkTransferAckResult {
+  work_id: WorkId;
+  transfer_id: string;
+  state: "acknowledged";
+  work?: never;
+}
 export interface WorkOpResultRequest { version: "0"; operation_id: string }
 export interface WorkStatusRequest { version: "0"; work_id?: string }
 export type WorkStatusResult =
@@ -340,7 +348,17 @@ export type WorkCheckResult = { ok: true; work: WorkRecord } | { ok: false; reas
 export interface DeliveryStatusRequest { version: "0"; conversation_id?: string; turn_number?: number }
 
 export interface OperatorWorkControlRequest { version: "0"; work_control: WorkControl }
-export interface WorkNotice { version: "0"; work: WorkRecord; op: WorkControlOp; reason: string; transfer_id?: string }
+interface WorkNoticeFields { version: "0"; op: WorkControlOp; reason: string; transfer_id?: string }
+export type WorkNotice =
+  | (WorkNoticeFields & { work: WorkRecord })
+  | (WorkNoticeFields & {
+    work: {
+      work_id: WorkId;
+      access: "transfer_pending";
+      pending_transfers: PendingWorkTransfer[];
+      work?: never;
+    };
+  });
 export interface WorkChanged { version: "0"; work: WorkRecord }
 export interface WorkScopeOverlap { version: "0"; work_id: string; other_work_id: string; scopes: string[] }
 export interface OperatorInstruction { version: "0"; agent_id: string; text: string; attachment_ids?: string[]; delivery_intent?: DeliveryIntent }

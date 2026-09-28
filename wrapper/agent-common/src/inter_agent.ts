@@ -163,16 +163,17 @@ function workOperationRejectionResult(
 }
 
 function workRejectionGuidance(reason: string): string {
+  const receiptScope = "The operation receipt records the work-operation result and delivery knowledge, but not the delivery-intent downgrade; any downgrade is reported only in the send_to_agent result's delivery_authority field.";
   if (reason === "work_applied_message_rejected") {
-    return "The work operation was applied, but message admission was rejected. Do not treat the body as delivered or repeat the work operation; use the returned operation result and delivery knowledge to decide separately whether to send the body.";
+    return `The work operation was applied, but message admission was rejected. Do not treat the body as delivered or repeat the work operation; use the returned operation result and delivery knowledge to decide separately whether to send the body. ${receiptScope}`;
   }
   if (reason === "work_operation_deduplicated") {
-    return "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed.";
+    return `This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed. ${receiptScope}`;
   }
   if (reason === "work_outcome_unknown") {
-    return "Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id.";
+    return `Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id. ${receiptScope}`;
   }
-  return "The work operation result is not included in this rejection. Query work_op_result with this operation_id before retrying the operation.";
+  return `The work operation result is not included in this rejection. Query work_op_result with this operation_id before retrying the operation. ${receiptScope}`;
 }
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */

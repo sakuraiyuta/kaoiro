@@ -5,6 +5,7 @@ import type {
   WorkCheckResult,
   WorkOpResult,
   WorkStatusResult,
+  WorkTransferAckResult,
 } from "@kaoiro/protocol";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 
@@ -16,7 +17,7 @@ export interface WorkToolHandlers {
   deliveryModes: () => DeliveryModes | "legacy" | "pending";
   workStatus: (input: { work_id?: string | undefined }) => Promise<WorkStatusResult>;
   workCheck: (input: { work_id: string; action: "start" | "land"; expected_revision: number; subject_hash?: string | undefined }) => Promise<WorkCheckResult>;
-  workTransferAck: (input: { work_id: string; transfer_id: string }) => Promise<Record<string, unknown>>;
+  workTransferAck: (input: { work_id: string; transfer_id: string }) => Promise<WorkTransferAckResult>;
   workOpResult: (input: { operation_id: string }) => Promise<WorkOpResult>;
   deliveryStatus: (input: { conversation_id?: string | undefined; turn_number?: number | undefined }) => Promise<DeliveryStatusResult>;
 }
@@ -90,7 +91,13 @@ export function workToolDescriptors(handlers: WorkToolHandlers): ToolDescriptor[
       name: "work_transfer_ack",
       description: "Acknowledge the specified pending transfer as its former assignee.",
       inputSchema: z.toJSONSchema(WORK_TRANSFER_ACK_SCHEMA, { io: "input" }),
-      handler: input => run("work_transfer_ack", input, WORK_TRANSFER_ACK_SCHEMA, workAvailable, handlers.workTransferAck),
+      handler: input => run("work_transfer_ack", input, WORK_TRANSFER_ACK_SCHEMA, workAvailable, async request => {
+        const ack = await handlers.workTransferAck(request);
+        if (ack.work_id !== request.work_id || ack.transfer_id !== request.transfer_id || ack.state !== "acknowledged") {
+          throw new Error("work_transfer_ack returned an invalid result");
+        }
+        return { work_id: ack.work_id, transfer_id: ack.transfer_id, state: ack.state };
+      }),
     },
     {
       name: "work_op_result",

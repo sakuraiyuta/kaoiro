@@ -2364,6 +2364,54 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     });
   });
 
+  it("decodes the yield-token-unavailable downgrade reason", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("ok")?.({
+      ingress_stamp: [9, 3],
+      delivery_authority: { requested: "yield", granted: "early", downgrade: "yield_token_unavailable" },
+    });
+    await expect(pending).resolves.toMatchObject({
+      kind: "accepted",
+      delivery_authority: { requested: "yield", granted: "early", downgrade: "yield_token_unavailable" },
+    });
+  });
+
+  it("projects work-transfer acknowledgements without exposing extra server fields", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      workControl: "v1",
+    });
+    mock.joinReceivers.get("ok")?.({ work_control: "v1" });
+    const pending = link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" });
+    mock.lastPush?.receivers.get("ok")?.({
+      work_id: "wrk_1",
+      transfer_id: "trf_1",
+      state: "acknowledged",
+      work: { secret: "must not reach the tool" },
+    });
+    await expect(pending).resolves.toEqual({
+      work_id: "wrk_1",
+      transfer_id: "trf_1",
+      state: "acknowledged",
+    });
+  });
+
+  it.each([
+    { work_id: "other", transfer_id: "trf_1", state: "acknowledged" },
+    { work_id: "wrk_1", transfer_id: "other", state: "acknowledged" },
+    { work_id: "wrk_1", transfer_id: "trf_1", state: "pending" },
+  ])("rejects a malformed work-transfer acknowledgement result", async reply => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      workControl: "v1",
+    });
+    mock.joinReceivers.get("ok")?.({ work_control: "v1" });
+    const pending = link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" });
+    mock.lastPush?.receivers.get("ok")?.(reply);
+    await expect(pending).rejects.toThrow("work_transfer_ack returned an invalid result");
+  });
+
   it("sendInterAgent は error で rejected + reason を返し、記録はしない", async () => {
     const acks: unknown[] = [];
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {

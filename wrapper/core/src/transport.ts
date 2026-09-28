@@ -44,6 +44,7 @@ import type {
   WorkStatusRequest,
   WorkStatusResult,
   WorkTransferAckRequest,
+  WorkTransferAckResult,
   WorkNotice,
   DeliveryStatusRequest,
   DeliveryStatusResult,
@@ -1165,7 +1166,7 @@ function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAccep
   if (!isObject(reply)) return {};
   const raw = reply as Partial<InterAgentSendReply>;
   const intents = ["normal", "early", "yield"] as const;
-  const downgrades = ["unsupported_by_recipient", "yield_not_authorized", "yield_interval", "yield_capacity", "early_quota", "recipient_legacy"] as const;
+  const downgrades = ["unsupported_by_recipient", "yield_not_authorized", "yield_interval", "yield_capacity", "yield_token_unavailable", "early_quota", "recipient_legacy"] as const;
   const authority = isObject(raw.delivery_authority) ? raw.delivery_authority : null;
   const requested = authority?.requested;
   const granted = authority?.granted;
@@ -2005,8 +2006,16 @@ export class ServerLink {
       .receive("timeout", () => { pending.inFlight = false; });
   }
 
-  acknowledgeWorkTransfer(request: Omit<WorkTransferAckRequest, "version">): Promise<Record<string, unknown>> {
-    return this.#requestWorkEvent("work_transfer_ack", request);
+  async acknowledgeWorkTransfer(request: Omit<WorkTransferAckRequest, "version">): Promise<WorkTransferAckResult> {
+    const reply = await this.#requestWorkEvent("work_transfer_ack", request);
+    if (
+      reply.work_id !== request.work_id ||
+      reply.transfer_id !== request.transfer_id ||
+      reply.state !== "acknowledged"
+    ) {
+      throw new Error("work_transfer_ack returned an invalid result");
+    }
+    return { work_id: request.work_id, transfer_id: request.transfer_id, state: "acknowledged" };
   }
 
   requestWorkOpResult(request: Omit<WorkOpResultRequest, "version">): Promise<WorkOpResult> {

@@ -172,7 +172,7 @@ describe("InterAgentTool", () => {
         deliveryModes: () => "legacy",
         workStatus: async () => ({ works: [], pending_transfers: [] }),
         workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
-        workTransferAck: async () => ({}),
+        workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }),
         workOpResult: async () => ({ error: "unknown_operation" }),
         deliveryStatus: async () => ({ status: "expired" }),
       },
@@ -1960,7 +1960,7 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
         workControlSupported: () => true, deliveryModesSupported: () => true, deliveryModes: () => "legacy",
         workStatus: async () => ({ works: [], pending_transfers: [] }),
         workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
-        workTransferAck: async () => ({}), workOpResult: async () => ({ error: "unknown_operation" }),
+        workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }), workOpResult: async () => ({ error: "unknown_operation" }),
         deliveryStatus: async () => ({ status: "expired" }),
       },
       sendInterAgent: async () => ({
@@ -2255,7 +2255,7 @@ describe("work-control send rejection receipts", () => {
     deliveryModes: () => "legacy" as const,
     workStatus: async () => ({ works: [], pending_transfers: [] }),
     workCheck: async () => ({ ok: false, reason: "unknown_work", work: {} } as never),
-    workTransferAck: async () => ({}),
+    workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }),
     workOpResult: async () => ({ error: "unknown_operation" }),
     deliveryStatus: async () => ({ status: "expired" }),
   };
@@ -2321,6 +2321,7 @@ describe("work-control send rejection receipts", () => {
       },
       guidance: expect.stringContaining("was applied"),
     });
+    expect(receipt.guidance).toContain("reported only in the send_to_agent result's delivery_authority field");
     expect(receipt).not.toHaveProperty("sent");
   });
 

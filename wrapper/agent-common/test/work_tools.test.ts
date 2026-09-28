@@ -36,4 +36,23 @@ describe("work tool descriptors", () => {
     expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: "work_control_unavailable", send_not_attempted: true });
     expect(workStatus).not.toHaveBeenCalled();
   });
+
+  it("projects work_transfer_ack to its restricted result shape", async () => {
+    const descriptors = workToolDescriptors({
+      ...handlers,
+      workTransferAck: async () => ({
+        work_id: "w",
+        transfer_id: "t",
+        state: "acknowledged",
+        work: { secret: "not for the former assignee" },
+      } as never),
+    });
+    const tool = descriptors.find(candidate => candidate.name === "work_transfer_ack")!;
+    const result = await tool.handler({ work_id: "w", transfer_id: "t" });
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      work_id: "w",
+      transfer_id: "t",
+      state: "acknowledged",
+    });
+  });
 });

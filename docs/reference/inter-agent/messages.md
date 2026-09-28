@@ -31,7 +31,12 @@ explicitly decide whether to start a new delivery. A `work_outcome_unknown`
 rejection also has no `ingress_stamp`; it carries the `operation_id`. Query
 `work_op_result` with that ID and retry with the same ID only if it was not
 applied. A yield-only WorkStore timeout is downgraded and proceeds as an
-accepted send, rather than returning `work_outcome_unknown`.
+accepted send, rather than returning `work_outcome_unknown`. When a work
+operation has applied but the server cannot issue its yield token, the send is
+accepted as `early` with `delivery_authority.downgrade: "yield_token_unavailable"`.
+The work receipt records the operation result and delivery knowledge, but not
+the intent downgrade; inspect the send result's `delivery_authority` for it.
+See [work authority and operations](work.md#work-authority-and-operations).
 
 ### envelope.type: "inter_agent_message"
 
@@ -109,7 +114,9 @@ A former assignee may read only its pending transfer obligations through
 the former assignee can call `work_transfer_ack` even if the best-effort
 `work_notice` was lost. A named lookup returns
 `{work_id, access: "transfer_pending", pending_transfers}` instead of a
-complete work record for this role.
+complete work record for this role. `work_transfer_ack` returns only
+`{work_id, transfer_id, state: "acknowledged"}`, never a full work record.
+See [work authority and operations](work.md#work-authority-and-operations).
 
 For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer
 turn actually handed to the sender; the server rejects a stale basis before
