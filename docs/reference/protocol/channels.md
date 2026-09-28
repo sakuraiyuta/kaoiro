@@ -22,7 +22,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 
 | Direction | Event | Contents |
 |---|---|---|
-| wrapper → server | `envelope` | Full envelope. Only `inter_agent_message` receives an `{ ingress_stamp: [us, seq] }` acceptance ack; other types receive an empty reply. Causal ordering follows [directory event contracts](../../reference/inter-agent/directory.md#event-contracts); sidecar recording uses [ADR-0051](../../adr/0051-history-restart-resilience.md). |
+| wrapper → server | `envelope` | Full envelope. Accepted `inter_agent_message` replies carry `ingress_stamp: [us, seq]`, the same server-owned `delivery_authority` as the relayed payload, optional `work` and `work_control_result`, and `delivery.advisory` (`recipient_state`, `granted`, optional `downgrade`, `mechanism`, `unresolved_count`, `guidance: "accepted; do not resend"`). `mechanism` is `queue`, `fold`, `cut`, `steer`, `hook`, or `unknown`; receivers treat an unrecognized value as `unknown`. A receipt hit rejects with `work_operation_deduplicated`, `send_not_attempted: true`, stored `work_control_result` and delivery knowledge, with no ingress stamp. An unknown work outcome rejects with `work_outcome_unknown`, `send_not_attempted: true`, and `operation_id`, also with no ingress stamp. Other envelope types receive an empty reply. Causal ordering follows [directory event contracts](../../reference/inter-agent/directory.md#event-contracts); sidecar recording uses [ADR-0051](../../adr/0051-history-restart-resilience.md). |
 | wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
 | wrapper → server | `delivery_stage` | ADR-0063 negotiated v1: `{version: "0", incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`. `stage` is `queued`, `submitted`, `included`, `settled`, or `unknown`; the server records `accepted` and `lost`, and returns `expired` on query. `yield_disposition` is set once. The current owner and ledger identity are checked before recording. |
 | wrapper → server | `yield_claim` | `{version: "0", incarnation, generation, yield_token, conversation_id, turn_number, work_id, authority_epoch}`. The serialized server decision returns `{granted: true, repeated?}` or `{granted: false, reason}`; a stale owner receives `stale_channel`. |
@@ -114,11 +114,17 @@ and independently `work_control: "v1"`. Delivery modes are echoed as
 reports enabled when an early or yield mechanism is declared. Work control
 has no delivery-mode prerequisite and is echoed as `work_control: "v1"`.
 An absent echo means the corresponding control is unavailable.
+An acknowledged delivery join also echoes
+`inter_agent_delivery_incarnation`, the server's current ledger incarnation.
+The wrapper copies that value into `delivery_stage` and `yield_claim`; a stale
+incarnation is refused with `stale_channel`. Every reconnect receives the
+current value, including a reconnect in the same generation.
 
 | Direction | Event | Contents |
 |---|---|---|
 | client → server | `instruction` | Gains optional `delivery_intent`: `normal`, `early`, or `yield`. Omitted requests `early` when the recipient declared a mechanism, otherwise `normal`. |
 | client → server | `work_control` | Operator-only `{version: "0", work_control}`. The server applies the same reducer used for inter-agent operations and sends notices to affected agents. |
+| client → server | `work_yield_status` | Operator-only `{version: "0", work_id, yield_token?}`. Reads claimed tokens for the work and each token's `cut`, `downgraded`, `unknown`, or `expired` disposition. |
 | server → wrapper | `work_notice` | `{version: "0", work, op, reason, transfer_id?}`. Best-effort ordinary input, without a conversation, turn, or reply basis. |
 | server → client | `work_changed` | Operator-only `{version: "0", work}` after an applied operation. |
 | server → client | `work_scope_overlap` | Operator-only `{version: "0", work_id, other_work_id, scopes}` when active grants overlap by declared scope. |

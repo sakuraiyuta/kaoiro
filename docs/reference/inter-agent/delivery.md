@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-28
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -101,6 +101,10 @@ closure notices from current tombstones. When that state is unavailable or the
 notice cannot be regenerated, the recipient receives a `delivery_lost` error
 with `synthetic: true`, its original kind and loss ID. Recovery notices retain
 their original loss ID if lost again; they do not create notification loops.
+Server-generated notices, including `delivery_lost` and `work_notice`, bypass
+intent admission, carry no `delivery_authority`, and consume no early quota.
+They cannot grant yield. A wrapper-origin internal notice carrying
+`delivery_intent` is rejected with `invalid_internal_notice`.
 
 Normal sends reserve one of 1,000 unresolved metadata slots before conversation
 accounting. A reservation is released when conversation preflight rejects or

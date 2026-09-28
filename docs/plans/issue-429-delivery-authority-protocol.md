@@ -421,7 +421,8 @@ a yield](#consumption-of-a-yield)); a downgraded request, as in this
 example, carries none.
 
 `downgrade` is one of `unsupported_by_recipient`, `yield_not_authorized`,
-`yield_interval`, `yield_capacity`, `early_quota`, `recipient_legacy`. It is absent when
+`yield_interval`, `yield_capacity`, `yield_token_unavailable`, `early_quota`,
+`recipient_legacy`. It is absent when
 `granted == requested`. The same object is returned to the sender in the
 send result, so a downgrade is visible before any delivery (L2).
 
@@ -446,27 +447,32 @@ link in phase 1 and are not eligible; their admission is D6 work, frozen with
 issue #426.
 
 **Server claim: one atomic decision in `WorkStore`.** Admission of a granted
-yield (step 4 of [admission](#server-reducer-and-atomicity)) writes a yield
-token `{yield_token, recipient, conversation_id, turn_number, work_id,
-authority_epoch, admitted_at, expires_at, state: unclaimed, claimed_by?,
-claimed_at?}` into `WorkStore` together with the op
-decision. `yield_token` is 128 random bits, generated there and stamped into
-the relayed `delivery_authority`; the delivery sequence is not used as the
+yield (step 4 of [admission](#server-reducer-and-atomicity)) writes the token
+into the recipient's `{:yield_state, recipient}` DETS object. That object holds
+`{last_claim_at, tokens: %{yield_token => {work_id, conversation_id,
+turn_number, authority_epoch, admitted_at, expires_at, state, claimed_by?,
+claimed_at?}}}`. When a message also carries an op, the work object holding
+the op and receipt is written first, then the token is written. If the token
+write fails, admission downgrades the yield to `early` with
+`yield_token_unavailable`; the applied op remains recorded. No token is
+disclosed, so this one-sided outcome cannot grant an early claim.
+`yield_token` is 128 random bits, generated there and stamped into the relayed
+`delivery_authority`; the delivery sequence is not used as the
 key because it is issued only later, at step 6. If the message is then not
-recorded (step 5 rejection), step 7 deletes the token (in the same write as
-the receipt's delivery knowledge when the message also carries an op, alone
-otherwise). A token orphaned by a crash before relay was never disclosed:
+recorded (step 5 rejection), step 7 deletes the token from its recipient
+object after writing the receipt's delivery knowledge, if any. A token
+orphaned by a crash before relay was never disclosed:
 only a relayed message carries its `yield_token`, and a relayed message's
 `(conversation_id, turn_number)` is consumed. Nobody can therefore present
 it; it expires after 24 hours. A claimed token is kept for
-`yield_token_ttl_ms` after its `claimed_at`, then removed. `WorkStore` also holds the recipient's last granted claim time. A
-`yield_claim` is one `WorkStore` call that, in a single serialized step,
+`yield_token_ttl_ms` after its `claimed_at`, then removed. A `yield_claim` is
+one `WorkStore` call that, in a single serialized step,
 checks and updates all of: a token with that `yield_token` exists for that
 recipient and message pair and is `unclaimed`; W is `active`; the claimer is
 W's assignee; the epoch equals W's current epoch; the recipient interval has
-elapsed. If all hold, the token becomes `claimed` with `claimed_by
-{incarnation, generation}` and `claimed_at`, and the interval restarts;
-otherwise nothing changes. Two concurrent claims are serialized there, so at
+elapsed. If all hold, one recipient object write sets the token to `claimed`
+with `claimed_by {incarnation, generation}` and `claimed_at`, and restarts the
+interval; otherwise nothing changes. Two concurrent claims are serialized there, so at
 most one can take the interval.
 
 Before calling `WorkStore`, the channel process checks that it is the
@@ -671,14 +677,11 @@ after E6 and phase 3 measure them.
 
 ### Delivery bookkeeping and stage history
 
-A recipient's delivery facts in `DeliveryStates` are kept in two structures
-with separate rules. The bookkeeping stays in the recipient's existing DETS
-object. The stage history is a separate object in the same table, keyed by
-`(recipient, incarnation)`, so that acks and ordinary bookkeeping writes do
-not rewrite up to 2,000 history records. A query-only stage report (`queued`,
-`settled`, `unknown`, `included`, a `yield_disposition`) rewrites only the
-history object. A resolution-changing report is written through the commit
-point defined below:
+A recipient's delivery bookkeeping and stage history remain separate fields
+with separate rules inside one recipient DETS ledger entry object. History is
+indexed by incarnation and is bounded across the recipient before each write.
+Every stage report and bookkeeping change writes that one object; this couples
+the history with a resolution-changing report at the commit point below.
 
 | Part | Contents | Read by | Lifetime |
 | --- | --- | --- | --- |
@@ -694,34 +697,27 @@ them, so `resolved` cannot grow without bound behind a stuck earlier item.
 
 **Commit point of a resolution-changing report.** A recorded `submitted`
 report for a sequence above the prefix changes the loss predicate, so it is
-committed as one coupled update of both objects:
+committed as one update of the ledger entry object:
 
 1. `DeliveryStates` validates the report (owner, incarnation, generation,
    issued sequence) and computes the next bookkeeping (sequence moved from
-   `metadata` to `resolved`) and the next history object, without changing
+   `metadata` to `resolved`) and bounded history, without changing
    its in-memory state.
-2. It writes both with one `:dets.insert(table, [bookkeeping_record,
-   history_record])` followed by `:dets.sync/1`, the pattern the store
-   already uses to write a retirement together with its loss intents
-   (`persist_with_losses`, `delivery_states.ex:600-604`).
+2. It writes the single entry object with `:dets.insert/2` followed by
+   `:dets.sync/1`.
 3. Only after the sync succeeds does it replace its in-memory state and reply
    `ok` to the report. The reply is the acknowledgement boundary: an
-   acknowledged report is durable in both objects.
+   acknowledged report has both facts in the durable entry.
 4. If the write or sync fails, it keeps the previous in-memory state and
    replies with an error; the wrapper keeps the report unconfirmed and
    resends it (reports are idempotent under the set merge). A crash before
    the reply has the same effect: the report is unconfirmed and is resent
    after a same-generation rejoin.
 
-That the list insertion is atomic under a crash is not established by this
-design; the precedent is a pattern, not a proof. The design therefore relies
-only on the ordering above. If a crash leaves the history half written and
-the bookkeeping half unwritten, the report was never acknowledged, the
-sequence is still unresolved, and only the history shows `submitted`. On
-restart the server does not infer resolution from history, which is not
-authoritative. The wrapper's resend then resolves it; if a retirement or
-generation boundary comes first, the item is reported lost under the stated
-limit below, and the sender sees both facts.
+The history and bookkeeping fields cannot be split by a partial insertion of
+different DETS objects. A crash before insertion leaves both old; a crash
+after insertion and sync leaves both new even if the reply was lost. The
+wrapper may resend an unacknowledged report, and the set merge is idempotent.
 
 Every existing path in `delivery_states.ex` uses the closed predicate:
 
@@ -734,7 +730,7 @@ Every existing path in `delivery_states.ex` uses the closed predicate:
 | `retire_generation` (lines 552–558) | Records losses for all `metadata` keys | Unchanged in code; resolved sequences have no metadata, so they are never reported lost |
 | `reserve` (lines 382–400) | Counts `map_size(metadata)` plus open reservations against 1,000 | Counts `metadata`, `resolved` and open reservations |
 | `entry_record` / `persist` (lines 681–694) | Persists a fixed `Map.take` list | The list gains `resolved`; otherwise a restart would silently drop it |
-| `recovery_defaults` (lines 618–627) and the new-generation merge in `bind` (lines 195–199) | Resets `metadata`, `skipped` and counters and issues a new incarnation | Also resets `resolved` to empty: the old ledger is abandoned with its prefix. The old incarnation's stage history object is kept until its own bounds drop it |
+| `recovery_defaults` (lines 618–627) and the new-generation merge in `bind` (lines 195–199) | Resets `metadata`, `skipped` and counters and issues a new incarnation | Also resets `resolved` to empty: the old ledger is abandoned with its prefix. The old incarnation's stage history field is kept until its own bounds drop it |
 | Resync-enabled rebind (line 203) | Sets `acked_seq := issued_seq` and `skipped := []` | Also sets `resolved := []` |
 
 Consequences:
@@ -951,8 +947,11 @@ Admission order for a message carrying `work_control` or `delivery_intent`:
    (different digest) before any state-dependent precondition is evaluated
    and before any mutation. Only on a miss does it check authority, carriage
    rules, state, `expected_revision` or `basis_revision`, hashes, bounds and
-   the intent query, then perform one DETS object write, containing the
-   mutation and its receipt, and `:dets.sync/1`. The first request to reach
+   the intent query, then perform one DETS work-object write, containing the
+   mutation and its receipt, and `:dets.sync/1`. A granted yield then writes
+   its separate recipient claim-state object. A failed token write downgrades
+   that yield to `early` with `yield_token_unavailable`; the work receipt
+   remains committed. The first request to reach
    this point is therefore the only one that creates a receipt and may
    continue to message admission; a concurrent duplicate that missed at step
    2 gets the winner's receipt here, releases its reservation and is not
@@ -1059,9 +1058,15 @@ replaces it with `work_control_result {op, operation_id, outcome}`.
 config, `mix kaoiro.env`, the cross-store tests and the deploy CLI manifest
 all see it. A store that misses one of those surfaces escapes backup: the
 user ledger was lost that way in issue #217. The file is owner-only. Restart
-must not resurrect an older revision or grant: every mutation and its receipt
-are one DETS object write followed by `:dets.sync/1` before the reply. The
-delivery knowledge of step 7 is a second write; its absence means unknown.
+must not resurrect an older revision or grant: every work mutation and its
+receipt are one DETS object write followed by `:dets.sync/1` before the reply.
+Yield tokens and the last claim time share one recipient claim-state object,
+so a claim consumes its token and restarts the interval in one write. For
+op-bearing messages, the work-object write precedes the claim-state token
+write; absence of the latter downgrades the yield without undoing the op. The
+delivery knowledge of step 7 is a later write; its absence means unknown.
+The existing multi-object write in `DeliveryStates.persist_with_losses` is
+tracked separately in issue #436.
 
 Retention: a `nominated` record not accepted within 24 hours becomes
 `expired`. Terminal records are kept 30 days after `updated_at`, then
@@ -1349,7 +1354,8 @@ injected path or options, checks that it opens the path listed in
 | V5 | Claim epoch fence | Yield admitted at epoch E; operator transfers director A → B → A before the claim; the claimer is still the assignee | Remove the claim-time epoch check | Claim refused with `grant_changed` |
 | V6 | Claim is one-use | `yield_min_interval_ms` set to 0 for the test; the assignee claims an admitted yield, then sends the same claim again (same `yield_token`, pair, incarnation and generation) | Remove the claimed flag (the second call is evaluated as a new claim) | Exactly one grant: the second reply is `granted: true, repeated: true`, and the token's `claimed_at` and the recipient's last claim time are unchanged by it. `already_claimed` is reserved for a claim whose identity differs from `claimed_by`, which the channel fence normally stops first; it is not asserted here |
 | V7 | Yield interval per recipient | Assignee of W1 and W2 (different directors); valid yields on W1 and W2 both admitted before either claim; then W1 claimed, then W2 claimed within 120 s | Make the interval per work, at admission and at claim | W2's claim refused with `yield_interval` |
-| V8 | Synthetic never early | A negotiated wrapper sends a validated internal notice that is admitted, with `delivery_intent: early`, to a recipient declaring `early: fold` | Remove rule 1 | The admitted notice is stamped `granted: normal` |
+| V8a | Wrapper-origin internal notices carry no intent | A negotiated wrapper sends an otherwise valid `turn_failure` notice with `delivery_intent: early` or `yield` | Add `delivery_intent` to the internal-notice allowlist | Both requests fail `invalid_internal_notice` before admission; neither consumes an early slot |
+| V8b | Server-generated notices bypass intent admission | Generate a `delivery_lost` notice and an operator `work_notice` for a recipient that supports early delivery | Route either synthetic notice through ordinary inter-agent intent admission with `early` requested | Neither notice carries `delivery_authority` or consumes an early slot; `work_notice` remains a distinct event |
 | V9 | Early pair quota | Five early items from one sender to one recipient, none submitted | Remove the pair cap | Fifth stamped `normal` with `early_quota` |
 | V10 | Revision CAS | Director sends two `revise` ops with different `operation_id`s, both with `expected_revision: r` | Remove the CAS | Second rejected `stale_work_revision`; final revision is r + 1 |
 | V11 | Assignee basis check | Director `revise` to r + 1 and the assignee receives it (its reply basis is current); the assignee's reply carries `submit` with `basis_revision: r` | Remove the basis check | Rejected `stale_work_revision`; `subject` unchanged |
@@ -1394,11 +1400,12 @@ injected path or options, checks that it opens the path listed in
 | V30e | Prefix crosses resolved entries | Same; then x acknowledged | Advance only across `skipped` | `acked_seq` becomes 2 in the same step |
 | V30f | Old-channel report | y reported by the previous channel owner | Remove the owner fence for reports | Rejected; `resolved` unchanged |
 | V30g | Reconnect and restart | y resolved; same-generation reconnect; then server restart; then x acknowledged | Keep `resolved` in memory only | After restart y is still resolved; x's ack moves the prefix to 2; no loss for y |
-| V30j | Report commit point | x (seq 1) queued; y (seq 2) `submitted` report. Three cuts: (a) crash before the insertion; (b) crash after insertion and sync, before the reply; (c) injected failure of the bookkeeping half with the history half written. After each: restart, then a same-generation range retirement over 1–2 and, separately, a generation retirement | Persist only the history half of a resolution-changing report | (b): y resolved after restart and never reported lost in either retirement; x reported lost once. (a) and (c): report unacknowledged; after the wrapper's resend y is resolved; if a retirement comes first, y is reported lost under the stated limit. Under the mutant, (b) reports y lost |
+| V30j | Report commit point | x (seq 1) queued; y (seq 2) `submitted` report. Cuts: (a) crash before the single entry insertion; (b) crash after insertion and sync, before reply; (c') mutation splits history and bookkeeping into two objects, then leaves only history written. Restart and retire 1–2 by range and generation in separate runs | Split the single entry write into two objects | (a) old bookkeeping and history remain; resend resolves y. (b) y is resolved after restart, x alone is lost. (c') the split mutation exposes history without resolution and fails the coupled-state assertion. No acknowledged report has only one fact. |
 | V30h | History after reclamation and TTL | After V30e, query y; then advance past its history bound and query again | Delete stage history with the bookkeeping | First query returns y's stages; second returns `expired`; no loss recorded |
 | V30i | History eviction with unresolved metadata | x (seq 1) unresolved; its stage-history record passes the 24 h age bound; then a terminal intentional disconnect (`retire_owned_generation`) | Let history eviction delete bookkeeping | x's `delivery_status` returns `expired`, and a loss intent with reason `interrupted` exists for x after the disconnect |
 | V32 | Stage set merge | `settled` reported before `submitted`, then a duplicate `queued` | Store one rank and overwrite | `submitted` timestamp retained |
-| V33a–c | Stage owner fence | Three schedules, each with a sequence valid in the current ledger and exactly one wrong field: old channel owner, old generation, replaced incarnation | Remove that one field's check | Rejected `invalid_delivery_stage`; stage set unchanged |
+| V33a–c | Stage owner fence | Three schedules, each with a sequence valid in the current ledger and exactly one wrong field: old channel owner, old generation, replaced incarnation | Remove that one field's check | Old owner or generation returns `invalid_delivery_stage`; replaced incarnation returns `stale_channel`; stage set unchanged |
+| V33d | Stage incarnation echo | A joined wrapper reports a valid sequence using an earlier ledger incarnation | Remove the incarnation comparison | Rejected `stale_channel`; stage set unchanged |
 | V34a | Stage count bound | A recipient accumulates 2,000 records that are acknowledged but never settled; one more arrives | Remove the count bound | Record count stays 2,000; a query for the dropped one returns `expired` |
 | V34b | Stage age bound | A submitted-only record older than 24 h | Remove the age bound | Record dropped; query returns `expired` |
 | V35 | Negotiation gate | `work_control` from a connection without `work_control: "v1"` | Remove the gate | Rejected as malformed |
@@ -1414,6 +1421,7 @@ injected path or options, checks that it opens the path listed in
 | V44 | One interval per concurrent claims | Store-level test: two valid yield tokens for one recipient (different works); two processes call `WorkStore.claim` directly (the recipient's single channel cannot produce this interleaving, see [Retry identity](#retry-identity-and-receipts)) | Split the claim into a read call and a write call, with a test barrier between them that both calls pass | Exactly one claim granted; the other refused `yield_interval` |
 | V45 | Claim is the linearization point | Claim granted at epoch E; operator `transfer` commits afterwards | Omit claimed tokens from the transfer result | The transfer result lists the claimed token; the claim is not revoked (token stays `claimed`) |
 | V46 | Claim channel fence | A message issued to the recipient in generation G1; the recipient rebinds to G2; a claim arrives with G1, the message's `yield_token` and pair | Remove the owner fence before `WorkStore.claim` | Refused `stale_channel`; token stays `unclaimed` |
+| V46b | Claim incarnation echo | A current-generation recipient claims a valid token with an earlier ledger incarnation | Remove the incarnation comparison | Refused `stale_channel`; token stays `unclaimed` |
 | V49 | Token deleted on rejection | A yield message rejected at step 5 | Skip the token deletion at step 7 | No `unclaimed` token remains for that `yield_token` |
 | V47 | `yield_disposition` set-once | Recipient reports `downgraded: mixed_turn`, then `cut` for the same sequence | Overwrite on each report | Second report rejected; `delivery_status` shows `downgraded: mixed_turn` |
 | V48 | Repeated claim after reconnect | Claim granted; reply lost; same-generation reconnect; same claim again | Treat the repeat as a new claim | Reply `granted: true, repeated: true`; interval not restarted |
@@ -1487,6 +1495,10 @@ issues rather than change the design now:
   those tokens' `yield_disposition`, and an explicit `expired` / unknown
   disposition when stage history expired before the token's retention;
   absence must not mean "no cut".
+  Decision (2026-09-28): operator-only `work_yield_status` reads
+  `{work_id, yield_token?}`. Without a token it lists all claimed tokens for
+  that work. Each disposition is `cut`, `downgraded` (with reason), `unknown`,
+  or `expired`; agents cannot use this read.
 - **Yield-token lifecycle and channel replacement (r3 S2).** Tests for
   expiry and cap downgrade, orphan cleanup, and a repeated response without
   an interval restart, across receipt lookup and server restart. Persist the
@@ -1552,7 +1564,7 @@ the issue #429 design.
 | `verdict_not_effective` | server (`work_check`, `complete`) | No effective accepted `approve` for the current subject | Obtain and accept a current approval |
 | `work_outcome_unknown` | server or wrapper | Work write outcome unknown (timeout, crash); carries `operation_id` | `work_op_result` with that ID; do not resend the body until its delivery knowledge allows it |
 | `work_applied_message_rejected` | server | The op applied; the message was rejected by conversation admission (delivery `not_recorded`); carries the op result and the conversation error | The instruction was not delivered; resend the body as an ordinary message |
-| `invalid_delivery_stage` | server | Stage report for an unknown sequence, wrong owner, generation or incarnation, or a second different `yield_disposition` | None (wrapper bug) |
+| `invalid_delivery_stage` | server | Stage report for an unknown sequence, wrong owner or generation, or a second different `yield_disposition` | None (wrapper bug) |
 | `work_control_unavailable` | wrapper, local | The server did not negotiate `work_control: "v1"` (for work fields) or delivery modes (for an intent other than `normal`) | The control was not applied and must not be reported as applied. An ordinary informational message may be sent separately; it does not take the control's effect |
 
 Server errors are returned in the `envelope` reply like existing admission
@@ -1568,7 +1580,7 @@ None is applied by this plan.
 
 | Direction | Event | Contents |
 | --- | --- | --- |
-| wrapper → server | `delivery_stage` | Negotiated by `inter_agent_delivery_modes: "v1"`. `{incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`; `yield_disposition` is set-once per sequence; `stage` is `queued`, `submitted` (with `handoff`), `included`, `settled` or `unknown`; `evidence` for `included` is `ticket_used` in v1. Accepted only from the current channel owner with matching incarnation and generation; others return `invalid_delivery_stage`. Stages merge as a set; a recorded `submitted` above the acked prefix adds the sequence to `resolved`. |
+| wrapper → server | `delivery_stage` | Negotiated by `inter_agent_delivery_modes: "v1"`. `{incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`; `yield_disposition` is set-once per sequence; `stage` is `queued`, `submitted` (with `handoff`), `included`, `settled` or `unknown`; `evidence` for `included` is `ticket_used` in v1. Accepted only from the current channel owner with matching incarnation and generation; stale incarnation returns `stale_channel`, other invalid reports return `invalid_delivery_stage`. Stages merge as a set; a recorded `submitted` above the acked prefix adds the sequence to `resolved`. |
 | wrapper → server | `yield_claim` | `{incarnation, generation, yield_token, conversation_id, turn_number, work_id, authority_epoch}`; replies `{granted: true, repeated?: true}` or `{granted: false, reason}` with `reason` one of `unknown_yield`, `already_claimed`, `work_not_active`, `not_assignee`, `grant_changed`, `yield_interval`, `stale_channel`. The channel first checks it is the current delivery owner for the incarnation and generation; the decision is one serialized `WorkStore` call. One grant per yield; a repeat of a granted claim by the same owner returns `granted: true, repeated: true`. |
 | wrapper → server | `work_transfer_ack` | `{work_id, transfer_id}`; accepted only from that obligation's old assignee while pending. |
 | wrapper → server | `work_op_result_request` | `{operation_id}`; replies with the caller's receipt, `unknown_operation` or `operation_id_expired`. |
@@ -1576,6 +1588,7 @@ None is applied by this plan.
 | wrapper → server | `work_check_request` | `{work_id, action: "start" \| "land", subject_hash?, expected_revision}`; replies `{ok: true, work}` or `{ok: false, reason, work}` and records the check. Cooperative; no lock. |
 | wrapper → server | `delivery_status_request` | Gains optional `{conversation_id, turn_number}`: replies with that sent message's stage set when the caller is its sender. |
 | client → server | `work_control` | Operator-only. `{version, work_control}` with the same op shapes as the inter-agent field; the server applies it with the same reducer and sends `work_notice` to the director (if an agent) and the assignee. |
+| client → server | `work_yield_status` | Operator-only read. `{version, work_id, yield_token?}` returns claimed tokens for the work (all when token omitted) with an explicit `cut`, `downgraded`, `unknown`, or `expired` disposition. |
 | server → wrapper | `work_notice` | Negotiated by `work_control: "v1"`. `{version, work, op, reason, transfer_id?}`; best-effort; the wrapper queues it as ordinary input. Not an inter-agent message: no conversation, turn or basis. |
 | client → server | `instruction` | Gains optional `delivery_intent` (`normal`, `early`, `yield`). Absent means `early` when the recipient declares an early mechanism, else `normal`. |
 | server → client | `work_changed` | Operator-only. `{work}` after every applied op. |
