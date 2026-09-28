@@ -2,7 +2,7 @@
 title: Delivery intent, staged delivery, work grants and work_control (ADR-0063 phase 1)
 description: Protocol design for early delivery and stop intents, capability negotiation, staged delivery records, server-owned work records with assignment grants and revisions, and revision-checked consequential actions.
 status: approved
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 ---
 
 # Delivery intent, staged delivery, work grants and work_control
@@ -1527,6 +1527,18 @@ issues rather than change the design now:
   input, not only peer folds. Keep W3a labelled decision-level and W3b
   white-box; label W5 and W9–W11 native only when their real schedules
   occur. E1–E5 remain mandatory before phase-2 capabilities are advertised.
+
+One clarification was added during the issue #434 implementation. The
+director decided it in conversation `50f09415`, turn 1:
+
+- **Early and yield items bypass per-peer serialization.** "Batches remain
+  per peer" ([Scheduling budget](#scheduling-budget)) applies to ordinary
+  root batches only. A granted `early` or `yield` item reaches the input
+  scheduler in arrival order while a turn is live, including a turn that
+  serves the same peer. It creates no turn token: a fold is bound to the
+  live turn by its receipt, and a cut by its claim and receipt. An item that
+  is not pushed returns to its peer's queue. An item whose text was written
+  to the `Query` never re-enters root input.
 
 ## Appendix A — ADR-0063 amendment draft
 
