@@ -60,8 +60,9 @@ export function isPathSha(value) {
 
 /** One env-var's comparison record (ふじ design review M1 fixed the
  *  per-key VALUE SHAPE; director ruling 2026-09-06, A-MF-1 fixed which
- *  fields the computed `match` actually covers). `match` is `compose ===
- *  container` ONLY — the bundled docker-compose.yaml sets every
+ *  fields the computed `match` actually covers). Normally `match` is
+ *  `compose === container_effective`; a measured `never_existed` first
+ *  application is the sole exception. The bundled docker-compose.yaml sets every
  *  canonical persistence-path var as a literal `environment:` entry
  *  while `.env.example`/`mix kaoiro.env` emit the same vars commented
  *  out, so a three-way check including `declared` (`.env`'s own line)
@@ -77,8 +78,13 @@ export function isPathSha(value) {
  *  application (the old container never had the var set at all) is
  *  compared against what it was ALREADY effectively reading, not
  *  against an env value that structurally cannot exist before the very
- *  deploy this check is gating recreates the container. */
+ *  deploy this check is gating recreates the container. The three optional
+ *  first-application fields bind an absent-file observation to that path;
+ *  older persisted entries without them remain valid. */
 function isEnvConsistencyEntry(value) {
+  const probePathPresent = Object.hasOwn(value ?? {}, "file_probe_path");
+  const probeResultPresent = Object.hasOwn(value ?? {}, "file_probe_result");
+  const firstApplicationPresent = Object.hasOwn(value ?? {}, "first_application");
   return (
     typeof value === "object" &&
     value !== null &&
@@ -93,6 +99,13 @@ function isEnvConsistencyEntry(value) {
     // (kaoiro-server-deploy.mjs's checkEnvConsistency, M5) — validated
     // the same shape as container_source just above it.
     (value.assumed_default_source === "old_image" || value.assumed_default_source === "target_image") &&
+    probePathPresent === probeResultPresent &&
+    (!probePathPresent ||
+      (value.file_probe_path === value.container_effective &&
+        (value.file_probe_result === "present" || value.file_probe_result === "absent"))) &&
+    (!firstApplicationPresent ||
+      (value.first_application === "never_existed" && value.file_probe_result === "absent" && value.match === true)) &&
+    (value.file_probe_result !== "absent" || firstApplicationPresent) &&
     typeof value.match === "boolean"
   );
 }

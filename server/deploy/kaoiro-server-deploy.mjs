@@ -18,7 +18,7 @@ import {
   rmSync,
   statfsSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
 import { fsyncExistingPath, writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
@@ -888,13 +888,36 @@ function containerEffectiveEnv(bin, container) {
   return env;
 }
 
+function containerPathExists(bin, container, path) {
+  try {
+    const output = runDocker(bin, ["exec", container, "test", "-e", path]);
+    if (output !== "") fail(`container path probe printed unexpected output for ${path}: ${JSON.stringify(output)}`);
+    return true;
+  } catch (err) {
+    // `test -e` has no output on a negative result. Docker/exec failures
+    // must not be mistaken for absence merely because they also exit 1.
+    if (err.status === 1 && String(err.stdout ?? "") === "" && String(err.stderr ?? "") === "") return false;
+    if (err instanceof DeployError) throw err;
+    fail(`could not probe ${path} in container ${container}: ${err.message}`);
+  }
+}
+
+function isUnderStateVolume(path) {
+  if (!isAbsolute(path)) return false;
+  const child = relative("/var/lib/kaoiro", path);
+  return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+}
+
 /** Consistency for exactly the env var names `paths` names (director
  *  ruling 2026-09-06, A-MF-1, correcting the original 3-way design;
  *  クロエ round 5 review A-MF-2, correcting A-MF-1 in turn): compose's
  *  resolved declaration vs. the CURRENTLY RUNNING (old) container's
  *  EFFECTIVE path for that store — the container's own env value if set,
  *  else the image's `default_path` for it (what the app itself falls
- *  back to). `match` is `compose === container_effective`.
+ *  back to). `match` is `compose === container_effective`, except for a
+ *  measured first application whose old image lacks the store, whose old
+ *  container lacks its file, and whose compose path is under the named
+ *  state volume.
  *
  *  WHY EFFECTIVE, NOT THE RAW ENV (A-MF-1's own bug): on the first
  *  application that adds a NEW persistence-path var to compose, the OLD
@@ -939,7 +962,7 @@ function containerEffectiveEnv(bin, container) {
  *  can answer at all) is preferred; `assumed_default_source` records
  *  which one actually supplied the value used, so the observation never
  *  silently passes off an assumption as a measurement. */
-function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsByEnv) {
+function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsByEnv, { bin, container, serverDir }) {
   const entries = {};
   for (const { env: envName, default_path: targetDefaultPath } of paths) {
     const declared = readEnvFileValue(envPath, envName);
@@ -950,13 +973,28 @@ function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsB
     const assumedDefaultSource = oldDefaultPath !== undefined ? "old_image" : "target_image";
     const containerEffective = containerRaw !== null ? containerRaw : defaultPath;
     const containerSource = containerRaw !== null ? "env" : "default";
+    let match = compose === containerEffective;
+    let fileProbe;
+    if (!match && compose !== null && oldPathsByEnv !== null && !oldPathsByEnv.has(envName)) {
+      const stateVolume = resolveNamedVolumeFromCompose(bin, serverDir);
+      if (!stateVolume.ok || !isUnderStateVolume(compose)) {
+        fail(`${envName}: cannot accept first application because compose does not place ${JSON.stringify(compose)} under the /var/lib/kaoiro named volume${stateVolume.ok ? "" : ` (${stateVolume.reason})`}`);
+      }
+      fileProbe = {
+        file_probe_path: containerEffective,
+        file_probe_result: containerPathExists(bin, container, containerEffective) ? "present" : "absent",
+      };
+      if (fileProbe.file_probe_result === "absent") match = true;
+    }
     entries[envName] = {
       declared,
       compose,
       container_effective: containerEffective,
       container_source: containerSource,
       assumed_default_source: assumedDefaultSource,
-      match: compose === containerEffective,
+      ...fileProbe,
+      ...(fileProbe?.file_probe_result === "absent" ? { first_application: "never_existed" } : {}),
+      match,
     };
   }
   return entries;
@@ -2018,6 +2056,7 @@ export function runUpdate(flags, config) {
             composeDeclaredEnv(bin, serverDir),
             containerEffectiveEnv(bin, container),
             oldPathsByEnv,
+            { bin, container, serverDir },
           );
           envConsistency = { skipped: false, entries };
           if (!Object.values(entries).every((e) => e.match)) {

@@ -53,6 +53,37 @@ test("isValidManifestShape accepts a well-formed manifest", () => {
   assert.equal(isValidManifestShape(validManifest()), true);
 });
 
+test("isValidManifestShape accepts a measured never-existed store without changing older entries", () => {
+  const manifest = validManifest();
+  const entry = manifest.env_consistency.entries.KAOIRO_CLIENT_TOKENS;
+  entry.file_probe_path = entry.container_effective;
+  entry.file_probe_result = "absent";
+  entry.first_application = "never_existed";
+  assert.equal(isValidManifestShape(manifest), true);
+  delete entry.file_probe_path;
+  delete entry.file_probe_result;
+  delete entry.first_application;
+  assert.equal(isValidManifestShape(manifest), true);
+});
+
+test("isValidManifestShape rejects an unbound first-application observation", () => {
+  const manifest = validManifest();
+  const entry = manifest.env_consistency.entries.KAOIRO_CLIENT_TOKENS;
+  entry.first_application = "never_existed";
+  assert.equal(isValidManifestShape(manifest), false);
+  entry.file_probe_path = "/different/path";
+  entry.file_probe_result = "absent";
+  assert.equal(isValidManifestShape(manifest), false);
+  entry.file_probe_path = entry.container_effective;
+  entry.file_probe_result = "present";
+  assert.equal(isValidManifestShape(manifest), false);
+  delete entry.first_application;
+  delete entry.file_probe_result;
+  assert.equal(isValidManifestShape(manifest), false);
+  entry.file_probe_result = "absent";
+  assert.equal(isValidManifestShape(manifest), false);
+});
+
 test("isValidManifestShape rejects a bad source_sha", () => {
   const bad = validManifest();
   bad.source_sha = "not-a-sha";

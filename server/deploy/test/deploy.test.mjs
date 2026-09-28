@@ -262,6 +262,12 @@ case "$1" in
     : > "$KAOIRO_TEST_STOP_FILE"
     exit 0
     ;;
+  exec)
+    if [ "$3" != test ] || [ "$4" != -e ]; then exit 125; fi
+    if [ -n "$KAOIRO_TEST_FILE_PROBE_STDOUT" ]; then printf '%s\\n' "$KAOIRO_TEST_FILE_PROBE_STDOUT"; fi
+    if [ -n "$KAOIRO_TEST_FILE_PROBE_STDERR" ]; then printf '%s\\n' "$KAOIRO_TEST_FILE_PROBE_STDERR" >&2; fi
+    exit "\${KAOIRO_TEST_FILE_PROBE_EXIT:-0}"
+    ;;
   inspect)
     case "$2" in
       # Preflight image check (N-5): the missing-alpine scenario is the
@@ -919,6 +925,9 @@ function withEnvConsistencyFixture(
     beamAbsent,
     oldBeamAbsent,
     beamProbeExit,
+    probeExit,
+    probeStdout,
+    probeStderr,
   } = {},
   fn,
 ) {
@@ -941,6 +950,9 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_BEAM_ABSENT: beamAbsent,
     KAOIRO_TEST_OLD_BEAM_ABSENT: oldBeamAbsent,
     KAOIRO_TEST_BEAM_PROBE_EXIT: beamProbeExit,
+    KAOIRO_TEST_FILE_PROBE_EXIT: probeExit,
+    KAOIRO_TEST_FILE_PROBE_STDOUT: probeStdout,
+    KAOIRO_TEST_FILE_PROBE_STDERR: probeStderr,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -1977,6 +1989,153 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
       'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying',
     ),
   );
+});
+
+const WORK_STORE_DEFAULT = "/tmp/kaoiro-dets/work_store.dets";
+const WORK_STORE_VOLUME = "/var/lib/kaoiro/work_store.dets";
+const WORK_STORE_MANIFEST = JSON.stringify([
+  { store: "Work", env: "KAOIRO_WORK_STORE_PATH", default_file: "work_store.dets", default_path: WORK_STORE_DEFAULT },
+]);
+const OLD_USERS_MANIFEST = JSON.stringify([
+  { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+]);
+
+function withNewWorkStore(overrides, fn) {
+  return withEnvConsistencyFixture({
+    evalOutput: WORK_STORE_MANIFEST,
+    oldEvalOutput: OLD_USERS_MANIFEST,
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
+    containerEnvJson: "[]",
+    probeExit: "1",
+    ...overrides,
+  }, fn);
+}
+
+test("runUpdate accepts and records a store absent from the old manifest and container", () => {
+  let result;
+  const calls = withCallLog("running-clean-stop", () => {
+    result = withNewWorkStore({}, () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()));
+  });
+  assert.ok(result, "the first application must finish");
+  assert.equal(result.phase, "done");
+  assert.ok(calls.includes(`exec kaoiro-c1 test -e ${WORK_STORE_DEFAULT}`));
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
+    .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
+  assert.equal(entry.match, true);
+  assert.equal(entry.first_application, "never_existed");
+  assert.equal(entry.file_probe_path, WORK_STORE_DEFAULT);
+  assert.equal(entry.file_probe_result, "absent");
+  assert.equal(entry.assumed_default_source, "target_image");
+});
+
+test("runUpdate keeps the 5-b failure when the old container has the new store's file", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({ probeExit: "0" }, () =>
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+    )),
+    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+      err.message.includes('"file_probe_result":"present"'),
+  );
+  assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+});
+
+test("runUpdate keeps the 5-b failure when the old image knows the store", () => {
+  const oldEvalOutput = JSON.stringify([
+    { store: "Work", env: "KAOIRO_WORK_STORE_PATH", default_file: "work_store.dets", default_path: "/tmp/old-work.dets" },
+  ]);
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({ oldEvalOutput }, () =>
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+    )),
+    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+      err.message.includes("/tmp/old-work.dets"),
+  );
+});
+
+test("runUpdate rejects a never-existed store omitted from compose", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({ composeEnvJson: "{}" }, () =>
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+    )),
+    (err) => err instanceof DeployError && err.message.includes("compose does not declare this persistence-path var"),
+  );
+});
+
+test("runUpdate rejects a never-existed store declared outside the state volume", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({
+      composeEnvJson: '{"KAOIRO_WORK_STORE_PATH":"/tmp/outside/work_store.dets"}',
+    }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
+    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
+      err.message.includes("/var/lib/kaoiro named volume"),
+  );
+});
+
+test("runUpdate rejects a never-existed store without a named state volume mount", () => {
+  const bindPlan = JSON.stringify({
+    name: "kaoiro",
+    services: { kaoiro: {
+      environment: { KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME },
+      volumes: [{ type: "bind", source: "/host/data", target: "/var/lib/kaoiro" }],
+    } },
+    volumes: {},
+  });
+  assert.throws(
+    () => withScenario("running", () => withComposePlans(bindPlan, bindPlan, () =>
+      withNewWorkStore({}, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())))),
+    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
+      err.message.includes("no named-volume mount"),
+  );
+});
+
+test("runUpdate refuses to infer absence when the container path probe fails", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({ probeExit: "125" }, () =>
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+    )),
+    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+  );
+});
+
+test("runUpdate refuses to infer absence from a diagnostic exit 1", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({
+      probeExit: "1", probeStderr: "container is not running",
+    }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
+    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+  );
+});
+
+test("runUpdate refuses unexpected output from the container path probe", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({
+      probeExit: "0", probeStdout: "unexpected",
+    }, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()))),
+    (err) => err instanceof DeployError && err.message.includes("printed unexpected output"),
+  );
+});
+
+test("runUpdate does not probe an old image that cannot answer the manifest query", () => {
+  assert.throws(
+    () => withScenario("running", () => withNewWorkStore({ oldBeamAbsent: "1" }, () =>
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+    )),
+    (err) => err instanceof DeployError && err.message.includes("first-application migration"),
+  );
+});
+
+test("runUpdate leaves an already matching new store outside the first-application probe", () => {
+  const result = withScenario("running-clean-stop", () => withNewWorkStore({
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_DEFAULT }),
+    probeExit: "125",
+  }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())));
+  assert.equal(result.phase, "done");
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
+    .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
+  assert.equal(entry.match, true);
+  assert.equal(Object.hasOwn(entry, "first_application"), false);
+  assert.equal(Object.hasOwn(entry, "file_probe_path"), false);
 });
 
 test("runUpdate refuses when compose does not declare a persistence-path var the image requires at all", () => {
