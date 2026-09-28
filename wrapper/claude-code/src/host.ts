@@ -1,4 +1,4 @@
-import { ToolOrigins } from "@kaoiro/agent-common";
+import { MAX_COALESCED_BYTES, MAX_COALESCED_MESSAGES, ToolOrigins } from "@kaoiro/agent-common";
 // Agent host — runs a query() session, derives state from its message stream,
 // and routes tool-permission requests through canUseTool so they surface as
 // waiting_permission. Streaming input (send) and interrupt are wired here.
@@ -399,6 +399,7 @@ export interface AgentHostOptions {
     envelopes: readonly Envelope[];
     ticketValues: readonly string[];
   }) => void;
+  phase2RootScheduling?: () => boolean;
   pendingReceiptRootTimeoutMs?: number;
   /** Synchronous final check before an input is yielded to the SDK. Undefined
    * keeps the queued input; null consumes it without starting a turn. */
@@ -708,6 +709,7 @@ export class AgentHost implements EngineAdapter {
   readonly #queue: QueuedTurn[] = [];
   readonly #pushedQueue: PushedReceipt[] = [];
   #pendingPushedReceipt: PushedReceipt | null = null;
+  readonly #receiptWaiters = new Set<() => void>();
   readonly #hostRunGeneration = randomUUID();
   #pendingRootDeadline: number | null = null;
   #pendingRootRemaining: number | null = null;
@@ -1086,10 +1088,32 @@ export class AgentHost implements EngineAdapter {
         owner.sessionId === this.#sessionId && !owner.tainted);
   }
 
+  async waitForPushedReceipt(ownerToken: string, timeoutMs: number): Promise<boolean> {
+    if (this.#pendingPushedReceipt === null) return this.#activeTurn?.turnToken === ownerToken && !this.#closed;
+    return await new Promise<boolean>(resolve => {
+      const finish = (ready: boolean): void => {
+        clearTimeout(timer);
+        this.#receiptWaiters.delete(check);
+        resolve(ready);
+      };
+      const check = (): void => {
+        if (this.#activeTurn?.turnToken !== ownerToken || this.#closed) finish(false);
+        else if (this.#pendingPushedReceipt === null) finish(true);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.#receiptWaiters.add(check);
+      check();
+    });
+  }
+
+  #wakeReceiptWaiters(): void {
+    for (const check of [...this.#receiptWaiters]) check();
+  }
+
   canFoldLiveInput(): boolean {
     const token = this.#activeTurn?.turnToken;
     return token !== undefined && this.canPushLiveInput() &&
-      (this.#foldsUsedByTurn.get(token) ?? 0) < 3;
+      (this.#foldsUsedByTurn.get(token) ?? 0) < (this.#config.folds_per_turn ?? 3);
   }
 
   removeQueuedInput(turnToken: string): boolean {
@@ -1115,8 +1139,12 @@ export class AgentHost implements EngineAdapter {
   }
 
   canReserveYieldOvertake(): boolean {
-    return this.#urgentRootStreak < 2 ||
+    return this.#urgentRootStreak < (this.#config.urgent_overtake_limit ?? 2) ||
       !this.#queue.some(turn => turn.inputSource === "peer" && !turn.urgent);
+  }
+
+  pushedInputFits(text: string, envelopeCount: number): boolean {
+    return envelopeCount <= MAX_COALESCED_MESSAGES && Buffer.byteLength(text, "utf8") <= MAX_COALESCED_BYTES;
   }
 
   pushLiveInput(options: {
@@ -1129,13 +1157,14 @@ export class AgentHost implements EngineAdapter {
   }): boolean {
     if (!this.canPushLiveInput()) return false;
     const active = this.#activeTurn!;
-    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= 3) return false;
+    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= (this.#config.folds_per_turn ?? 3)) return false;
     const ownerPromptId = [...this.#promptOwners].find(([, owner]) =>
       owner.token === active.turnToken && owner.sessionId === this.#sessionId && !owner.tainted)?.[0];
     if (ownerPromptId === undefined) return false;
     const foldId = randomBytes(16).toString("hex");
     const text = options.text(foldId);
     if (!text.includes(foldId)) throw new Error("pushed input lacks its receipt identifier");
+    if (!this.pushedInputFits(text, options.envelopes.length)) return false;
     const message: SDKUserMessage = {
       type: "user",
       session_id: "",
@@ -1528,6 +1557,7 @@ export class AgentHost implements EngineAdapter {
     if (this.#activeTurn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(this.#activeTurn.turnToken);
     this.#clearNotificationCandidates();
     this.#closed = true;
+    this.#wakeReceiptWaiters();
     this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
       clearInterval(this.#gcTimer);
@@ -1671,6 +1701,7 @@ export class AgentHost implements EngineAdapter {
   ): boolean {
     this.#admissionFailStopped = true;
     this.#closed = true;
+    this.#wakeReceiptWaiters();
     // The terminal owner remains unresolved, but its send authority must end now.
     this.toolOrigins.freeze();
     this.#clearNotificationCandidates();
@@ -2021,41 +2052,43 @@ export class AgentHost implements EngineAdapter {
     if (input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id || input.agent_id || this.#closed ||
         this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192) return;
     const pushed = this.#pendingPushedReceipt;
+    let rejectedPushedReceipt = false;
     if (pushed?.written && input.prompt.includes(pushed.foldId)) {
       const sameContext = pushed.sessionId === input.session_id &&
         pushed.generation === this.#hostRunGeneration && pushed.query === this.#query;
       const sameText = createHash("sha256").update(input.prompt, "utf8").digest("hex") === pushed.digest;
       if (!sameContext || !sameText) {
         this.#resolvePushedReceipt(pushed, "unknown", sameText ? "receipt_context_mismatch" : "digest_mismatch");
-        return;
+        rejectedPushedReceipt = true;
+      } else {
+        if (input.prompt_id === pushed.ownerPromptId &&
+            this.#activeTurn?.turnToken === pushed.eligibleOwner && pushed.kind === "fold") {
+          this.#resolvePushedReceipt(pushed, "fold", undefined, pushed.eligibleOwner);
+          return;
+        }
+        if (input.prompt_id !== pushed.ownerPromptId && this.#activeTurn === null) {
+          const turnToken = randomUUID();
+          const turn: QueuedTurn = {
+            kind: "wrapper_input",
+            turnToken,
+            conversationIds: pushed.conversationIds,
+            message: pushed.message,
+            inputSource: pushed.operatorInput ? "operator" : "peer",
+            inputEnvelopes: pushed.envelopes,
+          };
+          this.#activeTurn = turn;
+          if (!pushed.operatorInput) this.#urgentRootStreak += 1;
+          this.toolOrigins.begin(turnToken);
+          this.#everStartedTurn = true;
+          this.#resolvePushedReceipt(pushed, "root", undefined, turnToken);
+          this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turnToken, kind: "wrapper_input" });
+          this.#options.onTurnStart?.({ turnToken, conversationIds: pushed.conversationIds, kind: "wrapper_input" });
+          this.#options.onPromptAdmitted?.(turnToken);
+          return;
+        }
+        this.#resolvePushedReceipt(pushed, "unknown", "owner_still_live");
+        rejectedPushedReceipt = true;
       }
-      if (input.prompt_id === pushed.ownerPromptId &&
-          this.#activeTurn?.turnToken === pushed.eligibleOwner && pushed.kind === "fold") {
-        this.#resolvePushedReceipt(pushed, "fold", undefined, pushed.eligibleOwner);
-        return;
-      }
-      if (input.prompt_id !== pushed.ownerPromptId && this.#activeTurn === null) {
-        const turnToken = randomUUID();
-        const turn: QueuedTurn = {
-          kind: "wrapper_input",
-          turnToken,
-          conversationIds: pushed.conversationIds,
-          message: pushed.message,
-          inputSource: pushed.operatorInput ? "operator" : "peer",
-          inputEnvelopes: pushed.envelopes,
-        };
-        this.#activeTurn = turn;
-        this.#urgentRootStreak += 1;
-        this.toolOrigins.begin(turnToken);
-        this.#everStartedTurn = true;
-        this.#resolvePushedReceipt(pushed, "root", undefined, turnToken);
-        this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turnToken, kind: "wrapper_input" });
-        this.#options.onTurnStart?.({ turnToken, conversationIds: pushed.conversationIds, kind: "wrapper_input" });
-        this.#options.onPromptAdmitted?.(turnToken);
-        return;
-      }
-      this.#resolvePushedReceipt(pushed, "unknown", "owner_still_live");
-      return;
     }
     const active = this.#activeTurn;
     const owner = this.#promptOwners.get(input.prompt_id);
@@ -2095,6 +2128,7 @@ export class AgentHost implements EngineAdapter {
     if (active !== null && active.kind !== "sdk_notification" && input.prompt.includes("<task-notification>")) {
       this.#unresolvedForeignPromptIds.add(input.prompt_id);
     }
+    if (rejectedPushedReceipt) return;
     if (wrapperMatch && !notificationMatch && input.source !== "system") {
       this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: active.turnToken, kind: "wrapper_input" });
       this.#options.onPromptAdmitted?.(active.turnToken);
@@ -2122,6 +2156,7 @@ export class AgentHost implements EngineAdapter {
   ): void {
     if (this.#pendingPushedReceipt !== receipt) return;
     this.#pendingPushedReceipt = null;
+    this.#wakeReceiptWaiters();
     this.#clearPendingRootClock();
     this.#options.onPushedInputDecision?.({
       kind,
@@ -4247,11 +4282,12 @@ export class AgentHost implements EngineAdapter {
   }
 
   #pickNextRoot(): QueuedTurn {
+    if (!this.#options.phase2RootScheduling?.()) return this.#queue.shift()!;
     const operatorIndex = this.#queue.findIndex(turn => turn.inputSource === "operator");
     const ordinaryIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && !turn.urgent);
     const urgentIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && turn.urgent);
     const selectedIndex = operatorIndex >= 0 ? operatorIndex
-      : ordinaryIndex >= 0 && this.#urgentRootStreak >= 2 ? ordinaryIndex
+      : ordinaryIndex >= 0 && this.#urgentRootStreak >= (this.#config.urgent_overtake_limit ?? 2) ? ordinaryIndex
       : urgentIndex >= 0 ? urgentIndex
       : ordinaryIndex >= 0 ? ordinaryIndex : 0;
     return this.#queue.splice(selectedIndex, 1)[0]!;
@@ -4338,6 +4374,7 @@ export class AgentHost implements EngineAdapter {
       }
     }
     this.#activeTurn = null;
+    this.#wakeReceiptWaiters();
     if (turn !== null) this.#foldsUsedByTurn.delete(turn.turnToken);
     if (this.#pendingPushedReceipt !== null) {
       if (turn?.kind === "sdk_notification") this.#resumePendingRootClock();
