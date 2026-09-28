@@ -75,13 +75,15 @@ An explicit config value wins over its environment fallback.
 | Field | Default | Input | Effect |
 | --- | ---: | --- | --- |
 | `yield_claim_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS` | Maximum wait for a server `yield_claim` before downgrade to early input with `claim_timeout` |
-| `pending_receipt_root_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | Wait from the old result for a pushed fold or cut root hook; a live task-notification turn pauses this clock |
+| `pending_receipt_root_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | One bounded live-turn wait across successive fold receipts before a claimed cut; also the separate wait from the old result for a pushed fold or cut root hook, paused by a live task-notification turn |
 | `urgent_overtake_limit` | 2 root boundaries | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | Consecutive urgent peer roots allowed ahead of the oldest queued ordinary peer root; operator roots neither consume nor reset the count |
 | `folds_per_turn` | 3 batches | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_FOLDS_PER_TURN` | Fold reservations allowed in one live turn; a pushed receipt that becomes void or unknown keeps its slot |
 
-When `pending_receipt_root_timeout_ms` expires, the wrapper records
+If the live-turn pre-cut wait expires, the yield is downgraded with
+`receipt_wait_timeout`; the claim and interval remain consumed, and the host
+continues. If the post-result root-hook wait expires, the wrapper records
 `root_hook_timeout`, freezes admission and tool-origin authority, cancels
-queued input, and enters `error`. The operator must restart it using
+queued input, and enters `error`. The operator must then restart it using
 [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper).
 See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
 for stage and reply-authority behavior.
