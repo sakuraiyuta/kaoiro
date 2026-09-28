@@ -533,7 +533,9 @@ cancels no effect.
 Server refusal reasons: `unknown_yield`, `already_claimed`, `work_not_active`,
 `not_assignee`, `grant_changed`, `yield_interval`, `stale_channel`. Local
 downgrade reasons: `no_work_input`, `mixed_turn`, `continuation_turn`,
-`overtake_budget`, `claim_timeout`, `eligibility_changed`. The outcome is
+`overtake_budget`, `claim_timeout`, `eligibility_changed`, `oversized_input`.
+The final cut text's UTF-8 size check precedes the claim; an oversized input
+stays in the root queue and consumes no yield token. The outcome is
 reported as the delivery's `yield_disposition` ([Stages](#stages)).
 
 Old call bindings of T are not changed by a yield; it only ends T after its

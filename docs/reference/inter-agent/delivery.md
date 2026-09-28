@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -179,6 +179,88 @@ grant early or normal with a downgrade such as `yield_token_unavailable`,
 `delivery_authority.granted` and `delivery_authority.downgrade` give the final
 result; the receipt does not store that downgrade. See [work authority and
 operations](work.md#work-authority-and-operations).
+
+### Claude recipient handoff
+
+The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` only
+when `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` is set; it uses those modes only after
+the server echoes delivery modes v1. The flag is off by default. Codex and
+Antigravity do not advertise these modes. A granted early peer delivery can
+bypass the same peer's ordinary turn queue to enter its live Claude `Query`;
+ordinary peer batches remain serial. An operator early instruction without
+attachments can also fold, without a peer reply ticket. Synthetic notices
+never request early or yield. With the flag off or without the matching server
+echo, root input retains its arrival order and phase-2 overtaking is disabled.
+
+For a fold, the wrapper reserves a fold slot for the live turn,
+then pushes text containing a correlation `fold_id`, a peer-input preamble,
+and provisional `reply_authorization` tickets for the latest ordinary turn
+from each conversation and peer. A trusted `UserPromptSubmit` hook activates
+the one-use receipt only when its session, host generation, `Query`, entire
+text digest, and still-live eligible owner all match. That hook reports
+`submitted` with `handoff: "fold_hook"`; the push itself does not. A matching
+hook that instead starts a new root creates that root's input snapshot and
+reports `handoff: "prompt_hook"`. Other combinations become `unknown` and
+grant no send authority. The root owns its peer batch until it settles, so a
+later ordinary batch from that peer cannot replace its reply obligation.
+An unmatched hook containing a task-notification still passes through the
+existing foreign-notification guard; knowing a `fold_id` does not preserve
+send authority after a rejected notification.
+
+A fold leaves the live turn's default reply snapshot unchanged. Its ticket is
+bound to that turn, is single-use, and retires with the turn. Spending it
+reports optional `included` with `evidence: "ticket_used"` and credits the
+folded input to the completed-input ledger. A default-basis send after the
+fold can receive `stale_reply_basis`; recovery re-hands the folded envelope
+with `folded_earlier: true` and a fresh ticket at the tool-result boundary.
+The wrapper retains at most 256 folded recovery bodies until ticket use, a
+newer confirmed turn from the same peer and conversation, or a session-ledger
+reset retires them. Capacity eviction drops the oldest body and records
+`fold_recovery_capacity` with a count.
+
+A granted yield is usable only when the live turn has input linked to that
+work, no input linked to another work, and no operator instruction. The
+wrapper reserves an urgent root boundary, asks the server for `yield_claim`,
+and waits at most `yield_claim_timeout_ms` (default 2,000 ms). A refusal or
+timeout leaves the message as early input and records a downgraded
+`yield_disposition`; the recipient does not cut. After a grant, the wrapper
+rechecks the same live owner, work eligibility, and overtake budget before
+pushing `priority: "now"`. The running tool completes before the current turn
+ends; the yielded message starts the next root. A transfer after a granted
+claim does not revoke that cut. At most `urgent_overtake_limit` consecutive
+urgent peer root boundaries (default 2) may pass an older ordinary one, and
+at most `folds_per_turn` fold batches (default 3) may enter one turn. A fold
+whose pushed receipt becomes void or unknown still consumes its reserved
+slot; operator roots do not reset the peer overtake count.
+If another fold receipt is pending after a claim grant, the scheduler waits
+up to `pending_receipt_root_timeout_ms` for its decision, then rechecks the
+owner and all folded work input before cutting. A changed owner or
+eligibility downgrades the yield. One pushed text is limited to ten peer
+messages and 16,384 UTF-8 bytes, counting its full SDK user-message text,
+including the preamble, `fold_id`, and ticket lines. Oversized text stays in
+the root queue; the attempted fold does not consume a turn slot or activate
+its tickets. The final cut text is checked before `yield_claim`; when it is
+oversized, the wrapper leaves the urgent item at its arrival position in the
+root queue, makes no claim or early fallback, and reports
+`yield_disposition: {outcome: "downgraded", reason: "oversized_input"}`.
+`queued`, `submitted`, `included`, `settled`, and `unknown` are
+separate stage reports. `delivery_ack` advances the recipient's delivery
+ledger; it does not assert a Claude hook or completed model input.
+
+After the old result, a pushed fold or cut receipt holds the next queued root
+until its hook decides the receipt. A task-notification turn pauses the
+`pending_receipt_root_timeout_ms` clock (default 2,000 ms); the pause count is
+diagnostic. If no hook arrives by the deadline, the receipt becomes
+`unknown(root_hook_timeout)`, admission and tool-origin authority freeze,
+the wrapper enters `error`, and queued root input is cancelled without
+reaching the old `Query`. The pushed item F is `unknown` because its handoff
+is uncertain. The queued item R is `settled(failed_before_handoff)` because
+it was never handed to the engine; its cancellation kind is
+`receipt_timeout_fail_stop`, and its sender receives a best-effort failure
+notice. The timeout is counted in diagnostics.
+Recovery requires an operator restart of the wrapper; a session reset inside
+the failed host does not restore admission. See [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
+and [wrapper delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls).
 
 ## Related topics
 

@@ -1,12 +1,12 @@
 ---
-title: Wrapper configuration (runner-relayed fields)
-description: WrapperConfig fields the runner sources from runner.config.json, distinct from the fields mirrored verbatim from the spawn payload.
+title: Wrapper configuration
+description: Runner-relayed WrapperConfig fields and Claude process-local delivery controls.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 related: [protocol]
 ---
 
-# Wrapper configuration (runner-relayed fields)
+# Wrapper configuration
 
 ### WrapperConfig fields relayed by the runner (issues #181 and #292)
 
@@ -14,10 +14,10 @@ related: [protocol]
 handoff to the wrapper process it launches — a process-boundary data
 structure, not a `runner:<host_id>` channel message like the ones in
 [Runner control and launch](../protocol/runner-control.md).
-Most of its 30 fields mirror the `spawn` payload verbatim
-(`resolveWrapperConfig`, runner/src/supervisor.ts); this section documents
-only the fields that instead come from `runner.config.json`'s per-engine
-blocks, since nothing else in this spec names `WrapperConfig`.
+Most fields mirror the `spawn` payload verbatim (`resolveWrapperConfig`,
+runner/src/supervisor.ts). This section documents the fields that instead
+come from `runner.config.json`'s per-engine blocks. Claude's delivery controls
+below are process-local options, not runner-relayed fields.
 
 - `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
   resolved to `"exec"` when omitted and relayed only for Codex launches. The
@@ -54,6 +54,37 @@ blocks, since nothing else in this spec names `WrapperConfig`.
   `exceeds_launch_ceiling`. See [Runner configuration](runner.md)'s
   "Antigravity configuration" section for the declaration syntax and
   defaulting rules.
+
+### Claude phase-2 delivery controls
+
+`KAOIRO_CLAUDE_PHASE2_DELIVERY=1` in the Claude wrapper process environment
+enables advertising `early: "fold"` and `yield: "tool_boundary"` at join. The
+default is off; any other value leaves both modes unadvertised. The server
+must also echo delivery modes v1 before the wrapper uses either mode. Keep
+the flag off until the production-settings native R3 measurement has
+established the result-to-root-hook delay for the deployed Claude settings.
+The existing normal stage reports remain available when phase 2 is off.
+
+The following optional `WrapperConfig` fields control the Claude input
+scheduler. They are read when that wrapper starts; changing them requires a
+new wrapper process. A directly launched wrapper may set them in its config
+JSON. Runner-generated wrapper configs do not relay these fields, so a
+runner-managed deployment sets them through the inherited environment.
+An explicit config value wins over its environment fallback.
+
+| Field | Default | Input | Effect |
+| --- | ---: | --- | --- |
+| `yield_claim_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS` | Maximum wait for a server `yield_claim` before downgrade to early input with `claim_timeout` |
+| `pending_receipt_root_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | Wait from the old result for a pushed fold or cut root hook; a live task-notification turn pauses this clock |
+| `urgent_overtake_limit` | 2 root boundaries | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | Consecutive urgent peer roots allowed ahead of the oldest queued ordinary peer root; operator roots neither consume nor reset the count |
+| `folds_per_turn` | 3 batches | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_FOLDS_PER_TURN` | Fold reservations allowed in one live turn; a pushed receipt that becomes void or unknown keeps its slot |
+
+When `pending_receipt_root_timeout_ms` expires, the wrapper records
+`root_hook_timeout`, freezes admission and tool-origin authority, cancels
+queued input, and enters `error`. The operator must restart it using
+[Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper).
+See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
+for stage and reply-authority behavior.
 
 ## See Also
 
