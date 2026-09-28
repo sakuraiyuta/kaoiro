@@ -808,6 +808,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     const eligibility = host.yieldEligibility(authority.work_id);
     if (eligibility !== null) { downgradeYield(batch, eligibility); return; }
     if (!host.canReserveYieldOvertake()) { downgradeYield(batch, "overtake_budget"); return; }
+    const cutContext = host.captureLiveInputContext(ownerToken);
+    if (cutContext === null) { downgradeYield(batch, "eligibility_changed"); return; }
     const identity = deliveryIdentity();
     if (identity === null || typeof payload.conversation_id !== "string" ||
         typeof payload.turn_number !== "number") {
@@ -867,20 +869,37 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         attemptYieldCandidates();
         return;
       }
-      if (!await host.waitForPushedReceipt(ownerToken, config.pending_receipt_root_timeout_ms ?? 2_000)) {
-        yieldClaimInFlight = false;
-        downgradeYield(batch, "eligibility_changed");
-        attemptYieldCandidates();
-        return;
-      }
-      if (host.activeInterAgentTurnToken() !== ownerToken ||
-          host.yieldEligibility(authority.work_id!) !== null ||
-          !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken) ||
-          !host.canPushLiveInput()) {
-        yieldClaimInFlight = false;
-        downgradeYield(batch, "eligibility_changed");
-        attemptYieldCandidates();
-        return;
+      const receiptDeadline = performance.now() + (config.pending_receipt_root_timeout_ms ?? 2_000);
+      while (true) {
+        if (!yieldCandidates.has(batchToken)) {
+          yieldClaimInFlight = false;
+          attemptYieldCandidates();
+          return;
+        }
+        if (!host.matchesLiveInputContext(ownerToken, cutContext) ||
+            host.yieldEligibility(authority.work_id!) !== null ||
+            !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken)) {
+          yieldClaimInFlight = false;
+          downgradeYield(batch, "eligibility_changed");
+          attemptYieldCandidates();
+          return;
+        }
+        if (!host.hasPendingPushedReceipt()) {
+          if (host.canPushLiveInput()) break;
+          yieldClaimInFlight = false;
+          downgradeYield(batch, "eligibility_changed");
+          attemptYieldCandidates();
+          return;
+        }
+        const remaining = receiptDeadline - performance.now();
+        if (remaining <= 0 || !await host.waitForPushedReceipt(ownerToken, remaining)) {
+          const waitReason = host.matchesLiveInputContext(ownerToken, cutContext) &&
+            host.hasPendingPushedReceipt() ? "receipt_wait_timeout" : "eligibility_changed";
+          yieldClaimInFlight = false;
+          downgradeYield(batch, waitReason);
+          attemptYieldCandidates();
+          return;
+        }
       }
       const prepared = interAgentTurns.prepareInput(batchToken, false);
       if (prepared?.batch === null || prepared === undefined) {

@@ -332,7 +332,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     { name: "claim refusal", eligibility: null, claim: "refuse", reason: "yield_interval", cuts: 0 },
     { name: "claim timeout", eligibility: null, claim: "timeout", reason: "claim_timeout", cuts: 0 },
     { name: "eligibility changes during claim", eligibility: null, claim: "changed", reason: "eligibility_changed", cuts: 0 },
+    { name: "input context changes during claim", eligibility: null, claim: "context changed", reason: "eligibility_changed", cuts: 0 },
     { name: "rendered input changes during claim", eligibility: null, claim: "render changed", reason: "eligibility_changed", cuts: 0 },
+    { name: "receipt deadline", eligibility: null, claim: "chain timeout", reason: "receipt_wait_timeout", cuts: 0 },
+    { name: "receipt chain expires", eligibility: null, claim: "chain expires", reason: "receipt_wait_timeout", cuts: 0 },
     { name: "transfer after claim", eligibility: null, claim: "transfer", reason: undefined, cuts: 1 },
     { name: "granted claim waits for prior receipt", eligibility: null, claim: "pending", reason: undefined, cuts: 1 },
   ] as const)("decides yield from the final live input and claim result ($name)", async scenario => {
@@ -346,7 +349,12 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let resolveClaim!: (value: unknown) => void;
     const delayedClaim = new Promise<unknown>(resolve => { resolveClaim = resolve; });
     let releaseReceipt!: (value: boolean) => void;
-    const receiptResolved = new Promise<boolean>(resolve => { releaseReceipt = resolve; });
+    let receiptPending = scenario.claim === "pending" || scenario.claim === "chain timeout" || scenario.claim === "chain expires";
+    let sameContext = true;
+    const receiptWaitTimeouts: number[] = [];
+    const receiptResolved = new Promise<boolean>(resolve => {
+      releaseReceipt = value => { receiptPending = false; resolve(value); };
+    });
     let receiptWaitCalls = 0;
     let linkOptions!: Record<string, any>;
     let finishHost!: () => void;
@@ -355,7 +363,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const ready = new Promise<void>(resolve => { started = resolve; });
     const running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ ...config, yield_claim_timeout_ms: scenario.claim === "timeout" ? 5 : 2_000 }),
+      loadConfig: () => ({ ...config,
+        yield_claim_timeout_ms: scenario.claim === "timeout" ? 5 : 2_000,
+        pending_receipt_root_timeout_ms: scenario.claim === "chain expires" ? 50 : 2_000,
+      }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
@@ -382,8 +393,23 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         },
         activeInterAgentTurnToken: () => "T",
         canPushLiveInput: () => true, canFoldLiveInput: () => false,
-        waitForPushedReceipt: async () => {
+        captureLiveInputContext: () => ({}),
+        matchesLiveInputContext: () => sameContext,
+        hasPendingPushedReceipt: () => receiptPending,
+        waitForPushedReceipt: async (_ownerToken: string, timeoutMs: number) => {
           receiptWaitCalls += 1;
+          receiptWaitTimeouts.push(timeoutMs);
+          if (scenario.claim === "chain timeout") {
+            if (receiptWaitCalls === 1) {
+              await new Promise(resolve => setTimeout(resolve, 25));
+              return true;
+            }
+            return false;
+          }
+          if (scenario.claim === "chain expires") {
+            await new Promise(resolve => setTimeout(resolve, 12));
+            return receiptWaitCalls < 8;
+          }
           return scenario.claim === "pending" ? receiptResolved : true;
         },
         yieldEligibility: () => eligibility,
@@ -402,9 +428,12 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         requested: "yield", granted: "yield", work_id: "W", authority_epoch: 1, yield_token: "token",
       };
       await linkOptions.onInterAgentMessage(yieldMessage);
-      if (scenario.claim === "changed" || scenario.claim === "render changed" || scenario.claim === "transfer" || scenario.claim === "pending") {
+      if (scenario.claim === "changed" || scenario.claim === "context changed" || scenario.claim === "render changed" ||
+          scenario.claim === "chain timeout" || scenario.claim === "chain expires" ||
+          scenario.claim === "transfer" || scenario.claim === "pending") {
         await vi.waitFor(() => expect(claimCalls).toBe(1));
         if (scenario.claim === "changed") eligibility = "mixed_turn";
+        else if (scenario.claim === "context changed") sameContext = false;
         else if (scenario.claim === "render changed") yieldMessage.payload.body = "updated while the claim was pending";
         else if (scenario.claim === "transfer") {
           linkOptions.onWorkNotice({ version: "0", work: { work_id: "W" }, op: "transfer" });
@@ -423,6 +452,11 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect(last.reason).toBe(scenario.reason);
       expect(pushes.filter(kind => kind === "cut")).toHaveLength(scenario.cuts);
       expect(claimCalls).toBe(scenario.claim === "none" ? 0 : 1);
+      if (scenario.claim === "chain timeout") {
+        expect(receiptWaitTimeouts).toHaveLength(2);
+        expect(receiptWaitTimeouts[1]!).toBeLessThan(receiptWaitTimeouts[0]! - 15);
+      }
+      if (scenario.claim === "chain expires") expect(receiptWaitCalls).toBeLessThan(8);
     } finally { releaseReceipt(false); finishHost(); await running; vi.unstubAllEnvs(); }
   });
 
@@ -466,6 +500,9 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         },
         activeInterAgentTurnToken: () => "T",
         canPushLiveInput: () => true, canFoldLiveInput: () => false,
+        captureLiveInputContext: () => ({}),
+        matchesLiveInputContext: () => true,
+        hasPendingPushedReceipt: () => false,
         waitForPushedReceipt: async () => true,
         yieldEligibility: () => null,
         canReserveYieldOvertake: () => true,

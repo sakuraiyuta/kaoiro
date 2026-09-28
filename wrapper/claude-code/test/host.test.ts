@@ -8446,6 +8446,48 @@ it.each([false, true])("binds permission-before-assistant observation to the sam
 });
 
 describe("AgentHost phase-2 pushed input receipts", () => {
+  it("binds a claimed cut to the original live Query and owner", async () => {
+    const makeLive = () => {
+      const ready = deferred();
+      const release = deferred();
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+          await prompt[Symbol.asyncIterator]().next();
+          await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+            hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "root", prompt: "T",
+          } as never, undefined, { signal: new AbortController().signal });
+          yield msg({ type: "system", subtype: "init", session_id: "s" });
+          ready.resolve();
+          await release.promise;
+          yield result("success", { result: "done" });
+        })())),
+      });
+      return { host, ready, release };
+    };
+    const first = makeLive();
+    const second = makeLive();
+    await first.host.send("T", undefined, [], "same-owner");
+    await second.host.send("T", undefined, [], "same-owner");
+    const firstRun = first.host.run();
+    const secondRun = second.host.run();
+    try {
+      await Promise.all([first.ready.promise, second.ready.promise]);
+      expect(first.host.captureLiveInputContext("different-owner")).toBeNull();
+      const context = first.host.captureLiveInputContext("same-owner");
+      expect(context).not.toBeNull();
+      expect(first.host.matchesLiveInputContext("same-owner", context!)).toBe(true);
+      expect(second.host.matchesLiveInputContext("same-owner", context!)).toBe(false);
+      first.release.resolve();
+      await firstRun;
+      expect(first.host.matchesLiveInputContext("same-owner", context!)).toBe(false);
+    } finally {
+      first.release.resolve(); second.release.resolve();
+      first.host.close(); second.host.close();
+      await Promise.all([firstRun, secondRun]);
+    }
+  });
+
   it("classifies a root with two work links as mixed before any yield claim", async () => {
     const ready = deferred();
     const release = deferred();
