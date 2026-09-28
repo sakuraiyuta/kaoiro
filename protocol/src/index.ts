@@ -211,6 +211,10 @@ export interface WrapperConfig {
   yield_claim_timeout_ms?: number;
   /** Claude phase-2 wait for the root hook after the old result. */
   pending_receipt_root_timeout_ms?: number;
+  /** Maximum consecutive urgent peer roots while ordinary peer input waits. */
+  urgent_overtake_limit?: number;
+  /** Maximum pushed fold batches reserved for one live Claude turn. */
+  folds_per_turn?: number;
   /** Optional soft work-budget denominator as a percentage of the SDK's
    * authoritative context window. The Claude adapter defaults this to 60
    * when absent, then derives the actual token denominator from each

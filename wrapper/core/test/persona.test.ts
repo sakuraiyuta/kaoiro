@@ -31,6 +31,8 @@ const ROUND_TRIP_CASES: {
   permission_timeout_ms: { value: 5000 },
   yield_claim_timeout_ms: { value: 2000 },
   pending_receipt_root_timeout_ms: { value: 2500 },
+  urgent_overtake_limit: { value: 2 },
+  folds_per_turn: { value: 3 },
   context_work_budget_percent: { value: 60 },
   permission_mode: { value: "acceptEdits" },
   allowed_tools: { value: ["Read", "Edit"] },
@@ -74,6 +76,8 @@ describe("parseConfig", () => {
     delete process.env.KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS;
     delete process.env.KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS;
     delete process.env.KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS;
+    delete process.env.KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT;
+    delete process.env.KAOIRO_CLAUDE_FOLDS_PER_TURN;
   });
 
   it.each([
@@ -86,6 +90,24 @@ describe("parseConfig", () => {
     for (const bad of [0, -1, 1.5, 60001, "invalid"]) {
       expect(() => parseConfig({ ...valid, [key]: bad })).toThrow(ConfigError);
     }
+    delete process.env[envName];
+  });
+
+  it.each([
+    ["urgent_overtake_limit", "KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT"],
+    ["folds_per_turn", "KAOIRO_CLAUDE_FOLDS_PER_TURN"],
+  ] as const)("%s uses config ahead of env and rejects values outside 1..64", (key, envName) => {
+    process.env[envName] = "4";
+    expect(parseConfig(valid)[key]).toBe(4);
+    expect(parseConfig({ ...valid, [key]: 2 })[key]).toBe(2);
+    expect(parseConfig({ ...valid, [key]: 1 })[key]).toBe(1);
+    expect(parseConfig({ ...valid, [key]: 64 })[key]).toBe(64);
+    for (const bad of [0, -1, 1.5, 65, "invalid"]) {
+      expect(() => parseConfig({ ...valid, [key]: bad })).toThrow(ConfigError);
+    }
+    process.env[envName] = "65";
+    expect(() => parseConfig(valid)).toThrow(ConfigError);
+    expect(parseConfig({ ...valid, [key]: 3 })[key]).toBe(3);
     delete process.env[envName];
   });
 

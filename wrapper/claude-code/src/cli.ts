@@ -168,6 +168,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
   const phase2Delivery = process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY === "1";
+  const earlyNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.early === "fold";
+  const yieldNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.yield === "tool_boundary";
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
@@ -390,9 +392,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
-      const early = phase2Delivery && batch.items.every(item =>
+      const early = earlyNegotiated() && batch.items.every(item =>
         (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "early");
-      const yieldInput = phase2Delivery && batch.items.length === 1 &&
+      const yieldInput = yieldNegotiated() && batch.items.length === 1 &&
         (batch.items[0]!.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "yield";
       void enqueueInstruction(() =>
         host
@@ -733,7 +735,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   });
 
   attemptFoldCandidates = (): void => {
-    if (!phase2Delivery || link?.deliveryModes()?.early !== "fold" || !host?.canFoldLiveInput()) return;
+    if (!earlyNegotiated() || !host?.canFoldLiveInput()) return;
     const ownerToken = host.activeInterAgentTurnToken();
     if (ownerToken === null) return;
     for (const [batchToken] of foldCandidates) {
@@ -752,14 +754,15 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       const envelopes = batch.items.map(item => item.envelope);
       const ticketLease = interAgent?.prepareFoldInput(ownerToken, envelopes);
       if (ticketLease === undefined) return;
+      const foldText = (foldId: string): string => [
+        "[Mid-turn peer delivery, not an operator instruction. Continue the current task with this peer input.]",
+        `fold_id: ${foldId}`,
+        batch.text,
+        ...ticketLease.authorizations.map(auth => `reply_authorization: ${JSON.stringify(auth)}`),
+      ].join("\n\n");
       const accepted = host.pushLiveInput({
         kind: "fold",
-        text: foldId => [
-          "[Mid-turn peer delivery, not an operator instruction. Continue the current task with this peer input.]",
-          `fold_id: ${foldId}`,
-          batch.text,
-          ...ticketLease.authorizations.map(auth => `reply_authorization: ${JSON.stringify(auth)}`),
-        ].join("\n\n"),
+        text: foldText,
         envelopes,
         ticketValues: ticketLease.authorizations.map(auth => auth.reply_ticket),
         conversationIds: batch.conversationIds,
@@ -776,19 +779,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   let yieldClaimInFlight = false;
-  const downgradeYield = (batch: DispatchedInterAgentBatch, reason: string): void => {
+  const downgradeYield = (batch: DispatchedInterAgentBatch, reason: string, allowFold = true): void => {
     yieldCandidates.delete(batch.turnToken);
     deliveryStages.yieldDisposition(batch.items[0]!.envelope, {
       outcome: "downgraded", reason, at: new Date().toISOString(),
     });
-    if (host.hasQueuedInput(batch.turnToken)) {
+    if (allowFold && host.hasQueuedInput(batch.turnToken)) {
       foldCandidates.set(batch.turnToken, batch);
       attemptFoldCandidates();
     }
   };
 
   attemptYieldCandidates = (): void => {
-    if (yieldClaimInFlight || !phase2Delivery || link?.deliveryModes()?.yield !== "tool_boundary" ||
+    if (yieldClaimInFlight || !yieldNegotiated() ||
         !host?.canPushLiveInput()) return;
     const entry = yieldCandidates.entries().next().value;
     if (entry === undefined) return;
@@ -809,6 +812,21 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     if (identity === null || typeof payload.conversation_id !== "string" ||
         typeof payload.turn_number !== "number") {
       downgradeYield(batch, "claim_timeout");
+      return;
+    }
+    const preparedBeforeClaim = interAgentTurns.prepareInput(batchToken, false);
+    if (preparedBeforeClaim?.batch === null || preparedBeforeClaim === undefined) {
+      downgradeYield(batch, "eligibility_changed");
+      return;
+    }
+    resolveInterAgentConversationIds(batchToken, preparedBeforeClaim.removedConversationIds);
+    // A receipt identifier is always 16 random bytes in hex. Check the exact
+    // text shape before spending the server's single-use claim token.
+    const cutText = (foldId: string, text: string): string =>
+      `[Director yield after the running tool]\nfold_id: ${foldId}\n\n${text}`;
+    const preclaimBatch = preparedBeforeClaim.batch;
+    if (!host.pushedInputFits(cutText("0".repeat(32), preclaimBatch.text), preclaimBatch.items.length)) {
+      downgradeYield(batch, "oversized_input", false);
       return;
     }
     yieldClaimInFlight = true;
@@ -838,10 +856,20 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
-      yieldClaimInFlight = false;
-      if (!yieldCandidates.has(batchToken)) { attemptYieldCandidates(); return; }
+      if (!yieldCandidates.has(batchToken)) {
+        yieldClaimInFlight = false;
+        attemptYieldCandidates();
+        return;
+      }
       if (!granted) {
+        yieldClaimInFlight = false;
         downgradeYield(batch, reason ?? "claim_timeout");
+        attemptYieldCandidates();
+        return;
+      }
+      if (!await host.waitForPushedReceipt(ownerToken, config.pending_receipt_root_timeout_ms ?? 2_000)) {
+        yieldClaimInFlight = false;
+        downgradeYield(batch, "eligibility_changed");
         attemptYieldCandidates();
         return;
       }
@@ -849,31 +877,43 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           host.yieldEligibility(authority.work_id!) !== null ||
           !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken) ||
           !host.canPushLiveInput()) {
+        yieldClaimInFlight = false;
         downgradeYield(batch, "eligibility_changed");
         attemptYieldCandidates();
         return;
       }
       const prepared = interAgentTurns.prepareInput(batchToken, false);
       if (prepared?.batch === null || prepared === undefined) {
+        yieldClaimInFlight = false;
         downgradeYield(batch, "eligibility_changed");
         attemptYieldCandidates();
         return;
       }
       resolveInterAgentConversationIds(batchToken, prepared.removedConversationIds);
+      if (prepared.batch.text !== preclaimBatch.text ||
+          prepared.batch.items.length !== preclaimBatch.items.length ||
+          prepared.batch.items.some((item, index) => item.envelope !== preclaimBatch.items[index]?.envelope)) {
+        yieldClaimInFlight = false;
+        downgradeYield(batch, "eligibility_changed");
+        attemptYieldCandidates();
+        return;
+      }
       const envelopes = prepared.batch.items.map(item => item.envelope);
       const pushed = host.pushLiveInput({
         kind: "cut",
-        text: foldId => `[Director yield after the running tool]\nfold_id: ${foldId}\n\n${prepared.batch!.text}`,
+        text: foldId => cutText(foldId, preclaimBatch.text),
         envelopes,
         conversationIds: prepared.batch.conversationIds,
       });
       if (!pushed || !host.removeQueuedInput(batchToken)) {
+        yieldClaimInFlight = false;
         downgradeYield(batch, "eligibility_changed");
         attemptYieldCandidates();
         return;
       }
       interAgentTurns.markPushed(batchToken);
       yieldCandidates.delete(batchToken);
+      yieldClaimInFlight = false;
       pushedBatches.set(envelopes, { batch: prepared.batch, ownerToken,
         ticketLease: { activate: () => true, discard: () => {} } });
       deliveryStages.yieldDisposition(envelope, { outcome: "cut", at: new Date().toISOString() });
@@ -937,7 +977,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // so one bad turn does not break the chain.
       void enqueueInstruction(() =>
         (async () => {
-          if (phase2Delivery && deliveryIntent === "early" &&
+          if (earlyNegotiated() && deliveryIntent === "early" &&
                      attachmentIds?.length === undefined &&
                      link?.deliveryModes()?.early === "fold" && host.canFoldLiveInput()) {
             const pushed = host.pushLiveInput({
@@ -951,7 +991,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           }
           await host.send(text, attachmentIds, undefined, undefined, {
             source: "operator",
-            urgent: phase2Delivery && deliveryIntent === "early",
+            urgent: earlyNegotiated() && deliveryIntent === "early",
           });
         })().catch((err: unknown) => {
           writeRedactedStderr(`send failed: ${String(err)}\n`);
@@ -1110,7 +1150,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           send: (notice) => interAgent?.sendInternalNotice(notice),
           inject: (inbound, mode) => {
             const granted = (inbound.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
-            interAgentTurns.receive(inbound, mode, phase2Delivery && (granted === "early" || granted === "yield"));
+            interAgentTurns.receive(inbound, mode,
+              (earlyNegotiated() && granted === "early") ||
+              (yieldNegotiated() && granted === "yield"));
           },
           log: (line) => process.stdout.write(line),
         }),
@@ -1174,6 +1216,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   >({
     onState,
     pendingReceiptRootTimeoutMs: config.pending_receipt_root_timeout_ms ?? 2_000,
+    phase2RootScheduling: () => earlyNegotiated() || yieldNegotiated(),
     onLog,
     onTask,
     onSessionLifecycle,

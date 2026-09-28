@@ -294,6 +294,19 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config[key] = parsed;
   }
 
+  for (const [key, envName, max] of [
+    ["urgent_overtake_limit", "KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT", 64],
+    ["folds_per_turn", "KAOIRO_CLAUDE_FOLDS_PER_TURN", 64],
+  ] as const) {
+    const value = raw[key] ?? process.env[envName];
+    if (value === undefined || value === "") continue;
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > max) {
+      throw new ConfigError(`${key} must be an integer from 1 through ${max}`);
+    }
+    config[key] = parsed;
+  }
+
   // issue #254: a soft work budget is a positive share of the SDK-reported
   // context window. It must not exceed that window: an over-100 setting
   // would name an unreachable denominator as a normal stopping point.

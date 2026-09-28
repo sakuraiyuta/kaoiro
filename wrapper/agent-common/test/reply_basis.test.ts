@@ -122,6 +122,25 @@ describe("input-bound reply tickets", () => {
     basis.beginFromCompleted("N2");
     expect(basis.capture({ token: "N2" }, "c", "peer")).toMatchObject({ basis: 2 });
   });
+  it.each([
+    ["receipt root", true],
+    ["ordinary root", false],
+  ] as const)("builds the next %s from credited context and its own input", (_name, receiptRoot) => {
+    for (const ticketUsed of [false, true]) {
+      const basis = new ReplyBasis();
+      basis.begin("T", [inbound(1)]);
+      basis.observeFolded([inbound(2)]);
+      expect(basis.capture({ token: "T" }, "c", "peer")).toMatchObject({ basis: 1 });
+      if (ticketUsed) basis.creditFolded([inbound(2)], "T");
+      basis.retire("T");
+      basis.beginFromCompleted("N");
+      expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: ticketUsed ? 2 : 1 });
+      basis.retire("N");
+      basis.begin("F", [inbound(3, "own")], undefined, receiptRoot);
+      expect(basis.capture({ token: "F" }, "c", "peer")).toMatchObject({ basis: ticketUsed ? 2 : 1 });
+      expect(basis.capture({ token: "F" }, "own", "peer")).toMatchObject({ basis: 3 });
+    }
+  });
   it("freezes coalesced defaults and authorizes only after handoff, once, in the bound CID", () => {
     const basis = new ReplyBasis(); const origin = { token: "T" };
     basis.begin("T", [inbound(1), inbound(3)]);

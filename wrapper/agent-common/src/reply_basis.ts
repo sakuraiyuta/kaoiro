@@ -67,9 +67,11 @@ export class ReplyBasis {
     }
   }
   observeFolded(envelopes: readonly Envelope[]): void {
-    this.#merge(this.#delivered, envelopes);
+    // A fold is usable through its ticket, but is not default input for a later root.
+    void envelopes;
   }
   creditFolded(envelopes: readonly Envelope[], token: string): void {
+    this.#merge(this.#delivered, envelopes);
     this.#merge(this.#completed, envelopes);
     const confirmed = this.#confirmedByToken.get(token);
     if (confirmed && this.#snapshots.has(token)) this.#merge(confirmed, envelopes);
