@@ -11,6 +11,48 @@ function inbound(n: number, cid = "c"): Envelope {
 }
 
 describe("input-bound reply tickets", () => {
+  it("activates a fold ticket only after its hook and credits a used ticket without changing the live default", async () => {
+    const prepared = vi.fn();
+    const used = vi.fn();
+    let tool!: InterAgentTool;
+    tool = new InterAgentTool({
+      config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+      onTicketPrepared: prepared,
+      onTicketUsed: (ticket, token) => {
+        used(ticket, token);
+        tool.creditFoldedInput(token, [inbound(2)]);
+      },
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+    });
+    tool.prepareReplyInput("T", [inbound(1)]);
+    tool.beginReplyInput("T");
+    const folded = inbound(2);
+    const fold = tool.prepareFoldInput("T", [folded])!;
+    const auth = fold.authorizations[0]!;
+    expect(tool.replyBasis.capture({ token: "T" }, "c", "peer", auth.in_reply_to, auth.reply_ticket)).toBe("invalid_reply_ticket");
+    expect(tool.replyBasis.capture({ token: "T" }, "c", "peer")).toMatchObject({ basis: 1 });
+    expect(fold.activate()).toBe(true);
+    expect(prepared).toHaveBeenCalledWith(auth.reply_ticket, "T", [folded]);
+    expect(tool.replyBasis.capture({ token: "T" }, "c", "peer")).toMatchObject({ basis: 1 });
+    const result = await tool.invoke({
+      to: "peer", conversation_id: "c", kind: "response", body: "reply",
+      in_reply_to: auth.in_reply_to, reply_ticket: auth.reply_ticket,
+    }, { origin: { token: "T" } });
+    expect(result.isError).toBeUndefined();
+    expect(used).toHaveBeenCalledWith(auth.reply_ticket, "T");
+    tool.endReplyInput("T");
+    tool.beginNotificationReplyInput("N");
+    expect(tool.replyBasis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 2 });
+  });
+  it("retires activated fold tickets with their owning turn", () => {
+    const basis = new ReplyBasis();
+    basis.begin("T", [inbound(1)]);
+    const ticket = basis.prepare({ token: "T" }, "c", "peer", 1)!;
+    expect(ticket.activate()).toBe(true);
+    expect(basis.ticketCountForTurn("T")).toBe(1);
+    basis.retire("T");
+    expect(basis.ticketCountForTurn("T")).toBe(0);
+  });
   it("freezes captured and independent call origins without rearming on session reset", async () => {
     const origins = new ToolOrigins();
     origins.begin("T"); origins.bind("captured", "T");
@@ -66,6 +108,19 @@ describe("input-bound reply tickets", () => {
     basis.retire("T");
     basis.beginFromCompleted("N");
     expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 0 });
+  });
+  it("keeps folded input out of completed snapshots until its ticket is used", () => {
+    const basis = new ReplyBasis();
+    basis.begin("T", [inbound(1)]);
+    basis.observeFolded([inbound(2)]);
+    expect(basis.capture({ token: "T" }, "c", "peer")).toMatchObject({ basis: 1 });
+    basis.retire("T");
+    basis.beginFromCompleted("N");
+    expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 1 });
+    basis.creditFolded([inbound(2)], "N");
+    basis.retire("N");
+    basis.beginFromCompleted("N2");
+    expect(basis.capture({ token: "N2" }, "c", "peer")).toMatchObject({ basis: 2 });
   });
   it("freezes coalesced defaults and authorizes only after handoff, once, in the bound CID", () => {
     const basis = new ReplyBasis(); const origin = { token: "T" };
@@ -256,6 +311,19 @@ it("a notification settles only recovery CIDs handed to its own token", () => {
   expect((notices[0]!.payload as { conversation_id: string }).conversation_id).toBe("notification-cid");
   expect(tool.pendingConversationIdsForTurn("W")).toEqual(["wrapper-cid"]);
   tool.endReplyInput("N");
+});
+
+it("a live CID obligation cannot move to a later root before its owner resolves", () => {
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1" });
+  const first = inbound(1);
+  const later = inbound(2);
+  expect(tool.notePendingInjection(first, "T")).toBe(true);
+  expect(tool.notePendingInjection(later, "F")).toBe(false);
+  expect(tool.pendingConversationIdsForTurn("T")).toEqual(["c"]);
+  expect(tool.pendingConversationIdsForTurn("F")).toEqual([]);
+  expect(tool.resolveTurnEnd("T", ["c"], classifyInterAgentError({ reason: "api_error" }))).toHaveLength(1);
+  expect(tool.notePendingInjection(later, "F")).toBe(true);
+  expect(tool.pendingConversationIdsForTurn("F")).toEqual(["c"]);
 });
 
 it("a queued call cannot borrow the next turn after waiting for the CID lock", async () => {

@@ -29,6 +29,8 @@ const ROUND_TRIP_CASES: {
 } = {
   server_token: { value: "tok-1" },
   permission_timeout_ms: { value: 5000 },
+  yield_claim_timeout_ms: { value: 2000 },
+  pending_receipt_root_timeout_ms: { value: 2500 },
   context_work_budget_percent: { value: 60 },
   permission_mode: { value: "acceptEdits" },
   allowed_tools: { value: ["Read", "Edit"] },
@@ -70,6 +72,21 @@ describe("parseConfig", () => {
   // expect parseConfig to leave permission_timeout_ms unset.
   beforeEach(() => {
     delete process.env.KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS;
+    delete process.env.KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS;
+    delete process.env.KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS;
+  });
+
+  it.each([
+    ["yield_claim_timeout_ms", "KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS"],
+    ["pending_receipt_root_timeout_ms", "KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS"],
+  ] as const)("%s accepts a positive configured duration with an environment fallback", (key, envName) => {
+    process.env[envName] = "3000";
+    expect(parseConfig(valid)[key]).toBe(3000);
+    expect(parseConfig({ ...valid, [key]: 2000 })[key]).toBe(2000);
+    for (const bad of [0, -1, 1.5, 60001, "invalid"]) {
+      expect(() => parseConfig({ ...valid, [key]: bad })).toThrow(ConfigError);
+    }
+    delete process.env[envName];
   });
 
   it("正しい設定をそのまま受け入れる", () => {

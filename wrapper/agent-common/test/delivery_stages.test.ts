@@ -10,6 +10,38 @@ const envelope = (seq: number): Envelope => ({
 } as unknown as Envelope);
 
 describe("DeliveryStageReporter", () => {
+  it("reports fold inclusion, yield disposition, and a voided receipt under the captured identity", () => {
+    const reports: Record<string, unknown>[] = [];
+    const folded = envelope(20);
+    folded.payload.delivery_authority = { requested: "early", granted: "early" };
+    const yielded = envelope(21);
+    yielded.payload.delivery_authority = { requested: "yield", granted: "yield" };
+    const voided = envelope(22);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "i", generation: "g" }),
+      turns: { deliveryEnvelopesForTurn: () => [folded] },
+      now: () => "T",
+    });
+    reporter.queued(folded);
+    reporter.submittedEnvelopes("turn", [folded], "fold_hook");
+    reporter.includedEnvelopes([folded]);
+    reporter.settled("turn");
+    reporter.queued(yielded);
+    reporter.yieldDisposition(yielded, { outcome: "downgraded", reason: "mixed_turn", at: "T" });
+    reporter.queued(voided);
+    reporter.unknownEnvelopes([voided], "digest_mismatch");
+    expect(reports.map(report => [report.delivery_seq, report.stage])).toEqual([
+      [20, "queued"], [20, "submitted"], [20, "included"], [20, "settled"],
+      [21, "queued"], [21, "queued"], [22, "queued"], [22, "unknown"],
+    ]);
+    expect(reports[1]).toMatchObject({ handoff: "fold_hook" });
+    expect(reports[2]).toMatchObject({ evidence: "ticket_used" });
+    expect(reports[5]).toMatchObject({ yield_disposition: { outcome: "downgraded", reason: "mixed_turn" } });
+    expect(reports[7]).toMatchObject({ reason: "digest_mismatch" });
+    expect(reports.every(report => report.incarnation === "i" && report.generation === "g")).toBe(true);
+  });
+
   it("reports queued, submitted and terminal stages with the server identity", () => {
     const reports: Record<string, unknown>[] = [];
     const root = envelope(7);

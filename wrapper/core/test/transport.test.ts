@@ -516,6 +516,16 @@ describe("ServerLink — ファイルアップロード wire (ADR-0025)", () => 
     expect(seen).toEqual([{ text: "見て", ids: ["u1", "u2"] }]);
   });
 
+  it("passes the server-owned instruction delivery_intent to its callback", () => {
+    const intents: string[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+      onInstruction: (_text, _ids, intent) => { if (intent) intents.push(intent); },
+    });
+    emit("instruction", { text: "early", delivery_intent: "early" });
+    emit("instruction", { text: "normal", delivery_intent: "normal" });
+    expect(intents).toEqual(["early", "normal"]);
+  });
+
   it("instruction の attachment_ids が空 / 非配列なら undefined", () => {
     const seen: Array<{ text: string; ids?: string[] }> = [];
     new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
@@ -1684,10 +1694,14 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     ext: {},
   } as unknown as Envelope);
 
-  const fire: Record<Exclude<VersionedWrapperEvent, "yield_claim">, (link: ServerLink) => void> = {
+  const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
     delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
     disconnect_intent: (link) => void link.reportDisconnectIntent("stop"),
     delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
+    yield_claim: (link) => void link.requestYieldClaim({
+      incarnation: "inc-1", generation: "gen-1", yield_token: "yield-1",
+      conversation_id: "cid-1", turn_number: 1, work_id: "wrk_1", authority_epoch: 1,
+    }),
     delivery_stage: (link) => link.reportDeliveryStage({ incarnation: "inc-1", delivery_seq: 1, stage: "queued", at: "2026-09-28T00:00:00Z" }),
     work_transfer_ack: (link) => void link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" }),
     work_op_result_request: (link) => void link.requestWorkOpResult({ operation_id: "op_1_abcdefghijklmnopqrstuv" }),
@@ -1708,16 +1722,16 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     wrapper_build_info: () => {},
   };
 
-  it("T1-1: policy includes reserved yield_claim and fire table covers every active event", () => {
+  it("T1-1: fire table covers every active versioned event", () => {
     expect(WRAPPER_CONTROL_EVENT_POLICY.yield_claim).toBe("versioned");
-    expect(Object.keys(fire).sort()).toEqual(versioned().filter(event => event !== "yield_claim"));
+    expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: all 15 active versioned events are actually sent", () => {
+  it("T1-2: all 16 active versioned events are actually sent", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       interAgentReplyBasis: "v1",
-      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
@@ -1730,13 +1744,27 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       interAgentReplyBasis: "v1",
-      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
     mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1" });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
+  });
+
+  it("refuses yield_claim when tool-boundary yield was not negotiated", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1" });
+    const claim = link.requestYieldClaim({
+      incarnation: "inc-1", generation: "gen-1", yield_token: "yield-1",
+      conversation_id: "cid-1", turn_number: 1, work_id: "wrk_1", authority_epoch: 1,
+    });
+    expect(mock.pushes.filter(push => push.event === "yield_claim")).toEqual([]);
+    await expect(claim).rejects.toThrow("yield_claim_unavailable");
   });
 
   it("矛盾した release buildInfo は wrapper_build_info で unknown/dev に落とす", () => {

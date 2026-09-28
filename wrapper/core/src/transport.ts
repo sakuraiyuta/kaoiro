@@ -48,6 +48,8 @@ import type {
   WorkNotice,
   DeliveryStatusRequest,
   DeliveryStatusResult,
+  YieldClaimRequest,
+  YieldClaimResult,
 } from "@kaoiro/protocol";
 import {
   isWrapperBuildIdentityValid,
@@ -349,7 +351,7 @@ export interface ServerLinkOptions {
   /** An operator's instruction relayed by the server. `attachmentIds`, when
    *  present, lists prior uploads the wrapper should attach to this turn
    *  (file-upload spec). */
-  onInstruction?: (text: string, attachmentIds?: string[]) => void;
+  onInstruction?: (text: string, attachmentIds?: string[], deliveryIntent?: "normal" | "early") => void;
   /** An operator's permission decision relayed by the server. */
   onPermissionDecision?: (decision: PermissionDecisionMessage) => void;
   /** An operator's AskUserQuestion answer relayed by the server (ADR-0027). */
@@ -1415,6 +1417,7 @@ export class ServerLink {
         options.onInstruction?.(
           payload.text,
           ids && ids.length > 0 ? ids : undefined,
+          payload.delivery_intent === "early" ? "early" : "normal",
         );
       }
     });
@@ -2033,6 +2036,13 @@ export class ServerLink {
   requestDeliveryStatus(request: Omit<DeliveryStatusRequest, "version">): Promise<DeliveryStatusResult> {
     if (this.#deliveryModes === null) return Promise.reject(new Error("work_control_unavailable"));
     return this.#requestVersioned("delivery_status_request", request) as Promise<DeliveryStatusResult>;
+  }
+
+  requestYieldClaim(request: Omit<YieldClaimRequest, "version">): Promise<YieldClaimResult> {
+    if (this.#deliveryModes?.yield !== "tool_boundary") {
+      return Promise.reject(new Error("yield_claim_unavailable"));
+    }
+    return this.#requestVersioned("yield_claim", request) as Promise<YieldClaimResult>;
   }
 
   #requestWorkEvent(event: VersionedWrapperEvent, payload: Record<string, unknown>): Promise<Record<string, unknown>> {

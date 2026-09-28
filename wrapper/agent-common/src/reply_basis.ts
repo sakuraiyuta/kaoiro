@@ -66,6 +66,14 @@ export class ReplyBasis {
       if (confirmed) this.#merge(confirmed, envelopes);
     }
   }
+  observeFolded(envelopes: readonly Envelope[]): void {
+    this.#merge(this.#delivered, envelopes);
+  }
+  creditFolded(envelopes: readonly Envelope[], token: string): void {
+    this.#merge(this.#completed, envelopes);
+    const confirmed = this.#confirmedByToken.get(token);
+    if (confirmed && this.#snapshots.has(token)) this.#merge(confirmed, envelopes);
+  }
   begin(token: string, envelopes: readonly Envelope[], signal?: AbortSignal, deferInputConfirmation = false): void {
     if (this.#snapshots.has(token)) throw Error("SDK turn token reused");
     this.#confirmedByToken.set(token, new Map());
@@ -99,6 +107,9 @@ export class ReplyBasis {
     this.#snapshots.get(token)?.controller.abort();
     this.#snapshots.delete(token);
     for (const [value, ticket] of this.#tickets) if (ticket.token === token) this.#tickets.delete(value);
+  }
+  ticketCountForTurn(token: string): number {
+    return [...this.#tickets.values()].filter(ticket => ticket.token === token).length;
   }
   forget(cid: string): void {
     for (const k of this.#delivered.keys()) if ((JSON.parse(k) as string[])[0] === cid) this.#delivered.delete(k);

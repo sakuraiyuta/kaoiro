@@ -1,4 +1,4 @@
-import type { DeliveryIntent, DeliveryStageReport, Envelope, InterAgentMessagePayload } from "@kaoiro/protocol";
+import type { DeliveryIntent, DeliveryStageReport, Envelope, InterAgentMessagePayload, YieldDisposition } from "@kaoiro/protocol";
 
 export interface DeliveryStageIdentity {
   incarnation: string;
@@ -102,10 +102,37 @@ export class DeliveryStageReporter {
     this.#submit(turnToken, handoff);
   }
 
-  submittedEnvelopes(turnToken: string, envelopes: readonly Envelope[], handoff: "tool_result"): void {
+  submittedEnvelopes(turnToken: string, envelopes: readonly Envelope[], handoff: "tool_result" | "fold_hook" | "prompt_hook"): void {
     this.#observeIdentity();
     for (const envelope of envelopes) this.#recordTurnEnvelope(turnToken, envelope);
     this.#submit(turnToken, handoff);
+  }
+
+  includedEnvelopes(envelopes: readonly Envelope[]): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.capture(envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery !== undefined) this.#report(delivery, "included", { evidence: "ticket_used" });
+    }
+  }
+
+  unknownEnvelopes(envelopes: readonly Envelope[], reason: string): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.capture(envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery === undefined) continue;
+      this.#report(delivery, "unknown", { reason });
+      this.#removeDelivery(delivery);
+    }
+  }
+
+  yieldDisposition(envelope: Envelope, disposition: YieldDisposition): void {
+    this.#observeIdentity();
+    this.capture(envelope);
+    const delivery = this.#deliveryByEnvelope.get(envelope);
+    if (delivery !== undefined) this.#report(delivery, "queued", { yield_disposition: disposition });
   }
 
   settled(turnToken: string): void {
@@ -133,7 +160,7 @@ export class DeliveryStageReporter {
 
   #submit(
     turnToken: string,
-    handoff: "prompt_hook" | "exec_input_written" | "tool_result",
+    handoff: "prompt_hook" | "fold_hook" | "exec_input_written" | "tool_result",
   ): void {
     for (const delivery of this.#deliveriesByTurn.get(turnToken)?.values() ?? []) {
       if (delivery.submitted) continue;
@@ -219,7 +246,7 @@ export class DeliveryStageReporter {
   #report(
     delivery: TrackedDelivery,
     stage: DeliveryStageReport["stage"],
-    fields: Pick<DeliveryStageReport, "mode" | "handoff" | "reason"> = {},
+    fields: Pick<DeliveryStageReport, "mode" | "handoff" | "reason" | "evidence" | "yield_disposition"> = {},
   ): void {
     const current = this.#observeIdentity();
     if (
