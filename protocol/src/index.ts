@@ -5,6 +5,9 @@
 // docs/specs/protocol.md and the related ADRs. SDK-coupled and adapter-internal
 // types stay in each wrapper, not here.
 
+export * from "./work.js";
+import type { DeliveryAuthority, DeliveryIntent, DeliveryModes, WorkControl, WorkControlResult, WorkStamp } from "./work.js";
+
 /** State set v0 (protocol.md), plus `sending` which a wrapper raises
  *  locally when it accepts an instruction (#32). `disconnected` is derived
  *  server-side and is therefore not handled by a wrapper. */
@@ -1193,7 +1196,28 @@ export interface InterAgentMessagePayload {
   };
   error?: InterAgentErrorPayload;
   new_conversation: boolean;
+  /** Sender request; absent has the same meaning as normal. */
+  delivery_intent?: DeliveryIntent;
+  /** Required with a yield request and copied from observed work state. */
+  work_id?: string;
+  expected_authority_epoch?: number;
+  /** Executed at admission and never relayed as an executable field. */
+  work_control?: WorkControl;
+  /** Server-owned fields; a sender-supplied value is rejected. */
+  delivery_authority?: DeliveryAuthority;
+  work?: WorkStamp;
+  work_control_result?: WorkControlResult;
 }
+
+/** A wrapper can request an operation but cannot author server stamps. */
+export type OutboundInterAgentMessagePayload = Omit<
+  InterAgentMessagePayload,
+  "delivery_authority" | "work" | "work_control_result"
+> & {
+  delivery_authority?: never;
+  work?: never;
+  work_control_result?: never;
+};
 
 /** Context usage as it reaches a peer through `directory_request`. The server
  * only projects this when the reporting wrapper advertised
@@ -1245,6 +1269,7 @@ export interface InterAgentDeliveryStatus {
  * Omitted situational fields mean unknown, never zero or fine. */
 export interface DirectoryEntry {
   inter_agent_reply_basis?: "v1" | "legacy";
+  delivery_modes?: DeliveryModes;
   agent_id: string;
   persona: { id?: string; name?: string; sprite_set?: string };
   /** Mutable, instance-scoped name; persona metadata remains the canonical

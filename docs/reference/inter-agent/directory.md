@@ -1,7 +1,7 @@
 ---
 title: Peer directory
 status: provisional
-last_updated: 2026-09-26
+last_updated: 2026-09-28
 ---
 
 # Peer directory
@@ -45,6 +45,7 @@ report peers that have been inactive for a long time.
 | `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
 | `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | latest reported usage-limit snapshot, including an account read before the first turn | no usable source, all windows dropped in projection, or disconnected |
 | `inter_agent_reply_basis` | `"v1"` or `"legacy"` | negotiated server mode; see [reply basis](reply-basis.md#negotiation-and-comparison) | no current negotiation report; absence means unknown, not v1 |
+| `delivery_modes` | `{early, yield, stage_reports}` | mechanisms negotiated by the current connection; `early` is `fold`, `steer`, `hook`, or `none`, and `yield` is `tool_boundary` or `none` | not negotiated; absence means unknown and callers request only `normal` |
 | `build` | `WrapperBuildIdentity` | validated wrapper artifact identity reported on the live connection | no report is available or the entry is `directory_only` |
 | `disconnect` | `{origin, reason}` | server-observed terminal disconnect attribution using the closed pairs from protocol.md | connected, planned restart, legacy server, or malformed pair |
 | `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
@@ -269,6 +270,17 @@ and self-identification without per-call approval.
 |---|---|---|
 | `mcp__kaoiro__list_agents` | Lists other agents on the connection, returning destination identifiers (id/persona name/state), execution characteristics (engine/model/effort), liveness (context/session_started_at/turns/last_activity_at/conversation/rate_limits), and validated build identity when reported. | Calls server `directory_request`, narrows both `agents` and `users`, and returns them as separate arrays. Users are not `send_to_agent` destinations. An absent `build` means unreported; present `unknown` values mean reported but indeterminate. |
 | `mcp__kaoiro__whoami` | Returns the server's view of this agent: agent_id/persona/state/engine, effective model/effort and sources, permission/network_access, legacy permission_mode/fast_mode, session_id/cwd, `context`, `rate_limits`, `inter_agent_delivery` when available, and local build identity. | Reads identity/effective settings/context/rate_limits and build identity from local snapshots and host cache. The nested `build` object is always present; if the artifact is unavailable, bounded `unknown` values are returned. If delivery status is wired, performs a server `delivery_status_request` round trip and includes `inter_agent_delivery` only on success. |
+
+ADR-0063 phase 1 extends `send_to_agent` with optional
+`delivery_intent`, `work_id`, `expected_authority_epoch`, and
+`work_control`. The `work_control` operation carries an `operation_id`; the
+wrapper generates and returns one when the caller omits it. The additional
+tools are `work_transfer_ack({work_id, transfer_id})`,
+`work_op_result({operation_id})`, `work_status({work_id?})`,
+`work_check({work_id, action, expected_revision, subject_hash?})`, and
+`delivery_status({conversation_id, turn_number})`. These are contract names
+for the negotiated work and delivery implementation, not additions to the
+read-only auto-allow set above.
 
 Build `whoami` local fields from the shared host `EffectiveStatusSnapshot` and
 cache rather than a separate state envelope. Return model/effort/source and

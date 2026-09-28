@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -63,6 +63,20 @@ Only the `type` value and `payload` schema are new.
 | `error.message` | MUST when `error` exists | Human-readable reason with secrets masked and truncated |
 | `owner.kind` | MUST | `"user"` or `"agent"` |
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |
+| `delivery_intent` | optional | `normal` (default), `early`, or `yield`; the requested delivery mode. Non-normal values require negotiated delivery modes. |
+| `work_id` | MUST with `delivery_intent: "yield"` | Work targeted by the yield; work operations also carry their own `work_id`. |
+| `expected_authority_epoch` | MUST with `delivery_intent: "yield"` | Epoch observed by the sender; the wrapper never fills it from newer server state. |
+| `work_control` | optional | One typed operation with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. |
+| `delivery_authority` | server-owned | Requested and granted intent, downgrade, and a `yield_token` only for a granted yield. A sender-supplied value is rejected. |
+| `work` | server-owned | `{work_id, revision, authority_epoch, state}` at admission for a linked conversation. A sender-supplied value is rejected. |
+| `work_control_result` | server-owned | `{op, operation_id, outcome}` replaces an applied `work_control` in the relayed payload. A sender-supplied value is rejected. |
+
+The work and delivery fields are additive v0 wire shapes from
+[ADR-0063 phase 1](../../plans/issue-429-delivery-authority-protocol.md).
+Their effect requires server and wrapper negotiation; a type declaration alone
+does not activate the control. A successful work operation can precede a
+failed message admission, so its receipt and message-delivery knowledge must
+be reported separately.
 
 For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer
 turn actually handed to the sender; the server rejects a stale basis before

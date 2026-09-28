@@ -1,7 +1,7 @@
 ---
 title: Protocol versioning policy
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 description: The flat outer-version stamping policy and the staged completion inventory for every wrapper/server/client/runner route.
 ---
 
@@ -42,6 +42,7 @@ original claim is warned before normalization.
 | Status | Message |
 |---|---|
 | Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `set_quagmire_settings` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| ADR-0063 phase 1, v0 contract | `work_control` (operator-only) |
 | Permanent carve-out | `attach_chunk` (below) |
 | Producer not implemented | `restart` (no dashboard push call; implementation will use `pushVersioned` and stamp automatically) |
 
@@ -56,6 +57,7 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 |---|---|
 | Server normalizes (`relay/5`) | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `set_permission_mode` |
 | Stamped during assembly | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / join `set_permission_mode` / `set_permission` / `permission_sync` / `persona_sync` / `display_name_sync` |
+| ADR-0063 phase 1, v0 contract | `work_notice` |
 | From envelope | `envelope` (IA relay; frame key carries `version`, including synthesized `SynthEnvelope`) |
 | Permanent carve-out | `attach_chunk` (below) |
 
@@ -81,6 +83,12 @@ the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
 best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapper's own
 generated artifact; it is not inferred from runner identity.
 
+ADR-0063 phase 1 adds `delivery_stage`, `yield_claim`,
+`work_status_request`, `work_check_request`, `work_transfer_ack`, and
+`work_op_result_request` as flat `version: "0"` wrapper controls. Their
+policy registrations land with the shared wrapper implementation. The
+existing `delivery_status_request` accepts an optional message key.
+
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
 `envelope` is stamped by its frame key. The remaining 21 events
@@ -91,6 +99,10 @@ generated artifact; it is not inferred from runner identity.
 `session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
 `wrapper_build_info`) receive flat
 `version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
+
+ADR-0063 phase 1 adds operator-only `work_changed` and
+`work_scope_overlap`, each stamped `version: "0"` when produced. The
+dashboard receive policy lands with its client implementation.
 Dashboard's `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` funnel warn and accept best-effort.
 
 #### Permanent carve-out — `attach_chunk`

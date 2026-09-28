@@ -1,7 +1,7 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 
@@ -24,8 +24,14 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 |---|---|---|
 | wrapper → server | `envelope` | Full envelope. Only `inter_agent_message` receives an `{ ingress_stamp: [us, seq] }` acceptance ack; other types receive an empty reply. Causal ordering follows [directory event contracts](../../reference/inter-agent/directory.md#event-contracts); sidecar recording uses [ADR-0051](../../adr/0051-history-restart-resilience.md). |
 | wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
+| wrapper → server | `delivery_stage` | ADR-0063 negotiated v1: `{version: "0", incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`. `stage` is `queued`, `submitted`, `included`, `settled`, or `unknown`; the server records `accepted` and `lost`, and returns `expired` on query. `yield_disposition` is set once. The current owner and ledger identity are checked before recording. |
+| wrapper → server | `yield_claim` | `{version: "0", incarnation, generation, yield_token, conversation_id, turn_number, work_id, authority_epoch}`. The serialized server decision returns `{granted: true, repeated?}` or `{granted: false, reason}`; a stale owner receives `stale_channel`. |
+| wrapper → server | `work_transfer_ack` | `{version: "0", work_id, transfer_id}`; only the old assignee of that pending obligation may acknowledge it. |
+| wrapper → server | `work_op_result_request` | `{version: "0", operation_id}`; reads the caller's receipt, `unknown_operation`, or `operation_id_expired`. |
+| wrapper → server | `work_status_request` | `{version: "0", work_id?}`; returns a permitted work view, or the caller's non-terminal works when the ID is absent. |
+| wrapper → server | `work_check_request` | `{version: "0", work_id, action: "start" \| "land", expected_revision, subject_hash?}`; cooperative check and audit, without a resource lock. |
 | wrapper → server | `wrapper_build_info` | `{ build_revision, build_dirty, build_version, build_channel }` reports the wrapper artifact immediately after each successful channel join. The server derives `agent_id` from the topic, validates the complete identity pair, keeps only the latest connected value, and broadcasts it to operator-capable clients. `build_version` is `"unknown"` or `YYYY.M.PATCH`: a four-digit year, month `1` through `12`, and one to six decimal patch digits. The flat protocol `version` is added by the wrapper control-event funnel. |
-| wrapper → server | `delivery_status_request` | `{}`; reads the sender's `{ delivery?: {issued_seq, acked_seq, pending_since?} }`. Absence is legacy/disarmed unknown. |
+| wrapper → server | `delivery_status_request` | `{conversation_id?, turn_number?}`; without a message pair, reads the sender's ledger watermark. With a pair, reads the sender-authorized stage set or `expired`. Absence of a watermark is legacy/disarmed unknown. |
 | wrapper → server | `delivery_resync` | Negotiated by the additional join capability `delivery_resync: "skip-v1"`, echoed in the join reply. `{generation, request_id, cutoff, missing_ranges}` retires a bounded page of missing sequences under the current channel owner and generation. The reply echoes `request_id` and `skipped_ranges` with post-skip `delivery`; errors are `invalid_delivery_resync` or `stale_delivery_owner`. Version remains `"0"`. See [gap recovery](../../reference/inter-agent/delivery.md#negotiated-gap-recovery). |
 | wrapper → server | `history_reset` | `{ replay_id }` starts replay. Use the server ID when the join verdict requires replay, otherwise a legacy wrapper ID. Clear display projection, retain IA for `replay_ia`, and acknowledge an absent entry as no-op ([ADR-0051](../../adr/0051-history-restart-resilience.md), [ADR-0014](../../adr/0014-session-resume-and-restore.md)). |
 | wrapper → server | `history_replay_complete` | `{ replay_id }` follows the final JSONL/sidecar row. The server broadcasts it and CAS-transitions matching in-flight hydration ([ADR-0051](../../adr/0051-history-restart-resilience.md)). |
@@ -97,6 +103,34 @@ A `session_reset_request` error reply has exactly four `reason` values: `agent_b
 `session_reset_pending`, `unsupported_session_reset`, and `runner_unavailable`.
 `timeout` never appears in this payload because the wrapper transport owns that result when a
 request receives no reply.
+
+### ADR-0063 capability and event contract
+
+The wrapper join request may declare
+`inter_agent_delivery_modes: {version: "v1", early, yield, stage_reports}`
+and independently `work_control: "v1"`. Delivery modes are echoed as
+`inter_agent_delivery_modes: "v1"` only with `inter_agent_delivery_ack: "dispatch-v1"`,
+`delivery_resync: "skip-v1"`, `inter_agent_reply_basis: "v1"`, and stage
+reports enabled when an early or yield mechanism is declared. Work control
+has no delivery-mode prerequisite and is echoed as `work_control: "v1"`.
+An absent echo means the corresponding control is unavailable.
+
+| Direction | Event | Contents |
+|---|---|---|
+| client → server | `instruction` | Gains optional `delivery_intent`: `normal`, `early`, or `yield`. Omitted requests `early` when the recipient declared a mechanism, otherwise `normal`. |
+| client → server | `work_control` | Operator-only `{version: "0", work_control}`. The server applies the same reducer used for inter-agent operations and sends notices to affected agents. |
+| server → wrapper | `work_notice` | `{version: "0", work, op, reason, transfer_id?}`. Best-effort ordinary input, without a conversation, turn, or reply basis. |
+| server → client | `work_changed` | Operator-only `{version: "0", work}` after an applied operation. |
+| server → client | `work_scope_overlap` | Operator-only `{version: "0", work_id, other_work_id, scopes}` when active grants overlap by declared scope. |
+
+The matching shared MCP tools are `send_to_agent` with optional
+`delivery_intent`, `work_id`, `expected_authority_epoch`, and
+`work_control`; `work_transfer_ack({work_id, transfer_id})`;
+`work_op_result({operation_id})`; `work_status({work_id?})`;
+`work_check({work_id, action, expected_revision, subject_hash?})`; and
+`delivery_status({conversation_id, turn_number})`. These names specify
+the v0 wire surface; their availability follows the negotiated wrapper
+implementation.
 
 ### Client transport
 
