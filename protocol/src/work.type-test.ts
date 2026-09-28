@@ -2,6 +2,10 @@ import type {
   OutboundInterAgentMessagePayload,
   WorkControl,
   WorkErrorCode,
+  DeliveryStageReport,
+  DeliveryStageRecord,
+  YieldClaimRequest,
+  YieldToken,
   WorkRecord,
   WorkStatusResult,
   WorkTransferAckRequest,
@@ -58,9 +62,22 @@ const restrictedWithFullRecord: RestrictedTransferResult = {
   work: {} as WorkRecord,
 };
 
+const uuidGeneration = "879d0396-2b61-48d8-adb9-d00e4e4d50be";
+const stageGeneration: DeliveryStageReport["generation"] = uuidGeneration;
+const recordGeneration: DeliveryStageRecord["generation"] = uuidGeneration;
+const claimGeneration: YieldClaimRequest["generation"] = uuidGeneration;
+const tokenGeneration: NonNullable<YieldToken["claimed_by"]>["generation"] = uuidGeneration;
+// @ts-expect-error A numeric generation cannot identify a wrapper delivery generation.
+const numericGeneration: DeliveryStageReport["generation"] = 1;
+
 void stamped;
 void submit;
 void staleSubmit;
 void unknownError;
 void acknowledgeFromStatus;
 void restrictedWithFullRecord;
+void stageGeneration;
+void recordGeneration;
+void claimGeneration;
+void tokenGeneration;
+void numericGeneration;

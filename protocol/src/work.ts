@@ -233,7 +233,7 @@ export type WorkErrorCode =
 export interface DeliveryStageReport {
   version: "0";
   incarnation: string;
-  generation: number;
+  generation: string;
   delivery_seq: number;
   stage: "queued" | "submitted" | "included" | "settled" | "unknown";
   mode?: "normal" | "early" | "yield";
@@ -260,7 +260,7 @@ export interface YieldToken {
   admitted_at: string;
   expires_at: string;
   state: "unclaimed" | "claimed";
-  claimed_by?: { incarnation: string; generation: number };
+  claimed_by?: { incarnation: string; generation: string };
   claimed_at?: string;
 }
 
@@ -269,7 +269,7 @@ export interface DeliveryStageRecord {
   turn_number: number;
   recipient: string;
   incarnation: string;
-  generation: number;
+  generation: string;
   delivery_seq: number;
   stages: Partial<Record<"accepted" | "queued" | "submitted" | "included" | "settled" | "unknown" | "lost", string>>;
   mode?: DeliveryIntent;
@@ -285,7 +285,7 @@ export type YieldDispositionRead = YieldDisposition | { outcome: "unknown" | "ex
 export interface YieldClaimRequest {
   version: "0";
   incarnation: string;
-  generation: number;
+  generation: string;
   yield_token: string;
   conversation_id: string;
   turn_number: number;
