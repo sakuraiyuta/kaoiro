@@ -127,6 +127,128 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert {0, 0} = DeliveryStates.pending_early("server", assignee)
   end
 
+  @tag :r1_fix
+  test "M2 later operator update gives a former assignee only its pending obligation" do
+    suffix = System.unique_integer([:positive])
+    old = "r1-notice-old-#{suffix}"
+    replacement = "r1-notice-new-#{suffix}"
+
+    {:ok, _reply, wrapper} =
+      KaoiroServerWeb.WrapperSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> old, %{
+        "persona_id" => "default",
+        "work_control" => "v1"
+      })
+
+    assert_reply push(wrapper, "envelope", %{
+                   "version" => "0",
+                   "agent_id" => old,
+                   "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
+                   "ts" => "2026-09-28T00:00:00Z",
+                   "type" => "state_change",
+                   "state" => "idle",
+                   "payload" => %{},
+                   "ext" => %{}
+                 }),
+                 :ok
+
+    operator = join_as(:operator)
+
+    assign = %{
+      "op" => "assign",
+      "operation_id" => work_operation_id(),
+      "title" => "Restricted work notice",
+      "assignee" => old,
+      "director" => %{"kind" => "agent", "id" => "r1-notice-director-#{suffix}"}
+    }
+
+    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => assign}),
+                 :ok,
+                 %{"work_control_result" => %{work: %{work_id: work_id}}}
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "wrapper:" <> ^old,
+      event: "work_notice",
+      payload: %{"work" => %{work_id: ^work_id, title: "Restricted work notice"}}
+    }
+
+    transfer = %{
+      "op" => "transfer",
+      "operation_id" => work_operation_id(),
+      "work_id" => work_id,
+      "expected_revision" => 1,
+      "assignee" => replacement
+    }
+
+    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => transfer}),
+                 :ok
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "wrapper:" <> ^old,
+      event: "work_notice",
+      payload: transfer_notice
+    }
+
+    assert transfer_notice["work"].access == "transfer_pending"
+    assert transfer_notice["work"].work_id == work_id
+
+    assert [%{transfer_id: transfer_id, old_assignee: %{"id" => ^old}}] =
+             transfer_notice["work"].pending_transfers
+
+    assert transfer_notice["transfer_id"] == transfer_id
+    refute Map.has_key?(transfer_notice["work"], :title)
+    refute Map.has_key?(transfer_notice["work"], :receipts)
+
+    revise = %{
+      "op" => "revise",
+      "operation_id" => work_operation_id(),
+      "work_id" => work_id,
+      "expected_revision" => 2
+    }
+
+    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => revise}),
+                 :ok
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "wrapper:" <> ^old,
+      event: "work_notice",
+      payload: later_notice
+    }
+
+    assert later_notice["op"] == "revise"
+    assert later_notice["work"] == transfer_notice["work"]
+    refute Map.has_key?(later_notice, "transfer_id")
+    refute Map.has_key?(later_notice["work"], :title)
+    refute Map.has_key?(later_notice["work"], :receipts)
+
+    later_transfer = %{
+      "op" => "transfer",
+      "operation_id" => work_operation_id(),
+      "work_id" => work_id,
+      "expected_revision" => 3,
+      "assignee" => "r1-notice-third-#{suffix}"
+    }
+
+    assert_reply push(operator, "work_control", %{
+                   "version" => "0",
+                   "work_control" => later_transfer
+                 }),
+                 :ok
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "wrapper:" <> ^old,
+      event: "work_notice",
+      payload: other_transfer_notice
+    }
+
+    assert other_transfer_notice["work"].pending_transfers ==
+             transfer_notice["work"].pending_transfers
+
+    refute Map.has_key?(other_transfer_notice, "transfer_id")
+    refute Map.has_key?(other_transfer_notice["work"], :title)
+  end
+
   test "operator work_yield_status accepts a work ID and optional token filter" do
     suffix = System.unique_integer([:positive])
     cid = "yield-status-cid-#{suffix}"

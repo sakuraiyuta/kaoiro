@@ -19,6 +19,75 @@ defmodule KaoiroServer.DeliveryStatesTest do
     %{name: name, path: path}
   end
 
+  @tag :r1_fix
+  test "M5 simultaneous early reservations share the recipient cap", %{name: name} do
+    DeliveryStates.bind_resync("early-recipient", "generation", self(), name)
+    parent = self()
+
+    tasks =
+      for index <- 1..17 do
+        Task.async(fn ->
+          sender = "sender-#{index}"
+          {:ok, token} = DeliveryStates.reserve("early-recipient", self(), name)
+          result = DeliveryStates.reserve_early(sender, "early-recipient", token, 4, 16, name)
+          send(parent, {:early_reserved, sender, result})
+
+          receive do
+            :release -> DeliveryStates.release(token, name)
+          end
+        end)
+      end
+
+    results =
+      for _ <- tasks do
+        assert_receive {:early_reserved, _sender, result}
+        result
+      end
+
+    assert Enum.count(results, &(&1 == :ok)) == 16
+    assert Enum.count(results, &(&1 == {:error, :early_quota})) == 1
+    assert {0, 16} = DeliveryStates.pending_early("other-sender", "early-recipient", name)
+    for task <- tasks, do: send(task.pid, :release)
+    for task <- tasks, do: assert(:ok = Task.await(task))
+    assert {0, 0} = DeliveryStates.pending_early("other-sender", "early-recipient", name)
+  end
+
+  @tag :r1_fix
+  test "S1 non-prefix resolution is excluded from the unresolved count", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("count-recipient", "generation", owner, name)
+
+    for seq <- 1..2 do
+      assert ^seq =
+               DeliveryStates.issue_synthetic(
+                 "count-recipient",
+                 %{sender: "sender", conversation_id: "count-cid", turn_number: seq},
+                 name
+               )
+    end
+
+    assert 2 = DeliveryStates.unresolved_count("count-recipient", name)
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "count-recipient",
+               "generation",
+               owner,
+               %{
+                 "incarnation" => DeliveryStates.incarnation("count-recipient", name),
+                 "generation" => "generation",
+                 "delivery_seq" => 2,
+                 "stage" => "submitted",
+                 "handoff" => "prompt_hook",
+                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+               },
+               name
+             )
+
+    assert %{acked_seq: 0, issued_seq: 2} = DeliveryStates.get("count-recipient", name)
+    assert 1 = DeliveryStates.unresolved_count("count-recipient", name)
+  end
+
   test "submitted later sequence closes without crossing an earlier gap", %{
     name: name,
     path: path

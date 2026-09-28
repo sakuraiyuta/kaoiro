@@ -751,8 +751,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
        )
        when is_binary(work_id) and is_binary(transfer_id) do
     with :ok <- require_work_control(socket),
-         {:ok, work} <- WorkStore.transfer_ack(work_principal(socket), work_id, transfer_id) do
-      {:reply, {:ok, %{"work" => work}}, socket}
+         {:ok, _work} <- WorkStore.transfer_ack(work_principal(socket), work_id, transfer_id) do
+      {:reply,
+       {:ok, %{"work_id" => work_id, "transfer_id" => transfer_id, "state" => "acknowledged"}},
+       socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
@@ -1354,7 +1356,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
     work_stamp =
       if work_result,
         do: work_result.work,
-        else: WorkStore.message_work(envelope["payload"]["conversation_id"])
+        else:
+          work_store_or_nil(fn ->
+            WorkStore.message_work(envelope["payload"]["conversation_id"])
+          end)
 
     envelope =
       Map.update!(envelope, "payload", fn payload ->
@@ -1389,29 +1394,46 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     push_to_wrapper(to, recipient_envelope)
 
+    work_status =
+      if work_result do
+        principal = %{"kind" => "agent", "id" => from}
+        work_store_or_nil(fn -> WorkStore.status(principal, work_result.work.work_id) end)
+      end
+
     if work_result do
-      principal = %{"kind" => "agent", "id" => from}
-      {:ok, %{work: full_work}} = WorkStore.status(principal, work_result.work.work_id)
-      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_changed", %{"work" => full_work})
+      case work_status do
+        {:ok, %{work: full_work}} ->
+          KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_changed", %{
+            "work" => full_work
+          })
+
+        _ ->
+          :ok
+      end
     end
 
     if work_result && work_result.op == "accept_assignment" do
-      Enum.each(WorkStore.scope_overlaps(work_result.work.work_id), fn overlap ->
-        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_scope_overlap", overlap)
-      end)
+      Enum.each(
+        work_store_or_nil(fn -> WorkStore.scope_overlaps(work_result.work.work_id) end) || [],
+        fn overlap ->
+          KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_scope_overlap", overlap)
+        end
+      )
     end
 
-    if work_result do
-      :ok =
-        WorkStore.note_delivery(
-          %{"kind" => "agent", "id" => from},
-          work_result.operation_id,
-          %{
-            status: "recorded",
-            conversation_id: envelope["payload"]["conversation_id"],
-            turn_number: envelope["payload"]["turn_number"]
-          }
-        )
+    if work_result && match?({:ok, %{work: _}}, work_status) do
+      _ =
+        work_store_or_nil(fn ->
+          WorkStore.note_delivery(
+            %{"kind" => "agent", "id" => from},
+            work_result.operation_id,
+            %{
+              status: "recorded",
+              conversation_id: envelope["payload"]["conversation_id"],
+              turn_number: envelope["payload"]["turn_number"]
+            }
+          )
+        end)
     end
 
     if delivery_changed?, do: broadcast_delivery_status(to)
@@ -1436,8 +1458,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp delivery_advisory(recipient, authority) do
-    modes = WorkStore.modes(recipient)
-    delivery = DeliveryStates.get(recipient)
+    modes =
+      if authority.granted == "early",
+        do: work_store_or_nil(fn -> WorkStore.modes(recipient) end)
+
     state = AgentStates.get_envelope(recipient)
 
     mechanism =
@@ -1451,7 +1475,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       "recipient_state" => if(state, do: state["state"], else: "unknown"),
       "granted" => authority.granted,
       "mechanism" => mechanism,
-      "unresolved_count" => if(delivery, do: delivery.issued_seq - delivery.acked_seq, else: 0),
+      "unresolved_count" => DeliveryStates.unresolved_count(recipient),
       "guidance" => "accepted; do not resend"
     }
 
@@ -2790,7 +2814,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
                          to,
                          cid,
                          turn_number,
-                         intent_decision
+                         intent_decision,
+                         reservation
                        ),
                      record_result <-
                        ConversationStates.record_bound_message(
@@ -2819,20 +2844,27 @@ defmodule KaoiroServerWeb.WrapperChannel do
                     # or an explicitly-named conversation_id with no entry at all
                     # (issue #252): reject at the routing boundary.
                     {:error, reason} ->
+                      conversation_error = conversation_error(reason)
+
                       if work_result do
-                        :ok =
-                          WorkStore.note_delivery(
-                            principal,
-                            work_result.operation_id,
-                            %{
-                              status: "not_recorded",
-                              reason: to_string(reason)
-                            },
-                            authority[:yield_token]
-                          )
+                        _ =
+                          work_store_or_nil(fn ->
+                            WorkStore.note_delivery(
+                              principal,
+                              work_result.operation_id,
+                              %{
+                                status: "not_recorded",
+                                reason: conversation_error
+                              },
+                              authority[:yield_token]
+                            )
+                          end)
                       else
                         if authority[:yield_token],
-                          do: :ok = WorkStore.drop_yield(authority.yield_token)
+                          do:
+                            work_store_or_nil(fn ->
+                              WorkStore.drop_yield(authority.yield_token)
+                            end)
                       end
 
                       :ok = DeliveryStates.release(reservation)
@@ -2844,7 +2876,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
                            send_not_attempted: true,
                            details: %{
                              work_control_result: work_result,
-                             conversation_error: to_string(reason)
+                             conversation_error: conversation_error
                            }
                          }}
                       else
@@ -2881,7 +2913,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
        when is_binary(op) and is_binary(operation_id) do
     digest = WorkStore.digest(operation)
 
-    case WorkStore.lookup(principal, operation_id, digest) do
+    lookup =
+      try do
+        WorkStore.lookup(principal, operation_id, digest)
+      catch
+        :exit, _ -> {:error, work_outcome_unknown(operation_id)}
+      end
+
+    case lookup do
       {:ok, receipt} ->
         {:error, duplicate_work_reply(receipt)}
 
@@ -2917,12 +2956,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
     catch
       :exit, _ ->
-        {:error,
-         %{
-           reason: "work_outcome_unknown",
-           send_not_attempted: true,
-           details: %{operation_id: operation["operation_id"]}
-         }}
+        {:error, work_outcome_unknown(operation["operation_id"])}
     end
   end
 
@@ -2932,8 +2966,37 @@ defmodule KaoiroServerWeb.WrapperChannel do
     %{
       reason: "work_operation_deduplicated",
       send_not_attempted: true,
-      details: %{work_control_result: result, delivery: receipt[:delivery] || "unknown"}
+      details: %{work_control_result: result, delivery: receipt_delivery_status(receipt)}
     }
+  end
+
+  defp work_outcome_unknown(operation_id) do
+    %{
+      reason: "work_outcome_unknown",
+      send_not_attempted: true,
+      details: %{operation_id: operation_id}
+    }
+  end
+
+  defp receipt_delivery_status(receipt) do
+    case receipt[:delivery] do
+      %{status: status} when status in ~w(recorded not_recorded) -> status
+      %{"status" => status} when status in ~w(recorded not_recorded) -> status
+      _ -> "unknown"
+    end
+  end
+
+  defp conversation_error(%{reason: reason}) when is_binary(reason), do: reason
+  defp conversation_error(%{"reason" => reason}) when is_binary(reason), do: reason
+  defp conversation_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp conversation_error(reason) when is_binary(reason), do: reason
+
+  defp work_store_or_nil(fun) do
+    try do
+      fun.()
+    catch
+      :exit, _ -> nil
+    end
   end
 
   defp validate_sender_features(payload, modes, work_enabled?) do
@@ -2962,14 +3025,27 @@ defmodule KaoiroServerWeb.WrapperChannel do
          recipient,
          cid,
          turn,
-         intent_decision
+         intent_decision,
+         reservation
        ) do
     requested = payload["delivery_intent"] || "normal"
-    recipient_modes = WorkStore.modes(recipient)
+
+    recipient_modes =
+      try do
+        {:ok, WorkStore.modes(recipient)}
+      catch
+        :exit, _ -> :unavailable
+      end
+
+    modes = if match?({:ok, _}, recipient_modes), do: elem(recipient_modes, 1)
+
     base = %{requested: requested, granted: requested}
 
     {granted, reason, token} =
       case requested do
+        "yield" when recipient_modes == :unavailable ->
+          {"early", "yield_token_unavailable", nil}
+
         "yield" ->
           try do
             decision =
@@ -2996,38 +3072,48 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
     {granted, reason} =
-      if granted == "early" do
-        {pair, total} = DeliveryStates.pending_early(sender["id"], recipient)
-        config = Application.get_env(:kaoiro_server, :delivery_intent, [])
-
-        if pair >= config[:early_pending_per_pair] or
-             total >= config[:early_pending_per_recipient],
-           do: {"normal", "early_quota"},
-           else: {granted, reason}
-      else
-        {granted, reason}
-      end
-
-    {granted, reason} =
       cond do
-        granted == "yield" and (recipient_modes == nil or recipient_modes["yield"] == "none") ->
-          if recipient_modes == nil,
+        granted == "yield" and (modes == nil or modes["yield"] == "none") ->
+          if modes == nil,
             do: {"normal", "recipient_legacy"},
             else:
-              if(recipient_modes["early"] == "none",
+              if(modes["early"] == "none",
                 do: {"normal", "unsupported_by_recipient"},
                 else: {"early", "unsupported_by_recipient"}
               )
 
-        granted == "early" and (recipient_modes == nil or recipient_modes["early"] == "none") ->
-          {"normal",
-           if(recipient_modes == nil, do: "recipient_legacy", else: "unsupported_by_recipient")}
+        granted == "early" and recipient_modes == :unavailable ->
+          {"normal", "yield_token_unavailable"}
+
+        granted == "early" and (modes == nil or modes["early"] == "none") ->
+          {"normal", if(modes == nil, do: "recipient_legacy", else: "unsupported_by_recipient")}
 
         true ->
           {granted, reason}
       end
 
-    if token && granted != "yield", do: :ok = WorkStore.drop_yield(token)
+    {granted, reason} =
+      if granted == "early" do
+        config = Application.get_env(:kaoiro_server, :delivery_intent, [])
+
+        case DeliveryStates.reserve_early(
+               sender["id"],
+               recipient,
+               reservation,
+               config[:early_pending_per_pair],
+               config[:early_pending_per_recipient]
+             ) do
+          :ok -> {granted, reason}
+          {:error, :early_quota} -> {"normal", "early_quota"}
+          {:error, _} -> {"normal", "early_quota"}
+        end
+      else
+        {granted, reason}
+      end
+
+    if token && granted != "yield",
+      do: work_store_or_nil(fn -> WorkStore.drop_yield(token) end)
+
     result = %{base | granted: granted}
     result = if reason, do: Map.put(result, :downgrade, reason), else: result
     result = if granted == "yield", do: Map.put(result, :yield_token, token), else: result

@@ -106,6 +106,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.Users
   alias KaoiroServer.WorkStore
+  alias KaoiroServer.WorkReducer
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
   alias KaoiroServerWeb.PeerConnectivity
@@ -639,27 +640,41 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
       for id <- Enum.uniq([work.assignee["id"], work.director["id"] | pending_old]),
           is_binary(id) and AgentStates.connected?(id) and WorkStore.work_control_enabled?(id) do
-        notice = %{
-          "version" => "0",
-          "work" => work,
-          "op" => operation["op"],
-          "reason" => "operator_control"
-        }
+        principal = %{"kind" => "agent", "id" => id}
 
-        notice =
-          if operation["op"] == "transfer" do
-            case work.transfers do
-              [%{state: "pending", transfer_id: transfer_id} | _] ->
-                Map.put(notice, "transfer_id", transfer_id)
+        case WorkReducer.status(%{work_id => work}, principal, work_id) do
+          {:ok, view} ->
+            notice_work = Map.get(view, :work, view)
 
-              _ ->
+            notice = %{
+              "version" => "0",
+              "work" => notice_work,
+              "op" => operation["op"],
+              "reason" => "operator_control"
+            }
+
+            notice =
+              if operation["op"] == "transfer" do
+                case work.transfers do
+                  [%{state: "pending", transfer_id: transfer_id} | _] ->
+                    visible? =
+                      Map.has_key?(view, :work) or
+                        Enum.any?(view.pending_transfers, &(&1.transfer_id == transfer_id))
+
+                    if visible?, do: Map.put(notice, "transfer_id", transfer_id), else: notice
+
+                  _ ->
+                    notice
+                end
+              else
                 notice
-            end
-          else
-            notice
-          end
+              end
 
-        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{id}", "work_notice", notice)
+            KaoiroServerWeb.Endpoint.broadcast("wrapper:#{id}", "work_notice", notice)
+
+          _ ->
+            :ok
+        end
       end
 
       {:reply, {:ok, %{"work_control_result" => result}}, socket}

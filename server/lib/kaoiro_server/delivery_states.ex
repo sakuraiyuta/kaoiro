@@ -113,6 +113,23 @@ defmodule KaoiroServer.DeliveryStates do
   def pending_early(sender, recipient, server \\ __MODULE__),
     do: GenServer.call(server, {:pending_early, sender, recipient})
 
+  def reserve_early(
+        sender,
+        recipient,
+        reservation,
+        pair_limit,
+        recipient_limit,
+        server \\ __MODULE__
+      ),
+      do:
+        GenServer.call(
+          server,
+          {:reserve_early, sender, recipient, reservation, pair_limit, recipient_limit}
+        )
+
+  def unresolved_count(recipient, server \\ __MODULE__),
+    do: GenServer.call(server, {:unresolved_count, recipient})
+
   def owns_delivery?(agent_id, generation, owner, incarnation, server \\ __MODULE__),
     do: GenServer.call(server, {:owns_delivery, agent_id, generation, owner, incarnation})
 
@@ -435,6 +452,34 @@ defmodule KaoiroServer.DeliveryStates do
   def handle_call({:release, token}, _from, state),
     do: {:reply, :ok, release_reservation(state, token)}
 
+  def handle_call(
+        {:reserve_early, sender, recipient, token, pair_limit, recipient_limit},
+        {owner, _},
+        state
+      ) do
+    reservation = state.reservations[token]
+    {pair, total} = early_counts(state, sender, recipient)
+
+    cond do
+      reservation == nil or reservation.agent_id != recipient or reservation.owner != owner ->
+        {:reply, {:error, :invalid_delivery_reservation}, state}
+
+      reservation[:early_sender] == sender ->
+        {:reply, :ok, state}
+
+      reservation[:early_sender] != nil ->
+        {:reply, {:error, :invalid_delivery_reservation}, state}
+
+      pair >= pair_limit or total >= recipient_limit ->
+        {:reply, {:error, :early_quota}, state}
+
+      true ->
+        next = Map.put(reservation, :early_sender, sender)
+
+        {:reply, :ok, %{state | reservations: Map.put(state.reservations, token, next)}}
+    end
+  end
+
   def handle_call({:issue_reserved, agent_id, token, descriptor}, {owner, _}, state) do
     case state.reservations[token] do
       %{agent_id: ^agent_id, owner: ^owner} ->
@@ -477,19 +522,23 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call({:pending_early, sender, recipient}, _from, state) do
-    entry = state.entries[recipient]
-    by_seq = if entry, do: state.stages[{recipient, entry.incarnation}] || %{}, else: %{}
+    {:reply, early_counts(state, sender, recipient), state}
+  end
 
-    pending =
-      for {_seq, record} <- by_seq,
-          record[:mode] == "early" and
-            not Enum.any?(
-              ~w(submitted settled unknown lost),
-              &Map.has_key?(record.stages, &1)
-            ),
-          do: record
+  def handle_call({:unresolved_count, recipient}, _from, state) do
+    count =
+      case state.entries[recipient] do
+        nil ->
+          0
 
-    {:reply, {Enum.count(pending, &(&1.sender == sender)), length(pending)}, state}
+        entry ->
+          max(
+            0,
+            entry.issued_seq - entry.acked_seq - length(entry.resolved) - length(entry.skipped)
+          )
+      end
+
+    {:reply, count, state}
   end
 
   def handle_call({:report_stage, agent_id, generation, owner, report}, _from, state) do
@@ -733,6 +782,31 @@ defmodule KaoiroServer.DeliveryStates do
         Process.demonitor(reservation.monitor, [:flush])
         %{state | reservations: rest}
     end
+  end
+
+  defp early_counts(state, sender, recipient) do
+    entry = state.entries[recipient]
+    by_seq = if entry, do: state.stages[{recipient, entry.incarnation}] || %{}, else: %{}
+
+    accepted =
+      if entry do
+        for {seq, descriptor} <- entry.metadata,
+            descriptor[:mode] == "early",
+            record = by_seq[seq],
+            record == nil or
+              not Enum.any?(~w(submitted settled unknown lost), &Map.has_key?(record.stages, &1)),
+            do: descriptor[:sender]
+      else
+        []
+      end
+
+    held =
+      for {_token, reservation} <- state.reservations,
+          reservation.agent_id == recipient and is_binary(reservation[:early_sender]),
+          do: reservation.early_sender
+
+    pending = accepted ++ held
+    {Enum.count(pending, &(&1 == sender)), length(pending)}
   end
 
   defp retire_generation(state, agent_id, generation) do

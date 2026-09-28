@@ -503,25 +503,35 @@ defmodule KaoiroServer.WorkStore do
   end
 
   defp valid_operation_id?("op_" <> rest) do
-    case String.split(rest, "_", parts: 2) do
-      [issued, random] when byte_size(random) == 22 ->
-        case Integer.parse(issued) do
-          {millis, ""} ->
-            now = System.system_time(:millisecond)
-
-            Regex.match?(~r/^[A-Za-z0-9_-]{22}$/, random) and
-              millis >= now - config()[:operation_validity_ms] and millis <= now + 300_000
-
-          _ ->
-            false
-        end
-
-      _ ->
+    case operation_id_timestamp("op_" <> rest) do
+      nil ->
         false
+
+      millis ->
+        now = System.system_time(:millisecond)
+        millis >= now - config()[:operation_validity_ms] and millis <= now + 300_000
     end
   end
 
   defp valid_operation_id?(_), do: false
+
+  defp operation_id_timestamp("op_" <> rest) do
+    case String.split(rest, "_", parts: 2) do
+      [issued, random] when byte_size(random) == 22 ->
+        case Integer.parse(issued) do
+          {millis, ""} ->
+            if Regex.match?(~r/^[A-Za-z0-9_-]{22}$/, random), do: millis
+
+          _ ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp operation_id_timestamp(_), do: nil
 
   def digest(operation),
     do: :crypto.hash(:sha256, :erlang.term_to_binary(operation)) |> Base.encode16(case: :lower)
@@ -667,7 +677,8 @@ defmodule KaoiroServer.WorkStore do
 
         live_receipts =
           Enum.filter(work.receipts, fn receipt ->
-            now - receipt.issued_at_ms <= config[:operation_validity_ms]
+            issued_at = operation_id_timestamp(receipt.operation_id) || receipt.issued_at_ms
+            now <= issued_at + config[:operation_validity_ms]
           end)
 
         work =
@@ -687,7 +698,7 @@ defmodule KaoiroServer.WorkStore do
             {Map.put(kept, id, expired), true}
 
           work.state in ~w(completed cancelled declined expired) and
-              age >= config[:work_terminal_retention_ms] ->
+            age >= config[:work_terminal_retention_ms] and live_receipts == [] ->
             :ok = :dets.delete(state.table, {:work, id})
             {kept, true}
 

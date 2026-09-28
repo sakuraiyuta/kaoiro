@@ -2,6 +2,7 @@ defmodule KaoiroServer.WorkReducer do
   @moduledoc false
 
   @terminal ~w(completed cancelled declined expired)
+  @max_links 32
   @revision_ops ~w(revise hold release accept_verdict revoke_verdict complete cancel transfer release_transfer)
 
   def reduce(works, principal, %{"op" => "assign"} = op, context, config) do
@@ -71,6 +72,7 @@ defmodule KaoiroServer.WorkReducer do
          :ok <- revision(work, op, name),
          :ok <- state_precondition(work, name, state),
          :ok <- receipt_capacity(works, work, principal, config),
+         :ok <- link_capacity(work, context),
          {:ok, next_works, result_work, extras} <- apply_op(works, work, principal, op, config) do
       {next_works, result_work} = maybe_link_new_conversation(next_works, result_work, context)
 
@@ -402,7 +404,11 @@ defmodule KaoiroServer.WorkReducer do
          %{"op" => "revoke_verdict", "verdict_ref" => ref},
          _config
        ) do
-    next = Enum.reject(work.accepted_verdicts, &(&1.verdict_ref == ref))
+    next =
+      Enum.reject(work.accepted_verdicts, fn accepted ->
+        accepted.verdict_ref.work_id == ref_field(ref, :work_id) and
+          accepted.verdict_ref.verdict_id == ref_field(ref, :verdict_id)
+      end)
 
     if next == work.accepted_verdicts,
       do: {:error, :work_state_conflict},
@@ -562,6 +568,19 @@ defmodule KaoiroServer.WorkReducer do
   end
 
   defp maybe_link_new_conversation(works, work, _), do: {works, work}
+
+  defp link_capacity(work, %{new_conversation?: true, conversation_id: cid}) do
+    if cid in work.links or length(work.links) < @max_links,
+      do: :ok,
+      else: {:error, :work_capacity}
+  end
+
+  defp link_capacity(_work, _context), do: :ok
+
+  defp ref_field(ref, key) when is_map(ref),
+    do: Map.get(ref, key) || Map.get(ref, Atom.to_string(key))
+
+  defp ref_field(_ref, _key), do: nil
 
   defp revision(work, op, name) do
     cond do

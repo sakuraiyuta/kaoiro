@@ -1782,6 +1782,187 @@ defmodule KaoiroServer.WorkStoreTest do
     end)
   end
 
+  @tag :r1_fix
+  test "M1 a future operation ID keeps its receipt through sweep, restart, and terminal retention" do
+    previous = Application.fetch_env!(:kaoiro_server, :work_store)
+
+    Application.put_env(
+      :kaoiro_server,
+      :work_store,
+      previous
+      |> Keyword.put(:operation_validity_ms, 100)
+      |> Keyword.put(:work_terminal_retention_ms, 0)
+    )
+
+    try do
+      with_store("future_receipt", fn name ->
+        operator = %{"kind" => "user", "id" => "future-receipt-operator"}
+
+        ahead_id = fn ->
+          "op_#{System.system_time(:millisecond) + 10_000}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
+        end
+
+        assign = %{
+          "op" => "assign",
+          "operation_id" => ahead_id.(),
+          "title" => "Future receipt",
+          "assignee" => "future-receipt-assignee",
+          "director" => operator
+        }
+
+        assert {:ok, %{work: grant}} = WorkStore.apply(operator, assign, %{operator: true}, name)
+        Process.sleep(150)
+
+        assert {:duplicate, %{result: %{work: %{work_id: first_id}}}} =
+                 WorkStore.apply(operator, assign, %{operator: true}, name)
+
+        assert first_id == grant.work_id
+        assert :ok = WorkStore.sweep(name)
+        assert {:duplicate, _} = WorkStore.apply(operator, assign, %{operator: true}, name)
+
+        cancel = %{
+          "op" => "cancel",
+          "operation_id" => ahead_id.(),
+          "work_id" => grant.work_id,
+          "expected_revision" => 1
+        }
+
+        assert {:ok, _} = WorkStore.apply(operator, cancel, %{operator: true}, name)
+        assert :ok = WorkStore.sweep(name)
+        assert {:duplicate, _} = WorkStore.apply(operator, cancel, %{operator: true}, name)
+
+        path = :sys.get_state(name).path
+        :ok = GenServer.stop(name)
+        {:ok, _} = WorkStore.start_link(name: name, path: path)
+        assert {:duplicate, _} = WorkStore.apply(operator, assign, %{operator: true}, name)
+        assert {:duplicate, _} = WorkStore.apply(operator, cancel, %{operator: true}, name)
+
+        assert {:ok, %{work: %{work_id: ^first_id, state: "cancelled"}}} =
+                 WorkStore.status(operator, first_id, name)
+      end)
+    after
+      Application.put_env(:kaoiro_server, :work_store, previous)
+    end
+  end
+
+  @tag :r1_fix
+  test "M6 JSON verdict reference revokes an accepted approval" do
+    with_store("json_revoke", fn name ->
+      context = accepted_review(name, "json_revoke")
+      {:ok, %{work: work}} = WorkStore.status(context.director, context.target.work_id, name)
+
+      ref =
+        work.accepted_verdicts
+        |> hd()
+        |> Map.fetch!(:verdict_ref)
+        |> Jason.encode!()
+        |> Jason.decode!()
+
+      request =
+        %{
+          "op" => "revoke_verdict",
+          "operation_id" => operation_id(),
+          "work_id" => work.work_id,
+          "expected_revision" => work.revision,
+          "verdict_ref" => ref
+        }
+        |> Jason.encode!()
+        |> Jason.decode!()
+
+      assert {:ok, %{work: %{revision: 3}}} =
+               WorkStore.apply(
+                 context.director,
+                 request,
+                 %{recipient: context.assignee["id"], conversation_id: "json_revoke-target"},
+                 name
+               )
+
+      assert {:ok, %{work: %{accepted_verdicts: []}}} =
+               WorkStore.status(context.director, work.work_id, name)
+
+      assert %{ok: false, reason: :verdict_not_effective} =
+               WorkStore.check(
+                 context.assignee,
+                 %{
+                   "work_id" => work.work_id,
+                   "action" => "land",
+                   "expected_revision" => 3,
+                   "subject_hash" => "H"
+                 },
+                 name
+               )
+    end)
+  end
+
+  @tag :r1_fix
+  test "M8 a thirty-third conversation link is refused without a revision or receipt" do
+    with_store("link_bound", fn name ->
+      director = %{"kind" => "agent", "id" => "link-bound-director"}
+      assignee = %{"kind" => "agent", "id" => "link-bound-assignee"}
+      work = active_work(name, director["id"], assignee, "link-bound-origin")
+
+      for revision <- 1..31 do
+        assert {:ok, _} =
+                 WorkStore.apply(
+                   director,
+                   %{
+                     "op" => "revise",
+                     "operation_id" => operation_id(),
+                     "work_id" => work.work_id,
+                     "expected_revision" => revision
+                   },
+                   %{
+                     recipient: assignee["id"],
+                     conversation_id: "link-bound-#{revision}",
+                     new_conversation?: true
+                   },
+                   name
+                 )
+      end
+
+      assert {:ok, %{work: %{revision: 32, links: links}}} =
+               WorkStore.status(director, work.work_id, name)
+
+      assert length(links) == 32
+      overflow_id = operation_id()
+
+      assert {:error, :work_capacity} =
+               WorkStore.apply(
+                 director,
+                 %{
+                   "op" => "revise",
+                   "operation_id" => overflow_id,
+                   "work_id" => work.work_id,
+                   "expected_revision" => 32
+                 },
+                 %{
+                   recipient: assignee["id"],
+                   conversation_id: "link-bound-overflow",
+                   new_conversation?: true
+                 },
+                 name
+               )
+
+      assert {:error, :unknown_operation} = WorkStore.op_result(director, overflow_id, name)
+
+      assert {:ok, %{work: %{revision: 32, links: ^links}}} =
+               WorkStore.status(director, work.work_id, name)
+
+      assert {:ok, %{work: %{revision: 33}}} =
+               WorkStore.apply(
+                 director,
+                 %{
+                   "op" => "revise",
+                   "operation_id" => operation_id(),
+                   "work_id" => work.work_id,
+                   "expected_revision" => 32
+                 },
+                 %{recipient: assignee["id"], conversation_id: "link-bound-origin"},
+                 name
+               )
+    end)
+  end
+
   defp with_store(suffix, fun) do
     name = :"work_store_#{suffix}_#{System.unique_integer([:positive])}"
     path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
