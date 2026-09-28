@@ -27,6 +27,7 @@ import type {
   InterAgentMessagePayload,
   WrapperConfig,
 } from "../src/types.js";
+import type { WorkToolHandlers } from "../src/work_tools.js";
 
 const PERSONA = { id: "mio", name: "澪", sprite_set: "mio" };
 const TEST_TURN_TOKEN = "test-turn";
@@ -1576,6 +1577,7 @@ describe("list_agents / whoami companion tools", () => {
         engine: "codex",
         model: "gpt-5.6-sol",
         effort: "high",
+        delivery_modes: { early: "none", yield: "none", stage_reports: true },
       },
       {
         agent_id: "lab.peer-2",
@@ -2243,6 +2245,121 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
 
     expect(capture.envelopes).toHaveLength(1);
     expect(result.content[0]!.text).toContain("sent to peer.agent");
+  });
+});
+
+describe("work-control send rejection receipts", () => {
+  const workTools: WorkToolHandlers = {
+    workControlSupported: () => true,
+    deliveryModesSupported: () => true,
+    deliveryModes: () => "legacy" as const,
+    workStatus: async () => ({ works: [], pending_transfers: [] }),
+    workCheck: async () => ({ ok: false, reason: "unknown_work", work: {} } as never),
+    workTransferAck: async () => ({}),
+    workOpResult: async () => ({ error: "unknown_operation" }),
+    deliveryStatus: async () => ({ status: "expired" }),
+  };
+
+  function makeRejectedTool(
+    reason: string,
+    details?: Record<string, unknown> | ((operationId: string | undefined) => Record<string, unknown>),
+    captured = false,
+  ): { tool: InterAgentTool; operationIds: string[] } {
+    const operationIds: string[] = [];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {},
+      workTools,
+      ...(captured ? { replyBasisMode: () => "v1" as const } : {}),
+      sendInterAgent: async envelope => {
+        const payload = envelope.payload as unknown as InterAgentMessagePayload;
+        const operationId = payload.work_control?.operation_id;
+        if (operationId !== undefined) operationIds.push(operationId);
+        const rejectionDetails = typeof details === "function" ? details(operationId) : details;
+        return {
+          kind: "rejected",
+          reason,
+          ...(rejectionDetails === undefined ? {} : { details: rejectionDetails }),
+        };
+      },
+      now: () => "2026-09-28T00:00:00Z",
+    });
+    if (captured) tool.beginReplyInput("tool-turn");
+    return { tool, operationIds };
+  }
+
+  const args = {
+    to: "peer.agent",
+    kind: "request" as const,
+    body: "assign work",
+    work_control: { op: "assign" as const, title: "task" },
+  };
+
+  it.each([false, true])("preserves generated operation id, applied result and delivery on partial rejection (captured=%s)", async captured => {
+    const { tool, operationIds } = makeRejectedTool(
+      "work_applied_message_rejected",
+      operationId => ({
+        delivery: "not_recorded",
+        work_control_result: {
+          op: "assign", operation_id: operationId, outcome: "applied",
+        },
+      }),
+      captured,
+    );
+    const result = await tool.invoke(args, captured ? { origin: { token: "tool-turn" } } : undefined);
+    const receipt = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    expect(result.isError).toBe(true);
+    expect(operationIds).toHaveLength(1);
+    expect(receipt).toMatchObject({
+      error: "work_applied_message_rejected",
+      operation_id: operationIds[0],
+      delivery: "not_recorded",
+      work_control_result: {
+        operation_id: operationIds[0],
+        outcome: "applied",
+      },
+      guidance: expect.stringContaining("was applied"),
+    });
+    expect(receipt).not.toHaveProperty("sent");
+  });
+
+  it("keeps the generated operation id and distinguishes deduplicated from unknown outcomes", async () => {
+    const duplicate = makeRejectedTool("work_operation_deduplicated", {
+      delivery: "unknown",
+      work_control_result: {
+        op: "assign", operation_id: "prior_op_abcdefghijklmnop", outcome: "applied", deduplicated: true,
+      },
+    });
+    const duplicateResult = await duplicate.tool.invoke({
+      ...args,
+      work_control: { ...args.work_control, operation_id: "prior_op_abcdefghijklmnop" },
+    });
+    const duplicateReceipt = JSON.parse(duplicateResult.content[0]!.text) as Record<string, unknown>;
+    expect(duplicateReceipt).toMatchObject({
+      error: "work_operation_deduplicated",
+      delivery: "unknown",
+      work_control_result: { deduplicated: true },
+      guidance: expect.stringContaining("did not send the body"),
+    });
+    expect(duplicateReceipt.operation_id).toBe("prior_op_abcdefghijklmnop");
+    expect(duplicate.operationIds).toHaveLength(1);
+
+    const ordinary = makeRejectedTool("unknown_agent");
+    const ordinaryResult = await ordinary.tool.invoke(args);
+    const ordinaryReceipt = JSON.parse(ordinaryResult.content[0]!.text) as Record<string, unknown>;
+    expect(ordinaryReceipt.operation_id).toBe(ordinary.operationIds[0]);
+    expect(ordinaryReceipt.guidance).toContain("Query work_op_result");
+
+    const unknown = makeRejectedTool("work_outcome_unknown", { send_not_attempted: true }, true);
+    const unknownResult = await unknown.tool.invoke(args, { origin: { token: "tool-turn" } });
+    const unknownReceipt = JSON.parse(unknownResult.content[0]!.text) as Record<string, unknown>;
+    expect(unknownReceipt).toMatchObject({
+      error: "work_outcome_unknown",
+      operation_id: unknown.operationIds[0],
+      guidance: expect.stringContaining("Query work_op_result"),
+    });
+    expect(unknownResult.isError).toBe(true);
   });
 });
 

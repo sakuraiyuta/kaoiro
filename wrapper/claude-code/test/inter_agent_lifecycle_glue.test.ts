@@ -18,7 +18,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
+  DeliveryStageReporter,
   createDeliveryAcknowledgementWiring,
+  handoffToolResult,
   MAX_COALESCED_MESSAGES,
   classifyInterAgentError,
 } from "@kaoiro/agent-common";
@@ -320,6 +322,73 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     expect(sent).toEqual([]);
     expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
     expect(logs).toEqual(["  inter_agent_message reply consumed: peer.agent\n"]);
+  });
+
+  it.each(["commit", "rollback"] as const)("waiter reply stage follows the tool-result %s (deferred ack)", async outcome => {
+    const reply = inboundEnvelope("waiter-stage", 2, false, 41);
+    const reports: Record<string, unknown>[] = [];
+    const acknowledgements: Envelope[] = [];
+    const returned: Envelope[] = [];
+    const stages = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "inc", generation: "gen" }),
+      turns: { deliverySequencesForTurn: () => [] },
+      now: () => "T",
+    });
+    let tool!: InterAgentTool;
+    tool = new InterAgentTool({
+      config,
+      getState: () => "tool_running",
+      send: () => {},
+      replyBasisMode: () => "v1",
+      returnInput: envelope => returned.push(envelope),
+      onInputHandoff: (envelopes, token) => {
+        for (const envelope of envelopes) acknowledgements.push(envelope);
+        stages.submittedEnvelopes(token, envelopes, "tool_result");
+      },
+      sendInterAgent: async () => {
+        queueMicrotask(() => {
+          void handleInterAgentMessage({
+            interAgent: tool,
+            ingress: new InterAgentIngressGate(),
+            recordInboundIa: () => {},
+            send: () => {},
+            acknowledgeDelivery: envelope => acknowledgements.push(envelope),
+            reportQueued: envelope => stages.queued(envelope),
+            settleStage: (envelope, reason) => stages.settleEnvelope(envelope, reason),
+            inject: () => { throw new Error("waiter reply must not enter the root queue"); },
+            log: () => {},
+          }, reply);
+        });
+        return { kind: "accepted", stamp: [1, 1] };
+      },
+    });
+    tool.beginReplyInput("tool-turn");
+    const result = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "waiter-stage",
+      kind: "query",
+      body: "question",
+      wait_for_response: true,
+      timeout_ms: 500,
+    }, { origin: { token: "tool-turn" } });
+
+    expect(reports.map(report => report.stage)).toEqual(["queued"]);
+    expect(acknowledgements).toEqual([]);
+    if (outcome === "commit") {
+      expect(handoffToolResult(result, () => {})).toBe(true);
+      expect(acknowledgements).toEqual([reply]);
+      expect(reports.map(report => report.stage)).toEqual(["queued", "submitted"]);
+      expect(reports.at(-1)).toMatchObject({ handoff: "tool_result" });
+      stages.settled("tool-turn");
+      expect(reports.at(-1)).toMatchObject({ stage: "settled", reason: "turn_end" });
+    } else {
+      expect(() => handoffToolResult(result, () => { throw new Error("write failed"); })).toThrow("write failed");
+      expect(returned).toEqual([reply]);
+      expect(acknowledgements).toEqual([]);
+      expect(reports.map(report => report.stage)).toEqual(["queued"]);
+    }
+    tool.endReplyInput("tool-turn");
   });
 
   it("issue #226: production handler は terminal inbound を明示して注入しない", async () => {

@@ -640,6 +640,9 @@ export async function runAntigravityCli(
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
   }));
+  for (const notice of pendingWorkNotices.splice(0)) {
+    instructionChain = instructionChain.then(() => host!.send(notice)).catch(() => {});
+  }
   dependencies.onHostCreated?.(host);
   // issue #359 M1: apply a permission_sync that arrived before the host existed.
   if (pendingPermissionSync !== undefined) {

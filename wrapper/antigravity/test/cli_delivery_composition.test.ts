@@ -36,6 +36,59 @@ function inbound(deliverySeq: number, turnNumber: number, body = "hello"): Envel
 }
 
 describe("Antigravity CLI delivery composition", () => {
+  it("drains work notices received before host construction through the instruction chain", async () => {
+    const sends: string[] = [];
+    let linkOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    let running: Promise<void> | undefined;
+    const notice = {
+      version: "0",
+      op: "assign",
+      reason: "assignment_created",
+      work: { work_id: "wrk_1" },
+    };
+    const link = {
+      close: () => {},
+      send: () => {},
+      reportDisconnectIntent: async () => true,
+    };
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      activeInterAgentTurnToken: () => null,
+      requestInterruptForTurn: () => true,
+      failStopTurnForWatchdog: () => true,
+      failStopForWatchdogAttributionUnknown: () => true,
+      send: async (text: string) => { sends.push(text); },
+      run: async () => { started(); await finished; },
+    };
+    running = runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        options.onWorkNotice?.(notice as never);
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: () => host as never,
+    });
+
+    try {
+      await ready;
+      await vi.waitFor(() => expect(sends).toHaveLength(1));
+      expect(sends[0]).toContain("Work notice:");
+      expect(sends[0]).toContain("assignment_created");
+      expect(linkOptions.onWorkNotice).toBeTypeOf("function");
+    } finally {
+      finishHost();
+      await running;
+    }
+  });
+
   it("connects the server handler, agy turn start, token, and delivery acknowledgement", async () => {
     const acknowledgements: number[] = [];
     const disconnectReasons: string[] = [];

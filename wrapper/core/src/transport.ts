@@ -22,6 +22,7 @@ import type {
   DeliveryAdvisory,
   DeliveryAuthority,
   DeliveryModes,
+  DeliveryStageReport,
   DeliveryModesJoinRequest,
   InterAgentSendReply,
   EngineKind,
@@ -46,7 +47,6 @@ import type {
   WorkNotice,
   DeliveryStatusRequest,
   DeliveryStatusResult,
-  DeliveryStageReport,
 } from "@kaoiro/protocol";
 import {
   isWrapperBuildIdentityValid,
@@ -118,6 +118,16 @@ export interface ReplayIaItem {
   envelope: Envelope;
 }
 
+interface DeliveryStageIdentity {
+  incarnation: string;
+  generation: string;
+}
+
+interface PendingDeliveryStage {
+  report: Omit<DeliveryStageReport, "version">;
+  inFlight: boolean;
+}
+
 /** What the server did with an outbound `inter_agent_message` push
  *  (ADR-0051 D3-2). `unknown` is the honest answer for a timeout or a lost
  *  ack: the message may well have been delivered, so the caller must not
@@ -154,6 +164,7 @@ export const MAX_REPLAY_IA_PUSH_BYTES = 1_000_000;
  */
 export const MAX_ACTIVE_TASK_CACHE_ENTRIES = 5_000;
 export const MAX_ACTIVE_TASK_CACHE_BYTES = 6_000_000;
+export const MAX_PENDING_DELIVERY_STAGE_REPORTS = 4_096;
 
 /** The protocol version this wrapper speaks (ADR-0015). Mirrors
  *  `RUNNER_PROTOCOL_VERSION` in `runner/src/transport.ts` — same rule,
@@ -955,6 +966,8 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   };
   const delivery = deliveryStatusFrom(v.inter_agent_delivery);
   if (delivery !== undefined) entry.inter_agent_delivery = delivery;
+  const deliveryModes = deliveryModesFrom(v.delivery_modes);
+  if (deliveryModes !== undefined) entry.delivery_modes = deliveryModes;
   // issue #209 D19/D26: same value-level narrow used everywhere else on
   // this repo's display-name fields — a malformed value (overlong,
   // control chars) is omitted rather than passed through, matching this
@@ -999,6 +1012,20 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   const lastSeen = nonEmptyText(v.last_seen);
   if (lastSeen !== undefined) entry.last_seen = lastSeen;
   return entry;
+}
+
+function deliveryModesFrom(value: unknown): DeliveryModes | undefined {
+  if (!isObject(value)) return undefined;
+  const early = value.early;
+  const yieldMode = value.yield;
+  if (
+    (early === "fold" || early === "steer" || early === "hook" || early === "none") &&
+    (yieldMode === "tool_boundary" || yieldMode === "none") &&
+    typeof value.stage_reports === "boolean"
+  ) {
+    return { early, yield: yieldMode, stage_reports: value.stage_reports };
+  }
+  return undefined;
 }
 
 // Same charset the server enforces for BOTH agent_id and user_id
@@ -1307,6 +1334,9 @@ export class ServerLink {
   #deliveryModesSettled = false;
   #workControlSupported = false;
   #deliveryIncarnation: string | null = null;
+  #lastDeliveryStageIdentity: DeliveryStageIdentity | null = null;
+  readonly #pendingDeliveryStages = new Map<string, PendingDeliveryStage>();
+  #deliveryStageOverflowWarned = false;
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -1635,6 +1665,7 @@ export class ServerLink {
     this.#socket.onError(() => invalidateReplyBasis());
     this.#socket.onClose((event?: { code?: number }) => {
       this.#deliveryRecovery.disconnected();
+      for (const pending of this.#pendingDeliveryStages.values()) pending.inFlight = false;
       invalidateReplyBasis(event?.code === 1000);
     });
     this.#socket.onOpen(() => {
@@ -1667,6 +1698,7 @@ export class ServerLink {
         this.#deliveryIncarnation = isObject(reply) && typeof reply.inter_agent_delivery_incarnation === "string" && reply.inter_agent_delivery_incarnation.length > 0
           ? reply.inter_agent_delivery_incarnation
           : null;
+        this.#reconcileDeliveryStageReports();
         options.onWorkControl?.(this.#workControlSupported);
         for (const release of this.#replyBasisWaiters) release(this.#replyBasisMode);
         if (options.interAgentReplyBasis && this.#replyBasisMode === "legacy") writeRedactedStderr("inter-agent reply basis: legacy (server protection unavailable)\n");
@@ -1898,12 +1930,79 @@ export class ServerLink {
 
   reportDeliveryStage(
     report: Omit<DeliveryStageReport, "version" | "generation"> & { generation?: string },
-  ): void {
-    if (this.#deliveryModes?.stage_reports !== true || this.#deliveryIncarnation === null || report.incarnation !== this.#deliveryIncarnation) return;
-    this.#pushVersioned("delivery_stage", {
-      ...report,
-      generation: report.generation ?? this.#deliveryGeneration,
-    });
+  ): boolean {
+    const eligibleIdentity = this.#currentDeliveryStageIdentity() ?? this.#lastDeliveryStageIdentity;
+    const generation = report.generation ?? this.#deliveryGeneration;
+    if (
+      eligibleIdentity === null ||
+      report.incarnation !== eligibleIdentity.incarnation ||
+      generation !== eligibleIdentity.generation
+    ) return false;
+    const complete = { ...report, generation } as Omit<DeliveryStageReport, "version">;
+    const key = JSON.stringify([complete.incarnation, complete.generation, complete.delivery_seq, complete.stage]);
+    if (this.#pendingDeliveryStages.has(key)) return true;
+    if (this.#pendingDeliveryStages.size >= MAX_PENDING_DELIVERY_STAGE_REPORTS) {
+      if (!this.#deliveryStageOverflowWarned) {
+        this.#deliveryStageOverflowWarned = true;
+        writeRedactedStderr(`delivery_stage pending report limit reached (${MAX_PENDING_DELIVERY_STAGE_REPORTS}); further reports are not retained\n`);
+      }
+      return false;
+    }
+    this.#deliveryStageOverflowWarned = false;
+    const pending = { report: complete, inFlight: false };
+    this.#pendingDeliveryStages.set(key, pending);
+    this.#pushDeliveryStageReport(key, pending);
+    return true;
+  }
+
+  #currentDeliveryStageIdentity(): DeliveryStageIdentity | null {
+    if (this.#deliveryModes?.stage_reports !== true || this.#deliveryIncarnation === null) return null;
+    return { incarnation: this.#deliveryIncarnation, generation: this.#deliveryGeneration };
+  }
+
+  #reconcileDeliveryStageReports(): void {
+    const identity = this.#currentDeliveryStageIdentity();
+    if (identity === null) {
+      this.#lastDeliveryStageIdentity = null;
+      this.#pendingDeliveryStages.clear();
+      this.#deliveryStageOverflowWarned = false;
+      return;
+    }
+    const same = this.#lastDeliveryStageIdentity?.incarnation === identity.incarnation &&
+      this.#lastDeliveryStageIdentity.generation === identity.generation;
+    for (const [key, pending] of this.#pendingDeliveryStages) {
+      if (pending.report.incarnation !== identity.incarnation || pending.report.generation !== identity.generation) {
+        this.#pendingDeliveryStages.delete(key);
+      } else {
+        pending.inFlight = false;
+      }
+    }
+    if (!same && this.#lastDeliveryStageIdentity !== null) {
+      writeRedactedStderr("delivery_stage pending reports retired after delivery identity changed\n");
+    }
+    this.#lastDeliveryStageIdentity = identity;
+    this.#deliveryStageOverflowWarned = false;
+    for (const [key, pending] of this.#pendingDeliveryStages) this.#pushDeliveryStageReport(key, pending);
+  }
+
+  #pushDeliveryStageReport(key: string, pending: PendingDeliveryStage): void {
+    const current = this.#currentDeliveryStageIdentity();
+    if (
+      pending.inFlight ||
+      current === null ||
+      current.incarnation !== pending.report.incarnation ||
+      current.generation !== pending.report.generation ||
+      this.#channel.state !== "joined"
+    ) return;
+    pending.inFlight = true;
+    this.#pushVersioned("delivery_stage", pending.report as unknown as Record<string, unknown>)
+      .receive("ok", () => {
+        if (this.#pendingDeliveryStages.get(key) !== pending) return;
+        this.#pendingDeliveryStages.delete(key);
+        this.#deliveryStageOverflowWarned = false;
+      })
+      .receive("error", () => { pending.inFlight = false; })
+      .receive("timeout", () => { pending.inFlight = false; });
   }
 
   acknowledgeWorkTransfer(request: Omit<WorkTransferAckRequest, "version">): Promise<Record<string, unknown>> {
@@ -2272,6 +2371,8 @@ export class ServerLink {
   close(): void {
     this.#failReplyBasis(true, true);
     this.#deliveryRecovery.dispose();
+    this.#pendingDeliveryStages.clear();
+    this.#lastDeliveryStageIdentity = null;
     this.#channel.leave();
     this.#socket.disconnect();
   }

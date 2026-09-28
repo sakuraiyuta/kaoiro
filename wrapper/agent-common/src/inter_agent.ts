@@ -147,19 +147,32 @@ function acceptedDeliveryFields(
 
 function workOperationRejectionResult(
   acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>,
+  operationId?: string,
 ): InterAgentToolResult {
-  const guidance = acceptance.reason === "work_operation_deduplicated"
-    ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
-    : "Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id.";
+  const guidance = workRejectionGuidance(acceptance.reason);
   return {
     isError: true,
     content: [{ type: "text", text: JSON.stringify({
       error: acceptance.reason,
       send_not_attempted: acceptance.send_not_attempted === true,
       ...(acceptance.details ?? {}),
+      ...(acceptance.details?.operation_id === undefined && operationId !== undefined ? { operation_id: operationId } : {}),
       guidance,
     }, null, 2) }],
   };
+}
+
+function workRejectionGuidance(reason: string): string {
+  if (reason === "work_applied_message_rejected") {
+    return "The work operation was applied, but message admission was rejected. Do not treat the body as delivered or repeat the work operation; use the returned operation result and delivery knowledge to decide separately whether to send the body.";
+  }
+  if (reason === "work_operation_deduplicated") {
+    return "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed.";
+  }
+  if (reason === "work_outcome_unknown") {
+    return "Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id.";
+  }
+  return "The work operation result is not included in this rejection. Query work_op_result with this operation_id before retrying the operation.";
 }
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
@@ -539,7 +552,7 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
     ),
   delivery_intent: z.enum(["normal", "early", "yield"]).optional().describe("Requested delivery mode. The server may downgrade it; non-normal requests require negotiated delivery modes."),
   work_id: z.string().min(1).max(128).optional().describe("Work targeted by a yield. Required with delivery_intent=yield."),
-  expected_authority_epoch: WORK_REVISION.optional().describe("Authority epoch observed in the work stamp; required with delivery_intent=yield."),
+  expected_authority_epoch: WORK_REVISION.optional().describe("Caller-supplied expected authority epoch, normally copied from an observed work stamp; the wrapper validates presence and numeric shape but the server checks it against the current grant. Required with delivery_intent=yield."),
   work_control: WORK_CONTROL_SCHEMA.optional().describe("One revision-checked work operation to apply before admitting this message."),
 };
 
@@ -823,7 +836,7 @@ export interface InterAgentToolOptions {
   /** A host fail-stop revokes model-initiated sends independently of turn snapshots. */
   canSendInterAgent?: () => boolean;
   replyBasisGeneration?: () => number | undefined;
-  onInputHandoff?: (envelopes: readonly Envelope[]) => void;
+  onInputHandoff?: (envelopes: readonly Envelope[], turnToken: string) => void;
   returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
   onReplyDiagnostic?: (event: Record<string, unknown>) => void;
   claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined;
@@ -2213,7 +2226,7 @@ export class InterAgentTool {
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
             if (captured) {
               if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
-              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message) };
+              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id) };
             }
             return { kind: "rejected", message, acceptance };
           }
@@ -2242,6 +2255,9 @@ export class InterAgentTool {
       return outcome.result;
     }
     if (outcome.kind === "rejected") {
+      if (workControl !== undefined) {
+        return workOperationRejectionResult(outcome.acceptance, workControl.operation_id);
+      }
       if (outcome.acceptance.reason === "work_operation_deduplicated" || outcome.acceptance.reason === "work_outcome_unknown") {
         return workOperationRejectionResult(outcome.acceptance);
       }
@@ -2368,7 +2384,7 @@ export class InterAgentTool {
         ticket?.activate(); this.replyBasis.observe(ordinary, origin.token);
         if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
         lease?.commit();
-        this.#options.onInputHandoff?.(envelopes);
+        this.#options.onInputHandoff?.(envelopes, origin.token);
       },
       rollback: () => { origin.signal?.removeEventListener("abort", abort); abort(); },
     });
@@ -2379,13 +2395,20 @@ export class InterAgentTool {
     return localReplyError(code);
   }
 
-  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string): InterAgentToolResult {
+  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): InterAgentToolResult {
     this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
-    const fields = { error: acceptance.reason.slice(0, 128), message: acceptance.reason === "work_operation_deduplicated"
+    const isWorkRejection = operationId !== undefined ||
+      acceptance.reason === "work_operation_deduplicated" ||
+      acceptance.reason === "work_outcome_unknown" ||
+      acceptance.reason === "work_applied_message_rejected";
+    const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason) : undefined;
+    const fields = { error: acceptance.reason.slice(0, 128), message: workGuidance ?? (acceptance.reason === "work_operation_deduplicated"
       ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
       : acceptance.reason === "work_outcome_unknown"
       ? "The message was not sent. Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id."
-      : acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details };
+      : acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512)), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details,
+      ...(acceptance.details?.operation_id === undefined && operationId !== undefined ? { operation_id: operationId } : {}),
+      ...(workGuidance === undefined ? {} : { guidance: workGuidance }) };
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;

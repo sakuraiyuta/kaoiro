@@ -23,6 +23,7 @@ const mock = vi.hoisted(() => ({
   pushes: [] as { event: string; payload: unknown }[],
   lastChannelParams: null as unknown,
   onOpen: null as (() => void) | null,
+  onClose: null as ((event?: { code?: number }) => void) | null,
   // ADR-0051 D2: the hydration verdict rides the JOIN reply, so a test has
   // to be able to fire the join push's receive("ok") the way the phoenix
   // client does on every (re)join.
@@ -81,7 +82,7 @@ vi.mock("phoenix", () => {
       mock.onOpen = cb;
     }
     disconnect(): void {}
-    onClose(_callback: () => void): void {}
+    onClose(callback: (event?: { code?: number }) => void): void { mock.onClose = callback; }
     onError(_callback: () => void): void {}
   }
   return { Channel, Socket };
@@ -94,6 +95,7 @@ vi.stubGlobal("WebSocket", class {});
 import {
   MAX_ACTIVE_TASK_CACHE_BYTES,
   MAX_ACTIVE_TASK_CACHE_ENTRIES,
+  MAX_PENDING_DELIVERY_STAGE_REPORTS,
   MAX_REPLAY_IA_PUSH_BYTES,
   SERVER_EVENT_VERSION_POLICY,
   WRAPPER_CONTROL_EVENT_POLICY,
@@ -119,6 +121,8 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
     mock.lastPush = null;
     mock.pushes = [];
     mock.joinReceivers.clear();
+    mock.channelState = "joined";
+    mock.onClose = null;
   });
 
   it("first send は seq=1 を付与し ext を透過する", () => {
@@ -1628,6 +1632,19 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
       expect(narrowed.agent_id).toBe("peer.1");
     }
   });
+
+  it("projects only a complete, valid delivery_modes value", async () => {
+    const valid = await narrowOne({
+      delivery_modes: { early: "none", yield: "none", stage_reports: true },
+    });
+    expect(valid.delivery_modes).toEqual({ early: "none", yield: "none", stage_reports: true });
+
+    const malformed = await narrowOne({
+      delivery_modes: { early: "unknown", yield: "none", stage_reports: true },
+    });
+    expect(malformed.delivery_modes).toBeUndefined();
+    expect(malformed.agent_id).toBe("peer.1");
+  });
 });
 
 describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
@@ -1636,6 +1653,8 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     mock.lastPush = null;
     mock.pushes = [];
     mock.joinReceivers.clear();
+    mock.channelState = "joined";
+    mock.onClose = null;
   });
 
   const versioned = () =>
@@ -1750,8 +1769,98 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(mock.pushes.some(push => push.event === "delivery_stage")).toBe(false);
     mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "server-incarnation" });
     expect(link.deliveryIncarnation()).toBe("server-incarnation");
-    link.reportDeliveryStage({ incarnation: link.deliveryIncarnation()!, delivery_seq: 1, stage: "queued", at: "T" });
+    expect(link.reportDeliveryStage({
+      incarnation: "invented", delivery_seq: 1, stage: "queued", at: "T",
+    })).toBe(false);
+    expect(mock.pushes.some(push => push.event === "delivery_stage")).toBe(false);
+    expect(link.reportDeliveryStage({ incarnation: link.deliveryIncarnation()!, delivery_seq: 1, stage: "queued", at: "T" })).toBe(true);
     expect(mock.lastPush).toMatchObject({ event: "delivery_stage", payload: { incarnation: "server-incarnation", generation: expect.any(String) } });
+  });
+
+  it.each(["error", "timeout"] as const)("retains a %s stage report until the same-identity rejoin acknowledges it", status => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    const report = { incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: 8, stage: "submitted" as const, at: "T" };
+    expect(link.reportDeliveryStage(report)).toBe(true);
+    const first = mock.lastPush!;
+    expect(first.event).toBe("delivery_stage");
+    first.receivers.get(status)?.({});
+
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    const second = mock.lastPush!;
+    expect(second.event).toBe("delivery_stage");
+    expect(second.payload).toMatchObject(report);
+    second.receivers.get("ok")?.({});
+
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(2);
+  });
+
+  it("holds a handoff reported while disconnected and resends its captured identity after rejoin", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    mock.pushes = [];
+    mock.channelState = "errored";
+    mock.onClose?.({ code: 1006 });
+    expect(link.reportDeliveryStage({
+      incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: 9, stage: "submitted", at: "T",
+    })).toBe(true);
+    expect(mock.pushes).toEqual([]);
+
+    mock.channelState = "joined";
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    expect(mock.lastPush).toMatchObject({
+      event: "delivery_stage",
+      payload: { incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: 9, stage: "submitted" },
+    });
+  });
+
+  it("retires unconfirmed reports when a rejoin replaces the incarnation", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-old" });
+    link.reportDeliveryStage({
+      incarnation: "inc-old", generation: link.deliveryGeneration(), delivery_seq: 7, stage: "queued", at: "T",
+    });
+    mock.pushes = [];
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-new" });
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toEqual([]);
+    expect(link.reportDeliveryStage({
+      incarnation: "inc-new", generation: link.deliveryGeneration(), delivery_seq: 7, stage: "queued", at: "T2",
+    })).toBe(true);
+    expect(mock.lastPush).toMatchObject({
+      event: "delivery_stage",
+      payload: { incarnation: "inc-new", generation: link.deliveryGeneration(), delivery_seq: 7, at: "T2" },
+    });
+  });
+
+  it("bounds retained unconfirmed stage reports and accepts new work after an acknowledgement", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    for (let sequence = 1; sequence <= MAX_PENDING_DELIVERY_STAGE_REPORTS; sequence += 1) {
+      expect(link.reportDeliveryStage({
+        incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: sequence, stage: "queued", at: "T",
+      })).toBe(true);
+    }
+    expect(link.reportDeliveryStage({
+      incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: MAX_PENDING_DELIVERY_STAGE_REPORTS + 1, stage: "queued", at: "T",
+    })).toBe(false);
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(MAX_PENDING_DELIVERY_STAGE_REPORTS);
+    mock.lastPush!.receivers.get("ok")?.({});
+    expect(link.reportDeliveryStage({
+      incarnation: "inc-a", generation: link.deliveryGeneration(), delivery_seq: MAX_PENDING_DELIVERY_STAGE_REPORTS + 1, stage: "queued", at: "T",
+    })).toBe(true);
   });
 
   it("T1-4: control call site は funnel を迂回しない", async () => {
@@ -2270,6 +2379,36 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       reason: "unknown_agent",
     });
     expect(acks).toEqual([]);
+  });
+
+  it.each([
+    {
+      reason: "work_operation_deduplicated",
+      details: {
+        operation_id: "op_1_abcdefghijklmnopqrstuv",
+        delivery: "recorded",
+        work_control_result: { op: "assign", operation_id: "op_1_abcdefghijklmnopqrstuv", outcome: "applied", deduplicated: true },
+      },
+    },
+    {
+      reason: "work_outcome_unknown",
+      details: { operation_id: "op_2_abcdefghijklmnopqrstuv" },
+    },
+    {
+      reason: "work_applied_message_rejected",
+      details: {
+        operation_id: "op_3_abcdefghijklmnopqrstuv",
+        delivery: "not_recorded",
+        work_control_result: { op: "assign", operation_id: "op_3_abcdefghijklmnopqrstuv", outcome: "applied" },
+      },
+    },
+  ])("decodes the structured $reason rejection without manufacturing acceptance", async ({ reason, details }) => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({ reason, send_not_attempted: true, details });
+    const acceptance = await pending;
+    expect(acceptance).toMatchObject({ kind: "rejected", reason, send_not_attempted: true, details });
+    expect(acceptance).not.toHaveProperty("stamp");
   });
 
   it("narrowly carries disconnect attribution on a preflight rejection", async () => {

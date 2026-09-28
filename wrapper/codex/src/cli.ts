@@ -541,7 +541,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
-    onInputHandoff: envelopes => { for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope); },
+    onInputHandoff: (envelopes, turnToken) => {
+      for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
+      deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
+    },
     claimRecovery: (cid, peer, fit) => interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit),
     config,
     getState: () => host.state,
@@ -640,6 +643,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
     },
     turns: interAgentTurns,
+    onOverflow: () => writeRedactedStderr("delivery_stage tracking limit reached; new stages are omitted until tracked deliveries settle\n"),
   });
 
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
@@ -766,7 +770,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       handleInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
-          recordInboundIa,
+          recordInboundIa: envelope => {
+            deliveryStages.capture(envelope);
+            recordInboundIa(envelope);
+          },
           reportQueued: envelope => deliveryStages.queued(envelope),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
           send: (notice) => interAgent?.sendInternalNotice(notice),

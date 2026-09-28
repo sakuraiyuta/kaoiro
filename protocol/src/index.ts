@@ -1200,6 +1200,9 @@ export interface InterAgentMessagePayload {
   delivery_intent?: DeliveryIntent;
   /** Required with a yield request and copied from observed work state. */
   work_id?: string;
+  /** Caller-supplied expected epoch. The wrapper validates its shape and
+   *  presence but does not prove the caller observed the value; the server
+   *  enforces it against the current grant. */
   expected_authority_epoch?: number;
   /** Executed at admission and never relayed as an executable field. */
   work_control?: WorkControl;

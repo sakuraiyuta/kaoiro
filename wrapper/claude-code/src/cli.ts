@@ -578,7 +578,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
-    onInputHandoff: envelopes => { for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope); },
+    onInputHandoff: (envelopes, turnToken) => {
+      for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
+      deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
+    },
     claimRecovery: (cid, peer, fit) => interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit),
     config,
     getState: () => host.state,
@@ -677,6 +680,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
     },
     turns: interAgentTurns,
+    onOverflow: () => writeRedactedStderr("delivery_stage tracking limit reached; new stages are omitted until tracked deliveries settle\n"),
   });
 
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
@@ -875,7 +879,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           ingress: interAgentIngress,
-          recordInboundIa,
+          recordInboundIa: envelope => {
+            deliveryStages.capture(envelope);
+            recordInboundIa(envelope);
+          },
           retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
           reportQueued: envelope => deliveryStages.queued(envelope),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),

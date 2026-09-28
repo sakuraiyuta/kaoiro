@@ -87,7 +87,7 @@ Only the `type` value and `payload` schema are new.
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |
 | `delivery_intent` | optional | `normal` (default), `early`, or `yield`; the requested delivery mode. Non-normal values require negotiated delivery modes. |
 | `work_id` | MUST with `delivery_intent: "yield"` | Work targeted by the yield; work operations also carry their own `work_id`. |
-| `expected_authority_epoch` | MUST with `delivery_intent: "yield"` | Epoch observed by the sender; the wrapper never fills it from newer server state. |
+| `expected_authority_epoch` | MUST with `delivery_intent: "yield"` | Caller-supplied expectation, normally copied from an observed work stamp. The wrapper checks presence and numeric shape, then copies it unchanged; it does not prove the caller observed it. The server enforces the expected epoch against the current grant. |
 | `work_control` | optional | One typed operation with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. |
 | `delivery_authority` | server-owned | Requested and granted intent, downgrade, and a `yield_token` only for a granted yield. A sender-supplied value is rejected. |
 | `work` | server-owned | `{work_id, revision, authority_epoch, state}` at admission for a linked conversation. A sender-supplied value is rejected. |
@@ -99,6 +99,10 @@ Their effect requires server and wrapper negotiation; a type declaration alone
 does not activate the control. A successful work operation can precede a
 failed message admission, so its receipt and message-delivery knowledge must
 be reported separately.
+
+The wrapper treats `expected_authority_epoch` as the caller's expectation,
+not as evidence that the caller observed the stamp. The server's grant and
+epoch check is the authority boundary.
 
 A former assignee may read only its pending transfer obligations through
 `work_status`. Each such obligation includes `work_id` and `transfer_id`, so

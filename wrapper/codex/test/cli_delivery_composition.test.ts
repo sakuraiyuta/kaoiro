@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { handoffToolResult } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
+import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -46,6 +48,147 @@ function deferred<T = void>(): {
 }
 
 describe("Codex CLI delivery composition (issue #247)", () => {
+  it("reports a consumed waiter reply at the CLI's committed tool-result handoff", async () => {
+    const wire = await phoenixLoopback(() => ({
+      inter_agent_reply_basis: "v1",
+      inter_agent_delivery_modes: "v1",
+      inter_agent_delivery_incarnation: "server-incarnation",
+      work_control: "v1",
+    }));
+    let hostOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let startHost!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const started = new Promise<void>(resolve => { startHost = resolve; });
+    const running = runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, server_url: wire.url }),
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          activeInterAgentTurnToken: () => "waiter-turn",
+          run: async () => { startHost(); await finished; },
+          send: async () => {}, close: () => {},
+        } as never;
+      },
+      prepareStartup: async () => {},
+    });
+    try {
+      await vi.waitFor(() => expect(wire.joins).toBe(1));
+      wire.push("persona_prompt", { prompt: "system prompt" });
+      await started;
+      hostOptions.onTurnStart({ turnToken: "waiter-turn", conversationIds: [] });
+      const sendTool = (hostOptions.toolDescriptors as Array<{ name: string; handler: (input: Record<string, unknown>, context?: unknown) => Promise<any> }>)
+        .find(descriptor => descriptor.name === "send_to_agent");
+      expect(sendTool).toBeDefined();
+
+      const waiting = sendTool!.handler({
+        to: "peer.agent", conversation_id: "waiter-cli", kind: "query", body: "question",
+        wait_for_response: true, timeout_ms: 2_000,
+      }, { origin: { token: "waiter-turn" } });
+      await vi.waitFor(() => expect(wire.received.some(item =>
+        item.event === "envelope" && item.payload.type === "inter_agent_message",
+      )).toBe(true));
+      const reply = inboundEnvelope(1, 2);
+      reply.payload.conversation_id = "waiter-cli";
+      reply.payload.kind = "response";
+      wire.push("envelope", reply as unknown as Record<string, unknown>);
+      const result = await waiting;
+      const stages = () => wire.received.filter(item => item.event === "delivery_stage").map(item => item.payload);
+      await vi.waitFor(() => expect(stages().map(stage => stage.stage)).toEqual(["queued"]));
+      expect(wire.received.filter(item => item.event === "delivery_ack")).toHaveLength(0);
+
+      expect(handoffToolResult(result, () => {})).toBe(true);
+      await vi.waitFor(() => expect(stages().map(stage => stage.stage)).toEqual(["queued", "submitted"]));
+      expect(stages()[1]).toMatchObject({ delivery_seq: 1, handoff: "tool_result" });
+      await vi.waitFor(() => expect(wire.received.filter(item => item.event === "delivery_ack")).toHaveLength(1));
+
+      hostOptions.onTurnEnd({ turnToken: "waiter-turn", conversationIds: ["waiter-cli"] });
+      await vi.waitFor(() => expect(stages().map(stage => stage.stage)).toEqual(["queued", "submitted", "settled"]));
+      expect(stages()[2]).toMatchObject({ delivery_seq: 1, reason: "turn_end" });
+      hostOptions.onTurnFinalized({ turnToken: "waiter-turn" });
+    } finally {
+      finishHost();
+      await running;
+      await wire.close();
+    }
+  });
+
+  it("captures a delivery before receiveInbound waits across an identity change", async () => {
+    let identity = "old-incarnation";
+    const reports: Array<Record<string, unknown>> = [];
+    let releaseDone!: (value: { kind: "rejected"; reason: string }) => void;
+    const doneAcceptance = new Promise<{ kind: "rejected"; reason: string }>(resolve => { releaseDone = resolve; });
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    let finishHost!: () => void;
+    let startHost!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const started = new Promise<void>(resolve => { startHost = resolve; });
+    const running = runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { options.onReplyBasisMode!("v1"); options.onPersonaPrompt!("system prompt"); });
+        return {
+          sendInterAgent: async (envelope: Envelope) =>
+            envelope.payload.kind === "done" ? doneAcceptance : { kind: "accepted", stamp: null },
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          deliveryIncarnation: () => identity,
+          deliveryGeneration: () => "generation",
+          reportDeliveryStage: (report: Record<string, unknown>) => { reports.push(report); return true; },
+          acknowledgeInterAgentDelivery: () => {},
+          retireInterAgentDeliveries: () => true,
+          flushInterAgentRetirements: async () => {},
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "tool_running", statusExtSnapshot: () => ({}),
+          activeInterAgentTurnToken: () => "identity-turn",
+          run: async () => { startHost(); await finished; },
+          send: async () => {}, close: () => {},
+        } as never;
+      },
+      prepareStartup: async () => {},
+    });
+    let doneAttempt: Promise<unknown> | undefined;
+    try {
+      await started;
+      hostOptions.onTurnStart({ turnToken: "identity-turn", conversationIds: [] });
+      const sendTool = (hostOptions.toolDescriptors as Array<{ name: string; handler: (input: Record<string, unknown>, context?: unknown) => Promise<any> }>)
+        .find(descriptor => descriptor.name === "send_to_agent");
+      expect(sendTool).toBeDefined();
+      doneAttempt = sendTool!.handler({
+        to: "peer.agent", conversation_id: "done-gate", kind: "done", body: "close", done: true,
+      }, { origin: { token: "identity-turn" } });
+
+      const oldDelivery = inboundEnvelope(7, 2);
+      oldDelivery.payload.conversation_id = "done-gate";
+      const oldReceive = (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(oldDelivery);
+      identity = "new-incarnation";
+      const newDelivery = inboundEnvelope(7, 2);
+      newDelivery.payload.conversation_id = "separate-conversation";
+      await (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(newDelivery);
+      releaseDone({ kind: "rejected", reason: "unknown_agent" });
+      await doneAttempt;
+      await oldReceive;
+
+      expect(reports.filter(report => report.stage === "queued")).toEqual([
+        expect.objectContaining({ incarnation: "new-incarnation", generation: "generation", delivery_seq: 7 }),
+      ]);
+    } finally {
+      releaseDone({ kind: "rejected", reason: "unknown_agent" });
+      await doneAttempt;
+      finishHost();
+      await running;
+    }
+  });
+
   it("actual entrypoint connects status, handler, and host turn-start to one acknowledgement flow", async () => {
     const acknowledgements: number[] = [];
     const stderr = vi
