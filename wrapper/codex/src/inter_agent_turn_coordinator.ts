@@ -224,6 +224,10 @@ export class CodexInterAgentTurnCoordinator {
       );
   }
 
+  deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[] {
+    return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
+  }
+
   /** Returns the min/max delivery sequence represented by one active batch. */
   deliverySequenceRangeForTurn(
     turnToken: string,

@@ -41,21 +41,50 @@ export class DeliveryAcknowledger {
  * structural avoids making agent-common depend on either adapter. */
 export interface DeliveryTurnSource {
   deliverySequencesForTurn(turnToken: string): readonly number[];
+  deliveryEnvelopesForTurn?(turnToken: string): readonly Envelope[];
+}
+
+interface DeliveryAcknowledgementIdentity {
+  incarnation: string;
+  generation: string;
+}
+
+function sameAcknowledgementIdentity(
+  a: DeliveryAcknowledgementIdentity | null,
+  b: DeliveryAcknowledgementIdentity | null,
+): boolean {
+  return a !== null && b !== null && a.incarnation === b.incarnation && a.generation === b.generation;
 }
 
 /** Delivery-acknowledgement semantics for issue #237. The runtime builder
  * below applies this object to each production component connection; focused
  * tests can exercise the watermark loop without duplicating it in a fixture. */
 export class DeliveryAcknowledgement {
-  readonly #ledger = new DeliveryAcknowledger();
+  #ledger = new DeliveryAcknowledger();
   readonly #send: (deliverySeq: number) => void;
+  readonly #identity: (() => DeliveryAcknowledgementIdentity | null) | undefined;
+  readonly #capturedIdentity = new WeakMap<Envelope, DeliveryAcknowledgementIdentity | null>();
+  #activeIdentity: DeliveryAcknowledgementIdentity | null = null;
+  #identityObserved = false;
 
-  constructor(send: (deliverySeq: number) => void) {
+  constructor(
+    send: (deliverySeq: number) => void,
+    identity?: () => DeliveryAcknowledgementIdentity | null,
+  ) {
     this.#send = send;
+    this.#identity = identity;
   }
 
   /** Reconcile the server's authoritative baseline after a join/rejoin. */
   observe(status: { acked_seq: number; skipped_ranges?: [number, number][] } | null): void {
+    if (this.#identity !== undefined) {
+      const current = this.#snapshotIdentity(this.#identity());
+      if (!this.#identityObserved || !this.#sameNullableIdentity(current, this.#activeIdentity)) {
+        this.#ledger = new DeliveryAcknowledger();
+        this.#activeIdentity = current;
+        this.#identityObserved = true;
+      }
+    }
     if (status === null) return;
     this.#sendIfAdvanced(this.#ledger.bind(status.acked_seq));
     for (const [first, last] of status.skipped_ranges ?? []) {
@@ -65,19 +94,54 @@ export class DeliveryAcknowledgement {
     }
   }
 
+  /** Capture the join identity before a handler can await. The server ACK wire
+   * carries only a sequence, so stale captures must be dropped locally. */
+  readonly captureEnvelope = (envelope: Envelope): void => {
+    if (this.#identity === undefined || this.#capturedIdentity.has(envelope)) return;
+    this.#capturedIdentity.set(envelope, this.#snapshotIdentity(this.#identity()));
+  };
+
   /** Intentional non-injection has completed locally and cannot reach SDK. */
   readonly acknowledgeEnvelope = (envelope: Envelope): void => {
-    this.#sendIfAdvanced(
-      this.#ledger.complete((envelope as Envelope & { delivery_seq?: unknown }).delivery_seq),
-    );
+    const seq = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
+    if (!this.#identityAllows(envelope)) return;
+    this.#sendIfAdvanced(this.#ledger.complete(seq));
   };
 
   /** Actual SDK turn start is the confirmation point for injected batches. */
   readonly acknowledgeTurnStart = (turnToken: string, turns: DeliveryTurnSource): void => {
+    if (turns.deliveryEnvelopesForTurn !== undefined) {
+      for (const envelope of turns.deliveryEnvelopesForTurn(turnToken)) {
+        this.acknowledgeEnvelope(envelope);
+      }
+      return;
+    }
+    if (this.#identity !== undefined) return;
     for (const seq of turns.deliverySequencesForTurn(turnToken)) {
       this.#sendIfAdvanced(this.#ledger.complete(seq));
     }
   };
+
+  #identityAllows(envelope: Envelope): boolean {
+    if (this.#identity === undefined) return true;
+    if (!this.#capturedIdentity.has(envelope)) return false;
+    const captured = this.#capturedIdentity.get(envelope) ?? null;
+    const live = this.#snapshotIdentity(this.#identity());
+    return this.#identityObserved &&
+      this.#sameNullableIdentity(live, this.#activeIdentity) &&
+      this.#sameNullableIdentity(captured, live);
+  }
+
+  #snapshotIdentity(identity: DeliveryAcknowledgementIdentity | null): DeliveryAcknowledgementIdentity | null {
+    return identity === null ? null : { incarnation: identity.incarnation, generation: identity.generation };
+  }
+
+  #sameNullableIdentity(
+    a: DeliveryAcknowledgementIdentity | null,
+    b: DeliveryAcknowledgementIdentity | null,
+  ): boolean {
+    return a === null || b === null ? a === b : sameAcknowledgementIdentity(a, b);
+  }
 
   #sendIfAdvanced(ack: number | null): void {
     if (ack !== null) this.#send(ack);
@@ -115,6 +179,7 @@ export function createDeliveryAcknowledgementWiring(
  * than returning callbacks for an adapter fixture to wire independently. */
 export interface DeliveryAcknowledgementRuntime {
   acknowledgeDelivery(envelope: Envelope): void;
+  captureDelivery(envelope: Envelope): void;
   withServerLinkOptions<TOptions extends object>(
     options: TOptions,
   ): TOptions & {
@@ -138,11 +203,13 @@ export interface DeliveryAcknowledgementRuntime {
 export function createDeliveryAcknowledgementRuntime(
   send: (deliverySeq: number) => void,
   turns: DeliveryTurnSource,
+  identity?: () => DeliveryAcknowledgementIdentity | null,
 ): DeliveryAcknowledgementRuntime {
-  const acknowledgement = new DeliveryAcknowledgement(send);
+  const acknowledgement = new DeliveryAcknowledgement(send, identity);
 
   return {
     acknowledgeDelivery: acknowledgement.acknowledgeEnvelope,
+    captureDelivery: acknowledgement.captureEnvelope,
     withServerLinkOptions: (options) => ({
       ...options,
       onInterAgentDeliveryStatus: (status: { acked_seq: number } | null) =>

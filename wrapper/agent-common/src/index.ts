@@ -20,7 +20,7 @@ export type {
   DeliveryTurnSource,
 } from "./delivery_ack.js";
 export { DeliveryStageReporter } from "./delivery_stages.js";
-export type { DeliveryStageIdentity, DeliveryStageSender } from "./delivery_stages.js";
+export type { DeliveryStageIdentity, DeliveryStageSender, DeliveryStageTurnSource } from "./delivery_stages.js";
 export type {
   HistoryReplayerOptions,
   HydrationVerdict,

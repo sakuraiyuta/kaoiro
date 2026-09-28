@@ -12,13 +12,14 @@ const envelope = (seq: number): Envelope => ({
 describe("DeliveryStageReporter", () => {
   it("reports queued, submitted and terminal stages with the server identity", () => {
     const reports: Record<string, unknown>[] = [];
+    const root = envelope(7);
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => ({ incarnation: "server-incarnation", generation: "wrapper-generation" }),
-      turns: { deliverySequencesForTurn: token => token === "turn" ? [7] : [] },
+      turns: { deliveryEnvelopesForTurn: token => token === "turn" ? [root] : [] },
       now: () => "T",
     });
-    reporter.queued(envelope(7));
+    reporter.queued(root);
     reporter.submitted("turn", "prompt_hook");
     reporter.settled("turn");
     expect(reports).toEqual([
@@ -31,31 +32,33 @@ describe("DeliveryStageReporter", () => {
   it("does not attach a later incarnation to a delivery received before the first join", () => {
     const reports: unknown[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = null;
+    const root = envelope(7);
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => currentIdentity,
-      turns: { deliverySequencesForTurn: () => [7] },
+      turns: { deliveryEnvelopesForTurn: () => [root] },
       now: () => "T",
     });
-    reporter.queued(envelope(7));
+    reporter.queued(root);
     currentIdentity = { incarnation: "new", generation: "g" };
     reporter.submitted("turn", "exec_input_written");
     reporter.settled("turn");
     expect(reports).toEqual([]);
   });
 
-  it("keeps the captured identity through a disconnected handoff and retires it after replacement", () => {
+  it("keeps a disconnected handoff in its captured identity and retires it after replacement", () => {
     const reports: Record<string, unknown>[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = {
       incarnation: "old", generation: "g",
     };
+    const root = envelope(7);
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => currentIdentity,
-      turns: { deliverySequencesForTurn: () => [7] },
+      turns: { deliveryEnvelopesForTurn: () => [root] },
       now: () => "T",
     });
-    reporter.queued(envelope(7));
+    reporter.queued(root);
     currentIdentity = null;
     reporter.submitted("turn", "exec_input_written");
     expect(reports.at(-1)).toMatchObject({ incarnation: "old", generation: "g", delivery_seq: 7, stage: "submitted" });
@@ -65,44 +68,78 @@ describe("DeliveryStageReporter", () => {
     expect(reports.filter(report => report.stage === "submitted")).toEqual([
       expect.objectContaining({ incarnation: "old", delivery_seq: 7 }),
     ]);
-    reporter.queued(envelope(7));
-    expect(reports.at(-1)).toMatchObject({ incarnation: "new", generation: "g", delivery_seq: 7, stage: "queued" });
+    const fresh = envelope(7);
+    reporter.queued(fresh);
+    expect(reports.at(-1)).toMatchObject({ incarnation: "new", delivery_seq: 7, stage: "queued" });
     expect(reports.filter(report => report.stage === "submitted")).toEqual([
       expect.objectContaining({ incarnation: "old", delivery_seq: 7 }),
     ]);
   });
 
-  it("does not relabel an unsubmitted old turn after the server identity changes", () => {
+  it("does not relabel an old turn when its sequence is reused after identity replacement", () => {
     const reports: Record<string, unknown>[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = {
       incarnation: "old", generation: "g",
     };
+    const old = envelope(12);
+    const fresh = envelope(12);
+    const turnItems: Record<string, readonly Envelope[]> = { "old-turn": [old], "new-turn": [fresh] };
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => currentIdentity,
-      turns: { deliverySequencesForTurn: () => [12] },
+      turns: { deliveryEnvelopesForTurn: token => turnItems[token] ?? [] },
       now: () => "T",
     });
-    reporter.queued(envelope(12));
+    reporter.queued(old);
     currentIdentity = { incarnation: "new", generation: "g" };
     reporter.submitted("old-turn", "exec_input_written");
     expect(reports).toEqual([
       expect.objectContaining({ incarnation: "old", generation: "g", delivery_seq: 12, stage: "queued" }),
     ]);
 
-    reporter.queued(envelope(12));
-    expect(reports.at(-1)).toMatchObject({
-      incarnation: "new", generation: "g", delivery_seq: 12, stage: "queued",
-    });
+    reporter.queued(fresh);
+    reporter.submitted("new-turn", "exec_input_written");
     reporter.settled("old-turn");
     expect(reports.filter(report => report.stage === "settled")).toEqual([]);
-    reporter.submitted("new-turn", "exec_input_written");
-    expect(reports.at(-1)).toMatchObject({
-      incarnation: "new", generation: "g", delivery_seq: 12, stage: "submitted",
-    });
+    reporter.settled("new-turn");
+    expect(reports.filter(report => report.incarnation === "new")).toEqual([
+      expect.objectContaining({ delivery_seq: 12, stage: "queued" }),
+      expect.objectContaining({ delivery_seq: 12, stage: "submitted" }),
+      expect.objectContaining({ delivery_seq: 12, stage: "settled", reason: "turn_end" }),
+    ]);
   });
 
-  it("settles the envelope identity captured before an async disposition", () => {
+  it("settles only the fresh record when a captured old receive completes late", () => {
+    const reports: Record<string, unknown>[] = [];
+    let currentIdentity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const old = envelope(7);
+    const fresh = envelope(7);
+    const turnItems: Record<string, readonly Envelope[]> = { "old-turn": [old], "new-turn": [fresh] };
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => currentIdentity,
+      turns: { deliveryEnvelopesForTurn: token => turnItems[token] ?? [] },
+      now: () => "T",
+    });
+    reporter.capture(old);
+    currentIdentity = { incarnation: "new", generation: "g" };
+    reporter.queued(fresh);
+    reporter.submitted("new-turn", "prompt_hook");
+    reporter.queued(old);
+    reporter.settleEnvelope(old, "stale_skip");
+    reporter.settled("old-turn");
+    reporter.settled("new-turn");
+    expect(reports.filter(report => report.stage === "submitted")).toEqual([
+      expect.objectContaining({ incarnation: "new", delivery_seq: 7 }),
+    ]);
+    expect(reports.filter(report => report.stage === "settled")).toEqual([
+      expect.objectContaining({ incarnation: "new", delivery_seq: 7, reason: "turn_end" }),
+    ]);
+  });
+
+  it("settles the captured envelope identity before an async disposition completes", () => {
     const reports: Record<string, unknown>[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = {
       incarnation: "old", generation: "g",
@@ -110,7 +147,7 @@ describe("DeliveryStageReporter", () => {
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => currentIdentity,
-      turns: { deliverySequencesForTurn: () => [] },
+      turns: { deliveryEnvelopesForTurn: () => [] },
       now: () => "T",
     });
     const oldDelivery = envelope(13);
@@ -131,13 +168,14 @@ describe("DeliveryStageReporter", () => {
 
   it("settles a stream that ends before its first handoff as failed_before_handoff", () => {
     const reports: Record<string, unknown>[] = [];
+    const root = envelope(3);
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => ({ incarnation: "i", generation: "g" }),
-      turns: { deliverySequencesForTurn: () => [3] },
+      turns: { deliveryEnvelopesForTurn: () => [root] },
       now: () => "T",
     });
-    reporter.queued(envelope(3));
+    reporter.queued(root);
     reporter.settled("turn");
     expect(reports.at(-1)).toMatchObject({ stage: "settled", reason: "failed_before_handoff" });
   });
@@ -148,7 +186,7 @@ describe("DeliveryStageReporter", () => {
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => ({ incarnation: "i", generation: "g" }),
-      turns: { deliverySequencesForTurn: () => [] },
+      turns: { deliveryEnvelopesForTurn: () => [] },
       now: () => "T",
     });
     reporter.queued(reply);
@@ -158,13 +196,86 @@ describe("DeliveryStageReporter", () => {
     expect(reports.at(-1)).toMatchObject({ stage: "settled", reason: "turn_end" });
   });
 
+  it("joins a reused sequence waiter reply to its exact identity in the live turn", () => {
+    const reports: Record<string, unknown>[] = [];
+    let currentIdentity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const root = envelope(7);
+    const reply = envelope(7);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => currentIdentity,
+      turns: { deliveryEnvelopesForTurn: () => [root] },
+      now: () => "T",
+    });
+    reporter.queued(root);
+    reporter.submitted("live-turn", "prompt_hook");
+    currentIdentity = { incarnation: "new", generation: "g" };
+    reporter.queued(reply);
+    reporter.submittedEnvelopes("live-turn", [reply], "tool_result");
+    expect(reports.filter(report => report.stage === "submitted" && report.incarnation === "new")).toEqual([
+      expect.objectContaining({ delivery_seq: 7, handoff: "tool_result" }),
+    ]);
+    reporter.settled("live-turn");
+    expect(reports.filter(report => report.stage === "settled" && report.incarnation === "new")).toEqual([
+      expect.objectContaining({ delivery_seq: 7, reason: "turn_end" }),
+    ]);
+  });
+
+  it("keeps a distinct-sequence waiter reply control", () => {
+    const reports: Record<string, unknown>[] = [];
+    let currentIdentity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const root = envelope(7);
+    const reply = envelope(8);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => currentIdentity,
+      turns: { deliveryEnvelopesForTurn: () => [root] },
+      now: () => "T",
+    });
+    reporter.queued(root);
+    reporter.submitted("live-turn", "prompt_hook");
+    currentIdentity = { incarnation: "new", generation: "g" };
+    reporter.queued(reply);
+    reporter.submittedEnvelopes("live-turn", [reply], "tool_result");
+    expect(reports.filter(report => report.stage === "submitted" && report.incarnation === "new")).toEqual([
+      expect.objectContaining({ delivery_seq: 8, handoff: "tool_result" }),
+    ]);
+    reporter.settled("live-turn");
+    expect(reports.filter(report => report.stage === "settled" && report.incarnation === "new")).toEqual([
+      expect.objectContaining({ delivery_seq: 8, reason: "turn_end" }),
+    ]);
+  });
+
+  it("retires old identity records before applying the local capacity limit", () => {
+    const reports: Record<string, unknown>[] = [];
+    let currentIdentity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => currentIdentity,
+      turns: { deliveryEnvelopesForTurn: () => [] },
+      now: () => "T",
+    });
+    for (let sequence = 1; sequence <= 512; sequence += 1) reporter.capture(envelope(sequence));
+    currentIdentity = { incarnation: "new", generation: "g" };
+    reporter.queued(envelope(513));
+    expect(reports).toEqual([
+      expect.objectContaining({ incarnation: "new", delivery_seq: 513, stage: "queued" }),
+    ]);
+  });
+
   it("bounds unresolved local deliveries and warns only once while full", () => {
     const reports: Record<string, unknown>[] = [];
     const onOverflow = vi.fn();
     const reporter = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => ({ incarnation: "i", generation: "g" }),
-      turns: { deliverySequencesForTurn: () => [] },
+      turns: { deliveryEnvelopesForTurn: () => [] },
       onOverflow,
       now: () => "T",
     });

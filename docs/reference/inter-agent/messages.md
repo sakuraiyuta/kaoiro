@@ -31,11 +31,14 @@ explicitly decide whether to start a new delivery. A `work_outcome_unknown`
 rejection also has no `ingress_stamp`; it carries the `operation_id`. Query
 `work_op_result` with that ID and retry with the same ID only if it was not
 applied. A yield-only WorkStore timeout is downgraded and proceeds as an
-accepted send, rather than returning `work_outcome_unknown`. When a work
-operation has applied but the server cannot issue its yield token, the send is
-accepted as `early` with `delivery_authority.downgrade: "yield_token_unavailable"`.
-The work receipt records the operation result and delivery knowledge, but not
-the intent downgrade; inspect the send result's `delivery_authority` for it.
+accepted send, rather than returning `work_outcome_unknown`. If a work
+operation applies but yield-token issuance fails, its receipt remains applied
+and early is only a fallback delivery mode. Recipient capability and early
+quota checks still apply, so the final send result may grant early or normal
+with a downgrade such as `yield_token_unavailable`, `recipient_legacy`,
+`unsupported_by_recipient`, or `early_quota`. Treat the reply's
+`delivery_authority.granted` and `.downgrade` as the final result; the work
+receipt records the operation result and delivery knowledge, not that downgrade.
 See [work authority and operations](work.md#work-authority-and-operations).
 
 ### envelope.type: "inter_agent_message"

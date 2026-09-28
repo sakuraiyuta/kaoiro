@@ -89,4 +89,39 @@ describe("DeliveryAcknowledger (issue #247)", () => {
     host.onTurnStart({ turnToken: "wrapper", kind: "wrapper_input" });
     expect(sent).toEqual([1]);
   });
+
+  it("drops a delayed old-identity ack instead of confirming a reused new sequence", () => {
+    const sent: number[] = [];
+    let identity: { incarnation: string; generation: string } | null = {
+      incarnation: "old", generation: "g",
+    };
+    const old = { delivery_seq: 1 } as unknown as Envelope;
+    const fresh = { delivery_seq: 1 } as unknown as Envelope;
+    const turnItems: Record<string, readonly Envelope[]> = {
+      "old-turn": [old],
+      "new-turn": [fresh],
+    };
+    const runtime = createDeliveryAcknowledgementRuntime(
+      seq => sent.push(seq),
+      {
+        deliverySequencesForTurn: () => [1],
+        deliveryEnvelopesForTurn: token => turnItems[token] ?? [],
+      },
+      () => identity,
+    );
+    const link = runtime.withServerLinkOptions({});
+    const host = runtime.withHostOptions({});
+    link.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(old);
+
+    identity = { incarnation: "new", generation: "g" };
+    link.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    runtime.captureDelivery(fresh);
+    runtime.acknowledgeDelivery(old);
+    host.onTurnStart({ turnToken: "old-turn", kind: "wrapper_input" });
+    expect(sent).toEqual([]);
+
+    host.onTurnStart({ turnToken: "new-turn", kind: "wrapper_input" });
+    expect(sent).toEqual([1]);
+  });
 });

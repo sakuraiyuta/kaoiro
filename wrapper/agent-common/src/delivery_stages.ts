@@ -1,9 +1,12 @@
 import type { DeliveryIntent, DeliveryStageReport, Envelope, InterAgentMessagePayload } from "@kaoiro/protocol";
-import type { DeliveryTurnSource } from "./delivery_ack.js";
 
 export interface DeliveryStageIdentity {
   incarnation: string;
   generation: string;
+}
+
+export interface DeliveryStageTurnSource {
+  deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[];
 }
 
 export type DeliveryStageSender = (
@@ -11,9 +14,12 @@ export type DeliveryStageSender = (
 ) => void;
 
 interface TrackedDelivery {
+  key: string;
   identity: DeliveryStageIdentity | null;
+  deliverySeq: number;
   mode?: DeliveryIntent;
   submitted: boolean;
+  retired: boolean;
   turnToken?: string;
 }
 
@@ -35,23 +41,26 @@ function sameIdentity(a: DeliveryStageIdentity | null, b: DeliveryStageIdentity 
   return a !== null && b !== null && a.incarnation === b.incarnation && a.generation === b.generation;
 }
 
+function deliveryKey(identity: DeliveryStageIdentity | null, sequence: number): string {
+  return JSON.stringify([identity?.incarnation ?? null, identity?.generation ?? null, sequence]);
+}
+
 export class DeliveryStageReporter {
   readonly #send: DeliveryStageSender;
   readonly #identity: () => DeliveryStageIdentity | null;
-  readonly #turns: DeliveryTurnSource;
+  readonly #turns: DeliveryStageTurnSource;
   readonly #now: () => string;
   readonly #onOverflow: (() => void) | undefined;
-  readonly #deliveries = new Map<number, TrackedDelivery[]>();
-  readonly #sequencesByTurn = new Map<string, Map<number, TrackedDelivery>>();
+  readonly #deliveries = new Map<string, TrackedDelivery>();
+  readonly #deliveriesByTurn = new Map<string, Map<string, TrackedDelivery>>();
   readonly #deliveryByEnvelope = new WeakMap<Envelope, TrackedDelivery>();
   #lastIdentity: DeliveryStageIdentity | null = null;
-  #deliveryCount = 0;
   #warnedOverflow = false;
 
   constructor(options: {
     send: DeliveryStageSender;
     identity: () => DeliveryStageIdentity | null;
-    turns: DeliveryTurnSource;
+    turns: DeliveryStageTurnSource;
     now?: () => string;
     onOverflow?: () => void;
   }) {
@@ -63,15 +72,17 @@ export class DeliveryStageReporter {
   }
 
   queued(envelope: Envelope): void {
+    this.#observeIdentity();
     const sequence = sequenceOf(envelope);
     if (sequence === undefined) return;
     this.capture(envelope);
     const delivery = this.#deliveryByEnvelope.get(envelope);
     if (delivery === undefined) return;
-    this.#report(sequence, delivery, "queued", delivery.mode === undefined ? {} : { mode: delivery.mode });
+    this.#report(delivery, "queued", delivery.mode === undefined ? {} : { mode: delivery.mode });
   }
 
   capture(envelope: Envelope): void {
+    this.#observeIdentity();
     if (this.#deliveryByEnvelope.has(envelope)) return;
     const sequence = sequenceOf(envelope);
     if (sequence === undefined) return;
@@ -80,72 +91,76 @@ export class DeliveryStageReporter {
   }
 
   submitted(turnToken: string, handoff: "prompt_hook" | "exec_input_written"): void {
-    for (const sequence of this.#turns.deliverySequencesForTurn(turnToken)) {
-      this.#recordTurnSequence(turnToken, sequence);
+    this.#observeIdentity();
+    for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {
+      this.#recordTurnEnvelope(turnToken, envelope);
     }
     this.#submit(turnToken, handoff);
   }
 
   submittedEnvelopes(turnToken: string, envelopes: readonly Envelope[], handoff: "tool_result"): void {
-    for (const envelope of envelopes) {
-      const sequence = sequenceOf(envelope);
-      if (sequence === undefined) continue;
-      this.capture(envelope);
-      const delivery = this.#deliveryByEnvelope.get(envelope);
-      if (delivery !== undefined) this.#recordTurnSequence(turnToken, sequence, delivery);
-    }
+    this.#observeIdentity();
+    for (const envelope of envelopes) this.#recordTurnEnvelope(turnToken, envelope);
     this.#submit(turnToken, handoff);
   }
 
   settled(turnToken: string): void {
-    for (const sequence of this.#turns.deliverySequencesForTurn(turnToken)) {
-      this.#recordTurnSequence(turnToken, sequence);
+    this.#observeIdentity();
+    for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {
+      this.#recordTurnEnvelope(turnToken, envelope);
     }
-    for (const [sequence, delivery] of this.#sequencesByTurn.get(turnToken) ?? []) {
-      this.#report(sequence, delivery, "settled", {
+    for (const delivery of [...(this.#deliveriesByTurn.get(turnToken)?.values() ?? [])]) {
+      this.#report(delivery, "settled", {
         reason: delivery.submitted ? "turn_end" : "failed_before_handoff",
       });
-      this.#removeDelivery(sequence, delivery);
+      this.#removeDelivery(delivery);
     }
-    this.#sequencesByTurn.delete(turnToken);
+    this.#deliveriesByTurn.delete(turnToken);
   }
 
   settleEnvelope(envelope: Envelope, reason: "terminal_skip" | "stale_skip"): void {
-    const sequence = sequenceOf(envelope);
-    if (sequence === undefined) return;
+    this.#observeIdentity();
     this.capture(envelope);
     const delivery = this.#deliveryByEnvelope.get(envelope);
     if (delivery === undefined) return;
-    this.#report(sequence, delivery, "settled", { reason });
-    this.#removeDelivery(sequence, delivery);
+    this.#report(delivery, "settled", { reason });
+    this.#removeDelivery(delivery);
   }
 
   #submit(
     turnToken: string,
     handoff: "prompt_hook" | "exec_input_written" | "tool_result",
   ): void {
-    for (const [sequence, delivery] of this.#sequencesByTurn.get(turnToken) ?? []) {
+    for (const delivery of this.#deliveriesByTurn.get(turnToken)?.values() ?? []) {
       if (delivery.submitted) continue;
       delivery.submitted = true;
-      this.#report(sequence, delivery, "submitted", {
+      this.#report(delivery, "submitted", {
         handoff,
         ...(delivery.mode === undefined ? {} : { mode: delivery.mode }),
       });
     }
   }
 
-  #track(sequence: number, mode?: DeliveryIntent): TrackedDelivery | null {
+  #observeIdentity(): DeliveryStageIdentity | null {
     const current = this.#identity();
-    if (current !== null) this.#lastIdentity = current;
-    const capturedIdentity = current ?? this.#lastIdentity;
-    const deliveries = this.#deliveries.get(sequence) ?? [];
-    const existing = deliveries.find(delivery =>
-      capturedIdentity === null
-        ? delivery.identity === null
-        : sameIdentity(delivery.identity, capturedIdentity),
-    );
+    if (current !== null) {
+      if (!sameIdentity(current, this.#lastIdentity)) {
+        for (const delivery of [...this.#deliveries.values()]) {
+          if (!sameIdentity(delivery.identity, current)) this.#removeDelivery(delivery);
+        }
+      }
+      this.#lastIdentity = { incarnation: current.incarnation, generation: current.generation };
+      return this.#lastIdentity;
+    }
+    return this.#lastIdentity;
+  }
+
+  #track(sequence: number, mode?: DeliveryIntent): TrackedDelivery | null {
+    const capturedIdentity = this.#observeIdentity();
+    const key = deliveryKey(capturedIdentity, sequence);
+    const existing = this.#deliveries.get(key);
     if (existing !== undefined) return existing;
-    if (this.#deliveryCount >= MAX_TRACKED_DELIVERIES) {
+    if (this.#deliveries.size >= MAX_TRACKED_DELIVERIES) {
       if (!this.#warnedOverflow) {
         this.#warnedOverflow = true;
         this.#onOverflow?.();
@@ -154,57 +169,65 @@ export class DeliveryStageReporter {
     }
     this.#warnedOverflow = false;
     const delivery: TrackedDelivery = {
-      identity: capturedIdentity,
+      key,
+      identity: capturedIdentity === null ? null : { ...capturedIdentity },
+      deliverySeq: sequence,
       submitted: false,
+      retired: false,
       ...(mode === undefined ? {} : { mode }),
     };
-    deliveries.push(delivery);
-    this.#deliveries.set(sequence, deliveries);
-    this.#deliveryCount += 1;
+    this.#deliveries.set(key, delivery);
     return delivery;
   }
 
-  #recordTurnSequence(turnToken: string, sequence: number, preferred?: TrackedDelivery): void {
-    let deliveries = this.#sequencesByTurn.get(turnToken);
+  #recordTurnEnvelope(turnToken: string, envelope: Envelope): void {
+    this.capture(envelope);
+    const delivery = this.#deliveryByEnvelope.get(envelope);
+    if (
+      delivery === undefined ||
+      delivery.retired ||
+      this.#deliveries.get(delivery.key) !== delivery ||
+      (delivery.turnToken !== undefined && delivery.turnToken !== turnToken)
+    ) return;
+    let deliveries = this.#deliveriesByTurn.get(turnToken);
     if (deliveries === undefined) {
       deliveries = new Map();
-      this.#sequencesByTurn.set(turnToken, deliveries);
+      this.#deliveriesByTurn.set(turnToken, deliveries);
     }
-    if (deliveries.has(sequence)) return;
-    const candidates = this.#deliveries.get(sequence) ?? [];
-    const delivery = preferred ?? candidates.find(candidate => candidate.turnToken === undefined);
-    if (delivery === undefined || (delivery.turnToken !== undefined && delivery.turnToken !== turnToken)) return;
     delivery.turnToken = turnToken;
-    deliveries.set(sequence, delivery);
+    deliveries.set(delivery.key, delivery);
   }
 
-  #removeDelivery(sequence: number, delivery: TrackedDelivery): void {
-    const deliveries = this.#deliveries.get(sequence);
-    if (deliveries === undefined) return;
-    const index = deliveries.indexOf(delivery);
-    if (index < 0) return;
-    deliveries.splice(index, 1);
-    this.#deliveryCount -= 1;
-    if (deliveries.length === 0) this.#deliveries.delete(sequence);
+  #removeDelivery(delivery: TrackedDelivery): void {
+    if (this.#deliveries.get(delivery.key) !== delivery) return;
+    this.#deliveries.delete(delivery.key);
+    delivery.retired = true;
+    for (const [turnToken, deliveries] of this.#deliveriesByTurn) {
+      deliveries.delete(delivery.key);
+      if (deliveries.size === 0) this.#deliveriesByTurn.delete(turnToken);
+    }
     this.#warnedOverflow = false;
   }
 
   #report(
-    delivery_seq: number,
     delivery: TrackedDelivery,
     stage: DeliveryStageReport["stage"],
     fields: Pick<DeliveryStageReport, "mode" | "handoff" | "reason"> = {},
   ): void {
-    if (delivery.identity === null) return;
-    const current = this.#identity();
+    const current = this.#observeIdentity();
+    if (
+      delivery.retired ||
+      this.#deliveries.get(delivery.key) !== delivery ||
+      delivery.identity === null
+    ) return;
     if (current !== null && !sameIdentity(delivery.identity, current)) {
-      this.#removeDelivery(delivery_seq, delivery);
+      this.#removeDelivery(delivery);
       return;
     }
     this.#send({
       incarnation: delivery.identity.incarnation,
       generation: delivery.identity.generation,
-      delivery_seq,
+      delivery_seq: delivery.deliverySeq,
       stage,
       ...fields,
       at: this.#now(),

@@ -145,20 +145,27 @@ export interface WorkHold {
   set_at_revision: number;
 }
 
+export interface WorkCheckTarget {
+  ref: string;
+  expected_old: string;
+  actual?: string;
+}
+
 export interface WorkCheckAudit {
   principal: WorkPrincipal;
   action: WorkCheckAction;
   revision: number;
-  subject_hash?: string;
+  subject_hash?: string | null;
   result: "ok" | WorkErrorCode;
   at: string;
+  target?: WorkCheckTarget | null;
 }
 
 export interface WorkRecord {
   work_id: string;
   title: string;
-  origin?: { conversation_id: string; turn_number: number };
-  reviews?: string;
+  origin?: { conversation_id: string; turn_number: number } | null;
+  reviews?: string | null;
   director: WorkPrincipal;
   assignee: { kind: "agent"; id: string };
   resource_scope: string[];
@@ -167,7 +174,7 @@ export interface WorkRecord {
   revision: number;
   authority_epoch: number;
   transfers: WorkTransferObligation[];
-  subject?: WorkSubject;
+  subject?: WorkSubject | null;
   holds: WorkHold[];
   verdicts: WorkVerdict[];
   accepted_verdicts: WorkAcceptedVerdict[];
@@ -343,7 +350,7 @@ export type WorkStatusResult =
   | { work_id: WorkId; access: "transfer_pending"; pending_transfers: PendingWorkTransfer[]; work?: never }
   | { works: WorkRecord[]; pending_transfers: PendingWorkTransfer[] };
 export type WorkOpResult = { receipt: WorkOperationReceipt } | { error: "unknown_operation" | "operation_id_expired" };
-export interface WorkCheckRequest { version: "0"; work_id: string; action: WorkCheckAction; subject_hash?: string; expected_revision: number }
+export interface WorkCheckRequest { version: "0"; work_id: string; action: WorkCheckAction; subject_hash?: string; expected_revision: number; target?: WorkCheckTarget }
 export type WorkCheckResult = { ok: true; work: WorkRecord } | { ok: false; reason: WorkErrorCode; work: WorkRecord };
 export interface DeliveryStatusRequest { version: "0"; conversation_id?: string; turn_number?: number }
 

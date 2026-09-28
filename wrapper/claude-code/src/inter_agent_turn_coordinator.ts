@@ -305,6 +305,10 @@ export class InterAgentTurnCoordinator {
       );
   }
 
+  deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[] {
+    return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
+  }
+
   /** Stops future dispatch after a watchdog fail-stop while retaining the
    * exact SDK-active generation. Its outcome remains unknown until a real
    * ResultMessage/EOF, so resolving it (or a same-CID successor) here would

@@ -332,7 +332,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     const stages = new DeliveryStageReporter({
       send: report => { reports.push(report); },
       identity: () => ({ incarnation: "inc", generation: "gen" }),
-      turns: { deliverySequencesForTurn: () => [] },
+      turns: { deliveryEnvelopesForTurn: () => [] },
       now: () => "T",
     });
     let tool!: InterAgentTool;

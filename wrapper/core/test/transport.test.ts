@@ -1842,6 +1842,23 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     });
   });
 
+  it("reclaims pending-report capacity when a rejoin replaces the incarnation", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-old" });
+    for (let sequence = 1; sequence <= MAX_PENDING_DELIVERY_STAGE_REPORTS; sequence += 1) {
+      expect(link.reportDeliveryStage({
+        incarnation: "inc-old", generation: link.deliveryGeneration(), delivery_seq: sequence, stage: "queued", at: "T",
+      })).toBe(true);
+    }
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-new" });
+    expect(link.reportDeliveryStage({
+      incarnation: "inc-new", generation: link.deliveryGeneration(), delivery_seq: 1, stage: "queued", at: "T2",
+    })).toBe(true);
+  });
+
   it("bounds retained unconfirmed stage reports and accepts new work after an acknowledgement", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",

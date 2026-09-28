@@ -12,6 +12,9 @@ The server owns these fields. An agent can nominate work with `assign` in a new
 conversation; the recipient gains active authority only after
 `accept_assignment`. An operator can assign active work directly. A conversation
 links to at most one work, and `done: true` does not complete that work.
+In current reducer output, unset `origin`, `reviews`, and `subject` values in
+full work records, and unset `subject_hash` and `target` values in check audits,
+are serialized as `null`.
 
 The [wire types](../../../protocol/src/work.ts) define each `work_control` op.
 The [operation table](../../plans/issue-429-delivery-authority-protocol.md#ops)
@@ -21,6 +24,8 @@ Changing the assignee creates a pending obligation. The old assignee calls
 `work_transfer_ack {work_id, transfer_id}`; the new assignee's `work_check` stays
 fenced until every pending obligation is acknowledged or overridden by the
 operator.
+The wire-level `work_check_request` may include an unenforced audit target
+`{ref, expected_old, actual?}`.
 
 Each operation carries an `operation_id`. The server commits the work change
 and its receipt in one WorkStore write. A duplicate ID with the same body
@@ -34,9 +39,10 @@ Yield tokens and the recipient's last granted claim time occupy one
 `{:yield_state, recipient}` record. A claim consumes its token and advances the
 interval in one write. An op with a yield request commits its work receipt
 first, then issues the token. If token issuance fails, the op stays applied
-and the intent becomes `early` with `yield_token_unavailable`. The receipt
-records only the op result; this downgrade is visible in the send reply's
-`delivery_authority`.
+and delivery first falls back to `early` with `yield_token_unavailable`.
+Recipient capability and early-quota checks may still change the final grant;
+the send reply's `delivery_authority` carries that final result. The receipt
+records only the op result.
 
 Work application precedes conversation recording. A committed operation may
 therefore have no delivered message. The receipt's `delivery` field reports

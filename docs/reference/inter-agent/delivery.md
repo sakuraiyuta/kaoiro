@@ -171,11 +171,13 @@ evidence is first-event receipt. The wrapper reports stages only when the join
 reply supplies the server-issued `inter_agent_delivery_incarnation`; it never
 fabricates one.
 
-If a work operation applies but the server cannot issue its yield token, the
-send is accepted as `early` and `delivery_authority.downgrade` is
-`yield_token_unavailable`. The work receipt records the operation result and
-delivery knowledge, but not the intent downgrade; it is reported only in the
-send result's `delivery_authority`. See [work authority and
+If a work operation applies but yield-token issuance fails, the operation
+receipt remains applied and early is only a fallback delivery mode. Recipient
+capability and early-quota checks still apply, so the final send result can
+grant early or normal with a downgrade such as `yield_token_unavailable`,
+`recipient_legacy`, `unsupported_by_recipient`, or `early_quota`. The reply's
+`delivery_authority.granted` and `delivery_authority.downgrade` give the final
+result; the receipt does not store that downgrade. See [work authority and
 operations](work.md#work-authority-and-operations).
 
 ## Related topics

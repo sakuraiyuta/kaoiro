@@ -664,21 +664,23 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : {}),
   });
 
+  const deliveryIdentity = () => {
+    if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
+    const incarnation = link.deliveryIncarnation();
+    return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+  };
   const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => {
       writeDeliveryLifecycle("delivery_ack", undefined, deliverySeq);
       link?.acknowledgeInterAgentDelivery(deliverySeq);
     },
     interAgentTurns,
+    deliveryIdentity,
   );
 
   const deliveryStages = new DeliveryStageReporter({
     send: report => link?.reportDeliveryStage(report),
-    identity: () => {
-      if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
-      const incarnation = link.deliveryIncarnation();
-      return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
-    },
+    identity: deliveryIdentity,
     turns: interAgentTurns,
     onOverflow: () => writeRedactedStderr("delivery_stage tracking limit reached; new stages are omitted until tracked deliveries settle\n"),
   });
@@ -880,6 +882,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           interAgent,
           ingress: interAgentIngress,
           recordInboundIa: envelope => {
+            deliveryAcknowledgementRuntime.captureDelivery(envelope);
             deliveryStages.capture(envelope);
             recordInboundIa(envelope);
           },
