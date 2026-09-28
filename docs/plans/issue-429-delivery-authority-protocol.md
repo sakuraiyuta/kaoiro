@@ -1,7 +1,7 @@
 ---
 title: Delivery intent, staged delivery, work grants and work_control (ADR-0063 phase 1)
 description: Protocol design for early delivery and stop intents, capability negotiation, staged delivery records, server-owned work records with assignment grants and revisions, and revision-checked consequential actions.
-status: pending-review
+status: approved
 last_updated: 2026-09-28
 ---
 
@@ -1497,7 +1497,8 @@ issues rather than change the design now:
 
 ## Appendix A — ADR-0063 amendment draft
 
-Not landed. For the operator decision at design approval.
+Approved by the operator on 2026-09-28 after design review round 4 and
+recorded in ADR-0063 (Amendment section).
 
 > **Amendment (2026-09-28, issue #429 design).**
 >

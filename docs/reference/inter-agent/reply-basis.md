@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -159,6 +159,24 @@ accounting. They neither close conversations nor advance ordinary peer history.
 sink. Rejected or unknown notices produce bounded diagnostics, without resend or
 retrospective delivery ack. A legacy wrapper's arbitrary `error` payload is not
 an exemption.
+
+## Known limitation: sends after subagent hand-backs (issue #426)
+
+On Claude Code, a background `Agent` subagent's final report reaches the
+root as an `<agent-message>` continuation prompt that the host does not
+inject and does not currently admit. Ordinary `send_to_agent` calls made in
+that continuation are rejected locally with `unbound_tool_call` and
+`send_not_attempted: true`; nothing is sent. The block lasts until the next
+inbound inter-agent message starts a new turn.
+
+Operational guidance until issue #426 is resolved under ADR-0063 D6:
+
+- A Claude peer that must report to its director after background `Agent`
+  work should expect to wait for the director's next message, or run the
+  subagent in the foreground so the report returns as a tool result inside
+  the live turn.
+- A director waiting on such a peer should send a short message to open a
+  turn rather than treat silence as failure.
 
 ## Rollout boundary
 

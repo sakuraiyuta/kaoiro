@@ -141,3 +141,35 @@ reporting. Fairness (bounded queues, duplicate suppression, no automatic
 preemption from synthetic notices) is a design requirement of phase 1.
 Engine differences remain and are made visible to senders rather than
 hidden.
+
+## Amendment (2026-09-28, issue #429 design)
+
+Approved by the operator on 2026-09-28 after the issue #429 design review
+(Kogane, four rounds, must 0 at round 4). Source:
+[issue-429-delivery-authority-protocol](../plans/issue-429-delivery-authority-protocol.md),
+"Premise corrections adopted before design" and Appendix A.
+
+- **D2.** In phase 1 the director holding an accepted assignment grant may
+  request cooperative yield after the current tool; hard cancellation
+  remains operator-only. Director hard cancellation may be added later
+  together with an epoch-bound cancellation target. Operator instructions
+  default to early, non-destructive delivery; stopping requires an explicit
+  control.
+- **D3.** The grant is part of a server-owned work record identified by a
+  server-issued `work_id`. The conversation that carried the assignment is
+  the record's origin attribute, not its identity.
+- **D4.** The revision unit is one work (`work_id`), which may span several
+  conversations in sequence or in parallel. Conversations reference the
+  work. The first guarantee covers one work across all of its linked
+  conversations. Conflicts between different works over one resource
+  (issue 407 incident 6, resource part) are recorded as not mechanically
+  solved; the server warns on declared-scope overlap.
+- **D5.** In phase 1 the server atomically enforces the actions whose
+  effect is server state (verdict acceptance and revocation, hold release,
+  completion, transfer). Starting implementation, merge, push, deploy and
+  landing are checked cooperatively through a wrapper tool immediately
+  before the operation; conditional updates on the Git host are later work.
+
+Reason: a conversation is cut off at 20 turns, holds at most two agents,
+is reclaimed 24 hours after it started and lives only in server memory, so
+one piece of work necessarily spans several conversations.
