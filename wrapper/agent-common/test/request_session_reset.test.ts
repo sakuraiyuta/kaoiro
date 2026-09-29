@@ -493,3 +493,23 @@ describe("SessionResetCoordinator — turn boundaries", () => {
     expect(logs[1]).toContain("queue closed");
   });
 });
+
+describe("SessionResetCoordinator.blocksLiveInput", () => {
+  it("holds from reservation through dispatch and acceptance until a terminal failure", async () => {
+    const h = harness([{ requestId: "rs-live" }]);
+    expect(h.coordinator.blocksLiveInput).toBe(false);
+    h.coordinator.reserve("clear");
+    expect(h.coordinator.blocksLiveInput).toBe(true);
+    h.coordinator.onTurnEnd();
+    expect(h.coordinator.pending).toBe(false);
+    expect(h.coordinator.blocksLiveInput).toBe(true);
+    await settle();
+    expect(h.coordinator.blocksLiveInput).toBe(true);
+    h.coordinator.onResetFailed("rs-other", "runner_unavailable");
+    expect(h.coordinator.blocksLiveInput).toBe(true);
+    h.coordinator.onResetFailed("rs-live", "runner_unavailable");
+    expect(h.coordinator.blocksLiveInput).toBe(false);
+    await settle();
+    expect(h.notices).toHaveLength(1);
+  });
+});

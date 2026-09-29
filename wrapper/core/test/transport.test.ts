@@ -1789,6 +1789,25 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       expect(link.operatorInputModes()).toBeNull();
     });
 
+    it("exposes permission-sync readiness synchronously across join and rejoin", () => {
+      const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", permissionSync: { engine: "codex" } });
+      expect(link.permissionSyncPending()).toBe(true);
+      mock.joinReceivers.get("ok")?.({ permission_sync: true });
+      expect(link.permissionSyncPending()).toBe(true);
+      emit("permission_sync", { version: "0", control: null, next: null });
+      expect(link.permissionSyncPending()).toBe(false);
+      mock.channelState = "joining";
+      expect(link.permissionSyncPending()).toBe(true);
+      mock.channelState = "joined";
+      mock.onOpen?.();
+      expect(link.permissionSyncPending()).toBe(true);
+      mock.joinReceivers.get("ok")?.({ permission_sync: true });
+      emit("permission_sync", { version: "0", control: null, next: null });
+      expect(link.permissionSyncPending()).toBe(false);
+      const unsynced = new ServerLink("ws://x/wrapper", "b.agent", { personaId: "ao" });
+      expect(unsynced.permissionSyncPending()).toBe(false);
+    });
+
     it("drops on disconnect and re-negotiates on the next join", () => {
       const { link, seen } = open(true);
       mock.joinReceivers.get("ok")?.({ operator_input_modes: "v1" });
@@ -1798,7 +1817,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       expect(link.operatorInputModes()).toBeNull();
       mock.joinReceivers.get("ok")?.({ operator_input_modes: "v1" });
       expect(link.operatorInputModes()).toEqual(declared);
-      expect(seen).toEqual([true, false, false, true]);
+      expect(seen).toEqual([true, false, true]);
     });
   });
 

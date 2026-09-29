@@ -285,6 +285,12 @@ export class SessionResetCoordinator {
     return this.#reserved !== null;
   }
 
+  /** True from reservation until the reset fails or replaces this process:
+   * input arriving now belongs to the session after the reset. */
+  get blocksLiveInput(): boolean {
+    return this.#reserved !== null || this.#dispatching || this.#accepted !== null;
+  }
+
   /** Receives the server's terminal lifecycle failure. This must be called
    *  only with transport-narrowed values. A different request id belongs to a
    *  stale/other wrapper and is ignored, so it cannot manufacture a notice in

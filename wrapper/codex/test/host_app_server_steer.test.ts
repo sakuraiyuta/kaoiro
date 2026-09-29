@@ -1,0 +1,220 @@
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { afterEach, expect, it, vi } from "vitest";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { CodexHost, type CodexHostOptions } from "../src/host.js";
+import { AppServerSession } from "../src/app_server_session.js";
+import type { RpcObject } from "../src/app_server_rpc.js";
+
+const config: WrapperConfig = { agent_id: "host-steer", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
+  server_url: "ws://unused", model: "gpt-5.6-sol", effort: "high", codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const fn of cleanup.splice(0)) await fn();vi.restoreAllMocks(); });
+
+type SteerReply = (request: RpcObject, reply: (value: unknown) => void, error: (code: number, message: string, data?: unknown) => void) => void;
+
+function fixture(optIn = true) {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+  const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
+  let number = 0;
+  let holdStart: (() => void) | null = null, holdStarts = false;
+  let onSteer: SteerReply = (request, reply) => reply({ turnId: (request.params as { expectedTurnId: string }).expectedTurnId });
+  const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
+  const stdin = new Writable({ write(chunk, _encoding, cb) {
+    const request = JSON.parse(String(chunk)) as RpcObject;sent.push(request);
+    const reply = (result: unknown) => send({ id: request.id, result });
+    if (request.method === "initialize") reply({ userAgent: "test/0.156.1" });
+    if (request.method === "thread/start") reply({ thread: { id: "thread" }, model: "gpt-5.6-sol", reasoningEffort: "medium" });
+    if (request.method === "account/rateLimits/read") send({ id: request.id, error: { code: -32600, message: "no account" } });
+    if (request.method === "config/read") reply({ config: { model_reasoning_effort: "low" } });
+    if (request.method === "turn/start") {
+      number += 1;
+      const id = `turn-${number}`;
+      const respond = () => { reply({ turn: { id } });send({ method: "turn/started", params: { threadId: "thread", turn: { id } } }); };
+      if (holdStarts) holdStart = respond; else respond();
+    }
+    if (request.method === "turn/steer") onSteer(request, reply, (code, message, data) =>
+      send({ id: request.id, error: { code, message, ...(data === undefined ? {} : { data }) } }));
+    if (request.method === "turn/interrupt") { reply({});send({ method: "turn/completed", params: { threadId: "thread", turn: { id: `turn-${number}`, status: "interrupted" } } }); }
+    cb();
+  } });
+  Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
+  const exit = () => {
+    if (child.exitCode !== null) return;
+    Object.assign(child, { exitCode: 0 });child.emit("exit", 0, null);stdout.end();stderr.end();queueMicrotask(() => child.emit("close", 0, null));
+  };
+  stdin.on("finish", exit);child.kill = vi.fn(() => { exit();return true; });
+  const logs: Envelope[] = [], rejected: Envelope[] = [];
+  let available = true, syncPending = false, blocked = false;
+  const options: CodexHostOptions = { backend: "app-server", appendSystemPrompt: "PERSONA",
+    appServerSessionFactory: options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }),
+    onState: () => {}, onLog: e => logs.push(e), onInstructionRejected: e => rejected.push(e),
+    permissionSyncPending: () => syncPending, liveInputBlocked: () => blocked };
+  if (optIn) options.operatorSteer = { available: () => available };
+  const host = new CodexHost(config, options);
+  const running = host.run();cleanup.push(async () => { host.close();await running; });
+  const byMethod = (method: string) => sent.filter(r => r.method === method);
+  const texts = (method: string) => byMethod(method).map(r => (r.params as { input: { text: string }[] }).input[0]?.text);
+  const system = () => logs.flatMap(e => (e.payload as { kind?: string; text?: string }).kind === "system" ? [(e.payload as { text: string }).text] : []);
+  const operator = (text: string, intent: "early" | "normal" = "early", attachmentIds?: string[]) =>
+    host.send(text, attachmentIds, undefined, undefined, { source: "operator", intent });
+  const terminal = (status = "completed") => send({ method: "turn/completed", params: { threadId: "thread", turn: { id: `turn-${number}`, status } } });
+  const inputItem = (clientId: string) => send({ method: "item/started", params: { threadId: "thread", turnId: `turn-${number}`,
+    item: { type: "userMessage", id: `u-${clientId}`, clientId, content: [] } } });
+  const clientId = (index: number) => (byMethod("turn/steer")[index]?.params as { clientUserMessageId: string }).clientUserMessageId;
+  return { host, sent, logs, rejected, send, exit, byMethod, texts, system, operator, terminal, inputItem, clientId,
+    get number() { return number; },
+    set onSteer(fn: SteerReply) { onSteer = fn; },
+    set holdStarts(value: boolean) { holdStarts = value; },
+    releaseStart() { const release = holdStart;holdStart = null;release?.(); },
+    set available(value: boolean) { available = value; }, set syncPending(value: boolean) { syncPending = value; },
+    set blocked(value: boolean) { blocked = value; } };
+}
+
+async function running(f: ReturnType<typeof fixture>) {
+  await f.operator("BASE", "normal");
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await vi.waitFor(() => expect(f.host.state).not.toBe("idle"));
+}
+
+const turnChanged = (_: RpcObject, __: (value: unknown) => void, error: (code: number, message: string) => void) =>
+  error(-32600, "no active turn to steer");
+
+it("steers an operator input into the running turn and reports inclusion", async () => {
+  const f = fixture();
+  await running(f);
+  await f.operator("STEER");
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
+  expect(f.byMethod("turn/steer")[0]?.params).toMatchObject({ threadId: "thread", expectedTurnId: "turn-1" });
+  f.inputItem(f.clientId(0));
+  f.terminal();
+  await vi.waitFor(() => expect(f.system()).toContain("Operator input was included in the running turn."));
+  expect(f.system()).toContain("Operator input accepted into the running turn.");
+  expect(f.texts("turn/start")).toEqual(["BASE"]);
+});
+
+it("AC-1: after a P response a later operator input queues behind the placeholder (P -> op2 -> T)", async () => {
+  const f = fixture();
+  await running(f);
+  f.onSteer = turnChanged;
+  await f.operator("OP1");
+  await f.operator("OP2");
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(3));
+  expect(f.texts("turn/start")).toEqual(["BASE", "OP1", "OP2"]);
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
+});
+
+it("AC-1: a contradicting input item removes the placeholder and op2 goes next (P -> op2 -> O -> T)", async () => {
+  const f = fixture();
+  await running(f);
+  f.onSteer = turnChanged;
+  await f.operator("OP1");
+  await f.operator("OP2");
+  f.inputItem(f.clientId(0));
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")).toEqual(["BASE", "OP2"]);
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
+  expect(f.system()).toContain("Operator input delivery is unknown (protocol_contradiction); it will not be re-sent.");
+});
+
+it("a V response is never resubmitted and does not hold a later input", async () => {
+  const f = fixture();
+  await running(f);
+  let first = true;
+  f.onSteer = (request, reply) => {
+    reply({ turnId: first ? "turn-other" : (request.params as { expectedTurnId: string }).expectedTurnId });first = false;
+  };
+  await f.operator("OP1");
+  await f.operator("OP2");
+  expect(f.byMethod("turn/steer")).toHaveLength(2);
+  f.inputItem(f.clientId(1));
+  f.terminal();
+  await vi.waitFor(() => expect(f.system()).toContain("Operator input delivery is unknown (protocol_violation); it will not be re-sent."));
+  expect(f.texts("turn/start")).toEqual(["BASE"]);
+});
+
+it("R3 must 2: with the echo present but permission sync pending, nothing is steered", async () => {
+  const f = fixture();
+  await running(f);
+  f.syncPending = true;
+  await f.operator("WAIT");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(f.system()).toContain("Operator input queued for the next turn (pending_settings).");
+  f.syncPending = false;
+  await f.operator("LATER");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(f.system()).toContain("Operator input queued for the next turn (behind_earlier_input).");
+});
+
+it("re-evaluates every guard at the commit point after waiting for the start response", async () => {
+  for (const change of ["reserve", "interrupt"] as const) {
+    const f = fixture();
+    f.holdStarts = true;
+    await f.operator("BASE", "normal");
+    await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+    const pending = f.operator("DURING");
+    await new Promise(resolve => setImmediate(resolve));
+    if (change === "reserve") f.blocked = true;
+    else void f.host.interrupt().catch(() => {});
+    f.releaseStart();
+    await pending;
+    expect(f.byMethod("turn/steer"), change).toHaveLength(0);
+    await f.host.close();
+  }
+});
+
+it("a pending session-reset notice keeps later operator input off the running turn", async () => {
+  const f = fixture();
+  await running(f);
+  await f.host.send("RESET FAILED", undefined, undefined, undefined, { source: "reset_notice" });
+  await f.operator("AFTER");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(f.system()).toContain("Operator input queued for the next turn (reset_pending).");
+});
+
+it("settles once when a disconnect overlaps close", async () => {
+  const f = fixture();
+  await running(f);
+  f.onSteer = () => {};
+  const pending = f.operator("LOST");
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  f.exit();
+  f.host.close();
+  await pending;
+  await vi.waitFor(() => expect(f.system().filter(t => t.startsWith("Operator input delivery is unknown"))).toHaveLength(1));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(f.system().filter(t => t.startsWith("Operator input"))).toEqual(["Operator input delivery is unknown (connection); it will not be re-sent."]);
+});
+
+it("queues input with attachments, and never steers with the opt-in unavailable or for normal intent", async () => {
+  const f = fixture();
+  await running(f);
+  await f.operator("WITH IMAGE", "early", ["upload-1"]);
+  expect(f.system()).toContain("Operator input queued for the next turn (attachments_not_steerable).");
+  await f.operator("NORMAL", "normal");
+  const g = fixture(false);
+  await running(g);
+  await g.operator("NO OPT-IN");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(g.byMethod("turn/steer")).toHaveLength(0);
+});
+
+it("rechecks the echo at the commit point and caps steers per turn", async () => {
+  const f = fixture();
+  await running(f);
+  f.available = false;
+  await f.operator("NO ECHO");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(f.system()).toContain("Operator input queued for the next turn (operator_steer_unavailable).");
+  const g = fixture();
+  await running(g);
+  for (let i = 0; i < 9; i += 1) await g.operator(`S${i}`);
+  expect(g.byMethod("turn/steer")).toHaveLength(8);
+  expect(g.system()).toContain("Operator input queued for the next turn (steer_cap).");
+});

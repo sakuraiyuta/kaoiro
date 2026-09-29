@@ -154,6 +154,20 @@ function abandonmentCause(abandoned: TurnAbandonment): string {
   }
 }
 
+/** Per-persona opt-in for operator steering on the app-server backend,
+ * mirroring the Claude phase-2 delivery flag. */
+export function operatorSteerSource(
+  personaId: string,
+  flag: string | undefined,
+  rawPersonas: string | undefined,
+): "flag" | "persona_list" | "off" {
+  if (flag === "1") return "flag";
+  if (rawPersonas === undefined) return "off";
+  const personas = rawPersonas.split(",").map(id => id.trim());
+  if (!personas.every(id => /^[A-Za-z0-9._-]+$/.test(id))) return "off";
+  return personas.includes(personaId) ? "persona_list" : "off";
+}
+
 export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;
@@ -170,6 +184,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const config = readConfig(configPath);
   const backend = dependencies.backend ?? config.codex_backend ?? "exec";
   writeRedactedStderr(`codex: backend=${backend}\n`);
+  const operatorSteer = backend === "app-server" && operatorSteerSource(
+    config.persona.id,
+    process.env.KAOIRO_CODEX_OPERATOR_STEER,
+    process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS,
+  ) !== "off";
+  writeRedactedStderr(`codex: operator_steer=${operatorSteer ? "on" : "off"}\n`);
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
@@ -506,7 +526,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     notify: (text) => {
       // Same posture as every other chain writer here: the caller observes
       // the rejection, the shared chain never carries it forward.
-      const queued = instructionChain.then(() => host.send(text));
+      const queued = instructionChain.then(() => host.send(text, undefined, undefined, undefined, { source: "reset_notice" }));
       instructionChain = queued.catch(() => {});
       return queued;
     },
@@ -653,6 +673,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   >({
     interAgentReplyBasis: "v1",
     interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+    ...(operatorSteer ? {
+      operatorInputModes: { version: "v1", early: "steer" } as const,
+      onOperatorInputModes: (supported: boolean) => {
+        if (supported) return;
+        onLog(makeLog(config, host?.state ?? "idle", new Date().toISOString(), {
+          kind: "system", text: "Operator steering is unavailable: the server did not acknowledge operator_input_modes.",
+        }));
+      },
+    } : {}),
     workControl: "v1",
     onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
@@ -686,7 +715,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
-    onInstruction: (text, attachmentIds) => {
+    onInstruction: (text, attachmentIds, deliveryIntent) => {
       const tag = attachmentIds && attachmentIds.length > 0
         ? `instruction(+${attachmentIds.length})`
         : "instruction";
@@ -698,7 +727,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         }),
       );
       instructionChain = instructionChain.then(() =>
-        host.send(text, attachmentIds).catch((err: unknown) => {
+        host.send(text, attachmentIds, undefined, undefined, {
+          source: "operator", intent: deliveryIntent === "early" ? "early" : "normal",
+        }).catch((err: unknown) => {
           writeRedactedStderr(`send failed: ${String(err)}\n`);
         }),
       );
@@ -826,6 +857,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     Omit<CodexHostOptions, "onTurnStart">
   >({
     backend,
+    ...(operatorSteer ? {
+      operatorSteer: { available: () => typeof link?.operatorInputModes === "function" && link.operatorInputModes() !== null },
+      permissionSyncPending: () => typeof link?.permissionSyncPending === "function" ? link.permissionSyncPending() : true,
+      liveInputBlocked: () => sessionReset.blocksLiveInput,
+    } : {}),
     onState,
     onLog,
     onTask,
