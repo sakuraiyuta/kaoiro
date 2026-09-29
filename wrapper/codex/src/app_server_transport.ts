@@ -1,4 +1,4 @@
-import type { WrapperConfig } from "@kaoiro/agent-common";
+import { redactCredentials, writeRedactedStderr, type WrapperConfig } from "@kaoiro/agent-common";
 import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
   AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject,
@@ -91,6 +91,24 @@ function isTurnEvidence(event: AppServerNotification): boolean {
 
 const MAX_OWN_TURN_IDS = 256;
 
+// A cold CODEX_HOME (first start, or the first start after a CLI update that
+// migrates the state schema) can make one app-server child fail to open its
+// sqlite state while another wrapper is creating it. The child exits quickly
+// with this line; the failure is transient in the measured cases.
+const SQLITE_INIT_SIGNATURE = "failed to initialize sqlite state runtime";
+const INITIALIZE_MAX_ATTEMPTS = 3;
+// Delay range (ms) before the 2nd and the 3rd attempt.
+const INITIALIZE_RETRY_DELAY_MS: ReadonlyArray<readonly [number, number]> = [[100, 400], [400, 1600]];
+
+function sqliteSignatureLine(stderr: string): string | undefined {
+  const lines = stderr.split("\n").filter(line => line.includes(SQLITE_INIT_SIGNATURE));
+  const line = lines[lines.length - 1]?.trim();
+  return line === undefined ? undefined : redactCredentials(line).slice(0, 300);
+}
+
+/** Failure handling of one spawned child while `initialize` is unanswered. */
+interface InitializeAttempt { failure?: Error; promoted: boolean }
+
 function notificationTurnId(event: AppServerNotification): string | undefined {
   const nested = event.params.turn;
   const turnId = event.params.turnId ?? (rpcObject(nested) ? nested.id : undefined);
@@ -124,7 +142,10 @@ interface ActiveTurn {
 }
 
 export class AppServerTransport {
-  readonly #rpc: AppServerRpc;
+  #rpc: AppServerRpc;
+  #attempt: InitializeAttempt = { promoted: false };
+  #wakeRetry: (() => void) | undefined;
+  readonly #options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { onDisconnect?: (error: Error) => void };
   readonly #threadOpenTimeoutMs: number | undefined;
   #initializing: Promise<void> | undefined;
   #active: ActiveTurn | undefined;
@@ -149,20 +170,35 @@ export class AppServerTransport {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
     this.#enforceForeignTurn = options.enforceForeignTurn ?? false;
     this.#onForeignTurn = options.onForeignTurn;
-    this.#rpc = new AppServerRpc({
-      ...options,
+    this.#options = options;
+    this.#rpc = this.#spawn();
+  }
+
+  // Until `initialize` succeeds a child's failure belongs to its attempt, not
+  // to the transport: a discarded child must not disconnect the transport.
+  #spawn(): AppServerRpc {
+    const attempt: InitializeAttempt = { promoted: false };
+    const rpc = new AppServerRpc({
+      ...this.#options,
       onNotification: (event) => this.#notification(event),
       onFailure: (error) => {
-        const first = this.#failure === undefined;
-        this.#failure ??= error;
-        this.#disconnected.abort(error);
-        if (this.#active) {
-          this.#active.failure ??= error;
-          if (this.#active.turnId !== undefined) this.#active.stream.fail(error);
-        }
-        if (first && !this.#closing) options.onDisconnect?.(error);
+        if (attempt.promoted) this.#rpcFailed(error);
+        else attempt.failure ??= error;
       },
     });
+    this.#attempt = attempt;
+    return rpc;
+  }
+
+  #rpcFailed(error: Error): void {
+    const first = this.#failure === undefined;
+    this.#failure ??= error;
+    this.#disconnected.abort(error);
+    if (this.#active) {
+      this.#active.failure ??= error;
+      if (this.#active.turnId !== undefined) this.#active.stream.fail(error);
+    }
+    if (first && !this.#closing) this.#options.onDisconnect?.(error);
   }
 
   get initialSettings(): AppServerSettingsSnapshot | null { return this.#initialSettings && { ...this.#initialSettings }; }
@@ -320,30 +356,96 @@ export class AppServerTransport {
     return active.interrupt;
   }
 
-  async close(): Promise<void> { this.#closing = true;await this.#rpc.close(); }
+  async close(): Promise<void> {
+    this.#closing = true;
+    this.#wakeRetry?.();
+    await this.#rpc.close();
+  }
 
   async #initialize(): Promise<void> {
-    if (!this.#initializing) {
-      this.#initializing = (async () => {
-        const result = await this.#rpc.request("initialize", {
-          clientInfo: { name: "kaoiro", version: "0" },
-          capabilities: { experimentalApi: false },
-        }).result;
-        if (!rpcObject(result)) throw new AppServerConnectionError("Invalid initialize response");
-        const serverInfo = result.serverInfo;
-        if (rpcObject(serverInfo) && typeof serverInfo.version === "string") {
-          this.#version = serverInfo.version;
-        } else if (typeof result.userAgent === "string") {
-          this.#version = result.userAgent.match(/^[^/]+\/([^ ]+)/)?.[1];
-        }
-        this.#rpc.notify("initialized");
-      })().catch(async (error: unknown) => {
-        this.#failure = error instanceof Error ? error : new AppServerConnectionError("App-server initialization failed");
-        await this.#rpc.close();
-        throw this.#failure;
-      });
-    }
+    this.#initializing ??= this.#connect();
     await this.#initializing;
+  }
+
+  async #connect(): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      const rpc = this.#rpc;
+      const state = this.#attempt;
+      let error: unknown;
+      try {
+        await this.#handshake(rpc, state);
+        return;
+      } catch (caught) {
+        error = caught;
+      }
+      // The rpc failed by itself (as opposed to a rejection raised here) when
+      // its failure is already recorded.
+      const causal = state.failure;
+      await rpc.close();
+      // Only after the child has closed is stderr complete: stdout can end
+      // before the last stderr bytes arrive.
+      // A JSON-RPC reply is a real answer; a timed-out attempt may still have a
+      // live child and is never retried, whatever its stderr says.
+      const answered = error instanceof AppServerRpcError;
+      const timedOut = error instanceof AppServerConnectionError && error.kind === "timeout";
+      const line = answered || timedOut ? undefined : sqliteSignatureLine(rpc.stderrTail);
+      if (line === undefined || this.#closing || attempt >= INITIALIZE_MAX_ATTEMPTS) {
+        const failure = error instanceof AppServerConnectionError && line !== undefined
+          ? new AppServerConnectionError(`${error.message} (initialize attempt ${attempt}/${INITIALIZE_MAX_ATTEMPTS}: ${line})`, error.kind)
+          : error instanceof Error ? error : new AppServerConnectionError("App-server initialization failed");
+        throw this.#giveUp(failure, causal, state);
+      }
+      const [min, max] = INITIALIZE_RETRY_DELAY_MS[attempt - 1]!;
+      const delay = Math.round(min + Math.random() * (max - min));
+      const message = writeRedactedStderr(
+        `codex: app-server initialize failed (attempt ${attempt}/${INITIALIZE_MAX_ATTEMPTS}), retrying in ${delay} ms: ${line}\n`,
+      );
+      this.#options.onDiagnostic?.(message);
+      await this.#wait(delay);
+      if (this.#closing) throw this.#giveUp(new AppServerConnectionError("App-server closed by client"), undefined, state);
+      try {
+        this.#rpc = this.#spawn();
+      } catch (spawnError) {
+        throw this.#giveUp(spawnError instanceof Error ? spawnError : new AppServerConnectionError("App-server spawn failed"), undefined, state);
+      }
+    }
+  }
+
+  async #handshake(rpc: AppServerRpc, state: InitializeAttempt): Promise<void> {
+    const result = await rpc.request("initialize", {
+      clientInfo: { name: "kaoiro", version: "0" },
+      capabilities: { experimentalApi: false },
+    }).result;
+    if (!rpcObject(result)) throw new AppServerConnectionError("Invalid initialize response");
+    const serverInfo = result.serverInfo;
+    if (rpcObject(serverInfo) && typeof serverInfo.version === "string") {
+      this.#version = serverInfo.version;
+    } else if (typeof result.userAgent === "string") {
+      this.#version = result.userAgent.match(/^[^/]+\/([^ ]+)/)?.[1];
+    }
+    state.promoted = true;
+    rpc.notify("initialized");
+  }
+
+  /** Records the final failure the way a failed rpc always did: the transport
+   * disconnects once, and only when the rpc failed by itself. */
+  #giveUp(failure: Error, causal: Error | undefined, state: InitializeAttempt): Error {
+    if (causal === undefined) this.#failure = failure;
+    this.#rpcFailed(causal === undefined ? state.failure ?? failure : failure);
+    this.#failure = failure;
+    return failure;
+  }
+
+  #wait(ms: number): Promise<void> {
+    return new Promise<void>(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        this.#wakeRetry = undefined;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.#wakeRetry = done;
+    });
   }
 
   async #openThread(method: string, params: RpcObject): Promise<string> {
