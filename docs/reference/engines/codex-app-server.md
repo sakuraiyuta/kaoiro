@@ -50,11 +50,13 @@ queue; IA steering is ADR-0063 phase 3.
 `AppServerTransport.steer` takes the active-turn snapshot, calls the host's
 `admit(turnId)` and writes `turn/steer {threadId, expectedTurnId, input,
 clientUserMessageId}` in one synchronous section. `admit` is the only place
-the admission guards decide: the current join's echo, a stopped host, an
+the admission guards decide: the current join's echo, an
 older operator entry or placeholder in the queue, pending model, effort or
 permission settings (including an unresolved permission sync after a join),
 an abandoned turn, a session reset in progress or a queued reset notice, and
-a cap of 8 steers per turn. A declined input queues with a `system` log line
+a cap of 8 steers per turn. A closed or stopped host never reaches `admit`:
+closing the runtime is synchronous with every stop, and the runtime or
+transport then refuses the steer as `closed`. A declined input queues with a `system` log line
 naming the reason. While the start response of a turn is pending the input
 waits for it once and returns to `admit`.
 
@@ -78,9 +80,20 @@ Precondition rejections are classified from `error.data.codexErrorInfo.activeTur
 and from the two measured `-32600` messages for an expected-turn mismatch and
 no active turn; see the [Stage 2 probes](../../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md).
 
-The transport records its bound thread and the turn IDs it started. A turn on
-that thread which this host did not start is foreign, whether it appears with
-no active turn, before a start response names the host's turn, or while
-another turn is active. Every persona records the diagnostic; an opted-in
-persona also stops steering and refuses the next `turn/start`, which stops the
-host for operator recovery.
+The transport records its bound thread and up to 256 turn IDs it started. A
+turn on that thread which this host did not start is foreign, whether it
+appears with no active turn, before a start response names the host's turn,
+or while another turn is active. Only `turn/started` and `item/*`
+notifications are evidence of a running turn: after `thread/resume`, the
+app-server sends thread-level notifications such as `thread/tokenUsage/updated`
+carrying past turn IDs, and those are never treated as foreign. Every persona
+records a `codex_foreign_turn` diagnostic line; an opted-in persona also stops
+steering and refuses the next `turn/start`.
+
+That refusal stops the host through the same path as a lost app-server
+connection: the current turn finishes, the host enters `error`, and every
+queued entry is discarded without being sent. A queued inter-agent batch,
+including one that was about to start, settles once through the turn-end and
+finalization callbacks with the stop as its error, so the sending peer learns
+it was not delivered. Queued operator input is dropped. Recovery is an
+operator session reset or wrapper restart.
