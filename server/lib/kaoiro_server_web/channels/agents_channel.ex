@@ -3368,12 +3368,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # Reserved-command defensive reject (ADR-0036 F1, phase-17 17-4).
   # Old / external clients that never learned the `session_reset` control
-  # can still send an exact `/new`, `/clear` or `/reset` (the Claude Code
-  # CLI's alias of its own `/clear`) as normal text; loud-reject
-  # here so it never reaches the wrapper as an instruction. The strict
-  # exact-match (trim + no attachments) mirrors the dashboard's intercept
-  # rule so a legitimate `/new hello` prompt or `/new` with an attached
-  # file falls through as an ordinary instruction.
+  # can still send `/new`, `/clear` or `/reset` (the Claude Code CLI's aliases
+  # of its own `/clear`) as normal text; loud-reject here so it never reaches
+  # the wrapper as an instruction. The CLI runs a slash command from its first
+  # whitespace-delimited token and treats the rest as arguments, so
+  # `/reset now` starts a new session exactly like `/reset`: the first token
+  # decides, arguments do not matter, and only a token that is not one of
+  # these (`/resetx`) passes. The CLI's command lookup is case-sensitive, so
+  # this is too. Its whitespace is the JavaScript `\s` set (which includes U+FEFF and
+  # excludes U+0085), spelled out below rather than left to PCRE's `\s`.
+  # The rule leaves an instruction that carries attachments to the wrapper.
   @reserved_session_commands ["/new", "/clear", "/reset"]
   defp reject_reserved_session_command(payload) do
     text = payload["text"]
@@ -3386,11 +3390,22 @@ defmodule KaoiroServerWeb.AgentsChannel do
       attachments != [] ->
         :ok
 
-      String.trim(text) in @reserved_session_commands ->
+      reserved_session_command_token?(text) ->
         {:error, :reserved_session_command}
 
       true ->
         :ok
+    end
+  end
+
+  defp reserved_session_command_token?(text) do
+    case Regex.run(
+           ~r/^[\t-\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*([^\t-\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]+)/u,
+           text,
+           capture: :all_but_first
+         ) do
+      [token] -> token in @reserved_session_commands
+      _ -> false
     end
   end
 

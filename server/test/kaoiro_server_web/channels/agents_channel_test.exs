@@ -7556,19 +7556,55 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "instruction", _
     end
 
-    test "別名でない /resetx と引数付き /reset now は通常 instruction として relay" do
-      agent_id = "resv.resetx"
-      put_agent(agent_id)
-      @endpoint.subscribe("wrapper:" <> agent_id)
-      socket = join_as(:operator)
+    # The CLI runs `/reset now` as `/clear` with an argument, so an argument
+    # does not make it an ordinary instruction.
+    for {label, text} <- [
+          {"/reset now", "/reset now"},
+          {"/clear foo", "/clear foo"},
+          {"/new foo", "/new foo"},
+          {"tab 区切りの引数", "/reset\tnow"},
+          {"改行区切りの引数", "/clear\nfoo"},
+          {"先頭空白付き", "  /reset now"},
+          {"NBSP 区切りの引数 (JS の \\s)", "/reset\u00A0now"},
+          {"全角空白区切りの引数 (JS の \\s)", "/new\u3000foo"},
+          {"U+2028 区切りの引数 (JS の \\s)", "/clear\u2028foo"},
+          {"先頭の U+FEFF (JS の trim と \\s)", "\uFEFF/reset now"}
+        ] do
+      test "引数付き #{label} は reserved_session_command で reject" do
+        agent_id = "resv.args.#{:erlang.unique_integer([:positive])}"
+        put_agent(agent_id)
+        @endpoint.subscribe("wrapper:" <> agent_id)
+        socket = join_as(:operator)
 
-      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/resetx"})
-      assert_reply ref, :ok
-      assert_broadcast "instruction", %{"text" => "/resetx"}
+        ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => unquote(text)})
 
-      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/reset now"})
-      assert_reply ref, :ok
-      assert_broadcast "instruction", %{"text" => "/reset now"}
+        assert_reply ref, :error, %{reason: "reserved_session_command"}
+        refute_broadcast "instruction", _
+      end
+    end
+
+    for text <- [
+          "/resetx",
+          "/clearing",
+          "/newer foo",
+          "/RESET",
+          "/Clear now",
+          "/reset-now",
+          "x /reset",
+          "/reset.now",
+          "/reset\u0085now"
+        ] do
+      test "別名でない #{inspect(text)} は通常 instruction として relay (通過)" do
+        agent_id = "resv.other.#{:erlang.unique_integer([:positive])}"
+        put_agent(agent_id)
+        @endpoint.subscribe("wrapper:" <> agent_id)
+        socket = join_as(:operator)
+
+        ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => unquote(text)})
+
+        assert_reply ref, :ok
+        assert_broadcast "instruction", %{"text" => unquote(text)}
+      end
     end
 
     test "前後の空白付き /new (trim 一致) も reject" do
@@ -7581,18 +7617,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "reserved_session_command"}
       refute_broadcast "instruction", _
-    end
-
-    test "引数付き /new hello は通常 instruction として relay (通過)" do
-      agent_id = "resv.args"
-      put_agent(agent_id)
-      @endpoint.subscribe("wrapper:" <> agent_id)
-      socket = join_as(:operator)
-
-      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/new hello"})
-
-      assert_reply ref, :ok
-      assert_broadcast "instruction", %{"text" => "/new hello"}
     end
 
     test "/new + attachment 付きは通常 instruction として relay (通過)" do

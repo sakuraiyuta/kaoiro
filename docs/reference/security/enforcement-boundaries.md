@@ -125,10 +125,16 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   **nested-prefix spoof** where a host_id containing a dot lets a different
   host's agent_id impersonate it through naïve `starts_with?`.
 - **reserved_session_command rejection**: If an old / external client sends
-  literal `/new` / `/clear` / `/reset` to `send_instruction`, the server handler
-  rejects it loudly as `reserved_session_command` at its start and never passes it to
-  the engine (defense in depth rather than relying only on client-side
-  interception).
+  text whose first whitespace-delimited token is `/new`, `/clear` or `/reset` to
+  `send_instruction` (with or without arguments), the server handler rejects it
+  loudly as `reserved_session_command` at its start and never passes it to the
+  engine (defense in depth rather than relying only on client-side
+  interception). The token match is exact and case-sensitive, and the
+  whitespace is the JavaScript `\s` set: the Claude Code CLI runs a slash
+  command from that first token and reads the rest as arguments (`/reset now`
+  is `/clear` with an argument), so the token alone decides. `/resetx` and
+  `/Reset` pass as ordinary text. The dashboard's intercept drops the
+  arguments.
 - **Reserved-token vocabulary (where the copies live)**: the dashboard's check
   is `reservedSessionResetMode` in `dashboard/src/lib/protocol.ts`, called by
   both `shouldInterceptAsSessionReset` and the `AgentDetail` capability guard.

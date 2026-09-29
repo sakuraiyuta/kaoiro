@@ -636,19 +636,24 @@ export function modelSourceFrom(envelope: Envelope): string | null {
  *  self-contained per this file's plain-TS contract. */
 export type SessionResetMode = "new" | "clear";
 
-/** Returns the reserved session-reset mode for text whose trimmed value is
- *  exactly `/new`, `/clear` or `/reset`. The Claude Code CLI defines `/reset`
- *  (like `/new`) as an alias of its `/clear`, so it takes the `clear` mode.
- *  Leading and trailing whitespace is ignored;
- *  arguments and escaped forms remain ordinary instruction text. Whether a
+/** Returns the reserved session-reset mode for text whose first
+ *  whitespace-delimited token (after trimming) is `/new`, `/clear` or
+ *  `/reset`. The Claude Code CLI defines `/reset` (like `/new`) as an alias
+ *  of its `/clear`, so it takes the `clear` mode. The CLI runs a slash
+ *  command from that first token and treats the rest as arguments (the same
+ *  JavaScript `\s` split as here), so `/reset now` starts a new session too;
+ *  the arguments are dropped. A token that merely starts with one of them
+ *  (`/resetx`) and escaped forms remain ordinary instruction text. Whether a
  *  match is intercepted (attachments present, reset capability off) is the
  *  caller's decision. */
 export function reservedSessionResetMode(
   text: string,
 ): SessionResetMode | null {
   const trimmed = text.trim();
-  if (trimmed === "/new") return "new";
-  return trimmed === "/clear" || trimmed === "/reset" ? "clear" : null;
+  const end = trimmed.search(/\s/);
+  const command = end === -1 ? trimmed : trimmed.slice(0, end);
+  if (command === "/new") return "new";
+  return command === "/clear" || command === "/reset" ? "clear" : null;
 }
 
 /** Who initiated a reset (protocol.md, ADR-0043 D1). Mirrors
@@ -934,8 +939,9 @@ export function modelSwitchStateFrom(envelope: Envelope): ModelSwitchState {
  *  phase-17 17-8). Returns the reset mode when the input should NOT be
  *  sent as a normal instruction but as a `session_reset` control event.
  *  Rules:
- *   - `trim(text)` must exactly equal `/new` or `/clear` (引数付き
- *     `/new hello` は通常 instruction)
+ *   - the first whitespace-delimited token of `trim(text)` must be `/new`,
+ *     `/clear` or `/reset`; arguments after it are dropped, because the CLI
+ *     would run `/new hello` as the same session reset
  *   - attachments must be empty (attachment 付き `/new` は通常 instruction)
  *   - the resulting mode must be `"on"` per
  *     {@link sessionResetAvailability} (capability unstamped / false /

@@ -2776,8 +2776,21 @@ describe("shouldInterceptAsSessionReset (ADR-0036 F1, phase-17 17-8)", () => {
     );
   });
 
-  it("引数付き /new hello は通常 instruction (fall through)", () => {
-    expect(shouldInterceptAsSessionReset("/new hello", undefined, supportedCaps)).toBeNull();
+  it("引数付きでも先頭 token が予約語なら intercept する (CLI が同じ reset として実行する)", () => {
+    expect(shouldInterceptAsSessionReset("/new hello", undefined, supportedCaps)).toBe("new");
+    expect(shouldInterceptAsSessionReset("/clear foo", undefined, supportedCaps)).toBe("clear");
+    expect(shouldInterceptAsSessionReset("/reset now", undefined, supportedCaps)).toBe("clear");
+    expect(shouldInterceptAsSessionReset("  /reset\tnow  ", undefined, supportedCaps)).toBe("clear");
+  });
+
+  it("先頭 token が別名でなければ通常 instruction", () => {
+    for (const text of ["/resetx", "/clearing now", "/newer foo", "/RESET", "/Clear now", "x /reset", "/reset-now"]) {
+      expect(shouldInterceptAsSessionReset(text, undefined, supportedCaps)).toBeNull();
+    }
+  });
+
+  it("引数付きの予約語も attachment 付きなら通常 instruction", () => {
+    expect(shouldInterceptAsSessionReset("/reset now", ["u1"], supportedCaps)).toBeNull();
   });
 
   it("attachment 付き /new は通常 instruction (fall through)", () => {
@@ -2833,12 +2846,25 @@ describe("reservedSessionResetMode (issue #392)", () => {
     expect(reservedSessionResetMode("/clear\t")).toBe("clear");
   });
 
-  it("does not match escaped, extended, argument, or empty text", () => {
+  it("keys on the first whitespace-delimited token and drops the arguments", () => {
+    expect(reservedSessionResetMode("/new hello")).toBe("new");
+    expect(reservedSessionResetMode("/clear foo")).toBe("clear");
+    expect(reservedSessionResetMode("/reset now")).toBe("clear");
+    expect(reservedSessionResetMode("/reset\tnow")).toBe("clear");
+    expect(reservedSessionResetMode("/new\nhello")).toBe("new");
+    expect(reservedSessionResetMode("/reset\u00a0now")).toBe("clear");
+    expect(reservedSessionResetMode("  /clear   foo bar  ")).toBe("clear");
+  });
+
+  it("does not match escaped, extended, differently cased, or empty text", () => {
     expect(reservedSessionResetMode("\\/new")).toBeNull();
     expect(reservedSessionResetMode("/newer")).toBeNull();
-    expect(reservedSessionResetMode("/new hello")).toBeNull();
+    expect(reservedSessionResetMode("/newer foo")).toBeNull();
     expect(reservedSessionResetMode("/resetx")).toBeNull();
-    expect(reservedSessionResetMode("/reset now")).toBeNull();
+    expect(reservedSessionResetMode("/clearing now")).toBeNull();
+    expect(reservedSessionResetMode("/RESET")).toBeNull();
+    expect(reservedSessionResetMode("/Clear now")).toBeNull();
+    expect(reservedSessionResetMode("x /reset")).toBeNull();
     expect(reservedSessionResetMode("\\/reset")).toBeNull();
     expect(reservedSessionResetMode("")).toBeNull();
   });
