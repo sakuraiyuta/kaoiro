@@ -80,6 +80,38 @@ describe("DeliveryStageReporter", () => {
     expect(reports.at(-1)).toMatchObject({ stage: "settled", reason: "turn_end" });
   });
 
+  it("ends an unsubmitted delivery on unknown with the given reason and never settles it afterwards", () => {
+    const reports: Record<string, unknown>[] = [];
+    const root = envelope(7);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "inc", generation: "g" }),
+      turns: { deliveryEnvelopesForTurn: () => [root] },
+      now: () => "T",
+    });
+    reporter.queued(root);
+    reporter.unknownTurn("turn", "turn_start_timeout");
+    reporter.settled("turn");
+    expect(reports.map(report => report.stage)).toEqual(["queued", "unknown"]);
+    expect(reports[1]).toMatchObject({ delivery_seq: 7, stage: "unknown", reason: "turn_start_timeout" });
+  });
+
+  it("does not report a submitted delivery as unknown", () => {
+    const reports: Record<string, unknown>[] = [];
+    const root = envelope(7);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "inc", generation: "g" }),
+      turns: { deliveryEnvelopesForTurn: () => [root] },
+      now: () => "T",
+    });
+    reporter.queued(root);
+    reporter.submitted("turn", "turn_start_accepted");
+    reporter.unknownTurn("turn", "turn_start_timeout");
+    expect(reports.map(report => report.stage)).toEqual(["queued", "submitted", "settled"]);
+    expect(reports[2]).toMatchObject({ reason: "turn_end" });
+  });
+
   it("does not attach a later incarnation to a delivery received before the first join", () => {
     const reports: unknown[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = null;

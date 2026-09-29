@@ -180,9 +180,23 @@ even after a watchdog fail-stop because the acceptance already happened. A
 rejected or invalid `turn/start`, and an input skipped before dispatch, report
 no `submitted`.
 
-Known limit: a `turn/start` request that times out after it was sent, or a
-connection lost after it was sent, may have been accepted by the app-server.
-Such a turn settles with `failed_before_handoff` like a rejected one.
+A `turn/start` that was possibly delivered but got no valid reply is reported
+as `unknown`, not as a failure before handoff. The boundary is the request's
+stdin write, read after the app-server child has closed: `writing` (called, no
+callback yet) and `written` count as possibly delivered, while `unwritten` and
+`failed` do not (a write error means the newline-terminated line was not fully
+accepted, so the app-server cannot have run it). Failing before the write, a
+write error, and a JSON-RPC error reply to `turn/start` settle with
+`failed_before_handoff`. A timeout, a lost connection or a malformed reply after
+a possibly-delivered write ends on `unknown` and is never followed by `settled`,
+because the server keeps one last-written `reason`. The wrapper does not find out
+later whether the turn ran. The reason string is a free string; the current
+values are `turn_start_timeout`, `turn_start_disconnected` and
+`turn_start_invalid_response`, decided from the failure's typed cause. Only the
+turn that was being started carries it: inputs still queued behind it were never
+written and settle with `failed_before_handoff`. The Codex exec backend does not
+have this: its SDK writes the input without a callback, so a failure before the
+first event still settles with `failed_before_handoff`.
 
 The server rejects an unknown `handoff` value with `invalid_delivery_stage`, and
 the wrapper keeps a rejected report pending until the delivery identity changes.

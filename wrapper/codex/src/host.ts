@@ -12,7 +12,7 @@ import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerSession } from "./app_server_session.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
-import type { AppServerForeignTurn } from "./app_server_transport.js";
+import { AppServerTurnStartUnknownError, type AppServerForeignTurn } from "./app_server_transport.js";
 import { SteerRecord, type SteerOutcome, type SteerResponse } from "./app_server_steer.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
@@ -376,6 +376,10 @@ export interface CodexHostOptions {
     turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
+    /** Set when the turn's input was possibly handed to the engine but its
+     * outcome could not be established, so it must not be reported as a
+     * failure before handoff. `reason` is a current value, not a contract. */
+    handoff?: { outcome: "unknown"; reason: string };
     cancellation?: { kind: "watchdog_fail_stop" | "permission_gate"; started: false };
     /** Set only when the SDK itself declared the turn's end. A stream that
      * merely ended, a rejected run, or a cancellation never sets it, so a
@@ -1712,6 +1716,7 @@ export class CodexHost implements EngineAdapter {
         if (error instanceof AppServerSettingsError) failed.appServer = { switchFailureReason: error.reason };
         this.#finishTurn(false, failed);
         settle({ is_error: true, ...codexExecFailureRelay(String(error)) }, { turnToken, conversationIds, error: { detail: String(error) },
+          ...(error instanceof AppServerTurnStartUnknownError ? { handoff: { outcome: "unknown" as const, reason: error.reason } } : {}),
           ...(this.#turnAbandoned === null ? {} : { abandoned: this.#turnAbandoned }) });
       }
       if (runtime.closed || error instanceof AppServerConnectionError) this.#stopAppServer(error);

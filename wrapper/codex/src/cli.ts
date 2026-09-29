@@ -927,8 +927,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       cancellation,
       terminal,
       abandoned,
+      handoff,
     }) => {
-      deliveryStages.settled(turnToken);
+      if (handoff?.outcome === "unknown") deliveryStages.unknownTurn(turnToken, handoff.reason);
+      else deliveryStages.settled(turnToken);
       // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
       // is the reset boundary. `terminal` is set by the host on exactly
       // those two paths; a cancellation, a terminal-less EOF or a rejected

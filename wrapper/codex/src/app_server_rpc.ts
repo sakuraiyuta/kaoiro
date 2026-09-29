@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 export type RpcObject = Record<string, unknown>;
 export interface AppServerNotification { method: string; params: RpcObject }
-export interface RpcTicket { id: number; result: Promise<unknown> }
+/** State of one request's stdin write. Final only once the child has closed. */
+export type RpcWriteState = "unwritten" | "writing" | "written" | "failed";
+export interface RpcTicket { id: number; result: Promise<unknown>; writeState: () => RpcWriteState }
 
 export class AppServerRpcError extends Error {
   /** `error.data` when it is an object; the caller reads named fields only. */
@@ -18,8 +20,11 @@ export class AppServerRpcError extends Error {
   }
 }
 
+/** Why a connection-level failure happened, when a caller must tell causes apart. */
+export type ConnectionFailureKind = "timeout" | "invalid_response";
+
 export class AppServerConnectionError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly kind?: ConnectionFailureKind) {
     super(message);
     this.name = "AppServerConnectionError";
   }
@@ -112,6 +117,7 @@ export class AppServerRpc {
 
   request(method: string, params: RpcObject, defaultTimeoutMs = 25_000): RpcTicket {
     const id = this.#nextId++;
+    const write: { state: RpcWriteState } = { state: "unwritten" };
     const result = new Promise<unknown>((resolve, reject) => {
       if (this.#failure || this.#closing) {
         reject(this.#failure ?? new AppServerConnectionError("App-server is closing"));
@@ -119,12 +125,12 @@ export class AppServerRpc {
       }
       const timer = setTimeout(() => {
         // Once submitted, a timeout cannot establish that the operation was rejected.
-        this.#fail(new AppServerConnectionError(`App-server response timeout: ${method}`));
+        this.#fail(new AppServerConnectionError(`App-server response timeout: ${method}`, "timeout"));
       }, this.#options.requestTimeoutMs ?? defaultTimeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
-      this.#write({ id, method, params });
+      this.#write({ id, method, params }, write);
     });
-    return { id, result };
+    return { id, result, writeState: () => write.state };
   }
 
   notify(method: string): void {
@@ -140,12 +146,15 @@ export class AppServerRpc {
     await this.#closed;
   }
 
-  #write(message: RpcObject): void {
+  #write(message: RpcObject, write?: { state: RpcWriteState }): void {
     try {
+      if (write) write.state = "writing";
       this.#child.stdin.write(JSON.stringify(message) + "\n", (error) => {
+        if (write) write.state = error ? "failed" : "written";
         if (error) this.#fail(new AppServerConnectionError("App-server write failed"));
       });
     } catch {
+      if (write) write.state = "failed";
       this.#fail(new AppServerConnectionError("App-server write failed"));
     }
   }

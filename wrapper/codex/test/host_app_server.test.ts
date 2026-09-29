@@ -29,7 +29,7 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   let holdConfig: Promise<void> | null = null, holdHistory: Promise<void> | null = null;
   let invalidHistory = false;
   let interrupted = true, autocomplete = false;
-  let startReply: "immediate" | "silent" | "held" | "held-terminal" | "error" = "immediate", heldReply: (() => void) | null = null;
+  let startReply: "immediate" | "silent" | "held" | "held-terminal" | "error" | "exit" = "immediate", heldReply: (() => void) | null = null;
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   const reply = (request: RpcObject, result: unknown) => send({ id: request.id, result });
   const terminal = (status = "completed") => {
@@ -45,6 +45,7 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
       thread: { id: "thread", turns: [{ id: "past", items: [{ id: "answer", type: "agentMessage", text: "PAST" }] }] },
     }));
     if (request.method === "turn/start" && startReply === "error") send({ id: request.id, error: { code: -32600, message: "rejected" } });
+    else if (request.method === "turn/start" && startReply === "exit") exit();
     else if (request.method === "turn/start") {
       number += 1;active += 1;maxActive = Math.max(active, maxActive);
       const respond = () => reply(request, { turn: { id: `turn-${number}` } });
@@ -485,4 +486,31 @@ it("keeps the turn running when the input handoff callback throws", async () => 
   await f.host.send("A", undefined, [], "A");await f.until(1);f.terminal();
   await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(1));
   expect(f.ends.mock.calls[0]?.[0].error).toBeUndefined();expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
+it("marks only the active turn's outcome unknown when the app-server ends after turn/start was written", async () => {
+  const f = fixture();f.startReply = "exit";
+  await f.host.send("A", undefined, [], "A");await f.host.send("B", undefined, [], "B");
+  await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(2));
+  const ended = (token: string) => f.ends.mock.calls.map(([info]) => info).find(info => info.turnToken === token)!;
+  expect(ended("A").handoff).toEqual({ outcome: "unknown", reason: "turn_start_disconnected" });
+  expect(ended("B")).not.toHaveProperty("handoff");
+  expect(ended("B").error).toBeDefined();
+});
+
+it("does not mark the outcome unknown when turn/start is rejected, skipped or succeeds", async () => {
+  const rejected = fixture();rejected.startReply = "error";
+  await rejected.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(rejected.ends).toHaveBeenCalledTimes(1));
+  expect(rejected.ends.mock.calls[0]![0]).not.toHaveProperty("handoff");
+
+  const skipped = fixture({ prepareInput: () => null });
+  await skipped.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(skipped.finals).toHaveBeenCalledTimes(1));
+  expect(skipped.ends).not.toHaveBeenCalled();
+
+  const ok = fixture();
+  await ok.host.send("A", undefined, [], "A");await ok.until(1);ok.terminal();
+  await vi.waitFor(() => expect(ok.ends).toHaveBeenCalledTimes(1));
+  expect(ok.ends.mock.calls[0]![0]).not.toHaveProperty("handoff");
 });

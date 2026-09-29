@@ -2,7 +2,7 @@ import type { WrapperConfig } from "@kaoiro/agent-common";
 import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
   AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject,
-  type AppServerNotification, type AppServerRpcOptions, type RpcObject,
+  type AppServerNotification, type AppServerRpcOptions, type RpcObject, type RpcTicket,
 } from "./app_server_rpc.js";
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
@@ -62,6 +62,18 @@ export type AppServerSteerAttempt =
   | { kind: "sent"; turnId: string; requestId: number; response: Promise<SteerResponse> };
 
 export interface AppServerForeignTurn { threadId: string; turnId: string }
+
+/** A turn/start that was possibly delivered but got no valid reply, so the app-server may have run the turn. */
+export class AppServerTurnStartUnknownError extends AppServerConnectionError {
+  readonly reason: "turn_start_timeout" | "turn_start_invalid_response" | "turn_start_disconnected";
+  constructor(readonly original: AppServerConnectionError) {
+    super(original.message, original.kind);
+    // String(error) feeds the failure classifier; keep it equal to the original's.
+    this.name = original.name;
+    this.reason = original.kind === "timeout" ? "turn_start_timeout"
+      : original.kind === "invalid_response" ? "turn_start_invalid_response" : "turn_start_disconnected";
+  }
+}
 
 export class AppServerForeignTurnError extends Error {
   constructor() {
@@ -206,6 +218,7 @@ export class AppServerTransport {
       ready: new Promise<void>(resolve => { release = resolve; }) };
     // Reserve before initialize/request awaits; overlapping calls must never become implicit steering.
     this.#active = active;
+    let ticket: RpcTicket | undefined;
     try {
       await this.#initialize();
       const settings = await appServerTurnSettings(input.settings ?? {}, (method, params) => this.#rpc.request(method, params).result);
@@ -217,7 +230,7 @@ export class AppServerTransport {
       if (this.#failure) throw this.#failure;
       const preparedInput = input.onDispatch?.(dispatch, prepared);
       const wireInput = appServerInput(preparedInput ?? input.input);
-      const ticket = this.#rpc.request("turn/start", {
+      ticket = this.#rpc.request("turn/start", {
         ...settings, threadId: dispatch.threadId,
         input: wireInput,
         ...(dispatch.clientUserMessageId === undefined ? {} : { clientUserMessageId: dispatch.clientUserMessageId }),
@@ -225,7 +238,7 @@ export class AppServerTransport {
       });
       const result = await ticket.result;
       if (!rpcObject(result) || !rpcObject(result.turn) || typeof result.turn.id !== "string") {
-        throw new AppServerConnectionError("Invalid turn/start response");
+        throw new AppServerConnectionError("Invalid turn/start response", "invalid_response");
       }
       active.turnId = result.turn.id;
       this.#ownTurnIds.add(active.turnId);
@@ -249,6 +262,10 @@ export class AppServerTransport {
       if (error instanceof AppServerConnectionError) {
         this.#failure = error;
         await this.#rpc.close();
+        // Read after the child has closed: bytes still buffered when a timeout
+        // ended stdin can reach the child, so only then is the state final.
+        const written = ticket?.writeState();
+        if (written === "writing" || written === "written") throw new AppServerTurnStartUnknownError(error);
       }
       throw error;
     } finally {

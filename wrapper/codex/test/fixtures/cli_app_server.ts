@@ -36,7 +36,8 @@ export function watchdogClock() {
 
 // Only the external app-server child and time are simulated. CLI callbacks,
 // Host/Session, Unix ToolHost, ServerLink, brokers, IA and reset coordinator run.
-export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy") {
+export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy",
+  options: { stages?: boolean; turnStart?: () => "reply" | "exit" | "reject" } = {}) {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-cli-fixture-")), agentId = `fixture-${randomUUID()}`;
   const clock = watchdogClock(), sent: RpcObject[] = [];
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
@@ -56,7 +57,10 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
     }
     if (request.method === "account/rateLimits/read") send({ id: request.id, error: { code: -32600, message: "no account" } });
     if (request.method === "config/read") reply(request, { config: { model_reasoning_effort: "medium" } });
-    if (request.method === "turn/start") {
+    const turnStart = request.method === "turn/start" ? (options.turnStart?.() ?? "reply") : "reply";
+    if (request.method === "turn/start" && turnStart === "exit") exit();
+    else if (request.method === "turn/start" && turnStart === "reject") send({ id: request.id, error: { code: -32600, message: "rejected" } });
+    else if (request.method === "turn/start") {
       turn += 1;reply(request, { turn: { id: `turn-${turn}` } });
       send({ method: "turn/started", params: { threadId: "thread", turn: { id: `turn-${turn}` } } });
     }
@@ -68,7 +72,8 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   const exit = () => { if (child.exitCode !== null) return;Object.assign(child, { exitCode: 0 });child.emit("exit", 0, null);stdout.end();stderr.end();queueMicrotask(() => child.emit("close", 0, null)); };
   stdin.on("finish", exit);child.kill = () => { exit();return true; };
   let rejection: Record<string, unknown> | undefined;
-  const wire = await phoenixLoopback(() => ({ ...(replyBasis === "v1" ? { inter_agent_reply_basis: "v1" } : {}), permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
+  const wire = await phoenixLoopback(() => ({ ...(replyBasis === "v1" ? { inter_agent_reply_basis: "v1" } : {}),
+    ...(options.stages === true ? { inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-451" } : {}), permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
     event === "delivery_resync" ? { request_id: payload.request_id, skipped_ranges: payload.missing_ranges, delivery: { issued_seq: payload.cutoff, acked_seq: 1, pending_since: new Date().toISOString() } } :
     event === "session_reset_request" ? { request_id: "reset" } : { ingress_stamp: [1, 1] }, (event, payload) => {
       if (event !== "envelope" || payload.type !== "inter_agent_message") return undefined;
@@ -127,6 +132,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
       nextInbound = { enter, pending };
       return { entered, release };
     },
+    stageReports: (seq: number) => wire.received.filter(e => e.event === "delivery_stage" && e.payload.delivery_seq === seq).map(e => e.payload),
     turns: () => sent.filter(r => r.method === "turn/start"), interrupts: () => sent.filter(r => r.method === "turn/interrupt"),
     acks: () => wire.received.filter(e => e.event === "delivery_ack").map(e => e.payload.delivery_seq),
     waitForAcks: (seqs: number[]) => vi.waitFor(() => expect(wire.received.filter(e => e.event === "delivery_ack").map(e => e.payload.delivery_seq)).toEqual(seqs)),

@@ -3,19 +3,25 @@ import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppServerConnectionError, AppServerRpc, AppServerRpcError, type AppServerNotification, type RpcObject } from "../src/app_server_rpc.js";
-import { AppServerTransport } from "../src/app_server_transport.js";
+import { AppServerTransport, AppServerTurnStartUnknownError } from "../src/app_server_transport.js";
 import { AppServerTurnStream } from "../src/app_server_stream.js";
 
-function fixture() {
+type WriteHook = (chunk: Buffer, callback: (error?: Error | null) => void, accept: () => void) => void;
+
+function fixture(writeHook?: WriteHook) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const sent: RpcObject[] = [];
   let handle: (message: RpcObject) => void = () => {};
-  const stdin = new Writable({ write(chunk: Buffer, _encoding, callback) {
+  const accept = (chunk: Buffer) => {
     const message = JSON.parse(chunk.toString()) as RpcObject;
     sent.push(message);
     handle(message);
+  };
+  const stdin = new Writable({ write(chunk: Buffer, _encoding, callback) {
+    if (writeHook) return writeHook(chunk, callback, () => accept(chunk));
+    accept(chunk);
     callback();
   } });
   Object.assign(child, { stdout, stderr, stdin, exitCode: null, signalCode: null });
@@ -28,6 +34,7 @@ function fixture() {
     queueMicrotask(() => child.emit("close", 0, null));
   };
   stdin.on("finish", exit);
+  if (writeHook) stdin.on("close", exit);
   child.kill = vi.fn(() => { exit(); return true; });
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   return { child, stdout, stderr, stdin, sent, exit, send,
@@ -49,9 +56,9 @@ async function collect(events: AsyncIterable<AppServerNotification>) {
   for await (const event of events) result.push(event);
   return result;
 }
-function transportFixture(onDisconnect?: (error: Error) => void) {
-  const f = fixture();
-  const transport = new AppServerTransport({ spawnChild: () => f.child, requestTimeoutMs: 1000, ...(onDisconnect ? { onDisconnect } : {}) });
+function transportFixture(onDisconnect?: (error: Error) => void, options: { requestTimeoutMs?: number; writeHook?: WriteHook } = {}) {
+  const f = fixture(options.writeHook);
+  const transport = new AppServerTransport({ spawnChild: () => f.child, requestTimeoutMs: options.requestTimeoutMs ?? 1000, ...(onDisconnect ? { onDisconnect } : {}) });
   closers.push(() => transport.close());
   f.handle(request => {
     if (request.method === "initialize") f.respond(request, { userAgent: "kaoiro/0.153.4 (test)" });
@@ -623,4 +630,167 @@ it.each([false, true])("reports abnormal disconnection once but suppresses self-
   if (intentional) await f.transport.close();else f.exit();
   await tick();f.child.emit("error", new Error("duplicate failure"));await tick();
   expect(disconnected).toHaveBeenCalledTimes(intentional ? 0 : 1);
+});
+
+describe("request write state", () => {
+  const rpcFixture = (writeHook?: WriteHook, requestTimeoutMs?: number) => {
+    const f = fixture(writeHook);
+    const rpc = new AppServerRpc({ spawnChild: () => f.child, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) });
+    closers.push(() => rpc.close());
+    return { ...f, rpc };
+  };
+
+  it("is unwritten when the rpc has already failed", async () => {
+    const f = rpcFixture();
+    await f.rpc.close();
+    const ticket = f.rpc.request("ping", {});
+    await expect(ticket.result).rejects.toBeInstanceOf(AppServerConnectionError);
+    expect(ticket.writeState()).toBe("unwritten");
+  });
+
+  it("is written once the write callback succeeds", async () => {
+    const f = rpcFixture();
+    f.handle(request => f.respond(request, {}));
+    const ticket = f.rpc.request("ping", {});
+    await ticket.result;
+    expect(ticket.writeState()).toBe("written");
+  });
+
+  it("is failed when the write callback reports an error", async () => {
+    const f = rpcFixture((_chunk, callback) => callback(new Error("EPIPE")));
+    const ticket = f.rpc.request("ping", {});
+    await expect(ticket.result).rejects.toBeInstanceOf(AppServerConnectionError);
+    await f.rpc.close();
+    expect(ticket.writeState()).toBe("failed");
+  });
+
+  it("is failed when only a few bytes were accepted before the error", async () => {
+    let received = "";
+    const f = rpcFixture((chunk, callback) => { received += chunk.subarray(0, 5).toString();callback(new Error("EPIPE")); });
+    const ticket = f.rpc.request("ping", {});
+    await expect(ticket.result).rejects.toBeInstanceOf(AppServerConnectionError);
+    await f.rpc.close();
+    expect(ticket.writeState()).toBe("failed");
+    expect(received).toHaveLength(5);
+    expect(received).not.toContain("\n");
+    expect(f.sent).toEqual([]);
+  });
+
+  it.each([
+    ["succeeds", undefined, "written"],
+    ["fails", new Error("EPIPE"), "failed"],
+  ] as const)("is final only after close when a pending write %s after the timeout", async (_name, error, expected) => {
+    let release: () => void = () => {};
+    const f = rpcFixture((_chunk, callback) => { release = () => callback(error ?? null); }, 20);
+    const ticket = f.rpc.request("ping", {});
+    await expect(ticket.result).rejects.toMatchObject({ kind: "timeout" });
+    expect(ticket.writeState()).toBe("writing");
+    release();
+    await f.rpc.close();
+    expect(ticket.writeState()).toBe(expected);
+  });
+});
+
+describe("turn/start outcome after the write", () => {
+  const start = (f: ReturnType<typeof transportFixture>) => f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" });
+  const answerSetup = (f: ReturnType<typeof transportFixture>, onTurnStart: (request: RpcObject) => void) => f.handle(request => {
+    if (request.method === "initialize") f.respond(request, { userAgent: "kaoiro/0.153.4 (test)" });
+    if (request.method === "thread/start") f.respond(request, { thread: { id: "thread-1" } });
+    if (request.method === "turn/start") onTurnStart(request);
+  });
+  const isTurnStart = (chunk: Buffer) => (JSON.parse(chunk.toString()) as RpcObject).method === "turn/start";
+
+  it("is unknown when the reply never comes, and the reason is the timeout", async () => {
+    const f = transportFixture(undefined, { requestTimeoutMs: 40 });
+    answerSetup(f, () => {});
+    await f.transport.startThread();
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerTurnStartUnknownError);
+    expect(error).toBeInstanceOf(AppServerConnectionError);
+    expect(error).toMatchObject({ reason: "turn_start_timeout" });
+    expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+  });
+
+  it("is unknown when the app-server ends after the write, and the reason is a disconnect", async () => {
+    const f = transportFixture();
+    answerSetup(f, () => f.exit());
+    await f.transport.startThread();
+    await expect(start(f)).rejects.toMatchObject({ reason: "turn_start_disconnected" });
+  });
+
+  it("is unknown when the reply is malformed", async () => {
+    const f = transportFixture();
+    answerSetup(f, request => f.respond(request, {}));
+    await f.transport.startThread();
+    await expect(start(f)).rejects.toMatchObject({ reason: "turn_start_invalid_response" });
+  });
+
+  it("stays a rejection when the app-server answers with an error", async () => {
+    const f = transportFixture();
+    answerSetup(f, request => f.send({ id: request.id, error: { code: -32600, message: "rejected" } }));
+    await f.transport.startThread();
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerRpcError);
+    expect(error).not.toBeInstanceOf(AppServerTurnStartUnknownError);
+  });
+
+  it("is not unknown when the turn/start write reports an error", async () => {
+    const f = transportFixture(undefined, { writeHook: (chunk, callback, accept) => {
+      if (isTurnStart(chunk)) callback(new Error("EPIPE"));
+      else { accept();callback(); }
+    } });
+    answerSetup(f, () => {});
+    await f.transport.startThread();
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerConnectionError);
+    expect(error).not.toBeInstanceOf(AppServerTurnStartUnknownError);
+    expect(f.sent.some(r => r.method === "turn/start")).toBe(false);
+  });
+
+  it("is not unknown when only a few bytes of turn/start were accepted before the error", async () => {
+    let partial = "";
+    const f = transportFixture(undefined, { writeHook: (chunk, callback, accept) => {
+      if (isTurnStart(chunk)) { partial += chunk.subarray(0, 7).toString();callback(new Error("EPIPE")); }
+      else { accept();callback(); }
+    } });
+    answerSetup(f, () => {});
+    await f.transport.startThread();
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerConnectionError);
+    expect(error).not.toBeInstanceOf(AppServerTurnStartUnknownError);
+    expect(partial).toHaveLength(7);
+    expect(partial).not.toContain("\n");
+    expect(f.sent.some(r => r.method === "turn/start")).toBe(false);
+  });
+
+  it("reads the write state only after close: a pending write that fails after the timeout is not unknown", async () => {
+    const f = transportFixture(undefined, { requestTimeoutMs: 30, writeHook: (chunk, callback, accept) => {
+      if (isTurnStart(chunk)) setTimeout(() => callback(new Error("EPIPE")), 100);
+      else { accept();callback(); }
+    } });
+    answerSetup(f, () => {});
+    await f.transport.startThread();
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerConnectionError);
+    expect(error).not.toBeInstanceOf(AppServerTurnStartUnknownError);
+  });
+
+  it("is not unknown when the transport had already failed before turn/start", async () => {
+    const f = transportFixture();
+    await f.transport.startThread();
+    f.exit();
+    await new Promise<void>(resolve => setTimeout(resolve, 30));
+    const error = await start(f).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AppServerConnectionError);
+    expect(error).not.toBeInstanceOf(AppServerTurnStartUnknownError);
+    expect(f.sent.some(r => r.method === "turn/start")).toBe(false);
+  });
+
+  it("decides the reason from the typed cause, not from the message", () => {
+    const worded = new AppServerConnectionError("App-server response timeout: turn/start");
+    expect(new AppServerTurnStartUnknownError(worded).reason).toBe("turn_start_disconnected");
+    expect(new AppServerTurnStartUnknownError(new AppServerConnectionError("anything", "timeout")).reason).toBe("turn_start_timeout");
+    expect(new AppServerTurnStartUnknownError(new AppServerConnectionError("anything", "invalid_response")).reason).toBe("turn_start_invalid_response");
+    expect(String(new AppServerTurnStartUnknownError(worded))).toBe(String(worded));
+  });
 });

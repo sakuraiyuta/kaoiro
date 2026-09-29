@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { cliAppFixture } from "./fixtures/cli_app_server.js";
 
@@ -240,4 +240,41 @@ it("stale send transfers a queued body through the real recovery response withou
     f.terminal(); await vi.waitFor(() => expect(f.finalized).toHaveLength(1)); await f.drain();
     expect(f.turns()).toHaveLength(1); expect(f.acks()).toEqual([1, 2]);
   } finally { await f.close(); }
+});
+
+describe("delivery stages when turn/start may or may not have been delivered", () => {
+  const stages = (reports: Array<Record<string, unknown>>) => reports.map(report => report.stage).filter(stage => stage !== "queued");
+
+  it("ends on unknown, with no settled, when the app-server ends after turn/start was written", async () => {
+    const f = await cliAppFixture(false, "app-server", "legacy", { stages: true, turnStart: () => "exit" });
+    try {
+      await f.inbound(1, "c1");
+      await vi.waitFor(() => expect(stages(f.stageReports(1))).toEqual(["unknown"]), { timeout: 10_000 });
+      expect(f.stageReports(1).find(report => report.stage === "unknown")).toMatchObject({ reason: "turn_start_disconnected", incarnation: "inc-451" });
+      // The wrapper stops with its app-server; once it has exited nothing more can be reported.
+      await f.running;
+      expect(stages(f.stageReports(1))).toEqual(["unknown"]);
+    } finally { await f.close(); }
+  });
+
+  it("stays failed_before_handoff when turn/start is answered with an error", async () => {
+    const f = await cliAppFixture(false, "app-server", "legacy", { stages: true, turnStart: () => "reject" });
+    try {
+      await f.inbound(1, "c1");
+      await vi.waitFor(() => expect(stages(f.stageReports(1))).toEqual(["settled"]), { timeout: 10_000 });
+      expect(f.stageReports(1).find(report => report.stage === "settled")).toMatchObject({ reason: "failed_before_handoff" });
+    } finally { await f.close(); }
+  });
+
+  it("is unchanged for a successful turn: submitted, then settled at the turn end", async () => {
+    const f = await cliAppFixture(false, "app-server", "legacy", { stages: true });
+    try {
+      await f.inbound(1, "c1");
+      await vi.waitFor(() => expect(stages(f.stageReports(1))).toEqual(["submitted"]), { timeout: 10_000 });
+      f.terminal();
+      await vi.waitFor(() => expect(stages(f.stageReports(1))).toEqual(["submitted", "settled"]), { timeout: 10_000 });
+      expect(f.stageReports(1).find(report => report.stage === "submitted")).toMatchObject({ handoff: "turn_start_accepted" });
+      expect(f.stageReports(1).find(report => report.stage === "settled")).toMatchObject({ reason: "turn_end" });
+    } finally { await f.close(); }
+  });
 });

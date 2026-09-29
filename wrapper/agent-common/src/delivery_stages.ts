@@ -149,6 +149,25 @@ export class DeliveryStageReporter {
     this.#deliveriesByTurn.delete(turnToken);
   }
 
+  /** The turn's input may have reached the engine but its outcome cannot be
+   * established. The delivery ends on `unknown`, with no later `settled`: the
+   * server keeps a single last-written `reason`, which a `settled` would replace. */
+  unknownTurn(turnToken: string, reason: string): void {
+    this.#observeIdentity();
+    for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {
+      this.#recordTurnEnvelope(turnToken, envelope);
+    }
+    for (const delivery of [...(this.#deliveriesByTurn.get(turnToken)?.values() ?? [])]) {
+      // Unreachable while the unknown outcome exists only before the reply,
+      // hence before `submitted`; kept so a submitted delivery is never
+      // reported as unknown.
+      if (delivery.submitted) this.#report(delivery, "settled", { reason: "turn_end" });
+      else this.#report(delivery, "unknown", { reason });
+      this.#removeDelivery(delivery);
+    }
+    this.#deliveriesByTurn.delete(turnToken);
+  }
+
   settleEnvelope(envelope: Envelope, reason: "terminal_skip" | "stale_skip"): void {
     this.#observeIdentity();
     this.capture(envelope);
