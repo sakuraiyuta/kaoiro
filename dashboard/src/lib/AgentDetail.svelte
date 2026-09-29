@@ -3045,9 +3045,6 @@
                   <span class="cc-model">
                     {#if pendingModel}pending:{" "}{/if}{#if modelPrimary}{modelPrimary}{#if resolvedModel && resolvedModel !== modelPrimary}<span class="cc-model-resolved">{resolvedModel}</span>{/if}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
                   </span>
-                  {#if isFallbackModel}
-                    <span class="axes-hint">安全機構による退避 (設定は保持、再起動で復帰)</span>
-                  {/if}
                   {#if connection && modelSwitchSupported && models.length > 0}
                     <button
                       type="button"
@@ -3091,6 +3088,9 @@
                     </ul>
                   {/if}
                 </div>
+                {#if isFallbackModel}
+                  <span class="axes-hint">安全機構による退避 (設定は保持、再起動で復帰)</span>
+                {/if}
               </dd>
             </div>
           {/if}

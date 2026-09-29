@@ -771,6 +771,16 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.textContent).not.toContain("モデル切替に失敗");
     expect(target.querySelector(".switch-notice")?.classList.contains("error")).toBe(false);
     expect(target.textContent).toContain("安全機構による退避 (設定は保持、再起動で復帰)");
+    // issue #444: the fallback hint must sit directly under <dd> outside
+    // .cc-switchbox so it doesn't crush .cc-model into single-character wrapping.
+    const modelRow = [...target.querySelectorAll(".cc-row")].find(
+      (row) => row.querySelector("dt")?.textContent?.trim() === "model",
+    );
+    expect(modelRow).toBeDefined();
+    const switchbox = modelRow?.querySelector(".cc-switchbox");
+    expect(switchbox?.querySelector(".axes-hint")).toBeNull();
+    const hint = modelRow?.querySelector("dd > .axes-hint");
+    expect(hint?.textContent).toContain("安全機構による退避 (設定は保持、再起動で復帰)");
   });
 
   it("model_source=config の通常表示には退避注記が出ない (issue #363 negative control)", async () => {
