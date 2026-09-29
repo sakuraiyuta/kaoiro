@@ -135,8 +135,8 @@ immediate turn may abort the probe before it yields a zero-turn rate-limit
 snapshot.
 
 The Host gate cannot coordinate separate wrappers that concurrently initialize
-the same empty `CODEX_HOME`, such as a bulk spawn after a Codex update changes
-the `state_N.sqlite` version. The deployment runbook must instruct operators
+the same `CODEX_HOME`, such as a bulk spawn after a Codex update that migrates
+the state schema in place. The deployment runbook must instruct operators
 to start one Codex agent first after such an update, let its state initialize,
 then bulk spawn. Runner-wide serialization is a separate issue owned by the
 director. Update (issue #411): the transport now also retries a failed
