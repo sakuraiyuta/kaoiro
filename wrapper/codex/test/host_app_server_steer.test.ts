@@ -14,7 +14,7 @@ afterEach(async () => { for (const fn of cleanup.splice(0)) await fn();vi.restor
 
 type SteerReply = (request: RpcObject, reply: (value: unknown) => void, error: (code: number, message: string, data?: unknown) => void) => void;
 
-function fixture(optIn = true) {
+function fixture(optIn = true, extra: Partial<CodexHostOptions> = {}) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
   let number = 0;
@@ -50,7 +50,7 @@ function fixture(optIn = true) {
   const options: CodexHostOptions = { backend: "app-server", appendSystemPrompt: "PERSONA",
     appServerSessionFactory: options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }),
     onState: () => {}, onLog: e => logs.push(e), onInstructionRejected: e => rejected.push(e),
-    permissionSyncPending: () => syncPending, liveInputBlocked: () => blocked };
+    permissionSyncPending: () => syncPending, liveInputBlocked: () => blocked, ...extra };
   if (optIn) options.operatorSteer = { available: () => available };
   const host = new CodexHost(config, options);
   const running = host.run();cleanup.push(async () => { host.close();await running; });
@@ -217,4 +217,41 @@ it("rechecks the echo at the commit point and caps steers per turn", async () =>
   for (let i = 0; i < 9; i += 1) await g.operator(`S${i}`);
   expect(g.byMethod("turn/steer")).toHaveLength(8);
   expect(g.system()).toContain("Operator input queued for the next turn (steer_cap).");
+});
+
+it("G5: a pending model or effort keeps operator input off the running turn", async () => {
+  for (const change of ["model", "effort"] as const) {
+    const f = fixture();
+    await running(f);
+    if (change === "model") await f.host.setModel("gpt-5.6-sol");
+    else await f.host.setEffort("low");
+    await f.operator(`AFTER ${change}`);
+    expect(f.byMethod("turn/steer"), change).toHaveLength(0);
+    expect(f.system()).toContain("Operator input queued for the next turn (pending_settings).");
+  }
+});
+
+it("after a foreign turn the next dispatch fails closed and settles every queued entry once", async () => {
+  for (const head of ["ia", "operator"] as const) {
+    const starts = vi.fn(), ends = vi.fn(), finals = vi.fn();
+    const f = fixture(true, { onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals });
+    await running(f);
+    f.send({ method: "turn/started", params: { threadId: "thread", turn: { id: "foreign-1" } } });
+    await vi.waitFor(() => expect(f.system()).toContain(
+      "The app-server ran a turn this wrapper did not start; steering and new turns are stopped pending operator recovery."));
+    const ia = (token: string) => f.host.send(`IA ${token}`, undefined, [`cid-${token}`], token);
+    if (head === "ia") { await ia("ia-1");await f.operator("OP", "normal");await ia("ia-2"); }
+    else { await f.operator("OP", "normal");await ia("ia-1");await ia("ia-2"); }
+    f.terminal();
+    await vi.waitFor(() => expect(finals.mock.calls.map(([x]) => x.turnToken)).toEqual(expect.arrayContaining(["ia-1", "ia-2"])));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const count = (spy: typeof starts, token: string) => spy.mock.calls.filter(([x]) => x.turnToken === token).length;
+    for (const token of ["ia-1", "ia-2"]) {
+      expect(count(starts, token), `${head} start ${token}`).toBe(0);
+      expect(count(ends, token), `${head} end ${token}`).toBe(1);
+      expect(count(finals, token), `${head} final ${token}`).toBe(1);
+    }
+    expect(f.texts("turn/start"), head).toEqual(["BASE"]);
+    expect(f.byMethod("turn/steer")).toHaveLength(0);
+  }
 });
