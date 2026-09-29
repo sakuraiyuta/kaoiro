@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { AppServerRpc, type AppServerNotification } from "../src/app_server_rpc.js";
 import { AppServerSession } from "../src/app_server_session.js";
+import { tapStdout } from "./fixtures/notice_tap.js";
 
 // Pins, against the real pinned CLI, which history calls emit the
 // deprecationNotice and which do not, so that a CLI update that changes the
-// wording, stops or starts emitting it turns a test red. Every case runs in
-// its own freshly spawned app-server: the notice is observed per process, and
-// a shared process would let a later case pass on an earlier case's output.
+// wording, stops or starts emitting it turns a test red. The notice is emitted
+// once per deprecated call, not once per process (measured on 0.156.1). Every
+// case still runs in its own freshly spawned app-server, so the raw-stdout tap
+// and the case's notice list cannot see another case's output.
 const RESUME_NOTICE = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
 const READ_NOTICE = "Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.";
 const policy = { approvalPolicy: "never", approvalsReviewer: "user" };
@@ -29,7 +31,7 @@ async function seed(historyMode: "paginated" | "legacy"): Promise<string> {
     rpc.notify("initialized");
     const started = await rpc.request("thread/start", { ...policy, cwd: home, sandbox: "read-only",
       ...(historyMode === "legacy" ? { historyMode } : {}) }).result as { thread: { id: string; historyMode?: string } };
-    expect(started.thread.historyMode).toBe(historyMode);
+    expect(started.thread.historyMode, `premise: thread/start creates a ${historyMode} thread; a CLI that drops historyMode ends this test`).toBe(historyMode);
     await rpc.request("turn/start", { ...policy, threadId: started.thread.id, input: [{ type: "text", text: "SEED_QUESTION", text_elements: [] }] }).result;
     await done;
     return started.thread.id;
@@ -84,19 +86,6 @@ afterAll(async () => {
 });
 
 type Notice = { summary?: unknown; details?: unknown };
-type Tap = { sawNotice: () => boolean; restore: () => void };
-
-// Raw child stdout, before the transport drops notifications without a threadId.
-function tapStdout(): Tap {
-  const decode = TextDecoder.prototype.decode;
-  let seen = false;
-  const spy = vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: InstanceType<typeof TextDecoder>, ...args) {
-    const text = decode.apply(this, args);
-    if (text.includes('"deprecationNotice"')) seen = true;
-    return text;
-  });
-  return { sawNotice: () => seen, restore: () => spy.mockRestore() };
-}
 
 // One fresh app-server per call. The barrier read is answered after any
 // notification the earlier request produced, so silence is observed, not waited for.

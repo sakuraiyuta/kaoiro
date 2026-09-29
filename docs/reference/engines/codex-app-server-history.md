@@ -47,6 +47,8 @@ the notice, so
 `app_server_resume_notice.integration.test.ts` pins the wording, the silence of
 the production resume and history read, and the legacy behaviour against the
 pinned CLI; a CLI update that changes any of them fails that test.
+The legacy cases can be retired once the pinned CLI rejects `historyMode: "legacy"` on
+`thread/start` (the seed's premise assertion fails) or no longer opens legacy threads.
 
 History reading excludes live turn submission, thread changes, and concurrent
 history reads; conflicting operations reject immediately rather than queue.

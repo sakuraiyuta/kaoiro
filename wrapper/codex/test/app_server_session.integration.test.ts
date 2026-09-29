@@ -148,6 +148,9 @@ enabled = false
       const developer = JSON.stringify(beforeTool.input.filter(item => item.role === "developer"));
       expect(developer.match(/PERSONA_348_ONCE/g)).toHaveLength(1);
       // Resuming with excludeTurns must still give the model the earlier turns.
+      // No mutation isolates this line: one that keeps the thread id but loses
+      // the context cannot be made without changing the CLI. The legacy test
+      // below shows the same assertion failing when the thread is not resumed.
       if (index === 2) for (const text of ["USER_1", "FIRST"]) expect(JSON.stringify(beforeTool.input), text).toContain(text);
       const user = beforeTool.input.filter(item => item.role === "user").at(-1)!;
       const serializedUser = JSON.stringify(user);
@@ -239,7 +242,7 @@ enabled = false
     seed.notify("initialized");
     const policy = { approvalPolicy: "never", approvalsReviewer: "user" };
     const started = await seed.request("thread/start", { ...policy, cwd: home, sandbox: "read-only", historyMode: "legacy" }).result as { thread: { id: string; historyMode?: string } };
-    expect(started.thread.historyMode).toBe("legacy");
+    expect(started.thread.historyMode, "premise: an experimental thread/start with historyMode legacy creates a legacy thread").toBe("legacy");
     const threadId = started.thread.id;
     await seed.request("turn/start", { ...policy, threadId, input: [{ type: "text", text: "USER_1", text_elements: [] }] }).result;
     await done;
