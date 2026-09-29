@@ -966,7 +966,8 @@ defmodule KaoiroServer.DeliveryStates do
 
   # The wrapper stops tracking a delivery once it reports `unknown`, so a record
   # whose latest report is `unknown` is as final as a settled one. Records
-  # persisted before `last_stage` existed keep the settled/lost rule.
+  # persisted before `last_stage` existed keep the settled/lost rule until
+  # their next report gives them one.
   defp terminal_record?(record) do
     Map.has_key?(record.stages, "settled") or Map.has_key?(record.stages, "lost") or
       Map.get(record, :last_stage) == "unknown"

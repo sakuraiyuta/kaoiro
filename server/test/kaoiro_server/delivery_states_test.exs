@@ -669,6 +669,9 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert {:ok, %{acked_seq: 2, lost_count: 1, last_loss: %{count: 1}}} =
              DeliveryStates.retire_owned_generation("recipient", "generation", owner, name)
 
+    key = {"recipient", incarnation}
+    assert "lost" == :sys.get_state(name).entries["recipient"].stage_history[key][1].last_stage
+
     assert {:ok, %{stages: stages}} =
              DeliveryStates.message_status("sender", "owned-retirement-cid", 2, name)
 
@@ -802,11 +805,12 @@ defmodule KaoiroServer.DeliveryStatesTest do
       entry = state.entries["recipient"]
       old = "2020-01-01T00:00:00Z"
       entry = put_in(entry.stage_history[key][1].changed_at, old)
+      stages = state.stages
 
       %{
         state
         | entries: Map.put(state.entries, "recipient", entry),
-          stages: put_in(state.stages[key][1].changed_at, old)
+          stages: put_in(stages[key][1].changed_at, old)
       }
     end)
 
@@ -862,11 +866,12 @@ defmodule KaoiroServer.DeliveryStatesTest do
       entry = state.entries["recipient"]
       old = "2020-01-01T00:00:00Z"
       entry = put_in(entry.stage_history[key][1].changed_at, old)
+      stages = state.stages
 
       %{
         state
         | entries: Map.put(state.entries, "recipient", entry),
-          stages: put_in(state.stages[key][1].changed_at, old)
+          stages: put_in(stages[key][1].changed_at, old)
       }
     end)
 
