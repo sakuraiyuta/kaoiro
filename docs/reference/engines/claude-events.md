@@ -120,6 +120,40 @@ and revokes inter-agent send authority while keeping the wrapper owner until
 stream teardown. The wrapper reports `state=error` and stderr contains
 `notification result ownership ambiguous` and `notification result fail-stop`.
 
+#### Foreign root intervals
+
+A root interval whose opener the host cannot name (for example a background
+`Agent` hand-back turn) is a *foreign root occupancy*. It is established by a
+fresh-prompt-ID root `UserPromptSubmit` hook that matches no wrapper input and
+no pending notification, or, when no hook was seen, by a busy frame with
+`parent_tool_use_id === null`; child frames never establish it. The host grants
+no send authority to it: root calls stay `unbound_tool_call`. It holds the
+next-input barrier (including a pending pushed receipt, which resolves as
+`unknown(foreign_occupancy)`), pauses notification candidate clocks, and
+suppresses the turn-backed-state warning. A same-ID notification hook folds
+into it without a token.
+
+The occupancy ends only at a result of the same session whose `result_index`
+exceeds every index seen earlier in the host run. The result is displayed; no
+admitted-turn callback fires, its prompt ID is retired, and candidate clocks
+are rearmed in full. `conversation_reset`, compaction boundaries and an
+interrupt ACK are not terminals and keep the barrier.
+
+While a wrapper turn, an admitted notification turn or an occupancy is live, a
+fresh-ID root hook that is not the uniquely recognized wrapper input marks the
+interval identity ambiguous. A uniquely recognized wrapper input is the live
+wrapper turn's exact yielded text, from the same session, not `system`-sourced
+and not also a full rendering of a pending notification. Once ambiguous, no
+result settles or releases anything: the next terminal stops admission. An
+exact repeat of a retired result is ignored; a reused `result_index` with
+another identity stops admission.
+
+An occupancy failure (ambiguous interval, wrong session, missing or
+regressing `result_index`, session rebind frame, stream EOF) stops admission
+with no owning token and enters `error`; recovery is the procedure below. A
+foreign occupancy has no time bound: the hold lasts as long as the root
+computation.
+
 ### Live delivery receipts and root ownership
 
 With [Claude phase-2 delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls)

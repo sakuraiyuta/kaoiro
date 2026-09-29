@@ -657,6 +657,21 @@ interface NotificationCandidate {
   timeout: ReturnType<typeof setTimeout> | null;
 }
 
+interface ForeignOccupancy {
+  sessionId: string;
+  /** null while only root frames (no prompt hook) evidence the interval. */
+  promptId: string | null;
+}
+
+interface RetiredResult {
+  sessionId: string;
+  resultIndex: number;
+  uuid: string | undefined;
+  originKind: string | undefined;
+}
+
+const MAX_RETIRED_RESULTS = 64;
+
 interface ParsedNotification {
   taskId: string;
   toolUseId?: string;
@@ -747,7 +762,18 @@ export class AgentHost implements EngineAdapter {
    * whose result cannot safely be assigned to it. */
   #admissionFailStopped = false;
   #unattributedTerminalFrozen = false;
-  readonly #unresolvedForeignPromptIds = new Set<string>();
+  /** Set when the host saw more than one root interval it cannot tell apart
+   * (a fresh-ID root prompt hook while an owner or a foreign occupancy is
+   * live). While set, no terminal may settle or release anything. Lives on
+   * the live interval, so it is cleared with it. */
+  #intervalAmbiguous = false;
+  /** A root interval the host cannot name the opener of (for example a
+   * hand-back turn). It holds the input barrier and grants no send
+   * authority. Mutually exclusive with #activeTurn. */
+  #foreignOccupancy: ForeignOccupancy | null = null;
+  /** Highest result_index seen in this host run; a foreign drain must exceed it. */
+  #lastResultIndex: number | null = null;
+  readonly #retiredResults: RetiredResult[] = [];
   #hostEnded = false;
   #query: Query | null = null;
   /** Forwarded to `Options.abortController` so `close()` can bound the SDK's
@@ -1723,6 +1749,74 @@ export class AgentHost implements EngineAdapter {
       });
   }
 
+  /** Fail-stop with no admitted token. #failStopForAmbiguousResult returns on
+   * a null #activeTurn, so an occupancy failure goes to the null-capable
+   * primitive directly. */
+  #failStopOwnerless(detail: string): void {
+    if (this.#admissionFailStopped) return;
+    this.#unattributedTerminalFrozen = true;
+    this.#warn(`[kaoiro] ${detail}`);
+    this.#failStopAdmission(null, detail, "admission_fail_stop", () => {
+      this.#options.onAdmissionFailStop?.({ conversationIds: [] });
+    });
+  }
+
+  /** A busy root frame with no owner and no hook seen is still a root interval
+   * the host cannot name. Child frames never establish one. Evaluated before
+   * #apply so the establishing frame's own busy state is already backed. */
+  #observeRootFrame(message: SDKMessage, events: readonly AdapterEvent[]): void {
+    if (this.#activeTurn !== null || this.#foreignOccupancy !== null || !this.#everStartedTurn ||
+        this.#closed || events.length === 0) return;
+    if (message.type !== "assistant" && message.type !== "user") return;
+    if (message.parent_tool_use_id !== null) return;
+    let machine = this.#machine;
+    for (const event of events) machine = stepState(machine, event).next;
+    if (!TURN_BACKED_STATES.has(machine.state)) return;
+    const sessionId = sdkMessageToSessionId(message) ?? this.#sessionId;
+    if (sessionId === null) return;
+    this.#beginForeignOccupancy({ sessionId, promptId: null });
+  }
+
+  #matchRetiredResult(message: SDKMessage): "none" | "duplicate" | "conflict" {
+    if (message.type !== "result" || typeof message.result_index !== "number") return "none";
+    const record = this.#retiredResults.find(item =>
+      item.sessionId === message.session_id && item.resultIndex === message.result_index);
+    if (record === undefined) return "none";
+    return record.uuid === message.uuid && record.originKind === message.origin?.kind ? "duplicate" : "conflict";
+  }
+
+  #noteResultIndex(message: SDKMessage): void {
+    if (message.type === "result" && typeof message.result_index === "number") {
+      this.#lastResultIndex = message.result_index;
+    }
+  }
+
+  /** The only exit of a foreign occupancy: a result of the same session whose
+   * index advanced, with the interval identity unambiguous. The result is
+   * displayed but settles no admitted token. */
+  #drainForeignOccupancy(message: SDKMessage, result: ResultPayload): void {
+    const occupancy = this.#foreignOccupancy!;
+    if (message.type !== "result") return;
+    const index = message.result_index;
+    if (this.#intervalAmbiguous) {
+      this.#failStopOwnerless("foreign root interval identity ambiguous at its terminal; host admission stopped pending operator recovery");
+      return;
+    }
+    if (message.session_id !== occupancy.sessionId || typeof index !== "number" ||
+        (this.#lastResultIndex !== null && index <= this.#lastResultIndex)) {
+      this.#failStopOwnerless("foreign root terminal has the wrong session or a missing or regressing result index; host admission stopped pending operator recovery");
+      return;
+    }
+    this.#emitResult(result, sdkMessageToCost(message));
+    this.#retiredResults.push({ sessionId: message.session_id, resultIndex: index, uuid: message.uuid, originKind: message.origin?.kind });
+    if (this.#retiredResults.length > MAX_RETIRED_RESULTS) this.#retiredResults.shift();
+    if (occupancy.promptId !== null) this.#retiredPromptIds.add(occupancy.promptId);
+    this.#foreignOccupancy = null;
+    this.#intervalAmbiguous = false;
+    for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
+    this.#wakeTurnBoundary();
+  }
+
   #failStopAdmission(
     activeTurn: QueuedTurn | NotificationTurn | null,
     detail: string,
@@ -2059,7 +2153,7 @@ export class AgentHost implements EngineAdapter {
       timeout: null,
     };
     this.#notificationCandidates.set(taskId, candidate);
-    if (this.#activeTurn === null) this.#armNotificationCandidate(candidate);
+    if (this.#activeTurn === null && this.#foreignOccupancy === null) this.#armNotificationCandidate(candidate);
   }
 
   #armNotificationCandidate(candidate: NotificationCandidate): void {
@@ -2139,43 +2233,94 @@ export class AgentHost implements EngineAdapter {
             (!notifications[index]!.outputFilePresent || candidate.outputFile === notifications[index]!.outputFile) &&
             candidate.summary === notifications[index]!.result && notifications[index]!.summary !== undefined
       ));
+    // The one definition of a uniquely recognized wrapper input: every
+    // precedence exception and the registration below use it, so a hook that
+    // fails any clause cannot obtain either.
+    const uniqueWrapper = wrapperMatch && !notificationMatch && input.source !== "system" &&
+      (this.#sessionId === null || this.#sessionId === input.session_id);
     if (owner) {
       if (input.prompt.includes("<task-notification>")) {
         if (notificationMatch && !wrapperMatch && !owner.tainted && owner.kind === "wrapper_input" &&
             owner.token === active?.turnToken && owner.sessionId === input.session_id &&
             this.#sessionId === input.session_id) {
-          for (const candidate of candidates!) {
-            if (candidate!.timeout) clearTimeout(candidate!.timeout);
-            this.#notificationCandidates.delete(candidate!.taskId);
-          }
+          this.#consumeNotificationCandidates(candidates!);
           this.#wakeTurnBoundary();
-        } else {
+        } else if (!(uniqueWrapper && owner.token === active?.turnToken)) {
           owner.tainted = true;
         }
       }
       return;
     }
-    if (active !== null && active.kind !== "sdk_notification" && input.prompt.includes("<task-notification>")) {
-      this.#unresolvedForeignPromptIds.add(input.prompt_id);
-    }
-    if (rejectedPushedReceipt) return;
-    if (wrapperMatch && !notificationMatch && input.source !== "system") {
-      this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: active.turnToken, kind: "wrapper_input" });
-      this.#options.onPromptAdmitted?.(active.turnToken);
+    const occupancy = this.#foreignOccupancy;
+    if (occupancy !== null) {
+      this.#observeHookUnderOccupancy(occupancy, input.prompt_id, notificationMatch ? candidates! : null);
       return;
     }
-    if (!notificationMatch || wrapperMatch || active !== null || input.source === "sdk") return;
-    for (const candidate of candidates!) {
+    if (active !== null && !uniqueWrapper) this.#intervalAmbiguous = true;
+    if (!rejectedPushedReceipt) {
+      if (uniqueWrapper) {
+        this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: active!.turnToken, kind: "wrapper_input" });
+        this.#options.onPromptAdmitted?.(active!.turnToken);
+        return;
+      }
+      if (notificationMatch && !wrapperMatch && active === null && input.source !== "sdk") {
+        this.#admitNotification(input.session_id, input.prompt_id, candidates!);
+        return;
+      }
+    }
+    if (active === null) this.#beginForeignOccupancy({ sessionId: input.session_id, promptId: input.prompt_id });
+  }
+
+  #consumeNotificationCandidates(candidates: ReadonlyArray<NotificationCandidate | undefined>): void {
+    for (const candidate of candidates) {
       if (candidate!.timeout) clearTimeout(candidate!.timeout);
       this.#notificationCandidates.delete(candidate!.taskId);
     }
-    const turn: NotificationTurn = { kind: "sdk_notification", turnToken: randomUUID(), conversationIds: [], promptId: input.prompt_id };
+  }
+
+  #admitNotification(sessionId: string, promptId: string, candidates: ReadonlyArray<NotificationCandidate | undefined>): void {
+    this.#consumeNotificationCandidates(candidates);
+    const turn: NotificationTurn = { kind: "sdk_notification", turnToken: randomUUID(), conversationIds: [], promptId };
     this.#activeTurn = turn;
     this.#pausePendingRootClock();
     this.#everStartedTurn = true;
     this.toolOrigins.beginIndependent(turn.turnToken);
-    this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turn.turnToken, kind: turn.kind });
+    this.#promptOwners.set(promptId, { sessionId, token: turn.turnToken, kind: turn.kind });
     this.#options.onTurnStart?.({ turnToken: turn.turnToken, conversationIds: [], kind: turn.kind });
+  }
+
+  /** A root interval whose opener the host cannot name holds the input
+   * barrier and grants no send authority; see #drainForeignOccupancy for its
+   * only exit. */
+  #beginForeignOccupancy(occupancy: ForeignOccupancy): void {
+    this.#foreignOccupancy = occupancy;
+    this.#intervalAmbiguous = false;
+    if (this.#pendingPushedReceipt !== null) {
+      this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "foreign_occupancy");
+    }
+    // Paused, not dropped: a candidate is rearmed in full at the drain.
+    for (const candidate of this.#notificationCandidates.values()) {
+      if (candidate.timeout) clearTimeout(candidate.timeout);
+      candidate.timeout = null;
+    }
+  }
+
+  #observeHookUnderOccupancy(
+    occupancy: ForeignOccupancy,
+    promptId: string,
+    matched: ReadonlyArray<NotificationCandidate | undefined> | null,
+  ): void {
+    if (occupancy.promptId === null || occupancy.promptId === promptId) {
+      // The first hook of a frame-only record only names its prompt; a
+      // repeat of the recorded ID is the same interval.
+      occupancy.promptId = promptId;
+      if (matched !== null) {
+        this.#consumeNotificationCandidates(matched);
+        this.#wakeTurnBoundary();
+      }
+      return;
+    }
+    this.#intervalAmbiguous = true;
   }
 
   #resolvePushedReceipt(
@@ -2424,6 +2569,12 @@ export class AgentHost implements EngineAdapter {
           this.#options.onTurnProgress?.({ turnToken: activeTurn.turnToken });
         }
         const id = sdkMessageToSessionId(message);
+        // Checked before the rebind cleanup below erases per-session state:
+        // an unexpected rebind under a live root interval must not silently
+        // unlock the input generator.
+        if (this.#foreignOccupancy !== null && id !== null && id !== this.#foreignOccupancy.sessionId) {
+          this.#failStopOwnerless("session changed under a foreign root interval; host admission stopped pending operator recovery");
+        }
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
           if (hadPriorSession) {
@@ -2433,7 +2584,9 @@ export class AgentHost implements EngineAdapter {
             this.#clearNotificationCandidates();
             this.#promptOwners.clear();
             this.#retiredPromptIds.clear();
-            this.#unresolvedForeignPromptIds.clear();
+            this.#intervalAmbiguous = false;
+            this.#retiredResults.length = 0;
+            this.#lastResultIndex = null;
             this.toolOrigins.reset();
           }
           // A result from the old conversation must never refresh the new
@@ -2508,7 +2661,9 @@ export class AgentHost implements EngineAdapter {
         }
         // State first, so a log envelope carries the state this message
         // settled into; then relay the message's reply lines.
-        for (const event of sdkMessageToEvents(message)) this.#apply(event);
+        const events = sdkMessageToEvents(message);
+        this.#observeRootFrame(message, events);
+        for (const event of events) this.#apply(event);
         for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
         // Subagent/workflow task lifecycle (issue #170, ADR-0019 F2 / ADR-0047
         // F1) — deliberately does NOT feed #apply()/state derivation above:
@@ -2614,17 +2769,26 @@ export class AgentHost implements EngineAdapter {
           // (e.g. a plain success has no error_code to carry).
           this.#pendingAssistantErrorCode = undefined;
           if (this.#unattributedTerminalFrozen) continue;
+          const retired = this.#matchRetiredResult(message);
+          if (retired === "duplicate") continue;
+          if (retired === "conflict") {
+            this.#failStopOwnerless("a retired result index was reused with a different identity; host admission stopped pending operator recovery");
+            continue;
+          }
           const notificationResult = (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";
-          if (!notificationResult && this.#activeTurn?.kind !== "sdk_notification" && this.#unresolvedForeignPromptIds.size > 0) {
+          const ownerKind = this.#activeTurn?.kind;
+          if (this.#foreignOccupancy !== null) {
+            this.#drainForeignOccupancy(message, result);
+          } else if (this.#intervalAmbiguous && (ownerKind === "sdk_notification" || !notificationResult)) {
             this.#warn("[kaoiro] notification result ownership ambiguous; stopping host admission");
             this.#failStopForAmbiguousResult();
-          } else if (notificationResult && this.#activeTurn?.kind !== "sdk_notification") {
+          } else if (notificationResult && ownerKind !== "sdk_notification") {
             // A late SDK continuation must never settle a newly yielded wrapper input.
             // result.origin has no prompt ID, so even a tagged result cannot
             // prove which rejected prompt ended or clear an earlier collision.
             this.#emitResult(result, sdkMessageToCost(message));
             this.#clearNotificationCandidates();
-          } else if (!notificationResult && this.#activeTurn?.kind === "sdk_notification") {
+          } else if (!notificationResult && ownerKind === "sdk_notification") {
             this.#warn("[kaoiro] notification result lacks task-notification ownership; closing admission");
             this.close();
           } else if (result.is_error) {
@@ -2643,6 +2807,7 @@ export class AgentHost implements EngineAdapter {
             this.#emitResult(result, sdkMessageToCost(message));
             this.#completeActiveTurn(undefined, true);
           }
+          this.#noteResultIndex(message);
           this.#toolNames.clear();
         }
       }
@@ -2941,7 +3106,7 @@ export class AgentHost implements EngineAdapter {
    *  host driven without the input barrier (fake-SDK tests) legitimately has
    *  no owner for any state it emits. */
   #assertTurnBackedState(state: KaoiroState): void {
-    if (this.#activeTurn !== null || !this.#everStartedTurn) return;
+    if (this.#activeTurn !== null || this.#foreignOccupancy !== null || !this.#everStartedTurn) return;
     if (!TURN_BACKED_STATES.has(state)) return;
     this.#warn(
       `[kaoiro] invariant: ${state} emitted with no active turn; ` +
@@ -4430,10 +4595,12 @@ export class AgentHost implements EngineAdapter {
   }
 
   async #waitForNotificationBoundary(): Promise<void> {
-    while (this.#notificationCandidates.size > 0 || this.#activeTurn?.kind === "sdk_notification") {
+    while (this.#notificationCandidates.size > 0 || this.#activeTurn?.kind === "sdk_notification" ||
+        this.#foreignOccupancy !== null) {
       if (this.#closed && this.#queue.length === 0) return;
       await new Promise<void>((resolve) => {
-        if (this.#notificationCandidates.size === 0 && this.#activeTurn?.kind !== "sdk_notification") resolve();
+        if (this.#notificationCandidates.size === 0 && this.#activeTurn?.kind !== "sdk_notification" &&
+            this.#foreignOccupancy === null) resolve();
         else this.#turnBoundaryNotify = resolve;
       });
     }
@@ -4475,7 +4642,7 @@ export class AgentHost implements EngineAdapter {
       if (turn?.kind === "sdk_notification") this.#resumePendingRootClock();
       else this.#startPendingRootClock();
     }
-    this.#unresolvedForeignPromptIds.clear();
+    this.#intervalAmbiguous = false;
     for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
     if (turn !== null) {
       this.#options.onTurnEnd?.({
@@ -4515,6 +4682,9 @@ export class AgentHost implements EngineAdapter {
    * closed before notifying callbacks so any next batch the CLI attempts to
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
+    if (this.#foreignOccupancy !== null) {
+      this.#failStopOwnerless("SDK stream ended under a foreign root interval; host admission stopped pending operator recovery");
+    }
     this.#closed = true;
     if (this.#pendingPushedReceipt !== null) {
       this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "stream_eof");

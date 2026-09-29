@@ -181,10 +181,12 @@ an exemption.
 
 On Claude Code, a background `Agent` subagent's final report reaches the
 root as an `<agent-message>` continuation prompt that the host does not
-inject and does not currently admit. Ordinary `send_to_agent` calls made in
-that continuation are rejected locally with `unbound_tool_call` and
+inject and does not admit as a send owner. Ordinary `send_to_agent` calls made
+in that continuation are rejected locally with `unbound_tool_call` and
 `send_not_attempted: true`; nothing is sent. The block lasts until the next
-inbound inter-agent message starts a new turn.
+inbound inter-agent message starts a new turn. The host treats the
+continuation as a [foreign root interval](../engines/claude-events.md#foreign-root-intervals):
+it holds the next wrapper input until the interval's result.
 
 Operational guidance until issue #426 is resolved under ADR-0063 D6:
 
