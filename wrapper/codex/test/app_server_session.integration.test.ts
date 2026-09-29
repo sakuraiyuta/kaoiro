@@ -76,11 +76,16 @@ enabled = false
     vi.stubEnv("HOME", home);
     for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(name, undefined);
     let threadId: string | undefined;
+    const foreign: unknown[] = [];
     for (let index = 1; index <= 2; index += 1) {
       const controller = new AbortController();
       session = await AppServerSession.create({
         thread: { cwd: home, sandbox: "read-only", developerInstructions: "PERSONA_348_ONCE" },
         internalSubagents: index === 1,
+        // A resumed thread replays past turn IDs on thread-level usage
+        // notifications; none of them may count as a foreign turn.
+        enforceForeignTurn: index === 2,
+        onForeignTurn: turn => foreign.push(turn),
         turnSignal: () => controller.signal,
         tools: [{ name: "probe", description: "A probe.",
           inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
@@ -109,6 +114,8 @@ enabled = false
       ] });
       const events: AppServerProjection[] = [];
       for await (const event of turn.events) events.push(event);
+      expect(session.foreignTurn).toBeUndefined();
+      expect(foreign).toEqual([]);
       expect(turn.usage).toMatchObject({ last: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
       expect(session.rateLimits).toEqual({ readStatus: "unavailable", buckets: [
         { limitId: "codex", windows: { five_hour: { utilization: 0.12 }, seven_day: { utilization: 0.34 } } },

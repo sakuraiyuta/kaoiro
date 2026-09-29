@@ -109,6 +109,7 @@ export class AppServerSession {
   get version(): string | undefined { return this.#transport.version; }
   get stderrTail(): string { return this.#transport.stderrTail; }
   get rateLimits(): AppServerRateLimits { return this.#transport.rateLimits; }
+  get foreignTurn(): AppServerForeignTurn | undefined { return this.#transport.foreignTurn; }
 
   async startThread(): Promise<string> { return this.#openThread(); }
   async resumeThread(threadId: string): Promise<string> { return this.#openThread(threadId); }
