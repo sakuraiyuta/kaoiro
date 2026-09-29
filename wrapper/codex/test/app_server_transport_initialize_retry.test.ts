@@ -171,6 +171,48 @@ describe("initialize retry on an sqlite state initialization failure", () => {
     await expect(f.transport.readHistory("thread-1", historyConfig, historyNow)).rejects.toBe(error);
   });
 
+  it("counts a child that fails between its initialize reply and the handshake continuing as a failed attempt", async () => {
+    // The rpc asks for the next stdout chunk synchronously after routing the
+    // reply, before the handshake's continuation runs. Failing the child in
+    // that call puts the failure in the window just before promotion.
+    let spawned = 0;
+    const diagnostics: string[] = [];
+    const disconnects: Error[] = [];
+    const transport = new AppServerTransport({
+      spawnChild: () => {
+        spawned += 1;
+        if (spawned > 1) return fakeChild(okScript).child;
+        let deliver!: (chunk: Buffer) => void;
+        const reply = new Promise<Buffer>(resolve => { deliver = resolve; });
+        const fake = fakeChild((child, request) => {
+          if (request.method !== "initialize") return;
+          child.printError(SIGNATURE);
+          deliver(Buffer.from(JSON.stringify({ id: request.id, result: { userAgent: "kaoiro/0.156.1 (test)" } }) + "\n"));
+        });
+        let pulls = 0;
+        Object.assign(fake.child, { stdout: { [Symbol.asyncIterator]: () => ({
+          next: () => {
+            pulls += 1;
+            if (pulls === 1) return reply.then(value => ({ done: false, value }));
+            fake.child.emit("error", new Error("child died"));
+            return new Promise<never>(() => {});
+          },
+          return: async () => ({ done: true, value: undefined }),
+        }) } });
+        return fake.child;
+      },
+      requestTimeoutMs: 1000, shutdownTimeoutMs: 50,
+      onDiagnostic: message => diagnostics.push(message),
+      onDisconnect: error => disconnects.push(error),
+    });
+    closers.push(() => transport.close());
+    await transport.startThread();
+    expect(spawned).toBe(2);
+    expect(diagnostics).toHaveLength(1);
+    expect(disconnects).toEqual([]);
+    expect(await transport.readHistory("thread-1", historyConfig, historyNow)).toEqual({ coverage: "full", logs: [] });
+  });
+
   it("does not retry a signature that appears after initialize succeeded", async () => {
     const f = harness([(child, request) => {
       if (request.method === "initialize") child.respond(request, { userAgent: "kaoiro/0.156.1 (test)" });

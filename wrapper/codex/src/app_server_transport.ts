@@ -393,7 +393,7 @@ export class AppServerTransport {
         const failure = error instanceof AppServerConnectionError && line !== undefined
           ? new AppServerConnectionError(`${error.message} (initialize attempt ${attempt}/${INITIALIZE_MAX_ATTEMPTS}: ${line})`, error.kind)
           : error instanceof Error ? error : new AppServerConnectionError("App-server initialization failed");
-        throw this.#giveUp(failure, causal, state);
+        throw this.#giveUp(failure, causal);
       }
       const [min, max] = INITIALIZE_RETRY_DELAY_MS[attempt - 1]!;
       const delay = Math.round(min + Math.random() * (max - min));
@@ -402,11 +402,11 @@ export class AppServerTransport {
       );
       this.#options.onDiagnostic?.(message);
       await this.#wait(delay);
-      if (this.#closing) throw this.#giveUp(new AppServerConnectionError("App-server closed by client"), undefined, state);
+      if (this.#closing) throw this.#giveUp(new AppServerConnectionError("App-server closed by client"), undefined);
       try {
         this.#rpc = this.#spawn();
       } catch (spawnError) {
-        throw this.#giveUp(spawnError instanceof Error ? spawnError : new AppServerConnectionError("App-server spawn failed"), undefined, state);
+        throw this.#giveUp(spawnError instanceof Error ? spawnError : new AppServerConnectionError("App-server spawn failed"), undefined);
       }
     }
   }
@@ -429,9 +429,9 @@ export class AppServerTransport {
 
   /** Records the final failure the way a failed rpc always did: the transport
    * disconnects once, and only when the rpc failed by itself. */
-  #giveUp(failure: Error, causal: Error | undefined, state: InitializeAttempt): Error {
+  #giveUp(failure: Error, causal: Error | undefined): Error {
     if (causal === undefined) this.#failure = failure;
-    this.#rpcFailed(causal === undefined ? state.failure ?? failure : failure);
+    this.#rpcFailed(failure);
     this.#failure = failure;
     return failure;
   }
