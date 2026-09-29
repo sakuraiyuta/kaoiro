@@ -1113,4 +1113,169 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert Map.has_key?(projection, "z-gap")
     refute Map.has_key?(projection, "agent-200")
   end
+
+  describe "records ending on unknown are terminal for retention" do
+    setup %{name: name} do
+      owner = self()
+      DeliveryStates.bind_resync("recipient", "generation", owner, name)
+      incarnation = DeliveryStates.incarnation("recipient", name)
+      %{owner: owner, incarnation: incarnation, key: {"recipient", incarnation}}
+    end
+
+    test "an unknown-ending record expires on the terminal schedule, a queued one does not",
+         %{name: name} = ctx do
+      unknown = retention_record(ctx, "unknown-cid", ["queued", "unknown"])
+      queued = retention_record(ctx, "queued-cid", ["queued"])
+
+      assert "unknown" == internal_record(name, ctx.key, unknown).last_stage
+      assert {:ok, reply} = DeliveryStates.message_status("sender", "queued-cid", 1, name)
+      refute Map.has_key?(reply, :last_stage)
+
+      age_records(name, ctx.key, [unknown, queued], 2)
+
+      assert {:ok, %{status: "expired"}} =
+               DeliveryStates.message_status("sender", "unknown-cid", 1, name)
+
+      assert {:ok, %{stages: %{"queued" => _}}} =
+               DeliveryStates.message_status("sender", "queued-cid", 1, name)
+    end
+
+    test "a later report after unknown keeps the record non-terminal", %{name: name} = ctx do
+      submitted = retention_record(ctx, "submitted-cid", ["queued", "unknown", "submitted"])
+      repeated = retention_record(ctx, "repeated-cid", ["queued", "unknown", "queued"])
+      age_records(name, ctx.key, [submitted, repeated], 2)
+
+      assert {:ok, %{stages: %{"unknown" => _, "submitted" => _}}} =
+               DeliveryStates.message_status("sender", "submitted-cid", 1, name)
+
+      assert {:ok, %{stages: %{"unknown" => _, "queued" => _}}} =
+               DeliveryStates.message_status("sender", "repeated-cid", 1, name)
+    end
+
+    test "settled still expires on the terminal schedule", %{name: name} = ctx do
+      settled = retention_record(ctx, "settled-cid", ["queued", "settled"])
+      age_records(name, ctx.key, [settled], 2)
+
+      assert {:ok, %{status: "expired"}} =
+               DeliveryStates.message_status("sender", "settled-cid", 1, name)
+    end
+
+    test "a record persisted without last_stage keeps the settled/lost rule",
+         %{name: name} = ctx do
+      legacy = retention_record(ctx, "legacy-cid", ["queued", "unknown"])
+
+      :sys.replace_state(name, fn state ->
+        drop = &Map.delete(&1, :last_stage)
+        entry = state.entries["recipient"]
+        entry = update_in(entry.stage_history[ctx.key][legacy], drop)
+        stages = state.stages
+
+        %{
+          state
+          | entries: Map.put(state.entries, "recipient", entry),
+            stages: update_in(stages[ctx.key][legacy], drop)
+        }
+      end)
+
+      age_records(name, ctx.key, [legacy], 2)
+
+      assert {:ok, %{stages: %{"unknown" => _}}} =
+               DeliveryStates.message_status("sender", "legacy-cid", 1, name)
+    end
+
+    test "at the cap an unknown-ending record is dropped before an older non-terminal one",
+         %{name: name} = ctx do
+      previous = Application.fetch_env!(:kaoiro_server, :delivery_intent)
+
+      Application.put_env(
+        :kaoiro_server,
+        :delivery_intent,
+        Keyword.put(previous, :delivery_stage_max_records, 2)
+      )
+
+      on_exit(fn -> Application.put_env(:kaoiro_server, :delivery_intent, previous) end)
+
+      older = retention_record(ctx, "older-cid", ["queued"])
+      unknown = retention_record(ctx, "newer-unknown-cid", ["queued", "unknown"])
+      age_records(name, ctx.key, [older], 0.5)
+      age_records(name, ctx.key, [unknown], 0.25)
+      retention_record(ctx, "third-cid", [])
+
+      assert {:ok, %{status: "expired"}} =
+               DeliveryStates.message_status("sender", "newer-unknown-cid", 1, name)
+
+      assert {:ok, %{stages: %{"queued" => _}}} =
+               DeliveryStates.message_status("sender", "older-cid", 1, name)
+    end
+
+    test "last_stage survives DETS persistence and a restart", %{name: name, path: path} = ctx do
+      unknown = retention_record(ctx, "persisted-cid", ["queued", "unknown"])
+
+      GenServer.stop(Process.whereis(name))
+      {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+      [{"recipient", _, _, _, _, recovery}] = :dets.lookup(name, "recipient")
+      assert "unknown" == recovery.stage_history[ctx.key][unknown].last_stage
+      :ok = :dets.close(name)
+
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      assert "unknown" == internal_record(name, ctx.key, unknown).last_stage
+      age_records(name, ctx.key, [unknown], 2)
+
+      assert {:ok, %{status: "expired"}} =
+               DeliveryStates.message_status("sender", "persisted-cid", 1, name)
+    end
+  end
+
+  # Issues one synthetic delivery for `cid` and reports `stages` in order.
+  defp retention_record(%{owner: owner, incarnation: incarnation} = ctx, cid, stages) do
+    name = ctx.name
+
+    seq =
+      DeliveryStates.issue_synthetic(
+        "recipient",
+        %{sender: "sender", conversation_id: cid, turn_number: 1},
+        name
+      )
+
+    for stage <- stages do
+      report =
+        %{
+          "incarnation" => incarnation,
+          "generation" => "generation",
+          "delivery_seq" => seq,
+          "stage" => stage,
+          "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+        |> Map.merge(if(stage == "submitted", do: %{"handoff" => "prompt_hook"}, else: %{}))
+
+      assert :ok = DeliveryStates.report_stage("recipient", "generation", owner, report, name)
+    end
+
+    seq
+  end
+
+  defp internal_record(name, key, seq),
+    do: :sys.get_state(name).entries["recipient"].stage_history[key][seq]
+
+  # Moves `changed_at` back by `hours` in both copies the store keeps.
+  defp age_records(name, key, seqs, hours) do
+    at =
+      DateTime.utc_now()
+      |> DateTime.add(-round(hours * 3_600_000), :millisecond)
+      |> DateTime.to_iso8601()
+
+    :sys.replace_state(name, fn state ->
+      Enum.reduce(seqs, state, fn seq, state ->
+        entry = state.entries["recipient"]
+        entry = put_in(entry.stage_history[key][seq].changed_at, at)
+        stages = state.stages
+
+        %{
+          state
+          | entries: Map.put(state.entries, "recipient", entry),
+            stages: put_in(stages[key][seq].changed_at, at)
+        }
+      end)
+    end)
+  end
 end

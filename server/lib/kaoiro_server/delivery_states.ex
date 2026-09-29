@@ -520,7 +520,9 @@ defmodule KaoiroServer.DeliveryStates do
         end)
       end)
 
-    {:reply, if(record, do: {:ok, record}, else: {:ok, %{status: "expired"}}), state}
+    {:reply,
+     if(record, do: {:ok, Map.delete(record, :last_stage)}, else: {:ok, %{status: "expired"}}),
+     state}
   end
 
   def handle_call({:pending_early, sender, recipient}, _from, state) do
@@ -579,6 +581,7 @@ defmodule KaoiroServer.DeliveryStates do
           stage
           |> Map.put(:stages, stages)
           |> Map.put(:changed_at, at)
+          |> Map.put(:last_stage, report["stage"])
           |> maybe_put(:yield_disposition, disposition)
           |> maybe_put(:mode, report["mode"])
           |> maybe_put(:handoff, report["handoff"])
@@ -763,6 +766,7 @@ defmodule KaoiroServer.DeliveryStates do
               delivery_seq: seq,
               stages: %{"accepted" => at},
               changed_at: at,
+              last_stage: "accepted",
               mode: descriptor[:mode]
             }
 
@@ -831,7 +835,11 @@ defmodule KaoiroServer.DeliveryStates do
     by_seq =
       Enum.reduce(seqs, by_seq, fn seq, records ->
         Map.update(records, seq, nil, fn record ->
-          %{record | stages: Map.put_new(record.stages, "lost", at), changed_at: at}
+          Map.merge(record, %{
+            stages: Map.put_new(record.stages, "lost", at),
+            changed_at: at,
+            last_stage: "lost"
+          })
         end)
       end)
 
@@ -941,27 +949,27 @@ defmodule KaoiroServer.DeliveryStates do
       end)
       |> Enum.reject(fn {_key, _seq, record} ->
         changed = stage_time_ms(record.changed_at)
-
-        terminal? =
-          Map.has_key?(record.stages, "settled") or
-            Map.has_key?(record.stages, "lost")
-
-        now - changed > if(terminal?, do: settled_age, else: max_age)
+        now - changed > if(terminal_record?(record), do: settled_age, else: max_age)
       end)
 
     overflow = max(length(live) - max_records, 0)
 
     live
     |> Enum.sort_by(fn {_key, _seq, record} ->
-      {if(Map.has_key?(record.stages, "settled") or Map.has_key?(record.stages, "lost"),
-         do: 0,
-         else: 1
-       ), stage_time_ms(record.changed_at)}
+      {if(terminal_record?(record), do: 0, else: 1), stage_time_ms(record.changed_at)}
     end)
     |> Enum.drop(overflow)
     |> Enum.reduce(%{}, fn {key, seq, record}, acc ->
       Map.update(acc, key, %{seq => record}, &Map.put(&1, seq, record))
     end)
+  end
+
+  # The wrapper stops tracking a delivery once it reports `unknown`, so a record
+  # whose latest report is `unknown` is as final as a settled one. Records
+  # persisted before `last_stage` existed keep the settled/lost rule.
+  defp terminal_record?(record) do
+    Map.has_key?(record.stages, "settled") or Map.has_key?(record.stages, "lost") or
+      Map.get(record, :last_stage) == "unknown"
   end
 
   defp stage_time_ms(at) do

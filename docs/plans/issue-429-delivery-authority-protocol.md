@@ -2,7 +2,7 @@
 title: Delivery intent, staged delivery, work grants and work_control (ADR-0063 phase 1)
 description: Protocol design for early delivery and stop intents, capability negotiation, staged delivery records, server-owned work records with assignment grants and revisions, and revision-checked consequential actions.
 status: approved
-last_updated: 2026-09-29
+last_updated: 2026-09-30
 ---
 
 # Delivery intent, staged delivery, work grants and work_control
@@ -783,9 +783,11 @@ Consequences:
 Stage history is bounded independently of settlement and of the delivery
 bookkeeping, because a wrapper can submit and acknowledge input without ever
 reporting settlement (review r1 S1). Per recipient at most 2,000 records in any state, each at most 24 hours
-old; settled and lost records are also dropped 3,600,000 ms after their final
-stage. At the cap, settled and lost records are dropped oldest first, then
-the oldest others. A query for a dropped record returns `expired`, never an
+old; terminal records are also dropped 3,600,000 ms after their final
+stage. A record is terminal when it has `settled` or `lost`, or when its latest
+report is `unknown` (the wrapper stops tracking a delivery once it reports
+`unknown`); a later report after `unknown` makes it non-terminal again. At the
+cap, terminal records are dropped oldest first, then the oldest others. A query for a dropped record returns `expired`, never an
 empty or invented stage set.
 
 ## Claude fold handoff
@@ -1205,7 +1207,7 @@ configuration with the same names under the wrapper's delivery options.
 | Pending transfer obligations per work | 8 | Unbounded obligation growth from repeated transfers | `work_pending_transfers` |
 | `work_check` audit entries per work | 64, oldest dropped | Unbounded audit growth; audit is diagnostic, so dropping the oldest is acceptable | `work_checks_per_work` |
 | Stage records per recipient, and their maximum age | 2,000, 24 h | Stage and index growth when settlement is never reported | `delivery_stage_max_records`, `delivery_stage_max_age_ms` |
-| Stage retention after `settled` or `lost` | 3,600,000 ms | Index growth; long enough for a sender's follow-up query | `delivery_stage_retention_ms` |
+| Stage retention after `settled`, `lost`, or a final `unknown` | 3,600,000 ms | Index growth; long enough for a sender's follow-up query | `delivery_stage_retention_ms` |
 
 Existing bounds stay: 1,000 unresolved metadata slots per recipient with
 `delivery_backlog`, and the batch caps of 10 messages and 16,384 bytes.
