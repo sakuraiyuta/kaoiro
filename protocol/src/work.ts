@@ -276,7 +276,7 @@ export interface DeliveryStageReport {
   delivery_seq: number;
   stage: "queued" | "submitted" | "included" | "settled" | "unknown";
   mode?: "normal" | "early" | "yield";
-  handoff?: "prompt_hook" | "fold_hook" | "exec_input_written" | "tool_result";
+  handoff?: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result";
   evidence?: "ticket_used";
   reason?: string;
   yield_disposition?: YieldDisposition;

@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-09-29
+last_updated: 2026-09-30
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -170,6 +170,24 @@ By then the SDK has spawned the child, written the input, and closed stdin;
 evidence is first-event receipt. The wrapper reports stages only when the join
 reply supplies the server-issued `inter_agent_delivery_incarnation`; it never
 fabricates one.
+
+For a Codex app-server turn, `turn_start_accepted` means the `turn/start`
+response was received and validated (it carries a turn id). The wrapper
+reports it once, after that response and before any turn notification is
+consumed, so `submitted` precedes `settled` even when the terminal notification
+arrived first. It does not claim the model saw the input, and it is reported
+even after a watchdog fail-stop because the acceptance already happened. A
+rejected or invalid `turn/start`, and an input skipped before dispatch, report
+no `submitted`.
+
+Known limit: a `turn/start` request that times out after it was sent, or a
+connection lost after it was sent, may have been accepted by the app-server.
+Such a turn settles with `failed_before_handoff` like a rejected one.
+
+The server rejects an unknown `handoff` value with `invalid_delivery_stage`, and
+the wrapper keeps a rejected report pending until the delivery identity changes.
+Deploy the server before the runner, and if the server is rolled back to a
+version that predates `turn_start_accepted`, roll the runner back with it.
 
 If a work operation applies but yield-token issuance fails, the operation
 receipt remains applied and early is only a fallback delivery mode. Recipient

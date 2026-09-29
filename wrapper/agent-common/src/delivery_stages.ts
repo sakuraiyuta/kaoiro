@@ -94,7 +94,7 @@ export class DeliveryStageReporter {
     if (delivery !== null) this.#deliveryByEnvelope.set(envelope, delivery);
   }
 
-  submitted(turnToken: string, handoff: "prompt_hook" | "exec_input_written"): void {
+  submitted(turnToken: string, handoff: "prompt_hook" | "exec_input_written" | "turn_start_accepted"): void {
     this.#observeIdentity();
     for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {
       this.#recordTurnEnvelope(turnToken, envelope);
@@ -160,7 +160,7 @@ export class DeliveryStageReporter {
 
   #submit(
     turnToken: string,
-    handoff: "prompt_hook" | "fold_hook" | "exec_input_written" | "tool_result",
+    handoff: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result",
   ): void {
     for (const delivery of this.#deliveriesByTurn.get(turnToken)?.values() ?? []) {
       if (delivery.submitted) continue;

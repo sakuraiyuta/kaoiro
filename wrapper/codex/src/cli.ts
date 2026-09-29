@@ -875,7 +875,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
-    onInputHandedOff: ({ turnToken }) => deliveryStages.submitted(turnToken, "exec_input_written"),
+    onInputHandedOff: ({ turnToken, handoff }) => deliveryStages.submitted(turnToken, handoff),
     // issue #127: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
     // extended issue #211 段階3 for a coalesced turn's multiple cids). On

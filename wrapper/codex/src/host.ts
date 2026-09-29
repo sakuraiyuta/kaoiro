@@ -358,8 +358,10 @@ export interface CodexHostOptions {
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#237). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
-  /** First exec child stdout event proves stdin was written and closed. */
-  onInputHandedOff?: (info: { turnToken: string }) => void;
+  /** Exec: the first child stdout event proves stdin was written and closed.
+   * App-server: the validated turn/start response proves the input was
+   * accepted. Neither proves the model saw it. */
+  onInputHandedOff?: (info: { turnToken: string; handoff: "exec_input_written" | "turn_start_accepted" }) => void;
   /** Synchronous final input check. Undefined preserves the queued input;
    * null skips it without starting an SDK turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -1605,6 +1607,13 @@ export class CodexHost implements EngineAdapter {
           if (attempt.permission !== null) this.#beginPermissionExecution(attempt.permission.submission);
           this.#options.onLifecycle?.({ kind: "turn_start", turnToken });this.#options.onTurnStart?.({ turnToken, conversationIds });
         },
+        // Reported even after a watchdog fail-stop: the acceptance already
+        // happened. Must not throw; the runtime closes the session on an
+        // unexpected error.
+        onHandoff: () => {
+          try { this.#options.onInputHandedOff?.({ turnToken, handoff: "turn_start_accepted" }); }
+          catch (error) { writeRedactedStderr(`codex input handoff report failed: ${String(error)}\n`); }
+        },
         onTerminal: endBoundary,
         onPermission: (assessment, attempt) => {
           if (!this.#watchdogFailStopped && attempt.permission) this.#applyPermissionAssessment(attempt.permission.submission, assessment);
@@ -1917,7 +1926,7 @@ export class CodexHost implements EngineAdapter {
         }
         if (!inputHandedOff && this.historyBackend === "exec") {
           inputHandedOff = true;
-          this.#options.onInputHandedOff?.({ turnToken });
+          this.#options.onInputHandedOff?.({ turnToken, handoff: "exec_input_written" });
         }
         const event = next.value;
         const isUsable = isUsableThreadEvent(event);

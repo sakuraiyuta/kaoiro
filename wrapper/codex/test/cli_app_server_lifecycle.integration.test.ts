@@ -35,10 +35,19 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
   const createSpy = vi.spyOn(AppServerSession, "create").mockImplementation(async options => {
     const session = await originalCreate(options);sessions.push(session);mark("session_created");return session;
   });
+  // Raw child stdout, in arrival order: separates the turn/start response from
+  // the first notification before the transport reorders them.
+  const decode = TextDecoder.prototype.decode;
+  const decodeSpy = vi.spyOn(TextDecoder.prototype, "decode").mockImplementation(function (this: InstanceType<typeof TextDecoder>, ...args) {
+    const text = decode.apply(this, args);
+    if (/"method"\s*:\s*"turn\/started"/.test(text)) mark("raw_turn_started");
+    if (/"result"\s*:\s*\{\s*"turn"/.test(text)) mark("raw_turn_start_response");
+    return text;
+  });
   const clock = watchdogClock();
   const home = await mkdtemp(join(tmpdir(), "fuji-348-cli-ia-"));
   const agentId = `cli-${randomUUID()}`, peer = "peer.agent";
-  const wire = await phoenixLoopback(() => ({}), (event) => event === "directory_request"
+  const wire = await phoenixLoopback(() => ({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-450" }), (event) => event === "directory_request"
     ? { agents: [{ agent_id: peer, persona: { id: "p", name: "Peer", sprite_set: "p" }, state: "waiting_input" }], users: [] }
     : { ingress_stamp: [1, 1] });
   const originalPush = wire.received.push.bind(wire.received);
@@ -140,6 +149,22 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     expect(userTurns[2]!.indexOf("SECOND")).toBeLessThan(userTurns[2]!.indexOf("THIRD"));
     expect(userTurns.filter(text => text.includes("REPLY"))).toHaveLength(0);
     expect(acks().at(-1)).toBe(interrupt ? 4 : 5);
+    // Each host-dispatched delivery is submitted once, at the turn/start
+    // response, and only then settled.
+    const stageReports = () => wire.received.filter(e => e.event === "delivery_stage").map(e => e.payload);
+    await vi.waitFor(() => expect(stageReports().filter(r => r.stage === "settled" && [1, 2, 3, 4].includes(r.delivery_seq as number))).toHaveLength(4));
+    for (const seq of [1, 2, 3, 4]) {
+      const forSeq = stageReports().filter(r => r.delivery_seq === seq);
+      const submitted = forSeq.filter(r => r.stage === "submitted");
+      expect(submitted, `submitted for seq ${seq}`).toHaveLength(1);
+      expect(submitted[0]).toMatchObject({ handoff: "turn_start_accepted", incarnation: "inc-450" });
+      expect(forSeq.findIndex(r => r.stage === "settled")).toBeGreaterThan(forSeq.findIndex(r => r.stage === "submitted"));
+      expect(forSeq.find(r => r.stage === "settled")).toMatchObject({ reason: "turn_end" });
+    }
+    const first = (stage: string) => stages.find(entry => entry.stage === stage)?.elapsedMs;
+    const startOk = stages.find(entry => entry.stage === "rpc_ok" && entry.detail?.endsWith(":turn/start"))?.elapsedMs;
+    console.info("CODEX_TURN_START_TIMING", JSON.stringify({ interrupt, turn_start_rpc_ok_ms: startOk,
+      raw_turn_start_response_ms: first("raw_turn_start_response"), raw_turn_started_ms: first("raw_turn_started") }));
     if (!interrupt) expect(outbound().filter(e => (e.payload.payload as { meta?: { peer_error?: unknown } }).meta?.peer_error)).toHaveLength(0);
   } catch (error) {
     failure = error;
@@ -155,6 +180,6 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) { listener("SIGINT");process.removeListener("SIGINT", listener); }
     await running;output.mockRestore();ackSent.mockRestore();await wire.close();provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));vi.unstubAllEnvs();await rm(home, { recursive: true, force: true });
-    requestSpy.mockRestore();createSpy.mockRestore();sendSpy.mockRestore();
+    requestSpy.mockRestore();createSpy.mockRestore();sendSpy.mockRestore();decodeSpy.mockRestore();
   }
 }, 90_000);

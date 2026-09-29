@@ -41,6 +41,9 @@ export interface AppServerRuntimeHooks {
   /** Runs synchronously after final admission and before turn/start. */
   prepareInput?: () => string | null | undefined;
   onDispatch: (attempt: AppServerRuntimeAttempt, identity: AppServerDispatchIdentity) => void;
+  /** Runs once, after the validated turn/start response and before any turn
+   * event is consumed. It must not throw. */
+  onHandoff?: (identity: AppServerTurnIdentity) => void;
   onTerminal?: (identity: AppServerTurnIdentity) => void;
   onPermission: (assessment: CodexPermissionAssessment, attempt: AppServerRuntimeAttempt) => void;
   onProjection: (event: Exclude<AppServerProjection, { kind: "result" }>) => void;
@@ -174,6 +177,7 @@ export class AppServerHostRuntime {
               return preparedInput;
             },
           });
+          hooks.onHandoff?.(turn.identity);
           for await (const event of turn.events) {
             if (event.kind !== "result") {
               // Delay the terminal state until policy evidence and settings are settled.
