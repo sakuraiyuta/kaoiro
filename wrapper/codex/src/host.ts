@@ -2587,7 +2587,6 @@ export class CodexHost implements EngineAdapter {
    * guards decide. Creating the record here means it exists before the write. */
   #admitSteer(turnId: string, token: string, id: string, text: string, arrival: number): string | null {
     if (this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
-    if (this.#closed || this.#watchdogFailStopped || this.#appFailure !== null) return "host_stopped";
     if (this.#queue.some(turn => turn.source === "operator")) return "behind_earlier_input";
     const permission = this.#permissionState;
     if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
