@@ -11,13 +11,22 @@ export interface DeliveryModesJoinRequest {
   stage_reports: boolean;
 }
 
+/** Operator-input capability, declared separately from inter-agent early
+ *  delivery; `early` decides the server's default operator intent only. */
+export interface OperatorInputModesJoinRequest {
+  version: "v1";
+  early: DeliveryEarlyMode;
+}
+
 export interface WorkJoinRequest {
   inter_agent_delivery_modes?: DeliveryModesJoinRequest;
+  operator_input_modes?: OperatorInputModesJoinRequest;
   work_control?: "v1";
 }
 
 export interface WorkJoinReply {
   inter_agent_delivery_modes?: "v1";
+  operator_input_modes?: "v1";
   inter_agent_delivery_incarnation?: string;
   work_control?: "v1";
 }

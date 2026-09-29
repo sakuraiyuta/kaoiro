@@ -24,6 +24,7 @@ import type {
   DeliveryModes,
   DeliveryStageReport,
   DeliveryModesJoinRequest,
+  OperatorInputModesJoinRequest,
   InterAgentSendReply,
   EngineKind,
   Envelope,
@@ -320,9 +321,11 @@ export function chunkReplayIaItems(
 export interface ServerLinkOptions {
   interAgentReplyBasis?: "v1";
   interAgentDeliveryModes?: DeliveryModesJoinRequest;
+  operatorInputModes?: OperatorInputModesJoinRequest;
   workControl?: "v1";
   onReplyBasisMode?: (mode: "v1" | "legacy" | "pending") => void;
   onInterAgentDeliveryModes?: (supported: boolean, modes: DeliveryModes | null) => void;
+  onOperatorInputModes?: (supported: boolean) => void;
   onWorkControl?: (supported: boolean) => void;
   onWorkNotice?: (notice: WorkNotice) => void;
   /** persona.id declared to the server at join time (ADR-0029 F3).
@@ -1334,6 +1337,7 @@ export class ServerLink {
   #resolvePermissionSyncNegotiated!: (supported: boolean) => void;
   #permissionSyncNegotiationSettled = false;
   #deliveryModes: DeliveryModes | null = null;
+  #operatorInputModes: OperatorInputModesJoinRequest | null = null;
   #deliveryModesSettled = false;
   #workControlSupported = false;
   #deliveryIncarnation: string | null = null;
@@ -1383,6 +1387,9 @@ export class ServerLink {
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
       ...(options.interAgentDeliveryModes
         ? { inter_agent_delivery_modes: options.interAgentDeliveryModes }
+        : {}),
+      ...(options.operatorInputModes
+        ? { operator_input_modes: options.operatorInputModes }
         : {}),
       ...(options.workControl ? { work_control: options.workControl } : {}),
       delivery_generation: this.#deliveryGeneration,
@@ -1658,9 +1665,11 @@ export class ServerLink {
     const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
       this.#deliveryModes = null;
       this.#deliveryModesSettled = false;
+      this.#operatorInputModes = null;
       this.#workControlSupported = false;
       this.#deliveryIncarnation = null;
       options.onInterAgentDeliveryModes?.(false, null);
+      options.onOperatorInputModes?.(false);
       options.onWorkControl?.(false);
       this.#failReplyBasis(terminal, releaseWaiters);
     };
@@ -1698,6 +1707,10 @@ export class ServerLink {
           : null;
         this.#deliveryModesSettled = true;
         options.onInterAgentDeliveryModes?.(this.#deliveryModes !== null, this.#deliveryModes);
+        this.#operatorInputModes = isObject(reply) && reply.operator_input_modes === "v1"
+          ? options.operatorInputModes ?? null
+          : null;
+        options.onOperatorInputModes?.(this.#operatorInputModes !== null);
         this.#workControlSupported = isObject(reply) && reply.work_control === "v1";
         this.#deliveryIncarnation = isObject(reply) && typeof reply.inter_agent_delivery_incarnation === "string" && reply.inter_agent_delivery_incarnation.length > 0
           ? reply.inter_agent_delivery_incarnation
@@ -1833,6 +1846,12 @@ export class ServerLink {
 
   deliveryModes(): DeliveryModes | null {
     return this.#deliveryModes;
+  }
+
+  /** The operator-input declaration the server echoed on the current join;
+   *  null while unjoined or when the server did not acknowledge it. */
+  operatorInputModes(): OperatorInputModesJoinRequest | null {
+    return this.#operatorInputModes;
   }
 
   deliveryModesState(): DeliveryModes | "legacy" | "pending" {

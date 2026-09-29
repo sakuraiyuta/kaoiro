@@ -1753,6 +1753,55 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
   });
 
+  describe("operator_input_modes negotiation", () => {
+    const declared = { version: "v1", early: "steer" } as const;
+    const open = (withDeclaration: boolean) => {
+      const seen: boolean[] = [];
+      const link = new ServerLink("ws://x/wrapper", "a.agent", {
+        personaId: "ao",
+        interAgentDeliveryModes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+        ...(withDeclaration ? { operatorInputModes: declared } : {}),
+        onOperatorInputModes: supported => seen.push(supported),
+      });
+      return { link, seen };
+    };
+
+    it("declares at join and exposes the declaration only after the echo", () => {
+      const { link, seen } = open(true);
+      expect(mock.lastChannelParams).toMatchObject({ operator_input_modes: declared });
+      expect(link.operatorInputModes()).toBeNull();
+      mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", operator_input_modes: "v1" });
+      expect(link.operatorInputModes()).toEqual(declared);
+      expect(seen).toEqual([true]);
+    });
+
+    it("stays unavailable when an old server does not echo", () => {
+      const { link, seen } = open(true);
+      mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1" });
+      expect(link.operatorInputModes()).toBeNull();
+      expect(seen).toEqual([false]);
+    });
+
+    it("does not declare, and ignores a stray echo, without the option", () => {
+      const { link } = open(false);
+      expect(mock.lastChannelParams).not.toHaveProperty("operator_input_modes");
+      mock.joinReceivers.get("ok")?.({ operator_input_modes: "v1" });
+      expect(link.operatorInputModes()).toBeNull();
+    });
+
+    it("drops on disconnect and re-negotiates on the next join", () => {
+      const { link, seen } = open(true);
+      mock.joinReceivers.get("ok")?.({ operator_input_modes: "v1" });
+      mock.onClose?.({ code: 1006 });
+      expect(link.operatorInputModes()).toBeNull();
+      mock.joinReceivers.get("ok")?.({});
+      expect(link.operatorInputModes()).toBeNull();
+      mock.joinReceivers.get("ok")?.({ operator_input_modes: "v1" });
+      expect(link.operatorInputModes()).toEqual(declared);
+      expect(seen).toEqual([true, false, false, true]);
+    });
+  });
+
   it("refuses yield_claim when tool-boundary yield was not negotiated", async () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
