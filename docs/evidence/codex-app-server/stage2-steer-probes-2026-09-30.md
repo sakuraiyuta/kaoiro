@@ -39,3 +39,27 @@ this page keeps the observations the implementation relies on.
   turn can occur. The foreign-turn tripwire covers that case instead.
 - Late items of an interrupted turn are expected after its terminal and are
   not treated as foreign.
+
+## Post-implementation probes (L1, L2, L3b, L6), 2026-09-30
+
+Run against the landed implementation, develop `98160432`, with the same
+pinned binary (SHA-256 `0b2e9301…1f33f`), an isolated `CODEX_HOME` whose
+copied auth file was byte-identical to the original afterwards and was then
+deleted, `gpt-6-luna` at low effort, and five model turns. Procedure, file
+hashes, the checker and its negative controls are in the
+[post-implementation comment](https://github.com/sakuraiyuta/kaoiro/issues/366)
+on the issue. L1 to L3b drove the built `CodexHost` directly with the
+production session factory and a tap on the child's stdio; L6 ran a dev
+server, the built wrapper CLI with `KAOIRO_CODEX_OPERATOR_STEER=1`, and an
+operator client on the lobby channel. None of the probes resumed a thread, so
+the later `excludeTurns` resume change (`c415c37e`) does not bear on them.
+
+| Probe | Observed |
+|---|---|
+| L1: steer during a running command | One `turn/start`, one `turn/steer` with the started turn as `expectedTurnId`, accepted with the same `turnId`; the `kaoiro-steer:` input item started after the command completed; result `STEERED_L1_366`; system lines "accepted" then "included". |
+| L2: steer at `turn/started` | `gpt-6-luna` at low effort emitted no `reasoning` item in a first attempt (one turn, no steer sent), so the steer was sent at `turn/started`. It was accepted; the turn produced `ORIGINAL_L2 333833500` as a first final answer, then the steered input item, then `STEERED_L2_366`. Both answers became assistant log rows in order and the single result carried the last. |
+| L3b: steer during model output, then interrupt | The steer was accepted and `turn/interrupt` followed 50 ms later; `turn/completed` was `interrupted`. The steered input item never appeared, the outcome was `unknown (not_observed)` with no re-send, and during a 25 s wait there was no further `turn/started` and no `codex_foreign_turn` line. |
+| L6: end to end through the server | A first instruction with explicit `delivery_intent: "normal"` started a turn; a second one without `delivery_intent` was defaulted to early by the server from `operator_input_modes`, steered into the running turn, and reached the operator's lobby as "accepted" and "included" system lines before a result containing `STEERED_L6_366`. |
+
+L3b adds a second timing to L3; neither proves that a follow-up turn cannot
+occur, which is why the foreign-turn tripwire remains the safeguard.
