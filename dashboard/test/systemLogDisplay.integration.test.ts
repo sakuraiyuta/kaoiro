@@ -75,6 +75,19 @@ describe("log kind=system rendering (phase-28 A1 / #158)", () => {
     expect(line?.textContent).toContain("前 22315 tokens → 後 882 tokens");
   });
 
+  it("renders operator steer status lines verbatim as system lines (issue #366)", async () => {
+    const lines = [
+      "Operator input queued for the next turn (pending_settings).",
+      "Operator steering is unavailable: the server did not acknowledge operator_input_modes.",
+    ];
+    const target = await render(lines.map((text, index) => ({
+      ...systemLog, ts: `2026-07-28T05:00:0${index + 2}Z`, payload: { kind: "system", text },
+    })));
+    const rendered = [...target.querySelectorAll(".sysline")].map(line => line.firstChild?.textContent?.trim());
+    expect(rendered).toEqual(lines);
+    expect(target.querySelector(".msg.user")).toBeNull();
+  });
+
   it("assistant / user のバブルとしては描画しない", async () => {
     const target = await render([systemLog]);
     expect(target.querySelector(".msg.assistant")).toBeNull();
