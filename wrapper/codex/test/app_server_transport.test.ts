@@ -290,7 +290,15 @@ describe("app-server turn lifecycle", () => {
     await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" })).rejects.toThrow("active or submitting");
     await expect(f.transport.startThread()).rejects.toThrow("active operation");
     expect(await opening).toBe("thread-1");
-    expect(f.sent.at(-1)).toMatchObject({ method: "thread/resume", params: { threadId: "thread-1", approvalPolicy: "never", approvalsReviewer: "user" } });
+    expect(f.sent.at(-1)).toMatchObject({ method: "thread/resume", params: { threadId: "thread-1", excludeTurns: true, approvalPolicy: "never", approvalsReviewer: "user" } });
+  });
+
+  it("does not send excludeTurns on thread/start", async () => {
+    const f = transportFixture();
+    await f.transport.startThread();
+    const start = f.sent.find(r => r.method === "thread/start");
+    expect(start).toBeDefined();
+    expect(start!.params).not.toHaveProperty("excludeTurns");
   });
 
   it("allows a new turn after explicit rejection without restarting or resending", async () => {

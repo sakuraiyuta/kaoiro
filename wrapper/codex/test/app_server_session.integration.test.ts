@@ -3,6 +3,7 @@ import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { AppServerRpc } from "../src/app_server_rpc.js";
 import { AppServerSession } from "../src/app_server_session.js";
 import type { AppServerProjection } from "../src/app_server_projection.js";
 import { materializeLocalImages, cleanupLocalImages } from "../src/upload.js";
@@ -146,6 +147,8 @@ enabled = false
       const beforeTool = requests[index * 2 - 2]!;
       const developer = JSON.stringify(beforeTool.input.filter(item => item.role === "developer"));
       expect(developer.match(/PERSONA_348_ONCE/g)).toHaveLength(1);
+      // Resuming with excludeTurns must still give the model the earlier turns.
+      if (index === 2) for (const text of ["USER_1", "FIRST"]) expect(JSON.stringify(beforeTool.input), text).toContain(text);
       const user = beforeTool.input.filter(item => item.role === "user").at(-1)!;
       const serializedUser = JSON.stringify(user);
       expect(serializedUser).toContain(`USER_${index}`);
@@ -178,6 +181,81 @@ enabled = false
   } finally {
     await session?.close();
     if (materialized) await cleanupLocalImages(materialized.dir, message => { throw new Error(message); });
+    vi.unstubAllEnvs();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(home, { recursive: true, force: true });
+  }
+}, 90_000);
+
+// A thread created by an older CLI keeps the legacy history mode. Only an
+// experimental thread/start can create one, so it is seeded over a raw
+// connection; the wrapper itself never sends historyMode.
+it("resumes a legacy-history thread with excludeTurns and keeps the earlier context", async () => {
+  const home = await mkdtemp(join(tmpdir(), "ao453-legacy-"));
+  const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    const n = requests.length;
+    const item = { type: "message", id: `msg_${n}`, role: "assistant", status: "completed", phase: "final_answer",
+      content: [{ type: "output_text", text: n === 1 ? "FIRST" : "SECOND", annotations: [] }] };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [
+      { type: "response.created", response: { id: `r${n}`, object: "response", status: "in_progress", output: [] } },
+      { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress" } },
+      { type: "response.output_item.done", output_index: 0, item },
+      { type: "response.completed", response: { id: `r${n}`, object: "response", status: "completed", output: [item],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+    ]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.end();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No local port");
+  let session: AppServerSession | undefined;
+  let seed: AppServerRpc | undefined;
+  try {
+    await writeFile(join(home, "config.toml"), `model = "gpt-6-astra"
+model_provider = "local"
+[model_providers.local]
+name = "Local integration test"
+base_url = "http://127.0.0.1:${address.port}/v1"
+wire_api = "responses"
+[features]
+shell_snapshot = false
+plugins = false
+[analytics]
+enabled = false
+`);
+    vi.stubEnv("CODEX_HOME", home);
+    vi.stubEnv("HOME", home);
+    for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(name, undefined);
+    let completed: () => void = () => {};
+    const done = new Promise<void>(resolve => { completed = resolve; });
+    seed = new AppServerRpc({ onNotification: event => { if (event.method === "turn/completed") completed(); } });
+    await seed.request("initialize", { clientInfo: { name: "ao453-seed", version: "0" }, capabilities: { experimentalApi: true } }).result;
+    seed.notify("initialized");
+    const policy = { approvalPolicy: "never", approvalsReviewer: "user" };
+    const started = await seed.request("thread/start", { ...policy, cwd: home, sandbox: "read-only", historyMode: "legacy" }).result as { thread: { id: string; historyMode?: string } };
+    expect(started.thread.historyMode).toBe("legacy");
+    const threadId = started.thread.id;
+    await seed.request("turn/start", { ...policy, threadId, input: [{ type: "text", text: "USER_1", text_elements: [] }] }).result;
+    await done;
+    await seed.close();
+    seed = undefined;
+    expect(requests).toHaveLength(1);
+
+    session = await AppServerSession.create({ thread: { cwd: home, sandbox: "read-only" }, turnSignal: () => null });
+    expect(await session.resumeThread(threadId)).toBe(threadId);
+    const turn = await session.startProjectedTurn({ threadId, hostTurnToken: "host-2", input: "USER_2" });
+    for await (const _event of turn.events) { /* drain to the terminal */ }
+    expect(requests).toHaveLength(2);
+    for (const text of ["USER_1", "FIRST", "USER_2"]) expect(JSON.stringify(requests[1]!.input), text).toContain(text);
+  } finally {
+    await seed?.close();
+    await session?.close();
     vi.unstubAllEnvs();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

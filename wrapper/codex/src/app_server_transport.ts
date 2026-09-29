@@ -188,7 +188,7 @@ export class AppServerTransport {
   }
 
   async resumeThread(threadId: string, options: AppServerThreadOptions = {}): Promise<string> {
-    return this.#openThread("thread/resume", { ...options, threadId });
+    return this.#openThread("thread/resume", { ...options, threadId, excludeTurns: true });
   }
 
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {

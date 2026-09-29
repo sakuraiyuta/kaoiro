@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server display history"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-30
 ---
 
 # Codex app-server display history
@@ -34,6 +34,19 @@ Unknown items are not guessed into display events. IA framing uses the same
 exclusion as exec history. Projection produces only log envelopes, using the
 supplied `now()` because stable items have no timestamp; it does not replay
 results, acknowledgements, lifecycle transitions, or compaction notices.
+
+Resuming a thread sends `excludeTurns: true`, so `thread/resume` returns
+metadata and live-resume state without populating `thread.turns`. Nothing in the
+wrapper reads turns from the resume result; display history comes only from the
+reads above. On the pinned CLI (0.156.1), new threads are paginated by default,
+and there a resume without `excludeTurns` and `thread/read` with
+`includeTurns: true` each emit a `deprecationNotice` (with different wording).
+On a legacy-history thread neither emits it, and `includeTurns: true` is the only
+full read because `thread/items/list` is unsupported there. The transport drops
+the notice, so
+`app_server_resume_notice.integration.test.ts` pins the wording, the silence of
+the production resume and history read, and the legacy behaviour against the
+pinned CLI; a CLI update that changes any of them fails that test.
 
 History reading excludes live turn submission, thread changes, and concurrent
 history reads; conflicting operations reject immediately rather than queue.
