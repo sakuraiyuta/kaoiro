@@ -53,6 +53,15 @@ const sdk0284ModelInfoBytes = readFileSync(
 const sdk0284ModelInfo = JSON.parse(
   sdk0284ModelInfoBytes.toString("utf8"),
 ) as ModelInfo[];
+const sdk0284OfflineFallbackModelInfoBytes = readFileSync(
+  new URL(
+    "./fixtures/claude-agent-sdk-0.3.284-offline-fallback.models.json",
+    import.meta.url,
+  ),
+);
+const sdk0284OfflineFallbackModelInfo = JSON.parse(
+  sdk0284OfflineFallbackModelInfoBytes.toString("utf8"),
+) as ModelInfo[];
 
 describe("initialStatusExt", () => {
   it("initial idle に engine と capabilities を stamp する (#107)", () => {
@@ -8353,6 +8362,53 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       (model) => model.value === "claude-opus-5",
     );
     expect(canonical?.value).toBe(canonical?.resolvedModel);
+  });
+
+  it("SDK 0.3.284 offline static catalog fixture preserves its exact opus[1m] row", () => {
+    // Extracted from the real SDK 0.3.284 initialization response when the
+    // catalog endpoint was unreachable. Raw source and hash:
+    // tmp/reviews/issue-427/momo-recapture-r2.md.
+    expect(
+      createHash("sha256")
+        .update(sdk0284OfflineFallbackModelInfoBytes)
+        .digest("hex"),
+    ).toBe("e6417b97c604aa5d81a66664519b21941691ee2ceedded7c9bf11c4ceaa4f718");
+    expect(sdk0284OfflineFallbackModelInfo).toHaveLength(6);
+    expect(sdk0284OfflineFallbackModelInfo).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "opus[1m]",
+          resolvedModel: "claude-opus-5-5[1m]",
+        }),
+      ]),
+    );
+    expect(
+      sdk0284OfflineFallbackModelInfo.some((model) => model.value === "opus"),
+    ).toBe(false);
+  });
+
+  it("SDK 0.3.284 accepts an opus[1m] pin through the offline catalog's exact row", async () => {
+    // The static six-row catalog has an exact opus[1m] row and no base opus
+    // alias, so this pins the host's exact-row membership path.
+    const h = liveHost({
+      pin: "opus[1m]",
+      source: "config",
+      initModel: "claude-opus-5-5[1m]",
+      catalog: sdk0284OfflineFallbackModelInfo,
+    });
+    await h.initConsumed.promise;
+    await h.catalogLanded();
+    expect(h.seenOptions()?.model).toBe("opus[1m]");
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "opus[1m]",
+      model_source: "config",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    expect(h.host.statusExtSnapshot()).not.toHaveProperty("switch_error");
+    expect(h.envs.some((env) => env.ext?.model_source === "fallback")).toBe(
+      false,
+    );
+    await h.finish();
   });
 
   it("uses the measured base alias effort domain for a suffixed model pick", async () => {
