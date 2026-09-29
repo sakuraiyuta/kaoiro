@@ -620,16 +620,27 @@ describe("terminal validation under a live owner (issue #426 stage 1)", () => {
     expect(rig.obs).toEqual({ notificationEnds: 0, freezes: 1 });
   });
 
-  it("accepts the first result's own session when the host has not learned one yet", async () => {
+  it("accepts the first result's own session for a startup error that no hook or frame preceded", async () => {
     const rig = makeRig(async function* (c) {
       await c.input.next();
-      await prompt(c, "p1", "launch");
-      yield res(0, { session_id: "first-seen" });
+      yield res(0, { session_id: "first-seen", subtype: "error_during_execution", is_error: true });
       c.rig.obs.endsAtResult = c.rig.ends.length;
       c.rig.obs.freezesAtResult = c.rig.freezes.length;
     });
     await playFirst(rig);
     expect(rig.obs).toEqual({ endsAtResult: 1, freezesAtResult: 0 });
+  });
+
+  it("holds a result before the first init to the session its root hook was matched in", async () => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield res(0, { session_id: "another-session" });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+    });
+    await playFirst(rig);
+    expect(rig.obs).toEqual({ endsAtResult: 0, freezesAtResult: 1 });
   });
 
   it.each([

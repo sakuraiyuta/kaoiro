@@ -1785,6 +1785,13 @@ export class AgentHost implements EngineAdapter {
     this.#beginForeignOccupancy({ sessionId, promptId: null });
   }
 
+  /** The session recorded when the live turn's root hook was admitted. */
+  #liveOwnerSession(): string | null {
+    const token = this.#activeTurn?.turnToken;
+    for (const owner of this.#promptOwners.values()) if (owner.token === token) return owner.sessionId;
+    return null;
+  }
+
   #matchRetiredResult(message: SDKMessage): "none" | "duplicate" | "conflict" {
     if (message.type !== "result" || typeof message.result_index !== "number") return "none";
     const record = this.#retiredResults.find(item =>
@@ -2581,12 +2588,14 @@ export class AgentHost implements EngineAdapter {
         // an unexpected rebind under a live root interval, or a result that
         // lacks or differs from the live session, must neither settle
         // anything nor silently unlock the input generator. A host that has
-        // not learned its session yet accepts the first result's own ID.
+        // not learned its session yet (no init frame) still holds the session
+        // its live owner's root hook was matched in; only a result with no
+        // hook and no frame before it, such as a startup error, supplies it.
         const occupancySession = this.#foreignOccupancy?.sessionId;
         if (occupancySession !== undefined && id !== null && id !== occupancySession) {
           this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
         } else if (message.type === "result" && (occupancySession !== undefined || this.#activeTurn !== null)) {
-          const known = occupancySession ?? this.#sessionId;
+          const known = occupancySession ?? this.#sessionId ?? this.#liveOwnerSession();
           if (id === null || (known !== null && id !== known)) {
             this.#failStopLive("terminal under a live interval lacks its session or names another one; host admission stopped pending operator recovery");
           }
