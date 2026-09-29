@@ -1,7 +1,7 @@
 ---
 title: App-server lifecycle stability
 status: in_progress
-last_updated: 2026-09-26
+last_updated: 2026-09-30
 ---
 
 # Issue #362: app-server lifecycle stability
@@ -139,7 +139,9 @@ the same empty `CODEX_HOME`, such as a bulk spawn after a Codex update changes
 the `state_N.sqlite` version. The deployment runbook must instruct operators
 to start one Codex agent first after such an update, let its state initialize,
 then bulk spawn. Runner-wide serialization is a separate issue owned by the
-director.
+director. Update (issue #411): the transport now also retries a failed
+`initialize` a bounded number of times; see the
+[session reference](../reference/engines/codex-app-server-session.md).
 
 Independent exec-path checks used Codex 0.156.1 with the same experimental
 worktree. In three alternating full-wrapper fan-out runs per mode on four

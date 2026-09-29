@@ -27,7 +27,20 @@ Both backends preserve the materialized image until its turn consumes it.
 Before the main app-server session starts, the Host aborts and awaits any
 in-flight account probe. This prevents two app-server children of one Host
 from initializing the same empty `CODEX_HOME` concurrently. It does not
-coordinate separate wrappers; deployment ordering for that case is in the
+coordinate separate wrappers. Instead the transport retries `initialize`:
+a child that exits before any reply with `failed to initialize sqlite state
+runtime` on its stderr is respawned, up to 3 attempts in total, after a
+uniform 100 to 400 ms wait and then a uniform 400 to 1600 ms wait. The stderr is
+read only after the failed child has closed. A JSON-RPC error reply, a
+timed-out request, a transport that is closing, and a failure after
+`initialize` succeeded are never retried, so at most one attempt can run to the
+25 s request timeout: the worst case is about 29 s for the main session and
+about 32 s for the startup probe. The signature covers sqlite initialization
+failures in general, so a permanent one is retried too and then reaches the
+caller with the attempt count and the signature line. Each retry writes one
+redacted line to stderr and to the `onDiagnostic` option. Measurements are in
+the [evidence note](../../evidence/codex-app-server/initialize-sqlite-race-2026-09-30.md);
+deployment ordering for large migrations is in the
 [backend runbook](../../operations/codex-backend-switch.md).
 The probe opens no thread or bridge grandchild, so its pipes close with its
 child; the transport escalates an EOF-ignoring child to SIGKILL after five

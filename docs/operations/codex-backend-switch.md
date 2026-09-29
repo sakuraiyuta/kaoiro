@@ -43,6 +43,17 @@ failure remains an operator-visible error and closes admission; there is no
 implicit exec fallback. Unexpected wrapper exits retain the Supervisor's
 bounded restart policy. A deliberate stop does not restart.
 After updating Codex, start one Codex agent and let its local state initialize
-before a bulk spawn or reset of agents sharing an empty `CODEX_HOME`. Separate
-wrappers can otherwise race while creating the new `state_N.sqlite` schema;
-the per-Host startup probe gate does not coordinate those processes.
+before a bulk spawn or reset of agents sharing a `CODEX_HOME`. The first start
+after an update migrates the state schema in place, and separate wrappers can
+race while that happens. The transport retries a failed `initialize` up to 3
+times (about 2 s of added wait at most), which covered every measured
+collision, but the migrations measured were small; the note stays for a
+production home with large state databases. A retry is logged as
+`codex: app-server initialize failed (attempt N/3), retrying ...`. Persistent
+failures still surface as an operator-visible error with the attempt count.
+
+Running the global `codex` CLI against the same `~/.codex` also migrates the
+shared state, and opens the same race window for the wrappers that start next.
+Whether the production wrappers should use a separate home is tracked in
+[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454); this runbook does
+not prescribe one.
