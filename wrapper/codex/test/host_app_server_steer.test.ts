@@ -253,5 +253,11 @@ it("after a foreign turn the next dispatch fails closed and settles every queued
     }
     expect(f.texts("turn/start"), head).toEqual(["BASE"]);
     expect(f.byMethod("turn/steer")).toHaveLength(0);
+    expect(f.host.state, `${head} host state`).toBe("error");
+    for (const token of ["ia-1", "ia-2"]) {
+      const [end] = ends.mock.calls.filter(([x]) => x.turnToken === token).map(([x]) => x);
+      expect(end, `${head} end ${token}`).not.toHaveProperty("terminal");
+      expect(end?.error?.detail, `${head} end ${token}`).toContain("did not start");
+    }
   }
 });

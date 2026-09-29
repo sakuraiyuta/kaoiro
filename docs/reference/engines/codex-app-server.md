@@ -80,7 +80,9 @@ Precondition rejections are classified from `error.data.codexErrorInfo.activeTur
 and from the two measured `-32600` messages for an expected-turn mismatch and
 no active turn; see the [Stage 2 probes](../../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md).
 
-The transport records its bound thread and up to 256 turn IDs it started. A
+The transport records its bound thread and up to 256 turn IDs it started;
+past that, the oldest ID is forgotten, so a late item of a turn started more
+than 256 turns earlier in the same session would read as foreign. A
 turn on that thread which this host did not start is foreign, whether it
 appears with no active turn, before a start response names the host's turn,
 or while another turn is active. Only `turn/started` and `item/*`
