@@ -2371,12 +2371,18 @@
     // phase-17 17-8 (ADR-0036 F1): a first token of `/new`・`/clear`・`/reset`
     // (arguments are dropped) + no attachments + capability=on for the
     // requested mode → route to session_reset control event, not
-    // send_instruction. Anything else (attachment 付き) falls through as
-    // normal.
-    // Attachment presence is decided here (stagedFiles is the caller's
-    // truth) and the helper is only asked about text + capability.
-    const reservedMode: SessionResetMode | null =
-      stagedFiles.length === 0 ? reservedSessionResetMode(text) : null;
+    // send_instruction. Anything else falls through as normal.
+    // A reserved token with staged attachments is refused: the CLI reads the
+    // last text block as a slash command whatever precedes it, so sending it
+    // would still reset the session, and intercepting it would silently drop
+    // the attachments. Attachment presence is decided here (stagedFiles is
+    // the caller's truth) and the helper is only asked about text +
+    // capability.
+    const reservedMode: SessionResetMode | null = reservedSessionResetMode(text);
+    if (reservedMode !== null && stagedFiles.length > 0) {
+      actionError = "session の操作コマンドは添付付きでは使えません";
+      return;
+    }
     const resetTarget =
       reservedMode === null
         ? null

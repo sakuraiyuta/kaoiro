@@ -3377,17 +3377,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # these (`/resetx`) passes. The CLI's command lookup is case-sensitive, so
   # this is too. Its whitespace is the JavaScript `\s` set (which includes U+FEFF and
   # excludes U+0085), spelled out below rather than left to PCRE's `\s`.
-  # The rule leaves an instruction that carries attachments to the wrapper.
+  # Attachments do not exempt an instruction: the wrapper puts the text after
+  # them and the CLI reads the last text block as the command.
   @reserved_session_commands ["/new", "/clear", "/reset"]
   defp reject_reserved_session_command(payload) do
     text = payload["text"]
-    attachments = payload["attachment_ids"] || []
 
     cond do
       not is_binary(text) ->
-        :ok
-
-      attachments != [] ->
         :ok
 
       reserved_session_command_token?(text) ->

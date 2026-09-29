@@ -7619,21 +7619,44 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "instruction", _
     end
 
-    test "/new + attachment 付きは通常 instruction として relay (通過)" do
-      agent_id = "resv.attach"
-      put_agent(agent_id)
-      @endpoint.subscribe("wrapper:" <> agent_id)
-      socket = join_as(:operator)
+    # The wrapper puts the text after the attachments and the CLI reads the
+    # last text block as the command, so attachments do not exempt it.
+    for text <- ["/new", "/clear foo", "/reset", "/reset now", "  /reset\tnow"] do
+      test "attachment 付きの #{inspect(text)} も reserved_session_command で reject" do
+        agent_id = "resv.attach.#{:erlang.unique_integer([:positive])}"
+        put_agent(agent_id)
+        @endpoint.subscribe("wrapper:" <> agent_id)
+        socket = join_as(:operator)
 
-      ref =
-        push(socket, "instruction", %{
-          "agent_id" => agent_id,
-          "text" => "/new",
-          "attachment_ids" => ["u1"]
-        })
+        ref =
+          push(socket, "instruction", %{
+            "agent_id" => agent_id,
+            "text" => unquote(text),
+            "attachment_ids" => ["u1"]
+          })
 
-      assert_reply ref, :ok
-      assert_broadcast "instruction", %{"text" => "/new"}
+        assert_reply ref, :error, %{reason: "reserved_session_command"}
+        refute_broadcast "instruction", _
+      end
+    end
+
+    for text <- ["/resetx", "/clearing now", "/RESET", "x /reset"] do
+      test "attachment 付きの非一致 #{inspect(text)} は通常 instruction として relay (通過)" do
+        agent_id = "resv.attach.other.#{:erlang.unique_integer([:positive])}"
+        put_agent(agent_id)
+        @endpoint.subscribe("wrapper:" <> agent_id)
+        socket = join_as(:operator)
+
+        ref =
+          push(socket, "instruction", %{
+            "agent_id" => agent_id,
+            "text" => unquote(text),
+            "attachment_ids" => ["u1"]
+          })
+
+        assert_reply ref, :ok
+        assert_broadcast "instruction", %{"text" => unquote(text)}
+      end
     end
   end
 

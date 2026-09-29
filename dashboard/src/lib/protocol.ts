@@ -942,7 +942,10 @@ export function modelSwitchStateFrom(envelope: Envelope): ModelSwitchState {
  *   - the first whitespace-delimited token of `trim(text)` must be `/new`,
  *     `/clear` or `/reset`; arguments after it are dropped, because the CLI
  *     would run `/new hello` as the same session reset
- *   - attachments must be empty (attachment 付き `/new` は通常 instruction)
+ *   - attachments must be empty. This function then returns null, but the
+ *     composer must not send the text as an instruction either: the CLI
+ *     reads the last text block as the command, attachments or not, so it
+ *     refuses the send (see the AgentDetail guard)
  *   - the resulting mode must be `"on"` per
  *     {@link sessionResetAvailability} (capability unstamped / false /
  *     conditional-off = fall through as ordinary instruction)

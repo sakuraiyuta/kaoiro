@@ -124,3 +124,61 @@ describe("AgentDetail session reset unsupported guard (issue #381)", () => {
     expect(target.querySelector(".action-error")).toBeNull();
   });
 });
+
+describe("AgentDetail reserved token with staged attachments", () => {
+  const caps = {
+    session_capabilities: {
+      supports_attachments: true,
+      supports_user_input_dialog: true,
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
+    },
+  };
+
+  async function stageFile(target: HTMLElement): Promise<void> {
+    const input = target.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [new File(["x"], "a.txt", { type: "text/plain" })],
+    });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+  }
+
+  it.each(["/reset", "/reset now", "/clear foo", "/new"])(
+    "%s は添付付きでは送信も intercept もされず、添付を捨てずに案内が出る",
+    async (text) => {
+      const conn = connection();
+      const target = await render(caps, conn);
+      await stageFile(target);
+      await submitInstruction(target, text);
+      expect(conn.sendInstruction).not.toHaveBeenCalled();
+      expect(conn.sendSessionReset).not.toHaveBeenCalled();
+      expect(target.querySelector(".action-error")?.textContent).toContain(
+        "session の操作コマンドは添付付きでは使えません",
+      );
+      expect(target.querySelector(".tray-count")?.textContent).toContain("1/");
+    },
+  );
+
+  it("negative control: 添付なしの /reset now は従来どおり intercept される", async () => {
+    const conn = connection();
+    const target = await render(caps, conn);
+    await submitInstruction(target, "/reset now");
+    expect(conn.sendSessionReset).toHaveBeenCalledWith("host-a.p", "clear");
+    expect(conn.sendInstruction).not.toHaveBeenCalled();
+    expect(target.querySelector(".action-error")).toBeNull();
+  });
+
+  it("negative control: 添付付きでも別名でない /resetx に案内は出ない", async () => {
+    const conn = connection();
+    const target = await render(caps, conn);
+    await stageFile(target);
+    await submitInstruction(target, "/resetx");
+    expect(conn.sendSessionReset).not.toHaveBeenCalled();
+    expect(target.querySelector(".action-error")?.textContent ?? "").not.toContain(
+      "session の操作コマンド",
+    );
+  });
+});
+
