@@ -244,6 +244,8 @@ it("stale send transfers a queued body through the real recovery response withou
 
 describe("delivery stages when turn/start may or may not have been delivered", () => {
   const stages = (reports: Array<Record<string, unknown>>) => reports.map(report => report.stage).filter(stage => stage !== "queued");
+  const peerErrorCodes = (f: Awaited<ReturnType<typeof cliAppFixture>>) =>
+    f.envelopes("inter_agent_message").map(e => (e.payload as { error?: { code?: string } }).error?.code);
 
   it("ends on unknown, with no settled, when the app-server ends after turn/start was written", async () => {
     const f = await cliAppFixture(false, "app-server", "legacy", { stages: true, turnStart: () => "exit" });
@@ -254,6 +256,8 @@ describe("delivery stages when turn/start may or may not have been delivered", (
       // The wrapper stops with its app-server; once it has exited nothing more can be reported.
       await f.running;
       expect(stages(f.stageReports(1))).toEqual(["unknown"]);
+      // The turn may still be running, so the peer is told to wait, not to retry.
+      expect(peerErrorCodes(f)).toEqual(["timeout"]);
     } finally { await f.close(); }
   });
 
@@ -263,6 +267,7 @@ describe("delivery stages when turn/start may or may not have been delivered", (
       await f.inbound(1, "c1");
       await vi.waitFor(() => expect(stages(f.stageReports(1))).toEqual(["settled"]), { timeout: 10_000 });
       expect(f.stageReports(1).find(report => report.stage === "settled")).toMatchObject({ reason: "failed_before_handoff" });
+      await vi.waitFor(() => expect(peerErrorCodes(f)).toEqual(["api_error"]), { timeout: 10_000 });
     } finally { await f.close(); }
   });
 

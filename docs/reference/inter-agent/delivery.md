@@ -185,7 +185,8 @@ as `unknown`, not as a failure before handoff. The boundary is the request's
 stdin write, read after the app-server child has closed: `writing` (called, no
 callback yet) and `written` count as possibly delivered, while `unwritten` and
 `failed` do not (a write error means the newline-terminated line was not fully
-accepted, so the app-server cannot have run it). Failing before the write, a
+accepted, so the app-server cannot have run it; inferred from the framing, not
+measured). Failing before the write, a
 write error, and a JSON-RPC error reply to `turn/start` settle with
 `failed_before_handoff`. A timeout, a lost connection or a malformed reply after
 a possibly-delivered write ends on `unknown` and is never followed by `settled`,
@@ -194,7 +195,10 @@ later whether the turn ran. The reason string is a free string; the current
 values are `turn_start_timeout`, `turn_start_disconnected` and
 `turn_start_invalid_response`, decided from the failure's typed cause. Only the
 turn that was being started carries it: inputs still queued behind it were never
-written and settle with `failed_before_handoff`. The Codex exec backend does not
+written and settle with `failed_before_handoff`. The asynchronous peer notice for
+an unknown outcome carries the `timeout` code ("the peer may still be mid-turn,
+wait before retrying"), not `api_error`, so the sender is not told to retry an
+input that may already have been processed. The Codex exec backend does not
 have this: its SDK writes the input without a callback, so a failure before the
 first event still settles with `failed_before_handoff`.
 

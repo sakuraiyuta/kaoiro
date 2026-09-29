@@ -494,8 +494,10 @@ it("marks only the active turn's outcome unknown when the app-server ends after 
   await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(2));
   const ended = (token: string) => f.ends.mock.calls.map(([info]) => info).find(info => info.turnToken === token)!;
   expect(ended("A").handoff).toEqual({ outcome: "unknown", reason: "turn_start_disconnected" });
+  expect(ended("A").error?.reason).toBe("timeout");
   expect(ended("B")).not.toHaveProperty("handoff");
   expect(ended("B").error).toBeDefined();
+  expect(ended("B").error).not.toHaveProperty("reason");
 });
 
 it("does not mark the outcome unknown when turn/start is rejected, skipped or succeeds", async () => {
@@ -503,6 +505,7 @@ it("does not mark the outcome unknown when turn/start is rejected, skipped or su
   await rejected.host.send("A", undefined, [], "A");
   await vi.waitFor(() => expect(rejected.ends).toHaveBeenCalledTimes(1));
   expect(rejected.ends.mock.calls[0]![0]).not.toHaveProperty("handoff");
+  expect(rejected.ends.mock.calls[0]![0].error).not.toHaveProperty("reason");
 
   const skipped = fixture({ prepareInput: () => null });
   await skipped.host.send("A", undefined, [], "A");

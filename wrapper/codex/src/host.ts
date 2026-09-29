@@ -1715,8 +1715,12 @@ export class CodexHost implements EngineAdapter {
         const failed: AttemptedTurnSettings = attempted ?? { ...pending, permission: null, accountDefault: false, resolutionGeneration: this.#modelResolutionGeneration };
         if (error instanceof AppServerSettingsError) failed.appServer = { switchFailureReason: error.reason };
         this.#finishTurn(false, failed);
-        settle({ is_error: true, ...codexExecFailureRelay(String(error)) }, { turnToken, conversationIds, error: { detail: String(error) },
-          ...(error instanceof AppServerTurnStartUnknownError ? { handoff: { outcome: "unknown" as const, reason: error.reason } } : {}),
+        // An unknown outcome means the app-server may still be running the turn:
+        // the peer notice carries the timeout reason so it is told to wait, not to retry.
+        const unknown = error instanceof AppServerTurnStartUnknownError ? error : null;
+        settle({ is_error: true, ...codexExecFailureRelay(String(error)) }, { turnToken, conversationIds,
+          error: { detail: String(error), ...(unknown === null ? {} : { reason: "timeout" }) },
+          ...(unknown === null ? {} : { handoff: { outcome: "unknown" as const, reason: unknown.reason } }),
           ...(this.#turnAbandoned === null ? {} : { abandoned: this.#turnAbandoned }) });
       }
       if (runtime.closed || error instanceof AppServerConnectionError) this.#stopAppServer(error);
