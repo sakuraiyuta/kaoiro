@@ -216,6 +216,20 @@ describe("foreign-turn tripwire", () => {
     expect(f.foreign).toEqual([{ threadId: "thread-1", turnId: "foreign-4" }]);
   });
 
+  it("ignores past turn IDs on thread-level notifications in every window", async () => {
+    const f = steerFixture({ enforceForeignTurn: true });
+    await f.transport.startThread();
+    const usage = (turnId: string) => ({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId, tokenUsage: {} } });
+    f.send(usage("past-idle"));
+    f.onTurnStart(request => { f.send(usage("past-pending"));f.respond(request, { turn: { id: "turn-1" } }); });
+    await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" });
+    f.send(usage("past-active"));
+    f.send({ method: "thread/goal/cleared", params: { threadId: "thread-1", turnId: "past-goal" } });
+    await tick();
+    expect(f.foreign).toEqual([]);
+    expect(steer(f).kind).toBe("sent");
+  });
+
   it("does not treat own late items, other threads, or own turn events as foreign", async () => {
     const f = steerFixture();
     await activeTurn(f);

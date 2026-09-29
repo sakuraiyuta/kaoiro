@@ -70,6 +70,15 @@ export class AppServerForeignTurnError extends Error {
   }
 }
 
+// Only a turn start or a turn item shows that a turn is running. Thread-level
+// notifications (token usage, goals, status, compaction) carry past turn IDs
+// after a resume, measured on 0.156.1 for `thread/tokenUsage/updated`.
+function isTurnEvidence(event: AppServerNotification): boolean {
+  return event.method === "turn/started" || event.method.startsWith("item/");
+}
+
+const MAX_OWN_TURN_IDS = 256;
+
 function notificationTurnId(event: AppServerNotification): string | undefined {
   const nested = event.params.turn;
   const turnId = event.params.turnId ?? (rpcObject(nested) ? nested.id : undefined);
@@ -220,7 +229,9 @@ export class AppServerTransport {
       }
       active.turnId = result.turn.id;
       this.#ownTurnIds.add(active.turnId);
+      if (this.#ownTurnIds.size > MAX_OWN_TURN_IDS) this.#ownTurnIds.delete(this.#ownTurnIds.values().next().value!);
       for (const event of active.beforeResponse) {
+        if (!isTurnEvidence(event)) continue;
         const turnId = notificationTurnId(event);
         if (turnId !== undefined && turnId !== active.turnId && !this.#ownTurnIds.has(turnId)) this.#foreignTurn(event.params.threadId, turnId);
       }
@@ -350,7 +361,7 @@ export class AppServerTransport {
     const turnId = notificationTurnId(event);
     // A reserved turn without its start response is judged when the response
     // names its ID; late items of this host's own completed turns are known.
-    if (turnId !== undefined && event.params.threadId === this.#boundThreadId && !(active && active.turnId === undefined) &&
+    if (turnId !== undefined && isTurnEvidence(event) && event.params.threadId === this.#boundThreadId && !(active && active.turnId === undefined) &&
         turnId !== active?.turnId && !this.#ownTurnIds.has(turnId)) {
       this.#foreignTurn(this.#boundThreadId, turnId);
     }
