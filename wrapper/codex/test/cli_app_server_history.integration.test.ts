@@ -110,7 +110,7 @@ enabled = false
     wire.drop();await vi.waitFor(() => expect(wire.joins).toBe(2), { timeout: 10_000 });
     wire.push("instruction", { version: "0", text: "AFTER" });
     await vi.waitFor(() => expect(scheduled).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(queued).toHaveBeenCalledWith("AFTER", undefined));
+    await vi.waitFor(() => expect(queued).toHaveBeenCalledWith("AFTER", undefined, undefined, undefined, { source: "operator", intent: "normal" }));
     await (sent.mock.contexts[0] as ServerLink).requestDirectory();
     expect(completes()).toHaveLength(1);expect(starts).toHaveLength(1);
     release();await vi.waitFor(() => expect(completes()).toHaveLength(2), { timeout: 25_000 });

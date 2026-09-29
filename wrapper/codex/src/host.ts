@@ -12,6 +12,8 @@ import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerSession } from "./app_server_session.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
+import type { AppServerForeignTurn } from "./app_server_transport.js";
+import { SteerRecord, type SteerOutcome, type SteerResponse } from "./app_server_steer.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
 import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
@@ -95,6 +97,7 @@ import { effectiveNetworkAccess } from "./network_access.js";
 import {
   applyPermissionSyncState,
   beginPermissionExecution,
+  canSubmitPermission,
   createPermissionState,
   permissionObservationApplied,
   permissionObservationFailed,
@@ -323,6 +326,37 @@ export function initialStatusExt(
   return initialStatusExtFromCatalog(catalog, config.model ?? null);
 }
 
+/** Who produced a `send()`; only operator input may be steered. */
+export type CodexSendSource = "operator" | "synthetic" | "reset_notice";
+export interface CodexSendOptions {
+  source?: CodexSendSource;
+  intent?: "early" | "normal";
+}
+
+type QueuedTurn = {
+  input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
+  tempDir?: string;
+  conversationIds?: readonly string[];
+  turnToken?: string;
+  source?: CodexSendSource;
+  arrival?: number;
+  /** Marks an operator slot held for a precondition-rejected steer; settlement
+   * clears it (requeue) or removes the entry. The terminal settles the record
+   * before the run loop takes the next entry, so dispatch never meets it. */
+  placeholder?: true;
+};
+
+interface ActiveSteer {
+  record: SteerRecord;
+  token: string;
+  turnId: string;
+  text: string;
+  arrival: number;
+  placeholder?: QueuedTurn;
+}
+
+const MAX_STEERS_PER_TURN = 8;
+
 export interface CodexHostOptions {
   /** Internal opt-in only; normal CLI/config/env launch always uses exec. */
   backend?: "exec" | "app-server";
@@ -390,6 +424,13 @@ export interface CodexHostOptions {
   appendSystemPrompt: string;
   /** instruction_rejected sink (file-upload spec). */
   onInstructionRejected?: (envelope: Envelope) => void;
+  /** Present only when operator steering is opted in for this persona;
+   * `available` reads whether the current join echoed operator_input_modes. */
+  operatorSteer?: { available: () => boolean };
+  /** Synchronous: true while a join or rejoin's permission sync is unresolved. */
+  permissionSyncPending?: () => boolean;
+  /** Synchronous: true while a session reset is reserved, dispatching or accepted. */
+  liveInputBlocked?: () => boolean;
   /** attach_rejected sink for malformed / unsupported upload frames. */
   onAttachRejected?: (envelope: Envelope) => void;
   /** Reports the thread id (kaoiro session_id) once known (ADR-0014). */
@@ -660,12 +701,9 @@ export class CodexHost implements EngineAdapter {
    * ordinary inter-agent turn, multiple entries when several same-peer
    * pending messages were coalesced into this one turn. Threaded through
    * #runTurn so onTurnEnd resolves exactly this turn's conversation(s). */
-  readonly #queue: Array<{
-    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
-    tempDir?: string;
-    conversationIds?: readonly string[];
-    turnToken?: string;
-  }> = [];
+  readonly #queue: QueuedTurn[] = [];
+  #arrivalSeq = 0;
+  readonly #steers = new Map<string, ActiveSteer>();
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
   readonly #activeTempDirs = new Set<string>();
@@ -982,8 +1020,17 @@ export class CodexHost implements EngineAdapter {
     attachmentIds?: string[],
     interAgentConversationIds?: readonly string[],
     interAgentTurnToken?: string,
+    options: CodexSendOptions = {},
   ): Promise<void> {
     if (this.#closed) return;
+    const arrival = ++this.#arrivalSeq;
+    const source = interAgentConversationIds === undefined ? options.source ?? "synthetic" : undefined;
+    if (source === "operator" && options.intent === "early" && this.#options.operatorSteer !== undefined && this.#appRuntime !== null) {
+      const reason = attachmentIds !== undefined && attachmentIds.length > 0
+        ? "attachments_not_steerable" : await this.#steerOperatorInput(text, arrival);
+      if (reason === null || this.#closed) return;
+      if (reason !== "idle") this.#systemLog(`Operator input queued for the next turn (${reason}).`);
+    }
     if (
       attachmentIds !== undefined &&
       attachmentIds.length > MAX_ATTACHMENTS_PER_INSTRUCTION
@@ -1036,6 +1083,8 @@ export class CodexHost implements EngineAdapter {
     this.#apply({ kind: "user_send" });
     this.#queue.push({
       input,
+      ...(source === undefined ? {} : { source }),
+      arrival,
       ...(tempDir === undefined ? {} : { tempDir }),
       ...(interAgentConversationIds === undefined
         ? {}
@@ -1521,6 +1570,8 @@ export class CodexHost implements EngineAdapter {
         turnSignal: () => this.#turnScope?.signal ?? null,
         bridgeStderrPath: `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
         onDisconnect: error => this.#stopAppServer(error),
+        onForeignTurn: turn => this.#onForeignTurn(turn),
+        enforceForeignTurn: this.#options.operatorSteer !== undefined,
         transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS },
       },
       effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",
@@ -1614,7 +1665,8 @@ export class CodexHost implements EngineAdapter {
           try { this.#options.onInputHandedOff?.({ turnToken, handoff: "turn_start_accepted" }); }
           catch (error) { writeRedactedStderr(`codex input handoff report failed: ${String(error)}\n`); }
         },
-        onTerminal: endBoundary,
+        onTerminal: () => { this.#endSteers(turnToken, "T");endBoundary(); },
+        onInputItem: event => this.#observeSteer(turnToken, event.clientId),
         onPermission: (assessment, attempt) => {
           if (!this.#watchdogFailStopped && attempt.permission) this.#applyPermissionAssessment(attempt.permission.submission, assessment);
         },
@@ -1664,6 +1716,7 @@ export class CodexHost implements EngineAdapter {
       }
       if (runtime.closed || error instanceof AppServerConnectionError) this.#stopAppServer(error);
     } finally {
+      this.#endSteers(turnToken, "X");
       this.#endTurnScope();this.#turnScope = null;this.#activeTurnToken = null;this.#activeTurnConversationIds = [];this.#appTurnToken = null;
       try { if (tempDir !== undefined) await this.#cleanupTempDir(tempDir); }
       finally { this.#options.onTurnFinalized?.({ turnToken }); }
@@ -2333,12 +2386,7 @@ export class CodexHost implements EngineAdapter {
   /** An interrupt drops not-yet-started image turns too: their local_image
    * paths must never outlive the cancelled instruction (ADR-0025 F3/F11). */
   async #dropQueuedTempTurns(): Promise<void> {
-    const retained: Array<{
-      input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>;
-      tempDir?: string;
-      conversationIds?: readonly string[];
-      turnToken?: string;
-    }> = [];
+    const retained: QueuedTurn[] = [];
     for (const turn of this.#queue) {
       if (turn.tempDir === undefined) {
         retained.push(turn);
@@ -2511,6 +2559,114 @@ export class CodexHost implements EngineAdapter {
     this.#options.onAttachRejected?.(
       makeAttachRejected(this.#config, this.#machine.state, this.#now(), payload),
     );
+  }
+
+  /** Returns null when the input was steered into the running turn, or the
+   * reason it goes to the queue ("idle": no live turn, nothing to report). */
+  async #steerOperatorInput(text: string, arrival: number): Promise<string | null> {
+    for (let waited = false; ; waited = true) {
+      const runtime = this.#appRuntime, token = this.#appTurnToken;
+      if (runtime === null || token === null || this.#closed) return "idle";
+      const id = `kaoiro-steer:${randomUUID()}`;
+      const attempt = runtime.steer({ hostTurnToken: token, input: text, clientUserMessageId: id,
+        admit: turnId => this.#admitSteer(turnId, token, id, text, arrival) });
+      if (attempt.kind === "starting") {
+        if (waited) return "turn_starting";
+        await attempt.ready;
+        continue;
+      }
+      if (attempt.kind === "refused") return attempt.reason;
+      if (attempt.kind === "declined") return attempt.reason;
+      this.#steers.get(id)?.record.respond(await attempt.response);
+      return null;
+    }
+  }
+
+  /** The single commit point (design r3 §3): runs in the same synchronous
+   * section as the `turn/steer` write, and is the only place the admission
+   * guards decide. Creating the record here means it exists before the write. */
+  #admitSteer(turnId: string, token: string, id: string, text: string, arrival: number): string | null {
+    if (this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
+    if (this.#closed || this.#watchdogFailStopped || this.#appFailure !== null) return "host_stopped";
+    if (this.#queue.some(turn => turn.source === "operator")) return "behind_earlier_input";
+    const permission = this.#permissionState;
+    if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
+        permission.blocked !== null || this.#options.permissionSyncPending?.() === true ||
+        (permission.current === null ? permission.hasControl : !canSubmitPermission(permission, permission.current.submission))) {
+      return "pending_settings";
+    }
+    if (this.#appTurnToken !== token || this.#turnAbandoned !== null || this.#turnScope?.signal.aborted !== false) return "turn_ending";
+    if (this.#options.liveInputBlocked?.() === true || this.#queue.some(turn => turn.source === "reset_notice")) return "reset_pending";
+    if ([...this.#steers.values()].filter(steer => steer.turnId === turnId).length >= MAX_STEERS_PER_TURN) return "steer_cap";
+    const record = new SteerRecord(id, turnId, {
+      onResponse: response => this.#onSteerResponse(id, response),
+      onSettle: outcome => this.#onSteerSettled(id, outcome),
+    });
+    this.#steers.set(id, { record, token, turnId, text, arrival });
+    return null;
+  }
+
+  #onSteerResponse(id: string, response: SteerResponse): void {
+    const steer = this.#steers.get(id);
+    if (steer === undefined) return;
+    if (response.kind === "A") this.#systemLog("Operator input accepted into the running turn.");
+    if (response.kind !== "P") return;
+    // AC-1: the placeholder is created here, in the P response's synchronous
+    // section; settlement only resolves or removes it.
+    const placeholder: QueuedTurn = { input: steer.text, source: "operator", arrival: steer.arrival, placeholder: true };
+    const index = this.#queue.findIndex(turn => (turn.arrival ?? 0) > steer.arrival);
+    this.#queue.splice(index === -1 ? this.#queue.length : index, 0, placeholder);
+    steer.placeholder = placeholder;
+  }
+
+  #onSteerSettled(id: string, outcome: SteerOutcome): void {
+    const steer = this.#steers.get(id);
+    this.#steers.delete(id);
+    const placeholder = steer?.placeholder;
+    if (placeholder !== undefined) {
+      delete placeholder.placeholder;
+      if (outcome.kind !== "requeued" || this.#closed) {
+        const index = this.#queue.indexOf(placeholder);
+        if (index !== -1) this.#queue.splice(index, 1);
+      }
+    }
+    switch (outcome.kind) {
+      case "included":
+        this.#systemLog("Operator input was included in the running turn.");
+        break;
+      case "requeued":
+        this.#systemLog(this.#closed
+          ? `Operator input was not delivered (${outcome.reason}) and was dropped because the host stopped.`
+          : `Operator input was rejected by the app-server (${outcome.reason}) and queued for the next turn.`);
+        break;
+      case "refused":
+        this.#systemLog("Operator input was refused by the app-server and was not delivered.");
+        this.#emitInstructionRejected({ reason: "sdk_error", detail: `turn/steer refused: ${outcome.code} ${outcome.message}` });
+        break;
+      case "unknown":
+        this.#systemLog(`Operator input delivery is unknown (${outcome.reason}); it will not be re-sent.`);
+        break;
+    }
+    this.#wake?.();
+  }
+
+  #endSteers(token: string, terminal: "T" | "X"): void {
+    for (const steer of [...this.#steers.values()]) if (steer.token === token) steer.record.end(terminal);
+  }
+
+  #observeSteer(token: string, clientId: string): void {
+    const steer = this.#steers.get(clientId);
+    if (steer?.token === token) steer.record.observe();
+  }
+
+  #onForeignTurn(turn: AppServerForeignTurn): void {
+    const enforced = this.#options.operatorSteer !== undefined;
+    writeRedactedStderr(`${JSON.stringify({ event: "codex_foreign_turn", thread_id: turn.threadId, turn_id: turn.turnId, enforced })}\n`);
+    if (enforced) this.#systemLog("The app-server ran a turn this wrapper did not start; steering and new turns are stopped pending operator recovery.");
+  }
+
+  #systemLog(text: string): void {
+    this.#options.onLog?.(makeLog(this.#config, this.#machine.state, this.#now(), { kind: "system", text }));
   }
 
   #emitInstructionRejected(payload: InstructionRejectedPayload): void {

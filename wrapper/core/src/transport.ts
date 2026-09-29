@@ -1669,7 +1669,6 @@ export class ServerLink {
       this.#workControlSupported = false;
       this.#deliveryIncarnation = null;
       options.onInterAgentDeliveryModes?.(false, null);
-      options.onOperatorInputModes?.(false);
       options.onWorkControl?.(false);
       this.#failReplyBasis(terminal, releaseWaiters);
     };
@@ -1846,6 +1845,14 @@ export class ServerLink {
 
   deliveryModes(): DeliveryModes | null {
     return this.#deliveryModes;
+  }
+
+  /** Synchronous view of the permission-sync barrier: true while negotiation
+   *  is unsettled, while a join or rejoin has not delivered its snapshot, or
+   *  while the channel is not joined. False when sync is not configured. */
+  permissionSyncPending(): boolean {
+    if (this.#permissionSync === undefined) return false;
+    return !this.#permissionSyncNegotiationSettled || !this.#permissionSyncReady || this.#channel.state !== "joined";
   }
 
   /** The operator-input declaration the server echoed on the current join;
