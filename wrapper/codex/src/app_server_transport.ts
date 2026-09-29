@@ -6,6 +6,7 @@ import {
 } from "./app_server_rpc.js";
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
+import type { SteerResponse } from "./app_server_steer.js";
 import { AppServerAccountTelemetry, type AppServerRateLimits } from "./app_server_telemetry.js";
 
 import { appServerTurnSettings, type AppServerTurnSettings, type AppServerPreparedSettings, type AppServerSettingsSnapshot } from "./app_server_settings.js";
@@ -45,6 +46,51 @@ export interface AppServerTurn {
   events: AsyncIterable<AppServerNotification>;
 }
 
+export interface AppServerSteerRequest {
+  hostTurnToken: string;
+  input: AppServerInput;
+  clientUserMessageId: string;
+  /** Runs in the same synchronous section as the request write, after the
+   * active-turn snapshot. Returning a reason sends nothing. */
+  admit: (turnId: string) => string | null;
+}
+
+export type AppServerSteerAttempt =
+  | { kind: "refused"; reason: "idle" | "closed" | "foreign_turn" }
+  | { kind: "starting"; ready: Promise<void> }
+  | { kind: "declined"; reason: string }
+  | { kind: "sent"; turnId: string; requestId: number; response: Promise<SteerResponse> };
+
+export interface AppServerForeignTurn { threadId: string; turnId: string }
+
+export class AppServerForeignTurnError extends Error {
+  constructor() {
+    super("App-server thread has a turn this host did not start; new turns are stopped pending operator recovery");
+    this.name = "AppServerForeignTurnError";
+  }
+}
+
+function notificationTurnId(event: AppServerNotification): string | undefined {
+  const nested = event.params.turn;
+  const turnId = event.params.turnId ?? (rpcObject(nested) ? nested.id : undefined);
+  return typeof turnId === "string" ? turnId : undefined;
+}
+
+// The two expected-turn rejections carry no error data (measured on 0.156.1,
+// issue #366 probe L0); non-steerable turns carry codexErrorInfo (probe L4).
+function classifySteerError(error: unknown): SteerResponse {
+  if (!(error instanceof AppServerRpcError)) return { kind: "C" };
+  const info = rpcObject(error.data) ? error.data.codexErrorInfo : undefined;
+  const notSteerable = rpcObject(info) ? info.activeTurnNotSteerable : undefined;
+  if (rpcObject(notSteerable) && typeof notSteerable.turnKind === "string") {
+    return { kind: "P", reason: `not_steerable:${notSteerable.turnKind}` };
+  }
+  if (error.code === -32600 && (error.message.startsWith("expected active turn id ") || error.message === "no active turn to steer")) {
+    return { kind: "P", reason: "turn_changed" };
+  }
+  return { kind: "E", code: error.code, message: error.message };
+}
+
 interface ActiveTurn {
   threadId: string;
   hostTurnToken: string;
@@ -69,9 +115,19 @@ export class AppServerTransport {
   #opening = false;
   #readingHistory = false;
   readonly #account = new AppServerAccountTelemetry();
+  #boundThreadId: string | undefined;
+  readonly #ownTurnIds = new Set<string>();
+  #foreign: AppServerForeignTurn | undefined;
+  readonly #enforceForeignTurn: boolean;
+  readonly #onForeignTurn: ((turn: AppServerForeignTurn) => void) | undefined;
 
-  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void } = {}) {
+  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & {
+    threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void;
+    onForeignTurn?: (turn: AppServerForeignTurn) => void; enforceForeignTurn?: boolean;
+  } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
+    this.#enforceForeignTurn = options.enforceForeignTurn ?? false;
+    this.#onForeignTurn = options.onForeignTurn;
     this.#rpc = new AppServerRpc({
       ...options,
       onNotification: (event) => this.#notification(event),
@@ -92,6 +148,7 @@ export class AppServerTransport {
   get version(): string | undefined { return this.#version; }
   get stderrTail(): string { return this.#rpc.stderrTail; }
   get rateLimits(): AppServerRateLimits { return this.#account.snapshot; }
+  get foreignTurn(): AppServerForeignTurn | undefined { return this.#foreign && { ...this.#foreign }; }
 
   async readRateLimits(): Promise<AppServerRateLimits> {
     await this.#initialize();
@@ -127,6 +184,7 @@ export class AppServerTransport {
 
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {
     if (this.#failure) throw this.#failure;
+    if (this.#foreign && this.#enforceForeignTurn) throw new AppServerForeignTurnError();
     if (this.#active || this.#opening || this.#readingHistory) throw new Error("App-server already has an active or submitting operation");
     // Invalid images must fail before reserving an operation or initializing RPC.
     if (typeof input.input !== "string") appServerInput(input.input);
@@ -161,6 +219,11 @@ export class AppServerTransport {
         throw new AppServerConnectionError("Invalid turn/start response");
       }
       active.turnId = result.turn.id;
+      this.#ownTurnIds.add(active.turnId);
+      for (const event of active.beforeResponse) {
+        const turnId = notificationTurnId(event);
+        if (turnId !== undefined && turnId !== active.turnId && !this.#ownTurnIds.has(turnId)) this.#foreignTurn(event.params.threadId, turnId);
+      }
       for (const event of active.beforeResponse) this.#deliver(active, event);
       active.beforeResponse = [];
       if (active.failure) active.stream.fail(active.failure);
@@ -191,6 +254,29 @@ export class AppServerTransport {
     });
     try { await Promise.race([disconnected, prepare()]); }
     finally { this.#disconnected.signal.removeEventListener("abort", abort); }
+  }
+
+  /** Synchronous: the snapshot, `admit`, and the request write share one
+   * section, so no state change can land between the check and the write. */
+  steer(request: AppServerSteerRequest): AppServerSteerAttempt {
+    if (this.#failure || this.#closing) return { kind: "refused", reason: "closed" };
+    if (this.#foreign && this.#enforceForeignTurn) return { kind: "refused", reason: "foreign_turn" };
+    const active = this.#active;
+    if (!active || active.hostTurnToken !== request.hostTurnToken) return { kind: "refused", reason: "idle" };
+    if (active.turnId === undefined) return { kind: "starting", ready: active.ready };
+    const turnId = active.turnId;
+    const wireInput = appServerInput(request.input);
+    const reason = request.admit(turnId);
+    if (reason !== null) return { kind: "declined", reason };
+    const ticket = this.#rpc.request("turn/steer", {
+      threadId: active.threadId, expectedTurnId: turnId, input: wireInput,
+      clientUserMessageId: request.clientUserMessageId,
+    });
+    const response = ticket.result.then((result): SteerResponse => {
+      if (rpcObject(result) && result.turnId === turnId) return { kind: "A" };
+      return { kind: "V", turnId: rpcObject(result) && typeof result.turnId === "string" ? result.turnId : "" };
+    }, classifySteerError);
+    return { kind: "sent", turnId, requestId: ticket.id, response };
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {
@@ -245,6 +331,7 @@ export class AppServerTransport {
         await this.#rpc.close();
         throw this.#failure;
       }
+      this.#boundThreadId = result.thread.id;
       this.#initialSettings = typeof result.model === "string" &&
         (result.reasoningEffort === null || typeof result.reasoningEffort === "string")
         ? { model: result.model, effort: result.reasoningEffort } : null;
@@ -260,9 +347,22 @@ export class AppServerTransport {
       return;
     }
     const active = this.#active;
+    const turnId = notificationTurnId(event);
+    // A reserved turn without its start response is judged when the response
+    // names its ID; late items of this host's own completed turns are known.
+    if (turnId !== undefined && event.params.threadId === this.#boundThreadId && !(active && active.turnId === undefined) &&
+        turnId !== active?.turnId && !this.#ownTurnIds.has(turnId)) {
+      this.#foreignTurn(this.#boundThreadId, turnId);
+    }
     if (!active || event.params.threadId !== active.threadId) return;
     if (active.turnId === undefined) active.beforeResponse.push(event);
     else this.#deliver(active, event);
+  }
+
+  #foreignTurn(threadId: unknown, turnId: string): void {
+    if (this.#foreign || typeof threadId !== "string") return;
+    this.#foreign = { threadId, turnId };
+    this.#onForeignTurn?.({ ...this.#foreign });
   }
 
   #deliver(active: ActiveTurn, event: AppServerNotification): void {

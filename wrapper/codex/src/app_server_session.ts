@@ -5,7 +5,8 @@ import type { ToolDescriptor, WrapperConfig, ReplyOrigin } from "@kaoiro/agent-c
 import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
-  AppServerTransport, type AppServerThreadOptions, type AppServerTurn, type AppServerTurnInput,
+  AppServerTransport, type AppServerForeignTurn, type AppServerSteerAttempt, type AppServerSteerRequest,
+  type AppServerThreadOptions, type AppServerTurn, type AppServerTurnInput,
 } from "./app_server_transport.js";
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
 import { projectAppServerTurn, type AppServerProjectedTurn } from "./app_server_projection.js";
@@ -19,6 +20,9 @@ export interface AppServerSessionOptions {
   turnSignal: () => AbortSignal | null;
   bridgeStderrPath?: string;
   onDisconnect?: (error: Error) => void;
+  onForeignTurn?: (turn: AppServerForeignTurn) => void;
+  /** Stop steering and new turns once a foreign turn is seen. */
+  enforceForeignTurn?: boolean;
   transport?: Omit<AppServerRpcOptions, "onNotification" | "onFailure">;
 }
 
@@ -95,6 +99,8 @@ export class AppServerSession {
     this.#transport = new AppServerTransport({
       ...options.transport,
       ...(options.onDisconnect === undefined ? {} : { onDisconnect: options.onDisconnect }),
+      ...(options.onForeignTurn === undefined ? {} : { onForeignTurn: options.onForeignTurn }),
+      ...(options.enforceForeignTurn === undefined ? {} : { enforceForeignTurn: options.enforceForeignTurn }),
       ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
     });
   }
@@ -158,6 +164,11 @@ export class AppServerSession {
       return turn;
     } catch (error) { pending.resolve(); throw error; }
 
+  }
+
+  steer(request: AppServerSteerRequest): AppServerSteerAttempt {
+    if (this.#closing) return { kind: "refused", reason: "closed" };
+    return this.#transport.steer(request);
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {
