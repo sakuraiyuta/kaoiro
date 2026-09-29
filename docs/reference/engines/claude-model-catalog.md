@@ -213,24 +213,45 @@ Fable 5.1 rollout reached.
 | `claude-opus-4-6` | `claude-opus-4-6` | `low`, `medium`, `high`, `max` |
 | `claude-sonnet-4-6` | `claude-sonnet-4-6` | `low`, `medium`, `high`, `max` |
 
-On SDK 0.3.258 and 0.3.280, the default probe instead listed
-`opus[1m] -> claude-opus-5[1m]` and `sonnet -> claude-sonnet-5`; the 0.3.280
-default probe listed `default -> claude-opus-5-5[1m]`. SDK 0.3.284 changes the
-default and `opus` rows to the unsuffixed `claude-opus-5-5`, and changes Sonnet
-to `claude-sonnet-5-5`.
+The SDK 0.3.258 default catalog listed `opus[1m] -> claude-opus-5[1m]`. A
+network-reachable SDK 0.3.280 probe instead returned
+`opus[1m] -> claude-opus-5-5[1m]`, `default -> claude-opus-5-5[1m]`, and
+`sonnet -> claude-sonnet-5`. An explicit `Options.model: "opus"` query added
+the exact `opus -> claude-opus-5-5` row. These 0.3.280 results are recorded in
+the [0.3.284 rollout probe record](../../evidence/claude/issue-427/2026-09-29-agent-sdk-0.3.284.md).
+SDK 0.3.284 changes the network-reachable `default` and `opus` rows to the
+unsuffixed `claude-opus-5-5`, and changes Sonnet to `claude-sonnet-5-5`.
 
 With SDK 0.3.284, a query started with `Options.model: "opus[1m]"` still returns
 the same 12-row catalog, without an exact `opus[1m]` row. The captured fixture
 is [the SDK 0.3.284 query result](../../../wrapper/claude-code/test/fixtures/claude-agent-sdk-0.3.284-opus-1m.models.json)
-(SHA-256 `b1f649a21e14e58e516375b6cbcbc511e574ca19fa084a6725d4bfb9d3b86fe7`). In
-that query, the real CLI's `system/init` event and `getContextUsage()` both
-reported `claude-opus-5-5[1m]`. The event spelling was captured with a
-loopback-only API stub; no external model API was called. Therefore the wrapper
-keeps a persisted `opus[1m]` pin and passes its exact spelling to `Options.model`,
-while using the measured base `opus` alias row only for metadata and comparison.
+(SHA-256 `b1f649a21e14e58e516375b6cbcbc511e574ca19fa084a6725d4bfb9d3b86fe7`). A
+real-host run with a loopback-only API stub recorded the SDK `system/init`
+model as `claude-opus-5-5[1m]`; the host context projection was
+`used_tokens: 1970`, `max_tokens: 1000000`, `used_percentage: 0`. The stub
+answered `count_tokens` locally, so this context projection is not a live
+provider-usage measurement. The request used `model: "claude-opus-5-5"` and
+included the `context-1m-2025-08-07` beta header. No external model request was
+made. The raw capture and SHA-256 are in the
+[SDK 0.3.284 rollout record](../../evidence/claude/issue-427/2026-09-29-agent-sdk-0.3.284.md).
+Therefore the wrapper keeps a persisted `opus[1m]` pin and passes its exact
+spelling to `Options.model`, while using the measured base `opus` alias row
+only for metadata and comparison. The same run measured the Fable 5.1 pin as
+`system/init: claude-fable-5-1[1m]`, with an unsuffixed request model and the
+1M beta header; its host context projection was `used_tokens: 1974`,
+`max_tokens: 1000000`, `used_percentage: 0`. Both context projections came from
+the loopback stub run, not a live provider-usage response.
 The comparison treats `[1m]` as part of model identity: the suffix must be an
 exact lowercase match on both the pin and the engine report before comparing
 their base IDs. A report without the suffix is not considered the same model.
+
+When the catalog endpoint is unreachable, SDK 0.3.284 instead returns a
+six-row static catalog that includes an exact `opus[1m]` row resolving to
+`claude-opus-5-5[1m]` and omits the base `opus` row. The host accepts that pin
+through the exact catalog row; the measured fixture is
+[`claude-agent-sdk-0.3.284-offline-fallback.models.json`](../../../wrapper/claude-code/test/fixtures/claude-agent-sdk-0.3.284-offline-fallback.models.json),
+SHA-256 `e6417b97c604aa5d81a66664519b21941691ee2ceedded7c9bf11c4ceaa4f718`.
+The raw run and its hash are listed in the rollout evidence record.
 
 Anthropic's [model configuration reference](https://code.claude.com/docs/en/model-config#extended-context)
 defines `opus[1m]` as Opus with a 1M context window and says Claude Code strips
