@@ -27,6 +27,16 @@ an explicit optional Stage 1 backend selector on 2026-09-18; exec remains the
 default and rollback target. Stage 1 is implemented with this opt-in surface;
 this is not approval to replace the default.
 
+**Stage 2 (2026-09-30, [issue #366](https://github.com/sakuraiyuta/kaoiro/issues/366)).**
+The Stage 2 design was reviewed in four rounds on the issue and frozen at r4;
+the capability surface (`operator_input_modes`, separate from inter-agent
+early delivery) was adopted by kohaku and kogane. Operator steering is
+implemented behind a per-persona opt-in, default off; inter-agent input stays
+queued. Pre-implementation probes on the 0.156.1 pin are in the
+[Stage 2 evidence](../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md);
+the current contract is in the [transport reference](../reference/engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
+Post-implementation live probes and rollout remain pending.
+
 ## Context
 
 At baseline `1715de067a5701c2bbaa0c99e9be7606b8b6ccf4`,

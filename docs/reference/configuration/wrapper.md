@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and Claude process-local delivery controls.
 status: accepted
-last_updated: 2026-09-29
+last_updated: 2026-09-30
 related: [protocol]
 ---
 
@@ -54,6 +54,17 @@ below are process-local options, not runner-relayed fields.
   `exceeds_launch_ceiling`. See [Runner configuration](runner.md)'s
   "Antigravity configuration" section for the declaration syntax and
   defaulting rules.
+
+### Codex operator steer controls
+
+`KAOIRO_CODEX_OPERATOR_STEER=1` in the Codex wrapper process environment
+enables operator steering for every Codex peer on the app-server backend.
+`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS=momo,other` instead enables only the
+listed `persona.id` values, with the same list rules as the Claude controls
+below. An enabled wrapper declares `operator_input_modes: {version: "v1",
+early: "steer"}` at join and steers only while the server echoes it; the exec
+backend ignores both variables. The wrapper logs `codex: operator_steer=on|off`
+at startup. See [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 
 ### Claude phase-2 delivery controls
 

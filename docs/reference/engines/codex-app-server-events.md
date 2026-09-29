@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server events and telemetry"
 status: implemented
-last_updated: 2026-09-26
+last_updated: 2026-09-30
 ---
 
 # Codex app-server events and telemetry
@@ -20,6 +20,10 @@ within a turn; unrelated thread/turn notifications cannot affect its projection.
 Deltas affect progress only, while completed assistant messages each yield a
 transcript row. Two final answers therefore remain two rows, including when the
 terminal contains only a summary of the last one.
+
+A `userMessage` item start that carries a `clientId` (a steered input) yields a
+content-free `input_item` projection, which the runtime routes to the host's
+steer records rather than to progress or the transcript.
 
 Only `turn/completed` produces a terminal result. Its status retains the
 completed/failed/interrupted distinction; retry notifications alone do not end

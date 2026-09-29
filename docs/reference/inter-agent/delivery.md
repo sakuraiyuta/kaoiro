@@ -203,7 +203,13 @@ operations](work.md#work-authority-and-operations).
 The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` only
 when `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` is set; it uses those modes only after
 the server echoes delivery modes v1. The flag is off by default. Codex and
-Antigravity do not advertise these modes. A granted early peer delivery can
+Antigravity do not advertise these modes. An opted-in Codex app-server wrapper
+declares `operator_input_modes` instead, which lets operator instructions steer
+into its running turn while inter-agent delivery stays `early: "none"`, so peer
+senders keep receiving `unsupported_by_recipient` (see
+[Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2)).
+Operator steering can delay injection of a queued peer batch by at most one
+steer response time, because both share the wrapper's instruction chain. A granted early peer delivery can
 bypass the same peer's ordinary turn queue to enter its live Claude `Query`;
 ordinary peer batches remain serial. An operator early instruction without
 attachments can also fold, without a peer reply ticket. Synthetic notices

@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-09-23
+last_updated: 2026-09-30
 ---
 
 # Codex app-server transport
@@ -35,5 +35,52 @@ Approval policy is pinned to `never`, reviewer to `user`, analytics disabled,
 and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
-must redact it before logging. There is no steer or external-message submission
-API. IA continues through the existing coordinator and queue, without steering.
+must redact it before logging.
+
+## Operator steering (ADR-0058 Stage 2)
+
+An opted-in Codex persona on the app-server backend may deliver an operator
+instruction into the running turn with `turn/steer` instead of queueing it
+(opt-in: [wrapper configuration](../configuration/wrapper.md#codex-operator-steer-controls);
+capability: [`operator_input_modes`](../protocol/channels.md#adr-0063-capability-and-event-contract)).
+Only operator text whose delivered intent is `early` is eligible. Inter-agent
+input, work notices, session-reset notices and inputs with attachments always
+queue; IA steering is ADR-0063 phase 3.
+
+`AppServerTransport.steer` takes the active-turn snapshot, calls the host's
+`admit(turnId)` and writes `turn/steer {threadId, expectedTurnId, input,
+clientUserMessageId}` in one synchronous section. `admit` is the only place
+the admission guards decide: the current join's echo, a stopped host, an
+older operator entry or placeholder in the queue, pending model, effort or
+permission settings (including an unresolved permission sync after a join),
+an abandoned turn, a session reset in progress or a queued reset notice, and
+a cap of 8 steers per turn. A declined input queues with a `system` log line
+naming the reason. While the start response of a turn is pending the input
+waits for it once and returns to `admit`.
+
+Each steer is one record with two independent sides: the response (accepted,
+turn ID mismatch, precondition rejection, other error, or lost connection) and
+the terminal (`turn/completed`, or a stream that ended without one). Each side
+keeps only its first final event, and the record settles exactly once when
+both are final. An input item carrying the steer's `clientId` counts only if it
+arrives before the terminal. Outcomes: accepted and observed is `included`;
+accepted but not observed is `unknown`; a precondition rejection is `requeued`
+to the next `turn/start`; any other error is `refused` (also reported as
+`instruction_rejected`); a turn ID mismatch or a contradiction is `unknown`.
+Nothing is re-sent after an `unknown` outcome.
+
+A precondition rejection creates an operator-order placeholder in the queue
+in the rejection's own synchronous section; settlement only resolves it into
+the requeued input or removes it. A later operator input therefore queues
+behind the rejected one instead of being steered ahead of it.
+
+Precondition rejections are classified from `error.data.codexErrorInfo.activeTurnNotSteerable`
+and from the two measured `-32600` messages for an expected-turn mismatch and
+no active turn; see the [Stage 2 probes](../../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md).
+
+The transport records its bound thread and the turn IDs it started. A turn on
+that thread which this host did not start is foreign, whether it appears with
+no active turn, before a start response names the host's turn, or while
+another turn is active. Every persona records the diagnostic; an opted-in
+persona also stops steering and refuses the next `turn/start`, which stops the
+host for operator recovery.
