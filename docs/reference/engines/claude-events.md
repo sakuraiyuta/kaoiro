@@ -135,13 +135,17 @@ into it without a token.
 
 Any result under a live interval (a wrapper turn, an admitted notification
 turn or an occupancy) must carry a `result_index` above every index seen
-earlier in the host run, and a result that lacks its session ID or names another
-session stops admission before the rebind cleanup runs. Before the first
-init frame, the session its root hook was matched in stands in for the known
-one; only a result preceded by neither hook nor frame (a startup error)
-supplies its own ID. The index is a
-run-wide sequence, so the boundary survives a session rebind and a stale
-result never lowers it.
+earlier in the host run; the index is a run-wide sequence, so the boundary
+survives a session rebind and a stale result never lowers it.
+
+Each live interval has one session binding: the host's known session when the
+interval opens, else the first session a hook or frame in it names. Every later
+hook, frame and result is checked against that binding, and it is never
+replaced. A conflicting hook or frame is kept as interval ambiguity (the
+rebind cleanup does not erase it), and an occupancy that sees another session
+stops admission at once. A result that lacks a session ID or names another one
+stops admission before the rebind cleanup runs. Only a result preceded by no
+session evidence at all (a startup error) supplies its own ID.
 
 The occupancy ends only at a result of the same session that passes those
 checks. The result is displayed; no

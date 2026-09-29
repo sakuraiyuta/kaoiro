@@ -658,7 +658,6 @@ interface NotificationCandidate {
 }
 
 interface ForeignOccupancy {
-  sessionId: string;
   /** null while only root frames (no prompt hook) evidence the interval. */
   promptId: string | null;
 }
@@ -782,6 +781,12 @@ export class AgentHost implements EngineAdapter {
    * live). While set, no terminal may settle or release anything. Lives on
    * the live interval, so it is cleared with it. */
   #intervalAmbiguous = false;
+  /** The one session the live interval (wrapper turn, admitted notification
+   * turn or foreign occupancy) belongs to: the host's known session when the
+   * interval opened, else the first session any hook or frame names. Later
+   * evidence is checked against it, never used to replace it; null only while
+   * the interval has produced no evidence at all. */
+  #intervalSession: string | null = null;
   /** A root interval the host cannot name the opener of (for example a
    * hand-back turn). It holds the input barrier and grants no send
    * authority. Mutually exclusive with #activeTurn. */
@@ -1772,7 +1777,7 @@ export class AgentHost implements EngineAdapter {
   /** A busy root frame with no owner and no hook seen is still a root interval
    * the host cannot name. Child frames never establish one. Evaluated before
    * #apply so the establishing frame's own busy state is already backed. */
-  #observeRootFrame(message: SDKMessage, events: readonly AdapterEvent[]): void {
+  #observeRootFrame(message: SDKMessage, events: readonly AdapterEvent[], knownBeforeFrame: string | null): void {
     if (this.#activeTurn !== null || this.#foreignOccupancy !== null || !this.#everStartedTurn ||
         this.#closed || events.length === 0) return;
     if (message.type !== "assistant" && message.type !== "user") return;
@@ -1782,14 +1787,20 @@ export class AgentHost implements EngineAdapter {
     if (!TURN_BACKED_STATES.has(machine.state)) return;
     const sessionId = sdkMessageToSessionId(message) ?? this.#sessionId;
     if (sessionId === null) return;
-    this.#beginForeignOccupancy({ sessionId, promptId: null });
+    this.#beginForeignOccupancy(null, sessionId, knownBeforeFrame);
   }
 
-  /** The session recorded when the live turn's root hook was admitted. */
-  #liveOwnerSession(): string | null {
-    const token = this.#activeTurn?.turnToken;
-    for (const owner of this.#promptOwners.values()) if (owner.token === token) return owner.sessionId;
-    return null;
+  #openInterval(known: string | null = this.#sessionId): void {
+    this.#intervalSession = known;
+  }
+
+  /** A session claim made inside a live interval is checked against its
+   * binding. A conflict is kept as interval ambiguity and settles nothing;
+   * it never re-binds and never picks a side. */
+  #noteIntervalSession(id: string | null): void {
+    if (id === null || (this.#activeTurn === null && this.#foreignOccupancy === null)) return;
+    if (this.#intervalSession === null) this.#intervalSession = id;
+    else if (id !== this.#intervalSession) this.#intervalAmbiguous = true;
   }
 
   #matchRetiredResult(message: SDKMessage): "none" | "duplicate" | "conflict" {
@@ -2216,6 +2227,7 @@ export class AgentHost implements EngineAdapter {
             inputEnvelopes: pushed.envelopes,
           };
           this.#activeTurn = turn;
+          this.#openInterval();
           if (!pushed.operatorInput) this.#urgentRootStreak += 1;
           this.toolOrigins.begin(turnToken);
           this.#everStartedTurn = true;
@@ -2252,7 +2264,8 @@ export class AgentHost implements EngineAdapter {
     // precedence exception and the registration below use it, so a hook that
     // fails any clause cannot obtain either.
     const uniqueWrapper = wrapperMatch && !notificationMatch && input.source !== "system" &&
-      (this.#sessionId === null || this.#sessionId === input.session_id);
+      (this.#intervalSession === null || this.#intervalSession === input.session_id);
+    this.#noteIntervalSession(input.session_id);
     if (owner) {
       if (input.prompt.includes("<task-notification>")) {
         if (notificationMatch && !wrapperMatch && !owner.tainted && owner.kind === "wrapper_input" &&
@@ -2283,7 +2296,7 @@ export class AgentHost implements EngineAdapter {
         return;
       }
     }
-    if (active === null) this.#beginForeignOccupancy({ sessionId: input.session_id, promptId: input.prompt_id });
+    if (active === null) this.#beginForeignOccupancy(input.prompt_id, input.session_id);
   }
 
   #consumeNotificationCandidates(candidates: ReadonlyArray<NotificationCandidate | undefined>): void {
@@ -2297,6 +2310,7 @@ export class AgentHost implements EngineAdapter {
     this.#consumeNotificationCandidates(candidates);
     const turn: NotificationTurn = { kind: "sdk_notification", turnToken: randomUUID(), conversationIds: [], promptId };
     this.#activeTurn = turn;
+    this.#openInterval();
     this.#pausePendingRootClock();
     this.#everStartedTurn = true;
     this.toolOrigins.beginIndependent(turn.turnToken);
@@ -2307,9 +2321,11 @@ export class AgentHost implements EngineAdapter {
   /** A root interval whose opener the host cannot name holds the input
    * barrier and grants no send authority; see #drainForeignOccupancy for its
    * only exit. */
-  #beginForeignOccupancy(occupancy: ForeignOccupancy): void {
-    this.#foreignOccupancy = occupancy;
+  #beginForeignOccupancy(promptId: string | null, sessionId: string, known: string | null = this.#sessionId): void {
+    this.#foreignOccupancy = { promptId };
     this.#intervalAmbiguous = false;
+    this.#openInterval(known);
+    this.#noteIntervalSession(sessionId);
     if (this.#pendingPushedReceipt !== null) {
       this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "foreign_occupancy");
     }
@@ -2584,19 +2600,19 @@ export class AgentHost implements EngineAdapter {
           this.#options.onTurnProgress?.({ turnToken: activeTurn.turnToken });
         }
         const id = sdkMessageToSessionId(message);
-        // Checked before the rebind cleanup below erases per-session state:
-        // an unexpected rebind under a live root interval, or a result that
-        // lacks or differs from the live session, must neither settle
-        // anything nor silently unlock the input generator. A host that has
-        // not learned its session yet (no init frame) still holds the session
-        // its live owner's root hook was matched in; only a result with no
-        // hook and no frame before it, such as a startup error, supplies it.
-        const occupancySession = this.#foreignOccupancy?.sessionId;
-        if (occupancySession !== undefined && id !== null && id !== occupancySession) {
+        const knownBeforeFrame = this.#sessionId;
+        // Checked before the rebind cleanup below erases per-session state.
+        // Every frame's session is evidence for the live interval's binding
+        // (a conflict is kept as ambiguity, which the rebind cleanup must not
+        // erase); an occupancy that sees another session, and a result that
+        // lacks the binding's session, stop admission at once. Only a result
+        // that follows no hook, frame or known session at all (a startup
+        // error) supplies the binding itself.
+        if (message.type !== "result") this.#noteIntervalSession(id);
+        if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
           this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
-        } else if (message.type === "result" && (occupancySession !== undefined || this.#activeTurn !== null)) {
-          const known = occupancySession ?? this.#sessionId ?? this.#liveOwnerSession();
-          if (id === null || (known !== null && id !== known)) {
+        } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
+          if (id === null || (this.#intervalSession !== null && id !== this.#intervalSession)) {
             this.#failStopLive("terminal under a live interval lacks its session or names another one; host admission stopped pending operator recovery");
           }
         }
@@ -2609,7 +2625,6 @@ export class AgentHost implements EngineAdapter {
             this.#clearNotificationCandidates();
             this.#promptOwners.clear();
             this.#retiredPromptIds.clear();
-            this.#intervalAmbiguous = false;
             this.#retiredResults.length = 0;
             this.toolOrigins.reset();
           }
@@ -2686,7 +2701,7 @@ export class AgentHost implements EngineAdapter {
         // State first, so a log envelope carries the state this message
         // settled into; then relay the message's reply lines.
         const events = sdkMessageToEvents(message);
-        this.#observeRootFrame(message, events);
+        this.#observeRootFrame(message, events, knownBeforeFrame);
         for (const event of events) this.#apply(event);
         for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
         // Subagent/workflow task lifecycle (issue #170, ADR-0019 F2 / ADR-0047
@@ -4550,6 +4565,7 @@ export class AgentHost implements EngineAdapter {
           else this.#urgentRootStreak = 0;
         }
         this.#activeTurn = turn;
+        this.#openInterval();
         this.toolOrigins.begin(turn.turnToken);
         this.#everStartedTurn = true;
         // This is the watchdog's only start point. In particular, dispatch

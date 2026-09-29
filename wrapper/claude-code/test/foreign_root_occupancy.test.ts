@@ -762,3 +762,127 @@ describe("terminal validation under a live owner (issue #426 stage 1)", () => {
     expect(rig.obs).toEqual({ freezes: 1 });
   });
 });
+
+describe("one session binding per live interval (issue #426 stage 1)", () => {
+  type Evidence =
+    | { at: "hook"; id: string; session: string }
+    | { at: "init"; session: string }
+    | { at: "frame"; session: string }
+    | { at: "child"; session: string };
+
+  interface Row {
+    name: string;
+    /** Wrapper turn 1 (no session known yet), or turn 2 after a turn in "s". */
+    turn: 1 | 2;
+    evidence: Evidence[];
+    result: string | undefined;
+    outcome: "completes" | "fails";
+  }
+
+  const hook = (id: string, session: string): Evidence => ({ at: "hook", id, session });
+  const init = (session: string): Evidence => ({ at: "init", session });
+  const frame = (session: string): Evidence => ({ at: "frame", session });
+  const child = (session: string): Evidence => ({ at: "child", session });
+
+  const ROWS: Row[] = [
+    // First turn: no session is known when the interval opens.
+    { name: "hook S, init S, result S", turn: 1, evidence: [hook("p1", "s"), init("s")], result: "s", outcome: "completes" },
+    { name: "hook S, result S (no init)", turn: 1, evidence: [hook("p1", "s")], result: "s", outcome: "completes" },
+    { name: "init S, hook S, result S", turn: 1, evidence: [init("s"), hook("p1", "s")], result: "s", outcome: "completes" },
+    { name: "hook S, hook' S, init S, result S", turn: 1, evidence: [hook("p1", "s"), hook("p1b", "s"), init("s")], result: "s", outcome: "completes" },
+    { name: "hook S, init S, root frame S, child frame S, result S", turn: 1, evidence: [hook("p1", "s"), init("s"), frame("s"), child("s")], result: "s", outcome: "completes" },
+    { name: "no evidence, result S (startup error)", turn: 1, evidence: [], result: "s", outcome: "completes" },
+    { name: "hook S, init T, result T", turn: 1, evidence: [hook("p1", "s"), init("t")], result: "t", outcome: "fails" },
+    { name: "hook S, init T, result S", turn: 1, evidence: [hook("p1", "s"), init("t")], result: "s", outcome: "fails" },
+    { name: "init S, hook T, result S", turn: 1, evidence: [init("s"), hook("p1", "t")], result: "s", outcome: "fails" },
+    { name: "init S, hook T, result T", turn: 1, evidence: [init("s"), hook("p1", "t")], result: "t", outcome: "fails" },
+    { name: "hook S, hook' T, result S", turn: 1, evidence: [hook("p1", "s"), hook("p1b", "t")], result: "s", outcome: "fails" },
+    { name: "hook S, hook' T, result T", turn: 1, evidence: [hook("p1", "s"), hook("p1b", "t")], result: "t", outcome: "fails" },
+    { name: "hook S, result T (no init)", turn: 1, evidence: [hook("p1", "s")], result: "t", outcome: "fails" },
+    { name: "hook S, init S, root frame T, result S", turn: 1, evidence: [hook("p1", "s"), init("s"), frame("t")], result: "s", outcome: "fails" },
+    { name: "hook S, init S, child frame T, result S", turn: 1, evidence: [hook("p1", "s"), init("s"), child("t")], result: "s", outcome: "fails" },
+    { name: "hook S, init S, result missing", turn: 1, evidence: [hook("p1", "s"), init("s")], result: undefined, outcome: "fails" },
+    { name: "no evidence, result missing", turn: 1, evidence: [], result: undefined, outcome: "fails" },
+    // Second turn: "s" is already known when the interval opens.
+    { name: "known S, hook S, result S", turn: 2, evidence: [hook("p2", "s")], result: "s", outcome: "completes" },
+    { name: "known S, hook S, init S, root frame S, result S", turn: 2, evidence: [hook("p2", "s"), init("s"), frame("s")], result: "s", outcome: "completes" },
+    { name: "known S, no evidence, result S", turn: 2, evidence: [], result: "s", outcome: "completes" },
+    { name: "known S, no evidence, result T", turn: 2, evidence: [], result: "t", outcome: "fails" },
+    { name: "known S, hook T, result T", turn: 2, evidence: [hook("p2", "t")], result: "t", outcome: "fails" },
+    { name: "known S, hook T, result S", turn: 2, evidence: [hook("p2", "t")], result: "s", outcome: "fails" },
+    { name: "known S, hook S, init T, result T", turn: 2, evidence: [hook("p2", "s"), init("t")], result: "t", outcome: "fails" },
+    { name: "known S, hook S, init T, result S", turn: 2, evidence: [hook("p2", "s"), init("t")], result: "s", outcome: "fails" },
+    { name: "known S, hook S, hook' T, result S", turn: 2, evidence: [hook("p2", "s"), hook("p2b", "t")], result: "s", outcome: "fails" },
+    { name: "known S, hook S, root frame T, result S", turn: 2, evidence: [hook("p2", "s"), frame("t")], result: "s", outcome: "fails" },
+  ];
+
+  it.each(ROWS)("wrapper turn $turn: $name -> $outcome", async ({ turn, evidence, result, outcome }) => {
+    const rig = makeRig(async function* (c) {
+      let endsBefore = 0;
+      if (turn === 2) {
+        yield* firstTurn(c);
+        await c.rig.host.send("second");
+        endsBefore = c.rig.ends.length;
+        await c.input.next();
+      } else {
+        await c.input.next();
+      }
+      const text = turn === 2 ? "second" : "launch";
+      for (const item of evidence) {
+        if (item.at === "hook") await prompt(c, item.id, text, { session_id: item.session });
+        else if (item.at === "init") yield initFrame(item.session);
+        else if (item.at === "frame") yield rootFrame(item.session);
+        else yield childFrame(item.session);
+      }
+      yield res(turn === 2 ? 1 : 0, { session_id: result });
+      c.rig.obs.ends = c.rig.ends.length - endsBefore;
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual(outcome === "completes" ? { ends: 1, freezes: 0 } : { ends: 0, freezes: 1 });
+  });
+
+  it.each([
+    { name: "hook S, init S, result S", init: "s", hookSession: "s", result: "s", outcome: "completes" },
+    { name: "hook S, init T, result T", init: "t", hookSession: "s", result: "t", outcome: "fails" },
+    { name: "hook S, init T, result S", init: "t", hookSession: "s", result: "s", outcome: "fails" },
+  ])("notification turn (S known): $name -> $outcome", async ({ init: initSession, hookSession, result, outcome }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT(), { session_id: hookSession });
+      if (initSession !== "s") yield initFrame(initSession);
+      yield res(1, { session_id: result, origin: { kind: "task-notification" } });
+      c.rig.obs.notificationEnds = c.rig.ends.filter(({ token }) => token === c.rig.starts[1]?.token).length;
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.starts.map(({ kind }) => kind)).toEqual([undefined, "sdk_notification"]);
+    expect(rig.obs).toEqual(outcome === "completes" ? { notificationEnds: 1, freezes: 0 } : { notificationEnds: 0, freezes: 1 });
+  });
+
+  it.each([
+    { name: "hook S, result S", hookSession: "s", frameSession: undefined, result: "s", outcome: "drains" },
+    { name: "hook T, result T", hookSession: "t", frameSession: undefined, result: "t", outcome: "fails" },
+    { name: "hook T, result S", hookSession: "t", frameSession: undefined, result: "s", outcome: "fails" },
+    { name: "hook S, root frame S, result S", hookSession: "s", frameSession: "s", result: "s", outcome: "drains" },
+    { name: "hook S, root frame T, result S", hookSession: "s", frameSession: "t", result: "s", outcome: "fails" },
+    { name: "root frame S only, result S", hookSession: undefined, frameSession: "s", result: "s", outcome: "drains" },
+    { name: "root frame T only, result T", hookSession: undefined, frameSession: "t", result: "t", outcome: "fails" },
+  ])("foreign occupancy (S known): $name -> $outcome", async ({ hookSession, frameSession, result, outcome }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      if (hookSession !== undefined) await prompt(c, "F", "hand-back report", { session_id: hookSession });
+      else yield rootFrame(frameSession);
+      // The interval is open by now; queue the next input behind it.
+      await c.rig.host.send("second");
+      const next = c.input.next();
+      if (hookSession !== undefined && frameSession !== undefined) yield rootFrame(frameSession);
+      yield res(1, { session_id: result });
+      c.rig.obs.freezes = c.rig.freezes.length;
+      c.rig.obs.pull = await pull(next);
+    });
+    await play(rig);
+    expect(rig.obs).toEqual(outcome === "drains" ? { freezes: 0, pull: "turn" } : { freezes: 1, pull: "ended" });
+  });
+});
