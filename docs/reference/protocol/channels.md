@@ -1,7 +1,7 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-09-28
+last_updated: 2026-09-30
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 
@@ -108,7 +108,11 @@ request receives no reply.
 
 The wrapper join request may declare
 `inter_agent_delivery_modes: {version: "v1", early, yield, stage_reports}`
-and independently `work_control: "v1"`. Delivery modes are echoed as
+and independently `work_control: "v1"` and
+`operator_input_modes: {version: "v1", early}` (`early` is `fold`, `steer`,
+`hook` or `none`). The operator-input declaration is echoed as
+`operator_input_modes: "v1"` when well formed, has no prerequisite, and never
+changes inter-agent early admission. Delivery modes are echoed as
 `inter_agent_delivery_modes: "v1"` only with `inter_agent_delivery_ack: "dispatch-v1"`,
 `delivery_resync: "skip-v1"`, `inter_agent_reply_basis: "v1"`, and stage
 reports enabled when an early or yield mechanism is declared. Work control
@@ -122,7 +126,7 @@ current value, including a reconnect in the same generation.
 
 | Direction | Event | Contents |
 |---|---|---|
-| client → server | `instruction` | Gains optional `delivery_intent`: `normal`, `early`, or `yield`. Omitted requests `early` when the recipient declared a mechanism, otherwise `normal`. |
+| client → server | `instruction` | Gains optional `delivery_intent`: `normal`, `early`, or `yield`. An explicit value is relayed unchanged. When omitted, the recipient's `operator_input_modes` declaration decides alone if present (`early` unless it declared `none`); otherwise `early` when the recipient declared an inter-agent early mechanism, else `normal`. |
 | client → server | `work_control` | Operator-only `{version: "0", work_control}`. The server applies the same reducer used for inter-agent operations and sends notices to affected agents. |
 | client → server | `work_yield_status` | Operator-only `{version: "0", work_id, yield_token?}`. Reads claimed tokens for the work and each token's `cut`, `downgraded`, `unknown`, or `expired` disposition. |
 | server → wrapper | `work_notice` | `{version: "0", work, op, reason, transfer_id?}`. `work` is a full record for a current director or assignee; a former assignee with a pending obligation receives `{work_id, access: "transfer_pending", pending_transfers}` containing only its own obligations. A later transfer ID is withheld from other former assignees. Best-effort ordinary input, without a conversation, turn, or reply basis. |

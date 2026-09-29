@@ -2611,8 +2611,8 @@ export class CodexHost implements EngineAdapter {
     if (steer === undefined) return;
     if (response.kind === "A") this.#systemLog("Operator input accepted into the running turn.");
     if (response.kind !== "P") return;
-    // AC-1: the placeholder is created here, in the P response's synchronous
-    // section; settlement only resolves or removes it.
+    // The placeholder is created here, in the precondition rejection's
+    // synchronous section; settlement only resolves or removes it.
     const placeholder: QueuedTurn = { input: steer.text, source: "operator", arrival: steer.arrival, placeholder: true };
     const index = this.#queue.findIndex(turn => (turn.arrival ?? 0) > steer.arrival);
     this.#queue.splice(index === -1 ? this.#queue.length : index, 0, placeholder);
