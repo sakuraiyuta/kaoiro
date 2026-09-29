@@ -71,11 +71,14 @@ defmodule KaoiroServer.WorkStore do
   def yield_tokens(work_id, server \\ __MODULE__),
     do: GenServer.call(server, {:yield_tokens, work_id})
 
-  def register_modes(agent_id, owner, modes, work_control?, server \\ __MODULE__),
-    do: GenServer.call(server, {:register_modes, agent_id, owner, modes, work_control?})
-
-  def register_operator_modes(agent_id, owner, modes, server \\ __MODULE__),
-    do: GenServer.call(server, {:register_operator_modes, agent_id, owner, modes})
+  # Both declarations land in one call so a reader never pairs a new
+  # inter-agent declaration with the previous join's operator declaration.
+  def register_modes(agent_id, owner, modes, work_control?, operator_modes, server \\ __MODULE__),
+    do:
+      GenServer.call(
+        server,
+        {:register_modes, agent_id, owner, modes, work_control?, operator_modes}
+      )
 
   def unregister_modes(agent_id, owner, server \\ __MODULE__),
     do: GenServer.call(server, {:unregister_modes, agent_id, owner})
@@ -136,15 +139,18 @@ defmodule KaoiroServer.WorkStore do
     {:reply, :ok, next}
   end
 
-  def handle_call({:register_modes, agent_id, owner, modes, work_control?}, _from, state),
-    do:
-      {:reply, :ok,
-       %{state | modes: Map.put(state.modes, agent_id, {owner, modes, work_control?})}}
-
-  def handle_call({:register_operator_modes, agent_id, owner, modes}, _from, state),
-    do:
-      {:reply, :ok,
-       %{state | operator_modes: Map.put(state.operator_modes, agent_id, {owner, modes})}}
+  def handle_call(
+        {:register_modes, agent_id, owner, modes, work_control?, operator_modes},
+        _from,
+        state
+      ),
+      do:
+        {:reply, :ok,
+         %{
+           state
+           | modes: Map.put(state.modes, agent_id, {owner, modes, work_control?}),
+             operator_modes: Map.put(state.operator_modes, agent_id, {owner, operator_modes})
+         }}
 
   def handle_call({:unregister_modes, agent_id, owner}, _from, state) do
     modes =
