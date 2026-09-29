@@ -20,8 +20,9 @@ async function fixture(options: { join?: (n: number) => Record<string, unknown> 
     event => event === "phx_join" ? options.reject?.() : undefined);
   let mode: "v1" | "legacy" | "pending" = "pending", socket!: PhoenixSocket;
   const linkOptions = { personaId: "p", interAgentReplyBasis: "v1" as const, onReplyBasisMode: (m: typeof mode) => { mode = m; } };
+  // A join or an ack is awaited as an event; only a test about a timeout sets its own deadline.
   const link = options.defaultSocket ? new ServerLink(wire.url, "self", linkOptions) : new ServerLink(wire.url, "self", linkOptions, (url, opts) => {
-    socket = new Socket(url, { ...opts, timeout: options.timeout ?? 100, rejoinAfterMs: () => 100, reconnectAfterMs: () => 100 });
+    socket = new Socket(url, { ...opts, timeout: options.timeout ?? 30_000, rejoinAfterMs: () => 100, reconnectAfterMs: () => 100 });
     return socket;
   });
   const diagnostics: Record<string, unknown>[] = [];
@@ -102,7 +103,7 @@ it.each(["join-error", "join-timeout"])("%s releases failed waits, drains CID wa
   let failing = true;
   const stalled = deferred<Record<string, unknown>>();
   const f = await fixture({ join: () => failing && event === "join-timeout" ? stalled.promise : { inter_agent_reply_basis: "v1" },
-    reject: () => failing && event === "join-error" ? { reason: "fixture denied" } : undefined });
+    reject: () => failing && event === "join-error" ? { reason: "fixture denied" } : undefined, timeout: 100 });
   try {
     const w = waiting(f); await noSend(w, "reply_basis_pending"); expect(await w.mode).toBe("pending"); expect(f.sent()).toHaveLength(0);
     failing = false;
@@ -111,8 +112,12 @@ it.each(["join-error", "join-timeout"])("%s releases failed waits, drains CID wa
   } finally { stalled.resolve({}); await f.close(); }
 });
 
+// The server answers the join and the envelope slower than the old 100 ms
+// default deadline, as a loaded host does: the test must not depend on latency.
+const slowly = <T>(value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), 300));
+
 it.each(["leave", "kick"])("unrecognized server %s event is not a Phoenix channel close", async event => {
-  const f = await fixture();
+  const f = await fixture({ join: () => slowly({ inter_agent_reply_basis: "v1" }), reply: () => slowly({}) });
   try {
     expect(await f.link.waitForReplyBasisMode()).toBe("v1"); const gen = f.link.replyBasisGeneration();
     f.wire.push(event, {}); expect((await f.invoke()).isError).toBeUndefined();
@@ -194,7 +199,7 @@ it.each(["join-error", "phx_close"])("%s renews a waiter ticket only for definit
 
 it("channel close preserves unknown for a written push but drains its CID successor locally", async () => {
   const ack = deferred<Record<string, unknown>>();
-  const f = await fixture({ reply: event => event === "envelope" ? ack.promise : {} });
+  const f = await fixture({ reply: event => event === "envelope" ? ack.promise : {}, timeout: 1000 });
   try {
     expect(await f.link.waitForReplyBasisMode()).toBe("v1");
     const first = f.invoke(); await vi.waitFor(() => expect(f.sent()).toHaveLength(1));
