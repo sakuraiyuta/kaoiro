@@ -16,6 +16,8 @@ it.each([
   { name: "tab and newline trimmed", flag: undefined, personas: "\tao\n", source: "persona_list" },
   { name: "id charset", flag: undefined, personas: "a.b_c-1", id: "a.b_c-1", source: "persona_list" },
   { name: "list without the id", flag: undefined, personas: "aoi,other", source: "off" },
+  { name: "item that is a prefix of the id", flag: undefined, personas: "a", source: "off" },
+  { name: "item that is a suffix of the id", flag: undefined, personas: "o", source: "off" },
   { name: "different case", flag: undefined, personas: "Ao", source: "off" },
   { name: "empty list", flag: undefined, personas: "", source: "off" },
   { name: "whitespace-only list", flag: undefined, personas: "  ", source: "off" },

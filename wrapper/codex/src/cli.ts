@@ -155,8 +155,6 @@ function abandonmentCause(abandoned: TurnAbandonment): string {
   }
 }
 
-/** Per-persona opt-in for operator steering on the app-server backend,
- * mirroring the Claude phase-2 delivery flag. */
 export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;

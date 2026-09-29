@@ -75,7 +75,7 @@ every Claude peer. `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS=ao,other` instead
 enables only wrappers whose `persona.id` appears in that comma-separated list.
 Each item is trimmed and compared exactly, including case; glob patterns,
 empty items, and ids outside the persona-id character set invalidate the
-whole list. An empty or invalid list enables nobody. If the global flag is
+whole list. Both wrappers use one parser, `personaOptInSource` in agent-common. An empty or invalid list enables nobody. If the global flag is
 `1`, it wins over the list; other flag values do not enable phase 2 by
 themselves. With neither condition met, both modes remain unadvertised.
 The wrapper logs one startup line with `source=flag`, `source=persona_list`,
