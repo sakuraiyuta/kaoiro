@@ -42,7 +42,7 @@ export interface SteerRecordOptions {
 
 /** One steered input. Each side keeps only its first final event; settlement
  * happens on the single write that makes both sides final, which is why no
- * separate "settled" flag exists (AC-2: each latch is load-bearing). */
+ * separate "settled" flag exists: each latch is load-bearing. */
 export class SteerRecord {
   #response: SteerResponse | null = null;
   #terminal: SteerTerminal | null = null;
