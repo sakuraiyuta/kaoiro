@@ -61,6 +61,25 @@ describe("DeliveryStageReporter", () => {
     ]);
   });
 
+  it("reports one submitted per delivery for the turn_start_accepted handoff", () => {
+    const reports: Record<string, unknown>[] = [];
+    const root = envelope(7);
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "inc", generation: "g" }),
+      turns: { deliveryEnvelopesForTurn: () => [root] },
+      now: () => "T",
+    });
+    reporter.queued(root);
+    reporter.submitted("turn", "turn_start_accepted");
+    reporter.submitted("turn", "turn_start_accepted");
+    reporter.settled("turn");
+    expect(reports.filter(report => report.stage === "submitted")).toEqual([
+      expect.objectContaining({ delivery_seq: 7, handoff: "turn_start_accepted" }),
+    ]);
+    expect(reports.at(-1)).toMatchObject({ stage: "settled", reason: "turn_end" });
+  });
+
   it("does not attach a later incarnation to a delivery received before the first join", () => {
     const reports: unknown[] = [];
     let currentIdentity: { incarnation: string; generation: string } | null = null;

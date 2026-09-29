@@ -288,6 +288,50 @@ defmodule KaoiroServer.DeliveryStatesTest do
              DeliveryStates.message_status("sender", "cid", 2, name)
   end
 
+  test "submitted accepts the turn_start_accepted handoff and rejects an unknown one", %{
+    name: name
+  } do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+    incarnation = DeliveryStates.incarnation("recipient", name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "cid", turn_number: 1},
+               name
+             )
+
+    report = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "stage" => "submitted",
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.put(report, "handoff", "app_server_unknown"),
+               name
+             )
+
+    assert :ok =
+             DeliveryStates.report_stage(
+               "recipient",
+               "generation",
+               owner,
+               Map.put(report, "handoff", "turn_start_accepted"),
+               name
+             )
+
+    assert {:ok, %{stages: %{"submitted" => _}}} =
+             DeliveryStates.message_status("sender", "cid", 1, name)
+  end
+
   test "V30j submission persists history and resolution in one recipient object", %{
     name: name,
     path: path

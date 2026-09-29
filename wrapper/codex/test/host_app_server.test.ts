@@ -29,6 +29,7 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   let holdConfig: Promise<void> | null = null, holdHistory: Promise<void> | null = null;
   let invalidHistory = false;
   let interrupted = true, autocomplete = false;
+  let startReply: "immediate" | "silent" | "held" | "held-terminal" | "error" = "immediate", heldReply: (() => void) | null = null;
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   const reply = (request: RpcObject, result: unknown) => send({ id: request.id, result });
   const terminal = (status = "completed") => {
@@ -43,10 +44,14 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
     if (request.method === "thread/read") void (holdHistory ?? Promise.resolve()).then(() => reply(request, invalidHistory ? {} : {
       thread: { id: "thread", turns: [{ id: "past", items: [{ id: "answer", type: "agentMessage", text: "PAST" }] }] },
     }));
-    if (request.method === "turn/start") {
+    if (request.method === "turn/start" && startReply === "error") send({ id: request.id, error: { code: -32600, message: "rejected" } });
+    else if (request.method === "turn/start") {
       number += 1;active += 1;maxActive = Math.max(active, maxActive);
-      reply(request, { turn: { id: `turn-${number}` } });
-      send({ method: "turn/started", params: { threadId: "thread", turn: { id: `turn-${number}` } } });
+      const respond = () => reply(request, { turn: { id: `turn-${number}` } });
+      const started = () => send({ method: "turn/started", params: { threadId: "thread", turn: { id: `turn-${number}` } } });
+      if (startReply === "silent") respond();
+      else if (startReply === "immediate") { respond();started(); }
+      else { started();if (startReply === "held-terminal") terminal();heldReply = respond; }
       if (autocomplete && number > 1) queueMicrotask(() => terminal());
     }
     if (request.method === "turn/interrupt") { reply(request, {});if (interrupted) terminal("interrupted"); }
@@ -68,6 +73,8 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   const turns = () => sent.filter(r => r.method === "turn/start");
   const until = (count: number) => vi.waitFor(() => expect(turns()).toHaveLength(count));
   return { host, sent, states, logs, tasks, starts, ends, finals, boundaries, createSession, send, terminal, exit, running, turns, until,
+    set startReply(value: typeof startReply) { startReply = value; },
+    releaseReply() { const release = heldReply;heldReply = null;release?.(); },
     set holdHistory(value: Promise<void>) { holdHistory = value; }, set invalidHistory(value: boolean) { invalidHistory = value; },
     get maxActive() { return maxActive; }, set autocomplete(value: boolean) { autocomplete = value; }, set holdConfig(value: Promise<void>) { holdConfig = value; }, set interrupted(value: boolean) { interrupted = value; } };
 }
@@ -412,4 +419,70 @@ it("wires the app-server child's shutdownTimeoutMs below the runner's reset grac
   await vi.waitFor(() => expect(f.createSession).toHaveBeenCalledTimes(1));
   const options = f.createSession.mock.calls[0]?.[0] as { transport?: { shutdownTimeoutMs?: number } };
   expect(options.transport?.shutdownTimeoutMs).toBe(2_000);
+});
+
+// The runtime buffers notifications until the turn/start response, so these
+// controls hold or reorder the response to separate "accepted" from dispatch
+// and from the first notification.
+const HANDOFF = { turnToken: "A", handoff: "turn_start_accepted" };
+const settleWindow = () => new Promise<void>(resolve => setTimeout(resolve, 30));
+
+it("reports the input handoff at the turn/start response, not at dispatch or the first notification", async () => {
+  const handed = vi.fn(), f = fixture({ onInputHandedOff: handed });f.startReply = "held";
+  await f.host.send("A", undefined, [], "A");await f.until(1);
+  await vi.waitFor(() => expect(f.starts).toHaveBeenCalledTimes(1));await settleWindow();
+  expect(handed).not.toHaveBeenCalled();
+  f.releaseReply();await vi.waitFor(() => expect(handed).toHaveBeenCalledTimes(1));
+  expect(handed).toHaveBeenCalledWith(HANDOFF);
+  f.terminal();await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(1));
+  expect(handed).toHaveBeenCalledTimes(1);
+});
+
+it("reports the input handoff once the response arrives even when no notification follows", async () => {
+  const handed = vi.fn(), f = fixture({ onInputHandedOff: handed });f.startReply = "silent";
+  await f.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(handed).toHaveBeenCalledWith(HANDOFF));
+  expect(f.ends).not.toHaveBeenCalled();f.terminal();
+});
+
+it("reports the input handoff before the turn ends when the terminal precedes the response", async () => {
+  const order: string[] = [], f = fixture({ onInputHandedOff: () => order.push("handoff"), onTurnEnd: () => order.push("end") });
+  f.startReply = "held-terminal";
+  await f.host.send("A", undefined, [], "A");await f.until(1);await settleWindow();
+  expect(order).toEqual([]);
+  f.releaseReply();await vi.waitFor(() => expect(order).toEqual(["handoff", "end"]));
+});
+
+it("reports no input handoff when turn/start is rejected", async () => {
+  const handed = vi.fn(), f = fixture({ onInputHandedOff: handed });f.startReply = "error";
+  await f.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(1));
+  expect(f.ends.mock.calls[0]?.[0]).toMatchObject({ turnToken: "A", error: { detail: expect.stringContaining("rejected") } });
+  expect(handed).not.toHaveBeenCalled();
+});
+
+it("reports no input handoff for an input skipped before turn/start", async () => {
+  const handed = vi.fn(), f = fixture({ onInputHandedOff: handed, prepareInput: () => null });
+  await f.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(f.turns()).toHaveLength(0);expect(handed).not.toHaveBeenCalled();
+});
+
+it("reports the input handoff exactly once after a superseded admission is retried", async () => {
+  const { effort: _effort, ...withoutEffort } = config;
+  const handed = vi.fn(), f = fixture({ onInputHandedOff: handed }, withoutEffort), gate = deferred();f.holdConfig = gate.promise;
+  await f.host.setModel("gpt-6-astra");await f.host.send("A", undefined, [], "A");
+  await vi.waitFor(() => expect(f.sent.some(r => r.method === "config/read")).toBe(true));
+  await f.host.setModel("gpt-5.6-sol");gate.resolve();await f.until(1);
+  await vi.waitFor(() => expect(handed).toHaveBeenCalledTimes(1));
+  expect(f.sent.filter(r => r.method === "config/read").length).toBeGreaterThan(1);
+  f.terminal();await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(1));
+  expect(handed).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the turn running when the input handoff callback throws", async () => {
+  const f = fixture({ onInputHandedOff: () => { throw new Error("report failed"); } });
+  await f.host.send("A", undefined, [], "A");await f.until(1);f.terminal();
+  await vi.waitFor(() => expect(f.ends).toHaveBeenCalledTimes(1));
+  expect(f.ends.mock.calls[0]?.[0].error).toBeUndefined();expect(f.createSession).toHaveBeenCalledTimes(1);
 });

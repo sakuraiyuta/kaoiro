@@ -368,6 +368,7 @@ describe("exec input handoff evidence", () => {
   it("fires after runStreamed resolves and the first iterator value arrives", async () => {
     const order: string[] = [];
     const ended = deferred<void>();
+    const handoffs: string[] = [];
     const thread: CodexThreadLike = {
       async runStreamed() {
         order.push("runStreamed-resolved");
@@ -383,7 +384,7 @@ describe("exec input handoff evidence", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
       onTurnStart: () => order.push("turn-start"),
-      onInputHandedOff: () => order.push("input-handed-off"),
+      onInputHandedOff: info => { order.push("input-handed-off");handoffs.push(info.handoff); },
       onTurnEnd: () => ended.resolve(),
     });
     const running = host.run("prompt");
@@ -392,6 +393,7 @@ describe("exec input handoff evidence", () => {
     expect(order.indexOf("runStreamed-resolved")).toBeLessThan(order.indexOf("first-value-ready"));
     expect(order.indexOf("first-value-ready")).toBeLessThan(order.indexOf("input-handed-off"));
     expect(order.filter(value => value === "input-handed-off")).toHaveLength(1);
+    expect(handoffs).toEqual(["exec_input_written"]);
     host.close();
     await running;
   });

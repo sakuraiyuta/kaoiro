@@ -905,7 +905,7 @@ defmodule KaoiroServer.DeliveryStates do
     valid_time?(report["at"]) and
       (report["mode"] == nil or report["mode"] in ~w(normal early yield)) and
       (report["handoff"] == nil or
-         report["handoff"] in ~w(prompt_hook fold_hook exec_input_written tool_result)) and
+         report["handoff"] in ~w(prompt_hook fold_hook exec_input_written turn_start_accepted tool_result)) and
       (report["evidence"] == nil or report["evidence"] == "ticket_used") and
       (report["reason"] == nil or is_binary(report["reason"])) and
       (report["stage"] != "submitted" or is_binary(report["handoff"])) and
