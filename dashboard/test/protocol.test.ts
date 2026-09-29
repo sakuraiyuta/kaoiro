@@ -2764,6 +2764,12 @@ describe("shouldInterceptAsSessionReset (ADR-0036 F1, phase-17 17-8)", () => {
     );
   });
 
+  it("exact /reset (the CLI's alias of /clear) + capability on → 'clear'", () => {
+    expect(shouldInterceptAsSessionReset("/reset", undefined, supportedCaps)).toBe("clear");
+    expect(shouldInterceptAsSessionReset("/reset", ["att-1"], supportedCaps)).toBeNull();
+    expect(shouldInterceptAsSessionReset("/resetx", undefined, supportedCaps)).toBeNull();
+  });
+
   it("trim 前後空白 (/new に空白) も intercept", () => {
     expect(shouldInterceptAsSessionReset("  /new\n", undefined, supportedCaps)).toBe(
       "new",
@@ -2817,6 +2823,11 @@ describe("reservedSessionResetMode (issue #392)", () => {
     expect(reservedSessionResetMode("/clear")).toBe("clear");
   });
 
+  it("treats /reset, the CLI's alias of /clear, as the clear mode", () => {
+    expect(reservedSessionResetMode("/reset")).toBe("clear");
+    expect(reservedSessionResetMode(" /reset\n")).toBe("clear");
+  });
+
   it("trims surrounding whitespace before matching", () => {
     expect(reservedSessionResetMode(" /new ")).toBe("new");
     expect(reservedSessionResetMode("/clear\t")).toBe("clear");
@@ -2826,6 +2837,9 @@ describe("reservedSessionResetMode (issue #392)", () => {
     expect(reservedSessionResetMode("\\/new")).toBeNull();
     expect(reservedSessionResetMode("/newer")).toBeNull();
     expect(reservedSessionResetMode("/new hello")).toBeNull();
+    expect(reservedSessionResetMode("/resetx")).toBeNull();
+    expect(reservedSessionResetMode("/reset now")).toBeNull();
+    expect(reservedSessionResetMode("\\/reset")).toBeNull();
     expect(reservedSessionResetMode("")).toBeNull();
   });
 });

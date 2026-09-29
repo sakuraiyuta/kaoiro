@@ -3368,12 +3368,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # Reserved-command defensive reject (ADR-0036 F1, phase-17 17-4).
   # Old / external clients that never learned the `session_reset` control
-  # can still send an exact `/new` or `/clear` as normal text; loud-reject
+  # can still send an exact `/new`, `/clear` or `/reset` (the Claude Code
+  # CLI's alias of its own `/clear`) as normal text; loud-reject
   # here so it never reaches the wrapper as an instruction. The strict
   # exact-match (trim + no attachments) mirrors the dashboard's intercept
   # rule so a legitimate `/new hello` prompt or `/new` with an attached
   # file falls through as an ordinary instruction.
-  @reserved_session_commands ["/new", "/clear"]
+  @reserved_session_commands ["/new", "/clear", "/reset"]
   defp reject_reserved_session_command(payload) do
     text = payload["text"]
     attachments = payload["attachment_ids"] || []

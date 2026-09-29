@@ -7544,6 +7544,33 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "instruction", _
     end
 
+    test "exact /reset (the CLI's alias of /clear) は reserved_session_command で reject" do
+      agent_id = "resv.reset"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => " /reset\n"})
+
+      assert_reply ref, :error, %{reason: "reserved_session_command"}
+      refute_broadcast "instruction", _
+    end
+
+    test "別名でない /resetx と引数付き /reset now は通常 instruction として relay" do
+      agent_id = "resv.resetx"
+      put_agent(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/resetx"})
+      assert_reply ref, :ok
+      assert_broadcast "instruction", %{"text" => "/resetx"}
+
+      ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/reset now"})
+      assert_reply ref, :ok
+      assert_broadcast "instruction", %{"text" => "/reset now"}
+    end
+
     test "前後の空白付き /new (trim 一致) も reject" do
       agent_id = "resv.trim"
       put_agent(agent_id)

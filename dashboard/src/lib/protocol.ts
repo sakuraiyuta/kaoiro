@@ -631,13 +631,15 @@ export function modelSourceFrom(envelope: Envelope): string | null {
   return typeof raw === "string" && raw !== "" ? raw : null;
 }
 
-/** Reset modes for /new・/clear (ADR-0036 F1/F3, phase-17). Mirrors
+/** Reset modes for /new・/clear・/reset (ADR-0036 F1/F3, phase-17). Mirrors
  *  protocol.ts `SessionResetMode`; kept local so the client bundle stays
  *  self-contained per this file's plain-TS contract. */
 export type SessionResetMode = "new" | "clear";
 
 /** Returns the reserved session-reset mode for text whose trimmed value is
- *  exactly `/new` or `/clear`. Leading and trailing whitespace is ignored;
+ *  exactly `/new`, `/clear` or `/reset`. The Claude Code CLI defines `/reset`
+ *  (like `/new`) as an alias of its `/clear`, so it takes the `clear` mode.
+ *  Leading and trailing whitespace is ignored;
  *  arguments and escaped forms remain ordinary instruction text. Whether a
  *  match is intercepted (attachments present, reset capability off) is the
  *  caller's decision. */
@@ -645,7 +647,8 @@ export function reservedSessionResetMode(
   text: string,
 ): SessionResetMode | null {
   const trimmed = text.trim();
-  return trimmed === "/new" ? "new" : trimmed === "/clear" ? "clear" : null;
+  if (trimmed === "/new") return "new";
+  return trimmed === "/clear" || trimmed === "/reset" ? "clear" : null;
 }
 
 /** Who initiated a reset (protocol.md, ADR-0043 D1). Mirrors

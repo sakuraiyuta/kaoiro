@@ -90,7 +90,7 @@ Related security topics: [Security boundaries](../../architecture/security-bound
 - SHOULD: Separate operator tokens from viewer tokens and minimize their
   distribution.
 
-### Session-reset control (`/new` / `/clear`, phase-17)
+### Session-reset control (`/new` / `/clear` / `/reset`, phase-17)
 
 `session_reset` is a high-privilege operation through which an operator, or an
 agent itself after per-request permission_broker approval, can forcibly restart
@@ -125,8 +125,8 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   **nested-prefix spoof** where a host_id containing a dot lets a different
   host's agent_id impersonate it through naïve `starts_with?`.
 - **reserved_session_command rejection**: If an old / external client sends
-  literal `/new` / `/clear` to `send_instruction`, the server handler rejects
-  it loudly as `reserved_session_command` at its start and never passes it to
+  literal `/new` / `/clear` / `/reset` to `send_instruction`, the server handler
+  rejects it loudly as `reserved_session_command` at its start and never passes it to
   the engine (defense in depth rather than relying only on client-side
   interception).
 - **Reserved-token vocabulary (where the copies live)**: the dashboard's check
