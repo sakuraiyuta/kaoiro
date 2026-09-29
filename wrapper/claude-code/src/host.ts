@@ -2835,8 +2835,7 @@ export class AgentHost implements EngineAdapter {
             this.#emitResult(result, sdkMessageToCost(message));
             this.#clearNotificationCandidates();
           } else if (!notificationResult && ownerKind === "sdk_notification") {
-            this.#warn("[kaoiro] notification result lacks task-notification ownership; closing admission");
-            this.close();
+            this.#failStopLive("notification result lacks task-notification ownership; host admission stopped pending operator recovery");
           } else if (result.is_error) {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);

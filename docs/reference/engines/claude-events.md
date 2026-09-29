@@ -167,6 +167,9 @@ peer sender and hand-back flags, and outcome) is ignored; a reused
 An occupancy failure (ambiguous interval, wrong session, missing or
 regressing `result_index`, session rebind frame, stream EOF) stops admission
 with no owning token and enters `error`; recovery is the procedure below. A
+result without the task-notification origin at an admitted notification turn
+stops admission the same way, but with that turn's token: the host does not
+abort the SDK, so a running child subagent finishes its work. A
 foreign occupancy has no time bound: the hold lasts as long as the root
 computation.
 

@@ -899,3 +899,47 @@ describe("one session binding per live interval (issue #426 stage 1)", () => {
     expect(rig.obs).toEqual(outcome === "drains" ? { freezes: 0, pull: "turn" } : { freezes: 1, pull: "ended" });
   });
 });
+
+describe("origin mismatch at an admitted notification turn (issue #426 step 0b)", () => {
+  it.each([
+    { name: "no origin", origin: undefined },
+    { name: "a peer origin", origin: { kind: "peer", senderTaskId: "child-a", handback: true } },
+    { name: "a human origin", origin: { kind: "human" } },
+  ])("stops admission with the owner's token, without closing or aborting, for $name", async ({ origin }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      const close = vi.spyOn(c.rig.host, "close");
+      await c.rig.host.send("queued");
+      const next = c.input.next();
+      yield res(1, origin === undefined ? {} : { origin });
+      c.rig.obs.closeCalls = close.mock.calls.length;
+      c.rig.obs.aborted = c.options.abortController?.signal.aborted ?? null;
+      c.rig.obs.freezes = c.rig.freezes.length;
+      c.rig.obs.notificationEnds = c.rig.ends.filter(({ token }) => token === c.rig.starts[1]?.token).length;
+      c.rig.obs.errorState = c.rig.states.at(-1);
+      c.rig.obs.pull = await pull(next);
+    });
+    await play(rig);
+    expect(rig.starts.map(({ kind }) => kind)).toEqual([undefined, "sdk_notification"]);
+    expect(rig.obs).toEqual({
+      closeCalls: 0, aborted: false, freezes: 1, notificationEnds: 0, errorState: "error", pull: "ended",
+    });
+    expect(rig.freezes).toEqual([rig.starts[1]!.token]);
+    expect(rig.warnings.some((line) => line.includes("lacks task-notification ownership"))).toBe(true);
+  });
+
+  it("negative control: a task-notification origin still completes the notification turn", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      yield res(1, { origin: { kind: "task-notification" } });
+      c.rig.obs.freezes = c.rig.freezes.length;
+      c.rig.obs.notificationEnds = c.rig.ends.filter(({ token }) => token === c.rig.starts[1]?.token).length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ freezes: 0, notificationEnds: 1 });
+  });
+});
