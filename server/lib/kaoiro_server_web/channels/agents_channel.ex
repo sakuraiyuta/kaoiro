@@ -600,9 +600,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         if Map.has_key?(payload, "delivery_intent") do
           payload
         else
-          modes = KaoiroServer.WorkStore.modes(payload["agent_id"])
-          intent = if modes && modes["early"] != "none", do: "early", else: "normal"
-          Map.put(payload, "delivery_intent", intent)
+          Map.put(payload, "delivery_intent", default_operator_intent(payload["agent_id"]))
         end
 
       relay(
@@ -1984,6 +1982,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
     payload
     |> Map.delete("agent_id")
     |> Map.put("version", "0")
+  end
+
+  # A recipient's operator-input declaration, when present, decides the
+  # default alone; otherwise the inter-agent declaration does.
+  defp default_operator_intent(agent_id) do
+    modes =
+      KaoiroServer.WorkStore.operator_modes(agent_id) || KaoiroServer.WorkStore.modes(agent_id)
+
+    if modes && modes["early"] != "none", do: "early", else: "normal"
   end
 
   defp valid_operator_intent(nil), do: :ok

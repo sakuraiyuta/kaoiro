@@ -141,6 +141,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       :ok = WorkStore.register_modes(agent_id, self(), modes, params["work_control"] == "v1")
 
+      operator_modes =
+        if(valid_operator_input_modes?(params["operator_input_modes"]),
+          do: params["operator_input_modes"]
+        )
+
+      :ok = WorkStore.register_operator_modes(agent_id, self(), operator_modes)
+
       KaoiroServer.InterAgentReplyBasis.register(
         agent_id,
         self(),
@@ -177,6 +184,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
         |> maybe_put_optional_field(
           "inter_agent_delivery_modes",
           if(valid_delivery_modes?(params["inter_agent_delivery_modes"]), do: "v1")
+        )
+        |> maybe_put_optional_field(
+          "operator_input_modes",
+          if(operator_modes != nil, do: "v1")
         )
         |> maybe_put_optional_field(
           "delivery_resync",
@@ -2439,6 +2450,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp valid_delivery_modes?(_), do: false
+
+  # Operator-input capability, separate from the inter-agent declaration so
+  # a wrapper can accept early operator input without advertising early
+  # peer delivery it cannot honour.
+  defp valid_operator_input_modes?(%{"version" => "v1", "early" => early}),
+    do: early in ~w(fold steer hook none)
+
+  defp valid_operator_input_modes?(_), do: false
 
   defp require_work_control(socket),
     do: if(socket.assigns[:work_control], do: :ok, else: {:error, :work_control_unavailable})

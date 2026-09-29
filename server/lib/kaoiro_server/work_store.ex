@@ -74,10 +74,17 @@ defmodule KaoiroServer.WorkStore do
   def register_modes(agent_id, owner, modes, work_control?, server \\ __MODULE__),
     do: GenServer.call(server, {:register_modes, agent_id, owner, modes, work_control?})
 
+  def register_operator_modes(agent_id, owner, modes, server \\ __MODULE__),
+    do: GenServer.call(server, {:register_operator_modes, agent_id, owner, modes})
+
   def unregister_modes(agent_id, owner, server \\ __MODULE__),
     do: GenServer.call(server, {:unregister_modes, agent_id, owner})
 
   def modes(agent_id, server \\ __MODULE__), do: GenServer.call(server, {:modes, agent_id})
+
+  def operator_modes(agent_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:operator_modes, agent_id})
+
   def modes_snapshot(server \\ __MODULE__), do: GenServer.call(server, :modes_snapshot)
 
   def work_control_enabled?(agent_id, server \\ __MODULE__),
@@ -109,6 +116,7 @@ defmodule KaoiroServer.WorkStore do
         claim_states: claim_states,
         yield_tokens: index_yield_tokens(claim_states),
         modes: %{},
+        operator_modes: %{},
         yield_last: index_yield_last(claim_states),
         test_after_apply_sync: after_apply_sync,
         path: path
@@ -133,6 +141,11 @@ defmodule KaoiroServer.WorkStore do
       {:reply, :ok,
        %{state | modes: Map.put(state.modes, agent_id, {owner, modes, work_control?})}}
 
+  def handle_call({:register_operator_modes, agent_id, owner, modes}, _from, state),
+    do:
+      {:reply, :ok,
+       %{state | operator_modes: Map.put(state.operator_modes, agent_id, {owner, modes})}}
+
   def handle_call({:unregister_modes, agent_id, owner}, _from, state) do
     modes =
       case state.modes[agent_id] do
@@ -140,7 +153,23 @@ defmodule KaoiroServer.WorkStore do
         _ -> state.modes
       end
 
-    {:reply, :ok, %{state | modes: modes}}
+    operator_modes =
+      case state.operator_modes[agent_id] do
+        {^owner, _} -> Map.delete(state.operator_modes, agent_id)
+        _ -> state.operator_modes
+      end
+
+    {:reply, :ok, %{state | modes: modes, operator_modes: operator_modes}}
+  end
+
+  def handle_call({:operator_modes, agent_id}, _from, state) do
+    modes =
+      case state.operator_modes[agent_id] do
+        {_owner, modes} -> modes
+        _ -> nil
+      end
+
+    {:reply, modes, state}
   end
 
   def handle_call({:modes, agent_id}, _from, state) do
