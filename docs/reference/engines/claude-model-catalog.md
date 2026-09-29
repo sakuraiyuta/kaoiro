@@ -21,7 +21,7 @@ separately.
 | Path | Call site | SDK observable? | Source of truth |
 |---|---|---|---|
 | (i) register | `runner/src/config.ts` → `LaunchDialog.svelte` | Not inside wrapper (SDK Query not created; chicken-and-egg). Substitute a short-lived runner probe ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md)) | Runner memory cache of the last successful live probe (retain stale last-known-good after TTL expiry or later probe failures). Only when no successful cache exists use the bootstrap default floor in `wrapper/claude-code/src/catalog.ts` |
-| (ii) `ext.models` | `wrapper/claude-code/src/host.ts` → `AgentDetail.svelte` | Yes (`#refreshSupportedModels()` observes after init) | Observed result of SDK `supportedModels()` |
+| (ii) `ext.models` | `wrapper/claude-code/src/host.ts` → `AgentDetail.svelte` | Yes (the idle startup probe, then live Query) | Highest successful source so far: live Query > manual pre-Query refresh > startup probe > launch/bootstrap seed |
 
 (i)'s bootstrap was reduced to a minimal floor with one `default` entry (Phase 18-3,
 `display_name: "Default (recommended)"`, neutral description
@@ -47,7 +47,16 @@ catalog: Codex is re-derived fresh from the current auth mode and config on
 every call, and Antigravity's live-probed catalog is threaded through
 explicitly rather than defaulting to its pinned snapshot (issue #369).
 
-(ii) uses SDK observation as its single source of truth (Phase 18-4/5/6).
+(ii) consumes model rows from the idle wrapper's startup probe before the first
+turn. That probe requests usage data, but catalog processing is independent of
+rate-limit telemetry: rows are consumed if a native rate-limit event arrived
+first or the probe returned no `rate_limits`. Results obey the precedence in
+[ADR-0037 F10](../../adr/0037-claude-model-catalog-live-refresh.md): a successful
+live Query `supportedModels()` result wins over a successful manual pre-Query
+refresh, which wins over the automatic startup probe. A delayed lower-priority
+result cannot replace a higher-priority catalog. Empty or failed results keep
+the last accepted catalog.
+
 `#refreshSupportedModels()` performs an automatic bounded retry (three total,
 counting init as trial 1; `MAX_MODEL_REFRESH_RETRIES = 3`) and retries on a
 turn-driven `result` message. It is silent after the cap, emitting one
@@ -74,10 +83,12 @@ preventing a dead button). The same engine gate applies to `models_error`
 derivation, so the client does not react even if a Codex adapter bug emits it
 (defensive gate).
 
-The UX mismatch in the `effort_levels` option set before and after init (five
-levels before init → possibly fewer after init depending on the observed
-default model) is an accepted trade-off (observation:
-[claude-effort-levels-init-transition](../../open-questions/claude-effort-levels-init-transition.md)).
+The bootstrap `default` row still carries the placeholder `FULL_EFFORT` list,
+but a singleton default row does not enable runtime effort switching. Before a
+probe or a usable active-model row is available, AgentDetail hides effort
+choices and points the operator to refresh the catalog or wait until after the
+first turn. See the local validation reasons in
+[model-effort.md](../protocol/model-effort.md#claude-effort-selection-before-the-first-turn-issue-446-adr-0037-f10).
 
 The Codex-side catalog retains the final decision in
 [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1 (a

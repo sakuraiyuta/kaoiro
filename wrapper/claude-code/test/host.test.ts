@@ -177,6 +177,145 @@ describe("AgentHost whoami effective projection (#113)", () => {
     expect(host.statusSnapshot().rate_limits).toEqual(envs[0]?.ext.rate_limits);
   });
 
+  it("idle startup probe seeds model rows even when rate_limits is absent", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      modelSource: "config",
+      queryOptions: { model: "sonnet" },
+      probeFn: async (deps) => {
+        expect(deps?.includeUsage).toBe(true);
+        return {
+          ok: true,
+          models: [
+            {
+              value: "default",
+              display_name: "Default",
+              description: "",
+              effort_levels: ["low"],
+            },
+            {
+              value: "sonnet",
+              display_name: "Sonnet",
+              description: "",
+              effort_levels: ["low", "high"],
+            },
+          ],
+          elapsed_ms: 1,
+        };
+      },
+    });
+
+    await host.probeRateLimits();
+    expect(host.statusExtSnapshot().models).toEqual([
+      { value: "default", display_name: "Default", description: "", effort_levels: ["low"] },
+      { value: "sonnet", display_name: "Sonnet", description: "", effort_levels: ["low", "high"] },
+    ]);
+    await expect(host.setEffort("high")).resolves.toBeUndefined();
+    expect(host.statusSnapshot()).toMatchObject({ effort: "high" });
+    expect(envs.some((event) => event.ext.models !== undefined)).toBe(true);
+  });
+
+  it("an empty startup catalog leaves the seed rows and effort unavailable", async () => {
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async () => ({ ok: true, models: [], elapsed_ms: 1 }),
+    });
+    const before = host.statusExtSnapshot().models;
+    await host.probeRateLimits();
+    expect(host.statusExtSnapshot().models).toEqual(before);
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "effort_catalog_unavailable",
+    );
+  });
+
+  it("a successful startup probe with only the default row does not authorize effort selection", async () => {
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async () => ({
+        ok: true,
+        models: [
+          {
+            value: "default",
+            display_name: "Default",
+            description: "",
+            effort_levels: ["low", "medium", "high"],
+          },
+        ],
+        elapsed_ms: 1,
+      }),
+    });
+
+    await host.probeRateLimits();
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "effort_catalog_unavailable",
+    );
+  });
+
+  it("startup probe still seeds models after a native rate-limit event", async () => {
+    const nativeEventSeen = deferred<void>();
+    const releaseQuery = deferred<void>();
+    const probeStarted = deferred<void>();
+    const releaseProbe = deferred<void>();
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn(() =>
+        asQuery((async function* () {
+          yield msg({
+            type: "rate_limit_event",
+            rate_limit_info: {
+              status: "allowed",
+              rateLimitType: "seven_day",
+              utilization: 0.31,
+              resetsAt: 1790908233,
+            },
+          });
+          nativeEventSeen.resolve();
+          await releaseQuery.promise;
+        })()),
+      ),
+      probeFn: async () => {
+        probeStarted.resolve();
+        await releaseProbe.promise;
+        return {
+          ok: true,
+          models: [
+            {
+              value: "default",
+              display_name: "Default",
+              description: "",
+              effort_levels: ["low"],
+            },
+            {
+              value: "sonnet",
+              display_name: "Sonnet",
+              description: "",
+              effort_levels: ["low", "high"],
+            },
+          ],
+          elapsed_ms: 1,
+          rate_limits: {
+            seven_day: { utilization: 0.07, resets_at: "2026-10-02T02:30:33Z" },
+          },
+        };
+      },
+    });
+
+    const running = host.run();
+    await nativeEventSeen.promise;
+    await vi.waitFor(() =>
+      expect(host.statusSnapshot().rate_limits?.seven_day?.utilization).toBe(0.31),
+    );
+    const probe = host.probeRateLimits();
+    await probeStarted.promise;
+    releaseProbe.resolve();
+    await probe;
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("sonnet");
+    expect(host.statusSnapshot().rate_limits?.seven_day?.utilization).toBe(0.31);
+    releaseQuery.resolve();
+    await running;
+  });
+
   it("a source-free pre-turn probe leaves the field absent", async () => {
     const envs: Envelope[] = [];
     const host = new AgentHost(config, {
@@ -2931,6 +3070,9 @@ describe("AgentHost — query injection", () => {
     // session_capabilities は #statusExt から unconditional に stamp されるため
     // 全 state_change に乗る (ADR-0034 F1、spawn-direct advertise の実装契約)。
     // envs[0] を採るのは「init 到達を待たない」ことの demonstrate 用。
+    // The bootstrap-only default floor does not establish a model-specific
+    // effort catalog, so effort switching stays unavailable until a source
+    // reports a usable row.
     // supports_session_reset は phase-17 17-6 で adapter 側の flip が完了。
     // wrapper/runner/server が F2 fresh-relaunch handshake を提供する
     // session としての true 明示 + 対応 modes 列挙。dashboard 側の
@@ -2940,7 +3082,7 @@ describe("AgentHost — query injection", () => {
       supports_attachments: true,
       supports_user_input_dialog: true,
       supports_model_switch: true,
-      supports_effort_switch: true,
+      supports_effort_switch: false,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
       supports_context_usage: true,
@@ -5605,6 +5747,21 @@ describe("AgentHost — input queue/notify/close", () => {
 });
 
 describe("AgentHost — model/effort 切替 (#54)", () => {
+  const richEffortConfig: WrapperConfig = {
+    ...config,
+    claude_engine_catalog: [
+      {
+        value: "default",
+        display_name: "Default",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        value: "sonnet",
+        display_name: "Sonnet",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ],
+  };
   const modelInfos = [
     {
       value: "default",
@@ -5617,10 +5774,227 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     { value: "haiku", displayName: "Haiku", description: "h" },
   ];
 
+  const probeRows = (model: string) => [
+    { value: "default", display_name: "Default", description: "", effort_levels: ["low"] },
+    { value: model, display_name: model, description: "", effort_levels: ["low", "high"] },
+  ];
+
+  it("a late startup probe cannot replace a successful manual pre-Query refresh", async () => {
+    const startupStarted = deferred<void>();
+    const releaseStartup = deferred<void>();
+    const startupRows = probeRows("startup");
+    const manualRows = probeRows("manual");
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => {
+        if (deps?.includeUsage) {
+          startupStarted.resolve();
+          await releaseStartup.promise;
+          return { ok: true, models: startupRows, elapsed_ms: 1 };
+        }
+        return { ok: true, models: manualRows, elapsed_ms: 1 };
+      },
+    });
+
+    const startup = host.probeRateLimits();
+    await startupStarted.promise;
+    await expect(host.refreshCatalogFor()).resolves.toMatchObject({ ok: true });
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("manual");
+    releaseStartup.resolve();
+    await startup;
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("manual");
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).not.toContain("startup");
+  });
+
+  it("a failed manual pre-Query refresh does not suppress the startup probe", async () => {
+    const startupRows = probeRows("startup");
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => deps?.includeUsage
+        ? { ok: true, models: startupRows, elapsed_ms: 1 }
+        : { ok: false, reason: "auth_failed", elapsed_ms: 1 },
+    });
+
+    await expect(host.refreshCatalogFor()).resolves.toMatchObject({ ok: false });
+    await host.probeRateLimits();
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("startup");
+  });
+
+  it("a live Query catalog replaces manual and late startup catalogs", async () => {
+    const startupStarted = deferred<void>();
+    const releaseStartup = deferred<void>();
+    const liveCatalogStarted = deferred<void>();
+    const releaseQuery = deferred<void>();
+    const startupRows = probeRows("startup");
+    const manualRows = probeRows("manual");
+    const liveRows: ModelInfo[] = [
+      {
+        value: "default",
+        displayName: "Default",
+        description: "",
+        supportedEffortLevels: ["low"],
+      } as ModelInfo,
+      {
+        value: "live",
+        displayName: "Live",
+        description: "",
+        supportedEffortLevels: ["low", "high"],
+      } as ModelInfo,
+    ];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => {
+        if (deps?.includeUsage) {
+          startupStarted.resolve();
+          await releaseStartup.promise;
+          return { ok: true, models: startupRows, elapsed_ms: 1 };
+        }
+        return { ok: true, models: manualRows, elapsed_ms: 1 };
+      },
+      queryFn: makeQueryFn(() =>
+        asQuery(
+          (async function* () {
+            yield msg({ type: "system", subtype: "init", model: "default" });
+            await releaseQuery.promise;
+          })(),
+          async () => {},
+          undefined,
+          {
+            supportedModels: async () => {
+              liveCatalogStarted.resolve();
+              return liveRows;
+            },
+          },
+        ),
+      ),
+    });
+
+    const startup = host.probeRateLimits();
+    await startupStarted.promise;
+    await host.refreshCatalogFor();
+    const running = host.run();
+    await liveCatalogStarted.promise;
+    await vi.waitFor(() =>
+      expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live"),
+    );
+    releaseStartup.resolve();
+    await startup;
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live");
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).not.toContain("manual");
+    releaseQuery.resolve();
+    await running;
+  });
+
+  it("a live Query catalog outranks a startup probe that completes afterward", async () => {
+    const startupStarted = deferred<void>();
+    const releaseStartup = deferred<void>();
+    const liveCatalogStarted = deferred<void>();
+    const releaseQuery = deferred<void>();
+    const startupRows = probeRows("startup");
+    const liveRows: ModelInfo[] = [
+      {
+        value: "default",
+        displayName: "Default",
+        description: "",
+        supportedEffortLevels: ["low"],
+      } as ModelInfo,
+      {
+        value: "live",
+        displayName: "Live",
+        description: "",
+        supportedEffortLevels: ["low", "high"],
+      } as ModelInfo,
+    ];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => {
+        startupStarted.resolve();
+        await releaseStartup.promise;
+        return deps?.includeUsage
+          ? { ok: true, models: startupRows, elapsed_ms: 1 }
+          : { ok: false, reason: "auth_failed", elapsed_ms: 1 };
+      },
+      queryFn: makeQueryFn(() =>
+        asQuery(
+          (async function* () {
+            yield msg({ type: "system", subtype: "init", model: "default" });
+            await releaseQuery.promise;
+          })(),
+          async () => {},
+          undefined,
+          {
+            supportedModels: async () => {
+              liveCatalogStarted.resolve();
+              return liveRows;
+            },
+          },
+        ),
+      ),
+    });
+
+    const startup = host.probeRateLimits();
+    await startupStarted.promise;
+    const running = host.run();
+    await liveCatalogStarted.promise;
+    await vi.waitFor(() =>
+      expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live"),
+    );
+    releaseStartup.resolve();
+    await startup;
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live");
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).not.toContain("startup");
+    releaseQuery.resolve();
+    await running;
+  });
+
+  it("an empty live supportedModels result does not outrank the startup catalog", async () => {
+    const startupStarted = deferred<void>();
+    const releaseStartup = deferred<void>();
+    const liveFetchAttempted = deferred<void>();
+    const releaseQuery = deferred<void>();
+    const startupRows = probeRows("startup");
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => {
+        startupStarted.resolve();
+        await releaseStartup.promise;
+        return deps?.includeUsage
+          ? { ok: true, models: startupRows, elapsed_ms: 1 }
+          : { ok: false, reason: "auth_failed", elapsed_ms: 1 };
+      },
+      queryFn: makeQueryFn(() =>
+        asQuery(
+          (async function* () {
+            yield msg({ type: "system", subtype: "init", model: "default" });
+            await releaseQuery.promise;
+          })(),
+          async () => {},
+          undefined,
+          {
+            supportedModels: async () => {
+              liveFetchAttempted.resolve();
+              return [];
+            },
+          },
+        ),
+      ),
+    });
+
+    const startup = host.probeRateLimits();
+    await startupStarted.promise;
+    const running = host.run();
+    await liveFetchAttempted.promise;
+    releaseStartup.resolve();
+    await startup;
+    expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("startup");
+    releaseQuery.resolve();
+    await running;
+  });
+
   it("run 前の model/effort choice を first Query Options へ保持する (#110)", async () => {
     const envs: Envelope[] = [];
     let seenOptions: Options | undefined;
-    const host = new AgentHost(config, {
+    const host = new AgentHost(richEffortConfig, {
       onState: (e) => envs.push(e),
       queryFn: makeQueryFn((args) => {
         seenOptions = args.options;
@@ -5657,7 +6031,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
   it("idle run 後の first-turn 前 choice も Query生成まで buffer する (#110)", async () => {
     let seenOptions: Options | undefined;
     let queryCreated = false;
-    const host = new AgentHost(config, {
+    const host = new AgentHost(richEffortConfig, {
       onState: () => {},
       deferQueryUntilFirstInput: true,
       queryFn: makeQueryFn((args) => {
@@ -5701,7 +6075,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
 
   it("run 前は account default の effort を model choice より先に選べる (#110)", async () => {
     let seenOptions: Options | undefined;
-    const host = new AgentHost(config, {
+    const host = new AgentHost(richEffortConfig, {
       onState: () => {},
       queryFn: makeQueryFn((args) => {
         seenOptions = args.options;
@@ -6154,7 +6528,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     );
 
     await expect(intersecting.setEffort("low")).rejects.toThrow(
-      "unsupported bootstrap effort: low",
+      "effort_level_unsupported",
     );
     await expect(intersecting.setEffort("high")).resolves.toBeUndefined();
 
@@ -6188,7 +6562,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       supports_effort_switch: false,
     });
     await expect(missingLevels.setEffort("high")).rejects.toThrow(
-      "unsupported bootstrap effort: high",
+      "effort_level_unsupported",
     );
   });
 
@@ -6213,7 +6587,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     );
 
     await expect(host.setEffort("high")).rejects.toThrow(
-      "unsupported bootstrap effort: high",
+      "effort_catalog_unavailable",
     );
   });
 
@@ -6422,7 +6796,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       }
       return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
     });
-    const host = new AgentHost(config, {
+    const host = new AgentHost(richEffortConfig, {
       onState: (e) => envs.push(e),
       queryFn,
       now: () => "T",
@@ -6452,7 +6826,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
       }
       return asQuery(gen(), async () => {}, undefined, { applyFlagSettings });
     });
-    const host = new AgentHost(config, {
+    const host = new AgentHost(richEffortConfig, {
       onState: (e) => envs.push(e),
       queryFn,
       now: () => "T",
@@ -6473,6 +6847,117 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
     host.close();
     await done;
+  });
+
+  it("a live catalog level miss is rejected locally before the SDK control call", async () => {
+    const envs: Envelope[] = [];
+    const releaseQuery = deferred<void>();
+    const applyFlagSettings = vi.fn(async () => {});
+    const queryFn = makeQueryFn(() =>
+      asQuery(
+        (async function* () {
+          yield msg({ type: "system", subtype: "init", model: "sonnet" });
+          await releaseQuery.promise;
+        })(),
+        async () => {},
+        undefined,
+        {
+          applyFlagSettings,
+          supportedModels: async () => [
+            {
+              value: "default",
+              displayName: "Default",
+              description: "",
+              supportedEffortLevels: ["low"],
+            } as ModelInfo,
+            {
+              value: "sonnet",
+              displayName: "Sonnet",
+              description: "",
+              supportedEffortLevels: ["low"],
+            } as ModelInfo,
+          ],
+        },
+      ),
+    );
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      queryFn,
+      modelSource: "config",
+      queryOptions: { model: "sonnet" },
+    });
+    const running = host.run();
+    await vi.waitFor(() =>
+      expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("sonnet"),
+    );
+
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "effort_level_unsupported",
+    );
+    expect(applyFlagSettings).not.toHaveBeenCalled();
+    expect(envs.at(-1)?.ext.switch_error).toMatchObject({
+      kind: "effort",
+      requested: "high",
+      reason: "effort_level_unsupported",
+    });
+    expect(envs.at(-1)?.ext.switch_error).not.toHaveProperty("rolled_back_to");
+    expect(envs.at(-1)?.ext.pending_effort).toBeUndefined();
+    releaseQuery.resolve();
+    await running;
+  });
+
+  it("a rich catalog miss is unavailable instead of falling back to its default row", async () => {
+    const envs: Envelope[] = [];
+    const releaseQuery = deferred<void>();
+    const applyFlagSettings = vi.fn(async () => {});
+    const queryFn = makeQueryFn(() =>
+      asQuery(
+        (async function* () {
+          yield msg({ type: "system", subtype: "init", model: "opus" });
+          await releaseQuery.promise;
+        })(),
+        async () => {},
+        undefined,
+        {
+          applyFlagSettings,
+          supportedModels: async () => [
+            {
+              value: "default",
+              displayName: "Default",
+              description: "",
+              supportedEffortLevels: ["low", "high"],
+            } as ModelInfo,
+            {
+              value: "sonnet",
+              displayName: "Sonnet",
+              description: "",
+              supportedEffortLevels: ["low", "high"],
+            } as ModelInfo,
+          ],
+        },
+      ),
+    );
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      queryFn,
+    });
+    const running = host.run();
+    await vi.waitFor(() =>
+      expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("sonnet"),
+    );
+
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "effort_catalog_unavailable",
+    );
+    expect(applyFlagSettings).not.toHaveBeenCalled();
+    expect(envs.at(-1)?.ext.switch_error).toMatchObject({
+      kind: "effort",
+      requested: "high",
+      reason: "effort_catalog_unavailable",
+    });
+    expect(envs.at(-1)?.ext.pending_effort).toBeUndefined();
+    releaseQuery.resolve();
+    await running;
   });
 
   it("新modelで無効なeffortをnull clearし effort_reset を明示する", async () => {
@@ -6555,18 +7040,27 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await done;
   });
 
-  it("setModel / setEffort は run 前の startup state に buffer する (#110)", async () => {
+  it("default host rejects effort while the catalog is only the bootstrap floor", async () => {
+    const envs: Envelope[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
-      queryFn: scriptedQuery([]),
-      now: () => "T",
+      onState: (event) => envs.push(event),
     });
     await expect(host.setModel("default")).resolves.toBeUndefined();
-    await expect(host.setEffort("high")).resolves.toBeUndefined();
+    await expect(host.setEffort("high")).rejects.toThrow(
+      "effort_catalog_unavailable",
+    );
     expect(host.statusExtSnapshot()).toMatchObject({
       model: "default",
-      effort: "high",
+      session_capabilities: { supports_effort_switch: false },
     });
+    expect(envs.at(-1)?.ext.switch_error).toMatchObject({
+      kind: "effort",
+      requested: "high",
+      reason: "effort_catalog_unavailable",
+    });
+    expect(host.statusExtSnapshot()).not.toHaveProperty("effort");
+    expect(envs.at(-1)?.ext.switch_error).not.toHaveProperty("rolled_back_to");
+    expect(envs.at(-1)?.ext.pending_effort).toBeUndefined();
   });
 
   it("supportedModels が reject してもセッションは正常終了する", async () => {

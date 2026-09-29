@@ -1,11 +1,39 @@
 ---
 title: Model and effort state contract
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 description: The model/effort provenance, resume-drift snapshot, and pending-switch envelope fields.
 ---
 
 # Model and effort state
+
+#### Claude effort selection before the first turn (issue #446, ADR-0037 F10)
+
+The idle Claude wrapper consumes model rows from its startup probe, independently
+of rate-limit telemetry, so the dashboard can validate an effort request before
+the first turn. Catalog authority is ordered: a successful live Query result,
+then a successful manual pre-Query refresh, then the startup probe, then the
+launch/bootstrap seed. A lower-priority result that finishes late cannot replace
+a higher-priority catalog. Empty or failed results keep the last accepted rows.
+
+The singleton `default` row is a loading floor, not evidence for an effort
+request. Until a usable catalog row matches the active model, the wrapper rejects
+the request locally and the dashboard hides effort choices with a refresh/first
+turn hint. A `default` row remains usable when it is part of a richer catalog and
+is the active model. A matching row without the requested level is a distinct
+local rejection.
+
+Claude uses these `ext.switch_error.reason` values for local effort validation:
+
+- `effort_catalog_unavailable` — no usable catalog row matches the active model,
+  including the singleton `default` floor.
+- `effort_level_unsupported` — one or more rows match, but their shared
+  `effort_levels` do not include the requested level.
+
+Both checks happen before the SDK control request. They do not change the
+requested/effective effort, create `pending_effort`, or roll back a value, so
+`rolled_back_to` is omitted. SDK rejections retain their existing
+`control_rejected` reason and last-known-good `rolled_back_to` behavior.
 
 #### `ext.model_source` / `ext.effort_source` (2026-07-11, [ADR-0032](../../adr/0032-codex-adapter.md) F4bc addendum, phase 15)
 

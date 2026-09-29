@@ -659,68 +659,30 @@
       entries.slice(1).every((entry) => entry.effort_levels?.includes(level)),
     );
   }
-  // Effort choices belong to the active (or pending) model. Offering a union
-  // would permit an invalid model/effort pair and invite the silent downgrade
-  // ADR-0035 explicitly forbids.
+  function effortCatalogEntries() {
+    const key = pendingModel?.value ?? ccModel;
+    if (agentEngine === "claude-code") {
+      // F5's placeholder levels do not identify the account's active model.
+      if (models.length === 1 && models[0]?.value === "default") return [];
+      return findCatalogEntries(key ?? "default");
+    }
+    if (key !== null && key !== undefined) {
+      const active = findCatalogEntries(key);
+      if (active.length > 0) return active;
+    }
+    const realDefault = models.find((model) => model.value === "default");
+    if (realDefault !== undefined) return [realDefault];
+    return key === null || key === undefined ? models : [];
+  }
+  const effortCatalogUnavailable = $derived(
+    agentEngine === "claude-code" && effortCatalogEntries().length === 0,
+  );
   const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
   const effortLevels = $derived.by(() => {
-    // Phase-23 dogfood 再回帰対策 (藤 修正版方針 5 + G1): three-tier lookup。
-    //
-    // 1) **concrete catalog hit** — pending / ccModel を value 完全一致で
-    //    先に探し、無いときだけ resolved_model の全matchを取る。exactなら
-    //    そのrow、canonical複数matchならeffort_levelsのintersection
-    //    (1件でも欠落なら[])。Tier 2へfallbackしない。
-    // 2) **exact miss / key 未報告** で real `value="default"` entry あり
-    //    → その effort_levels (欠落なら [])。Claude bootstrap の default
-    //    entry は engine が宣言した account-default effort domain。
-    //    synthetic (ローカル合成) との違いは engine 側 supportedModels()
-    //    に含まれる正式 alias で model 切替 menu に出しても意味を持つ点。
-    // 3) **key 未報告 (null/undefined)** かつ real default 無しの場合のみ
-    //    → models 全 entry の effort_levels の intersection を first entry
-    //    の順で返す (1 件でも欠落あれば [])。
-    // 4) **concrete key があるが exact miss + real default 無し**
-    //    (藤 G1) → [] fail-closed。unknown/future/stale concrete model が
-    //    catalog 候補のいずれかである保証がなく、intersection に fallback
-    //    すると「現在 model に必ず valid」を主張できないため、安全側で
-    //    button を非表示にする。
-    //
-    // union は不採用 (invalid pair 提示に相当し ADR-0035 silent downgrade
-    // 禁止に反する)。synthetic default entry も不採用 (setModel("default")
-    // 明示送信の責務汚染)。engine 名分岐禁止 — models 配列と key の
-    // 有無だけで判定する。
-    const key = pendingModel?.value ?? ccModel;
-    const hasConcreteKey = key !== null && key !== undefined;
-    // Tier 1: value exact, then all canonical resolved_model matches
-    if (hasConcreteKey) {
-      const activeModels = findCatalogEntries(key);
-      if (activeModels.length > 0) {
-        const seen = new Set(effortLevelsForCatalogEntries(activeModels));
-        return EFFORT_ORDER.filter((l) => seen.has(l));
-      }
-    }
-    // Tier 2: real default alias entry
-    const realDefault = models.find((m) => m.value === "default");
-    if (realDefault !== undefined) {
-      const seen = new Set(realDefault.effort_levels ?? []);
-      return EFFORT_ORDER.filter((l) => seen.has(l));
-    }
-    // Tier 4 (藤 G1): concrete key で exact miss かつ real default 無し
-    // → [] fail-closed (intersection にフォールバックしない)
-    if (hasConcreteKey) return [];
-    // Tier 3: key 未報告のみ intersection fail-closed
-    if (models.length === 0) return [];
-    const first = models[0];
-    if (first === undefined || first.effort_levels === undefined) return [];
-    const rest = models.slice(1);
-    const common = new Set(
-      first.effort_levels.filter((lvl) =>
-        rest.every(
-          (m) =>
-            m.effort_levels !== undefined && m.effort_levels.includes(lvl),
-        ),
-      ),
+    const levels = new Set(
+      effortLevelsForCatalogEntries(effortCatalogEntries()),
     );
-    return EFFORT_ORDER.filter((l) => common.has(l));
+    return EFFORT_ORDER.filter((level) => levels.has(level));
   });
 
   // The always-present seven_day placeholder (pct null) must not, by itself,
@@ -1449,7 +1411,7 @@
     sawEffortReset = reset;
   });
   // Catalog fetch cap indicator (ADR-0037 F6, phase-18-6/18-10). Persistent
-  // state — the wrapper stays on the floor default until refresh_models
+  // state — the live Query retry cap remains exhausted until a refresh
   // succeeds — so read it once and route it to two surfaces with different
   // lifetimes: (a) a persistent class on the ↻ button so the operator sees
   // "still broken" even after switchNotice is cleared by an unrelated click,
@@ -1468,7 +1430,7 @@
     if (modelsError && !sawModelsError) {
       switchNotice = {
         tone: "error",
-        text: "モデル一覧の取得に繰り返し失敗しています。切替 button 隣の ↻ から再取得を試みてください",
+        text: "セッション中のモデル一覧更新に繰り返し失敗しています。切替 button 隣の ↻ から再取得を試みてください",
       };
     }
     sawModelsError = modelsError;
@@ -1675,7 +1637,23 @@
       // an info-level notice so operators do not read "action required"
       // into an automatic safe recovery. tone:"error" stays for genuine
       // switch failures (turn_failed etc.).
-      if (failure.reason === "persist_alias_unknown") {
+      if (
+        failure.kind === "effort" &&
+        failure.reason === "effort_catalog_unavailable"
+      ) {
+        switchNotice = {
+          tone: "info",
+          text: "現在のモデルの effort カタログがないため、切替をローカルで止めました。カタログを更新 (↻) するか、初回 turn の後に切り替えてください",
+        };
+      } else if (
+        failure.kind === "effort" &&
+        failure.reason === "effort_level_unsupported"
+      ) {
+        switchNotice = {
+          tone: "info",
+          text: `現在のモデルのカタログに ${failure.requested} がないため、切替をローカルで止めました`,
+        };
+      } else if (failure.reason === "persist_alias_unknown") {
         switchNotice = {
           tone: "info",
           text: `保存されていた ${failure.requested} は現在の catalog にないので default で開始しました`,
@@ -3136,6 +3114,9 @@
                     </ul>
                   {/if}
                 </div>
+                {#if connection && effortCatalogUnavailable}
+                  <span class="axes-hint">カタログを更新 (↻) するか、初回 turn の後に effort を切り替えてください</span>
+                {/if}
               </dd>
             </div>
           {/if}

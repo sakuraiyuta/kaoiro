@@ -161,6 +161,20 @@ interface TurnBoundWait {
  *  3", not "init + 3 retries". Manual retry (Phase 18-5) resets this. */
 const MAX_MODEL_REFRESH_RETRIES = 3;
 
+type ModelCatalogSource = "seed" | "startup_probe" | "manual_probe" | "live_query";
+// A live Query is session authority, while an operator-started probe outranks
+// the earlier fire-and-forget startup probe if their results cross in flight.
+const MODEL_CATALOG_PRIORITY: Record<ModelCatalogSource, number> = {
+  seed: 0,
+  startup_probe: 1,
+  manual_probe: 2,
+  live_query: 3,
+};
+
+type EffortCatalogErrorReason =
+  | "effort_catalog_unavailable"
+  | "effort_level_unsupported";
+
 /** Minimum gap between two emitted `task` envelopes of kind="updated" for
  *  the SAME task_id (issue #170, ADR-0048 F2 — "一定間隔 + 差分閾値" left
  *  to段階1 implementation). A `task_progress` SDK message that arrives
@@ -854,13 +868,11 @@ export class AgentHost implements EngineAdapter {
    *  legitimate first-success path when the catalog only becomes reachable
    *  after a retry. */
   #persistedModel: string | null = null;
-  /** Selectable models with their per-model effort levels (#54, ADR-0020);
-   *  surfaced so the dashboard can build the bare `/model` / `/effort` choice
-   *  dialogs without a round-trip. Seed order: runner-supplied catalog
-   *  (ADR-0039 F9 追補) if the spawn carried one, else the bootstrap floor
-   *  (ADR-0037 F1). The SDK's own supportedModels() still overrides both
-   *  once `#refreshSupportedModels()` succeeds. */
+  /** Selectable models with per-model effort levels (#54, ADR-0020). The
+   *  runner/bootstrap seed is refined by the idle probe, a manual pre-Query
+   *  refresh, or the live Query in increasing authority order. */
   #models: SupportedModel[];
+  #modelsCatalogSource: ModelCatalogSource = "seed";
   /** True while a supportedModels() call is in flight; guards concurrent
    *  fetches triggered by overlapping init / result messages within the same
    *  turn. Cleared in finally. */
@@ -1880,21 +1892,19 @@ export class AgentHost implements EngineAdapter {
    *  docs/reference/engines/claude-events.md model/effort 検証メモ), so the cast widens it
    *  deliberately. Next-message granularity. */
   async setEffort(level: string): Promise<void> {
+    const validationReason = this.#effortCatalogError(level);
+    if (validationReason !== null) {
+      this.#switchErrorOnce = {
+        kind: "effort",
+        requested: level,
+        reason: validationReason,
+      };
+      this.#emitState(this.#machine.state);
+      throw new Error(`claude-code: effort rejected locally: ${validationReason}`);
+    }
+
     const current = this.#query;
     if (current === null) {
-      const activeModels = this.#findPinnedCatalogEntries(
-        this.#model ?? "default",
-      );
-      const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
-      if (!activeEffortLevels.includes(level as EffortLevel)) {
-        this.#switchErrorOnce = {
-          kind: "effort",
-          requested: level,
-          reason: "control_rejected",
-        };
-        this.#emitState(this.#machine.state);
-        throw new Error(`unsupported bootstrap effort: ${level}`);
-      }
       this.#effort = level;
       this.#effortSource = "config";
       this.#effortLastGood = level;
@@ -2996,29 +3006,19 @@ export class AgentHost implements EngineAdapter {
       ext.switch_error = this.#switchErrorOnce;
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
-    if (this.#models !== null && this.#model !== null) {
-      const activeModels = this.#findPinnedCatalogEntries(this.#model);
-      if (activeModels.length > 0) {
-        const activeEffortLevels = this.#effortLevelsForCatalogEntries(activeModels);
-        const caps = ext.session_capabilities as Record<string, unknown>;
-        ext.session_capabilities = {
-          ...caps,
-          supports_effort_switch: activeEffortLevels.length > 0,
-        };
-      }
-    }
+    const activeEffortLevels = this.#effortLevelsForCatalogEntries(
+      this.#effortCatalogEntriesForActiveModel(),
+    );
+    const caps = ext.session_capabilities as Record<string, unknown>;
+    ext.session_capabilities = {
+      ...caps,
+      supports_effort_switch: activeEffortLevels.length > 0,
+    };
     if (this.#cwd !== null) ext.cwd = this.#cwd;
     if (this.#slashCommands !== null) ext.slash_commands = this.#slashCommands;
     if (this.#models !== null) ext.models = this.#models;
-    // Deliberately NOT one-shot (contrast with effort_reset / switch_error
-    // above, which consume via consumeOneShot). Rationale: those are discrete
-    // events — a late-connecting operator does not need to see them replayed.
-    // models_error is a PERSISTENT state — the wrapper is stuck on the floor
-    // catalog until refresh_models (phase-18-5) resets the retry state — so a
-    // reconnecting client MUST see it too, otherwise they will read the floor
-    // default as the account's real catalog (ADR-0037 F1 keeps ext.models
-    // valid throughout; this flag is the ONLY signal that fetch has given up).
-    // If future work makes this one-shot, the reconnect path breaks silently.
+    // Keep this persistent so reconnecting clients know the live Query retry
+    // cap remains exhausted even when a probe catalog is available.
     if (
       this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES &&
       !this.#modelsSucceeded
@@ -3245,10 +3245,19 @@ export class AgentHost implements EngineAdapter {
   async probeRateLimits(): Promise<void> {
     try {
       const outcome = await this.#probeFn({ includeUsage: true, signal: this.#startupProbeAbort.signal });
-      if (this.#closed || this.#nativeRateLimitsSeen || outcome.rate_limits === undefined) return;
-      this.#applyUsageRateLimits(outcome.rate_limits, false);
+      if (this.#closed) return;
+      if (
+        outcome.ok &&
+        outcome.models !== undefined &&
+        this.#applyProbeCatalog(outcome.models, "startup_probe")
+      ) {
+        this.#emitState(this.#machine.state);
+      }
+      if (!this.#nativeRateLimitsSeen && outcome.rate_limits !== undefined) {
+        this.#applyUsageRateLimits(outcome.rate_limits, false);
+      }
     } catch {
-      // The isolated account probe is optional telemetry.
+      // Probe failure leaves the last accepted catalog and telemetry intact.
     }
   }
 
@@ -3358,7 +3367,7 @@ export class AgentHost implements EngineAdapter {
     this.#modelsRetryCount += 1;
     try {
       const models = await current.supportedModels();
-      if (!models) return;
+      if (!models || models.length === 0) return;
       const viewBefore = this.#modelViewKey();
       this.#models = models.map((m) => ({
         value: m.value,
@@ -3374,6 +3383,7 @@ export class AgentHost implements EngineAdapter {
           ? { resolved_model: m.resolvedModel }
           : {}),
       }));
+      this.#modelsCatalogSource = "live_query";
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
       // The account catalog can settle a report that was undecidable against
@@ -3421,16 +3431,13 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Validates a persisted `#model` (spawn config / env / resume snapshot)
-   *  against the SDK's measured catalog once #refreshSupportedModels() has
+   *  against a measured catalog once a probe or #refreshSupportedModels() has
    *  populated it (ADR-0037 F8, phase-18-7). A persisted alias or canonical
    *  ID that the account no longer entitles — Anthropic drops a model, the
    *  operator's plan changes, a resume snapshot outlives its catalog — is dropped to
    *  `"default"` (BOOTSTRAP floor, always in the SDK catalog) and reported
-   *  once via `#switchErrorOnce` for UI feedback. Runs only in the
-   *  refresh-success branch, so the FIRST turn before that success can still
-   *  hit the SDK with a stale input string and be rejected there — accepted trade-off
-   *  under the pre-init chicken-and-egg (there is no earlier point to see the
-   *  measured catalog). Operator-explicit setModel with a floor-out value at
+   *  once via `#switchErrorOnce` for UI feedback. A successful idle probe can
+   *  validate the pick before the first turn. Operator-explicit setModel with a floor-out value at
    *  pre-init stays a loud throw (`setModel` L717-725) — that is a dashboard
    *  bug path, not a persist path, and warrants fail-fast. */
   #validatePersistModelAgainstCatalog(): void {
@@ -3485,6 +3492,53 @@ export class AgentHost implements EngineAdapter {
     return first.effort_levels.filter((level) =>
       models.slice(1).every((model) => model.effort_levels?.includes(level)),
     );
+  }
+
+  #effortCatalogEntriesForActiveModel(): SupportedModel[] {
+    // The bootstrap row's optimistic levels do not identify the account model.
+    if (
+      this.#models.length === 1 &&
+      this.#models[0]?.value === "default"
+    ) {
+      return [];
+    }
+    return this.#findPinnedCatalogEntries(this.#model ?? "default");
+  }
+
+  #effortCatalogError(level: string): EffortCatalogErrorReason | null {
+    const activeModels = this.#effortCatalogEntriesForActiveModel();
+    if (activeModels.length === 0) return "effort_catalog_unavailable";
+    return this.#effortLevelsForCatalogEntries(activeModels).includes(
+      level as EffortLevel,
+    )
+      ? null
+      : "effort_level_unsupported";
+  }
+
+  #applyProbeCatalog(
+    models: NonNullable<ProbeOutcome["models"]>,
+    source: "startup_probe" | "manual_probe",
+  ): boolean {
+    if (
+      MODEL_CATALOG_PRIORITY[this.#modelsCatalogSource] >
+      MODEL_CATALOG_PRIORITY[source]
+    ) {
+      return false;
+    }
+    if (models.length === 0) return false;
+    this.#models = models.map((model) => ({
+      value: model.value,
+      display_name: model.display_name,
+      description: model.description,
+      ...(model.effort_levels ? { effort_levels: [...model.effort_levels] } : {}),
+      ...(model.default_effort ? { default_effort: model.default_effort } : {}),
+      ...(typeof model.resolved_model === "string" && model.resolved_model.length > 0
+        ? { resolved_model: model.resolved_model }
+        : {}),
+    })) as SupportedModel[];
+    this.#modelsCatalogSource = source;
+    this.#validatePersistModelAgainstCatalog();
+    return true;
   }
 
   /** Manual retry of supportedModels() (ADR-0037 F6, phase-18-5). Resets the
@@ -3584,24 +3638,15 @@ export class AgentHost implements EngineAdapter {
         ...(err instanceof Error ? {} : {}),
       };
     }
-    if (outcome.ok && outcome.models !== undefined && outcome.models.length > 0) {
-      // Defensive copy per row so a downstream mutation cannot bleed back
-      // through the shared array reference.
-      this.#models = outcome.models.map((m) => ({
-        value: m.value,
-        display_name: m.display_name,
-        description: m.description,
-        ...(m.effort_levels ? { effort_levels: [...m.effort_levels] } : {}),
-        ...(m.default_effort ? { default_effort: m.default_effort } : {}),
-        // Same absent = unknown contract as the live-SDK mapping above; an
-        // empty id from a stale/foreign probe payload is dropped here too.
-        ...(typeof m.resolved_model === "string" && m.resolved_model.length > 0
-          ? { resolved_model: m.resolved_model }
-          : {}),
-      })) as SupportedModel[];
-      this.#modelsSucceeded = true;
-      this.#validatePersistModelAgainstCatalog();
+    if (
+      outcome.ok &&
+      outcome.models !== undefined &&
+      this.#applyProbeCatalog(outcome.models, "manual_probe")
+    ) {
       this.#emitState(this.#machine.state);
+      return { ok: true, models_count: this.#models.length };
+    }
+    if (outcome.ok && outcome.models !== undefined && outcome.models.length > 0) {
       return { ok: true, models_count: this.#models.length };
     }
     return {

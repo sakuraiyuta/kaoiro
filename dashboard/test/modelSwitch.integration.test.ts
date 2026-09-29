@@ -165,12 +165,7 @@ const claudeBootstrap: ModelOption[] = [
     display_name: "Fable",
     effort_levels: ["low", "medium", "high", "xhigh", "max"],
   },
-  // Haiku has no effort support: effort_levels intentionally omitted
-  // (SDK 0.3.208 で該当 model は supportedEffortLevels を返さない)。
-  // dashboard の 3-tier lookup が real `value="default"` entry で解決する
-  // ので、この levels 欠落 entry が併存しても button は正しく表示される。
-  // 契約: `wrapper/claude-code/test/host.test.ts:1349` に「Haiku has no
-  // effort support: effort_levels must be omitted」の同義 pin あり。
+  // Haiku does not support effort; keep its SDK row without effort_levels.
   { value: "haiku", display_name: "Haiku" },
 ];
 
@@ -341,6 +336,64 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(failed.target.textContent).toContain("モデル切替に失敗");
     expect(failed.target.textContent).toContain("bad-slug は実効に反映されていません");
     expect(failed.target.textContent).toContain("旧値 gpt-terra に戻しました");
+  });
+
+  it("local catalog-unavailable effort rejection explains the next step without a rollback claim", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "sonnet",
+      models: [
+        {
+          value: "default",
+          display_name: "Default",
+          effort_levels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: false,
+      },
+      effective: { effort: "xhigh" },
+      switch_error: {
+        kind: "effort",
+        requested: "high",
+        reason: "effort_catalog_unavailable",
+      },
+    });
+
+    expect(target.textContent).toContain("切替をローカルで止めました");
+    expect(target.textContent).toContain("カタログを更新 (↻) するか、初回 turn の後に切り替えてください");
+    expect(target.textContent).not.toContain("実効に反映されていません");
+    expect(target.textContent).not.toContain("旧値");
+  });
+
+  it("local unsupported-level rejection names the catalog miss without a rollback claim", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "sonnet",
+      models: [
+        { value: "default", display_name: "Default", effort_levels: ["low"] },
+        { value: "sonnet", display_name: "Sonnet", effort_levels: ["low"] },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+      effective: { effort: "low" },
+      switch_error: {
+        kind: "effort",
+        requested: "high",
+        reason: "effort_level_unsupported",
+      },
+    });
+
+    expect(target.textContent).toContain("現在のモデルのカタログに high がないため、切替をローカルで止めました");
+    expect(target.textContent).not.toContain("実効に反映されていません");
+    expect(target.textContent).not.toContain("旧値");
   });
 
   it("does not offer an invalid old effort for a pending model and announces reset", async () => {
@@ -685,7 +738,7 @@ describe("phase-16 dashboard model switch integration", () => {
         supports_effort_switch: true,
       },
     });
-    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+    expect(target.textContent).toContain("セッション中のモデル一覧更新に繰り返し失敗");
     const button = target.querySelector(
       '[aria-label="モデル一覧を再取得"]',
     ) as HTMLButtonElement;
@@ -940,7 +993,7 @@ describe("phase-16 dashboard model switch integration", () => {
     // First rising edge: false → true fires the notice.
     props.envelope = buildEnv(true);
     await tick();
-    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+    expect(target.textContent).toContain("セッション中のモデル一覧更新に繰り返し失敗");
 
     // Persistent-surface pin: the .cc-refresh-error class must be present
     // while models_error is true, regardless of whether switchNotice is
@@ -976,7 +1029,7 @@ describe("phase-16 dashboard model switch integration", () => {
     // the operator must see the alert a second time.
     props.envelope = buildEnv(true);
     await tick();
-    expect(target.textContent).toContain("モデル一覧の取得に繰り返し失敗");
+    expect(target.textContent).toContain("セッション中のモデル一覧更新に繰り返し失敗");
 
     // Prove reactivity of the harness itself: model change through props
     // MUST propagate to the mounted component, otherwise this test would
@@ -1128,15 +1181,7 @@ describe("phase-16 dashboard model switch integration", () => {
   });
 });
 
-// Phase-23 dogfood 再回帰対策 (藤 修正版方針 5): effortLevels 派生の
-// three-tier lookup。
-//   1) exact match → その model の effort_levels (欠落なら []、tier 2/3 に
-//      fallback しない)
-//   2) real `value="default"` entry (engine 宣言) → その levels
-//   3) default 無ければ全 entry intersection fail-closed
-// synthetic default entry は追加しない、union は ADR-0035 silent downgrade
-// 禁止に反するため不採用、engine 名分岐禁止 — models 配列だけで判定する。
-describe("effortLevels 派生 (3-tier: exact → real default → intersection fail-closed)", () => {
+describe("effort choices follow engine catalog rules", () => {
   it("exact match: active model の effort_levels をそのまま返す (通常経路)", async () => {
     const { target } = await renderDetail({
       engine: "codex",
@@ -1196,8 +1241,8 @@ describe("effortLevels 派生 (3-tier: exact → real default → intersection f
     const options = [...target.querySelectorAll('[role="option"]')].map(
       (n) => n.textContent?.trim(),
     );
-    // value に canonical は無いので、Tier 1 の resolved_model pass で
-    // sonnet row を拾う。Tier 2 の default levels へは進まない。
+    // No value-exact row exists, so the canonical match selects Sonnet; the
+    // default row is not used for the active model.
     expect(options).toEqual(["medium", "high", "xhigh"]);
   });
 
@@ -1297,14 +1342,11 @@ describe("effortLevels 派生 (3-tier: exact → real default → intersection f
     expect(missing.querySelector('[title="effort を切替"]')).toBeNull();
   });
 
-  // 藤指示 (a): Claude bootstrap は real "default" alias entry を持つので
-  // Haiku (effort 非対応) が同居していても tier 2 で解決し button 表示、
-  // levels は default entry のもの。
-  it("(a) exact miss + real default entry + effort 非対応 Haiku 併存でも default levels を返し button 表示 (Claude bootstrap 経路)", async () => {
+  it("singleton default floor does not enable effort choices for the default model", async () => {
     const { target } = await renderDetail({
       engine: "claude-code",
-      model: "claude-opus-4-7", // SDK init 由来の specific id (bootstrap には無い)
-      models: claudeBootstrap, // default + fable + haiku (levels 無し) の 3 entry
+      model: "default",
+      models: [claudeBootstrap[0]!],
       session_capabilities: {
         supports_attachments: true,
         supports_user_input_dialog: true,
@@ -1312,18 +1354,28 @@ describe("effortLevels 派生 (3-tier: exact → real default → intersection f
         supports_effort_switch: true,
       },
     });
-    const effortBtn = target.querySelector(
-      '[title="effort を切替"]',
-    ) as HTMLButtonElement | null;
-    expect(effortBtn).not.toBeNull();
-    effortBtn!.click();
-    await tick();
-    const options = [...target.querySelectorAll('[role="option"]')].map(
-      (n) => n.textContent?.trim(),
-    );
-    // real default entry の effort_levels を返す (Haiku の levels 欠落は
-    // tier 2 では影響しない、tier 3 の intersection にも進まない)
-    expect(options).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+    expect(target.textContent).toContain("カタログを更新 (↻) するか、初回 turn の後に effort を切り替えてください");
+    expect(target.querySelector('[aria-label="モデル一覧を再取得"]')).not.toBeNull();
+  });
+
+  it("rich catalog miss does not fall back to the default row", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "opus",
+      models: [
+        { value: "default", display_name: "Default", effort_levels: ["low", "high"] },
+        { value: "sonnet", display_name: "Sonnet", effort_levels: ["low", "medium"] },
+      ],
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+    expect(target.textContent).toContain("カタログを更新 (↻) するか、初回 turn の後に effort を切り替えてください");
   });
 
   // 藤指示 (b): default 無し + levels 欠落 entry ありなら tier 3 intersection
@@ -1417,6 +1469,7 @@ describe("effortLevels 派生 (3-tier: exact → real default → intersection f
     });
     // Tier 4 fail-closed → effortLevels=[] → button 非表示
     expect(target.querySelector('[title="effort を切替"]')).toBeNull();
+    expect(target.textContent).not.toContain("カタログを更新 (↻)");
   });
 
   it("exact match の model は default/intersection より優先 (union 固有 xhigh 単独 model でも維持)", async () => {

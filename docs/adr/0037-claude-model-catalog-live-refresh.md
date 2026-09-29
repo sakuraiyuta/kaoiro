@@ -217,6 +217,35 @@ register path uses the last-known-good cache from the last successful probe and 
 remain unchanged after TTL expiry); externalise this to Gitea
 [issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166).
 
+### F10 (2026-09-29, issue #446) — Seed the idle catalog from the startup probe and fail closed for effort
+
+The idle Claude wrapper's startup probe already opens a short-lived SDK Query and
+returns model rows. Consume those rows into `ext.models` even when native
+rate-limit telemetry has already arrived or the probe has no `rate_limits` field.
+Catalog authority is ordered: live Query `supportedModels()` > a successful
+manual pre-Query refresh > the automatic startup probe > the launch/bootstrap
+seed. A result from a lower-priority source that completes late must not replace
+a higher-priority catalog. Empty and failed results retain the last accepted
+catalog.
+
+For runtime effort selection, this addendum narrows F5: the bootstrap
+`default` row's `FULL_EFFORT` values remain placeholder metadata, not proof that
+the SDK accepts an effort for the running model. Accept a request only when a
+usable catalog row matches the active model and its `effort_levels` contains the
+requested value. A catalog containing only the singleton `default` floor is
+unusable for this check, including when the active model has not yet been
+reported. A `default` row in a richer catalog remains usable for an active
+`default` model. If no row matches, reject locally with
+`effort_catalog_unavailable`; if a matching row lacks the requested level,
+reject locally with `effort_level_unsupported`. Neither local rejection calls
+the SDK, mutates the requested/effective effort, nor supplies `rolled_back_to`.
+The dashboard hides choices while the active row is unavailable and directs the
+operator to refresh the catalog or wait until after the first turn.
+
+The local reason names are part of `SwitchErrorExt.reason`, which remains an
+open string for adapter-specific failures. No server, runner, persistence, or
+reset-snapshot field is added.
+
 ## Consequences
 
 ### Positive
