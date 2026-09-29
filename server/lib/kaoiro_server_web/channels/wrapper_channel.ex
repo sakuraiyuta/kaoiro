@@ -139,14 +139,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
           do: params["inter_agent_delivery_modes"]
         )
 
-      :ok = WorkStore.register_modes(agent_id, self(), modes, params["work_control"] == "v1")
-
       operator_modes =
         if(valid_operator_input_modes?(params["operator_input_modes"]),
           do: params["operator_input_modes"]
         )
 
-      :ok = WorkStore.register_operator_modes(agent_id, self(), operator_modes)
+      :ok =
+        WorkStore.register_modes(
+          agent_id,
+          self(),
+          modes,
+          params["work_control"] == "v1",
+          operator_modes
+        )
 
       KaoiroServer.InterAgentReplyBasis.register(
         agent_id,
