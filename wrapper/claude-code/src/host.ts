@@ -666,8 +666,23 @@ interface ForeignOccupancy {
 interface RetiredResult {
   sessionId: string;
   resultIndex: number;
-  uuid: string | undefined;
-  originKind: string | undefined;
+  /** Canonical fingerprint of the terminal's native identity. */
+  identity: string;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+/** What makes a result the same terminal: its UUID, its complete origin (peer
+ * sender and hand-back flags included) and its outcome. An unchanged UUID
+ * does not make conflicting native fields identical. */
+function resultIdentity(message: SDKMessage): string {
+  if (message.type !== "result") return "";
+  return canonicalJson([message.uuid, message.origin ?? null, message.subtype, message.is_error, message.terminal_reason ?? null]);
 }
 
 const MAX_RETIRED_RESULTS = 64;
@@ -1738,26 +1753,19 @@ export class AgentHost implements EngineAdapter {
     });
   }
 
-  #failStopForAmbiguousResult(): void {
-    const activeTurn = this.#activeTurn;
-    if (activeTurn === null || this.#admissionFailStopped) return;
-    this.#unattributedTerminalFrozen = true;
-    this.#failStopAdmission(activeTurn,
-      "notification result ownership ambiguous; host admission stopped pending operator recovery",
-      "admission_fail_stop", () => {
-        this.#options.onAdmissionFailStop?.({ turnToken: activeTurn.turnToken, conversationIds: activeTurn.conversationIds });
-      });
-  }
-
-  /** Fail-stop with no admitted token. #failStopForAmbiguousResult returns on
-   * a null #activeTurn, so an occupancy failure goes to the null-capable
-   * primitive directly. */
-  #failStopOwnerless(detail: string): void {
+  /** Fail-stop at a terminal that cannot be attributed. The live owner, if
+   * any, keeps its token until teardown; with none, the null-capable
+   * primitive is used directly. */
+  #failStopLive(detail: string): void {
     if (this.#admissionFailStopped) return;
+    const activeTurn = this.#activeTurn;
     this.#unattributedTerminalFrozen = true;
     this.#warn(`[kaoiro] ${detail}`);
-    this.#failStopAdmission(null, detail, "admission_fail_stop", () => {
-      this.#options.onAdmissionFailStop?.({ conversationIds: [] });
+    this.#failStopAdmission(activeTurn, detail, "admission_fail_stop", () => {
+      this.#options.onAdmissionFailStop?.({
+        ...(activeTurn === null ? {} : { turnToken: activeTurn.turnToken }),
+        conversationIds: activeTurn?.conversationIds ?? [],
+      });
     });
   }
 
@@ -1782,33 +1790,37 @@ export class AgentHost implements EngineAdapter {
     const record = this.#retiredResults.find(item =>
       item.sessionId === message.session_id && item.resultIndex === message.result_index);
     if (record === undefined) return "none";
-    return record.uuid === message.uuid && record.originKind === message.origin?.kind ? "duplicate" : "conflict";
+    return record.identity === resultIdentity(message) ? "duplicate" : "conflict";
   }
 
+  /** The run's index boundary only moves up: a stale result must not lower it. */
   #noteResultIndex(message: SDKMessage): void {
-    if (message.type === "result" && typeof message.result_index === "number") {
+    if (message.type === "result" && typeof message.result_index === "number" &&
+        (this.#lastResultIndex === null || message.result_index > this.#lastResultIndex)) {
       this.#lastResultIndex = message.result_index;
     }
   }
 
-  /** The only exit of a foreign occupancy: a result of the same session whose
-   * index advanced, with the interval identity unambiguous. The result is
-   * displayed but settles no admitted token. */
+  /** A result under a live interval (owner or occupancy) must carry an index
+   * above every one seen in this run. */
+  #resultIndexAdvances(message: SDKMessage): boolean {
+    if (message.type !== "result") return true;
+    const index = message.result_index;
+    return typeof index === "number" && (this.#lastResultIndex === null || index > this.#lastResultIndex);
+  }
+
+  /** The only exit of a foreign occupancy: a result of the same session (its
+   * index was validated by the caller). The result is displayed but settles no
+   * admitted token. */
   #drainForeignOccupancy(message: SDKMessage, result: ResultPayload): void {
     const occupancy = this.#foreignOccupancy!;
     if (message.type !== "result") return;
-    const index = message.result_index;
-    if (this.#intervalAmbiguous) {
-      this.#failStopOwnerless("foreign root interval identity ambiguous at its terminal; host admission stopped pending operator recovery");
-      return;
-    }
-    if (message.session_id !== occupancy.sessionId || typeof index !== "number" ||
-        (this.#lastResultIndex !== null && index <= this.#lastResultIndex)) {
-      this.#failStopOwnerless("foreign root terminal has the wrong session or a missing or regressing result index; host admission stopped pending operator recovery");
+    if (message.session_id !== occupancy.sessionId || typeof message.result_index !== "number") {
+      this.#failStopLive("foreign root terminal has the wrong session or no result index; host admission stopped pending operator recovery");
       return;
     }
     this.#emitResult(result, sdkMessageToCost(message));
-    this.#retiredResults.push({ sessionId: message.session_id, resultIndex: index, uuid: message.uuid, originKind: message.origin?.kind });
+    this.#retiredResults.push({ sessionId: message.session_id, resultIndex: message.result_index, identity: resultIdentity(message) });
     if (this.#retiredResults.length > MAX_RETIRED_RESULTS) this.#retiredResults.shift();
     if (occupancy.promptId !== null) this.#retiredPromptIds.add(occupancy.promptId);
     this.#foreignOccupancy = null;
@@ -2570,10 +2582,16 @@ export class AgentHost implements EngineAdapter {
         }
         const id = sdkMessageToSessionId(message);
         // Checked before the rebind cleanup below erases per-session state:
-        // an unexpected rebind under a live root interval must not silently
-        // unlock the input generator.
-        if (this.#foreignOccupancy !== null && id !== null && id !== this.#foreignOccupancy.sessionId) {
-          this.#failStopOwnerless("session changed under a foreign root interval; host admission stopped pending operator recovery");
+        // an unexpected rebind under a live root interval, or a result of
+        // another session under a live turn, must neither settle anything nor
+        // silently unlock the input generator.
+        if (id !== null) {
+          if (this.#foreignOccupancy !== null && id !== this.#foreignOccupancy.sessionId) {
+            this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
+          } else if (message.type === "result" && this.#activeTurn !== null &&
+              this.#sessionId !== null && id !== this.#sessionId) {
+            this.#failStopLive("result of another session under a live turn; host admission stopped pending operator recovery");
+          }
         }
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
@@ -2772,16 +2790,20 @@ export class AgentHost implements EngineAdapter {
           const retired = this.#matchRetiredResult(message);
           if (retired === "duplicate") continue;
           if (retired === "conflict") {
-            this.#failStopOwnerless("a retired result index was reused with a different identity; host admission stopped pending operator recovery");
+            this.#failStopLive("a retired result index was reused with a different identity; host admission stopped pending operator recovery");
             continue;
           }
           const notificationResult = (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";
           const ownerKind = this.#activeTurn?.kind;
-          if (this.#foreignOccupancy !== null) {
+          const liveInterval = this.#foreignOccupancy !== null || this.#activeTurn !== null;
+          if (liveInterval && !this.#resultIndexAdvances(message)) {
+            this.#failStopLive("terminal under a live root interval has a missing or regressing result index; host admission stopped pending operator recovery");
+          } else if (this.#intervalAmbiguous) {
+            this.#failStopLive(this.#foreignOccupancy !== null
+              ? "foreign root interval identity ambiguous at its terminal; host admission stopped pending operator recovery"
+              : "notification result ownership ambiguous; host admission stopped pending operator recovery");
+          } else if (this.#foreignOccupancy !== null) {
             this.#drainForeignOccupancy(message, result);
-          } else if (this.#intervalAmbiguous && (ownerKind === "sdk_notification" || !notificationResult)) {
-            this.#warn("[kaoiro] notification result ownership ambiguous; stopping host admission");
-            this.#failStopForAmbiguousResult();
           } else if (notificationResult && ownerKind !== "sdk_notification") {
             // A late SDK continuation must never settle a newly yielded wrapper input.
             // result.origin has no prompt ID, so even a tagged result cannot
@@ -4683,7 +4705,7 @@ export class AgentHost implements EngineAdapter {
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     if (this.#foreignOccupancy !== null) {
-      this.#failStopOwnerless("SDK stream ended under a foreign root interval; host admission stopped pending operator recovery");
+      this.#failStopLive("SDK stream ended under a foreign root interval; host admission stopped pending operator recovery");
     }
     this.#closed = true;
     if (this.#pendingPushedReceipt !== null) {

@@ -6,6 +6,11 @@ import { AgentHost, type AgentHostOptions } from "../src/host.js";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 const config: WrapperConfig = {
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -131,8 +136,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: foldText,
               }, undefined, signal);
               yield outcome === "error"
-                ? { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["failed"] } as SDKMessage
-                : { type: "result", subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+                ? { type: "result", result_index: nextResultIndex(), subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["failed"] } as SDKMessage
+                : { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
             })();
             return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
           }) as never,
@@ -201,13 +206,13 @@ describe("Claude CLI delivery composition (issue #247)", () => {
               yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
               ready();
               await releaseResult;
-              yield { type: "result", subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+              yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
               const root = (await input.next()).value!;
               rootTexts.push(root.message.content as string);
               await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: root.message.content,
               }, undefined, signal);
-              yield { type: "result", subtype: "success", session_id: "s", result: "R done" } as SDKMessage;
+              yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "R done" } as SDKMessage;
             })(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query) as never,
         });
         host.probeRateLimits = async () => {};
@@ -279,18 +284,18 @@ describe("Claude CLI delivery composition (issue #247)", () => {
               rootReady();
               const cut = (await input.next()).value!;
               expect(cut.priority).toBe("now");
-              yield { type: "result", subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+              yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
               await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p2", prompt: cut.message.content as string,
               }, undefined, signal);
               cutReady();
               await cutFinished;
-              yield { type: "result", subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["F failed"] } as SDKMessage;
+              yield { type: "result", result_index: nextResultIndex(), subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["F failed"] } as SDKMessage;
               const later = (await input.next()).value!;
               await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p3", prompt: later.message.content as string,
               }, undefined, signal);
-              yield { type: "result", subtype: "success", session_id: "s", result: "R done" } as SDKMessage;
+              yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "R done" } as SDKMessage;
             })();
             return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
           }) as never,
@@ -928,10 +933,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
             { type: "tool_use", id: "held-tool", name: "Read", input: {} },
           ] } } as unknown as SDKMessage;
           await firstBoundary;
-          yield { type: "result", subtype: "success", result: "first done" } as SDKMessage;
+          yield { type: "result", result_index: nextResultIndex(), subtype: "success", result: "first done" } as SDKMessage;
           inputs.push((await input.next()).value!);
           await secondBoundary;
-          yield { type: "result", subtype: "success", result: "second done" } as SDKMessage;
+          yield { type: "result", result_index: nextResultIndex(), subtype: "success", result: "second done" } as SDKMessage;
         }
         return Object.assign(frames(), { interrupt: async () => {} }) as unknown as Query;
       };

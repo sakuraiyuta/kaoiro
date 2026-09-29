@@ -15,6 +15,11 @@ import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -25,7 +30,7 @@ const config: WrapperConfig = {
 const msg = (shape: unknown): SDKMessage => shape as SDKMessage;
 const assistant = (content: unknown): SDKMessage =>
   msg({ type: "assistant", message: { content } });
-const result = (subtype: string): SDKMessage => msg({ type: "result", subtype });
+const result = (subtype: string): SDKMessage => msg({ type: "result", result_index: nextResultIndex(), subtype });
 
 type QueryArgs = { prompt: AsyncIterable<SDKUserMessage>; options: Options };
 type QueryFn = NonNullable<AgentHostOptions["queryFn"]>;

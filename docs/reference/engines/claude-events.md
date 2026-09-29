@@ -133,8 +133,13 @@ next-input barrier (including a pending pushed receipt, which resolves as
 suppresses the turn-backed-state warning. A same-ID notification hook folds
 into it without a token.
 
-The occupancy ends only at a result of the same session whose `result_index`
-exceeds every index seen earlier in the host run. The result is displayed; no
+Any result under a live interval (a wrapper turn, an admitted notification
+turn or an occupancy) must carry a `result_index` above every index seen
+earlier in the host run, and a result of another session stops admission before
+the rebind cleanup runs; a stale result never lowers the boundary.
+
+The occupancy ends only at a result of the same session that passes those
+checks. The result is displayed; no
 admitted-turn callback fires, its prompt ID is retired, and candidate clocks
 are rearmed in full. `conversation_reset`, compaction boundaries and an
 interrupt ACK are not terminals and keep the barrier.
@@ -145,8 +150,9 @@ interval identity ambiguous. A uniquely recognized wrapper input is the live
 wrapper turn's exact yielded text, from the same session, not `system`-sourced
 and not also a full rendering of a pending notification. Once ambiguous, no
 result settles or releases anything: the next terminal stops admission. An
-exact repeat of a retired result is ignored; a reused `result_index` with
-another identity stops admission.
+exact repeat of a retired result (same UUID, complete origin including the
+peer sender and hand-back flags, and outcome) is ignored; a reused
+`result_index` with any other identity stops admission.
 
 An occupancy failure (ambiguous interval, wrong session, missing or
 regressing `result_index`, session rebind frame, stream EOF) stops admission

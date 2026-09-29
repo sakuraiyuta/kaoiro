@@ -37,6 +37,11 @@ import {
 } from "../src/upload.js";
 import { buildChunkPayload } from "./helpers.js";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 const config: WrapperConfig = {
   agent_id: "test.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -415,7 +420,7 @@ const taskToolResult = (toolUseId: string): SDKMessage =>
 const result = (
   subtype: string,
   extra: Record<string, unknown> = {},
-): SDKMessage => msg({ type: "result", subtype, ...extra });
+): SDKMessage => msg({ type: "result", result_index: nextResultIndex(), subtype, ...extra });
 
 type QueryFn = NonNullable<AgentHostOptions["queryFn"]>;
 type QueryArgs = { prompt: AsyncIterable<SDKUserMessage>; options: Options };
@@ -2291,12 +2296,12 @@ describe("AgentHost — query injection", () => {
           turn += 1;
           if (turn === 1) {
             yield msg({
-              type: "result",
+              type: "result", result_index: nextResultIndex(),
               subtype: "error_during_execution",
               errors: ["boom"],
             });
           } else {
-            yield msg({ type: "result", subtype: "success", result: "ok" });
+            yield msg({ type: "result", result_index: nextResultIndex(), subtype: "success", result: "ok" });
           }
         }
       }
@@ -2337,7 +2342,7 @@ describe("AgentHost — query injection", () => {
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         for await (const _m of args.prompt) {
-          yield msg({ type: "result", subtype: "success", result: "ok" });
+          yield msg({ type: "result", result_index: nextResultIndex(), subtype: "success", result: "ok" });
         }
       }
       return asQuery(gen());

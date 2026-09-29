@@ -1,6 +1,11 @@
 import { it, expect, vi } from "vitest";
 import { AgentHost } from "../src/host.js";
 import { InterAgentTool, INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
+
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
 const config = {
   agent_id: "review.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -67,7 +72,7 @@ it.each([false, true])(
             is_backgrounded: true,
           };
           yield {
-            type: "result",
+            type: "result", result_index: nextResultIndex(),
             subtype: "success",
             result: "T1 done",
             session_id: "s",
@@ -94,7 +99,7 @@ it.each([false, true])(
               "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><output-file>/tmp/task</output-file><summary>done</summary></task-notification>",
             );
             yield {
-              type: "result",
+              type: "result", result_index: nextResultIndex(),
               subtype: "success",
               result: "ambiguous",
               session_id: "s",
@@ -131,7 +136,7 @@ it.each([false, true])(
           expect(sink).toHaveBeenCalledTimes(freeze ? 0 : 2);
           if (!freeze)
             yield {
-              type: "result",
+              type: "result", result_index: nextResultIndex(),
               subtype: "success",
               result: "T2 done",
               session_id: "s",

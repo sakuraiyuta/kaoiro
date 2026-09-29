@@ -45,6 +45,11 @@ import {
   InterAgentTurnCoordinator,
 } from "../src/inter_agent_turn_coordinator.js";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 // The host reads only a few SDK fields; build minimal shapes and cast (same
 // convention as host.test.ts's own local helpers, not shared across files).
 const msg = (shape: unknown): SDKMessage => shape as SDKMessage;
@@ -639,11 +644,11 @@ function makeControllableQueryFn(onInput?: (input: SDKUserMessage) => void): {
         release = null;
         yield outcome === "error"
           ? msg({
-              type: "result",
+              type: "result", result_index: nextResultIndex(),
               subtype: "error_during_execution",
               errors: ["boom"],
             })
-          : msg({ type: "result", subtype: "success", result: "ok" });
+          : msg({ type: "result", result_index: nextResultIndex(), subtype: "success", result: "ok" });
       }
     }
     return asQuery(gen());

@@ -38,6 +38,11 @@ import type {
 import { buildKaoiroMcpServer } from "../src/inter_agent_sdk.js";
 import type { ClaudeOnlyTool } from "../src/inter_agent_sdk.js";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 const config: WrapperConfig = {
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -108,7 +113,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         // message arrives (wrapper-side backpressure) — close it out
         // FIRST, so the /compact turn queued below can be pulled next.
         yield {
-          type: "result",
+          type: "result", result_index: nextResultIndex(),
           subtype: "success",
           result: "kick",
         } as unknown as SDKMessage;
@@ -134,7 +139,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         // #maybeFireResumeReservation via the production enqueueInjection
         // chain) can reach args.prompt too.
         yield {
-          type: "result",
+          type: "result", result_index: nextResultIndex(),
           subtype: "success",
           result: "ok",
         } as unknown as SDKMessage;

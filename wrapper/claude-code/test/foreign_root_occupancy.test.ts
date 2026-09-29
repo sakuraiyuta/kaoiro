@@ -560,3 +560,132 @@ describe("unique wrapper recognition (issue #426 stage 1)", () => {
     expect(rig.obs).toMatchObject({ endsAfterResult: 0, freezes: 1 });
   });
 });
+
+describe("terminal validation under a live owner (issue #426 stage 1)", () => {
+  const PEER_A = { kind: "peer", senderTaskId: "child-a", handback: true };
+
+  async function playFirst(rig: Rig): Promise<void> {
+    await play(rig);
+  }
+
+  it.each([
+    { name: "another session, after interval ambiguity is already established", frame: res(0, { session_id: "other-session" }), ambiguous: true },
+    { name: "another session", frame: res(0, { session_id: "other-session" }), ambiguous: false },
+    { name: "no result_index", frame: res(undefined), ambiguous: false },
+  ])("fails stop on a wrapper-owned terminal with $name", async ({ frame, ambiguous }) => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield initFrame();
+      if (ambiguous) await prompt(c, "F", "foreign overlap");
+      yield frame;
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+      c.rig.obs.bound = false;
+    });
+    await playFirst(rig);
+    expect(rig.obs).toMatchObject({ endsAtResult: 0, freezesAtResult: 1 });
+    expect(rig.freezes).toEqual([rig.starts[0]!.token]);
+  });
+
+  it("fails stop on a wrapper-owned terminal whose index regresses", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      await c.rig.host.send("second");
+      await c.input.next();
+      await prompt(c, "p2", "second");
+      yield res(0, { uuid: "u-again" });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ endsAtResult: 1, freezesAtResult: 1 });
+  });
+
+  it.each([
+    { name: "another session", frame: res(1, { session_id: "other-session", origin: { kind: "task-notification" } }) },
+    { name: "no result_index", frame: res(undefined, { origin: { kind: "task-notification" } }) },
+    { name: "a regressing result_index", frame: res(0, { uuid: "u-again", origin: { kind: "task-notification" } }) },
+  ])("fails stop on a notification-owned terminal with $name", async ({ frame }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      yield frame;
+      c.rig.obs.notificationEnds = c.rig.ends.filter(({ token }) => token === c.rig.starts[1]?.token).length;
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.starts.map(({ kind }) => kind)).toEqual([undefined, "sdk_notification"]);
+    expect(rig.obs).toEqual({ notificationEnds: 0, freezes: 1 });
+  });
+
+  it("an ambiguous wrapper interval that receives a notification-origin terminal stops admission and loses its send binding", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      yield taskStarted();
+      await c.rig.host.send("second");
+      await c.input.next();
+      await prompt(c, "p2", "second");
+      await prompt(c, "F", "foreign overlap");
+      yield res(1, { origin: { kind: "task-notification" } });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezes = c.rig.freezes.length;
+      c.rig.obs.bound = await (async () => {
+        await sendTool(c, "p2", "call-after");
+        const origin = c.rig.host.toolOrigins.resolve("call-after");
+        let found = false;
+        void origin.then((value) => { found = value !== undefined; });
+        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+        return found;
+      })();
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ endsAtResult: 1, freezes: 1, bound: false });
+  });
+
+  it("does not let a stale ownerless result lower the run's index boundary", async () => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield initFrame();
+      yield res(5);
+      yield res(1, { uuid: "stale", origin: { kind: "task-notification" } });
+      await prompt(c, "F", "hand-back report");
+      yield rootFrame();
+      yield res(3, { uuid: "regressing" });
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ freezes: 1 });
+  });
+
+  it("treats an exact retired repeat as a duplicate", async () => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      await prompt(c, "F", "hand-back report");
+      yield res(1, { uuid: "u-peer", origin: PEER_A });
+      yield res(1, { uuid: "u-peer", origin: PEER_A });
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ freezes: 0 });
+  });
+
+  it.each([
+    { name: "another peer sender", frame: res(1, { uuid: "u-peer", origin: { ...PEER_A, senderTaskId: "child-b" } }) },
+    { name: "a dropped hand-back flag", frame: res(1, { uuid: "u-peer", origin: { kind: "peer", senderTaskId: "child-a" } }) },
+    { name: "another terminal outcome", frame: res(1, { uuid: "u-peer", origin: PEER_A, subtype: "error_during_execution", is_error: true }) },
+    { name: "another terminal reason", frame: res(1, { uuid: "u-peer", origin: PEER_A, terminal_reason: "aborted_streaming" }) },
+  ])("fails stop when a retired index is reused with $name", async ({ frame }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      await prompt(c, "F", "hand-back report");
+      yield res(1, { uuid: "u-peer", origin: PEER_A });
+      yield frame;
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ freezes: 1 });
+  });
+});

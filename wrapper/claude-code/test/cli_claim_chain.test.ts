@@ -4,6 +4,11 @@ import { AgentHost } from "../src/host.js";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
+// Native results carry a run-wide delivery sequence; a live interval only
+// accepts a result whose index advanced.
+let resultIndexCounter = 0;
+const nextResultIndex = (): number => resultIndexCounter++;
+
 const config: WrapperConfig = {
   agent_id: "self",
   persona: { id: "p", name: "P", sprite_set: "p" },
@@ -91,7 +96,7 @@ describe("Claude claimed-cut receipt chain", () => {
               priorities.push(pushed.priority ?? null);
               if (n === 0) { firstFoldWritten.resolve(); await releaseFirstHook.promise; }
               if (pushed.priority === "now") {
-                yield { type: "result", subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+                yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
               }
               await hook({
                 hook_event_name: "UserPromptSubmit", session_id: "s",
@@ -99,10 +104,10 @@ describe("Claude claimed-cut receipt chain", () => {
                 prompt: pushed.message.content as string,
               }, undefined, signal);
               if (pushed.priority === "now" && n < successorCount + 1) {
-                yield { type: "result", subtype: "success", session_id: "s", result: "F done" } as SDKMessage;
+                yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "F done" } as SDKMessage;
               }
             }
-            yield { type: "result", subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+            yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
           })(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query) as never,
         });
         host.probeRateLimits = async () => {};
@@ -208,7 +213,7 @@ describe("Claude claimed-cut final receipt deadline", () => {
                 hookedAt = performance.now();
               }
               if (pushed.priority === "now") {
-                yield { type: "result", subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
+                yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "T done" } as SDKMessage;
               }
               await hook({
                 hook_event_name: "UserPromptSubmit", session_id: "s",
@@ -216,7 +221,7 @@ describe("Claude claimed-cut final receipt deadline", () => {
                 prompt: pushed.message.content as string,
               }, undefined, signal);
             }
-            yield { type: "result", subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+            yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
           })(), { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query) as never,
         });
         const wait = host.waitForPushedReceipt.bind(host);
