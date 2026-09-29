@@ -644,11 +644,11 @@ function makeControllableQueryFn(onInput?: (input: SDKUserMessage) => void): {
         release = null;
         yield outcome === "error"
           ? msg({
-              type: "result", result_index: nextResultIndex(),
+              type: "result", result_index: nextResultIndex(), session_id: "s",
               subtype: "error_during_execution",
               errors: ["boom"],
             })
-          : msg({ type: "result", result_index: nextResultIndex(), subtype: "success", result: "ok" });
+          : msg({ type: "result", result_index: nextResultIndex(), session_id: "s", subtype: "success", result: "ok" });
       }
     }
     return asQuery(gen());

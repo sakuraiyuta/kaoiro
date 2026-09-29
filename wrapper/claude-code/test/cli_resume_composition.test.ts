@@ -76,6 +76,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
     const link = {
       close: () => {},
       currentSessionId: () => null,
+      setSessionId: () => {},
       send: () => {},
       reportSessionLifecycle: (
         kind: SessionLifecycleKind,
@@ -113,7 +114,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         // message arrives (wrapper-side backpressure) — close it out
         // FIRST, so the /compact turn queued below can be pulled next.
         yield {
-          type: "result", result_index: nextResultIndex(),
+          type: "result", result_index: nextResultIndex(), session_id: "s",
           subtype: "success",
           result: "kick",
         } as unknown as SDKMessage;
@@ -139,7 +140,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         // #maybeFireResumeReservation via the production enqueueInjection
         // chain) can reach args.prompt too.
         yield {
-          type: "result", result_index: nextResultIndex(),
+          type: "result", result_index: nextResultIndex(), session_id: "s",
           subtype: "success",
           result: "ok",
         } as unknown as SDKMessage;

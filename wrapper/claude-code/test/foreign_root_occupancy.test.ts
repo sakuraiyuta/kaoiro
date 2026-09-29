@@ -588,6 +588,68 @@ describe("terminal validation under a live owner (issue #426 stage 1)", () => {
     expect(rig.freezes).toEqual([rig.starts[0]!.token]);
   });
 
+  it.each([
+    { name: "a missing session_id", session: undefined },
+    { name: "an empty session_id", session: "" },
+  ])("fails stop on a wrapper-owned terminal with $name", async ({ session }) => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield initFrame();
+      yield res(0, { session_id: session });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+    });
+    await playFirst(rig);
+    expect(rig.obs).toEqual({ endsAtResult: 0, freezesAtResult: 1 });
+  });
+
+  it.each([
+    { name: "a missing session_id", session: undefined },
+    { name: "an empty session_id", session: "" },
+  ])("fails stop on a notification-owned terminal with $name", async ({ session }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c, { background: true });
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      yield res(1, { session_id: session, origin: { kind: "task-notification" } });
+      c.rig.obs.notificationEnds = c.rig.ends.filter(({ token }) => token === c.rig.starts[1]?.token).length;
+      c.rig.obs.freezes = c.rig.freezes.length;
+    });
+    await playFirst(rig);
+    expect(rig.obs).toEqual({ notificationEnds: 0, freezes: 1 });
+  });
+
+  it("accepts the first result's own session when the host has not learned one yet", async () => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield res(0, { session_id: "first-seen" });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+    });
+    await playFirst(rig);
+    expect(rig.obs).toEqual({ endsAtResult: 1, freezesAtResult: 0 });
+  });
+
+  it.each([
+    { name: "regressing", index: 0, ends: 1, freezes: 1 },
+    { name: "advancing", index: 1, ends: 2, freezes: 0 },
+  ])("keeps the run's index boundary across an idle session rebind ($name index)", async ({ index, ends, freezes }) => {
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      yield initFrame("s2");
+      await c.rig.host.send("second");
+      await c.input.next();
+      await prompt(c, "p2", "second", { session_id: "s2" });
+      yield res(index, { session_id: "s2", uuid: "u-s2" });
+      c.rig.obs.endsAtResult = c.rig.ends.length;
+      c.rig.obs.freezesAtResult = c.rig.freezes.length;
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ endsAtResult: ends, freezesAtResult: freezes });
+  });
+
   it("fails stop on a wrapper-owned terminal whose index regresses", async () => {
     const rig = makeRig(async function* (c) {
       yield* firstTurn(c);

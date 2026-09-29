@@ -933,10 +933,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
             { type: "tool_use", id: "held-tool", name: "Read", input: {} },
           ] } } as unknown as SDKMessage;
           await firstBoundary;
-          yield { type: "result", result_index: nextResultIndex(), subtype: "success", result: "first done" } as SDKMessage;
+          yield { type: "result", result_index: nextResultIndex(), session_id: "s", subtype: "success", result: "first done" } as SDKMessage;
           inputs.push((await input.next()).value!);
           await secondBoundary;
-          yield { type: "result", result_index: nextResultIndex(), subtype: "success", result: "second done" } as SDKMessage;
+          yield { type: "result", result_index: nextResultIndex(), session_id: "s", subtype: "success", result: "second done" } as SDKMessage;
         }
         return Object.assign(frames(), { interrupt: async () => {} }) as unknown as Query;
       };
@@ -951,7 +951,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           });
           return {
             acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
-            close: () => {}, currentSessionId: () => null, send: () => {},
+            close: () => {}, currentSessionId: () => null, setSessionId: () => {}, send: () => {},
             reportSessionLifecycle: () => {},
           } as never;
         },

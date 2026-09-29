@@ -135,8 +135,11 @@ into it without a token.
 
 Any result under a live interval (a wrapper turn, an admitted notification
 turn or an occupancy) must carry a `result_index` above every index seen
-earlier in the host run, and a result of another session stops admission before
-the rebind cleanup runs; a stale result never lowers the boundary.
+earlier in the host run, and a result that lacks its session ID or names another
+session stops admission before the rebind cleanup runs (a host that has not
+learned a session yet accepts the first result's own ID). The index is a
+run-wide sequence, so the boundary survives a session rebind and a stale
+result never lowers it.
 
 The occupancy ends only at a result of the same session that passes those
 checks. The result is displayed; no

@@ -428,6 +428,21 @@ type QueryArgs = { prompt: AsyncIterable<SDKUserMessage>; options: Options };
 /** Wraps an async generator into a Query. interrupt / getContextUsage are the
  *  control methods most tests exercise; `extra` injects the rest (setModel,
  *  applyFlagSettings, supportedModels — #54). */
+/** The SDK stamps a session_id on every message. Scripted results that omit
+ * it take the latest session the script announced, or "s" before any. */
+async function* stampResultSession(
+  gen: AsyncGenerator<SDKMessage, void>,
+): AsyncGenerator<SDKMessage, void> {
+  let session = "s";
+  for await (const message of gen) {
+    const id = (message as { session_id?: unknown }).session_id;
+    if (typeof id === "string" && id !== "") session = id;
+    yield message.type === "result" && (id === undefined || id === "")
+      ? ({ ...message, session_id: session } as SDKMessage)
+      : message;
+  }
+}
+
 function asQuery(
   gen: AsyncGenerator<SDKMessage, void>,
   interrupt: () => Promise<void> = async () => {},
@@ -436,7 +451,7 @@ function asQuery(
 ): Query {
   const controls: Record<string, unknown> = { interrupt, ...extra };
   if (getContextUsage) controls.getContextUsage = getContextUsage;
-  return Object.assign(gen, controls) as unknown as Query;
+  return Object.assign(stampResultSession(gen), controls) as unknown as Query;
 }
 
 /** Wraps a per-test query implementation as a QueryFn — the one cast site

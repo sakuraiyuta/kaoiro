@@ -1809,18 +1809,14 @@ export class AgentHost implements EngineAdapter {
     return typeof index === "number" && (this.#lastResultIndex === null || index > this.#lastResultIndex);
   }
 
-  /** The only exit of a foreign occupancy: a result of the same session (its
-   * index was validated by the caller). The result is displayed but settles no
+  /** The only exit of a foreign occupancy: a result whose session and index
+   * the caller has already validated. The result is displayed but settles no
    * admitted token. */
   #drainForeignOccupancy(message: SDKMessage, result: ResultPayload): void {
     const occupancy = this.#foreignOccupancy!;
     if (message.type !== "result") return;
-    if (message.session_id !== occupancy.sessionId || typeof message.result_index !== "number") {
-      this.#failStopLive("foreign root terminal has the wrong session or no result index; host admission stopped pending operator recovery");
-      return;
-    }
     this.#emitResult(result, sdkMessageToCost(message));
-    this.#retiredResults.push({ sessionId: message.session_id, resultIndex: message.result_index, identity: resultIdentity(message) });
+    this.#retiredResults.push({ sessionId: message.session_id, resultIndex: message.result_index!, identity: resultIdentity(message) });
     if (this.#retiredResults.length > MAX_RETIRED_RESULTS) this.#retiredResults.shift();
     if (occupancy.promptId !== null) this.#retiredPromptIds.add(occupancy.promptId);
     this.#foreignOccupancy = null;
@@ -2582,15 +2578,17 @@ export class AgentHost implements EngineAdapter {
         }
         const id = sdkMessageToSessionId(message);
         // Checked before the rebind cleanup below erases per-session state:
-        // an unexpected rebind under a live root interval, or a result of
-        // another session under a live turn, must neither settle anything nor
-        // silently unlock the input generator.
-        if (id !== null) {
-          if (this.#foreignOccupancy !== null && id !== this.#foreignOccupancy.sessionId) {
-            this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
-          } else if (message.type === "result" && this.#activeTurn !== null &&
-              this.#sessionId !== null && id !== this.#sessionId) {
-            this.#failStopLive("result of another session under a live turn; host admission stopped pending operator recovery");
+        // an unexpected rebind under a live root interval, or a result that
+        // lacks or differs from the live session, must neither settle
+        // anything nor silently unlock the input generator. A host that has
+        // not learned its session yet accepts the first result's own ID.
+        const occupancySession = this.#foreignOccupancy?.sessionId;
+        if (occupancySession !== undefined && id !== null && id !== occupancySession) {
+          this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
+        } else if (message.type === "result" && (occupancySession !== undefined || this.#activeTurn !== null)) {
+          const known = occupancySession ?? this.#sessionId;
+          if (id === null || (known !== null && id !== known)) {
+            this.#failStopLive("terminal under a live interval lacks its session or names another one; host admission stopped pending operator recovery");
           }
         }
         if (id !== null && id !== this.#sessionId) {
@@ -2604,7 +2602,6 @@ export class AgentHost implements EngineAdapter {
             this.#retiredPromptIds.clear();
             this.#intervalAmbiguous = false;
             this.#retiredResults.length = 0;
-            this.#lastResultIndex = null;
             this.toolOrigins.reset();
           }
           // A result from the old conversation must never refresh the new

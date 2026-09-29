@@ -34,7 +34,7 @@ const config: WrapperConfig = {
 const msg = (shape: unknown): SDKMessage => shape as SDKMessage;
 const assistant = (content: unknown): SDKMessage =>
   msg({ type: "assistant", message: { content } });
-const result = (subtype: string): SDKMessage => msg({ type: "result", result_index: nextResultIndex(), subtype });
+const result = (subtype: string): SDKMessage => msg({ type: "result", result_index: nextResultIndex(), session_id: "s", subtype });
 const toolUse = (id: string): Record<string, unknown> => ({
   type: "tool_use",
   id,
