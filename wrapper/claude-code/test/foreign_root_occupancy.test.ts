@@ -768,7 +768,9 @@ describe("one session binding per live interval (issue #426 stage 1)", () => {
     | { at: "hook"; id: string; session: string }
     | { at: "init"; session: string }
     | { at: "frame"; session: string }
-    | { at: "child"; session: string };
+    | { at: "child"; session: string }
+    /** A result that ends nothing: a late notification-origin continuation. */
+    | { at: "late"; session: string };
 
   interface Row {
     name: string;
@@ -783,6 +785,7 @@ describe("one session binding per live interval (issue #426 stage 1)", () => {
   const init = (session: string): Evidence => ({ at: "init", session });
   const frame = (session: string): Evidence => ({ at: "frame", session });
   const child = (session: string): Evidence => ({ at: "child", session });
+  const late = (session: string): Evidence => ({ at: "late", session });
 
   const ROWS: Row[] = [
     // First turn: no session is known when the interval opens.
@@ -814,6 +817,14 @@ describe("one session binding per live interval (issue #426 stage 1)", () => {
     { name: "known S, hook S, init T, result S", turn: 2, evidence: [hook("p2", "s"), init("t")], result: "s", outcome: "fails" },
     { name: "known S, hook S, hook' T, result S", turn: 2, evidence: [hook("p2", "s"), hook("p2b", "t")], result: "s", outcome: "fails" },
     { name: "known S, hook S, root frame T, result S", turn: 2, evidence: [hook("p2", "s"), frame("t")], result: "s", outcome: "fails" },
+    // A result that ends nothing is session evidence like any other frame.
+    { name: "late result S, hook S, result S", turn: 1, evidence: [late("s"), hook("p1", "s")], result: "s", outcome: "completes" },
+    { name: "late result S, result S", turn: 1, evidence: [late("s")], result: "s", outcome: "completes" },
+    { name: "late result S, hook T, result T", turn: 1, evidence: [late("s"), hook("p1", "t")], result: "t", outcome: "fails" },
+    { name: "late result S, hook T, result S", turn: 1, evidence: [late("s"), hook("p1", "t")], result: "s", outcome: "fails" },
+    { name: "hook S, late result T, result S", turn: 1, evidence: [hook("p1", "s"), late("t")], result: "s", outcome: "fails" },
+    { name: "known S, late result S, hook S, result S", turn: 2, evidence: [late("s"), hook("p2", "s")], result: "s", outcome: "completes" },
+    { name: "known S, late result T, result T", turn: 2, evidence: [late("t")], result: "t", outcome: "fails" },
   ];
 
   it.each(ROWS)("wrapper turn $turn: $name -> $outcome", async ({ turn, evidence, result, outcome }) => {
@@ -828,13 +839,15 @@ describe("one session binding per live interval (issue #426 stage 1)", () => {
         await c.input.next();
       }
       const text = turn === 2 ? "second" : "launch";
+      let index = turn === 2 ? 1 : 0;
       for (const item of evidence) {
         if (item.at === "hook") await prompt(c, item.id, text, { session_id: item.session });
         else if (item.at === "init") yield initFrame(item.session);
         else if (item.at === "frame") yield rootFrame(item.session);
-        else yield childFrame(item.session);
+        else if (item.at === "child") yield childFrame(item.session);
+        else yield res(index++, { session_id: item.session, uuid: `late-${index}`, origin: { kind: "task-notification" } });
       }
-      yield res(turn === 2 ? 1 : 0, { session_id: result });
+      yield res(index, { session_id: result });
       c.rig.obs.ends = c.rig.ends.length - endsBefore;
       c.rig.obs.freezes = c.rig.freezes.length;
     });

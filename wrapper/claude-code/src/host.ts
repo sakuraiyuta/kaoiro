@@ -2602,20 +2602,23 @@ export class AgentHost implements EngineAdapter {
         const id = sdkMessageToSessionId(message);
         const knownBeforeFrame = this.#sessionId;
         // Checked before the rebind cleanup below erases per-session state.
-        // Every frame's session is evidence for the live interval's binding
-        // (a conflict is kept as ambiguity, which the rebind cleanup must not
-        // erase); an occupancy that sees another session, and a result that
-        // lacks the binding's session, stop admission at once. Only a result
-        // that follows no hook, frame or known session at all (a startup
-        // error) supplies the binding itself.
-        if (message.type !== "result") this.#noteIntervalSession(id);
+        // Every message's session is evidence for the live interval's binding,
+        // and this is the only place the host learns a session, so nothing can
+        // teach the host a session that the binding has not seen. An occupancy
+        // that sees another session, and a result without a session, stop
+        // admission at once; any other conflict (a result included) is kept as
+        // ambiguity, which the rebind cleanup must not erase and the terminal
+        // gate turns into a fail-stop. Only a result that follows no hook,
+        // frame or known session at all (a startup error) supplies the
+        // binding itself.
         if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
           this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
         } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
-          if (id === null || (this.#intervalSession !== null && id !== this.#intervalSession)) {
-            this.#failStopLive("terminal under a live interval lacks its session or names another one; host admission stopped pending operator recovery");
+          if (id === null) {
+            this.#failStopLive("terminal under a live interval lacks its session; host admission stopped pending operator recovery");
           }
         }
+        this.#noteIntervalSession(id);
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
           if (hadPriorSession) {
