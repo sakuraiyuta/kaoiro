@@ -881,6 +881,9 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert %{acked_seq: 1, lost_count: 0} = DeliveryStates.get("recipient", name)
   end
 
+  # Driving 2,000 records through the API costs about 60 s (one DETS sync
+  # per call, issue #449). Seed records 2..2000 from the first real record,
+  # then cross the default cap with one real delivery.
   test "V34a stage history retains exactly the newest 2000 records", %{name: name} do
     owner = self()
     DeliveryStates.bind_resync("recipient", "generation", owner, name)
@@ -888,7 +891,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert Application.fetch_env!(:kaoiro_server, :delivery_intent)[:delivery_stage_max_records] ==
              2_000
 
-    for turn <- 1..2_001 do
+    deliver = fn turn ->
       assert ^turn =
                DeliveryStates.issue_synthetic(
                  "recipient",
@@ -900,6 +903,34 @@ defmodule KaoiroServer.DeliveryStatesTest do
                DeliveryStates.acknowledge("recipient", "generation", owner, turn, name)
     end
 
+    deliver.(1)
+
+    :sys.replace_state(name, fn state ->
+      entry = state.entries["recipient"]
+      [{key, %{1 => first}}] = Map.to_list(entry.stage_history)
+      {:ok, first_at, _} = DateTime.from_iso8601(first.changed_at)
+
+      seeded =
+        Map.new(2..2_000, fn seq ->
+          at = first_at |> DateTime.add(seq, :millisecond) |> DateTime.to_iso8601()
+
+          {seq,
+           %{
+             first
+             | delivery_seq: seq,
+               turn_number: seq,
+               stages: %{"accepted" => at},
+               changed_at: at
+           }}
+        end)
+
+      history = %{key => Map.merge(%{1 => first}, seeded)}
+      entry = %{entry | stage_history: history, issued_seq: 2_000, acked_seq: 2_000}
+      %{state | entries: Map.put(state.entries, "recipient", entry), stages: history}
+    end)
+
+    deliver.(2_001)
+
     history = :sys.get_state(name).entries["recipient"].stage_history
 
     assert 2_000 ==
@@ -908,8 +939,10 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert {:ok, %{status: "expired"}} =
              DeliveryStates.message_status("sender", "stage-bound-cid", 1, name)
 
-    assert {:ok, %{stages: %{"accepted" => _}}} =
-             DeliveryStates.message_status("sender", "stage-bound-cid", 2_001, name)
+    for turn <- [2, 2_000, 2_001] do
+      assert {:ok, %{stages: %{"accepted" => _}}} =
+               DeliveryStates.message_status("sender", "stage-bound-cid", turn, name)
+    end
   end
 
   test "legacy DETS watermarks migrate without inventing sender information", %{
