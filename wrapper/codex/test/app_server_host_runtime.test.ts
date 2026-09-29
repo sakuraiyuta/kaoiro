@@ -374,3 +374,32 @@ it("excludes turn dispatch and concurrent reads while history is pending, then r
   expect(f.createSession).toHaveBeenCalledTimes(1);expect(f.session.resumeThread).toHaveBeenCalledTimes(1);
   await f.runtime.close();await expect(f.runtime.readHistory(config, () => "T")).rejects.toBeInstanceOf(AppServerConnectionError);
 });
+
+it("routes steered input items to onInputItem only, and steers only a dispatched live turn of the same token", async () => {
+  const f = fixture();
+  const gate = deferred();
+  f.terminalWait = gate.promise;
+  const original = f.session.startProjectedTurn;
+  f.session.startProjectedTurn = vi.fn(async request => {
+    const turn = await original(request);
+    return { ...turn, events: (async function* (): AsyncGenerator<AppServerProjection> {
+      yield { kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1" };
+      yield* turn.events;
+    })() };
+  });
+  const steer = vi.fn(() => ({ kind: "declined" as const, reason: "delegated" }));
+  f.session.steer = steer;
+  const onInputItem = vi.fn();
+  const request = { hostTurnToken: "host-1", input: "x", clientUserMessageId: "kaoiro-steer:1", admit: () => null };
+  expect(f.runtime.steer(request)).toEqual({ kind: "refused", reason: "idle" });
+  const running = f.runtime.run(input(), { ...f.hooks, onInputItem });
+  await vi.waitFor(() => expect(onInputItem).toHaveBeenCalledTimes(1));
+  expect(f.runtime.steer({ ...request, hostTurnToken: "other" })).toEqual({ kind: "refused", reason: "idle" });
+  expect(f.runtime.steer(request)).toEqual({ kind: "declined", reason: "delegated" });
+  gate.resolve();
+  await running;
+  expect(f.hooks.onProjection).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "input_item" }));
+  expect(onInputItem).toHaveBeenCalledWith({ kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1" });
+  expect(f.runtime.steer(request)).toEqual({ kind: "refused", reason: "idle" });
+  expect(steer).toHaveBeenCalledTimes(1);
+});

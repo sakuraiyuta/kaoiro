@@ -14,10 +14,13 @@ import {
 import { canSubmitPermission, type PermissionState } from "./permission_state.js";
 import { codexRolloutsRoot } from "./rollout.js";
 import type { AppServerProjection } from "./app_server_projection.js";
-import type { AppServerDispatchIdentity, AppServerTurnIdentity, AppServerTurnInput } from "./app_server_transport.js";
+import type {
+  AppServerDispatchIdentity, AppServerSteerAttempt, AppServerSteerRequest, AppServerTurnIdentity, AppServerTurnInput,
+} from "./app_server_transport.js";
 
 export type AppServerHostSession = Pick<AppServerSession,
   "readHistory" | "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close"> & {
+    steer?: AppServerSession["steer"];
     rateLimits?: AppServerRateLimits;
   };
 export interface AppServerHostRuntimeOptions {
@@ -46,7 +49,8 @@ export interface AppServerRuntimeHooks {
   onHandoff?: (identity: AppServerTurnIdentity) => void;
   onTerminal?: (identity: AppServerTurnIdentity) => void;
   onPermission: (assessment: CodexPermissionAssessment, attempt: AppServerRuntimeAttempt) => void;
-  onProjection: (event: Exclude<AppServerProjection, { kind: "result" }>) => void;
+  onProjection: (event: Exclude<AppServerProjection, { kind: "result" | "input_item" }>) => void;
+  onInputItem?: (event: Extract<AppServerProjection, { kind: "input_item" }>) => void;
 }
 export interface AppServerRuntimeCompletion {
   identity: AppServerTurnIdentity;
@@ -179,6 +183,7 @@ export class AppServerHostRuntime {
           });
           hooks.onHandoff?.(turn.identity);
           for await (const event of turn.events) {
+            if (event.kind === "input_item") { hooks.onInputItem?.(event); continue; }
             if (event.kind !== "result") {
               // Delay the terminal state until policy evidence and settings are settled.
               if (event.kind !== "adapter" || event.event.kind !== "result") hooks.onProjection(event);
@@ -213,6 +218,15 @@ export class AppServerHostRuntime {
     } finally {
       if (this.#active === active) this.#active = undefined;
     }
+  }
+
+  /** The transport decides live-turn state from its own active turn; the
+   * host's admit() owns abandonment and every other guard. */
+  steer(request: AppServerSteerRequest): AppServerSteerAttempt {
+    const active = this.#active;
+    if (this.#closed) return { kind: "refused", reason: "closed" };
+    if (!active || active.token !== request.hostTurnToken) return { kind: "refused", reason: "idle" };
+    return this.#session?.steer?.(request) ?? { kind: "refused", reason: "idle" };
   }
 
   async interrupt(hostTurnToken: string): Promise<boolean> {

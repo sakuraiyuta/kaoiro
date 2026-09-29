@@ -9,9 +9,12 @@ export interface AppServerNotification { method: string; params: RpcObject }
 export interface RpcTicket { id: number; result: Promise<unknown> }
 
 export class AppServerRpcError extends Error {
-  constructor(readonly code: number, message: string) {
+  /** `error.data` when it is an object; the caller reads named fields only. */
+  readonly data: RpcObject | undefined;
+  constructor(readonly code: number, message: string, data?: unknown) {
     super(message);
     this.name = "AppServerRpcError";
+    this.data = rpcObject(data) ? data : undefined;
   }
 }
 
@@ -193,7 +196,7 @@ export class AppServerRpc {
       if (!rpcObject(message.error) || typeof message.error.code !== "number" || typeof message.error.message !== "string") {
         throw new Error("Invalid RPC error");
       }
-      waiter.reject(new AppServerRpcError(message.error.code, message.error.message));
+      waiter.reject(new AppServerRpcError(message.error.code, message.error.message, message.error.data));
     } else {
       waiter.resolve(message.result);
     }

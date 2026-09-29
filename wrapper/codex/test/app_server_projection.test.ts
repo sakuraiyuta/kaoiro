@@ -233,3 +233,20 @@ describe("app-server result and progress projection", () => {
     expect(envelope.state).toBe("error");
   });
 });
+
+describe("steered input items (issue #366)", () => {
+  it("surfaces a client-tagged user item without content, and keeps both final answers as logs", async () => {
+    const out = await collect(project([
+      started(item("userMessage", "u0", { clientId: null, content: [{ type: "text", text: "ORIGINAL" }] })),
+      answer("m1", "ORIGINAL_ANSWER"),
+      started(item("userMessage", "u1", { clientId: "kaoiro-steer:1", content: [{ type: "text", text: "SECRET_STEER" }] })),
+      completed(item("userMessage", "u1", { clientId: "kaoiro-steer:1", content: [] })),
+      answer("m2", "STEERED_ANSWER"),
+      terminal(),
+    ]).events);
+    expect(out.filter(e => e.kind === "input_item")).toEqual([{ kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1" }]);
+    expect(JSON.stringify(out.filter(e => e.kind === "input_item"))).not.toContain("SECRET_STEER");
+    expect(logs(out).filter(p => p.kind === "assistant").map(p => p.text)).toEqual(["ORIGINAL_ANSWER", "STEERED_ANSWER"]);
+    expect(results(out).map(e => e.kind === "result" && e.payload.text)).toEqual(["STEERED_ANSWER"]);
+  });
+});

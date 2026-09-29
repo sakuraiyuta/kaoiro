@@ -15,6 +15,8 @@ export type AppServerProjection =
   | { kind: "adapter"; event: AdapterEvent }
   | { kind: "log"; payload: LogPayload }
   | { kind: "tasklist"; snapshot: TasklistSnapshot }
+  /** A user input item carrying a client ID (a steered input); no content. */
+  | { kind: "input_item"; itemId: string; clientId: string }
   | { kind: "result"; status: "completed" | "failed" | "interrupted"; payload: ResultPayload };
 
 export interface AppServerProjectedTurn {
@@ -183,6 +185,10 @@ async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | nu
         const isComplete = notification.method === "item/completed";
         if (completed.has(item.id) || (!isComplete && started.has(item.id))) break;
         (isComplete ? completed : started).add(item.id);
+        if (!isComplete && item.type === "userMessage" && typeof item.clientId === "string") {
+          yield { kind: "input_item", itemId: item.id, clientId: item.clientId };
+          break;
+        }
         if (item.type === "contextCompaction") {
           if (isComplete) compacted.add(item.id);
           else {
