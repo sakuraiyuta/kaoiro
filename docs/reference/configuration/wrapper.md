@@ -61,7 +61,7 @@ below are process-local options, not runner-relayed fields.
 enables operator steering for every Codex peer on the app-server backend.
 `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS=momo,other` instead enables only the
 listed `persona.id` values, with the same list rules as the Claude controls
-below. Only the exact value `1` enables the global flag; any other value,
+below; both wrappers use one parser, `personaOptInSource` in agent-common. Only the exact value `1` enables the global flag; any other value,
 including `true`, leaves it off and defers to the persona list. An enabled wrapper declares `operator_input_modes: {version: "v1",
 early: "steer"}` at join and steers only while the server echoes it; the exec
 backend ignores both variables. The wrapper logs `codex: operator_steer=on|off`

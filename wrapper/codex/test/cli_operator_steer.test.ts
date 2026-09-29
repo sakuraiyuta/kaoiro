@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
-import { operatorSteerSource, runCodexCli } from "../src/cli.js";
+import { runCodexCli } from "../src/cli.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -16,11 +16,12 @@ afterEach(() => {
   Object.assign(process.env, saved);
 });
 
-async function compose(backend: "exec" | "app-server", optIn: boolean, echoed: unknown = null,
+async function compose(backend: "exec" | "app-server", optIn: boolean | "flag", echoed: unknown = null,
   during: (linkOptions: Record<string, any>) => void = () => {}) {
   delete process.env.KAOIRO_CODEX_OPERATOR_STEER;
-  if (optIn) process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS = "other, p";
-  else delete process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS;
+  delete process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS;
+  if (optIn === "flag") process.env.KAOIRO_CODEX_OPERATOR_STEER = "1";
+  else if (optIn) process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS = "other, p";
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
   const sent: Envelope[] = [];
@@ -49,12 +50,9 @@ async function compose(backend: "exec" | "app-server", optIn: boolean, echoed: u
 }
 
 describe("operator steer opt-in", () => {
-  it("parses the flag and persona list like the Claude phase-2 flag", () => {
-    expect(operatorSteerSource("p", "1", undefined)).toBe("flag");
-    expect(operatorSteerSource("p", undefined, "a, p")).toBe("persona_list");
-    expect(operatorSteerSource("p", undefined, "a,b")).toBe("off");
-    expect(operatorSteerSource("p", undefined, "p,bad id")).toBe("off");
-    expect(operatorSteerSource("p", "0", undefined)).toBe("off");
+  it("reads the global flag from KAOIRO_CODEX_OPERATOR_STEER", async () => {
+    const on = await compose("app-server", "flag", { version: "v1", early: "steer" });
+    expect(on.linkOptions.operatorInputModes).toEqual({ version: "v1", early: "steer" });
   });
 
   it("declares operator_input_modes and wires the host only for an opted-in app-server persona", async () => {

@@ -34,6 +34,7 @@ import {
   makeStateChange,
   mergePendingDisplayNameSync,
   operatorApprovalGated,
+  personaOptInSource,
   requestSessionResetDescriptor,
   validateRequestSessionResetInput,
 } from "@kaoiro/agent-common";
@@ -156,18 +157,6 @@ function abandonmentCause(abandoned: TurnAbandonment): string {
 
 /** Per-persona opt-in for operator steering on the app-server backend,
  * mirroring the Claude phase-2 delivery flag. */
-export function operatorSteerSource(
-  personaId: string,
-  flag: string | undefined,
-  rawPersonas: string | undefined,
-): "flag" | "persona_list" | "off" {
-  if (flag === "1") return "flag";
-  if (rawPersonas === undefined) return "off";
-  const personas = rawPersonas.split(",").map(id => id.trim());
-  if (!personas.every(id => /^[A-Za-z0-9._-]+$/.test(id))) return "off";
-  return personas.includes(personaId) ? "persona_list" : "off";
-}
-
 export async function runCodexCli(dependencies: CodexCliDependencies = {}): Promise<void> {
   const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
   const readConfig = dependencies.loadConfig ?? loadConfig;
@@ -184,7 +173,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const config = readConfig(configPath);
   const backend = dependencies.backend ?? config.codex_backend ?? "exec";
   writeRedactedStderr(`codex: backend=${backend}\n`);
-  const operatorSteer = backend === "app-server" && operatorSteerSource(
+  const operatorSteer = backend === "app-server" && personaOptInSource(
     config.persona.id,
     process.env.KAOIRO_CODEX_OPERATOR_STEER,
     process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS,

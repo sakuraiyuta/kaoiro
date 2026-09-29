@@ -112,6 +112,8 @@ export type {
   TurnBoundary,
 } from "./request_session_reset.js";
 export { operatorApprovalGated } from "./approval_gate.js";
+export { personaOptInSource } from "./persona_opt_in.js";
+export type { PersonaOptInSource } from "./persona_opt_in.js";
 export type { ApprovalGateOptions } from "./approval_gate.js";
 export {
   initialMachineState,
