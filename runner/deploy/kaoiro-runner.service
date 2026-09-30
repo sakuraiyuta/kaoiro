@@ -1,7 +1,8 @@
 # kaoiro runner — systemd USER unit (issue #136).
 #
 # A user unit, never a root system service: the runner reads the host user's
-# ~/.claude / ~/.codex credentials and spawns wrapper processes inside that
+# ~/.claude credentials and Codex home (~/.codex, or CODEX_HOME from runner.env)
+# and spawns wrapper processes inside that
 # user's own repositories (ADR-0023).
 #
 # Install (replace @@DEPLOY_DIR@@ first — see runner/README.md「常駐化」):

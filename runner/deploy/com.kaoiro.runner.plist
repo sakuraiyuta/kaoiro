@@ -4,7 +4,8 @@
   kaoiro runner — launchd LaunchAgent (issue #136).
 
   A LaunchAgent, not a LaunchDaemon: the runner reads the login user's
-  ~/.claude / ~/.codex credentials and spawns wrappers inside that user's own
+  ~/.claude credentials and Codex home (~/.codex, or CODEX_HOME from runner.env)
+  and spawns wrappers inside that user's own
   repositories (ADR-0023).
 
   The auth token is deliberately NOT here — kaoiro-runner-launch.sh reads it

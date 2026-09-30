@@ -65,7 +65,8 @@ are out of scope; `kaoiro-runner-bootstrap.sh` is for initial installation only)
 | [`deploy/kaoiro-runner-common.sh`](../../runner/deploy/kaoiro-runner-common.sh) | Common logic sourced by the three scripts above (install root resolution, lock, symlink swap) |
 
 **Run as a user service** (not as a root system service). This is because the runner reads the
-host user's `~/.claude` / `~/.codex` credentials and spawns wrappers inside that user's repositories
+host user's `~/.claude` credentials and Codex home (`~/.codex`, or the
+directory `CODEX_HOME` names in `runner.env`; see [Codex home for production](codex-home.md)) and spawns wrappers inside that user's repositories
 ([ADR-0023](../adr/0023-host-runner-architecture.md)).
 
 **Do not write tokens in the unit/plist**. The launch shim reads from a 0600 env file.

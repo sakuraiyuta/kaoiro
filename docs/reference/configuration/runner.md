@@ -76,6 +76,30 @@ the runner service after changing it. For temporary dogfood investigation,
 launching with `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` also
 emits the full log to `tmp/dogfood-logs/runner.log`.
 
+## Codex home
+
+`CODEX_HOME` in `runner.env` selects the Codex state directory (auth, sessions,
+state databases) for the whole runner. It is an environment variable, not a
+`runner.config.json` key: the runner, every wrapper, the Codex SDK and the
+`codex app-server` child inherit it, so all of them agree without a relay, and
+it is read once at startup (restart the runner after changing it).
+
+- Unset or empty means `~/.codex`, as for the Codex CLI itself.
+- It must be an absolute path of an existing directory. Otherwise the runner
+  logs `runner: error — CODEX_HOME=... ; Codex launches are refused until it is
+  fixed` at startup and refuses every Codex launch (spawn, restart, reset,
+  switch and crash relaunch) with a `runner: codex launch refused for <agent>`
+  line, and reports `error` to the server; other engines are unaffected.
+- The runner logs `runner: codex home=<path>` at startup and each Codex wrapper
+  logs `codex: home=<path>`.
+- Readers: the runner's resume scan (`sessions.ts`) and the wrapper's rollout
+  readers (`rollout.ts`) resolve the directory through `codexHome()`
+  (`wrapper/codex/src/codex_home.ts`); no other source file may spell the
+  default path (a test scans for it).
+
+Operator procedure, verification and rollback:
+[Codex home for production](../../operations/codex-home.md).
+
 ## Codex backend
 
 The public Codex engine defaults to `codex exec`. Set `codex.backend` to

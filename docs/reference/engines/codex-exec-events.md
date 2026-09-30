@@ -202,12 +202,14 @@ kaoiro. Therefore:
   ([ADR-0014](../../adr/0014-session-resume-and-restore.md)).
 - Resume: Resume with `codex.resumeThread(thread_id)` on a restore instruction.
 - Enumeration: Asynchronously walk
-  `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` newest-first as a
+  `<codex home>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` newest-first as a
   fixed-depth date tree, matching the `cwd` field in the first `session_meta`
   line (confirmed with real files). Existence checks return early on a match and
   do not block the runner event loop in hot paths for spawn / resume /
   `switch_session` (#97). Do not depend on the internal index in
-  `~/.codex/state_5.sqlite`.
+  `<codex home>/state_5.sqlite`. The Codex home is `CODEX_HOME` when set and
+  non-empty, else `~/.codex`; the runner and the wrapper resolve it through one
+  function (`codexHome()`).
 - History replay (#103): Because SDK `resumeThread()` does not re-emit past
   events, the wrapper projects rollout `response_item` to user / assistant /
   tool_use / tool_result logs. Codex 0.144.1 code-mode tools persist as

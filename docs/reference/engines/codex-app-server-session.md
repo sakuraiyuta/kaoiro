@@ -41,7 +41,9 @@ caller with the attempt count and the signature line. Each retry writes one
 redacted line to stderr and to the `onDiagnostic` option. Measurements are in
 the [evidence note](../../evidence/codex-app-server/initialize-sqlite-race-2026-09-30.md);
 deployment ordering for large migrations is in the
-[backend runbook](../../operations/codex-backend-switch.md).
+[backend runbook](../../operations/codex-backend-switch.md). Production keeps
+its state in a dedicated `CODEX_HOME`, so the global CLI is not a source of the
+collision ([Codex home for production](../../operations/codex-home.md)).
 The probe opens no thread or bridge grandchild, so its pipes close with its
 child; the transport escalates an EOF-ignoring child to SIGKILL after five
 seconds, bounding the main session's startup wait to that shutdown interval.

@@ -21,7 +21,10 @@ On 2026-07-09, Codex was integrated into the macOS/Windows ChatGPT Desktop App.
   pull-down to switch**. The same panel has an “Open config.toml” button (an
   entry point to editing config.toml directly).
 - Desktop / CLI / IDE extensions share the same `~/.codex/config.toml`, so a
-  change anywhere affects all paths.
+  change anywhere affects all paths. This is the default Codex home. Where the
+  runner sets `CODEX_HOME` (a dedicated production home,
+  [Codex home for production](codex-home.md)), the kaoiro peers read
+  `<CODEX_HOME>/config.toml` instead and this file no longer affects them.
 
 Note that this changes it **only on the Codex side**, not on the ChatGPT web
 settings page (ChatGPT conversation and Codex coding are handled separately).
@@ -38,6 +41,9 @@ Codex CLI help:
     `~/.codex/config.toml`. Examples: `-c model="o3"`
 ```
 
+(The help text names `~/.codex/config.toml`; with `CODEX_HOME` set the file is
+`$CODEX_HOME/config.toml`.)
+
 - One-off override: `codex -m gpt-5.6-terra "..."`
 - Dot notation: `codex -c model="gpt-5.6-luna" "..."`
 
@@ -46,6 +52,11 @@ The same flags pass to subcommands such as `codex exec` / `codex mcp-server`
 specifying a slug outside the plan results in 400/404.
 
 ### (C) Persistent setting (`~/.codex/config.toml`)
+
+In this section `~/.codex` means the Codex home: `$CODEX_HOME` when it is set
+and non-empty, else `~/.codex`. Production peers run against a dedicated home
+when the runner sets `CODEX_HOME`; edit that home's `config.toml` for them
+([Codex home for production](codex-home.md)).
 
 ```toml
 # ~/.codex/config.toml
@@ -57,7 +68,7 @@ model = "gpt-5.6-sol"
 1. CLI flags (`--model` / `-c model=`)
 2. Profile (`[profiles.xxx]` section, enabled by `--profile`)
 3. Project config `.codex/config.toml` (trusted projects only)
-4. User config `~/.codex/config.toml`
+4. User config `<codex home>/config.toml` (`~/.codex/config.toml` by default)
 5. Account / plan default (implicit)
 
 The `CODEX_HOME` environment variable can also relocate `~/.codex` itself.

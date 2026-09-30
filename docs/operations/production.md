@@ -309,4 +309,6 @@ class as the reboot issue above; the fix is the same boot-order drop-in.
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
 - [Codex backend switching and rollback](codex-backend-switch.md) — backend selection, verification, and rollback (release note in [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
+- [Codex home for production](codex-home.md) — the dedicated `CODEX_HOME`,
+  its operator login, cutover and rollback
 - Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)

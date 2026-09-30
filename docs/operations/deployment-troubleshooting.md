@@ -36,9 +36,18 @@ identifies the known deployment state.
 
 **Remedy.** Ensure `agy` is installed and its directory is added to `PATH` in `runner.env` ([When using nvm / fnm / asdf](runner-install.md#when-using-nvm--fnm--asdf)). Restart the runner service and verify the runner journal (`journalctl --user -u kaoiro-runner`) shows `runner: antigravity agy version <version>` without warnings. If `conversation_summaries.db` emits a schema mismatch warning, check its `user_version` as described in [Antigravity session index](runner-install.md#antigravity-session-index).
 
+## Codex launches are refused: `CODEX_HOME` is unusable
+
+**Symptom.** The runner journal shows `runner: error — CODEX_HOME=<value> ...; Codex launches are refused until it is fixed` at startup, and `runner: codex launch refused for <agent>: CODEX_HOME=<value> ...` for each Codex spawn, restart or relaunch. Claude and Antigravity agents are unaffected. Started by hand, a Codex wrapper prints `CODEX_HOME points to "<value>", but that path does not exist`.
+
+**Diagnosis.** `CODEX_HOME` in `runner.env` is relative, names a path that does not exist, or names a file. The reason is the tail of the message (`is not an absolute path`, `does not exist`, `is not a directory`).
+
+**Remedy.** Create the directory (`mkdir -p` and `chmod 700`; Codex does not create it) or correct the path in `runner.env`, then restart the runner service. To go back to the default home, remove the line and restart. See [Codex home for production](codex-home.md).
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).
 - [Server update and rollback](server-update-and-rollback.md#44-failure-handling).
 - [Runner update and rollback](runner-update-and-rollback.md).
 - [Runner install and distribution](runner-install.md).
+- [Codex home for production](codex-home.md).

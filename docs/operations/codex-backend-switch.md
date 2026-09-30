@@ -53,6 +53,7 @@ failures still surface as an operator-visible error with the attempt count.
 
 Running the global `codex` CLI against the same `~/.codex` also migrates the
 shared state, and opens the same race window for the wrappers that start next.
-Whether the production wrappers should use a separate home is tracked in
-[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454); this runbook does
-not prescribe one.
+Production therefore uses a dedicated `CODEX_HOME` that only the pinned binary
+touches (operator decision, [issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454));
+the procedure is in [Codex home for production](codex-home.md). Rolling back
+the backend (above) keeps whichever home is configured.
