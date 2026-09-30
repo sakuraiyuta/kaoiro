@@ -850,17 +850,22 @@ export class Supervisor {
     if (agentId === null) return;
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
-    if (!this.#launchable(agentId, entry.parsed)) return;
-    if (isObject(payload)) {
-      const requestId = nonEmptyString(payload.request_id);
-      if (requestId !== undefined) {
-        // A deliberate restart belongs to this command, not to the spawn or
-        // switch that originally created the entry. New runners accept the
-        // server-issued id and relay it into the relaunched wrapper's
-        // transition_id; an old server omits it and retains the historical
-        // restart behaviour unchanged.
-        entry.parsed = { ...entry.parsed, requestId };
-      }
+    const requestId = isObject(payload)
+      ? nonEmptyString(payload.request_id)
+      : undefined;
+    if (!this.#launchable(agentId, entry.parsed)) {
+      // The server opened a planned-downtime window for this restart id; a
+      // failed result with the same id closes it and keeps the running child.
+      this.#fail(agentId, "error", requestId);
+      return;
+    }
+    if (requestId !== undefined) {
+      // A deliberate restart belongs to this command, not to the spawn or
+      // switch that originally created the entry. New runners accept the
+      // server-issued id and relay it into the relaunched wrapper's
+      // transition_id; an old server omits it and retains the historical
+      // restart behaviour unchanged.
+      entry.parsed = { ...entry.parsed, requestId };
     }
     this.#pendingSwitches.delete(agentId);
     entry.restarting = true;

@@ -713,6 +713,7 @@ describe("Supervisor.handleSpawn", () => {
     });
     h.sup.handleRestart({ agent_id: antigravity.agent_id });
     expect(h.children[0]!.kills).toBe(0);
+    expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
     expect(h.configs[0]).toMatchObject({ antigravity_cli_path: process.execPath });
   });
 
@@ -3244,24 +3245,46 @@ describe("Codex launch gate on an unusable CODEX_HOME", () => {
     expect(h.children).toHaveLength(2);
   });
 
-  it("keeps a running Codex wrapper when a restart is refused", () => {
+  it("keeps a running Codex wrapper when a restart is refused, and reports it under the restart id", () => {
     let problem: string | null = null;
     const h = harness({ codexHomeProblem: () => problem });
     h.sup.handleSpawn(codexSpawn);
     problem = "CODEX_HOME=/gone does not exist";
-    h.sup.handleRestart({ agent_id: codexSpawn.agent_id });
+    const before = h.results.length;
+    h.sup.handleRestart({ agent_id: codexSpawn.agent_id, request_id: "restart-1" });
     expect(h.children[0]!.kills).toBe(0);
+    expect(h.results).toHaveLength(before + 1);
+    expect(h.results.at(-1)).toMatchObject({
+      agent_id: codexSpawn.agent_id, ok: false, reason: "error", request_id: "restart-1",
+    });
+    // An old server sends no id: the failure is still reported, uncorrelated.
+    h.sup.handleRestart({ agent_id: codexSpawn.agent_id });
+    expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
+    expect(h.results.at(-1)).not.toHaveProperty("request_id");
+    // Control: once the problem is gone the same restart proceeds and reports nothing.
+    problem = null;
+    const after = h.results.length;
+    h.sup.handleRestart({ agent_id: codexSpawn.agent_id, request_id: "restart-2" });
+    expect(h.children[0]!.kills).toBe(1);
+    expect(h.results).toHaveLength(after);
   });
 
   // No injected check: the default composition reads the process environment.
   it("reads the runner environment when no check is injected", () => {
-    vi.stubEnv("CODEX_HOME", "/kaoiro-test/does/not/exist");
+    const scratch = mkdtempSync(join(tmpdir(), "kaoiro-codex-home-gate-"));
+    const later = join(scratch, "later");
+    vi.stubEnv("CODEX_HOME", later);
     try {
       const h = harness();
       h.sup.handleSpawn(codexSpawn);
       expect(h.children).toHaveLength(0);
       expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
-    } finally { vi.unstubAllEnvs(); }
+      // The directory is checked at every launch: creating it needs no restart.
+      mkdirSync(later);
+      h.sup.handleSpawn(codexSpawn);
+      expect(h.children).toHaveLength(1);
+      expect(h.results.at(-1)).toMatchObject({ ok: true });
+    } finally { vi.unstubAllEnvs(); rmSync(scratch, { recursive: true, force: true }); }
     const ok = harness();
     ok.sup.handleSpawn(codexSpawn);
     expect(ok.children).toHaveLength(1);
