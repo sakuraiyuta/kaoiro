@@ -191,9 +191,15 @@ The shared `PermissionBroker` shows a pending record in the single
 `pending_permission` slot ([ADR-0022](../../adr/0022-pending-permission-authoritative-source.md))
 with `tool_name` `codex:command_execution` or `codex:file_change`. The input
 is `{command, cwd, kind, reason?, command_actions?, network?, approval_id?}`
-or `{item_id, reason?, grant_root?, changes? | changes_unavailable}`, where
-`changes` comes from the latest `fileChange` item snapshot with that id (at
-most 256 per turn), plus `inactivity_limit_ms`. The 16 KB rule applies.
+or `{item_id, reason?, grant_root?, changes? | changes_unavailable}`, plus
+`inactivity_limit_ms`. `changes` comes from the latest `fileChange` item
+snapshot keyed by `(threadId, turnId, itemId)` of the request itself: an item
+id is not assumed unique across turns, so a late item of another turn, before
+or after the start response, never supplies or overwrites it. Snapshots are
+taken at wire receipt, including in the reservation window; once the turn is
+named, other turns' snapshots are discarded and no longer stored (at most 256
+per turn). Without a matching snapshot the input says `changes_unavailable`.
+The 16 KB rule applies.
 
 The broker's settle runs the record's callback before the slot changes and
 reports the cause: an operator allow writes `accept`, a deny `decline`, a
