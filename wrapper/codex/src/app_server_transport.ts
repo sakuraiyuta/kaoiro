@@ -373,8 +373,9 @@ export class AppServerTransport {
     active.evidence = [];
     const owner = active.owner;
     if (named !== undefined) {
+      // The buffer holds only this thread's notifications (#notification).
       if (active.beforeResponse.some(event => event.method === "turn/completed" &&
-          event.params.threadId === active.threadId && notificationTurnId(event) === named)) owner.terminal = true;
+          notificationTurnId(event) === named)) owner.terminal = true;
       owner.start = { kind: "started", turnId: named };
       this.#approvals.start(owner, this.#boundThreadId);
       return;
