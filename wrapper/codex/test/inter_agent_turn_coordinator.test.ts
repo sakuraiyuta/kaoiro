@@ -161,7 +161,8 @@ describe("recovery ownership", () => {
     coordinator.receive(message("active"), "reply-owed");
     const first = message("recover"), second = message("recover"); second.payload.turn_number = 3;
     coordinator.receive(first, "reply-owed"); coordinator.receive(second, "reply-owed");
-    expect(coordinator.claimRecovery("recover", "peer.agent", "T1", () => false)?.oversizedPending).toBe(true);
+    expect(coordinator.claimRecovery("recover", "peer.agent", "T1", () => false))
+      .toMatchObject({ oversizedPending: true, recoverySource: "handoff_queue" });
     expect(coordinator.unreadCount("T1")).toBe(2);
     const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
     expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);

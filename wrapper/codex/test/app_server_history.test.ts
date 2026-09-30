@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WrapperConfig } from "@kaoiro/agent-common";
+import { isFormattedInterAgentMessage } from "@kaoiro/agent-common";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { readAppServerHistory } from "../src/app_server_history.js";
 import { AppServerConnectionError, AppServerRpcError, type RpcObject } from "../src/app_server_rpc.js";
 import { MAX_HISTORY } from "../src/history.js";
+import { CodexInterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
 const config: WrapperConfig = { agent_id: "history", persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" },
   display_name: "Fuji", server_url: "ws://localhost/wrapper" };
@@ -23,7 +25,40 @@ function fixture(responses: unknown[]) {
 }
 const texts = (result: Awaited<ReturnType<typeof readAppServerHistory>>) => result.logs.map(log => (log.payload as { text?: string }).text).filter(Boolean);
 
+function generatedStatusBatch(): string {
+  const batches: Array<{ turnToken: string; peer: string; items: readonly unknown[]; conversationIds: readonly string[]; text: string }> = [];
+  let sequence = 0;
+  const coordinator = new CodexInterAgentTurnCoordinator({
+    createTurnToken: () => `history-${++sequence}`,
+    onDispatch: batch => batches.push(batch),
+  });
+  const status = (deliverySeq: number, conversationId: string): Envelope => ({
+    version: "0", agent_id: "server", persona: config.persona, display_name: "Kaoiro server",
+    ts: "2026-09-30T00:00:00Z", type: "inter_agent_message", state: "idle",
+    payload: { to: config.agent_id, conversation_id: conversationId, turn_number: 0, kind: "inform", body: "peer reconnected" },
+    delivery_seq: deliverySeq,
+  } as unknown as Envelope);
+  coordinator.receive(status(0, "status-blocker"), "reply-owed");
+  coordinator.receive(status(1, "status-first"), "reply-owed");
+  coordinator.receive(status(2, "status-second"), "reply-owed");
+  expect(batches).toHaveLength(1);
+  coordinator.settle(batches[0]!.turnToken);
+  coordinator.dispatchNextForPeer("server");
+  expect(batches).toHaveLength(2);
+  expect(batches[1]!.items).toHaveLength(2);
+  return batches[1]!.text;
+}
+
 describe("app-server history", () => {
+  it("skips a real two-notice server batch while retaining ordinary user text", async () => {
+    const batch = generatedStatusBatch();
+    expect(batch.startsWith('[Inter-agent message — to reply, call send_to_agent with conversation_id="status-first".]')).toBe(true);
+    expect(isFormattedInterAgentMessage(batch)).toBe(true);
+    expect(batch).not.toContain("reply to each conversation_id");
+    const f = fixture([thread(), thread([turn([user(batch), user("ordinary operator input")])])]);
+    expect(texts(await f.read())).toEqual(["ordinary operator input"]);
+  });
+
   it("reads metadata before full legacy items, defaults absent views, and retains both final answers", async () => {
     const f = fixture([thread(), thread([turn([user("hello"), assistant("first"), assistant("last")])])]);
     const result = await f.read();

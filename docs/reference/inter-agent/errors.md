@@ -195,6 +195,13 @@ remains; delivery gaps outside the planned window are out of scope.
 
 `stale_reply_basis` means the body was not admitted. Local origin/ticket errors report `send_not_attempted: true`; correction does not send a peer message. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
 
+When `stale_reply_basis` returns an empty `recovery`, no matching input is
+available for inline recovery now; this does not establish delivery loss or
+rule out later confirmed input. Do not retry on that conversation. Wait for a
+later confirmed input if peer input is needed, or omit `conversation_id` and
+restate the available context in a new conversation if it is enough to proceed.
+Oversized queued input and retained folded input have distinct guidance.
+
 `unbound_tool_call` identifies a call with no confirmed live wrapper input or
 validated Claude SDK notification owner; `stale_tool_call`
 identifies a call whose input has ended or been cancelled. Neither is a spent

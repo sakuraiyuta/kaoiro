@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { reconstructHistory, readSessionHistory, sessionSidecarPath
 } from "../src/history.js";
+import { isFormattedInterAgentMessage } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { InterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
 const config: WrapperConfig = {
   agent_id: "test.agent",
@@ -19,7 +21,43 @@ function reconstruct(lines: string[]): Envelope[] {
   return reconstructHistory(lines.join("\n"), config, "sess-1", now);
 }
 
+function generatedStatusBatch(): string {
+  const batches: Array<{ turnToken: string; peer: string; items: readonly unknown[]; conversationIds: readonly string[]; text: string }> = [];
+  let sequence = 0;
+  const coordinator = new InterAgentTurnCoordinator({
+    createTurnToken: () => `history-${++sequence}`,
+    onDispatch: batch => batches.push(batch),
+  });
+  const status = (deliverySeq: number, conversationId: string): Envelope => ({
+    version: "0", agent_id: "server", persona: config.persona, display_name: "Kaoiro server",
+    ts: "2026-09-30T00:00:00Z", type: "inter_agent_message", state: "idle",
+    payload: { to: config.agent_id, conversation_id: conversationId, turn_number: 0, kind: "inform", body: "peer reconnected" },
+    delivery_seq: deliverySeq,
+  } as unknown as Envelope);
+  coordinator.receive(status(0, "status-blocker"), "reply-owed");
+  coordinator.receive(status(1, "status-first"), "reply-owed");
+  coordinator.receive(status(2, "status-second"), "reply-owed");
+  expect(batches).toHaveLength(1);
+  coordinator.settle(batches[0]!.turnToken);
+  coordinator.dispatchNextForPeer("server");
+  expect(batches).toHaveLength(2);
+  expect(batches[1]!.items).toHaveLength(2);
+  return batches[1]!.text;
+}
+
 describe("reconstructHistory — JSONL transcript -> log envelopes", () => {
+  it("skips a real two-notice server batch while retaining ordinary user text", () => {
+    const batch = generatedStatusBatch();
+    expect(batch.startsWith('[Inter-agent message — to reply, call send_to_agent with conversation_id="status-first".]')).toBe(true);
+    expect(isFormattedInterAgentMessage(batch)).toBe(true);
+    expect(batch).not.toContain("reply to each conversation_id");
+    const envelopes = reconstruct([
+      line({ type: "user", message: { role: "user", content: batch } }),
+      line({ type: "user", message: { role: "user", content: "ordinary operator input" } }),
+    ]);
+    expect(envelopes.map(envelope => envelope.payload)).toEqual([{ kind: "user", text: "ordinary operator input" }]);
+  });
+
   it("maps user/assistant lines to ordered log envelopes, backfilling tool_name", () => {
     const envelopes = reconstruct([
       line({

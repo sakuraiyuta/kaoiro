@@ -2,10 +2,11 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { logEntryToPayload } from "@kaoiro/agent-common";
+import { isFormattedInterAgentMessage, logEntryToPayload } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { threadEventToLogs } from "../src/adapter.js";
+import { CodexInterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 import {
   readCodexHistory,
   reconstructCodexHistory,
@@ -33,7 +34,45 @@ function payloads(envelopes: Envelope[]) {
   return envelopes.map((envelope) => envelope.payload);
 }
 
+function generatedStatusBatch(): string {
+  const batches: Array<{ turnToken: string; peer: string; items: readonly unknown[]; conversationIds: readonly string[]; text: string }> = [];
+  let sequence = 0;
+  const coordinator = new CodexInterAgentTurnCoordinator({
+    createTurnToken: () => `history-${++sequence}`,
+    onDispatch: batch => batches.push(batch),
+  });
+  const status = (deliverySeq: number, conversationId: string): Envelope => ({
+    version: "0", agent_id: "server", persona: CONFIG.persona, display_name: "Kaoiro server",
+    ts: "2026-09-30T00:00:00Z", type: "inter_agent_message", state: "idle",
+    payload: { to: CONFIG.agent_id, conversation_id: conversationId, turn_number: 0, kind: "inform", body: "peer reconnected" },
+    delivery_seq: deliverySeq,
+  } as unknown as Envelope);
+  coordinator.receive(status(0, "status-blocker"), "reply-owed");
+  coordinator.receive(status(1, "status-first"), "reply-owed");
+  coordinator.receive(status(2, "status-second"), "reply-owed");
+  expect(batches).toHaveLength(1);
+  coordinator.settle(batches[0]!.turnToken);
+  coordinator.dispatchNextForPeer("server");
+  expect(batches).toHaveLength(2);
+  expect(batches[1]!.items).toHaveLength(2);
+  return batches[1]!.text;
+}
+
 describe("Codex rollout history reconstruction (#106)", () => {
+  it("skips a real two-notice server batch while retaining ordinary user text", () => {
+    const batch = generatedStatusBatch();
+    expect(batch.startsWith('[Inter-agent message — to reply, call send_to_agent with conversation_id="status-first".]')).toBe(true);
+    expect(isFormattedInterAgentMessage(batch)).toBe(true);
+    expect(batch).not.toContain("reply to each conversation_id");
+    const jsonl = [
+      line({ type: "message", role: "user", content: [{ type: "input_text", text: batch }] }),
+      line({ type: "message", role: "user", content: [{ type: "input_text", text: "ordinary operator input" }] }),
+    ].join("\n");
+    expect(payloads(reconstructCodexHistory(jsonl, CONFIG, "uuid-history", () => "NOW"))).toEqual([
+      { kind: "user", text: "ordinary operator input" },
+    ]);
+  });
+
   it("user / assistant / exec / MCP をlive adapterと対称なpayloadへ写像する", () => {
     const jsonl = [
       line({

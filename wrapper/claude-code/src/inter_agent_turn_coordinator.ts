@@ -165,12 +165,12 @@ export class InterAgentTurnCoordinator {
       + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
   }
 
-  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number): { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; commit: () => void; rollback: () => void } | undefined {
+  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number): { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; recoverySource?: "handoff_queue" | "retained_fold"; commit: () => void; rollback: () => void } | undefined {
     if (expectedTurn !== undefined) {
       const folded = this.#foldedRecovery.get(JSON.stringify([cid, peer, expectedTurn]));
       if (folded !== undefined) {
         const envelopes = [folded.envelope];
-        if (!fit(envelopes)) return { envelopes: [], oversizedPending: true, foldedEarlier: true, commit: () => {}, rollback: () => {} };
+        if (!fit(envelopes)) return { envelopes: [], oversizedPending: true, foldedEarlier: true, recoverySource: "retained_fold", commit: () => {}, rollback: () => {} };
         return { envelopes, foldedEarlier: true, commit: () => {}, rollback: () => {} };
       }
     }
@@ -182,7 +182,7 @@ export class InterAgentTurnCoordinator {
     for (const item of candidates) {
       if (item.envelope.payload.conversation_id !== cid || item.envelope.agent_id !== peer || item.envelope.payload.notice_type !== undefined) continue;
       if (!fit([...selected, item].map(i => i.envelope))) {
-        if (!selected.length) return { envelopes: [], oversizedPending: true, commit: () => {}, rollback: () => {} };
+        if (!selected.length) return { envelopes: [], oversizedPending: true, recoverySource: "handoff_queue", commit: () => {}, rollback: () => {} };
         break;
       }
       selected.push(item);

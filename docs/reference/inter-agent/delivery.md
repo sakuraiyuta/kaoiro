@@ -260,6 +260,11 @@ newer confirmed turn from the same peer and conversation, or a session-ledger
 reset retires them. Capacity eviction drops the oldest body and records
 `fold_recovery_capacity` with a count.
 
+If a retained folded body is too large for inline recovery, `oversized_pending`
+does not show that it is visible in the current SDK turn or that a fresh ticket
+exists. Follow the source-specific guidance and wait for confirmed input when
+the body is needed; do not infer visibility from a fold having happened before.
+
 A granted yield is usable only when the live turn has input linked to that
 work, no input linked to another work, and no operator instruction. The
 wrapper reserves an urgent root boundary, asks the server for `yield_claim`,

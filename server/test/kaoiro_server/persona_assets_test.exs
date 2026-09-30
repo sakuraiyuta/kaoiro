@@ -409,7 +409,10 @@ defmodule KaoiroServer.PersonaAssetsTest do
     use_ingest(tmp)
 
     assert PersonaAssets.known_persona?("default")
-    assert PersonaAssets.prompt("default") == FooterAssets.built_in_system_footer()
+    prompt = PersonaAssets.prompt("default")
+    assert prompt == FooterAssets.built_in_system_footer()
+    assert prompt =~ "`agent_id=server` / `[from server]` かつ `turn_number=0` の `inform` / `peer-error` は状態通知です。返信せず、`send_to_agent` を呼びません。"
+    assert prompt =~ "`stale_reply_basis` で `recovery` が空でも、配送喪失か後着かは判断できません。同じ失敗送信は再試行せず、相手の入力が必要なら確定入力を待ち、手元の文脈で進めるなら `conversation_id` を省略して新しいスレッドに文脈を添えます。"
     refute PersonaAssets.known_persona?("unknown")
     assert PersonaAssets.prompt("unknown") == nil
   end

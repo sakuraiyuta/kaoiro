@@ -25,3 +25,6 @@ conversation_id を省略して新規スレッドで送り直すこと。`stale_
 メッセージの行頭に `#` を置かない (markdown 見出しに化ける)。issue 参照は
 `issue #NNN` のように語を前置すること。レビュー便の `##` など、意図的な
 セクション見出しは自由に使ってよい。
+
+`agent_id=server` / `[from server]` かつ `turn_number=0` の `inform` / `peer-error` は状態通知です。返信せず、`send_to_agent` を呼びません。
+`stale_reply_basis` で `recovery` が空でも、配送喪失か後着かは判断できません。同じ失敗送信は再試行せず、相手の入力が必要なら確定入力を待ち、手元の文脈で進めるなら `conversation_id` を省略して新しいスレッドに文脈を添えます。

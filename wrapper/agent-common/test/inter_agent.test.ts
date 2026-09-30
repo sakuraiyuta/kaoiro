@@ -1021,6 +1021,24 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
 });
 
 describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEnd)", () => {
+  it("server turn-0 status creates no failure notice or turn history; a later peer turn remains actionable", async () => {
+    const { tool } = makeTool("self.agent");
+    const status = inboundEnvelope("cid-status", "inform", undefined, "server");
+    status.payload.turn_number = 0;
+    expect((await tool.receiveInbound(status)).inject).toBe(true);
+    expect(tool.notePendingInjection(status, "status-turn")).toBe(false);
+    expect(tool.pendingConversationIdsForTurn("status-turn")).toEqual([]);
+    expect(resolveTurn(tool, ["cid-status"], { code: "api_error", message: "status turn failed" }, "status-turn")).toEqual([]);
+
+    const peer = inboundEnvelope("cid-status", "inform", undefined, "peer.agent");
+    peer.payload.turn_number = 1;
+    expect((await tool.receiveInbound(peer)).inject).toBe(true);
+    expect(tool.notePendingInjection(peer, "peer-turn")).toBe(true);
+    const notices = resolveTurn(tool, ["cid-status"], { code: "api_error", message: "peer turn failed" }, "peer-turn");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.payload).toMatchObject({ to: "peer.agent", conversation_id: "cid-status" });
+  });
+
   it("resolveTurnEnd は notePendingInjection 済みの conversation を送信元宛の envelope にして返す", () => {
     const { tool, capture } = makeTool("self.agent");
     notePending(tool, inboundEnvelope("cnv-pending"));
@@ -1255,6 +1273,10 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
 });
 
 describe("canAddToCoalescedBatch / formatInboundMessages (issue #221 段階3)", () => {
+  it("formats an empty batch as empty text", () => {
+    expect(formatInboundMessages([])).toBe("");
+  });
+
   it("空 batch は候補の自前サイズに関わらず常に受理する (単独の巨大メッセージも捨てない)", () => {
     expect(canAddToCoalescedBatch(0, 0, MAX_COALESCED_BYTES + 1)).toBe(true);
   });
@@ -1298,6 +1320,10 @@ describe("canAddToCoalescedBatch / formatInboundMessages (issue #221 段階3)", 
     expect(firstIndex).toBeGreaterThanOrEqual(0);
     expect(secondIndex).toBeGreaterThan(firstIndex);
     expect(text).toContain("2 pending inter-agent messages");
+    expect(text.startsWith('[Inter-agent message — to reply, call send_to_agent with conversation_id="cnv-first".]')).toBe(true);
+    expect(text).toContain("in receipt order; each message includes its own conversation_id");
+    expect(text).not.toContain("reply to each conversation_id");
+    expect(isFormattedInterAgentMessage(text)).toBe(true);
   });
 });
 
@@ -1904,6 +1930,7 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
       .find((d) => d.name === "send_to_agent")!.description;
     expect(description).toMatch(/^For a normal reply to confirmed wrapper-delivered input, omit both `in_reply_to` and `reply_ticket`;/);
     expect(description).toContain("For a same-turn waiter or recovery result, copy both fields from its `reply_authorization`");
+    expect(description).toContain("returned as `status_notice` and needs no reply");
     expect(description).toContain("peer_error: {code, message, from}");
     expect(description).toContain("rate_limit = wait before retrying");
     expect(description).toContain("context_overflow = retrying is pointless");

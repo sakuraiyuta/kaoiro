@@ -178,6 +178,8 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     const folded = inbound("peer", "folded-cid", 2);
     coordinator.retainFolded([folded], "original-turn");
 
+    expect(coordinator.claimRecovery("folded-cid", "peer", "notification-turn", () => false, 2))
+      .toMatchObject({ envelopes: [], oversizedPending: true, recoverySource: "retained_fold" });
     const rehand = coordinator.claimRecovery("folded-cid", "peer", "notification-turn", () => true, 2);
     expect(rehand).toMatchObject({ envelopes: [folded], foldedEarlier: true });
     rehand?.commit();
@@ -439,7 +441,8 @@ describe("recovery ownership", () => {
     coordinator.receive(message("active"), "reply-owed");
     const first = message("recover"), second = message("recover"); second.payload.turn_number = 3;
     coordinator.receive(first, "reply-owed"); coordinator.receive(second, "reply-owed");
-    expect(coordinator.claimRecovery("recover", "peer.agent", "T1", () => false)?.oversizedPending).toBe(true);
+    expect(coordinator.claimRecovery("recover", "peer.agent", "T1", () => false))
+      .toMatchObject({ oversizedPending: true, recoverySource: "handoff_queue" });
     expect(coordinator.unreadCount("T1")).toBe(2);
     const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
     expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);

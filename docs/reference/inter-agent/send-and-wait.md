@@ -89,6 +89,14 @@ sending, the wrapper waits for the next inbound envelope for the same
 `conversation_id` and returns the complete envelope (including `body` and
 `meta`) in the **same tool result**.
 
+An ordinary peer envelope is returned as `reply`. A server-authored status
+envelope (`agent_id=server`, `turn_number=0`) is returned as `status_notice`;
+when it also carries an error, the result keeps `peer_error` alongside
+`status_notice`. A status notice has no peer reply authorization and does not
+need a response. In reply-basis v1, its delivery acknowledgement remains
+deferred until the tool result is committed to the SDK; a rejected or rolled
+back result does not acknowledge it.
+
 - Default is `false`; existing fire-and-forget and next-turn injection are
   unchanged.
 - `timeout_ms` defaults to 300,000 ms, must be a positive integer, and is

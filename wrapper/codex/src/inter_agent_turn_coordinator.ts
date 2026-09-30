@@ -110,7 +110,7 @@ export class CodexInterAgentTurnCoordinator {
       + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
   }
 
-  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean): { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined {
+  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean): { envelopes: readonly Envelope[]; oversizedPending?: boolean; recoverySource?: "handoff_queue"; commit: () => void; rollback: () => void } | undefined {
     const selected: CodexInterAgentBatchItem[] = [];
     const candidates = [
       ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken)).flatMap(batch => batch.items),
@@ -119,7 +119,7 @@ export class CodexInterAgentTurnCoordinator {
     for (const item of candidates) {
       if (item.envelope.payload.conversation_id !== cid || item.envelope.agent_id !== peer || item.envelope.payload.notice_type !== undefined) continue;
       if (!fit([...selected, item].map(i => i.envelope))) {
-        if (!selected.length) return { envelopes: [], oversizedPending: true, commit: () => {}, rollback: () => {} };
+        if (!selected.length) return { envelopes: [], oversizedPending: true, recoverySource: "handoff_queue", commit: () => {}, rollback: () => {} };
         break;
       }
       selected.push(item);

@@ -157,9 +157,24 @@ A stale rejection can return already-received, ordinary, undelivered envelopes
 for that peer/CID in arrival order. Recovery contains at most ten whole messages
 and at most 16,384 UTF-8 bytes for the complete serialized tool result, including
 authorization and unread advice. An oversized oldest message stays queued and
-produces `oversized_pending`; later messages cannot skip it. If a newer accepted
-message has not arrived locally, the result reports `awaiting_delivery`.
-`unread_remaining` and `more_pending` describe queued work after this handoff.
+produces `oversized_pending`; later messages cannot skip it. The tool result
+guidance distinguishes an ordinary queued item, which remains eligible for the
+normal input handoff, from a retained Claude fold, which may belong to an earlier
+SDK turn and does not prove that its body is visible or that authorization is
+available. Neither case permits resending the rejected body.
+
+With an empty recovery, the wrapper has no matching input available for inline
+recovery now. It cannot infer delivery loss or whether a later confirmed input
+will arrive. The result omits `awaiting_delivery` and unrelated aggregate unread
+counts. Do not retry the failed send on that conversation. If peer input is
+needed, wait for a later confirmed input and handle it normally; if the context
+already available is enough, omit `conversation_id` and restate that context in
+a new conversation. An empty recovery does not prevent a later ordinary input
+from arriving through the normal handoff path.
+
+`unread_remaining` and `more_pending` describe queued work only when a recovery
+envelope is actually returned; they do not predict whether the rejected
+conversation will receive later input.
 
 For Claude folds, `stale_reply_basis` can also return a previously folded
 envelope with `folded_earlier: true` and a fresh ticket, including after its
