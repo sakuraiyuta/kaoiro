@@ -27,6 +27,14 @@ an explicit optional Stage 1 backend selector on 2026-09-18; exec remains the
 default and rollback target. Stage 1 is implemented with this opt-in surface;
 this is not approval to replace the default.
 
+**Default backend (2026-10-01, operator decision).** The default Codex
+backend changes from exec to app-server just before the default-on
+in-flight delivery work
+([issue #463](https://github.com/sakuraiyuta/kaoiro/issues/463)) merges into
+`develop`. An opt-out keeps exec selectable as the rollback target. The
+measurements this ADR requires before a default-adapter switch still apply
+to that change.
+
 **Stage 2 (2026-09-30, [issue #366](https://github.com/sakuraiyuta/kaoiro/issues/366)).**
 The Stage 2 design was reviewed in four rounds on the issue and frozen at r4;
 the capability surface (`operator_input_modes`, separate from inter-agent

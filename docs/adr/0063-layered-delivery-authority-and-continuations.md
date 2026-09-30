@@ -190,6 +190,9 @@ Operator decision on 2026-10-01. Tracking:
 - **Feasibility.** Where an engine, backend or the join-time capability
   negotiation cannot meet this, the implementer presents an alternative in
   the design before implementing instead of narrowing the scope silently.
+- **Codex backend.** The default Codex backend becomes app-server just
+  before this work merges into `develop`; an opt-out returns to exec, which
+  has no in-flight input and therefore queues (ADR-0058).
 - **Unchanged.** The phasing order, the canary before the Claude default
   flip (issue #441), D2 (hard cancellation stays operator-only) and D9. Each
   default flip lands through the normal design and review flow with
