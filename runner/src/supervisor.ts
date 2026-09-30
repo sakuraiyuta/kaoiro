@@ -23,6 +23,7 @@ import type {
   WirePersona,
   WrapperConfig,
 } from "@kaoiro/protocol";
+import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { ChatGptPlan } from "./config.js";
 import {
@@ -210,6 +211,9 @@ export interface SupervisorOptions {
     cwd: string,
     engine: EngineKind,
   ) => MaybePromise<SessionMeta[]>;
+  /** Why Codex cannot be launched (an unusable CODEX_HOME), or null. Read at
+   *  every Codex launch; the default checks the runner's own environment. */
+  codexHomeProblem?: () => string | null;
   sessionExists?: (
     cwd: string,
     sessionId: string,
@@ -650,6 +654,7 @@ export class Supervisor {
     sessionId: string,
     engine: EngineKind,
   ) => MaybePromise<boolean>;
+  readonly #codexHomeProblem: () => string | null;
   readonly #now: () => number;
   readonly #resetTerminationGraceMs: number;
   #wrapperServerUrl: string;
@@ -692,6 +697,7 @@ export class Supervisor {
     this.#sendStopAgent = options.sendStopAgent;
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
+    this.#codexHomeProblem = options.codexHomeProblem ?? (() => defaultCodexHomeProblem());
     this.#now = options.now ?? (() => Date.now());
     this.#resetTerminationGraceMs =
       options.resetTerminationGraceMs ?? RESET_TERMINATION_GRACE_MS;
@@ -844,7 +850,7 @@ export class Supervisor {
     if (agentId === null) return;
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) return;
+    if (!this.#launchable(agentId, entry.parsed)) return;
     if (isObject(payload)) {
       const requestId = nonEmptyString(payload.request_id);
       if (requestId !== undefined) {
@@ -942,7 +948,7 @@ export class Supervisor {
       this.#fail(agentId, "session_not_found", requestId);
       return;
     }
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+    if (!this.#launchable(agentId, entry.parsed)) {
       this.#fail(agentId, "error", requestId);
       return;
     }
@@ -1075,7 +1081,7 @@ export class Supervisor {
     const mode = payload.mode;
     if (requestId === undefined || requestId === "") return;
     if (mode !== "new" && mode !== "clear") return;
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+    if (!this.#launchable(agentId, entry.parsed)) {
       this.#sendResetResult({
         version: "0",
         host_id: this.#hostId,
@@ -1377,7 +1383,18 @@ export class Supervisor {
     });
   }
 
-  #antigravityLaunchable(agentId: string, parsed: ParsedSpawn): boolean {
+  #launchable(agentId: string, parsed: ParsedSpawn): boolean {
+    if (parsed.engine === "codex") {
+      // Fail closed: with an unusable CODEX_HOME every Codex wrapper would exit
+      // at once and crash-loop until the restart cap. Other engines are
+      // unaffected.
+      const problem = this.#codexHomeProblem();
+      if (problem === null) return true;
+      process.stderr.write(
+        `runner: codex launch refused for ${agentId}: ${problem}\n`,
+      );
+      return false;
+    }
     if (parsed.engine !== "antigravity") return true;
     const executable = this.#antigravityExecutable;
     if (executable === undefined) return true;
@@ -1463,7 +1480,7 @@ export class Supervisor {
   }
 
   #start(agentId: string, parsed: ParsedSpawn): boolean {
-    if (!this.#antigravityLaunchable(agentId, parsed)) return false;
+    if (!this.#launchable(agentId, parsed)) return false;
     // Resolve the permission ceiling ONCE here and pin it on the ChildEntry;
     // #launchSpawn already rejected a conflicting initial config, so the
     // resolution is safe (issue #359).
@@ -1626,7 +1643,7 @@ export class Supervisor {
   }
 
   #relaunch(agentId: string, entry: ChildEntry): void {
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+    if (!this.#launchable(agentId, entry.parsed)) {
       this.#remove(agentId, entry);
       return;
     }
@@ -1671,7 +1688,7 @@ export class Supervisor {
   #relaunchForReset(agentId: string, entry: ChildEntry): void {
     const pending = entry.pendingReset;
     if (pending === undefined) return;
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+    if (!this.#launchable(agentId, entry.parsed)) {
       this.#rollback(agentId, entry, "spawn_failed");
       return;
     }
@@ -1763,7 +1780,7 @@ export class Supervisor {
     }
     // Restore entry.parsed to the pre-reset state.
     entry.parsed = { ...entry.parsed, resumeSessionId: rollbackSid };
-    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+    if (!this.#launchable(agentId, entry.parsed)) {
       this.#sendResetResult({
         version: "0",
         host_id: this.#hostId,

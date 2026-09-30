@@ -13,6 +13,7 @@
 //   fail-closed and rejects every runner, since runners have no
 //   server-minted signed-token path (issue #133).
 
+import { codexHome, codexHomeProblem } from "@kaoiro/codex";
 import type { EngineCatalogResult, EngineModelInfo } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
 import {
@@ -216,6 +217,14 @@ export async function runRunnerCli(
   // binary. A live epoch keeps running its already-verified old binary until
   // then — not an active gap, since that binary's gate registration was
   // already confirmed.
+
+  process.stderr.write(`runner: codex home=${codexHome()}\n`);
+  const codexHomeIssue = codexHomeProblem();
+  if (codexHomeIssue !== null) {
+    process.stderr.write(
+      `runner: error — ${codexHomeIssue}; Codex launches are refused until it is fixed\n`,
+    );
+  }
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).

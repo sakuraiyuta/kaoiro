@@ -283,3 +283,12 @@ describe("delivery stages when turn/start may or may not have been delivered", (
     } finally { await f.close(); }
   });
 });
+
+it("reports the Codex home it runs against", async () => {
+  const stderr = vi.spyOn(process.stderr, "write");
+  const f = await cliAppFixture(false, "app-server");
+  try {
+    expect(process.env.CODEX_HOME, "premise: the fixture isolates CODEX_HOME").toBeTruthy();
+    expect(stderr.mock.calls.some(([text]) => String(text) === `codex: home=${process.env.CODEX_HOME}\n`)).toBe(true);
+  } finally { stderr.mockRestore();await f.close(); }
+});

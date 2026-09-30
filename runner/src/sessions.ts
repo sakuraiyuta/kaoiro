@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { codexHome } from "@kaoiro/codex";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
 
 /** session_id rides a JSONL filename and the wrapper's `--resume` arg, so its
@@ -605,7 +606,7 @@ export function sessionExistsIn(dir: string, sessionId: string): boolean {
 
 /** Root of the codex session store. */
 export function codexSessionsRoot(): string {
-  return join(homedir(), ".codex", "sessions");
+  return join(codexHome(), "sessions");
 }
 
 /** rollout filename -> session id (the trailing UUID), or null. */

@@ -88,6 +88,7 @@ function harness(
     contextWorkBudgetPercent?: number;
     antigravityExecutable?: AgyExecutableResolution;
     antigravityProbeTimeoutMs?: number;
+    codexHomeProblem?: () => string | null;
     antigravityMax?: {
       max_sandbox?: "read-only" | "workspace-write" | "danger-full-access";
       max_approval?: "untrusted" | "on-request" | "local" | "never";
@@ -145,6 +146,9 @@ function harness(
     ...(opts.antigravityMax === undefined
       ? {}
       : { antigravityMax: opts.antigravityMax }),
+    ...(opts.codexHomeProblem === undefined
+      ? {}
+      : { codexHomeProblem: opts.codexHomeProblem }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
     ...(opts.resetTerminationGraceMs === undefined
       ? {}
@@ -1608,7 +1612,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
   });
 
   // issue #381: antigravity の reset_session 経路自体は他 engine と共通
-  // (#relaunchForReset) だが、`#antigravityLaunchable` gate を通した上での
+  // (#relaunchForReset) だが、`#launchable` gate を通した上での
   // 正常系は今まで pin されていなかった。ここで pin する責務は relaunch の
   // resumeSessionId が落ちることだけ — その後 wrapper (host.ts
   // #turnArguments) が `--conversation` を付けないことは
@@ -3199,5 +3203,67 @@ describe("Supervisor.handleResetSession — transition 相関子 (#150)", () => 
     h.children[0]!.exit();
 
     expect(h.configs[1]).toMatchObject({ transition_id: "rs-reset-1" });
+  });
+});
+
+describe("Codex launch gate on an unusable CODEX_HOME", () => {
+  const codexSpawn = { ...spawnMsg, agent_id: "lab-pc-1.codex-a", engine: "codex" };
+
+  it("launches Codex when CODEX_HOME is fine", () => {
+    const h = harness({ codexHomeProblem: () => null });
+    h.sup.handleSpawn(codexSpawn);
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({ ok: true });
+  });
+
+  it("refuses only Codex spawns, and says why", () => {
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      const h = harness({ codexHomeProblem: () => "CODEX_HOME=/nope does not exist" });
+      h.sup.handleSpawn(codexSpawn);
+      expect(h.children).toHaveLength(0);
+      expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
+      expect(stderr.mock.calls.some(([text]) => String(text).includes(
+        "runner: codex launch refused for lab-pc-1.codex-a: CODEX_HOME=/nope does not exist"))).toBe(true);
+      h.sup.handleSpawn({ ...spawnMsg, agent_id: "lab-pc-1.claude-a", engine: "claude-code" });
+      expect(h.children).toHaveLength(1);
+      expect(h.results.at(-1)).toMatchObject({ ok: true });
+    } finally { stderr.mockRestore(); }
+  });
+
+  it("does not crash-loop a Codex wrapper once CODEX_HOME became unusable", () => {
+    let problem: string | null = null;
+    const h = harness({ codexHomeProblem: () => problem });
+    h.sup.handleSpawn(codexSpawn);
+    expect(h.children).toHaveLength(1);
+    problem = "CODEX_HOME=/gone does not exist";
+    h.children[0]!.exit();
+    expect(h.children).toHaveLength(1);
+    problem = null;
+    h.sup.handleSpawn(codexSpawn);
+    expect(h.children).toHaveLength(2);
+  });
+
+  it("keeps a running Codex wrapper when a restart is refused", () => {
+    let problem: string | null = null;
+    const h = harness({ codexHomeProblem: () => problem });
+    h.sup.handleSpawn(codexSpawn);
+    problem = "CODEX_HOME=/gone does not exist";
+    h.sup.handleRestart({ agent_id: codexSpawn.agent_id });
+    expect(h.children[0]!.kills).toBe(0);
+  });
+
+  // No injected check: the default composition reads the process environment.
+  it("reads the runner environment when no check is injected", () => {
+    vi.stubEnv("CODEX_HOME", "/kaoiro-test/does/not/exist");
+    try {
+      const h = harness();
+      h.sup.handleSpawn(codexSpawn);
+      expect(h.children).toHaveLength(0);
+      expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
+    } finally { vi.unstubAllEnvs(); }
+    const ok = harness();
+    ok.sup.handleSpawn(codexSpawn);
+    expect(ok.children).toHaveLength(1);
   });
 });

@@ -58,6 +58,7 @@ import {
 } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
+import { codexHome } from "./codex_home.js";
 import { readCodexHistory } from "./history.js";
 import {
   codexRolloutsRoot,
@@ -171,6 +172,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const config = readConfig(configPath);
   const backend = dependencies.backend ?? config.codex_backend ?? "exec";
   writeRedactedStderr(`codex: backend=${backend}\n`);
+  writeRedactedStderr(`codex: home=${codexHome()}\n`);
   const operatorSteer = backend === "app-server" && personaOptInSource(
     config.persona.id,
     process.env.KAOIRO_CODEX_OPERATOR_STEER,

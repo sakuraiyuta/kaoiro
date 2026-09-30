@@ -12,9 +12,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { PermissionConfiguration } from "@kaoiro/protocol";
+import { codexHome } from "./codex_home.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const TAIL_BYTES = 512 * 1024;
@@ -40,7 +40,7 @@ export interface CodexPermissionTurnContext {
 }
 
 export function codexRolloutsRoot(): string {
-  return join(homedir(), ".codex", "sessions");
+  return join(codexHome(), "sessions");
 }
 
 /** Substrings a resume failure's free-form error detail carries when the

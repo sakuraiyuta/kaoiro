@@ -13,7 +13,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   encodeCwd,
   isValidSessionId,
@@ -665,5 +665,47 @@ describe("codex rollouts — 同一 session_id が複数 rollout に分散 (#101
       newestUuid,
       uuid,
     ]);
+  });
+});
+
+describe("codex session store follows CODEX_HOME", () => {
+  const uuid = "019f4bdb-d821-7631-aee1-ec7982060454";
+  const dirs: string[] = [];
+  const scratch = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-codex-home-sessions-"));
+    dirs.push(dir);
+    return dir;
+  };
+  const withRollout = (home: string): string => {
+    const day = join(home, "sessions", "2026", "09", "30");
+    mkdirSync(day, { recursive: true });
+    writeFileSync(
+      join(day, `rollout-2026-09-30T10-00-00-${uuid}.jsonl`),
+      `${JSON.stringify({ type: "session_meta", payload: { id: uuid, cwd: "/repo/a" } })}\n`,
+    );
+    return home;
+  };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("lists and finds a session under CODEX_HOME", async () => {
+    vi.stubEnv("CODEX_HOME", withRollout(scratch()));
+    const listed = await listSessions("/repo/a", "codex");
+    expect(listed.map((meta) => meta.session_id)).toEqual([uuid]);
+    await expect(sessionExists("/repo/a", uuid, "codex")).resolves.toBe(true);
+  });
+
+  it("does not consult ~/.codex once CODEX_HOME points elsewhere", async () => {
+    const fakeHome = scratch();
+    withRollout(join(fakeHome, ".codex"));
+    vi.stubEnv("HOME", fakeHome);
+    vi.stubEnv("CODEX_HOME", scratch());
+    await expect(listSessions("/repo/a", "codex")).resolves.toEqual([]);
+    await expect(sessionExists("/repo/a", uuid, "codex")).resolves.toBe(false);
+    // Control: the same fixture is found through ~/.codex when CODEX_HOME is unset.
+    vi.stubEnv("CODEX_HOME", undefined);
+    await expect(sessionExists("/repo/a", uuid, "codex")).resolves.toBe(true);
   });
 });
