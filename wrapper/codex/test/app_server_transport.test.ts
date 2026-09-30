@@ -636,7 +636,7 @@ it.each([false, true])("reports abnormal disconnection once but suppresses self-
 describe("request write state", () => {
   const rpcFixture = (writeHook?: WriteHook, requestTimeoutMs?: number) => {
     const f = fixture(writeHook);
-    const rpc = new AppServerRpc({ spawnChild: () => f.child, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) });
+    const rpc = new AppServerRpc({ spawnChild: () => f.child, shutdownTimeoutMs: 50, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) });
     closers.push(() => rpc.close());
     return { ...f, rpc };
   };
