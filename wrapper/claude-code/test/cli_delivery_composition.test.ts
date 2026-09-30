@@ -262,12 +262,16 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     } finally { release(); host?.close(); await running; vi.unstubAllEnvs(); }
   });
 
-  it("hands off an oversized recovery candidate through the Claude fold hook", async () => {
+  it("recovers an oversized queued early item before the Claude fold hook hands it off", async () => {
     vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
     let linkOptions!: Record<string, any>;
     let host!: AgentHost;
     let ready!: () => void;
     const rootReady = new Promise<void>(resolve => { ready = resolve; });
+    let requestRecovery!: () => void;
+    const recoveryRequested = new Promise<void>(resolve => { requestRecovery = resolve; });
+    let recoveryReturned!: (value: Record<string, any>) => void;
+    const recoveryResult = new Promise<Record<string, any>>(resolve => { recoveryReturned = resolve; });
     const oversizedBody = "x".repeat(15_700);
     const stages: Array<Record<string, unknown>> = [];
     const acknowledged: number[] = [];
@@ -286,7 +290,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           acknowledgeInterAgentDelivery: (seq: number) => acknowledged.push(seq),
           retireInterAgentDeliveries: () => true,
           flushInterAgentRetirements: async () => {},
-          sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+          sendInterAgent: async () => ({ kind: "rejected", reason: "stale_reply_basis", details: { expected_peer_turn: 2 } }),
           send: () => {}, close: () => {}, currentSessionId: () => null,
           setSessionId: () => {}, reportDisconnectIntent: async () => true,
         } as never;
@@ -306,11 +310,35 @@ describe("Claude CLI delivery composition (issue #247)", () => {
               }, undefined, signal);
               yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
               ready();
+              await recoveryRequested;
+              const mcp = sdkOptions.mcpServers.kaoiro as McpSdkServerConfigWithInstance;
+              type Transport = Parameters<typeof mcp.instance.connect>[0];
+              const responses: Array<Record<string, any>> = [];
+              const transport: Transport = { start: async () => {}, close: async () => {}, send: async message => { responses.push(message as Record<string, any>); } };
+              await mcp.instance.connect(transport);
+              try {
+                const toolUseId = "root-stale-reply";
+                await sdkOptions.hooks.PreToolUse.at(-1).hooks[0]({
+                  hook_event_name: "PreToolUse", session_id: "s", prompt_id: "p1", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: toolUseId,
+                }, toolUseId, signal);
+                transport.onmessage!({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+                  name: "send_to_agent", arguments: { to: "peer.agent", conversation_id: "same-cid", kind: "response", body: "reply" },
+                  _meta: { "claudecode/toolUseId": toolUseId },
+                } });
+                await vi.waitFor(() => expect(responses).toHaveLength(1));
+                recoveryReturned(JSON.parse(responses[0]!.result.content[0].text) as Record<string, any>);
+              } finally { await mcp.instance.close(); }
               const fold = (await input.next()).value!;
               const foldText = fold.message.content as string;
               foldTexts.push(foldText);
               await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: foldText,
+              }, undefined, signal);
+              const oversizedFold = (await input.next()).value!;
+              const oversizedFoldText = oversizedFold.message.content as string;
+              foldTexts.push(oversizedFoldText);
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: oversizedFoldText,
               }, undefined, signal);
               yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
             })();
@@ -328,24 +356,37 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       root.payload.conversation_id = "same-cid";
       await linkOptions.onInterAgentMessage(root);
       await rootReady;
-      const oversized = inboundEnvelope(2, 2);
+      const blocker = inboundEnvelope(2);
+      blocker.payload.conversation_id = "blocker-cid";
+      blocker.payload.body = "blocker body";
+      blocker.payload.delivery_authority = { requested: "early", granted: "early" };
+      await linkOptions.onInterAgentMessage(blocker);
+      await vi.waitFor(() => expect(host.hasPendingPushedReceipt()).toBe(true));
+      const oversized = inboundEnvelope(3, 2);
       oversized.payload.conversation_id = "same-cid";
       oversized.payload.body = oversizedBody;
       oversized.payload.delivery_authority = { requested: "early", granted: "early" };
       await linkOptions.onInterAgentMessage(oversized);
+      requestRecovery();
+      const recovered = await recoveryResult;
       await running;
       expect(rootTexts[0]).not.toContain("reply_authorization:");
-      expect(foldTexts).toHaveLength(1);
-      expect(foldTexts[0]).toContain(oversizedBody);
-      const authorizationLine = foldTexts[0]!.split("\n").find(line => line.startsWith("reply_authorization: "));
+      expect(recovered.oversized_pending).toBe(true);
+      expect(recovered.recovery).toEqual([]);
+      expect(recovered.guidance).toContain("too large for inline recovery");
+      expect(recovered.guidance).toContain("If it arrives in a Claude fold with reply_authorization");
+      expect(foldTexts).toHaveLength(2);
+      expect(foldTexts[0]).toContain("blocker body");
+      expect(foldTexts[1]).toContain(oversizedBody);
+      const authorizationLine = foldTexts[1]!.split("\n").find(line => line.startsWith("reply_authorization: "));
       expect(authorizationLine).toBeDefined();
       const authorization = JSON.parse(authorizationLine!.slice("reply_authorization: ".length)) as { in_reply_to: number; reply_ticket: string };
       expect(authorization.in_reply_to).toBe(2);
       expect(authorization.reply_ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      expect(Buffer.byteLength(foldTexts[0]!, "utf8")).toBeLessThanOrEqual(MAX_COALESCED_BYTES);
-      expect(stages).toContainEqual(expect.objectContaining({ delivery_seq: 2, stage: "submitted", handoff: "fold_hook" }));
-      expect(acknowledged).toEqual([1, 2]);
-    } finally { host?.close(); await running; vi.unstubAllEnvs(); }
+      expect(Buffer.byteLength(foldTexts[1]!, "utf8")).toBeLessThanOrEqual(MAX_COALESCED_BYTES);
+      expect(stages).toContainEqual(expect.objectContaining({ delivery_seq: 3, stage: "submitted", handoff: "fold_hook" }));
+      expect(acknowledged).toEqual([1, 2, 3]);
+    } finally { requestRecovery(); host?.close(); await running; vi.unstubAllEnvs(); }
   });
 
   it("keeps a cut root F active for its peer until F settles before dispatching the next same-CID item", async () => {
