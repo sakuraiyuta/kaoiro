@@ -72,7 +72,7 @@ CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
 | `auth.json` | Created by the login above. |
 | `AGENTS.md`, `agents/`, `model-profiles/`, `hooks/` | Symlinks into the operator's ai-settings checkout, as in `~/.codex`, so the peers keep their global instructions. |
 | `config.toml` | Written by hand, minimal: `model`, `model_reasoning_effort`, `project_doc_fallback_filenames`, and `trust_level` for the directories the peers run in. Not copied from `~/.codex`. |
-| `[[hooks.*]]` | See "Hooks". |
+| `[[hooks.*]]` and `[hooks.state]` | Carried, with re-keyed trust entries. See "Hooks". |
 | `rules/default.rules` | Not carried: it holds the operator's own interactive approvals. |
 | `sessions/`, `state_5.sqlite`, `thread_history_1.sqlite`, other databases, caches, plugins, history | Not carried. Created fresh by the pinned binary. |
 
@@ -85,15 +85,38 @@ follows in a new home (probe P2, pinned 0.156.1, recorded in
 - A hook without a matching `[hooks.state]` trust entry is skipped silently.
   The trust key is `<absolute path of config.toml>:<event>:0:0`; the `sha256:`
   value of an existing entry works when re-keyed to the new `config.toml` path.
-- The script reads `$HOME/.codex/model-profiles`, whatever `CODEX_HOME` is, so
-  carrying it unchanged keeps a dependency on the old home's symlink.
-- The hook process sees `CODEX_HOME`, so the script can follow it
-  (`${CODEX_HOME:-$HOME/.codex}/model-profiles`) without changing the hook
-  definition or its trust.
+- Before ai-settings commit `6f70337`, the script read `$HOME/.codex/model-profiles`
+  whatever `CODEX_HOME` was. From that commit it reads
+  `${CODEX_HOME:-$HOME/.codex}/model-profiles` (empty counts as unset, as for
+  Codex); the hook process sees `CODEX_HOME`, so the hook definition and its
+  trust do not change.
 
-Whether to carry the hook, and whether to change that line in ai-settings, is
-recorded in issue #454. A wrong or missing trust entry fails silently, so the
-cutover checks that the injection happened (below).
+Decision (D2, recorded in
+[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454#issuecomment-5902848788)):
+
+1. Carry the hook into the new home, after the ai-settings change above is on the
+   checkout that `~/.codex/hooks` points to (the block below checks it).
+2. Keep the `command` string exactly `bash ~/.codex/hooks/model-profile.sh`. The
+   trust hash covers that definition, so an unchanged string lets the hash of the
+   existing entry be reused under the new key.
+3. Keep the `~/.codex/hooks` symlink. The `command` is resolved through `~` (the
+   operator's `HOME`), not through `CODEX_HOME`, so the production hook still
+   depends on `~/.codex/hooks` pointing at the ai-settings checkout. Removing or
+   retargeting that link, or deleting `~/.codex`, disables the hook in production
+   without an error. The new home's own `model-profiles` symlink is the second
+   dependency: the script reads it there.
+
+How each failure shows up:
+
+| Failure | Result |
+| --- | --- |
+| No matching `[hooks.state]` trust entry | The hook is skipped silently: no marker. |
+| `~/.codex/hooks` link gone or retargeted | The command cannot run: no marker. |
+| No `model-profiles` link in the new home | The script exits at `cannot read resolver` before writing a marker: no marker. It does not fall back to `~/.codex`. |
+| `model-profiles` present but no profile matches the model | A marker is written with the key `none`. |
+
+The cutover therefore checks the content of the marker, not only its existence
+(step 5 below).
 
 ## Create the new home's contents (needs the operator)
 
@@ -131,12 +154,20 @@ EOF
 chmod 600 "$H/config.toml"
 ```
 
-Only if the model-profile hook is carried (the decision is recorded in
-[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454); skip this block
-otherwise). The `command` string must stay exactly as below, because the trust
-hash belongs to that definition. Each `[hooks.state]` key is the event name and
-the absolute path of the new `config.toml`, and each hash is copied from the same
-event's entry in `~/.codex/config.toml`:
+The model-profile hook (decision D2 in "Hooks"). First confirm that the script
+behind `~/.codex/hooks` follows `CODEX_HOME` and that the new home resolves
+profiles; each command must print `ok`, and if either does not, stop and fix it
+before going on:
+
+```sh
+grep -q '^profile_dir="${CODEX_HOME:-' ~/.codex/hooks/model-profile.sh && echo ok
+test -r "$H/model-profiles/resolve.sh" && echo ok
+```
+
+The `command` string must stay exactly as below, because the trust hash belongs
+to that definition. Each `[hooks.state]` key is the event name and the absolute
+path of the new `config.toml`, and each hash is copied from the same event's
+entry in `~/.codex/config.toml`:
 
 ```sh
 grep -A1 '^\[hooks\.state\.' ~/.codex/config.toml   # the two entries; hashes are not secrets
@@ -162,9 +193,8 @@ trusted_hash = "<sha256:... of the user_prompt_submit entry>"
 EOF
 ```
 
-Without a matching trust entry the hook is skipped silently. The command above
-still reads `$HOME/.codex/model-profiles` unless the ai-settings script was
-changed to follow `CODEX_HOME` (see "Hooks").
+A trust entry that does not match is skipped silently, so the cutover checks the
+marker (step 5).
 
 ## Cutover
 
@@ -179,9 +209,13 @@ changed to follow `CODEX_HOME` (see "Hooks").
    Claude and Antigravity agents restore as usual. Codex restores end with
    `session_not_found`, because the new home has no sessions.
 5. Start the Codex peers as new sessions from the dashboard, one first. After its
-   first good turn check the rate-limit windows, one permission decision, and
-   (if the hook is carried) that `~/.cache/codex-cc/.codex-cc-model-injected-<session>`
-   exists. Then start the others.
+   first good turn check the rate-limit windows, one permission decision, and the
+   hook marker: `cat ~/.cache/codex-cc/.codex-cc-model-injected-<session>` must
+   print the profile key expected for that peer's model (for example `gpt-6` for
+   `gpt-6-sol`), and `ls <CODEX_HOME>/model-profiles/<key>.md` must exist. No marker means
+   the hook did not inject (trust entry, `~/.codex/hooks` link or the new home's
+   `model-profiles` link); the key `none` means no profile matches the model, so
+   the peer runs without its profile. Then start the others.
 6. Verify the separation (below).
 
 ## Rollback
