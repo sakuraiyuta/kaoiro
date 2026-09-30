@@ -247,7 +247,47 @@ describe("fileChange snapshots are bound to the requesting turn", () => {
     await h.finish();
   });
 
-  it("other turns' items cannot fill the bound: after naming they are not stored, and window ones are pruned", async () => {
+  // R2: in the window, items of other turns must not take the budget the
+  // named turn's items need.
+  for (const other of ["t-old", "t-foreign"] as const) {
+    it(`in the reservation window: 256 items of ${other} before the current item do not starve it`, async () => {
+      const h = await afterOldTurn();
+      for (let i = 0; i < 256; i += 1) h.item(other, "item/started", { ...fc("old.txt"), id: `w-${i}` });
+      h.item("t-new", "item/started", fc("new.txt"));
+      askFile(h, 5, "t-new"); await settle();
+      h.startNamed("t-new"); await settle();
+      expect(h.turnError).toBeUndefined();
+      expect(shownChanges(h)).toMatchObject({ changes: [{ path: "new.txt" }] });
+      await h.finish();
+    });
+  }
+
+  it("negative control: the current turn alone past the bound keeps its first 256 items", async () => {
+    const h = await afterOldTurn();
+    // 200 in the window and 57 after naming: the 257th item is not stored.
+    for (let i = 0; i < 200; i += 1) h.item("t-new", "item/started", { ...fc(`c-${i}.txt`), id: `c-${i}` });
+    h.startNamed("t-new"); await settle();
+    for (let i = 200; i < 257; i += 1) h.item("t-new", "item/started", { ...fc(`c-${i}.txt`), id: `c-${i}` });
+    askFile(h, 5, "t-new", "c-0"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes: [{ path: "c-0.txt" }] });
+    askFile(h, 6, "t-new", "c-255"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes: [{ path: "c-255.txt" }] });
+    askFile(h, 7, "t-new", "c-256"); await settle();
+    expect(shownChanges(h)).toMatchObject({ item_id: "c-256", changes_unavailable: true });
+    await h.finish();
+  });
+
+  it("an item already stored is updated even when the bound is reached", async () => {
+    const h = await afterOldTurn();
+    h.startNamed("t-new"); await settle();
+    for (let i = 0; i < 256; i += 1) h.item("t-new", "item/started", { ...fc(`c-${i}.txt`), id: `c-${i}` });
+    h.item("t-new", "item/completed", { ...fc("c-0-final.txt"), id: "c-0" });
+    askFile(h, 5, "t-new", "c-0"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes: [{ path: "c-0-final.txt" }] });
+    await h.finish();
+  });
+
+  it("other turns' items cannot fill the bound, in the window or after naming", async () => {
     const h = await afterOldTurn();
     for (let i = 0; i < 256; i += 1) h.item("t-old", "item/started", { ...fc("old.txt"), id: `w-${i}` });
     h.startNamed("t-new"); await settle();

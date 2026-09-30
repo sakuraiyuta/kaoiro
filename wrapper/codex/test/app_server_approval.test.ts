@@ -197,7 +197,7 @@ describe("ApprovalRouter", () => {
   it("copies fileChange changes from the item snapshot, or marks them unavailable", () => {
     const { router, slots } = routerRig();
     const o = owner();
-    o.fileChanges.set(fileChangeKey("th", "t1", "i1"), { turnId: "t1", changes: [{ path: "p5.txt", kind: "add", diff: "+hello" }] });
+    o.fileChanges.set(fileChangeKey("th", "t1", "i1"), [{ path: "p5.txt", kind: "add", diff: "+hello" }]);
     router.receive(raw(0, { itemId: "i1", reason: null, grantRoot: null }, FILE), channel(), { boundThreadId: "th", owner: o });
     router.receive(raw(1, { itemId: "i2" }, FILE), channel(), { boundThreadId: "th", owner: o });
     expect(slots[0]).toMatchObject({ tool_name: "codex:file_change", input: { item_id: "i1", changes: [{ path: "p5.txt", kind: "add", diff: "+hello" }] } });
@@ -207,7 +207,7 @@ describe("ApprovalRouter", () => {
   it("never shows a snapshot of the same item id from another turn", () => {
     const { router, slots } = routerRig();
     const o = owner();
-    o.fileChanges.set(fileChangeKey("th", "t0", "i1"), { turnId: "t0", changes: [{ path: "old.txt" }] });
+    o.fileChanges.set(fileChangeKey("th", "t0", "i1"), [{ path: "old.txt" }]);
     router.receive(raw(0, { itemId: "i1" }, FILE), channel(), { boundThreadId: "th", owner: o });
     expect(slots[0]).toMatchObject({ input: { item_id: "i1", changes_unavailable: true } });
     expect(slots[0]!.input).not.toHaveProperty("changes");

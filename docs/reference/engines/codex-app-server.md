@@ -195,10 +195,12 @@ or `{item_id, reason?, grant_root?, changes? | changes_unavailable}`, plus
 `inactivity_limit_ms`. `changes` comes from the latest `fileChange` item
 snapshot keyed by `(threadId, turnId, itemId)` of the request itself: an item
 id is not assumed unique across turns, so a late item of another turn, before
-or after the start response, never supplies or overwrites it. Snapshots are
-taken at wire receipt, including in the reservation window; once the turn is
-named, other turns' snapshots are discarded and no longer stored (at most 256
-per turn). Without a matching snapshot the input says `changes_unavailable`.
+or after the start response, never supplies or overwrites it. Only the named
+turn's items are stored, at most 256 per turn: items received in the
+reservation window are taken from the bounded window buffer when the start
+response names the turn, and later items at wire receipt. Items of other turns
+therefore never take that budget. Without a matching snapshot the input says
+`changes_unavailable`.
 The 16 KB rule applies.
 
 The broker's settle runs the record's callback before the slot changes and

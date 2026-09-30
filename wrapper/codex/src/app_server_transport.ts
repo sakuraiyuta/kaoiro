@@ -377,8 +377,9 @@ export class AppServerTransport {
       if (active.beforeResponse.some(event => event.method === "turn/completed" &&
           notificationTurnId(event) === named)) owner.terminal = true;
       owner.start = { kind: "started", turnId: named };
-      // Snapshots taken in the window for other turns can never be asked about.
-      for (const [key, snapshot] of owner.fileChanges) if (snapshot.turnId !== named) owner.fileChanges.delete(key);
+      // Built from the bounded window buffer only now, so no other turn's
+      // items can take the named turn's snapshot budget.
+      for (const event of active.beforeResponse) this.#fileChangeSnapshot(active, event);
       this.#approvals.start(owner, this.#boundThreadId);
       return;
     }
@@ -581,14 +582,16 @@ export class AppServerTransport {
       this.#turnEvidence(event.params.threadId, turnId);
     }
     if (!active || event.params.threadId !== active.threadId) return;
-    this.#fileChangeSnapshot(active, event);
     if (active.turnId === undefined) {
       if (active.beforeResponse.length >= this.#maxBeforeResponse) {
         rpc.failProtocol("App-server sent too many notifications before the turn/start response");
         return;
       }
       active.beforeResponse.push(event);
-    } else this.#deliver(active, event);
+    } else {
+      this.#fileChangeSnapshot(active, event);
+      this.#deliver(active, event);
+    }
   }
 
   /** The issue #366 predicate, for notifications and item/* requests alike.
@@ -618,15 +621,13 @@ export class AppServerTransport {
     if (!event.method.startsWith("item/")) return;
     const item = event.params.item;
     const turnId = notificationTurnId(event);
+    // Only the owner's named turn can be asked about, so the bound is per turn.
     if (!rpcObject(item) || item.type !== "fileChange" || typeof item.id !== "string" || item.changes === undefined ||
-        turnId === undefined) return;
-    // Once named, only the owner's turn can be asked about; this keeps the
-    // bound for the owner's own items.
-    if (active.turnId !== undefined && turnId !== active.turnId) return;
+        active.turnId === undefined || turnId !== active.turnId) return;
     const snapshots = active.owner.fileChanges;
     const key = fileChangeKey(active.threadId, turnId, item.id);
     if (!snapshots.has(key) && snapshots.size >= MAX_FILE_CHANGE_SNAPSHOTS) return;
-    snapshots.set(key, { turnId, changes: item.changes });
+    snapshots.set(key, item.changes);
   }
 
   #foreignTurn(threadId: unknown, turnId: string): void {

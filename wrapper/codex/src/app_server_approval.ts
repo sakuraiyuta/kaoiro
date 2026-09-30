@@ -36,10 +36,11 @@ export interface ApprovalOwner {
   start?: { kind: "started"; turnId: string } | { kind: "failed" };
   /** The approvalPolicy this owner's turn/start carried. */
   approvalPolicy?: ApprovalPolicy;
-  /** Latest `changes` of each fileChange item, display only, keyed by
-   * {@link fileChangeKey}: an item id alone is not known to be unique across
-   * turns, and a dialog must never show another turn's edit. */
-  readonly fileChanges: Map<string, { turnId: string; changes: unknown }>;
+  /** Latest `changes` of each of the owner's named-turn fileChange items,
+   * display only, keyed by {@link fileChangeKey}: an item id alone is not
+   * known to be unique across turns, and a dialog must never show another
+   * turn's edit. */
+  readonly fileChanges: Map<string, unknown>;
 }
 
 export function fileChangeKey(threadId: string, turnId: string, itemId: string): string {
@@ -176,7 +177,7 @@ function dialogInput(request: ParsedApproval, owner: ApprovalOwner, inactivityLi
       ["approval_id", p.approvalId],
     ]);
   }
-  const changes = owner.fileChanges.get(fileChangeKey(request.threadId, request.turnId, request.itemId))?.changes;
+  const changes = owner.fileChanges.get(fileChangeKey(request.threadId, request.turnId, request.itemId));
   return present([
     ["item_id", request.itemId], ["reason", p.reason], ["grant_root", p.grantRoot],
     ["changes", changes], ["changes_unavailable", changes === undefined ? true : undefined],
