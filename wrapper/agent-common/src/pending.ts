@@ -24,8 +24,15 @@ export class PendingRegistry<T> {
   /** Registers a pending request under `id`. `settle` resolves it with the
    *  decision. `onTimeout` supplies the value to settle with if the finite
    *  timeout elapses; it is never called when no timeout is configured. */
-  add(id: string, settle: (value: T) => void, onTimeout: () => T): void {
-    if (this.#timeoutMs === null) {
+  add(
+    id: string,
+    settle: (value: T) => void,
+    onTimeout: () => T,
+    /** Overrides the registry timeout for this entry; null = none. */
+    timeoutMs?: number | null,
+  ): void {
+    const limit = timeoutMs === undefined ? this.#timeoutMs : timeoutMs;
+    if (limit === null) {
       // No timeout: wait indefinitely, matching the SDK's canUseTool default
       // (ADR-0022 F6). close() still settles pending requests on shutdown.
       this.#pending.set(id, { settle, timer: null });
@@ -34,7 +41,7 @@ export class PendingRegistry<T> {
     const timer = setTimeout(() => {
       this.#pending.delete(id);
       settle(onTimeout());
-    }, this.#timeoutMs);
+    }, limit);
     // Let the process exit even while a request is pending.
     timer.unref?.();
     this.#pending.set(id, { settle, timer });

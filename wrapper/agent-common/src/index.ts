@@ -87,7 +87,9 @@ export {
 } from "./permission.js";
 export type {
   PermissionBrokerOptions,
+  PermissionDecideOptions,
   PermissionDecision,
+  SettledPermissionDecision,
 } from "./permission.js";
 export type { PermissionDecisionMessage } from "./permission.js";
 export { QuestionBroker } from "./question.js";

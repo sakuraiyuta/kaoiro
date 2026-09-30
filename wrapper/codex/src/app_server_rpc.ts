@@ -21,7 +21,7 @@ export class AppServerRpcError extends Error {
 }
 
 /** Why a connection-level failure happened, when a caller must tell causes apart. */
-export type ConnectionFailureKind = "timeout" | "invalid_response";
+export type ConnectionFailureKind = "timeout" | "invalid_response" | "protocol";
 
 export class AppServerConnectionError extends Error {
   constructor(message: string, readonly kind?: ConnectionFailureKind) {
@@ -64,11 +64,29 @@ export function resolveAppServerBinary(): string {
   return binary;
 }
 
+/** A server-to-client JSON-RPC request. `key` types the id (`n:1` vs `s:1`) so
+ * an integer and a string never collide. */
+export interface AppServerServerRequest { id: string | number; key: string; method: string; params: unknown }
+
+/** Server-request ids kept per connection for duplicate detection. Nothing is
+ * evicted: the request that would exceed the bound fails the connection. */
+export const MAX_SERVER_REQUEST_IDS = 65_536;
+
+export const SERVER_REQUEST_DISABLED = { code: -32601, message: "Client approval and server-request handling are disabled" } as const;
+
+export function serverRequestKey(id: string | number): string {
+  return typeof id === "number" ? `n:${id}` : `s:${id}`;
+}
+
 export interface AppServerRpcOptions {
   spawnChild?: () => ChildProcessWithoutNullStreams;
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   onNotification?: (notification: AppServerNotification) => void;
+  /** Receives every server request with a fresh id, synchronously in wire
+   * order. Without it every request is answered with -32601. */
+  onServerRequest?: (request: AppServerServerRequest) => void;
+  maxServerRequestIds?: number;
   onFailure?: (error: Error) => void;
   onDiagnostic?: (message: string) => void;
 }
@@ -83,6 +101,7 @@ export class AppServerRpc {
   readonly #child: ChildProcessWithoutNullStreams;
   readonly #options: AppServerRpcOptions;
   readonly #pending = new Map<number, Waiter>();
+  readonly #seen = new Set<string>();
   readonly #closed: Promise<void>;
   #nextId = 1;
   #failure: Error | undefined;
@@ -114,6 +133,21 @@ export class AppServerRpc {
   }
 
   get stderrTail(): string { return this.#stderrTail; }
+  /** True once the connection has failed or is closing: nothing more is written. */
+  get failed(): boolean { return this.#failure !== undefined || this.#closing; }
+
+  /** Answers a server request. Returns false, writing nothing, once failed. */
+  respond(id: string | number, result: RpcObject): boolean {
+    if (this.failed) return false;
+    this.#write({ id, result });
+    return true;
+  }
+
+  respondError(id: string | number, error: { code: number; message: string }): boolean {
+    if (this.failed) return false;
+    this.#write({ id, error: { ...error } });
+    return true;
+  }
 
   request(method: string, params: RpcObject, defaultTimeoutMs = 25_000): RpcTicket {
     const id = this.#nextId++;
@@ -186,7 +220,22 @@ export class AppServerRpc {
     if (typeof message.method === "string") {
       if (message.id !== undefined) {
         if (typeof message.id !== "string" && typeof message.id !== "number") throw new Error("Invalid request id");
-        this.#write({ id: message.id, error: { code: -32601, message: "Client approval and server-request handling are disabled" } });
+        const key = serverRequestKey(message.id);
+        // A reused id makes any answer ambiguous, so nothing is answered.
+        if (this.#seen.has(key)) {
+          this.#fail(new AppServerConnectionError("App-server reused a server-request id", "protocol"));
+          return;
+        }
+        if (this.#seen.size >= (this.#options.maxServerRequestIds ?? MAX_SERVER_REQUEST_IDS)) {
+          this.#fail(new AppServerConnectionError("App-server exceeded the server-request id bound", "protocol"));
+          return;
+        }
+        this.#seen.add(key);
+        if (this.#options.onServerRequest) {
+          this.#options.onServerRequest({ id: message.id, key, method: message.method, params: message.params });
+          return;
+        }
+        this.respondError(message.id, SERVER_REQUEST_DISABLED);
         this.#options.onDiagnostic?.("Unexpected app-server request rejected");
       } else {
         if (!rpcObject(message.params)) throw new Error("Invalid notification params");

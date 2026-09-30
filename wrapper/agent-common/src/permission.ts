@@ -41,6 +41,23 @@ export interface PermissionDecision {
   message?: string;
 }
 
+/** The broker's settlement. `cause` says what settled the request: only
+ *  "operator" is an operator decision; "timeout" is the deadline, "aborted"
+ *  the caller's signal and "closed" the broker's close(). */
+export interface SettledPermissionDecision extends PermissionDecision {
+  cause: "operator" | "timeout" | "aborted" | "closed";
+}
+
+export interface PermissionDecideOptions {
+  /** This request's deadline in ms; null = none. Omitted = the broker's. */
+  deadlineMs?: number | null;
+  /** Runs inside the settle, before the slot changes and before the
+   *  returned promise resolves, so a caller can act on the outcome before
+   *  any external callback can reenter it. Not called when `signal` is
+   *  already aborted at decide(). */
+  onSettled?: (decision: SettledPermissionDecision) => void;
+}
+
 export type { PermissionDecisionMessage } from "@kaoiro/wrapper-core";
 
 export interface PermissionBrokerOptions {
@@ -68,7 +85,7 @@ export class PermissionBroker {
   readonly #timeoutMs: number | null;
   readonly #now: () => string;
   readonly #newId: () => string;
-  readonly #registry: PendingRegistry<PermissionDecision>;
+  readonly #registry: PendingRegistry<SettledPermissionDecision>;
   /** Live pending records in arrival order (issue #285 review round 1, M2).
    *  ADR-0022 gives the wrapper ONE authoritative pending slot, so concurrent
    *  tool calls compete for it: the newest request takes the slot, and when
@@ -84,7 +101,7 @@ export class PermissionBroker {
     this.#timeoutMs = configured === undefined ? null : configured;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
-    this.#registry = new PendingRegistry<PermissionDecision>(this.#timeoutMs);
+    this.#registry = new PendingRegistry<SettledPermissionDecision>(this.#timeoutMs);
   }
 
   /** Compatible with AgentHostOptions#decidePermission.
@@ -99,11 +116,13 @@ export class PermissionBroker {
     toolName: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-  ): Promise<PermissionDecision> {
+    options: PermissionDecideOptions = {},
+  ): Promise<SettledPermissionDecision> {
     if (signal?.aborted) {
       return Promise.resolve({
         allow: false,
         message: "kaoiro: tool call is no longer live",
+        cause: "aborted",
       });
     }
     const requestId = this.#newId();
@@ -147,12 +166,14 @@ export class PermissionBroker {
         this.#registry.resolve(requestId, {
           allow: false,
           message: "kaoiro: tool call cancelled",
+          cause: "aborted",
         });
       };
       // settle clears the ext pending-record before resolving; the registry
       // owns the pending map, timeout, and shutdown drain (ADR-0027 F5).
-      const settle = (decision: PermissionDecision): void => {
+      const settle = (decision: SettledPermissionDecision): void => {
         signal?.removeEventListener("abort", onAbort);
+        options.onSettled?.(decision);
         this.#live.delete(requestId);
         this.#options.onPendingChange?.(this.#slot());
         resolve(decision);
@@ -160,7 +181,8 @@ export class PermissionBroker {
       this.#registry.add(requestId, settle, () => ({
         allow: false,
         message: "kaoiro: permission request timed out",
-      }));
+        cause: "timeout",
+      }), options.deadlineMs);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
@@ -176,13 +198,20 @@ export class PermissionBroker {
   /** Resolves a pending request; late/unknown request_ids are ignored
    *  (already timed out or never ours). */
   resolve(decision: PermissionDecisionMessage): void {
-    const resolved: PermissionDecision = { allow: decision.allow === true };
+    const resolved: SettledPermissionDecision = {
+      allow: decision.allow === true,
+      cause: "operator",
+    };
     if (decision.message !== undefined) resolved.message = decision.message;
     this.#registry.resolve(decision.request_id, resolved);
   }
 
   /** Denies all in-flight requests (wrapper shutdown). */
   close(): void {
-    this.#registry.closeAll({ allow: false, message: "kaoiro: wrapper closed" });
+    this.#registry.closeAll({
+      allow: false,
+      message: "kaoiro: wrapper closed",
+      cause: "closed",
+    });
   }
 }

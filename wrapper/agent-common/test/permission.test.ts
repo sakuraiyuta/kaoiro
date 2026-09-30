@@ -63,7 +63,7 @@ describe("PermissionBroker", () => {
     const pending = broker.decide("Bash", {});
     broker.resolve({ request_id: "req-1", allow: true });
 
-    await expect(pending).resolves.toStrictEqual({ allow: true });
+    await expect(pending).resolves.toStrictEqual({ allow: true, cause: "operator" });
   });
 
   it("deny の message を伝える", async () => {
@@ -72,7 +72,7 @@ describe("PermissionBroker", () => {
     const pending = broker.decide("Bash", {});
     broker.resolve({ request_id: "req-1", allow: false, message: "却下" });
 
-    await expect(pending).resolves.toEqual({ allow: false, message: "却下" });
+    await expect(pending).resolves.toEqual({ allow: false, message: "却下", cause: "operator" });
   });
 
   it("既定では timeout なし (SDK と同じく無制限待機、ADR-0022)", async () => {
@@ -101,6 +101,7 @@ describe("PermissionBroker", () => {
     await expect(pending).resolves.toEqual({
       allow: false,
       message: "kaoiro: permission request timed out",
+      cause: "timeout",
     });
   });
 
@@ -271,5 +272,81 @@ describe("PermissionBroker", () => {
     await expect(pending).resolves.toMatchObject({ allow: true });
     expect(removed).toHaveBeenCalledTimes(1);
     expect(removed.mock.calls[0]![0]).toBe("abort");
+  });
+});
+
+describe("PermissionBroker settlement cause and per-request options", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("labels each settlement with what settled it", async () => {
+    const { broker } = makeBroker({ timeoutMs: 1_000 });
+    const operator = broker.decide("A", {});
+    broker.resolve({ request_id: "req-1", allow: false });
+    await expect(operator).resolves.toMatchObject({ allow: false, cause: "operator" });
+
+    const timeout = broker.decide("B", {});
+    vi.advanceTimersByTime(1_000);
+    await expect(timeout).resolves.toMatchObject({ allow: false, cause: "timeout" });
+
+    const controller = new AbortController();
+    const aborted = broker.decide("C", {}, controller.signal);
+    controller.abort();
+    await expect(aborted).resolves.toMatchObject({ allow: false, cause: "aborted" });
+    await expect(broker.decide("D", {}, AbortSignal.abort()))
+      .resolves.toMatchObject({ allow: false, cause: "aborted" });
+
+    const closed = broker.decide("E", {});
+    broker.close();
+    await expect(closed).resolves.toMatchObject({ allow: false, cause: "closed" });
+  });
+
+  it("runs onSettled before the slot changes, so a reentrant callback sees a settled request", async () => {
+    const order: string[] = [];
+    let settledSeen = false;
+    const { broker } = makeBroker({
+      onPendingChange: (pending) => {
+        order.push(pending === null ? "slot:null" : `slot:${pending.request_id}`);
+        if (pending === null) expect(settledSeen).toBe(true);
+      },
+    });
+    const decision = broker.decide("A", {}, undefined, {
+      onSettled: (settled) => {
+        settledSeen = true;
+        order.push(`settled:${settled.cause}:${settled.allow}`);
+      },
+    });
+    broker.resolve({ request_id: "req-1", allow: true });
+    order.push("resolved-call-returned");
+    await decision;
+    expect(order).toEqual([
+      "slot:req-1", "settled:operator:true", "slot:null", "resolved-call-returned",
+    ]);
+  });
+
+  it("uses a per-request deadline over the broker timeout, and null for none", async () => {
+    const { broker } = makeBroker({ timeoutMs: 300_000 });
+    const short = broker.decide("A", {}, undefined, { deadlineMs: 50 });
+    const none = broker.decide("B", {}, undefined, { deadlineMs: null });
+    const inherited = broker.decide("C", {});
+    vi.advanceTimersByTime(50);
+    await expect(short).resolves.toMatchObject({ cause: "timeout" });
+    vi.advanceTimersByTime(300_000);
+    await expect(inherited).resolves.toMatchObject({ cause: "timeout" });
+    let noneSettled = false;
+    void none.then(() => { noneSettled = true; });
+    vi.advanceTimersByTime(10 * 60_000);
+    await Promise.resolve();
+    expect(noneSettled).toBe(false);
+    broker.resolve({ request_id: "req-2", allow: true });
+    await expect(none).resolves.toMatchObject({ allow: true, cause: "operator" });
+  });
+
+  it("does not call onSettled for a signal that is already aborted", async () => {
+    const onSettled = vi.fn();
+    const { broker, sent } = makeBroker();
+    await broker.decide("A", {}, AbortSignal.abort(), { onSettled });
+    expect(onSettled).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 });
