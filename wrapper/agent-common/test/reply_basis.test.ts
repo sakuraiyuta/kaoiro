@@ -344,6 +344,7 @@ describe("missing-ticket guidance matrix", () => {
     tool.replyBasis.forget("c256");
     expect((await reject(tool, 1, "c256", "T2")).guidance).toBe("Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=1; do not omit both fields.");
     expect((await reject(tool, 2, "c256", "T2")).guidance).toBe("Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=2; do not omit both fields.");
+    expect((await reject(tool, 1, "c0", "T2")).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=1. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
     tool.endReplyInput("T2");
 
     tool.prepareReplyInput("T2", [inbound(1, "c256")]);tool.beginReplyInput("T2");
