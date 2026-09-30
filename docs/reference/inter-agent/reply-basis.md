@@ -143,8 +143,8 @@ requirements. Do not repeat tickets in diagnostics.
 | Spent or expired ticket | Local error; the same value cannot be reused |
 | Local `reply_basis_connection_changed` / `reply_basis_pending` | No push attempted (`send_not_attempted: true`); fresh authorization for an intentional retry after rejoin |
 | `peer_reconnecting_capacity` / `delivery_backlog` | Definite nonacceptance: return a fresh ticket for the same observed input, for an intentional retry |
-| `stale_reply_basis` | Only newly handed-off recovery bodies authorize a new ticket |
-| Accepted | Spent; a separately received waiter/recovery input can authorize another reply |
+| `stale_reply_basis` | A non-empty recovery can authorize its returned input. Empty or oversized recovery has no ticket; a later input follows the route table below |
+| Accepted | Spent; a separately handed-off waiter, recovery, or Claude fold input may carry its own authorization |
 | Unknown delivery / ack timeout | No renewed ticket; automatic retry could duplicate a delivery |
 | Closed or other permanent rejection | No renewal |
 
@@ -152,6 +152,20 @@ The wrapper does not automatically resend a rejected body. Local errors include
 `send_not_attempted`, a distinct error code, and correction guidance.
 
 ## Inline recovery and ownership
+
+This matrix is the source of truth for reply metadata in each delivery route.
+Tool guidance and tests follow the route that actually hands the input to the
+SDK; an oversized recovery response does not predict that later route.
+
+| Route | `reply_authorization` / ticket on this handoff? | Reply method |
+|---|---|---|
+| Normal root input | No explicit ticket; the wrapper freezes the input turn as the default basis. | Omit both `in_reply_to` and `reply_ticket`. |
+| Claude fold | Yes, for each latest ordinary peer input represented in the fold. | In the same SDK turn, copy both fields from the fold's `reply_authorization`. |
+| Waiter | Yes for an ordinary peer envelope returned by the waiter; no for a server turn-zero `status_notice`. | Copy both fields for the peer envelope. Do not reply to a `status_notice`. |
+| Recovery | Yes when a non-empty recovery hands off ordinary peer input; no for an empty result. | Copy both fields from a non-empty recovery result. Empty recovery provides no ticket. |
+| Oversized queue | No ticket accompanies the oversized recovery result. The queued item may later arrive as a normal root input or as a Claude fold. | Wait for the handoff. For a root input omit both fields; for a fold copy both from its `reply_authorization`. |
+| Generic empty recovery | No ticket accompanies the empty result. | Do not retry the failed send with its stale basis. A later confirmed input in the same conversation follows the normal root or fold rule above. |
+| Retained fold | An oversized retained-fold result has no current-turn ticket; an earlier fold's ticket belongs to its original SDK turn. | Do not assume the old body or ticket is usable. Wait for new confirmed input, then follow its root or fold rule above. |
 
 A stale rejection can return already-received, ordinary, undelivered envelopes
 for that peer/CID in arrival order. Recovery contains at most ten whole messages
@@ -167,10 +181,13 @@ With an empty recovery, the wrapper has no matching input available for inline
 recovery now. It cannot infer delivery loss or whether a later confirmed input
 will arrive. The result omits `awaiting_delivery` and unrelated aggregate unread
 counts. Do not retry the failed send with its stale basis on that conversation.
-If peer input is needed, wait for a later confirmed input and handle it
-normally; if the context already available is enough, omit `conversation_id`
-and restate that context in a new conversation. An empty recovery does not
-prevent a later ordinary input from arriving through the normal handoff path.
+If peer input is needed, wait for a later confirmed input; when it arrives as a
+normal root input, reply in this conversation with both `in_reply_to` and
+`reply_ticket` omitted. If it arrives in a Claude fold with
+`reply_authorization`, copy both fields from that same-turn authorization. If
+the context already available is enough, omit `conversation_id` and restate it
+in a new conversation. An empty recovery does not prevent a later ordinary
+input from arriving through the normal handoff path.
 
 `unread_remaining` and `more_pending` describe queued work only when a recovery
 envelope is actually returned; they do not predict whether the rejected

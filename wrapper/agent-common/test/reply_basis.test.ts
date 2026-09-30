@@ -604,7 +604,7 @@ it("a retired turn restores a pending recovery even if its adapter has not retur
 });
 
 it("oversized recovery stays queued and recovery budgets include the actual result and advice", async () => {
-  const huge = inbound(3); huge.payload.body = "あ".repeat(10000);
+  const huge = inbound(3); huge.payload.body = "x".repeat(15_700);
   const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1", unreadCount: () => 12,
     claimRecovery: (_cid, _peer, fit) => { expect(fit([huge])).toBe(false); expect(fit(Array.from({ length: 11 }, () => inbound(3)))).toBe(false); return { envelopes: [], oversizedPending: true, recoverySource: "handoff_queue", commit: vi.fn(), rollback: vi.fn() }; },
     sendInterAgent: async () => ({ kind: "rejected", reason: "stale_reply_basis" }) });
@@ -614,9 +614,9 @@ it("oversized recovery stays queued and recovery budgets include the actual resu
   expect(parsed).toMatchObject({ oversized_pending: true, recovery: [] });
   expect(parsed.guidance).toContain("still queued for normal handoff");
   expect(parsed.guidance).toContain("Do not resend the failed body");
-  expect(parsed.guidance).toContain("wait for the queued input to arrive as confirmed input");
-  expect(parsed.guidance).toContain("send a normal reply with both in_reply_to and reply_ticket omitted");
-  expect(parsed.guidance).toContain("frozen default basis");
+  expect(parsed.guidance).toContain("wait for the item to be handed off");
+  expect(parsed.guidance).toContain("If it arrives as a normal root input, send a normal reply with both in_reply_to and reply_ticket omitted");
+  expect(parsed.guidance).toContain("If it arrives in a Claude fold with reply_authorization, copy both fields");
   expect(parsed.guidance).not.toContain("use its reply authorization");
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(parsed).not.toHaveProperty("unread_remaining");
@@ -634,7 +634,8 @@ it("empty recovery is indeterminate and omits unrelated unread counts", async ()
   expect(parsed.guidance).toContain("does not prove delivery was lost");
   expect(parsed.guidance).toContain("Do not retry this failed send with its stale basis on this conversation");
   expect(parsed.guidance).not.toContain("Do not retry on this conversation");
-  expect(parsed.guidance).toContain("wait for a later confirmed input");
+  expect(parsed.guidance).toContain("when it arrives as a normal root input, reply in this conversation with both in_reply_to and reply_ticket omitted");
+  expect(parsed.guidance).toContain("if it arrives in a Claude fold with reply_authorization, copy both fields");
   expect(parsed.guidance).toContain("omit conversation_id");
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(parsed).not.toHaveProperty("unread_remaining");
@@ -663,6 +664,8 @@ it("oversized retained folds get conservative guidance even when the matching re
   expect(parsed.guidance).toContain("may belong to an earlier SDK turn");
   expect(parsed.guidance).toContain("do not assume its body is visible");
   expect(parsed.guidance).toContain("Do not retry this failed send with its stale basis on this conversation");
+  expect(parsed.guidance).toContain("if it arrives as a normal root input, reply in this conversation with both in_reply_to and reply_ticket omitted");
+  expect(parsed.guidance).toContain("if it arrives in a Claude fold with reply_authorization, copy both fields");
 });
 
 it("an oversized result without a known source falls back to generic empty-recovery guidance", async () => {

@@ -202,8 +202,11 @@ basis on that conversation. Wait for a later confirmed input if peer input is
 needed, or omit `conversation_id` and restate the available context in a new
 conversation if it is enough to proceed. Oversized queued input and retained
 folded input have distinct guidance; an oversized queued input can be answered
-as a normal reply with both `in_reply_to` and `reply_ticket` omitted after it
-is handed off.
+as a normal root reply with both `in_reply_to` and `reply_ticket` omitted, or
+as a fold reply by copying both fields from the fold's `reply_authorization`.
+The same route rule applies when a later confirmed input arrives after an empty
+recovery: use the normal root form in the existing conversation, or copy both
+fields if that input is handed off in a Claude fold.
 
 `unbound_tool_call` identifies a call with no confirmed live wrapper input or
 validated Claude SDK notification owner; `stale_tool_call`

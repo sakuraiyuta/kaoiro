@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
+import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
@@ -260,6 +260,92 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect(stages).toContainEqual(expect.objectContaining({ delivery_seq: 2, stage: "submitted", handoff: "prompt_hook" }));
       expect(stages).not.toContainEqual(expect.objectContaining({ delivery_seq: 2, handoff: "fold_hook" }));
     } finally { release(); host?.close(); await running; vi.unstubAllEnvs(); }
+  });
+
+  it("hands off an oversized recovery candidate through the Claude fold hook", async () => {
+    vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
+    let linkOptions!: Record<string, any>;
+    let host!: AgentHost;
+    let ready!: () => void;
+    const rootReady = new Promise<void>(resolve => { ready = resolve; });
+    const oversizedBody = "x".repeat(15_700);
+    const stages: Array<Record<string, unknown>> = [];
+    const acknowledged: number[] = [];
+    const rootTexts: string[] = [];
+    const foldTexts: string[] = [];
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
+          deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+          reportDeliveryStage: (stage: Record<string, unknown>) => stages.push(stage),
+          acknowledgeInterAgentDelivery: (seq: number) => acknowledged.push(seq),
+          retireInterAgentDeliveries: () => true,
+          flushInterAgentRetirements: async () => {},
+          sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          setSessionId: () => {}, reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (cfg, options) => {
+        host = new AgentHost(cfg, {
+          ...options,
+          queryFn: (({ prompt, options: sdkOptions }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+            const stream = (async function* (): AsyncGenerator<SDKMessage> {
+              const input = prompt[Symbol.asyncIterator]();
+              const signal = { signal: new AbortController().signal };
+              const root = (await input.next()).value!;
+              const rootText = root.message.content as string;
+              rootTexts.push(rootText);
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: rootText,
+              }, undefined, signal);
+              yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+              ready();
+              const fold = (await input.next()).value!;
+              const foldText = fold.message.content as string;
+              foldTexts.push(foldText);
+              await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: foldText,
+              }, undefined, signal);
+              yield { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
+            })();
+            return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+          }) as never,
+        });
+        host.probeRateLimits = async () => {};
+        return host;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(host).toBeDefined());
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      const root = inboundEnvelope(1);
+      root.payload.conversation_id = "same-cid";
+      await linkOptions.onInterAgentMessage(root);
+      await rootReady;
+      const oversized = inboundEnvelope(2, 2);
+      oversized.payload.conversation_id = "same-cid";
+      oversized.payload.body = oversizedBody;
+      oversized.payload.delivery_authority = { requested: "early", granted: "early" };
+      await linkOptions.onInterAgentMessage(oversized);
+      await running;
+      expect(rootTexts[0]).not.toContain("reply_authorization:");
+      expect(foldTexts).toHaveLength(1);
+      expect(foldTexts[0]).toContain(oversizedBody);
+      const authorizationLine = foldTexts[0]!.split("\n").find(line => line.startsWith("reply_authorization: "));
+      expect(authorizationLine).toBeDefined();
+      const authorization = JSON.parse(authorizationLine!.slice("reply_authorization: ".length)) as { in_reply_to: number; reply_ticket: string };
+      expect(authorization.in_reply_to).toBe(2);
+      expect(authorization.reply_ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.byteLength(foldTexts[0]!, "utf8")).toBeLessThanOrEqual(MAX_COALESCED_BYTES);
+      expect(stages).toContainEqual(expect.objectContaining({ delivery_seq: 2, stage: "submitted", handoff: "fold_hook" }));
+      expect(acknowledged).toEqual([1, 2]);
+    } finally { host?.close(); await running; vi.unstubAllEnvs(); }
   });
 
   it("keeps a cut root F active for its peer until F settles before dispatching the next same-CID item", async () => {

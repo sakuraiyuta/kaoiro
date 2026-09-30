@@ -1928,9 +1928,13 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     const description = tool
       .descriptors()
       .find((d) => d.name === "send_to_agent")!.description;
-    expect(description).toMatch(/^For a normal reply to confirmed wrapper-delivered input, omit both `in_reply_to` and `reply_ticket`;/);
-    expect(description).toContain("For a same-turn waiter or recovery result, copy both fields from its `reply_authorization`");
-    expect(description).toContain("returned as `status_notice` and needs no reply");
+    expect(description).toMatch(/^For a normal reply to confirmed input delivered as a root, omit both `in_reply_to` and `reply_ticket`;/);
+    expect(description).toContain("For a same-turn explicit reply or retry, use both fields only when the current fold, waiter, recovery, or retry result includes `reply_authorization`");
+    expect(description).toContain("An oversized queued input may later arrive either as a root without a ticket or as a Claude fold with a ticket");
+    expect(description).toContain("returned as `status_notice`, carries no reply authorization, and needs no reply");
+    const schema = tool.descriptors().find((d) => d.name === "send_to_agent")!.inputSchema as any;
+    expect(schema.properties.in_reply_to.description).toContain("For a normal root input, omit both fields");
+    expect(schema.properties.reply_ticket.description).toContain("never predict, transfer from an earlier turn, or reuse it");
     expect(description).toContain("peer_error: {code, message, from}");
     expect(description).toContain("rate_limit = wait before retrying");
     expect(description).toContain("context_overflow = retrying is pointless");
