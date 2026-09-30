@@ -38,7 +38,7 @@ import type {
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
-import { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization } from "./reply_basis.js";
+import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import { workToolDescriptors, type WorkToolHandlers } from "./work_tools.js";
@@ -575,7 +575,7 @@ const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
 };
 
 const TOOL_DESCRIPTION =
-  `For an intentional same-turn reply, copy in_reply_to and its single-use reply_ticket from the recovery or waiter result in this SDK turn. Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. A \`peer_reconnecting_capacity\` server rejection is different: the message was not accepted, no reconnected notice will follow for that attempt, and the result tells you to retry later with the same conversation_id. A \`delivery_backlog\` rejection means the recipient ledger is full: wait for recipient drain and do not resend automatically. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
+  `For a normal reply to confirmed wrapper-delivered input, omit both \`in_reply_to\` and \`reply_ticket\`; the wrapper uses that turn's frozen default basis. For a same-turn waiter or recovery result, copy both fields from its \`reply_authorization\` in this SDK turn. Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. A \`peer_reconnecting_capacity\` server rejection is different: the message was not accepted, no reconnected notice will follow for that attempt, and the result tells you to retry later with the same conversation_id. A \`delivery_backlog\` rejection means the recipient ledger is full: wait for recipient drain and do not resend automatically. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
 
 const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Negotiated inter_agent_delivery includes issued_seq, acked_seq, lost_count and last_loss; with skip-v1, equal watermarks mean no unresolved deliveries, not proof of dispatch. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is the latest reported snapshot; Codex and Claude Code may report an account read before the first turn, but do not refresh it on an idle timer — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.\n\nAn entry carrying `directory_only: true` is an agent that EXISTED in the past and is currently unreachable: the server still holds its identity in the persistent directory, but no live session. Read it as evidence of who is down, not as a destination — `send_to_agent` cannot deliver to it, and retrying will not help. If you need that agent back, escalate to the operator, who can restore or delete it. Such an entry carries only identity (`agent_id` / `persona` / `display_name`), `state: \"disconnected\"`, `conversation`, and `last_seen` (the last time the server accepted an envelope from it; absent means the server no longer knows, typically after a server restart — never \"it was never active\"). `engine` / `model` / `effort` / `context` / `rate_limits` / `session_started_at` / `turns` / `last_activity_at` are always absent on these entries. Note that `directory_only` itself is the ONE field where an absent value is not \"unknown\": the server sets it only when true, so its absence means the entry came from the live directory.\n\nThe reply also carries `users`: the kaoiro human users (operator/viewer) currently REGISTERED and authorized, each with id/kind/display_name/role — 'kind' is always the literal \"user\" here, distinguishing them from `agents`. `users` are NOT valid `send_to_agent` destinations — that tool only ever delivers to an agent_id from the `agents` list. This is a registry, not an online-presence list: it includes every currently-authorized user whether or not they are actively connected right now, and it does NOT currently identify who issued any particular instruction or inter-agent message — that attribution is not wired yet, so do not infer it from this list. Read it only to know which users exist and what role each holds; never pass a user's id as `send_to_agent`'s `to`. This array can be empty even when users exist — the operator can opt out of this disclosure server-side (default is disclosed). Live peers may also include `build` ({revision, dirty, version, channel}); absent means unreported, while a present `unknown` value means reported but indeterminate.";
@@ -1764,7 +1764,15 @@ export class InterAgentTool {
     const captured = this.#options.replyBasisMode !== undefined
       ? this.replyBasis.capture(context?.origin, conversationId, args.to, args.in_reply_to, args.reply_ticket)
       : undefined;
-    if (typeof captured === "string") return this.#localReplyError(captured);
+    if (typeof captured === "string") {
+      const guidance = captured === "reply_ticket_required" && args.in_reply_to !== undefined && args.reply_ticket === undefined
+        ? replyTicketGuidanceText(
+            this.replyBasis.replyTicketGuidance(context!.origin!, conversationId, args.to, args.in_reply_to),
+            args.in_reply_to,
+          )
+        : undefined;
+      return this.#localReplyError(captured, guidance);
+    }
 
 
     // issue #167 review M1: the turn-allocation-through-acceptance-handling
@@ -2441,9 +2449,9 @@ export class InterAgentTool {
     });
   }
 
-  #localReplyError(code: string): InterAgentToolResult {
+  #localReplyError(code: string, guidance?: string): InterAgentToolResult {
     this.#options.onReplyDiagnostic?.({ event: "reply_local_rejection", code, send_not_attempted: true });
-    return localReplyError(code);
+    return localReplyError(code, guidance);
   }
 
   #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): InterAgentToolResult {
@@ -2680,21 +2688,39 @@ function peerErrorResult(
   };
 }
 
-function localReplyError(code: string): InterAgentToolResult {
+function replyTicketGuidanceText(guidance: ReplyTicketGuidance, basis: number): string {
+  switch (guidance) {
+    case "copy_matching_authorization": return REPLY_TICKET_REQUIRED_GUIDANCE;
+    case "wait_for_matching_authorization":
+      return `A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=${basis}.`;
+    case "wait_for_fresh_authorization":
+      return `No unused, unexpired authorization remains for in_reply_to=${basis}. Wait for a fresh reply_authorization for this basis or a new confirmed input.`;
+    case "plain_reply":
+      return "This in_reply_to matches the frozen basis for a confirmed input in this turn, and no reply authorization has been handed off for this tuple. Resend as a normal reply with both in_reply_to and reply_ticket omitted.";
+    case "wait_for_confirmed_input":
+      return "No ordinary peer input is confirmed for this conversation and peer. Wait for confirmed input; do not describe this send as a reply.";
+    case "wait_for_matching_basis":
+      return `No handed-off authorization for in_reply_to=${basis} matches this turn's frozen basis. Wait for new confirmed input or a handed-off reply_authorization matching in_reply_to=${basis}.`;
+    case "wait_for_history":
+      return `Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=${basis}; do not omit both fields.`;
+  }
+}
+
+function localReplyError(code: string, guidance?: string): InterAgentToolResult {
   return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: code, send_not_attempted: true,
-    guidance: code === "reply_basis_closed"
+    guidance: guidance ?? (code === "reply_basis_closed"
       ? "The server channel is closed. A new wrapper connection is required before sending again."
       : code === "work_control_unavailable"
       ? "The server did not negotiate the requested work control or delivery modes. No message or control was sent."
       : code === "invalid_reply_ticket" || code === "reply_ticket_required"
-      ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
+      ? REPLY_TICKET_REQUIRED_GUIDANCE
       : code === "unbound_tool_call"
       ? "This tool call is not bound to a confirmed live input. No message was sent. Wait for a new confirmed input before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call."
       : code === "stale_tool_call"
       ? "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input."
       : code === "admission_fail_stop"
       ? "The host stopped admission. No message was sent. Ask the operator to terminate the wrapper and restore it after disconnection."
-      : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
+      : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn.") }) }] };
 }
 
 function rateReset(seconds: number | undefined): { reset_delay_seconds?: number } {

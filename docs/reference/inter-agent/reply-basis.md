@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-09-29
+last_updated: 2026-09-30
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -95,6 +95,34 @@ Tickets become usable only at complete tool-result handoff. `expires_in_ms:
 reads the result. Turn retirement and session replacement invalidate tickets.
 Closed conversations cannot send. At most 256 ticket records are held per turn.
 New authorization supersedes unused authorization for the same peer/CID.
+
+When a call supplies `in_reply_to` without `reply_ticket`, the wrapper rejects
+locally with `reply_ticket_required` and applies this table. `P` is the supplied
+basis, `F` is the live origin's frozen default for the same CID and peer, and
+`T` is the basis on a handed-off ticket for that exact turn/CID/peer. A usable
+ticket is unused and unexpired. Provisional tickets have not been handed off.
+
+| Ticket and issuance history | Basis relation | Guidance |
+| --- | --- | --- |
+| At least one usable ticket has `T = P` | `P` may equal or differ from `F` | Copy both fields from the matching handed-off `reply_authorization`; its unspent, unexpired ticket can be retried. |
+| Usable ticket(s) exist, but every usable `T` differs from `P` | `P` may equal or differ from `F` | Do not substitute another basis or omit both fields. Wait for confirmed input or a handed-off authorization for `P`. |
+| Issuance is known, but no usable ticket remains (spent, expired, superseded, or forgotten) | `P` may equal `F`, an old `T`, or neither | Wait for a fresh authorization for `P` or new confirmed input. |
+| No issuance is known; history is unsaturated; no ticket or provisional-only ticket | `P = F > 0` | Resend as a normal reply with both authorization fields omitted; the wrapper applies `F`. |
+| No issuance is known; history is unsaturated; no ticket or provisional-only ticket | `P != F` | Wait for new confirmed input or a handed-off authorization for `P`. |
+| No issuance is known; history is unsaturated; no ticket or provisional-only ticket | `P = F = 0` | No ordinary peer input is confirmed. Wait for confirmed input; do not describe the send as a reply. |
+| History is saturated and the tuple is unrecorded, with no retained issued ticket record | Any relation to `F`; prior `T` is unknown | Treat prior issuance as unknown. Wait for confirmed input or a matching authorization; never infer that omission is safe. |
+
+The precedence is matching usable ticket, different-basis usable ticket,
+known exhausted issuance, then unsaturated never-issued history. Saturation
+makes only unrecorded history unknown: a retained ticket record still
+determines whether to copy a matching usable authorization, wait because its
+basis differs, or request fresh authorization after it is spent or expired.
+The per-turn issuance ledger stores at most 256 distinct tuples and records
+only successful handoffs. A successful activation of a 257th distinct tuple
+marks the ledger saturated without growing it; `forget(cid)` retains issuance
+facts and the saturation flag until turn retirement or session reset. If the
+257th tuple's live ticket record is later forgotten, its earlier issuance is
+unknown and the conservative saturated guidance applies.
 
 Claude phase-2 fold text carries provisional tickets. An exact, trusted
 `UserPromptSubmit` hook activates them only for the live turn that owned the

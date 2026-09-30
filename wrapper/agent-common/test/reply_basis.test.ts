@@ -195,6 +195,169 @@ describe("input-bound reply tickets", () => {
   });
 });
 
+describe("missing-ticket guidance matrix", () => {
+  const defaultGuidance = "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried.";
+  const plainGuidance = "This in_reply_to matches the frozen basis for a confirmed input in this turn, and no reply authorization has been handed off for this tuple. Resend as a normal reply with both in_reply_to and reply_ticket omitted.";
+  const sent = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+
+  function makeGuidanceTool(frozen: number | null = 1) {
+    const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1", sendInterAgent: sent });
+    tool.prepareReplyInput("T", frozen === null ? [] : [inbound(frozen)]);
+    tool.beginReplyInput("T");
+    return tool;
+  }
+
+  async function reject(tool: InterAgentTool, supplied: number, cid = "c", token = "T") {
+    const result = await tool.invoke({ to: "peer", conversation_id: cid, kind: "response", body: "reply", in_reply_to: supplied }, { origin: { token } });
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toMatchObject({ error: "reply_ticket_required", send_not_attempted: true });
+    expect(sent).not.toHaveBeenCalled();
+    return parsed as { guidance: string };
+  }
+
+  it.each([
+    ["no issued ticket, P equals a positive frozen basis", 1, 1, "plain"] as const,
+    ["no issued ticket, P differs from frozen basis", 1, 2, "mismatch"] as const,
+    ["no issued ticket, both bases are zero", null, 0, "zero"] as const,
+  ])("selects exactly one unsaturated no-issuance row: %s", async (_name, frozen, supplied, expected) => {
+    const tool = makeGuidanceTool(frozen);
+    const result = await reject(tool, supplied);
+    if (expected === "plain") expect(result.guidance).toBe(plainGuidance);
+    else if (expected === "mismatch") expect(result.guidance).toBe("No handed-off authorization for in_reply_to=2 matches this turn's frozen basis. Wait for new confirmed input or a handed-off reply_authorization matching in_reply_to=2.");
+    else expect(result.guidance).toBe("No ordinary peer input is confirmed for this conversation and peer. Wait for confirmed input; do not describe this send as a reply.");
+    tool.endReplyInput("T");
+  });
+
+  it("does not treat a provisional ticket as issued history or authorization", async () => {
+    const tool = makeGuidanceTool(1);
+    const provisional = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 2)!;
+    expect((await reject(tool, 2)).guidance).toBe("No handed-off authorization for in_reply_to=2 matches this turn's frozen basis. Wait for new confirmed input or a handed-off reply_authorization matching in_reply_to=2.");
+    provisional.discard();
+    expect((await reject(tool, 1)).guidance).toBe(plainGuidance);
+    tool.endReplyInput("T");
+  });
+
+  it.each([
+    ["another CID", "other-cid", "peer", "T"],
+    ["another peer", "c", "other-peer", "T"],
+    ["another turn", "c", "peer", "other-turn"],
+  ] as const)("ignores issued tickets for %s", async (_name, cid, peer, token) => {
+    const tool = makeGuidanceTool(1);
+    if (token === "other-turn") tool.replyBasis.begin(token, [inbound(1)]);
+    const ticket = tool.replyBasis.prepare({ token }, cid, peer, 1)!;
+    expect(ticket.activate()).toBe(true);
+    tool.replyBasis.forget(cid);
+    expect((await reject(tool, 1)).guidance).toBe(plainGuidance);
+    tool.endReplyInput("T");
+    if (token === "other-turn") tool.endReplyInput(token);
+  });
+
+  it("does not record an authorization when activation fails", async () => {
+    const tool = makeGuidanceTool(1);
+    const provisional = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 1)!;
+    tool.replyBasis.forget("c");
+    expect(provisional.activate()).toBe(false);
+    expect((await reject(tool, 1)).guidance).toBe(plainGuidance);
+    tool.endReplyInput("T");
+  });
+
+  it("keeps legacy guidance for other malformed authorization shapes", async () => {
+    const tool = makeGuidanceTool(1);
+    const ticketOnly = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply", reply_ticket: "stray" }, { origin: { token: "T" } });
+    expect(JSON.parse(ticketOnly.content[0]!.text)).toEqual({ error: "reply_ticket_required", send_not_attempted: true, guidance: defaultGuidance });
+    const invalid = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply", in_reply_to: 1, reply_ticket: "stray" }, { origin: { token: "T" } });
+    expect(JSON.parse(invalid.content[0]!.text)).toEqual({ error: "invalid_reply_ticket", send_not_attempted: true, guidance: defaultGuidance });
+    expect(sent).not.toHaveBeenCalled();
+    tool.endReplyInput("T");
+  });
+
+  it.each([
+    ["matching usable ticket even when it differs from frozen basis", 1, 2, 2, defaultGuidance] as const,
+    ["different usable ticket when supplied basis equals frozen basis", 1, 2, 1, "A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=1."] as const,
+    ["different usable ticket when supplied basis differs from both", 1, 2, 3, "A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=3."] as const,
+  ])("classifies usable-ticket basis relations: %s", async (_name, frozen, ticketBasis, supplied, expected) => {
+    const tool = makeGuidanceTool(frozen);
+    const ticket = tool.replyBasis.prepare({ token: "T" }, "c", "peer", ticketBasis)!;
+    expect(ticket.activate()).toBe(true);
+    expect((await reject(tool, supplied)).guidance).toBe(expected);
+    tool.endReplyInput("T");
+  });
+
+  it.each(["spent", "expired", "superseded", "forgotten"] as const)("requires fresh authorization after issued ticket becomes %s", async status => {
+    const tool = makeGuidanceTool(1);
+    const old = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 2)!;
+    expect(old.activate()).toBe(true);
+    if (status === "spent") {
+      expect(tool.replyBasis.capture({ token: "T" }, "c", "peer", 2, old.authorization.reply_ticket)).toMatchObject({ basis: 2 });
+    } else if (status === "expired") {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(Number.MAX_SAFE_INTEGER);
+      try {
+        expect((await reject(tool, 2)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=2. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+        expect((await reject(tool, 1)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=1. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+        expect((await reject(tool, 3)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=3. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+      }
+      finally { clock.mockRestore(); }
+      tool.endReplyInput("T");
+      return;
+    } else if (status === "superseded") {
+      const newer = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 3)!;
+      expect(newer.activate()).toBe(true);
+      expect(tool.replyBasis.capture({ token: "T" }, "c", "peer", 3, newer.authorization.reply_ticket)).toMatchObject({ basis: 3 });
+    } else {
+      tool.replyBasis.forget("c");
+    }
+    expect((await reject(tool, 2)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=2. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+    expect((await reject(tool, 1)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=1. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+    expect((await reject(tool, 3)).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=3. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+    tool.endReplyInput("T");
+  });
+
+  it("does not point at a newer usable basis when the supplied basis was superseded", async () => {
+    const tool = makeGuidanceTool(1);
+    const old = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 2)!;
+    expect(old.activate()).toBe(true);
+    const newer = tool.replyBasis.prepare({ token: "T" }, "c", "peer", 3)!;
+    expect(newer.activate()).toBe(true);
+    expect((await reject(tool, 2)).guidance).toBe("A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=2.");
+    tool.endReplyInput("T");
+  });
+
+  it("keeps issued-history saturation conservative while a retained ticket record still wins", async () => {
+    const tool = makeGuidanceTool(1);
+    const envelopes = Array.from({ length: 257 }, (_, i) => inbound(1, `c${i}`));
+    tool.endReplyInput("T");
+    tool.prepareReplyInput("T2", envelopes);
+    tool.beginReplyInput("T2");
+    const origin = { token: "T2" };
+    for (let i = 0; i < 256; i++) {
+      const cid = `c${i}`;
+      const ticket = tool.replyBasis.prepare(origin, cid, "peer", 1)!;
+      expect(ticket.activate()).toBe(true);
+      tool.replyBasis.forget(cid);
+    }
+    const retained = tool.replyBasis.prepare(origin, "c256", "peer", 1)!;
+    expect(retained.activate()).toBe(true);
+    expect((await reject(tool, 1, "c256", "T2")).guidance).toBe(defaultGuidance);
+    expect((await reject(tool, 2, "c256", "T2")).guidance).toBe("A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=2.");
+    expect(tool.replyBasis.capture(origin, "c256", "peer", 1, retained.authorization.reply_ticket)).toMatchObject({ basis: 1 });
+    expect((await reject(tool, 1, "c256", "T2")).guidance).toBe("No unused, unexpired authorization remains for in_reply_to=1. Wait for a fresh reply_authorization for this basis or a new confirmed input.");
+    tool.replyBasis.forget("c256");
+    expect((await reject(tool, 1, "c256", "T2")).guidance).toBe("Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=1; do not omit both fields.");
+    expect((await reject(tool, 2, "c256", "T2")).guidance).toBe("Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=2; do not omit both fields.");
+    tool.endReplyInput("T2");
+
+    tool.prepareReplyInput("T2", [inbound(1, "c256")]);tool.beginReplyInput("T2");
+    expect((await reject(tool, 1, "c256", "T2")).guidance).toBe(plainGuidance);
+    const issuedBeforeReset = tool.replyBasis.prepare({ token: "T2" }, "c256", "peer", 1)!;
+    expect(issuedBeforeReset.activate()).toBe(true);
+    tool.replyBasis.forget("c256");
+    tool.resetReplyInput();
+    tool.prepareReplyInput("T2", [inbound(1, "c256")]);tool.beginReplyInput("T2");
+    expect((await reject(tool, 1, "c256", "T2")).guidance).toBe(plainGuidance);
+    tool.endReplyInput("T2");
+  });
+});
+
 it("checks host send admission for wrapper and independent notification tokens", async () => {
   let allowed = true;
   const sink = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));

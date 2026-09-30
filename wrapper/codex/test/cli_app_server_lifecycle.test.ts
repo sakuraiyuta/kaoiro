@@ -242,6 +242,51 @@ it("stale send transfers a queued body through the real recovery response withou
   } finally { await f.close(); }
 });
 
+it.each(["exec", "app-server"] as const)("%s ToolHost write applies plain and issued-ticket guidance at its real handoff boundary", async backend => {
+  const f = await cliAppFixture(false, backend, "v1");
+  try {
+    await f.inbound(1, "plain-reply");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    const args = { to: "peer.agent", conversation_id: "plain-reply", kind: "response", body: "reply" };
+    const plain = await f.tool("send_to_agent", { ...args, in_reply_to: 1 });
+    expect(plain.result).toMatchObject({ isError: true });
+    expect(JSON.parse(plain.result.content[0].text)).toEqual({
+      error: "reply_ticket_required", send_not_attempted: true,
+      guidance: "This in_reply_to matches the frozen basis for a confirmed input in this turn, and no reply authorization has been handed off for this tuple. Resend as a normal reply with both in_reply_to and reply_ticket omitted.",
+    });
+    expect(f.envelopes("inter_agent_message")).toHaveLength(0);
+    const sent = await f.tool("send_to_agent", args);
+    expect(sent.result.isError).toBeUndefined();
+    expect((f.envelopes("inter_agent_message")[0]!.payload as { in_reply_to?: number }).in_reply_to).toBe(1);
+  } finally { await f.close(); }
+});
+
+it.each(["exec", "app-server"] as const)("%s ToolHost guidance preserves ticket basis and keeps issued-ticket refusal actionable", async backend => {
+  const f = await cliAppFixture(false, backend, "v1");
+  try {
+    await f.inbound(1, "ticketed");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    await f.inbound(2, "ticketed", "LATEST_PEER_BODY", "peer.agent", 3);await f.waitForAcks([1]);
+    const args = { to: "peer.agent", conversation_id: "ticketed", kind: "response", body: "reply" };
+    f.rejectNextSend({ reason: "stale_reply_basis", expected_peer_turn: 3, supplied_basis: 1, conversation_id: "ticketed" });
+    const recovery = await f.tool("send_to_agent", args);
+    const auth = JSON.parse(recovery.result.content[0].text).reply_authorization as { in_reply_to: number; reply_ticket: string };
+    expect(auth.in_reply_to).toBe(3);
+    await f.waitForAcks([1, 2]);
+    const afterRecovery = f.envelopes("inter_agent_message").length;
+
+    const matching = await f.tool("send_to_agent", { ...args, in_reply_to: 3 });
+    expect(JSON.parse(matching.result.content[0].text)).toEqual({
+      error: "reply_ticket_required", send_not_attempted: true,
+      guidance: "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried.",
+    });
+    const differentBasis = await f.tool("send_to_agent", { ...args, in_reply_to: 1 });
+    expect(JSON.parse(differentBasis.result.content[0].text)).toEqual({
+      error: "reply_ticket_required", send_not_attempted: true,
+      guidance: "A usable reply_authorization exists for a different in_reply_to. Do not use it or omit both fields. Wait for a new confirmed input or a handed-off reply_authorization matching in_reply_to=1.",
+    });
+    expect(f.envelopes("inter_agent_message")).toHaveLength(afterRecovery);
+  } finally { await f.close(); }
+});
+
 describe("delivery stages when turn/start may or may not have been delivered", () => {
   const stages = (reports: Array<Record<string, unknown>>) => reports.map(report => report.stage).filter(stage => stage !== "queued");
   const peerErrorCodes = (f: Awaited<ReturnType<typeof cliAppFixture>>) =>

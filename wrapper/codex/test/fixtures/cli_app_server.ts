@@ -104,7 +104,9 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
       startupRateLimitResolver: async () => new Map(),
       waitForPermissionSync: () => { permissionWaits += 1;return options.waitForPermissionSync!(); },
       onTurnFinalized: info => { options.onTurnFinalized?.(info);finalized.push(info.turnToken); },
-      codexFactory: () => { spawned += 1;const thread = { runStreamed: async () => { sent.push({ method: "turn/start" });return { events: (async function* () {
+      codexFactory: options => { spawned += 1;
+        socketPath = (((options.config as any).mcp_servers?.kaoiro?.env.KAOIRO_BRIDGE_SOCKET) as string | undefined) ?? "";
+        const thread = { runStreamed: async () => { sent.push({ method: "turn/start" });return { events: (async function* () {
         yield { type: "thread.started" as const, thread_id: "thread" };await execTerminal;
         yield { type: "turn.completed" as const, usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 } };
       })() }; } };return { startThread: () => thread, resumeThread: () => thread }; },

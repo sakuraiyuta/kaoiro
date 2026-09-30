@@ -10,6 +10,18 @@ description: Send and wait contracts and compatibility.
 The structural type `InterAgentMessagePayload` is defined in
 [@kaoiro/protocol](../../../protocol/src/index.ts).
 
+### Sending a normal reply
+
+For a normal reply to confirmed wrapper-delivered input, omit both
+`in_reply_to` and `reply_ticket`; the wrapper uses that input turn's frozen
+default basis. Same-turn waiter and recovery results are different: copy both
+fields from their handed-off `reply_authorization`. Supplying only one field,
+or supplying a basis without its matching ticket, is rejected locally with
+`send_not_attempted: true`. The wrapper's guidance distinguishes a matching
+usable authorization, a different-basis or exhausted ticket, a frozen-basis
+mismatch, and unknown issuance history; see the [reply-basis guidance
+table](reply-basis.md#explicit-replies-and-tickets).
+
 ### Receiver-side behavior (wrapper-B)
 
 For an inbound `envelope` (type `inter_agent_message`, `agent_id` not self)
