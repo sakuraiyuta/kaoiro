@@ -197,10 +197,13 @@ remains; delivery gaps outside the planned window are out of scope.
 
 When `stale_reply_basis` returns an empty `recovery`, no matching input is
 available for inline recovery now; this does not establish delivery loss or
-rule out later confirmed input. Do not retry on that conversation. Wait for a
-later confirmed input if peer input is needed, or omit `conversation_id` and
-restate the available context in a new conversation if it is enough to proceed.
-Oversized queued input and retained folded input have distinct guidance.
+rule out later confirmed input. Do not retry the failed send with its stale
+basis on that conversation. Wait for a later confirmed input if peer input is
+needed, or omit `conversation_id` and restate the available context in a new
+conversation if it is enough to proceed. Oversized queued input and retained
+folded input have distinct guidance; an oversized queued input can be answered
+as a normal reply with both `in_reply_to` and `reply_ticket` omitted after it
+is handed off.
 
 `unbound_tool_call` identifies a call with no confirmed live wrapper input or
 validated Claude SDK notification owner; `stale_tool_call`

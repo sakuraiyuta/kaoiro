@@ -614,6 +614,10 @@ it("oversized recovery stays queued and recovery budgets include the actual resu
   expect(parsed).toMatchObject({ oversized_pending: true, recovery: [] });
   expect(parsed.guidance).toContain("still queued for normal handoff");
   expect(parsed.guidance).toContain("Do not resend the failed body");
+  expect(parsed.guidance).toContain("wait for the queued input to arrive as confirmed input");
+  expect(parsed.guidance).toContain("send a normal reply with both in_reply_to and reply_ticket omitted");
+  expect(parsed.guidance).toContain("frozen default basis");
+  expect(parsed.guidance).not.toContain("use its reply authorization");
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(parsed).not.toHaveProperty("unread_remaining");
   expect(parsed).not.toHaveProperty("more_pending");
@@ -628,6 +632,8 @@ it("empty recovery is indeterminate and omits unrelated unread counts", async ()
   const parsed = JSON.parse(result.content[0]!.text);
   expect(parsed).toMatchObject({ recovery: [] });
   expect(parsed.guidance).toContain("does not prove delivery was lost");
+  expect(parsed.guidance).toContain("Do not retry this failed send with its stale basis on this conversation");
+  expect(parsed.guidance).not.toContain("Do not retry on this conversation");
   expect(parsed.guidance).toContain("wait for a later confirmed input");
   expect(parsed.guidance).toContain("omit conversation_id");
   expect(parsed).not.toHaveProperty("awaiting_delivery");
@@ -656,7 +662,7 @@ it("oversized retained folds get conservative guidance even when the matching re
   expect(parsed).toMatchObject({ oversized_pending: true, recovery: [] });
   expect(parsed.guidance).toContain("may belong to an earlier SDK turn");
   expect(parsed.guidance).toContain("do not assume its body is visible");
-  expect(parsed.guidance).toContain("Do not retry this conversation");
+  expect(parsed.guidance).toContain("Do not retry this failed send with its stale basis on this conversation");
 });
 
 it("an oversized result without a known source falls back to generic empty-recovery guidance", async () => {

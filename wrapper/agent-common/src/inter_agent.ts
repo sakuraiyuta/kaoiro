@@ -2481,11 +2481,11 @@ export class InterAgentTool {
       if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes, ...(lease.foldedEarlier ? { folded_earlier: true } : {}) }, lease.envelopes, lease);
       lease?.rollback();
       const oversizedGuidance = lease?.recoverySource === "handoff_queue"
-        ? "A matching input is still queued for normal handoff but is too large for inline recovery. Do not resend the failed body or start a duplicate conversation; wait for the queued input to arrive and use its reply authorization."
+        ? "A matching input is still queued for normal handoff but is too large for inline recovery. Do not resend the failed body or start a duplicate conversation; wait for the queued input to arrive as confirmed input. Then send a normal reply with both in_reply_to and reply_ticket omitted; the wrapper uses that input turn's frozen default basis."
         : lease?.recoverySource === "retained_fold"
-          ? "A matching folded input was retained but is too large for inline recovery. It may belong to an earlier SDK turn, so do not assume its body is visible or that a reply authorization is available. Do not retry this conversation; wait for a new confirmed input, or start a new conversation with the context you have."
+          ? "A matching folded input was retained but is too large for inline recovery. It may belong to an earlier SDK turn, so do not assume its body is visible or that a reply authorization is available. Do not retry this failed send with its stale basis on this conversation; wait for a new confirmed input, or start a new conversation with the context you have."
           : undefined;
-      const guidance = oversizedGuidance ?? "No matching input is available for inline recovery now. This does not prove delivery was lost or that later input will arrive. Do not retry on this conversation. If peer input is needed, wait for a later confirmed input; if the context you have is enough to continue, omit conversation_id and restate it in a new conversation.";
+      const guidance = oversizedGuidance ?? "No matching input is available for inline recovery now. This does not prove delivery was lost or that later input will arrive. Do not retry this failed send with its stale basis on this conversation. If peer input is needed, wait for a later confirmed input; if the context you have is enough to continue, omit conversation_id and restate it in a new conversation.";
       return { isError: true, content: [{ type: "text", text: JSON.stringify({ ...fields, recovery: [], ...(lease?.oversizedPending ? { oversized_pending: true } : {}), guidance }) }] };
     }
     if (attempt.ticket && (acceptance.send_not_attempted || ["peer_reconnecting_capacity", "delivery_backlog"].includes(acceptance.reason))) {
