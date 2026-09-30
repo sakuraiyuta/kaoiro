@@ -31,11 +31,13 @@ Stopping iteration detaches the consumer, not the running turn: admission stays
 closed until its terminal event. The internal Host backend wires token-fenced
 interrupt and immediate shutdown; the CLI composition is exercised below.
 
-Approval policy is pinned to `never`, reviewer to `user`, analytics disabled,
-and `experimentalApi` false. Unexpected server requests receive an explicit
-JSON-RPC rejection and an optional diagnostic without their payload. The
-`stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
-must redact it before logging.
+The reviewer is pinned to `user`, analytics disabled, and `experimentalApi`
+false. Thread start and resume, and every `turn/start` of a persona without
+the approval opt-in, carry approval policy `never`; see
+[Approval requests](#approval-requests-adr-0064). A server request that is
+not routed receives JSON-RPC error `-32601` and an optional diagnostic without
+its payload. The `stderrTail` accessor retains up to 16,384 characters for
+diagnostics; callers must redact it before logging.
 
 ## Operator steering (ADR-0058 Stage 2)
 
@@ -99,3 +101,111 @@ including one that was about to start, settles once through the turn-end and
 finalization callbacks with the stop as its error, so the sending peer learns
 it was not delivered. Queued operator input is dropped. Recovery is an
 operator session reset or wrapper restart.
+
+## Approval requests (ADR-0064)
+
+An opted-in Codex persona on the app-server backend exposes approval as a
+mutable axis ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md);
+opt-in: [wrapper configuration](../configuration/wrapper.md#codex-approval-axis-controls)).
+Each `turn/start` carries the approval the runtime captured for that
+execution (`untrusted`, `on-request` or `never`); the policy written is kept
+on the turn's reservation and is the only policy the gate reads, so a
+selection changed mid-turn cannot open it. The exec backend and a
+non-opted-in persona write `never`.
+
+### Routing and admission
+
+`AppServerRpc` hands every server request with a fresh typed id (`n:1` and
+`s:1` differ) to the transport synchronously in wire order. A reused id, or
+the request past 65,536 ids on one connection, fails the connection with
+kind `protocol` and no answer, because any answer would carry an ambiguous
+id. Nothing is evicted below the bound.
+
+Each request becomes one record. Admission is this list, checked top to
+bottom at receipt and again when the reservation's start is set:
+
+| Rule | Condition | Result |
+|---|---|---|
+| 1 | method is not `item/commandExecution/requestApproval` or `item/fileChange/requestApproval`, or params are invalid | rejected (`-32601` if writable) |
+| 2 | the connection has failed | dropped |
+| 3 | `threadId` is not the bound thread | rejected |
+| 4 | no turn reservation at receipt | rejected |
+| 5 | the reservation was aborted by the host | dropped |
+| 6 | the reservation's own turn completed | dropped |
+| 7 | the `turn/start` response has not arrived | held |
+| 8 | the start failed, or named another turn | rejected |
+| 9 | gate closed: no opt-in, or the turn's policy is `never` | rejected |
+| 10 | otherwise | pending: shown to the operator |
+
+The reservation's facts only accumulate: `aborted` is set by the host before
+it aborts the turn (operator interrupt, watchdog interrupt or fail-stop,
+close); `terminal` is set when the reservation's named turn completes, on the
+wire or while the buffered window is replayed; `start` is set once. A
+`turn/completed` for another turn or on another thread sets nothing.
+
+### Record states and events
+
+Events: `R` receipt, `Kn` / `Ku` the start named a turn / ended without one,
+`S` `serverRequest/resolved` for the id, `T` the reservation's terminal, `F`
+connection failure (a duplicate id is `F`), `A` host abort, `D` operator
+decision, `X` deadline. The first event that leaves a live state wins.
+
+| State \ Event | R | Kn / Ku | S | T | F | A | D | X |
+|---|---|---|---|---|---|---|---|---|
+| absent | admission | fact only | ignored | fact only | fact only | fact only | cannot happen | cannot happen |
+| held | cannot happen | admission | dropped | cannot happen: a named start re-admits held records first | dropped | dropped | cannot happen | cannot happen |
+| pending | cannot happen | cannot happen: the start is set once | dropped | dropped | dropped | dropped | replied (`accept` / `decline`) | replied (`decline`) |
+| replied, dropped, rejected | cannot happen | ignored | ignored | ignored | ignored | ignored | ignored | ignored |
+
+A write happens only on `D`, `X` or a rejection. A pending record that is
+dropped aborts its broker request, which clears the dialog. The measured
+0.156.1 order after an interrupt is the terminal, then `serverRequest/resolved`
+([Stage 3 evidence](../../evidence/codex-app-server/stage3-approval-probes-2026-09-30.md)),
+so the record ends on `T` and `S` is ignored.
+
+### The reservation window
+
+`#endReservation` is the only exit of the window between reserving a turn
+and learning its id. It runs once, synchronously, before the error of a
+failed start is rethrown and before another start can reserve (the
+`AppServerPermissionSuperseded` retry included):
+
+- It judges every deferred turn evidence item (`turn/started`, `item/*`
+  notifications and `item/*` server requests) with the issue #366 predicate.
+  An unnamed ending names no own turn, so evidence for any unknown turn is
+  foreign.
+- For a named start it sets `terminal` if the buffer holds that turn's
+  `turn/completed`, sets `start`, re-admits held records, and only then is the
+  buffer replayed. The active turn stays until its terminal is delivered.
+- An unnamed start (JSON-RPC error, or a failure before `turn/start` is
+  written) rejects held records; a connection failure drops them. Both
+  release the active turn.
+
+Notifications buffered before the `turn/start` response are bounded at
+4,096; the next one fails the connection (`protocol`) instead of evicting,
+because the buffer is the source of the terminal fact.
+
+### Operator path
+
+The shared `PermissionBroker` shows a pending record in the single
+`pending_permission` slot ([ADR-0022](../../adr/0022-pending-permission-authoritative-source.md))
+with `tool_name` `codex:command_execution` or `codex:file_change`. The input
+is `{command, cwd, kind, reason?, command_actions?, network?, approval_id?}`
+or `{item_id, reason?, grant_root?, changes? | changes_unavailable}`, where
+`changes` comes from the latest `fileChange` item snapshot with that id (at
+most 256 per turn), plus `inactivity_limit_ms`. The 16 KB rule applies.
+
+The broker's settle runs the record's callback before the slot changes and
+reports the cause: an operator allow writes `accept`, a deny `decline`, a
+deadline `decline`; an abort or close writes nothing. `decline` carries no
+message. Command approvals on 0.156.1 carry an `availableDecisions` list
+that is not in the generated schema and omits `decline`; `decline` was
+measured to be honoured, and that capture is pinned in a test with the Codex
+pin. There is no deadline unless `permission_timeout_ms` is configured. The
+turn watchdog stays active, so an unanswered request ends with its turn at the
+configured inactivity limit; the dialog states that limit.
+
+Not offered: `acceptForSession`, policy amendments, `cancel`,
+`item/permissions/requestApproval` (always `-32601`), and elicitations. The
+bridge tools raise no server request under `on-request` or `untrusted`
+(probes P4a/P4b), so they keep their own operator gate.

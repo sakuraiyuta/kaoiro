@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-30
 ---
 
 # Security enforcement boundaries
@@ -52,7 +52,12 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   No confirmation UI or audit-fsync acknowledgement is implied.
   Codex enforces the selected policy through its OS sandbox where enabled;
   changing that policy is explicitly authorized operator control, not
-  preservation of the launch-time ceiling. In particular, selecting
+  preservation of the launch-time ceiling. An opted-in Codex app-server
+  persona may also run with approval `untrusted` or `on-request`
+  ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)); each
+  escalation Codex asks for is an operator-only approval through the broker,
+  and a request that is not shown to the operator is answered `-32601` or
+  left unanswered, never accepted. In particular, selecting
   `danger-full-access` does not retain the preceding sandbox restriction.
   This does not authorize changing `allowedTools` / `canUseTool` through the
   server. Antigravity Stage B0 switching was implemented on 2026-09-18

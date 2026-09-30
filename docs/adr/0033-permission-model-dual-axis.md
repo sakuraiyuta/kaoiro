@@ -50,7 +50,7 @@ running** (feature flag `exec_permission_approvals` is under development = not
 released; the default approval_policy for exec is `never`). This fixes approval
 to `never`; it does not prevent changing sandbox or network configuration between
 executions. `waiting_permission` never occurs for Codex. Track upstream approval
-support in [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+support in open-questions/codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md)).
 
 ## Decision
 
@@ -133,7 +133,7 @@ Keep three distinct values:
 `approval` remains **fixed to `never`**. The exec harness overrides the approval
 policy, and the SDK cannot deliver an operator approval while the process runs.
 It is not an input to `set_permission`. See
-[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md)).
 
 Reuse ADR-0035's `requested`, `effective`, and `rolled_back_to` vocabulary, but
 not its model-failure rollback rule. Once the current `turn_context` confirms a
@@ -250,7 +250,7 @@ Implement it in [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity
 - **Permanent “approval: never (host-fixed, upstream constraint)” badge on Codex**:
   sandbox/network switching does not enable approval switching. Source the label
   from control constraints while ext.permission is absent. Link the fixed
-  approval label to [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+  approval label to codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md)).
 - **Add a Claude permission_mode selector to LaunchDialog**: currently only
   Codex shows a sandbox selector and Claude can select a mode only after launch in
   AgentDetail. Add a mode selector (default / plan / acceptEdits / dontAsk / auto /
@@ -304,7 +304,7 @@ supersede ADR-0022.
   Labels provide the context.
 - Codex’s approval experience does not exist until upstream
   `exec_permission_approvals` becomes stable (tracked in
-  [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)).
+  open-questions/codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md))).
 
 ### Neutral
 
@@ -313,6 +313,14 @@ supersede ADR-0022.
   synchronised inside the envelope.
 - Viewer delivery is automatically covered by ADR-0021’s allow-list (ext is
   completely removed for viewers).
+
+## Updates
+
+- 2026-09-30: [ADR-0064](0064-codex-app-server-approval-requests.md) supersedes F3's "approval fixed to `never`"
+  for the Codex app-server backend only, behind a per-persona opt-in: approval
+  becomes a third field of the requested / submitted / effective triple, and
+  approval requests reach the operator through ADR-0022's single slot. F3
+  stays in force for the exec backend; the rest of this ADR stands.
 
 ## Alternatives Considered
 
@@ -334,7 +342,7 @@ supersede ADR-0022.
 - Implementation: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md),
   [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4 addendum
   and D8 resume diff detection).
-- Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
+- Open questions: codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md))
   (upstream approval tracking). Old Q2 (envelope schema) / Q3 (UI vocabulary)
   were resolved and closed on 2026-07-10.
 - Related ADR: [ADR-0034](0034-session-capabilities-advertisement.md) (extend the

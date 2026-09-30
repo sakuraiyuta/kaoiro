@@ -1,7 +1,7 @@
 ---
 title: Tool authorization
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-30
 ---
 
 # Tool authorization
@@ -25,8 +25,16 @@ The structural type for permission configurations is `PermissionConfiguration` i
 
 - Claude's tool ceiling remains `allowedTools` / `canUseTool`. Codex's selected
   sandbox/network policy may change through the operator-only `set_permission`
-  control; approval stays `never`. Selection is not an immutable launch-time
+  control; approval stays `never` on exec and on a non-opted-in app-server
+  persona. Selection is not an immutable launch-time
   ceiling ([ADR-0033](../../adr/0033-permission-model-dual-axis.md) F3).
+  On the app-server backend with the approval opt-in
+  ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)), the
+  operator may select `untrusted` or `on-request`; Codex's command and
+  file-change approval requests then reach the same broker as an
+  operator-only dialog (`codex:command_execution` / `codex:file_change`), and
+  only an operator decision or a configured deadline writes an answer. An
+  accepted request is a one-off escalation, not a policy change.
   Antigravity Stage B0 permission switching was implemented on 2026-09-18
   (`f1356d96`, permission sync in `9e1d9960`, reconnect ceiling check in
   `15cfd94a`). With all three launch ceilings and permission-sync support,

@@ -4,7 +4,7 @@ description: Implement an @openai/codex-sdk-compatible EngineAdapter in wrapper/
 status: done
 phase: 14
 depends_on: [phase-13-wrapper-multipackage-restructure]
-last_updated: 2026-07-11
+last_updated: 2026-09-30
 ---
 
 # Phase 14 — Codex Adapter Implementation
@@ -69,7 +69,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 ## Followups (in-phase but unfinished)
 
 - [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md) — Treat phase-14 as complete with startup-only reflection because cwd change tracking is best-effort; continue dynamic tracking at low urgency.
-- [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) — Codex interactive approval awaits upstream stabilization of `exec_permission_approvals`. Complete this phase with fixed dual axes at startup.
+- codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](../adr/0064-codex-app-server-approval-requests.md)) — Codex interactive approval awaits upstream stabilization of `exec_permission_approvals`. Complete this phase with fixed dual axes at startup.
 
 ## Open Questions Blocking This Phase
 

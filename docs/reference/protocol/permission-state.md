@@ -1,7 +1,7 @@
 ---
 title: Permission state contract
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-30
 description: The ext.permission two-axis model and the requested/submitted/effective state machine for a permission change.
 ---
 
@@ -22,7 +22,9 @@ The Claude adapter has a six-mode → two-axis mapping table (ADR-0033 F2,
 display approximation) and stamps `enforcement: "mode"`. The Codex adapter
 projects its spawn sandbox_mode and fixed `approval: "never"` because exec
 has no approval flow (ADR-0033 F3), stamping `enforcement: "os"` (its
-sandbox is the real OS sandbox). The Antigravity adapter stamps
+sandbox is the real OS sandbox). On the app-server backend with the approval
+opt-in, approval is a third field of the requested / submitted / effective
+triple instead ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)). The Antigravity adapter stamps
 `enforcement: "advisory"` because its `--sandbox` flag was measured to have
 no effect; the wrapper enforces the cell by inspecting tool arguments,
 never by the OS (ADR-0057 F4).
@@ -143,7 +145,8 @@ at SDK 0.156.1 via an offline loopback capture, issue #399, unchanged from
 0.153.4) nor a prior tail record is confirmation. Handle delayed/partial writes and
 session changes without promoting stale evidence. A policy mismatch is a loud
 failure with the actually observed policy, not a silent substitution. An
-approval value other than the fixed `never` is a contract violation; do not
+approval value other than the submitted one (`never` unless the approval axis
+is advertised) is a contract violation, `approval_policy_mismatch`; do not
 continue dispatch until reconciled. The effective claim is an observation of
 the engine's policy, not a proof that every OS isolation primitive succeeded.
 
@@ -207,8 +210,10 @@ network, or approval picker only when that axis arm is well formed. Sandbox and
 approval options above `max` are disabled and labelled rather than hidden; a
 false network ceiling disables enabling network while preserving the narrowing
 true-to-false action. A missing or malformed arm keeps that axis launch-fixed
-and hides its picker. When the whole field is absent, the legacy unclamped
-sandbox/network controls remain available while approval stays host-fixed.
+and hides its picker. An approval arm with `values` offers only those values;
+a malformed `values` makes the arm malformed. When the whole field is absent,
+the legacy unclamped sandbox/network controls remain available while approval
+stays host-fixed.
 These client clamps mirror the authoritative server and wrapper gates; they do
 not replace either gate.
 Client ack/state updates cannot reduce the latest known revision or restore
@@ -221,8 +226,11 @@ Fixed adapter constraints are required in every control state, including the
 initial revision-zero baseline: Codex sends `constraints:{approval:"never",
 enforcement:"os"}`. These fields survive omission of `ext.permission`; they
 state the configured contract, not an observation of an unstarted exec. For an
-engine whose approval is launch-fixed (Codex), render the host-fixed approval
-label from constraints and render sandbox and network as unknown until observed. If an observation contradicts a constraint,
+engine whose approval is launch-fixed (Codex without an advertised approval
+axis), render the host-fixed approval label from constraints and render sandbox
+and network as unknown until observed. With the approval axis advertised, the
+constraint keeps the launch value and the unobserved row shows the requested
+approval without the host-fixed label. If an observation contradicts a constraint,
 show the observed value and a contract-violation error rather than concealing it
 behind the fixed label.
 

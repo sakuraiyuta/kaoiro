@@ -67,6 +67,23 @@ early: "steer"}` at join and steers only while the server echoes it; the exec
 backend ignores both variables. The wrapper logs `codex: operator_steer=on|off`
 at startup. See [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 
+### Codex approval axis controls
+
+`KAOIRO_CODEX_APPROVAL_AXIS=1` in the Codex wrapper process environment
+makes approval a mutable axis for every Codex peer on the app-server
+backend; `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS=momo,other` enables only the
+listed `persona.id` values. Both use `personaOptInSource` with the same rules
+as the steer controls above, and the default is off. An enabled wrapper
+advertises `permission_switch_axes.approval` with `values: ["untrusted",
+"on-request", "never"]` (launch value and ceiling `never`) once permission
+sync is negotiated, writes the operator's selected approval into each
+`turn/start`, and routes command and file-change approval requests to the
+operator. Approvals have no deadline unless `permission_timeout_ms` is set.
+The exec backend ignores both variables. The wrapper logs
+`codex: approval_axis=on|off` at startup. See
+[Codex app-server transport](../engines/codex-app-server.md#approval-requests-adr-0064)
+and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).
+
 ### Claude phase-2 delivery controls
 
 `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` in the Claude wrapper process environment

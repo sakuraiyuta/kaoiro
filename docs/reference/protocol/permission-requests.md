@@ -1,7 +1,7 @@
 ---
 title: Permission request contract
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-30
 description: The set_permission wire contract -- request validation, relay, and acknowledgement.
 ---
 
@@ -34,17 +34,24 @@ approval accepts `untrusted`, `on-request`, `local`, or `never` (the observed-on
 `on-failure` is not a switch target). Reject `null`, empty patches, and unknown
 fields (`actor`, `revision`) as `invalid_payload`. The `approval` axis is accepted
 only for an engine that advertises it mutable in
-`session_capabilities.permission_switch_axes` (Antigravity, ADR-0057 F4c); Codex
+`session_capabilities.permission_switch_axes` (Antigravity, ADR-0057 F4c; Codex
+on the app-server backend with the approval opt-in, ADR-0064). Otherwise Codex
 keeps approval launch-fixed to `never` and rejects an `approval` patch as
 `unsupported_permission_switch`.
 
 Each axis is clamped to the launch ceiling the wrapper advertises in
 `session_capabilities.permission_switch_axes`
-(`{sandbox?:{max}, network_access?:{max}, approval?:{max}}`) — a host-local
+(`{sandbox?:{max}, network_access?:{max}, approval?:{max, values?}}`) — a host-local
 operator bound the server cannot widen (ADR-0057 F4c Stage B0). A patch that
 would move an axis past its ceiling is rejected with `exceeds_launch_ceiling`,
 and an axis whose spec is missing or malformed is launch-fixed
-(`unsupported_permission_switch`). When `permission_switch_axes` is absent
+(`unsupported_permission_switch`). `approval.values`, when present, is the
+closed set of selectable approvals: a non-empty, duplicate-free subset of the
+approval enum that contains `max`, otherwise the approval axis is malformed; a
+value outside it is `unsupported_permission_switch`. Codex advertises
+`values: ["untrusted", "on-request", "never"]` with `max: "never"`, and its
+sandbox and network arms at their most permissive values so that they stay
+unclamped. When `permission_switch_axes` is absent
 entirely the legacy contract holds: sandbox and network switch freely and
 `approval` is forbidden. Permissive order is `untrusted < on-request < local <
 never` for approval, `read-only < workspace-write < danger-full-access` for

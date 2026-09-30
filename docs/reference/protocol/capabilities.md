@@ -1,7 +1,7 @@
 ---
 title: Session capabilities contract
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-09-30
 description: The ext.session_capabilities shape, stamp timing, and per-engine advertised values.
 ---
 
@@ -67,7 +67,12 @@ cannot represent.
   Antigravity advertise runtime permission selection only after permission-sync
   negotiation. Antigravity additionally requires all runner-supplied sandbox,
   network-access, and approval ceilings; absent capability fields remain
-  fail-closed for legacy peers.
+  fail-closed for legacy peers. Codex advertises `permission_switch_axes` only
+  on the app-server backend with the approval opt-in:
+  `approval: {max: "never", values: ["untrusted", "on-request", "never"]}`,
+  with sandbox and network at their most permissive ceiling
+  ([ADR-0064](../../adr/0064-codex-app-server-approval-requests.md)). `values`
+  is optional; see [permission changes](permission-requests.md#permission-changes-at-an-execution-boundary).
 
 ## Related protocol topics
 

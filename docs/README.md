@@ -88,6 +88,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0061](adr/0061-dashboard-operator-bulk-reset.md) | Dashboard operator bulk close + bulk session reset | accepted |
 | [0062](adr/0062-input-bound-inter-agent-replies.md) | Input-bound inter-agent replies | accepted |
 | [0063](adr/0063-layered-delivery-authority-and-continuations.md) | Layered inter-agent delivery, authority and continuation admission | accepted |
+| [0064](adr/0064-codex-app-server-approval-requests.md) | Codex approval requests over the app-server transport | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.

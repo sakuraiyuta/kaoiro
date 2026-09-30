@@ -26,7 +26,6 @@ Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
 | [external-human-recv-permission-model](external-human-recv-permission-model.md) | low | — | 2026-07-04 |
 | [external-human-contact-management-ux](external-human-contact-management-ux.md) | low | — | 2026-07-04 |
 | [codex-cwd-extraction](codex-cwd-extraction.md) | low | — | 2026-07-10 |
-| [codex-exec-approval-upstream](codex-exec-approval-upstream.md) | low | — | 2026-07-10 |
 | [claude-effort-levels-init-transition](claude-effort-levels-init-transition.md) | medium | — | 2026-07-14 |
 | [coordination-report-routing](coordination-report-routing.md) | medium | — | 2026-07-28 |
 | [work-division-conflict-guard](work-division-conflict-guard.md) | low | — | 2026-07-28 |

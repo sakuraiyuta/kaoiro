@@ -37,6 +37,14 @@ queued. Pre-implementation probes on the 0.156.1 pin are in the
 the current contract is in the [transport reference](../reference/engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 Post-implementation live probes and rollout remain pending.
 
+**Stage 3 (2026-09-30, [issue #367](https://github.com/sakuraiyuta/kaoiro/issues/367)).**
+The operator decided to go ahead with approval requests. The design was
+reviewed in five rounds on the issue and is recorded as
+[ADR-0064](0064-codex-app-server-approval-requests.md), which supersedes ADR-0033 F3 for the app-server backend
+only. Approval requests are implemented behind a per-persona opt-in, default
+off; diagnostic probes are in the
+[Stage 3 evidence](../evidence/codex-app-server/stage3-approval-probes-2026-09-30.md).
+
 ## Context
 
 At baseline `1715de067a5701c2bbaa0c99e9be7606b8b6ccf4`,
@@ -55,7 +63,7 @@ integration for approvals because of its experimental protocol and cost.
 Issue #346 introduces another reason to reconsider that cost: instructions
 received while the agent works should be eligible for the active turn.
 This proposal is option B in
-[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md),
+codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](0064-codex-app-server-approval-requests.md)),
 but option A in the comparison below.
 
 Appendix A measures the production package's **0.153.4** binary directly.

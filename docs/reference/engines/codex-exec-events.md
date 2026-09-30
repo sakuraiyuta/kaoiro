@@ -1,7 +1,7 @@
 ---
 title: Codex exec event reference
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-09-30
 related: [protocol, plugin-model, system-overview, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -193,7 +193,7 @@ kaoiro. Therefore:
 - A command needing escalation outside the sandbox is automatically denied and
   returned to the model as failure (the model attempts an in-sandbox alternative).
 - Track upstream exec approval support (feature flag `exec_permission_approvals`,
-  in development) in [open-questions/codex-exec-approval-upstream](../../open-questions/codex-exec-approval-upstream.md).
+  in development) in open-questions/codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md); exec keeps `never`).
 
 ### Session / thread resume and enumeration
 
@@ -329,7 +329,7 @@ engines ([ADR-0032](../../adr/0032-codex-adapter.md) F3).
 - ADR: [ADR-0032](../../adr/0032-codex-adapter.md) (introducing Codex adapter),
   [ADR-0033](../../adr/0033-permission-model-dual-axis.md) (two permission axes)
 - Open questions: [codex-cwd-extraction](../../open-questions/codex-cwd-extraction.md),
-  [codex-exec-approval-upstream](../../open-questions/codex-exec-approval-upstream.md)
+  codex-exec-approval-upstream (closed 2026-09-30 by [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md))
 - Plan: [phase-14-codex-adapter](../../plans/phase-14-codex-adapter.md)
 
 ## Migration links
