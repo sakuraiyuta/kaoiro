@@ -31,6 +31,20 @@ export interface ReplyAttempt {
   basis: number;
   ticket?: Ticket;
 }
+interface IssuedTicketHistory {
+  readonly tuples: Set<string>;
+  saturated: boolean;
+}
+export const REPLY_TICKET_REQUIRED_GUIDANCE = "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried.";
+export type ReplyTicketGuidance =
+  | "copy_matching_authorization"
+  | "wait_for_matching_authorization"
+  | "wait_for_fresh_authorization"
+  | "plain_reply"
+  | "wait_for_confirmed_input"
+  | "wait_for_matching_basis"
+  | "wait_for_history";
+
 const key = (cid: string, peer: string): string => JSON.stringify([cid, peer]);
 export function ordinaryPeerInput(envelope: Envelope): boolean {
   const p = envelope.payload as Partial<InterAgentMessagePayload>;
@@ -47,6 +61,7 @@ export class ReplyBasis {
   readonly #pendingInputByToken = new Map<string, readonly Envelope[]>();
   readonly #snapshots = new Map<string, Snapshot>();
   readonly #tickets = new Map<string, Ticket>();
+  readonly #issuedHistory = new Map<string, IssuedTicketHistory>();
   readonly #clock: () => number;
   constructor(clock: () => number = () => performance.now()) { this.#clock = clock; }
 
@@ -109,6 +124,7 @@ export class ReplyBasis {
     this.#snapshots.get(token)?.controller.abort();
     this.#snapshots.delete(token);
     for (const [value, ticket] of this.#tickets) if (ticket.token === token) this.#tickets.delete(value);
+    this.#issuedHistory.delete(token);
   }
   ticketCountForTurn(token: string): number {
     return [...this.#tickets.values()].filter(ticket => ticket.token === token).length;
@@ -119,8 +135,9 @@ export class ReplyBasis {
     for (const confirmed of this.#confirmedByToken.values()) for (const k of confirmed.keys()) if ((JSON.parse(k) as string[])[0] === cid) confirmed.delete(k);
     for (const [token, pending] of this.#pendingInputByToken) this.#pendingInputByToken.set(token, pending.filter(e => (e.payload as Partial<InterAgentMessagePayload>).conversation_id !== cid));
     for (const [value, ticket] of this.#tickets) if (ticket.cid === cid) this.#tickets.delete(value);
+    // Keep issuance facts across forget(): deleting a live ticket must not make an issued tuple look never-issued.
   }
-  reset(): void { for (const token of this.#snapshots.keys()) this.retire(token); this.#delivered.clear(); this.#completed.clear(); this.#confirmedByToken.clear(); this.#pendingInputByToken.clear(); this.#tickets.clear(); }
+  reset(): void { for (const token of this.#snapshots.keys()) this.retire(token); this.#delivered.clear(); this.#completed.clear(); this.#confirmedByToken.clear(); this.#pendingInputByToken.clear(); this.#tickets.clear(); this.#issuedHistory.clear(); }
   live(origin: ReplyOrigin | undefined): string | undefined {
     if (!origin) return "unbound_tool_call";
     const snapshot = this.#snapshots.get(origin.token);
@@ -143,6 +160,40 @@ export class ReplyBasis {
     if (this.#clock() >= ticket.expires) return "expired_reply_ticket";
     ticket.state = "spent";
     return { origin: bound, cid, peer, basis: explicit, ticket };
+  }
+  replyTicketGuidance(origin: ReplyOrigin, cid: string, peer: string, supplied: number): ReplyTicketGuidance {
+    const snapshot = this.#snapshots.get(origin.token)!;
+    const tuple = key(cid, peer);
+    const records = [...this.#tickets.values()].filter(ticket => ticket.token === origin.token && ticket.cid === cid && ticket.peer === peer);
+    const now = this.#clock();
+    const usable = records.filter(ticket => ticket.state === "unused" && now < ticket.expires);
+    if (usable.some(ticket => ticket.basis === supplied)) return "copy_matching_authorization";
+    if (usable.length > 0) return "wait_for_matching_authorization";
+
+    const history = this.#issuedHistory.get(origin.token);
+    if (history?.tuples.has(tuple) || records.some(ticket => ticket.state !== "provisional")) {
+      return "wait_for_fresh_authorization";
+    }
+    if (history?.saturated) return "wait_for_history";
+
+    const frozen = snapshot.basis.get(tuple) ?? 0;
+    if (supplied === frozen) return frozen > 0 ? "plain_reply" : "wait_for_confirmed_input";
+    return "wait_for_matching_basis";
+  }
+
+  #recordIssued(ticket: Ticket): void {
+    let history = this.#issuedHistory.get(ticket.token);
+    if (!history) {
+      history = { tuples: new Set(), saturated: false };
+      this.#issuedHistory.set(ticket.token, history);
+    }
+    const tuple = key(ticket.cid, ticket.peer);
+    if (history.tuples.has(tuple) || history.saturated) return;
+    if (history.tuples.size === 256) {
+      history.saturated = true;
+      return;
+    }
+    history.tuples.add(tuple);
   }
   beforeSend(attempt: ReplyAttempt): string | undefined {
     return this.live(attempt.origin) ?? (attempt.ticket && this.#clock() >= attempt.ticket.expires ? "expired_reply_ticket" : undefined);
@@ -170,6 +221,7 @@ export class ReplyBasis {
           if (prior !== ticket && prior.token === origin.token && prior.cid === cid && prior.peer === peer && prior.state === "unused") prior.state = "superseded";
         }
         ticket.expires = this.#clock() + 300_000; ticket.state = "unused";
+        this.#recordIssued(ticket);
         return true;
       },
     };

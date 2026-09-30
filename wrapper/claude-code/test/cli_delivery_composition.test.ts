@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatInboundMessage, handoffToolResult } from "@kaoiro/agent-common";
+import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
-import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 // Native results carry a run-wide delivery sequence; a live interval only
@@ -92,6 +92,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const acknowledged: number[] = [];
     const pushedInputs: string[] = [];
     const notices: Envelope[] = [];
+    const foldedGuidance: string[] = [];
+    const foldedOutboundCounts: number[] = [];
     let linkOptions!: Record<string, any>;
     let host!: AgentHost;
     let ready!: () => void;
@@ -135,6 +137,26 @@ describe("Claude CLI delivery composition (issue #247)", () => {
               await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
                 hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: foldText,
               }, undefined, signal);
+              const authorizationLine = foldText.split("\n").find(line => line.startsWith("reply_authorization: "))!;
+              const authorization = JSON.parse(authorizationLine.slice("reply_authorization: ".length)) as { in_reply_to: number };
+              const mcp = sdkOptions.mcpServers.kaoiro as McpSdkServerConfigWithInstance;
+              type Transport = Parameters<typeof mcp.instance.connect>[0];
+              const responses: Array<Record<string, any>> = [];
+              const transport: Transport = { start: async () => {}, close: async () => {}, send: async message => { responses.push(message as Record<string, any>); } };
+              await mcp.instance.connect(transport);
+              try {
+                const toolUseId = "folded-reply";
+                await sdkOptions.hooks.PreToolUse.at(-1).hooks[0]({
+                  hook_event_name: "PreToolUse", session_id: "s", prompt_id: "p1", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: toolUseId,
+                }, toolUseId, signal);
+                transport.onmessage!({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+                  name: "send_to_agent", arguments: { to: "peer.agent", conversation_id: "c-2", kind: "response", body: "reply", in_reply_to: authorization.in_reply_to },
+                  _meta: { "claudecode/toolUseId": toolUseId },
+                } });
+                await vi.waitFor(() => expect(responses).toHaveLength(1));
+                foldedGuidance.push(JSON.parse(responses[0]!.result.content[0].text).guidance as string);
+                foldedOutboundCounts.push(notices.filter(envelope => envelope.payload.conversation_id === "c-2").length);
+              } finally { await mcp.instance.close(); }
               yield outcome === "error"
                 ? { type: "result", result_index: nextResultIndex(), subtype: "error_during_execution", is_error: true, session_id: "s", errors: ["failed"] } as SDKMessage
                 : { type: "result", result_index: nextResultIndex(), subtype: "success", session_id: "s", result: "done" } as SDKMessage;
@@ -159,6 +181,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       expect(pushedInputs[0]).toContain("Mid-turn peer delivery");
       expect(stages).toContainEqual(expect.objectContaining({ stage: "submitted", handoff: "fold_hook" }));
       expect(acknowledged).toEqual([1, 2]);
+      expect(foldedGuidance).toEqual(["Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."]);
+      expect(foldedOutboundCounts).toEqual([0]);
       if (outcome === "error") {
         await vi.waitFor(() => expect(notices.filter(envelope => envelope.payload.conversation_id === "c-2")).toHaveLength(1));
         expect(notices.find(envelope => envelope.payload.conversation_id === "c-2")?.payload.notice_type).toBe("turn_failure");

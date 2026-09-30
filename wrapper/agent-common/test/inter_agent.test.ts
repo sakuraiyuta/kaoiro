@@ -1902,6 +1902,8 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     const description = tool
       .descriptors()
       .find((d) => d.name === "send_to_agent")!.description;
+    expect(description).toMatch(/^For a normal reply to confirmed wrapper-delivered input, omit both `in_reply_to` and `reply_ticket`;/);
+    expect(description).toContain("For a same-turn waiter or recovery result, copy both fields from its `reply_authorization`");
     expect(description).toContain("peer_error: {code, message, from}");
     expect(description).toContain("rate_limit = wait before retrying");
     expect(description).toContain("context_overflow = retrying is pointless");
