@@ -15,8 +15,10 @@ function params(over: RpcObject = {}): RpcObject {
 function request(over: RpcObject = {}, method: string = COMMAND): ParsedApproval | null {
   return parseApprovalRequest(method, params(over));
 }
-function owner(over: Partial<ApprovalOwner> = {}): ApprovalOwner {
-  return { ...createApprovalOwner("th"), start: { kind: "started", turnId: "t1" }, approvalPolicy: "on-request", ...over };
+function owner(over: { [K in keyof ApprovalOwner]?: ApprovalOwner[K] | undefined } = {}): ApprovalOwner {
+  const o = { ...createApprovalOwner("th"), start: { kind: "started", turnId: "t1" }, approvalPolicy: "on-request", ...over } as ApprovalOwner;
+  if ("start" in over && over.start === undefined) delete o.start;
+  return o;
 }
 function facts(over: Partial<AdmitFacts> = {}): AdmitFacts {
   return { rpcFailed: false, boundThreadId: "th", owner: owner(), enabled: true, ...over };
@@ -245,6 +247,18 @@ describe("ApprovalRouter", () => {
     router.resolved("n:1");
     expect(transitions.filter(t => t.key === "n:1").map(t => `${t.event}>${t.to}`)).toEqual(["R>pending", "S>dropped"]);
     expect(c2.writes).toEqual([]);
+  });
+
+  it("shares the one slot with a bridge-tool request: newest shows, and the slot falls back", () => {
+    const { router, broker, slots } = routerRig();
+    void broker.decide("mcp__kaoiro__request_session_reset", {});
+    expect(slots.at(-1)).toMatchObject({ request_id: "req-1" });
+    router.receive(raw(0), channel(), { boundThreadId: "th", owner: owner() });
+    expect(slots.at(-1)).toMatchObject({ request_id: "req-2", tool_name: "codex:command_execution" });
+    router.resolved("n:0");
+    expect(slots.at(-1)).toMatchObject({ request_id: "req-1" });
+    broker.resolve({ request_id: "req-1", allow: false });
+    expect(slots.at(-1)).toBeNull();
   });
 
   it("refuses an enabled router without a broker", () => {
