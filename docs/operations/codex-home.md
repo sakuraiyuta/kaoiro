@@ -79,7 +79,8 @@ CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
 ### Hooks
 
 The model-profile hook (`ai-settings/codex/hooks/model-profile.sh`) behaves as
-follows in a new home (probe P2, pinned 0.156.1, issue #454):
+follows in a new home (probe P2, pinned 0.156.1, recorded in
+[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454#issuecomment-5902727477)):
 
 - A hook without a matching `[hooks.state]` trust entry is skipped silently.
   The trust key is `<absolute path of config.toml>:<event>:0:0`; the `sha256:`
@@ -94,13 +95,83 @@ Whether to carry the hook, and whether to change that line in ai-settings, is
 recorded in issue #454. A wrong or missing trust entry fails silently, so the
 cutover checks that the injection happened (below).
 
+## Create the new home's contents (needs the operator)
+
+Run these after the login above, in the same shell (`H` is set there). Keep the
+`CODEX_HOME` value out of the shell environment; the commands use `"$H"`.
+
+Instruction symlinks. On the current host `AGENTS.md`, `agents`, `hooks` and
+`model-profiles` in `~/.codex` are symlinks with absolute targets into ai-settings;
+`cp -P` copies the links themselves (not their targets):
+
+```sh
+ls -l ~/.codex/AGENTS.md ~/.codex/agents ~/.codex/hooks ~/.codex/model-profiles
+                         # each must be a symlink with an absolute target
+cp -P ~/.codex/AGENTS.md ~/.codex/agents ~/.codex/model-profiles \
+  ~/.codex/hooks "$H"/
+ls -l "$H"               # same four links, same targets
+```
+
+If one of them is a real directory or a relative link on another host, recreate
+it with `ln -s <absolute target> "$H"/<name>` instead.
+
+A minimal `config.toml` (not a copy of `~/.codex/config.toml`). Replace every
+`<...>` with the value the peers should use; add one `[projects.*]` table per
+directory a peer runs in:
+
+```sh
+cat > "$H/config.toml" <<'EOF'
+model = "<model>"
+model_reasoning_effort = "<low|medium|high>"
+project_doc_fallback_filenames = ["CLAUDE.md"]
+
+[projects."<absolute directory a peer runs in>"]
+trust_level = "trusted"
+EOF
+chmod 600 "$H/config.toml"
+```
+
+Only if the model-profile hook is carried (the decision is recorded in
+[issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454); skip this block
+otherwise). The `command` string must stay exactly as below, because the trust
+hash belongs to that definition. Each `[hooks.state]` key is the event name and
+the absolute path of the new `config.toml`, and each hash is copied from the same
+event's entry in `~/.codex/config.toml`:
+
+```sh
+grep -A1 '^\[hooks\.state\.' ~/.codex/config.toml   # the two entries; hashes are not secrets
+cat >> "$H/config.toml" <<EOF
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "bash ~/.codex/hooks/model-profile.sh"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "bash ~/.codex/hooks/model-profile.sh"
+timeout = 5
+
+[hooks.state]
+[hooks.state."$H/config.toml:session_start:0:0"]
+trusted_hash = "<sha256:... of the session_start entry>"
+[hooks.state."$H/config.toml:user_prompt_submit:0:0"]
+trusted_hash = "<sha256:... of the user_prompt_submit entry>"
+EOF
+```
+
+Without a matching trust entry the hook is skipped silently. The command above
+still reads `$HOME/.codex/model-profiles` unless the ai-settings script was
+changed to follow `CODEX_HOME` (see "Hooks").
+
 ## Cutover
 
 1. Deploy the reader fix through a normal runner update and confirm that
    behavior is unchanged with `CODEX_HOME` unset.
-2. Operator: create the home and log in (above); create the symlinks and the
-   minimal `config.toml`; add `CODEX_HOME=<absolute path>` to `runner.env`
-   (mode 0600).
+2. Operator: create the home and log in (above); create its contents (above);
+   add `CODEX_HOME=<absolute path>` to `runner.env` (mode 0600).
 3. Pick an idle moment: no in-flight Codex turns and no queued deliveries. Note
    the Codex session ids and hand open items over to issues or the worklog.
 4. Restart the runner (`systemctl --user restart kaoiro-runner`). The journal

@@ -89,7 +89,13 @@ it is read once at startup (restart the runner after changing it).
   logs `runner: error — CODEX_HOME=... ; Codex launches are refused until it is
   fixed` at startup and refuses every Codex launch (spawn, restart, reset,
   switch and crash relaunch) with a `runner: codex launch refused for <agent>`
-  line, and reports `error` to the server; other engines are unaffected.
+  line; other engines are unaffected. A refused spawn, resume, switch or restart
+  is reported to the server as a failed result (`error`, under the command's
+  request id, so a restart's planned-downtime window is closed and the running
+  wrapper stays). A refused crash relaunch has no command to answer: the agent
+  stays offline and the journal line is the only signal.
+- The directory is checked at every launch, so creating a missing directory
+  needs no restart; changing the value does (it is read at startup).
 - The runner logs `runner: codex home=<path>` at startup and each Codex wrapper
   logs `codex: home=<path>`.
 - Readers: the runner's resume scan (`sessions.ts`) and the wrapper's rollout

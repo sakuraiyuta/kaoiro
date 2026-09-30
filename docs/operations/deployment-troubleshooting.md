@@ -38,11 +38,11 @@ identifies the known deployment state.
 
 ## Codex launches are refused: `CODEX_HOME` is unusable
 
-**Symptom.** The runner journal shows `runner: error — CODEX_HOME=<value> ...; Codex launches are refused until it is fixed` at startup, and `runner: codex launch refused for <agent>: CODEX_HOME=<value> ...` for each Codex spawn, restart or relaunch. Claude and Antigravity agents are unaffected. Started by hand, a Codex wrapper prints `CODEX_HOME points to "<value>", but that path does not exist`.
+**Symptom.** The runner journal shows `runner: error — CODEX_HOME=<value> ...; Codex launches are refused until it is fixed` at startup, and `runner: codex launch refused for <agent>: CODEX_HOME=<value> ...` for each Codex spawn, restart or relaunch. A refused spawn, resume, switch or restart also shows as a failed result on the dashboard. **A Codex agent that crashed while `CODEX_HOME` was unusable is not relaunched: it goes offline with no reason on the dashboard, and the journal line is the only signal.** Claude and Antigravity agents are unaffected. Started by hand, a Codex wrapper prints `CODEX_HOME points to "<value>", but that path does not exist`.
 
 **Diagnosis.** `CODEX_HOME` in `runner.env` is relative, names a path that does not exist, or names a file. The reason is the tail of the message (`is not an absolute path`, `does not exist`, `is not a directory`).
 
-**Remedy.** Create the directory (`mkdir -p` and `chmod 700`; Codex does not create it) or correct the path in `runner.env`, then restart the runner service. To go back to the default home, remove the line and restart. See [Codex home for production](codex-home.md).
+**Remedy.** If the directory is missing, create it (`mkdir -p` and `chmod 700`; Codex does not create it): the runner checks it at every launch, so no restart is needed. If the value in `runner.env` is wrong, correct it and restart the runner service (the value is read at startup). To go back to the default home, remove the line and restart. Then start again any Codex agent that went offline, from the dashboard. See [Codex home for production](codex-home.md).
 
 ## See Also
 
