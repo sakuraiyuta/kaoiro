@@ -5,7 +5,7 @@ import {
   type AppServerNotification, type AppServerRpcOptions, type AppServerServerRequest, type RpcObject, type RpcTicket,
 } from "./app_server_rpc.js";
 import {
-  ApprovalRouter, createApprovalOwner, isApprovalPolicy,
+  ApprovalRouter, createApprovalOwner, fileChangeKey, isApprovalPolicy,
   type ApprovalDecide, type ApprovalOwner, type ApprovalPolicy, type ApprovalTransition,
 } from "./app_server_approval.js";
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
@@ -377,6 +377,8 @@ export class AppServerTransport {
       if (active.beforeResponse.some(event => event.method === "turn/completed" &&
           notificationTurnId(event) === named)) owner.terminal = true;
       owner.start = { kind: "started", turnId: named };
+      // Snapshots taken in the window for other turns can never be asked about.
+      for (const [key, snapshot] of owner.fileChanges) if (snapshot.turnId !== named) owner.fileChanges.delete(key);
       this.#approvals.start(owner, this.#boundThreadId);
       return;
     }
@@ -615,10 +617,16 @@ export class AppServerTransport {
   #fileChangeSnapshot(active: ActiveTurn, event: AppServerNotification): void {
     if (!event.method.startsWith("item/")) return;
     const item = event.params.item;
-    if (!rpcObject(item) || item.type !== "fileChange" || typeof item.id !== "string" || item.changes === undefined) return;
+    const turnId = notificationTurnId(event);
+    if (!rpcObject(item) || item.type !== "fileChange" || typeof item.id !== "string" || item.changes === undefined ||
+        turnId === undefined) return;
+    // Once named, only the owner's turn can be asked about; this keeps the
+    // bound for the owner's own items.
+    if (active.turnId !== undefined && turnId !== active.turnId) return;
     const snapshots = active.owner.fileChanges;
-    if (!snapshots.has(item.id) && snapshots.size >= MAX_FILE_CHANGE_SNAPSHOTS) return;
-    snapshots.set(item.id, item.changes);
+    const key = fileChangeKey(active.threadId, turnId, item.id);
+    if (!snapshots.has(key) && snapshots.size >= MAX_FILE_CHANGE_SNAPSHOTS) return;
+    snapshots.set(key, { turnId, changes: item.changes });
   }
 
   #foreignTurn(threadId: unknown, turnId: string): void {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type PendingPermissionExt, type WrapperConfig } from "@kaoiro/agent-common";
 import {
-  admit, approvalGate, ApprovalRouter, createApprovalOwner, parseApprovalRequest,
+  admit, approvalGate, ApprovalRouter, createApprovalOwner, fileChangeKey, parseApprovalRequest,
   type AdmitFacts, type ApprovalChannel, type ApprovalOwner, type ApprovalTransition, type ParsedApproval,
 } from "../src/app_server_approval.js";
 import { SERVER_REQUEST_DISABLED, type RpcObject } from "../src/app_server_rpc.js";
@@ -197,11 +197,20 @@ describe("ApprovalRouter", () => {
   it("copies fileChange changes from the item snapshot, or marks them unavailable", () => {
     const { router, slots } = routerRig();
     const o = owner();
-    o.fileChanges.set("i1", [{ path: "p5.txt", kind: "add", diff: "+hello" }]);
+    o.fileChanges.set(fileChangeKey("th", "t1", "i1"), { turnId: "t1", changes: [{ path: "p5.txt", kind: "add", diff: "+hello" }] });
     router.receive(raw(0, { itemId: "i1", reason: null, grantRoot: null }, FILE), channel(), { boundThreadId: "th", owner: o });
     router.receive(raw(1, { itemId: "i2" }, FILE), channel(), { boundThreadId: "th", owner: o });
     expect(slots[0]).toMatchObject({ tool_name: "codex:file_change", input: { item_id: "i1", changes: [{ path: "p5.txt", kind: "add", diff: "+hello" }] } });
     expect(slots[1]).toMatchObject({ input: { item_id: "i2", changes_unavailable: true } });
+  });
+
+  it("never shows a snapshot of the same item id from another turn", () => {
+    const { router, slots } = routerRig();
+    const o = owner();
+    o.fileChanges.set(fileChangeKey("th", "t0", "i1"), { turnId: "t0", changes: [{ path: "old.txt" }] });
+    router.receive(raw(0, { itemId: "i1" }, FILE), channel(), { boundThreadId: "th", owner: o });
+    expect(slots[0]).toMatchObject({ input: { item_id: "i1", changes_unavailable: true } });
+    expect(slots[0]!.input).not.toHaveProperty("changes");
   });
 
   it("drops a pending request on abort without a write, and ignores the late decision", () => {

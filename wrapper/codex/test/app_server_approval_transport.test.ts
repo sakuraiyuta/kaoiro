@@ -179,6 +179,86 @@ describe("gate at the transport", () => {
   });
 });
 
+// The dialog's `changes` come from the requesting turn's own fileChange item:
+// the key is (thread, turn, item), so an item id reused by another turn,
+// before or after the start response, never supplies the displayed edit.
+describe("fileChange snapshots are bound to the requesting turn", () => {
+  const fc = (path: string) => ({ id: "same-item", type: "fileChange", changes: [{ path, kind: "add", diff: `+${path}` }] });
+  const askFile = (h: Awaited<ReturnType<typeof harness>>, id: number, turnId: string, itemId = "same-item") =>
+    h.request(id, turnId, { itemId, reason: null, grantRoot: null, kind: undefined, command: undefined, cwd: undefined }, FILE);
+  const shownChanges = (h: Awaited<ReturnType<typeof harness>>) => (h.slots.at(-1)?.input as Record<string, unknown> | undefined);
+  // Completes an owned earlier turn, then reserves the current one.
+  async function afterOldTurn() {
+    const h = await harness();
+    await h.reserve("old");
+    h.startNamed("t-old"); h.completed("t-old"); await settle();
+    await h.reserve("tok");
+    return h;
+  }
+
+  it("after the start response: a late item of the earlier turn does not supply the dialog", async () => {
+    const h = await afterOldTurn();
+    h.startNamed("t-new"); await settle();
+    h.item("t-old", "item/started", fc("old.txt"));
+    askFile(h, 5, "t-new"); await settle();
+    expect(shownChanges(h)).toMatchObject({ item_id: "same-item", changes_unavailable: true });
+    expect(shownChanges(h)).not.toHaveProperty("changes");
+    await h.finish();
+  });
+
+  it("after the start response: a late earlier-turn item does not overwrite the current turn's", async () => {
+    const h = await afterOldTurn();
+    h.startNamed("t-new"); await settle();
+    h.item("t-new", "item/started", fc("new.txt"));
+    h.item("t-old", "item/completed", fc("old.txt"));
+    askFile(h, 5, "t-new"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes: [{ path: "new.txt" }] });
+    await h.finish();
+  });
+
+  for (const order of ["old first", "new first"] as const) {
+    it(`in the reservation window (${order}): only the named turn's item is shown`, async () => {
+      const h = await afterOldTurn();
+      if (order === "old first") { h.item("t-old", "item/started", fc("old.txt")); h.item("t-new", "item/started", fc("new.txt")); }
+      else { h.item("t-new", "item/started", fc("new.txt")); h.item("t-old", "item/completed", fc("old.txt")); }
+      askFile(h, 5, "t-new"); await settle();
+      h.startNamed("t-new"); await settle();
+      expect(h.transitions.find(t => t.key.endsWith(":n:5"))?.to).toBe("held");
+      expect(shownChanges(h)).toMatchObject({ changes: [{ path: "new.txt" }] });
+      await h.finish();
+    });
+  }
+
+  it("in the reservation window: only an earlier-turn item leaves the dialog without changes", async () => {
+    const h = await afterOldTurn();
+    h.item("t-old", "item/started", fc("old.txt"));
+    askFile(h, 5, "t-new"); await settle();
+    h.startNamed("t-new"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes_unavailable: true });
+    await h.finish();
+  });
+
+  it("negative control: a different item id of the current turn is shown as before", async () => {
+    const h = await afterOldTurn();
+    h.startNamed("t-new"); await settle();
+    h.item("t-new", "item/started", { ...fc("other.txt"), id: "other-item" });
+    askFile(h, 5, "t-new", "other-item"); await settle();
+    expect(shownChanges(h)).toMatchObject({ item_id: "other-item", changes: [{ path: "other.txt" }] });
+    await h.finish();
+  });
+
+  it("other turns' items cannot fill the bound: after naming they are not stored, and window ones are pruned", async () => {
+    const h = await afterOldTurn();
+    for (let i = 0; i < 256; i += 1) h.item("t-old", "item/started", { ...fc("old.txt"), id: `w-${i}` });
+    h.startNamed("t-new"); await settle();
+    for (let i = 0; i < 256; i += 1) h.item("t-old", "item/started", { ...fc("old.txt"), id: `n-${i}` });
+    h.item("t-new", "item/started", fc("new.txt"));
+    askFile(h, 5, "t-new"); await settle();
+    expect(shownChanges(h)).toMatchObject({ changes: [{ path: "new.txt" }] });
+    await h.finish();
+  });
+});
+
 describe("duplicate and reused server-request ids (r3 §D)", () => {
   for (const phase of ["held", "pending", "replied"] as const) {
     it(`a duplicate while ${phase} fails the connection with no reply carrying the id`, async () => {
