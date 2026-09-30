@@ -860,6 +860,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         // No deadline unless configured (ADR-0022 F6); the bridge gate keeps
         // its own 300 s bound through the broker default.
         deadlineMs: config.permission_timeout_ms ?? null,
+        inactivityLimitMs: turnWatchdogSettings.inactivityMs,
       },
     } : {}),
     ...(operatorSteer ? {

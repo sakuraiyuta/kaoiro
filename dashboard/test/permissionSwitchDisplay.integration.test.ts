@@ -319,7 +319,7 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     });
     const dock = target.querySelector(".permission-dock");
     for (const surface of [rowByLabel(target, "権限要求"), dock]) {
-      expect(surface?.textContent).toContain("wrapper は approval=never を明示しています");
+      expect(surface?.textContent).toContain("wrapper は要求した approval (既定は never) を明示しています");
       expect(surface?.textContent).toContain("観測値が異なる場合は");
       expect(surface?.textContent).toContain("$CODEX_HOME/config.toml（既定 ~/.codex/config.toml）");
       expect(surface?.textContent).toContain("approvals_reviewer と Codex CLI のバージョン");
@@ -1442,6 +1442,74 @@ describe("AgentDetail approval control (issue #359, ADR-0057 F4c)", () => {
     approvalOption(target, "never")?.click();
     await tick();
     expect(onSetPermission).not.toHaveBeenCalled();
+  });
+
+  // ADR-0064: Codex's app-server backend advertises a closed approval set.
+  const codexApprovalCaps = {
+    ...SWITCH_CAPS,
+    permission_switch_axes: {
+      sandbox: { max: "danger-full-access" },
+      network_access: { max: true },
+      approval: { max: "never", values: ["untrusted", "on-request", "never"] },
+    },
+  };
+
+  it("offers only the advertised Codex approval values, without host-fixed", async () => {
+    const { target } = await render({
+      engine: "codex",
+      session_capabilities: codexApprovalCaps,
+      permission_control: control(),
+    });
+    await openApprovalMenu(target);
+    for (const value of ["untrusted", "on-request", "never"]) {
+      expect(approvalOption(target, value)?.disabled).toBe(false);
+    }
+    expect(approvalOption(target, "local")).toBeUndefined();
+    expect(rowByLabel(target, "実効書込範囲")?.textContent).not.toContain("host-fixed");
+  });
+
+  it("keeps Codex approval host-fixed when the axis is not advertised (negative control)", async () => {
+    const { target } = await render({
+      engine: "codex",
+      session_capabilities: SWITCH_CAPS,
+      permission_control: control(),
+    });
+    expect(rowByLabel(target, "承認 変更")).toBeNull();
+    expect(rowByLabel(target, "実効書込範囲")?.textContent).toContain("host-fixed");
+  });
+
+  it("notes the dropped deny message and the inactivity limit on a Codex approval", async () => {
+    const { target } = await render(
+      {
+        engine: "codex",
+        session_capabilities: codexApprovalCaps,
+        permission_control: control(),
+        pending_permission: {
+          request_id: "perm-367",
+          tool_name: "codex:command_execution",
+          input: { command: "touch x", inactivity_limit_ms: 1_800_000 },
+          ts: "2026-09-30T00:00:00Z",
+        },
+      },
+      { state: "waiting_permission" },
+    );
+    const dock = target.querySelector(".permission-dock");
+    expect(dock?.textContent).toContain("codex:command_execution");
+    expect(dock?.textContent).toContain("拒否の理由は Codex に届きません");
+    expect(dock?.textContent).toContain("30 分");
+  });
+
+  it("adds no Codex note to a bridge-tool approval (negative control)", async () => {
+    const { target } = await render(
+      {
+        engine: "codex",
+        session_capabilities: codexApprovalCaps,
+        permission_control: control(),
+        pending_permission: { request_id: "perm-1", tool_name: "Bash", input: {} },
+      },
+      { state: "waiting_permission" },
+    );
+    expect(target.querySelector(".permission-dock")?.textContent).not.toContain("Codex に届きません");
   });
 
   it("shows the requested approval in the status line", async () => {

@@ -4041,6 +4041,31 @@ describe("sessionCapabilitiesFrom — permission_switch_axes ceilings", () => {
     });
   });
 
+  it("keeps a well-formed approval values list (ADR-0064)", () => {
+    expect(
+      capsWith({
+        approval: { max: "never", values: ["untrusted", "on-request", "never"] },
+      })?.permission_switch_axes,
+    ).toEqual({
+      approval: { max: "never", values: ["untrusted", "on-request", "never"] },
+    });
+  });
+
+  it.each([
+    ["empty", []],
+    ["duplicate", ["untrusted", "untrusted", "never"]],
+    ["outside the selectable set", ["untrusted", "on-failure", "never"]],
+    ["max missing", ["untrusted", "on-request"]],
+    ["not a list", "never"],
+  ])("drops the approval arm for a malformed values list (%s)", (_label, values) => {
+    expect(
+      capsWith({
+        sandbox: { max: "danger-full-access" },
+        approval: { max: "never", values },
+      })?.permission_switch_axes,
+    ).toEqual({ sandbox: { max: "danger-full-access" } });
+  });
+
   it("exposes a well-formed approval ceiling", () => {
     expect(capsWith({ approval: { max: "local" } })?.permission_switch_axes).toEqual(
       { approval: { max: "local" } },

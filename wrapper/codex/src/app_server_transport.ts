@@ -105,6 +105,7 @@ export interface AppServerApprovalOptions {
   decide: ApprovalDecide;
   /** Per-request deadline; null = none (ADR-0022 F6). */
   deadlineMs: number | null;
+  inactivityLimitMs?: number;
   onTransition?: (transition: ApprovalTransition) => void;
 }
 
@@ -206,6 +207,7 @@ export class AppServerTransport {
       enabled: approvals !== undefined,
       ...(approvals === undefined ? {} : {
         decide: approvals.decide, deadlineMs: approvals.deadlineMs,
+        ...(approvals.inactivityLimitMs === undefined ? {} : { inactivityLimitMs: approvals.inactivityLimitMs }),
         ...(approvals.onTransition === undefined ? {} : { onTransition: approvals.onTransition }),
       }),
       ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),

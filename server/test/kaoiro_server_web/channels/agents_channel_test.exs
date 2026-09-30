@@ -1826,6 +1826,96 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply within, :ok, %{"status" => "pending"}
     end
 
+    # ADR-0064 (issue #367): Codex's app-server backend advertises a closed
+    # approval set through `values`, with sandbox and network at their most
+    # permissive ceiling so they stay as unclamped as the legacy flow.
+    @codex_approval_axes %{
+      "sandbox" => %{"max" => "danger-full-access"},
+      "network_access" => %{"max" => true},
+      "approval" => %{"max" => "never", "values" => ["untrusted", "on-request", "never"]}
+    }
+
+    test "Codex approval axis: an advertised value is accepted and persisted" do
+      agent_id = "test.setperm367-ok"
+
+      put_permission_agent(agent_id,
+        engine: "codex",
+        permission_switch_axes: @codex_approval_axes
+      )
+
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "on-request"})
+
+      assert_reply ref, :ok, %{"status" => "pending", "requested" => requested}
+      assert requested["approval"] == "on-request"
+
+      assert KaoiroServer.PermissionSettings.get(agent_id).control.requested.approval ==
+               "on-request"
+    end
+
+    test "Codex approval axis: a value within max but outside values is unsupported" do
+      agent_id = "test.setperm367-local"
+
+      put_permission_agent(agent_id,
+        engine: "codex",
+        permission_switch_axes: @codex_approval_axes
+      )
+
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
+
+      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+    end
+
+    test "Codex approval axis: sandbox and network keep switching freely" do
+      agent_id = "test.setperm367-sandbox"
+
+      put_permission_agent(agent_id,
+        engine: "codex",
+        permission_switch_axes: @codex_approval_axes
+      )
+
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "danger-full-access",
+          "network_access" => true
+        })
+
+      assert_reply ref, :ok, %{"status" => "pending"}
+    end
+
+    # A malformed `values` makes the whole approval axis launch-fixed, even for
+    # a value that appears in it (negative controls for each validation term).
+    for {label, values} <- [
+          {"empty", []},
+          {"duplicate", ["untrusted", "untrusted", "never"]},
+          {"outside the enum", ["untrusted", "on-failure", "never"]},
+          {"max missing", ["untrusted", "on-request"]},
+          {"not a list", "untrusted"}
+        ] do
+      test "Codex approval axis: malformed values (#{label}) is unsupported_permission_switch" do
+        agent_id = "test.setperm367-bad-#{System.unique_integer([:positive])}"
+
+        axes =
+          put_in(@codex_approval_axes, ["approval", "values"], unquote(Macro.escape(values)))
+
+        put_permission_agent(agent_id, engine: "codex", permission_switch_axes: axes)
+        seed_permission_baseline(agent_id)
+        socket = join_as(:operator)
+
+        ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "untrusted"})
+        assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      end
+    end
+
     # issue #359 round 1 M1: a PRESENT `permission_switch_axes` fixes every axis
     # it does not advertise well-formed. Empty, approval-only, non-map, null,
     # and a null axis spec must all reject the switch instead of falling back to

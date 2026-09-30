@@ -773,8 +773,29 @@ export interface SessionCapabilities {
   permission_switch_axes?: {
     sandbox?: { max: (typeof SELECTABLE_SANDBOX_VALUES)[number] };
     network_access?: { max: boolean };
-    approval?: { max: (typeof SELECTABLE_APPROVAL_VALUES)[number] };
+    /** `values` closes the selectable set (ADR-0064); absent = every value
+     *  up to `max`. A malformed `values` drops the whole arm. */
+    approval?: {
+      max: (typeof SELECTABLE_APPROVAL_VALUES)[number];
+      values?: Array<(typeof SELECTABLE_APPROVAL_VALUES)[number]>;
+    };
   };
+}
+
+/** The server's `values` rule for the approval arm: undefined when absent,
+ *  null when malformed (not a non-empty, duplicate-free subset of the
+ *  selectable values that contains `max`). */
+function approvalValuesFrom(
+  raw: unknown,
+  max: unknown,
+): Array<(typeof SELECTABLE_APPROVAL_VALUES)[number]> | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  if (!raw.every((value) => typeof value === "string" && SELECTABLE_APPROVAL_SET.has(value))) {
+    return null;
+  }
+  if (new Set(raw).size !== raw.length || !raw.includes(max)) return null;
+  return raw as Array<(typeof SELECTABLE_APPROVAL_VALUES)[number]>;
 }
 
 /** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
@@ -840,9 +861,18 @@ export function sessionCapabilitiesFrom(
       const approval = axisMap.approval;
       if (typeof approval === "object" && approval !== null) {
         const max = (approval as Record<string, unknown>).max;
-        if (typeof max === "string" && SELECTABLE_APPROVAL_SET.has(max)) {
+        const values = approvalValuesFrom(
+          (approval as Record<string, unknown>).values,
+          max,
+        );
+        if (
+          typeof max === "string" &&
+          SELECTABLE_APPROVAL_SET.has(max) &&
+          values !== null
+        ) {
           out.permission_switch_axes.approval = {
             max: max as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+            ...(values === undefined ? {} : { values }),
           };
         }
       }

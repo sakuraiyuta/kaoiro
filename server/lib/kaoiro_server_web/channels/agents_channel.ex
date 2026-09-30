@@ -2624,9 +2624,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp clamp_advertised_axis(_axis, _value, :error),
     do: {:error, :unsupported_permission_switch}
 
-  defp clamp_advertised_axis(:approval, value, {:ok, %{"max" => max}})
-       when max in @approval_values,
-       do: within_ceiling(@approval_values, value, max)
+  defp clamp_advertised_axis(:approval, value, {:ok, %{"max" => max} = spec})
+       when max in @approval_values do
+    case approval_values(spec, max) do
+      :all ->
+        within_ceiling(@approval_values, value, max)
+
+      {:ok, values} ->
+        if value in values,
+          do: within_ceiling(@approval_values, value, max),
+          else: {:error, :unsupported_permission_switch}
+
+      :malformed ->
+        {:error, :unsupported_permission_switch}
+    end
+  end
 
   defp clamp_advertised_axis(:sandbox, value, {:ok, %{"max" => max}})
        when max in @sandbox_values,
@@ -2640,6 +2652,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp clamp_advertised_axis(_axis, _value, {:ok, _malformed}),
     do: {:error, :unsupported_permission_switch}
+
+  # `values` (ADR-0064) closes the selectable set. Absent keeps every value up
+  # to `max`; present, it must be a non-empty, duplicate-free subset of the
+  # approval enum containing `max`, or the whole axis is malformed.
+  defp approval_values(spec, max) do
+    case Map.fetch(spec, "values") do
+      :error ->
+        :all
+
+      {:ok, values} when is_list(values) and values != [] ->
+        if Enum.all?(values, &(&1 in @approval_values)) and
+             length(Enum.uniq(values)) == length(values) and max in values,
+           do: {:ok, values},
+           else: :malformed
+
+      {:ok, _} ->
+        :malformed
+    end
+  end
 
   defp within_ceiling(order, value, max) do
     if permissive_rank(order, value) <= permissive_rank(order, max),

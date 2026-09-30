@@ -1853,6 +1853,16 @@
   const approvalPickerVisible = $derived(
     permissionPickerVisible && approvalCeiling !== null,
   );
+  // ADR-0064: an advertised `values` closes the offered set (Codex offers
+  // untrusted / on-request / never); absent keeps every value.
+  const approvalChoices = $derived(
+    sessionCaps?.permission_switch_axes?.approval?.values ??
+      SELECTABLE_APPROVAL_VALUES,
+  );
+  // Codex approval is host-fixed unless its app-server axis is advertised.
+  const codexApprovalHostFixed = $derived(
+    isCodexAgent && approvalCeiling === null,
+  );
   // An option is offered only up to the ceiling (permissive order matches the
   // server's @approval_values). A value at or below the ceiling's rank is
   // selectable; anything above is disabled and labelled, so the operator sees
@@ -1892,7 +1902,7 @@
     "approval_policy_mismatch",
   ]);
   const CODEX_APPROVAL_CONFIG_RECOVERY =
-    'wrapper は approval=never を明示しています。観測値が異なる場合は、host の $CODEX_HOME/config.toml（既定 ~/.codex/config.toml）の approvals_reviewer と Codex CLI のバージョンを確認してください。原因を直す前に再適用しても、次の turn で再びブロックされる可能性があります。修正後に同じ権限値を一度だけ再適用して新しい revision を割り当て、キャンセルされた指示を再送してください。';
+    'wrapper は要求した approval (既定は never) を明示しています。観測値が異なる場合は、host の $CODEX_HOME/config.toml（既定 ~/.codex/config.toml）の approvals_reviewer と Codex CLI のバージョンを確認してください。原因を直す前に再適用しても、次の turn で再びブロックされる可能性があります。修正後に同じ権限値を一度だけ再適用して新しい revision を割り当て、キャンセルされた指示を再送してください。';
   function needsPermissionGateRecovery(view: PermRequestView): boolean {
     return (
       view.status === "unknown" ||
@@ -3260,7 +3270,7 @@
                     class="axes-hostfixed"
                     title="wrapper が tool 引数を検査するのみで OS 強制ではありません (ADR-0057 F4)"
                   > (advisory, wrapper enforced)</span>{/if} /
-                  承認: {permAxes.approval}{#if isCodexAgent}<span
+                  承認: {permAxes.approval}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
                     title="upstream 制約 (codex-exec-approval-upstream)"
                   > (host-fixed)</span>{/if}
@@ -3279,10 +3289,13 @@
               <dt>実効書込範囲</dt>
               <dd>
                 <span class="axes-badge">
-                  書込: 未確認 / 承認: {permControl.constraints.approval}<span
+                  書込: 未確認 / 承認: {codexApprovalHostFixed
+                    ? permControl.constraints.approval
+                    : (permRequestView?.requested.approval ??
+                      permControl.constraints.approval)}{#if codexApprovalHostFixed}<span
                     class="axes-hostfixed"
                     title="upstream 制約 (codex-exec-approval-upstream)"
-                  > (host-fixed)</span>
+                  > (host-fixed)</span>{/if}
                 </span>
               </dd>
             </div>
@@ -3410,7 +3423,7 @@
                         role="listbox"
                         aria-label="承認 候補"
                       >
-                        {#each SELECTABLE_APPROVAL_VALUES as value (value)}
+                        {#each approvalChoices as value (value)}
                           <li>
                             <button
                               type="button"
@@ -3963,6 +3976,13 @@
                 <p class="permission-tool">
                   <code>{permission.tool_name}</code> の実行許可を求めています
                 </p>
+                {#if permission.tool_name.startsWith("codex:")}
+                  <p class="permission-note">
+                    拒否の理由は Codex に届きません (decline のみ送信)。{#if typeof permission.input?.inactivity_limit_ms === "number"}応答がないまま
+                      {Math.round(permission.input.inactivity_limit_ms / 60_000)} 分
+                      無活動が続くと、turn の watchdog がこの要求ごと turn を中断します。{/if}
+                  </p>
+                {/if}
                 {#if permission.input}
                   <details>
                     <summary>input</summary>

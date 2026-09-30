@@ -396,10 +396,9 @@ export interface PermissionAxesExt {
  * value. See protocol.md, "Permission changes at an execution boundary".
  *
  * `approval` is present only for an engine that carries approval as a MUTABLE
- * axis (Antigravity, ADR-0057 F4c Stage B0 / issue #359). Codex keeps its
- * fixed `never` in `constraints.approval` and never sets it here; its absence
- * is the discriminator the dashboard uses between a live selector and a fixed
- * badge. Additive: an old wrapper/server omits it and the Codex sandbox/
+ * axis (Antigravity, ADR-0057 F4c Stage B0 / issue #359; Codex on the
+ * app-server backend when the axis is advertised, ADR-0064). Otherwise Codex
+ * keeps its fixed `never` in `constraints.approval` and never sets it here. Additive: an old wrapper/server omits it and the Codex sandbox/
  * network four-quadrant flow is unchanged. */
 export interface PermissionConfiguration {
   sandbox: PermissionAxesExt["sandbox"];
@@ -776,7 +775,13 @@ export interface SessionCapabilitiesExt {
   permission_switch_axes?: {
     sandbox?: { max: PermissionAxesExt["sandbox"] };
     network_access?: { max: boolean };
-    approval?: { max: PermissionAxesExt["approval"] };
+    /** `values`, when present, is the closed set of selectable approvals:
+     *  non-empty, duplicate-free, within the approval enum and containing
+     *  `max`; otherwise the axis is malformed and launch-fixed. Absent = every
+     *  value of the permissive order up to `max` (the Antigravity default).
+     *  Codex's app-server backend advertises
+     *  `["untrusted", "on-request", "never"]` (ADR-0064). */
+    approval?: { max: PermissionAxesExt["approval"]; values?: PermissionAxesExt["approval"][] };
   };
   /** Command availability, not an observed mode. True from Claude's first
    * state_change even without permission_mode; false overrides legacy metadata.

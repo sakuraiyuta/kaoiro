@@ -135,6 +135,9 @@ export interface ApprovalRouterOptions {
   enabled: boolean;
   decide?: ApprovalDecide;
   deadlineMs?: number | null;
+  /** Shown in the dialog: an unanswered request ends with the turn when the
+   * watchdog interrupts it. */
+  inactivityLimitMs?: number;
   onDiagnostic?: (message: string) => void;
   /** Observer for every state change and every ignored event (tests). */
   onTransition?: (transition: ApprovalTransition) => void;
@@ -153,10 +156,11 @@ interface ApprovalRecord {
 const FINAL: ReadonlySet<ApprovalState> = new Set(["replied", "dropped", "rejected"]);
 // Display input for the operator dialog; a fileChange item's changes are
 // the only data taken from outside the request.
-function dialogInput(request: ParsedApproval, owner: ApprovalOwner): Record<string, unknown> {
+function dialogInput(request: ParsedApproval, owner: ApprovalOwner, inactivityLimitMs: number | undefined): Record<string, unknown> {
   const p = request.params;
-  const present = (entries: Array<[string, unknown]>) =>
-    Object.fromEntries(entries.filter(([, value]) => value !== undefined && value !== null));
+  const present = (entries: Array<[string, unknown]>) => Object.fromEntries(
+    [...entries, ["inactivity_limit_ms", inactivityLimitMs] as [string, unknown]]
+      .filter(([, value]) => value !== undefined && value !== null));
   if (request.method === "item/commandExecution/requestApproval") {
     const network = rpcObject(p.networkApprovalContext) ? p.networkApprovalContext : undefined;
     return present([
@@ -257,7 +261,7 @@ export class ApprovalRouter {
     const request = record.request!;
     const abort = new AbortController();
     record.abort = abort;
-    void this.#options.decide!(APPROVAL_TOOL_NAMES[request.method], dialogInput(request, record.owner!), abort.signal, {
+    void this.#options.decide!(APPROVAL_TOOL_NAMES[request.method], dialogInput(request, record.owner!, this.#options.inactivityLimitMs), abort.signal, {
       deadlineMs: this.#options.deadlineMs ?? null,
       onSettled: decision => {
         if (decision.cause === "operator") this.#answer(record, "D", decision.allow ? "accept" : "decline");
