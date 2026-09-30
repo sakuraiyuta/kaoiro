@@ -20,9 +20,8 @@ Codex wrapper lifetimes on that runner, not one dashboard agent. Running
 wrappers keep their backend. No environment variable, backend flag or dashboard
 control overrides it. Check the wrapper's `codex: backend=...` startup diagnostic.
 
-To roll back to exec while preserving a session (not yet exercised in
-production; the recorded evidence is from 0.153.4, not the current pin; see
-issue #452):
+To roll back to exec while preserving a session (exercised in production on
+the 0.156.1 pin, in both directions, on 2026-09-30; see issue #452):
 
 1. Record the Codex session ID, host and working directory. Stop the target agent
    through the existing operator stop action and wait for it to exit. Do not
