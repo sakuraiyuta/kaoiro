@@ -1424,9 +1424,10 @@ export class CodexHost implements EngineAdapter {
   }
 
   /** Permission twin of setPendingQuestion, and likewise the state driver
-   *  on codex: the SDK never asks (approval pinned to never), so the only
-   *  permission dialogs are the ones a bridge tool handler opens itself
-   *  through the broker (`operatorApprovalGated`, issue #347). Guarded so a
+   *  on codex: the SDK never asks, so the permission dialogs are the ones a
+   *  bridge tool handler opens itself through the broker
+   *  (`operatorApprovalGated`, issue #347) and, with the app-server approval
+   *  axis, the app-server's approval requests (ADR-0064). Guarded so a
    *  settle that lands after the turn already emitted its terminal state —
    *  a timeout or connection close racing the terminal — clears the stamped
    *  record without dragging a resting agent back into tool_running. */
