@@ -35,7 +35,9 @@ implemented behind a per-persona opt-in, default off; inter-agent input stays
 queued. Pre-implementation probes on the 0.156.1 pin are in the
 [Stage 2 evidence](../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md);
 the current contract is in the [transport reference](../reference/engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
-Post-implementation live probes and rollout remain pending.
+Post-implementation live probes and rollout remain pending. The default-off
+opt-in is a rollout stage: the end state is default on with a per-agent
+opt-out in the dashboard (ADR-0063 Amendment 2026-10-01).
 
 **Stage 3 (2026-09-30, [issue #367](https://github.com/sakuraiyuta/kaoiro/issues/367)).**
 The operator decided to go ahead with approval requests. The design was

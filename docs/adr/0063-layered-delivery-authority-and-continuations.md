@@ -173,3 +173,24 @@ Approved by the operator on 2026-09-28 after the issue #429 design review
 Reason: a conversation is cut off at 20 turns, holds at most two agents,
 is reclaimed 24 hours after it started and lives only in server memory, so
 one piece of work necessarily spans several conversations.
+
+## Amendment (2026-10-01, default-on in-flight delivery)
+
+Operator decision on 2026-10-01. Tracking:
+[issue #463](https://github.com/sakuraiyuta/kaoiro/issues/463).
+
+- **End state.** In-flight delivery is on by default for every engine
+  (Claude Code, Codex, Antigravity), and an operator can opt out per agent.
+  This covers operator early input (Claude fold, Codex `turn/steer`) and
+  inter-agent early and yield delivery. The host-wide environment opt-ins
+  (`KAOIRO_CLAUDE_PHASE2_DELIVERY`, `KAOIRO_CODEX_OPERATOR_STEER` and their
+  `_PERSONAS` lists) are rollout controls, not the end state.
+- **Operator control.** The dashboard exposes the setting per agent, both
+  at launch and during a live session.
+- **Feasibility.** Where an engine, backend or the join-time capability
+  negotiation cannot meet this, the implementer presents an alternative in
+  the design before implementing instead of narrowing the scope silently.
+- **Unchanged.** The phasing order, the canary before the Claude default
+  flip (issue #441), D2 (hard cancellation stays operator-only) and D9. Each
+  default flip lands through the normal design and review flow with
+  evidence.
