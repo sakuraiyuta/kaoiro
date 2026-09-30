@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { AppServerRpcError, rpcObject, type RpcObject } from "./app_server_rpc.js";
+import { isApprovalPolicy, type ApprovalPolicy } from "./app_server_approval.js";
 
 export interface AppServerTurnSettings {
   cwd?: string;
@@ -9,6 +10,8 @@ export interface AppServerTurnSettings {
   permission?: {
     sandbox: "read-only" | "workspace-write" | "danger-full-access";
     networkAccess: boolean;
+    /** Written as the turn's approvalPolicy only when approvals are enabled. */
+    approval?: ApprovalPolicy;
   };
 }
 
@@ -68,7 +71,8 @@ export async function appServerTurnSettings(settings: AppServerTurnSettings, req
     ...(effort === undefined ? {} : { effort }),
   };
   if (permission !== undefined) {
-    if (!rpcObject(permission) || typeof permission.networkAccess !== "boolean") throw invalid();
+    if (!rpcObject(permission) || typeof permission.networkAccess !== "boolean" ||
+        (permission.approval !== undefined && !isApprovalPolicy(permission.approval))) throw invalid();
     switch (permission.sandbox) {
       case "read-only": result.sandboxPolicy = { type: "readOnly", networkAccess: false }; break;
       case "danger-full-access": result.sandboxPolicy = { type: "dangerFullAccess" }; break;

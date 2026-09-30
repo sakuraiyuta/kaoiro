@@ -13,6 +13,7 @@ import {
 } from "./app_server_permission.js";
 import { canSubmitPermission, type PermissionState } from "./permission_state.js";
 import { codexRolloutsRoot } from "./rollout.js";
+import { isApprovalPolicy, type ApprovalPolicy } from "./app_server_approval.js";
 import type { AppServerProjection } from "./app_server_projection.js";
 import type {
   AppServerDispatchIdentity, AppServerSteerAttempt, AppServerSteerRequest, AppServerTurnIdentity, AppServerTurnInput,
@@ -21,6 +22,7 @@ import type {
 export type AppServerHostSession = Pick<AppServerSession,
   "readHistory" | "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close"> & {
     steer?: AppServerSession["steer"];
+    abortApprovals?: AppServerSession["abortApprovals"];
     rateLimits?: AppServerRateLimits;
   };
 export interface AppServerHostRuntimeOptions {
@@ -28,6 +30,9 @@ export interface AppServerHostRuntimeOptions {
   resumeThreadId?: string;
   effortIntent: "explicit" | "default";
   rolloutRoot?: string;
+  /** The approval axis is advertised (ADR-0064). Without it a requested
+   * approval is not submitted and the turn keeps `never`. */
+  approvalAxis?: boolean;
   createSession?: (options: AppServerSessionOptions) => Promise<AppServerHostSession>;
   onRateLimits?: (snapshot: AppServerRateLimits) => void;
 }
@@ -63,6 +68,13 @@ export class AppServerAdmissionError extends Error {
   constructor(readonly reason: "interrupted" | "permission_gate_blocked" | "input_skipped") {
     super(`App-server admission cancelled: ${reason}`);
   }
+}
+
+// Only the values the app-server backend offers reach turn/start; the
+// transport still writes `never` unless approvals are enabled.
+function approvalOf(selection: { requested: { approval?: string } }): ApprovalPolicy | undefined {
+  const approval = selection.requested.approval;
+  return isApprovalPolicy(approval) ? approval : undefined;
 }
 
 type Active = { token: string; abort: AbortController; dispatched: boolean; interrupted: boolean; terminal?: { abandoned: boolean } };
@@ -155,6 +167,7 @@ export class AppServerHostRuntime {
         if (snapshot.permission.blocked !== null) throw new AppServerAdmissionError("permission_gate_blocked");
         const pending = { ...snapshot.pending };
         const selection = { ...snapshot.permission.next, requested: { ...snapshot.permission.next.requested } };
+        if (!this.#options.approvalAxis) delete selection.requested.approval;
         const baseline = this.#baseline;
         const rollback = this.#rollback;
         const settings = appServerSettingsForAttempt(baseline, pending, rollback);
@@ -162,7 +175,10 @@ export class AppServerHostRuntime {
         try {
           const turn = await this.#session!.startProjectedTurn({
             ...input, threadId,
-            settings: { ...settings, permission: { sandbox: selection.requested.sandbox, networkAccess: selection.requested.network_access } },
+            settings: { ...settings, permission: {
+              sandbox: selection.requested.sandbox, networkAccess: selection.requested.network_access,
+              ...(approvalOf(selection) === undefined ? {} : { approval: approvalOf(selection)! }),
+            } },
             beforeDispatch: () => cancellable(waitForAdmission(), active.abort.signal),
             onDispatch: (identity, prepared) => {
               if (active.abort.signal.aborted || this.#closed) throw new AppServerAdmissionError("interrupted");
@@ -227,6 +243,13 @@ export class AppServerHostRuntime {
     if (this.#closed) return { kind: "refused", reason: "closed" };
     if (!active || active.token !== request.hostTurnToken) return { kind: "refused", reason: "idle" };
     return this.#session?.steer?.(request) ?? { kind: "refused", reason: "idle" };
+  }
+
+  /** Synchronous; see AppServerTransport#abortApprovals. */
+  abortApprovals(hostTurnToken: string): void {
+    const active = this.#active;
+    if (!active || active.token !== hostTurnToken) return;
+    this.#session?.abortApprovals?.(hostTurnToken);
   }
 
   async interrupt(hostTurnToken: string): Promise<boolean> {

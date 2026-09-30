@@ -5,7 +5,7 @@ import type { ToolDescriptor, WrapperConfig, ReplyOrigin } from "@kaoiro/agent-c
 import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
-  AppServerTransport, type AppServerForeignTurn, type AppServerSteerAttempt, type AppServerSteerRequest,
+  AppServerTransport, type AppServerApprovalOptions, type AppServerForeignTurn, type AppServerSteerAttempt, type AppServerSteerRequest,
   type AppServerThreadOptions, type AppServerTurn, type AppServerTurnInput,
 } from "./app_server_transport.js";
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
@@ -23,7 +23,9 @@ export interface AppServerSessionOptions {
   onForeignTurn?: (turn: AppServerForeignTurn) => void;
   /** Stop steering and new turns once a foreign turn is seen. */
   enforceForeignTurn?: boolean;
-  transport?: Omit<AppServerRpcOptions, "onNotification" | "onFailure">;
+  /** Operator approval of app-server requests; absent = disabled (ADR-0064). */
+  approvals?: AppServerApprovalOptions;
+  transport?: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest">;
 }
 
 async function removeToolHostDirectory(host: ToolHost | null): Promise<void> {
@@ -101,6 +103,7 @@ export class AppServerSession {
       ...(options.onDisconnect === undefined ? {} : { onDisconnect: options.onDisconnect }),
       ...(options.onForeignTurn === undefined ? {} : { onForeignTurn: options.onForeignTurn }),
       ...(options.enforceForeignTurn === undefined ? {} : { enforceForeignTurn: options.enforceForeignTurn }),
+      ...(options.approvals === undefined ? {} : { approvals: options.approvals }),
       ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
     });
   }
@@ -170,6 +173,10 @@ export class AppServerSession {
   steer(request: AppServerSteerRequest): AppServerSteerAttempt {
     if (this.#closing) return { kind: "refused", reason: "closed" };
     return this.#transport.steer(request);
+  }
+
+  abortApprovals(hostTurnToken: string): void {
+    this.#transport.abortApprovals(hostTurnToken);
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {

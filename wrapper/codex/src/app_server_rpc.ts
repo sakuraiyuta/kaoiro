@@ -143,6 +143,11 @@ export class AppServerRpc {
     return true;
   }
 
+  /** Fails the connection for a protocol violation the caller detected. */
+  failProtocol(message: string): void {
+    this.#fail(new AppServerConnectionError(message, "protocol"));
+  }
+
   respondError(id: string | number, error: { code: number; message: string }): boolean {
     if (this.failed) return false;
     this.#write({ id, error: { ...error } });

@@ -12,7 +12,8 @@ import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerSession } from "./app_server_session.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
-import { AppServerTurnStartUnknownError, type AppServerForeignTurn } from "./app_server_transport.js";
+import { AppServerTurnStartUnknownError, type AppServerApprovalOptions, type AppServerForeignTurn } from "./app_server_transport.js";
+import { APPROVAL_POLICIES, isApprovalPolicy } from "./app_server_approval.js";
 import { SteerRecord, type SteerOutcome, type SteerResponse } from "./app_server_steer.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
@@ -275,10 +276,20 @@ function nextEventBeforeDeadline<T>(
   });
 }
 
+/** The app-server approval axis (ADR-0064). An advertisement fixes every axis
+ * it omits, so sandbox and network are advertised at their most permissive
+ * value, which keeps them as unclamped as without an advertisement. */
+export const CODEX_APPROVAL_SWITCH_AXES = Object.freeze({
+  sandbox: { max: "danger-full-access" },
+  network_access: { max: true },
+  approval: { max: "never", values: [...APPROVAL_POLICIES] },
+});
+
 function initialStatusExtFromCatalog(
   catalog: CodexCatalog,
   model: string | null,
   permissionSyncSupported = false,
+  approvalAxis = false,
 ): Record<string, unknown> {
   return {
     engine: "codex",
@@ -305,6 +316,9 @@ function initialStatusExtFromCatalog(
       // 確定するまで estimated 投影も行わない (docs/reference/engines/codex-exec-events.md)。
       supports_context_usage: false,
       supports_permission_switch: permissionSyncSupported,
+      ...(permissionSyncSupported && approvalAxis
+        ? { permission_switch_axes: CODEX_APPROVAL_SWITCH_AXES }
+        : {}),
     },
     ...(catalog.length > 0 ? { models: catalog } : {}),
   };
@@ -431,6 +445,9 @@ export interface CodexHostOptions {
   /** Present only when operator steering is opted in for this persona;
    * `available` reads whether the current join echoed operator_input_modes. */
   operatorSteer?: { available: () => boolean };
+  /** Present only when the app-server approval axis is opted in for this
+   * persona (ADR-0064); `decide` is the shared permission broker. */
+  appServerApprovals?: AppServerApprovalOptions;
   /** Synchronous: true while a join or rejoin's permission sync is unresolved. */
   permissionSyncPending?: () => boolean;
   /** Synchronous: true while a session reset is reserved, dispatching or accepted. */
@@ -1128,6 +1145,9 @@ export class CodexHost implements EngineAdapter {
    * still live (see `#turnAbandoned`), then closes the scope so pending
    * bridge tool waits settle. */
   #abandonTurn(cause: TurnAbandonment): void {
+    // Before the scope abort: an approval of this turn must be final before
+    // anything the abort wakes can answer it.
+    if (this.#appTurnToken !== null) this.#appRuntime?.abortApprovals(this.#appTurnToken);
     const scope = this.#turnScope;
     if (scope !== null && !scope.signal.aborted) this.#turnAbandoned = cause;
     scope?.abort();
@@ -1355,6 +1375,12 @@ export class CodexHost implements EngineAdapter {
     if (!this.#permissionState.syncSupported) {
       throw new Error("codex: permission switching is unavailable on this server");
     }
+    // Final gate behind the server's clamp: approval is mutable only where
+    // the axis is advertised, and only to an advertised value.
+    const approval = selection.requested.approval;
+    if (approval !== undefined && (!this.#approvalAxis || !isApprovalPolicy(approval))) {
+      throw new Error(`codex: approval=${String(approval)} is not an advertised approval value`);
+    }
     const state = requestPermission(this.#permissionState, selection);
     if (state === this.#permissionState) return;
     this.#permissionState = state;
@@ -1435,6 +1461,10 @@ export class CodexHost implements EngineAdapter {
   }
 
   get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? "exec"; }
+
+  get #approvalAxis(): boolean {
+    return this.#options.backend === "app-server" && this.#options.appServerApprovals !== undefined;
+  }
 
   scheduleHistoryReplay(job: AppServerHistoryJob): void {
     if (this.#closed) return;
@@ -1576,8 +1606,10 @@ export class CodexHost implements EngineAdapter {
         onDisconnect: error => this.#stopAppServer(error),
         onForeignTurn: turn => this.#onForeignTurn(turn),
         enforceForeignTurn: this.#options.operatorSteer !== undefined,
+        ...(this.#options.appServerApprovals === undefined ? {} : { approvals: this.#options.appServerApprovals }),
         transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS },
       },
+      approvalAxis: this.#approvalAxis,
       effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",
       ...(this.#sessionId === null ? {} : { resumeThreadId: this.#sessionId }),
       ...(this.#options.permissionRolloutRoot === undefined ? {} : { rolloutRoot: this.#options.permissionRolloutRoot }),
@@ -2877,6 +2909,7 @@ export class CodexHost implements EngineAdapter {
         this.#catalog,
         this.#model,
         this.#permissionState.syncSupported,
+        this.#approvalAxis,
       ),
       ...effectiveStatusEnvelopeFields(effectiveStatus),
     };

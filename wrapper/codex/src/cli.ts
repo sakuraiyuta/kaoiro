@@ -2,10 +2,11 @@
 // config, connects the ServerLink, waits fail-closed for the server-pushed
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
 // composition (@kaoiro/claude-code/src/cli.ts) minus the Claude-only parts:
-// no SDK-side canUseTool approval (the approval axis is fixed to never,
-// ADR-0033 F3 — the PermissionBroker here serves only the wrapper-gated
-// bridge tools, ADR-0043 amendment), no image-only upload rendering, rollout
-// history replay.
+// no SDK-side canUseTool approval (the exec backend fixes approval to never,
+// ADR-0033 F3; the PermissionBroker here serves the wrapper-gated bridge
+// tools, ADR-0043 amendment, and, on an opted-in app-server backend, the
+// app-server's approval requests, ADR-0064), no image-only upload rendering,
+// rollout history replay.
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
@@ -179,6 +180,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS,
   ) !== "off";
   writeRedactedStderr(`codex: operator_steer=${operatorSteer ? "on" : "off"}\n`);
+  const approvalAxis = backend === "app-server" && personaOptInSource(
+    config.persona.id,
+    process.env.KAOIRO_CODEX_APPROVAL_AXIS,
+    process.env.KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS,
+  ) !== "off";
+  writeRedactedStderr(`codex: approval_axis=${approvalAxis ? "on" : "off"}\n`);
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
@@ -266,7 +273,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         `model=${resolvedModel}${resolvedModelTag}${effortPart} ` +
         `sandbox=${sandbox}(source=${sandboxSource}) ` +
         `network_access=${networkAccess} ` +
-        `approval=never(host-fixed)` +
+        (approvalAxis ? `approval=never(launch,switchable)` : `approval=never(host-fixed)`) +
         `${permissionModePart}${allowedToolsPart} ` +
         `persona=${config.persona.id}\n`,
     );
@@ -846,6 +853,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     Omit<CodexHostOptions, "onTurnStart">
   >({
     backend,
+    ...(approvalAxis ? {
+      appServerApprovals: {
+        decide: (toolName, input, signal, options) =>
+          permissionBroker!.decide(toolName, input, signal, options),
+        // No deadline unless configured (ADR-0022 F6); the bridge gate keeps
+        // its own 300 s bound through the broker default.
+        deadlineMs: config.permission_timeout_ms ?? null,
+      },
+    } : {}),
     ...(operatorSteer ? {
       operatorSteer: { available: () => typeof link?.operatorInputModes === "function" && link.operatorInputModes() !== null },
       permissionSyncPending: () => typeof link?.permissionSyncPending === "function" ? link.permissionSyncPending() : true,

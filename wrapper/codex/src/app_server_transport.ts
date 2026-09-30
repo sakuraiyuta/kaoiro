@@ -1,9 +1,13 @@
 import { redactCredentials, writeRedactedStderr, type WrapperConfig } from "@kaoiro/agent-common";
 import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
-  AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject,
-  type AppServerNotification, type AppServerRpcOptions, type RpcObject, type RpcTicket,
+  AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject, serverRequestKey,
+  type AppServerNotification, type AppServerRpcOptions, type AppServerServerRequest, type RpcObject, type RpcTicket,
 } from "./app_server_rpc.js";
+import {
+  ApprovalRouter, createApprovalOwner, isApprovalPolicy,
+  type ApprovalDecide, type ApprovalOwner, type ApprovalPolicy, type ApprovalTransition,
+} from "./app_server_approval.js";
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
 import type { SteerResponse } from "./app_server_steer.js";
@@ -90,6 +94,21 @@ function isTurnEvidence(event: AppServerNotification): boolean {
 }
 
 const MAX_OWN_TURN_IDS = 256;
+// Notifications buffered while turn/start is unanswered. The buffer is the
+// source of the owner's terminal fact, so overflow fails the connection
+// instead of evicting.
+const MAX_BEFORE_RESPONSE = 4_096;
+const MAX_FILE_CHANGE_SNAPSHOTS = 256;
+
+/** Operator approval of app-server requests (ADR-0064). Absent = disabled. */
+export interface AppServerApprovalOptions {
+  decide: ApprovalDecide;
+  /** Per-request deadline; null = none (ADR-0022 F6). */
+  deadlineMs: number | null;
+  onTransition?: (transition: ApprovalTransition) => void;
+}
+
+type ReservationEnding = { kind: "named"; turnId: string } | { kind: "unnamed" } | { kind: "failed" };
 
 // A cold CODEX_HOME (first start, or the first start after a CLI update that
 // migrates the state schema) can make one app-server child fail to open its
@@ -137,6 +156,10 @@ interface ActiveTurn {
   interrupt?: Promise<boolean>;
   stream: AppServerTurnStream;
   beforeResponse: AppServerNotification[];
+  /** Turn evidence (notifications and item/* requests) awaiting the window end. */
+  evidence: Array<{ threadId: string; turnId: string }>;
+  owner: ApprovalOwner;
+  windowEnded: boolean;
   turnId?: string;
   failure?: Error;
 }
@@ -145,7 +168,10 @@ export class AppServerTransport {
   #rpc: AppServerRpc;
   #attempt: InitializeAttempt = { promoted: false };
   #wakeRetry: (() => void) | undefined;
-  readonly #options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { onDisconnect?: (error: Error) => void };
+  readonly #options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & { onDisconnect?: (error: Error) => void };
+  readonly #approvals: ApprovalRouter;
+  readonly #maxBeforeResponse: number;
+  #generation = 0;
   readonly #threadOpenTimeoutMs: number | undefined;
   #initializing: Promise<void> | undefined;
   #active: ActiveTurn | undefined;
@@ -163,14 +189,27 @@ export class AppServerTransport {
   readonly #enforceForeignTurn: boolean;
   readonly #onForeignTurn: ((turn: AppServerForeignTurn) => void) | undefined;
 
-  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & {
+  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & {
     threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void;
     onForeignTurn?: (turn: AppServerForeignTurn) => void; enforceForeignTurn?: boolean;
+    approvals?: AppServerApprovalOptions; maxBeforeResponse?: number;
   } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
     this.#enforceForeignTurn = options.enforceForeignTurn ?? false;
     this.#onForeignTurn = options.onForeignTurn;
-    this.#options = options;
+    this.#maxBeforeResponse = options.maxBeforeResponse ?? MAX_BEFORE_RESPONSE;
+    const { approvals, maxBeforeResponse: _max, ...rest } = options;
+    this.#options = rest;
+    // Installed with or without the opt-in: the gate, not the hook, keeps a
+    // non-opted-in persona at today's -32601.
+    this.#approvals = new ApprovalRouter({
+      enabled: approvals !== undefined,
+      ...(approvals === undefined ? {} : {
+        decide: approvals.decide, deadlineMs: approvals.deadlineMs,
+        ...(approvals.onTransition === undefined ? {} : { onTransition: approvals.onTransition }),
+      }),
+      ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+    });
     this.#rpc = this.#spawn();
   }
 
@@ -178,10 +217,14 @@ export class AppServerTransport {
   // to the transport: a discarded child must not disconnect the transport.
   #spawn(): AppServerRpc {
     const attempt: InitializeAttempt = { promoted: false };
-    const rpc = new AppServerRpc({
+    // Request ids restart with each child, so keys carry the child's generation.
+    const generation = ++this.#generation;
+    const rpc: AppServerRpc = new AppServerRpc({
       ...this.#options,
-      onNotification: (event) => this.#notification(event),
+      onNotification: (event) => this.#notification(event, rpc, generation),
+      onServerRequest: (request) => this.#serverRequest(request, rpc, generation),
       onFailure: (error) => {
+        this.#approvals.fail({ channel: rpc });
         if (attempt.promoted) this.#rpcFailed(error);
         else attempt.failure ??= error;
       },
@@ -194,6 +237,7 @@ export class AppServerTransport {
     const first = this.#failure === undefined;
     this.#failure ??= error;
     this.#disconnected.abort(error);
+    this.#approvals.fail();
     if (this.#active) {
       this.#active.failure ??= error;
       if (this.#active.turnId !== undefined) this.#active.stream.fail(error);
@@ -251,6 +295,7 @@ export class AppServerTransport {
     };
     let release!: () => void;
     const active: ActiveTurn = { ...dispatch, stream: new AppServerTurnStream(), beforeResponse: [],
+      evidence: [], owner: createApprovalOwner(dispatch.threadId), windowEnded: false,
       ready: new Promise<void>(resolve => { release = resolve; }) };
     // Reserve before initialize/request awaits; overlapping calls must never become implicit steering.
     this.#active = active;
@@ -266,11 +311,13 @@ export class AppServerTransport {
       if (this.#failure) throw this.#failure;
       const preparedInput = input.onDispatch?.(dispatch, prepared);
       const wireInput = appServerInput(preparedInput ?? input.input);
+      const approvalPolicy = this.#approvalPolicy(input.settings);
+      active.owner.approvalPolicy = approvalPolicy;
       ticket = this.#rpc.request("turn/start", {
         ...settings, threadId: dispatch.threadId,
         input: wireInput,
         ...(dispatch.clientUserMessageId === undefined ? {} : { clientUserMessageId: dispatch.clientUserMessageId }),
-        approvalPolicy: "never", approvalsReviewer: "user",
+        approvalPolicy, approvalsReviewer: "user",
       });
       const result = await ticket.result;
       if (!rpcObject(result) || !rpcObject(result.turn) || typeof result.turn.id !== "string") {
@@ -279,11 +326,7 @@ export class AppServerTransport {
       active.turnId = result.turn.id;
       this.#ownTurnIds.add(active.turnId);
       if (this.#ownTurnIds.size > MAX_OWN_TURN_IDS) this.#ownTurnIds.delete(this.#ownTurnIds.values().next().value!);
-      for (const event of active.beforeResponse) {
-        if (!isTurnEvidence(event)) continue;
-        const turnId = notificationTurnId(event);
-        if (turnId !== undefined && turnId !== active.turnId && !this.#ownTurnIds.has(turnId)) this.#foreignTurn(event.params.threadId, turnId);
-      }
+      this.#endReservation(active, { kind: "named", turnId: active.turnId });
       for (const event of active.beforeResponse) this.#deliver(active, event);
       active.beforeResponse = [];
       if (active.failure) active.stream.fail(active.failure);
@@ -294,6 +337,10 @@ export class AppServerTransport {
         events: active.stream,
       };
     } catch (error) {
+      if (!active.windowEnded) {
+        this.#endReservation(active, error instanceof AppServerConnectionError || this.#failure !== undefined
+          ? { kind: "failed" } : { kind: "unnamed" });
+      }
       if (this.#active === active) this.#active = undefined;
       if (error instanceof AppServerConnectionError) {
         this.#failure = error;
@@ -305,8 +352,49 @@ export class AppServerTransport {
       }
       throw error;
     } finally {
+      if (!active.windowEnded) this.#endReservation(active, { kind: "unnamed" });
       release();
     }
+  }
+
+  /** The single exit of the unresolved-start window: judges every deferred
+   * turn evidence item, folds a buffered owner terminal, then settles the
+   * owner's held approval requests. A named start keeps the active turn;
+   * only an unnamed or failed start releases it here. */
+  #endReservation(active: ActiveTurn, ending: ReservationEnding): void {
+    if (active.windowEnded) throw new Error("App-server reservation window ended twice");
+    active.windowEnded = true;
+    const named = ending.kind === "named" ? ending.turnId : undefined;
+    for (const { threadId, turnId } of active.evidence) {
+      if (turnId !== named && !this.#ownTurnIds.has(turnId)) this.#foreignTurn(threadId, turnId);
+    }
+    active.evidence = [];
+    const owner = active.owner;
+    if (named !== undefined) {
+      if (active.beforeResponse.some(event => event.method === "turn/completed" &&
+          event.params.threadId === active.threadId && notificationTurnId(event) === named)) owner.terminal = true;
+      owner.start = { kind: "started", turnId: named };
+      this.#approvals.start(owner, this.#boundThreadId);
+      return;
+    }
+    owner.start = { kind: "failed" };
+    if (ending.kind === "failed") this.#approvals.fail({ owner });
+    else this.#approvals.start(owner, this.#boundThreadId);
+    if (this.#active === active) this.#active = undefined;
+  }
+
+  #approvalPolicy(settings: AppServerTurnSettings | undefined): ApprovalPolicy {
+    const requested = settings?.permission?.approval;
+    return this.#approvals.enabled && isApprovalPolicy(requested) ? requested : "never";
+  }
+
+  /** Synchronous: the host calls it before aborting the turn, so no approval
+   * request of that turn can reach, or stay in front of, the operator. */
+  abortApprovals(hostTurnToken: string): void {
+    const active = this.#active;
+    if (!active || active.hostTurnToken !== hostTurnToken || active.owner.aborted) return;
+    active.owner.aborted = true;
+    this.#approvals.abort(active.owner);
   }
 
   async #beforeDispatch(prepare: () => Promise<void>): Promise<void> {
@@ -471,22 +559,63 @@ export class AppServerTransport {
     }
   }
 
-  #notification(event: AppServerNotification): void {
+  #notification(event: AppServerNotification, rpc: AppServerRpc, generation: number): void {
     if (event.method === "account/rateLimits/updated") {
       this.#account.update(event.params.rateLimits);
       return;
     }
+    if (event.method === "serverRequest/resolved") {
+      const requestId = event.params.requestId;
+      if (typeof requestId === "string" || typeof requestId === "number") {
+        this.#approvals.resolved(`${generation}:${serverRequestKey(requestId)}`);
+      }
+    }
     const active = this.#active;
     const turnId = notificationTurnId(event);
-    // A reserved turn without its start response is judged when the response
-    // names its ID; late items of this host's own completed turns are known.
-    if (turnId !== undefined && isTurnEvidence(event) && event.params.threadId === this.#boundThreadId && !(active && active.turnId === undefined) &&
-        turnId !== active?.turnId && !this.#ownTurnIds.has(turnId)) {
-      this.#foreignTurn(this.#boundThreadId, turnId);
+    if (turnId !== undefined && isTurnEvidence(event) && typeof event.params.threadId === "string") {
+      this.#turnEvidence(event.params.threadId, turnId);
     }
     if (!active || event.params.threadId !== active.threadId) return;
-    if (active.turnId === undefined) active.beforeResponse.push(event);
-    else this.#deliver(active, event);
+    this.#fileChangeSnapshot(active, event);
+    if (active.turnId === undefined) {
+      if (active.beforeResponse.length >= this.#maxBeforeResponse) {
+        rpc.failProtocol("App-server sent too many notifications before the turn/start response");
+        return;
+      }
+      active.beforeResponse.push(event);
+    } else this.#deliver(active, event);
+  }
+
+  /** The issue #366 predicate, for notifications and item/* requests alike.
+   * A reserved turn without its start response is judged when its window
+   * ends; late items of this host's own completed turns are known. */
+  #turnEvidence(threadId: string, turnId: string): void {
+    if (threadId !== this.#boundThreadId) return;
+    const active = this.#active;
+    if (active && active.turnId === undefined) {
+      if (threadId === active.threadId) active.evidence.push({ threadId, turnId });
+      return;
+    }
+    if (turnId !== active?.turnId && !this.#ownTurnIds.has(turnId)) this.#foreignTurn(threadId, turnId);
+  }
+
+  #serverRequest(request: AppServerServerRequest, rpc: AppServerRpc, generation: number): void {
+    const params = rpcObject(request.params) ? request.params : undefined;
+    if (request.method.startsWith("item/") && typeof params?.threadId === "string" && typeof params.turnId === "string") {
+      this.#turnEvidence(params.threadId, params.turnId);
+    }
+    this.#approvals.receive({ ...request, key: `${generation}:${request.key}` }, rpc, {
+      boundThreadId: this.#boundThreadId, owner: this.#active?.owner,
+    });
+  }
+
+  #fileChangeSnapshot(active: ActiveTurn, event: AppServerNotification): void {
+    if (!event.method.startsWith("item/")) return;
+    const item = event.params.item;
+    if (!rpcObject(item) || item.type !== "fileChange" || typeof item.id !== "string" || item.changes === undefined) return;
+    const snapshots = active.owner.fileChanges;
+    if (!snapshots.has(item.id) && snapshots.size >= MAX_FILE_CHANGE_SNAPSHOTS) return;
+    snapshots.set(item.id, item.changes);
   }
 
   #foreignTurn(threadId: unknown, turnId: string): void {
@@ -501,6 +630,9 @@ export class AppServerTransport {
     if (turnId !== active.turnId) return;
     active.stream.push(event);
     if (event.method === "turn/completed") {
+      // Settle the owner's records before the owner can be retired.
+      active.owner.terminal = true;
+      this.#approvals.terminal(active.owner);
       active.stream.finish();
       if (this.#active === active) this.#active = undefined;
     }

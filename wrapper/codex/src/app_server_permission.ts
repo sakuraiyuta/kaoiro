@@ -21,9 +21,11 @@ export function assessCodexPermission(submission: PermissionSubmission, context:
     ...submission, session_id: context.sessionId, turn_id: context.turnId,
     permission: { sandbox: context.sandbox, approval, enforcement: "os" }, network_access: context.networkAccess,
   };
-  if (policy !== "never" || observation === null) return {
+  // The submitted approval is what turn/start carried; absent means never.
+  const expectedApproval = submission.requested.approval ?? "never";
+  if (policy !== expectedApproval || observation === null) return {
     applied: false, observation, reason: "approval_policy_mismatch",
-    diagnostic: `codex: permission policy mismatch: expected approval=never; observed approval=${policy}\n`,
+    diagnostic: `codex: permission policy mismatch: expected approval=${expectedApproval}; observed approval=${policy}\n`,
   };
   const expected = submission.requested;
   const network = effectiveNetworkAccess(expected.sandbox, expected.network_access);
