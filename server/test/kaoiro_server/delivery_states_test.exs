@@ -1066,6 +1066,40 @@ defmodule KaoiroServer.DeliveryStatesTest do
              DeliveryStates.pending_losses(name)
   end
 
+  test "a superseded generation retains one interrupted loss in either retirement order", %{
+    name: name
+  } do
+    for order <- [:retire_before_bind, :bind_before_retire] do
+      recipient = "watchdog-#{order}"
+      owner = self()
+      DeliveryStates.bind_resync(recipient, "old", owner, name)
+
+      assert 1 =
+               DeliveryStates.issue_synthetic(
+                 recipient,
+                 %{sender: "sender", conversation_id: recipient, turn_number: 1},
+                 name
+               )
+
+      if order == :retire_before_bind do
+        assert {:ok, %{acked_seq: 1}} =
+                 DeliveryStates.retire(recipient, "old", owner, 1, [[1, 1]], name)
+      end
+
+      assert %{issued_seq: 1, acked_seq: 1} =
+               DeliveryStates.bind_resync(recipient, "new", owner, name)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.retire(recipient, "old", owner, 1, [[1, 1]], name)
+
+      assert [%{generation: "old", seq: 1, reason: "interrupted"}] =
+               Enum.filter(DeliveryStates.pending_losses(name), &(&1.recipient == recipient))
+
+      assert {:ok, %{stages: %{"lost" => _}}} =
+               DeliveryStates.message_status("sender", recipient, 1, name)
+    end
+  end
+
   test "same generation reconnect retains a real gap; new process generation abandons it", %{
     name: name
   } do
