@@ -53,6 +53,12 @@ export class DeliveryRecovery {
     return true;
   }
 
+  /** Whether `seq` lies within the sequences this ledger has received or
+   * seen issued, the only ones a dispatch completion can refer to. */
+  admits(seq: number): boolean {
+    return seq <= this.#issued;
+  }
+
   confirm(seq: number): void {
     this.#resolved = Math.max(this.#resolved, seq);
     for (const received of this.#received) {

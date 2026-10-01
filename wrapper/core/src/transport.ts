@@ -1311,7 +1311,11 @@ export class ServerLink {
     }
   }
   readonly #deliveryGeneration = randomUUID();
-  readonly #deliveryRecovery: DeliveryRecovery;
+  #deliveryRecovery: DeliveryRecovery;
+  /** Incarnation the current recovery ledger belongs to. Unlike
+   *  `#deliveryIncarnation` it survives a disconnect, so a rejoin can tell
+   *  whether the server still recognises that ledger. */
+  #deliveryRecoveryIncarnation: string | null = null;
 
   readonly #socket: Socket;
   readonly #channel: Channel;
@@ -1374,12 +1378,13 @@ export class ServerLink {
   ) {
     this.#onReplyBasisMode = options.onReplyBasisMode;
     this.#onNoticeAttributionMode = options.onNoticeAttributionMode;
-    this.#deliveryRecovery = new DeliveryRecovery({
+    const createDeliveryRecovery = () => new DeliveryRecovery({
       request: (request) => this.requestInterAgentDeliveryResync(request),
       resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
       resendAck: (seq) => this.acknowledgeInterAgentDelivery(seq),
       unavailable: () => writeRedactedStderr("[kaoiro] delivery recovery unavailable: server did not negotiate skip-v1\n"),
     });
+    this.#deliveryRecovery = createDeliveryRecovery();
     this.#onInterAgentAck = options.onInterAgentAck;
     this.#permissionSync = options.permissionSync;
     this.#permissionSyncNegotiated = new Promise<boolean>((resolve) => {
@@ -1737,6 +1742,20 @@ export class ServerLink {
         this.#deliveryIncarnation = isObject(reply) && typeof reply.inter_agent_delivery_incarnation === "string" && reply.inter_agent_delivery_incarnation.length > 0
           ? reply.inter_agent_delivery_incarnation
           : null;
+        // A different incarnation means the server no longer recognises this
+        // wrapper's per-sequence state, so the old ledger must neither resend
+        // nor dedupe against it. Replace it before the status callback below:
+        // that callback can confirm an ACK synchronously.
+        if (this.#deliveryIncarnation !== null) {
+          if (
+            this.#deliveryRecoveryIncarnation !== null &&
+            this.#deliveryRecoveryIncarnation !== this.#deliveryIncarnation
+          ) {
+            this.#deliveryRecovery.dispose();
+            this.#deliveryRecovery = createDeliveryRecovery();
+          }
+          this.#deliveryRecoveryIncarnation = this.#deliveryIncarnation;
+        }
         this.#reconcileDeliveryStageReports();
         options.onWorkControl?.(this.#workControlSupported);
         for (const release of this.#replyBasisWaiters) release(this.#replyBasisMode);
@@ -1903,9 +1922,12 @@ export class ServerLink {
   /** Records contiguous SDK-dispatch completion.  The server treats a stale,
    * future, or duplicate watermark as a harmless no-op. Several replay owners
    * converge here, so a watermark at or below one already issued since the
-   * last join "ok" is not pushed again. */
+   * last join "ok" is not pushed again. A watermark beyond every sequence
+   * the current ledger has seen cannot be a completion in its sequence
+   * space, so it is dropped before it can confirm one. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
+    if (!this.#deliveryRecovery.admits(deliverySeq)) return;
     this.#deliveryRecovery.confirm(deliverySeq);
     if (deliverySeq <= this.#deliveryAckIssued) return;
     this.#deliveryAckIssued = deliverySeq;
