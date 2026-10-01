@@ -208,6 +208,18 @@ else if (args.includes('show')) {
     expect(readFileSync(calls, "utf8")).toBe(before);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
   });
+  it("refuses malformed retention metadata instead of releasing protected code", () => {
+    expect(update().status).toBe(0);
+    const tx = forwardTransaction();
+    const refPath = join(root, "codex-state/backups", `${tx.uuid}.json`);
+    const ref = JSON.parse(readFileSync(refPath, "utf8"));
+    ref.retired = "yes";
+    writeFileSync(refPath, JSON.stringify(ref));
+    const result = stateAction("protected", root);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Malformed backup retention state");
+  });
   it("rejects an otherwise valid wrong home before stop", () => {
     const wrong = join(dir, "wrong"); mkdirSync(wrong, { mode: 0o700 });
     const result = update(["--codex-home", wrong]);

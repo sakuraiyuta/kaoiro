@@ -27,6 +27,23 @@ function paths(root) {
   const base = join(root, "codex-state");
   return { base, transactions: join(base, "transactions"), backups: join(base, "backups"), barriers: join(base, "barriers") };
 }
+function validateRecord(record, root, kind, name) {
+  const sha = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const native = (value) => value && typeof value.id === "string" && ID.test(value.id) && sha(value.sha256) && typeof value.path === "string" && !value.path.startsWith("/") && !value.path.split("/").includes("..");
+  const binding = record.binding;
+  must(binding && typeof binding.home?.path === "string" && binding.home.path.startsWith("/") && Number.isSafeInteger(binding.home.dev) && Number.isSafeInteger(binding.home.ino) && typeof binding.unit === "string" && /^[A-Za-z0-9_.@-]+\.service$/.test(binding.unit), "Malformed state record binding");
+  if (kind === "barriers") {
+    must(native(record.native) && name === barrierName(binding) && typeof record.uuid === "string" && /^[a-f0-9-]{36}$/.test(record.uuid), "Malformed migration barrier");
+    return;
+  }
+  must(typeof record.uuid === "string" && /^[a-f0-9-]{36}$/.test(record.uuid) && name === `${record.uuid}.json` && native(record.source) && native(record.target) && typeof record.tool === "string" && ID.test(record.tool) && typeof record.snapshot === "string" && record.snapshot.startsWith("/") && Number.isSafeInteger(record.order) && record.order > 0, "Malformed Codex state reference");
+  if (kind === "backups") {
+    must(typeof record.retired === "boolean" && typeof record.restored === "boolean" && sha(record.manifestHash), "Malformed backup retention state");
+  } else {
+    const phases = ["prepared", "stopped", "snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "completed", "restore-prepared", "restore-intent", "quarantine-intent", "quarantined", "promote-intent", "state-restored", "restored", "retired"];
+    must(record.root === root && ["forward", "restore"].includes(record.mode) && typeof record.phase === "string" && (phases.includes(record.phase) || /^credential-(?:intent|moved):(?:auth\.json|\.credentials\.json|secrets|mcp-oauth-locks)$/.test(record.phase)), "Malformed state transaction phase");
+  }
+}
 function records(root, kind) {
   const p = paths(root);
   if (!hasEntry(p.base)) return [];
@@ -36,7 +53,7 @@ function records(root, kind) {
   return readdirSync(p[kind]).filter((name) => !name.includes(".tmp-") && !name.includes(".damaged-")).map((name) => {
     must(/^[a-zA-Z0-9-]+\.json$/.test(name), "Unknown state record filename");
     const record = readJSON(join(p[kind], name));
-    must(kind === "barriers" || name === `${record.uuid}.json`, "State record UUID mismatch");
+    validateRecord(record, root, kind, name);
     return record;
   });
 }
@@ -75,10 +92,15 @@ function save(root, tx) { atomicJSON(join(paths(root).transactions, `${tx.uuid}.
 function transaction(root, uuid) {
   must(/^[a-f0-9-]{36}$/.test(uuid), "Invalid transaction UUID");
   const tx = readJSON(join(paths(root).transactions, `${uuid}.json`));
+  validateRecord(tx, root, "transactions", `${uuid}.json`);
   must(tx.root === root && tx.uuid === uuid, "Transaction belongs to another installation");
   return tx;
 }
-function reference(root, tx) { return readJSON(join(paths(root).backups, `${tx.uuid}.json`)); }
+function reference(root, tx) {
+  const ref = readJSON(join(paths(root).backups, `${tx.uuid}.json`));
+  validateRecord(ref, root, "backups", `${tx.uuid}.json`);
+  return ref;
+}
 function verifiedReference(root, tx) {
   const ref = reference(root, tx);
   must(ref.snapshot === tx.snapshot && JSON.stringify(ref.source) === JSON.stringify(tx.source) && JSON.stringify(ref.target) === JSON.stringify(tx.target) && ref.tool === tx.tool && JSON.stringify(ref.binding) === JSON.stringify(tx.binding), "Backup reference differs from its transaction");
