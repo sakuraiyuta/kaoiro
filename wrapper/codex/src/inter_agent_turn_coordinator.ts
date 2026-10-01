@@ -199,7 +199,7 @@ export class CodexInterAgentTurnCoordinator {
     }
     for (const reservation of [...this.#steerReservations.values()]) {
       this.discardSteerReservation(reservation.id);
-      this.retireEnvelopes([reservation.envelope]);
+      if (reservation.status === "fallback") this.retireEnvelopes([reservation.envelope]);
       droppedPending += 1;
     }
     for (const batches of this.#pendingBatches.values()) {

@@ -557,6 +557,20 @@ reclassification, contradiction, watchdog stop, host close, or replacement
 failure. A failed replacement emits a diagnostic and retires the unstarted
 delivery through the existing skip-v1 sender-recovery path.
 
+At watchdog freeze, a reservation still in `steering` loses its slot and
+coordinator ownership without retirement. It may already have entered the
+active turn, so its delivery obligation remains unresolved until the steer
+observation or the sender's unknown-outcome recovery decides it. A reservation
+already in `fallback` has a definite non-delivery steer result and an unstarted
+root; freeze removes its slot and retires that envelope once. A late steer
+settlement cannot recreate either reservation after freeze.
+
+| Reservation at freeze | Coordinator action | Delivery outcome |
+| --- | --- | --- |
+| `steering`, including accepted, written without response, or a precondition response not yet settled | Remove slot and reservation; do not retire | Keep the possibly delivered steer unresolved; observation or sender recovery may classify it as unknown. |
+| `fallback`, after definitive rejection and before root dispatch | Remove slot and reservation; retire once | Report definite non-delivery through skip-v1 recovery. |
+| Already dispatched root | Retain only the exact active generation; retire an unstarted generation | The active generation remains unresolved. |
+
 Fallback reservations and their pending or unstarted roots are excluded from
 inline recovery claims and the unread advisory: a caller is never told to
 claim an input that only its reserved root may deliver. The current transport

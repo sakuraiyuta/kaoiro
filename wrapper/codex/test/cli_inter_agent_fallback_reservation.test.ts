@@ -3,8 +3,8 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
-import type { Envelope, InterAgentMessagePayload, WrapperConfig } from "@kaoiro/agent-common";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { InterAgentTool, type Envelope, type InterAgentMessagePayload, type WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
 import { CodexHost, type CodexHostOptions } from "../src/host.js";
 import { AppServerSession } from "../src/app_server_session.js";
@@ -14,7 +14,24 @@ import type { RpcObject } from "../src/app_server_rpc.js";
 const config: WrapperConfig = { agent_id: "self.agent", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
   server_url: "ws://localhost:4000/wrapper", model: "gpt-5.6-sol", effort: "high", codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
 const cleanup: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const fn of cleanup.splice(0)) await fn(); vi.restoreAllMocks(); });
+const quiescenceChecks: (() => void)[] = [];
+let skipAutomaticQuiescence = false;
+let fixturesCreated = 0;
+let fixturesChecked = 0;
+afterEach(async () => {
+  try {
+    for (const check of quiescenceChecks) {
+      if (!skipAutomaticQuiescence) check();
+      fixturesChecked += 1;
+    }
+  } finally {
+    quiescenceChecks.length = 0;
+    skipAutomaticQuiescence = false;
+    for (const fn of cleanup.splice(0)) await fn();
+    vi.restoreAllMocks();
+  }
+});
+afterAll(() => expect(fixturesChecked).toBe(fixturesCreated));
 
 function inbound(seq: number, cid: string, body: string, granted: "early" | "normal"): Envelope {
   return { version: "0", agent_id: "peer.agent", persona: { id: "peer", name: "Peer", sprite_set: "peer" },
@@ -28,7 +45,7 @@ function inbound(seq: number, cid: string, body: string, granted: "early" | "nor
     ext: {} } as Envelope;
 }
 
-async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" | "E" } = {}) {
+async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" | "E" | "A" | "none" } = {}) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
   let number = 0;
@@ -55,7 +72,8 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
       reply({ turn: { id } }); send({ method: "turn/started", params: { threadId: "thread", turn: { id } } });
     }
     if (request.method === "turn/steer") {
-      send({ id: request.id, error: options.steerOutcome === "P"
+      if (options.steerOutcome === "A") reply({ turnId: (request.params as { expectedTurnId: string }).expectedTurnId });
+      else if (options.steerOutcome !== "none") send({ id: request.id, error: options.steerOutcome === "P"
         ? { code: -32600, message: "cannot steer a compact turn",
           data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } } }
         : { code: -32600, message: options.steerOutcome === "E" ? "invalid request" : "no active turn to steer" } });
@@ -74,6 +92,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
   let hostOptions!: CodexHostOptions;
   let host: CodexHost | undefined;
   const retired: Envelope[] = [];
+  const reports: Record<string, unknown>[] = [];
   const link = { close: () => {}, currentSessionId: () => null, send: () => {},
     deliveryModes: () => ({ version: "v1", early: "steer", yield: "none", stage_reports: true }),
     noticeAttributionMode: () => "v1",
@@ -81,7 +100,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     replyBasisGeneration: () => 1, setSessionId: () => {},
     permissionSyncPending: () => false,
     sendInterAgent: async () => ({ kind: "accepted" }),
-    reportDeliveryStage: () => {},
+    reportDeliveryStage: (report: Record<string, unknown>) => { reports.push(report); },
     acknowledgeInterAgentDelivery: () => {},
     retireInterAgentDeliveries: (envelopes: readonly Envelope[]) => { retired.push(...envelopes); return true; },
     flushInterAgentRetirements: async () => {},
@@ -96,11 +115,12 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
       return link as never;
     },
-    createHost: (hostConfig, options) => {
-      const o0 = options as CodexHostOptions;
+    createHost: (hostConfig, hostOptionsArg) => {
+      const o0 = hostOptionsArg as CodexHostOptions;
       hostOptions = o0;
       const created = new CodexHost(hostConfig, { ...o0, backend: "app-server",
-        appServerSessionFactory: o => AppServerSession.create({ ...o, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }) });
+        appServerSessionFactory: o => AppServerSession.create({ ...o, transport: { spawnChild: () => child, shutdownTimeoutMs: 100,
+          ...(options.steerOutcome === "none" ? { requestTimeoutMs: 300 } : {}) } }) });
       const originalSteer = created.steerInterAgentInput.bind(created);
       vi.spyOn(created, "steerInterAgentInput").mockImplementation((text, hooks, batchId) =>
         originalSteer(text, { ...hooks, onSettle: (...args) => {
@@ -132,7 +152,9 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     expect(host!.pendingInterAgentPlaceholderCount).toBe(0);
     expect(coordinator?.pendingSteerReservationCount).toBe(0);
   };
-  return { host: host!, hostOptions, linkOptions, byMethod, texts, terminal, completedSteerItem, retired, assertQuiescent,
+  fixturesCreated += 1;
+  quiescenceChecks.push(assertQuiescent);
+  return { host: host!, hostOptions, linkOptions, byMethod, texts, terminal, completedSteerItem, retired, reports, assertQuiescent,
     settledWriteStates, releaseSteerWrite: () => { heldSteerWrite?.(); heldSteerWrite = undefined; },
     get coordinator() { return coordinator; } };
 }
@@ -285,14 +307,79 @@ it("removes a fallback slot when its conversation becomes terminal before settle
   expect(f.texts("turn/start")[1]).toContain("LATER ROOT");
 });
 
-it("retires a queued fallback once during watchdog fail-stop", async () => {
+it("keeps a precondition response uncertain when watchdog stops before settlement", async () => {
   const f = await scenario(10);
   expect(f.host.failStopForWatchdogAttributionUnknown()).toBe(true);
   await f.host.waitForWatchdogCleanup();
   f.assertQuiescent();
   expect(f.byMethod("turn/start")).toHaveLength(1);
   expect(f.host.state).toBe("error");
-  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(1);
+  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
+  expect(f.reports.map(r => r.stage)).toContain("queued");
+  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+});
+
+it("does not retire an accepted steer when watchdog stops the active turn", async () => {
+  const f = await compose({ steerOutcome: "A" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.reports.some(r => r.stage === "submitted")).toBe(true));
+  expect(f.host.failStopForWatchdogAttributionUnknown()).toBe(true);
+  await f.host.waitForWatchdogCleanup();
+  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
+  expect(f.reports.map(r => r.stage)).toEqual(expect.arrayContaining(["queued", "submitted"]));
+  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+});
+
+it("does not retire a written steer awaiting RPC response at watchdog stop", async () => {
+  const f = await compose({ steerOutcome: "none" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  expect(f.host.failStopForWatchdogAttributionUnknown()).toBe(true);
+  await f.host.waitForWatchdogCleanup();
+  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
+  expect(f.reports.map(r => r.stage)).toContain("queued");
+  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+});
+
+it("releases admission reservation when the reply lease refuses the steer", async () => {
+  const f = await compose();
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  const attempt = f.host.steerInterAgentInput.bind(f.host);
+  let reservationsAtHostReturn = -1;
+  vi.spyOn(f.host, "steerInterAgentInput").mockImplementation(async (...args) => {
+    const result = await attempt(...args);
+    reservationsAtHostReturn = f.coordinator?.pendingSteerReservationCount ?? -1;
+    return result;
+  });
+  vi.spyOn(InterAgentTool.prototype, "noteSteerAttempt").mockReturnValueOnce(false);
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  expect(reservationsAtHostReturn).toBe(0);
+  f.assertQuiescent();
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toContain("EARLY BODY");
+});
+
+it("releases admission reservation when host queues instead of writing", async () => {
+  const f = await compose();
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  vi.spyOn(f.host, "steerInterAgentInput").mockImplementation(async (_text, hooks, batchId) => {
+    expect(hooks.admit(f.host.activeInterAgentTurnToken()!, 1)).toBeNull();
+    return { kind: "queued", reason: "test_refusal_after_admission" };
+  });
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  f.assertQuiescent();
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toContain("EARLY BODY");
 });
 
 it("retires a rejected fallback if its exact host slot cannot be replaced", async () => {
@@ -317,6 +404,7 @@ it("retires a rejected fallback if its exact host slot cannot be replaced", asyn
 });
 
 it("the shared quiescence check detects an orphaned slot and reservation", async () => {
+  skipAutomaticQuiescence = true;
   const f = await scenario(0);
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
   f.assertQuiescent();
