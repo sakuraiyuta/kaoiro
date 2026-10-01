@@ -129,6 +129,7 @@ and
 ## Review round 4 correction
 
 Code and contract correction: `36e4f08b3a3002ddcf69edf8a6505ef6cd02cb76`.
+Additional test correction: `1f3853e14bc7e158df6f5e1a2a846ad0061e8370`.
 The scripted CLI, host, session, and coordinator reproduction showed that
 watchdog freeze retired three `steering` cases before the fix: accepted A,
 written without a response, and a precondition response not yet settled
@@ -144,11 +145,12 @@ self-test opt-out and a final check that every fixture was covered.
 All shell gates used `env -u CODEX_HOME`; the mutation runner removed
 `CODEX_HOME` from each spawned Vitest environment. None used a live turn. Logs are under
 `tmp/reviews/issue-346/impl-r4-fuji-artifacts/`. Counts and exit codes below
-come from those logs at the corrected code commit. The server suite ran alone.
+come from those logs at the corrected product code. The server suite ran alone;
+the unrelated package suites preceded the additional test-only commit.
 
 | Gate | Result | Exit |
 | --- | ---: | ---: |
-| Codex full suite, final run | 1,252 passed, 81 files | 0 |
+| Codex full suite, final run | 1,253 passed, 81 files | 0 |
 | Agent common full suite | 505 passed, 20 files | 0 |
 | Wrapper core full suite, serial rerun | 306 passed, 6 files | 0 |
 | Claude Code full suite | 761 passed, 32 files | 0 |
@@ -190,8 +192,23 @@ results above. After the final mutation, the production source matched
 `36e4f08b` and the final Codex run passed. The authenticated native gate is
 still pending the final Codex pin.
 
-Key log SHA-256 values: Codex
-`ba96f57bea59e593c7617fed6f6d14bd16ceae52c52e727aa72f8d7af753fd3d`,
+The additional writing-state tests assert stage reports from the actual CLI
+settlement: the pending-write P fallback remains queued without an unknown
+stage, the E response reports unknown, and a new no-response writing case
+reports `unknown` with `turn_steer_write_uncertain` and `turn_steer_timeout`.
+The last case has no retirement or replay. Removing the stage-report call
+made the E and no-response cases fail (2 failed, exit 1); allowing the fake
+stream to complete its write made the no-response writing assertion fail
+(1 failed, exit 1). After restoration, the Codex full suite passed 1,253
+tests (exit 0) and wrapper typecheck exited 0. Their logs have SHA-256
+`bfad7aa63864d02c0db89b0c2f35c9874955709404744ca39e73a4c573d334d1`
+and `9cf1e9ae4b654017d851ccc60b3cb0e010f1ab7283b71d225a2c5885e0a3b434`;
+the two mutation logs have SHA-256
+`0c8dadc1fa34fadc736bb6647fcffbe00a5c1f56ef8031c3461451cba3261b4f`
+and `cf0a8c347724b5dd9f791156f8fdb706a7304574c57bdeabd91450b3f15139de`.
+
+Key log SHA-256 values: final Codex
+`bfad7aa63864d02c0db89b0c2f35c9874955709404744ca39e73a4c573d334d1`,
 wrapper core serial
 `42e6878fa82ff69836ca001a8861c3336c2274380de33724cb503af6019a47b8`,
 server
