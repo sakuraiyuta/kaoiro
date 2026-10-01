@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -229,6 +229,22 @@ code/message/body templates. The shared
 [protocol fixture](../../../protocol/fixtures/inter-agent-internal-notices.json)
 defines producer/validator examples. `rate_limit` may include a safe nonnegative
 `reset_delay_seconds` with the exact canonical duration suffix.
+
+For a Codex early steer, a reply ticket becomes live only after both a valid
+`turn/steer` response and the exact completed user-message item arrive before
+terminal. Activation replaces an older unused ticket for the same peer/CID.
+The wrapper retains the activated input body, bounded to 256 records, for a
+stale-basis recovery result with `folded_earlier: true`; ticket use, a newer
+confirmed input or session reset retires it. Provisional or uncertain inputs
+without both activation facts receive no recovery ticket.
+
+Negotiated steer failure notices carry `error.affected_deliveries`. The server
+accepts only bounded, sorted coverage for the current owner and generation.
+The recipient matches each entry to its original peer turn; an A-only notice
+cannot consume B's CID waiter. It is instead shown as an asynchronous
+A-attributed input. A matching B notice returns with B's original peer turn
+and wait/no-retry guidance. Old unscoped notices do not claim sequence
+coverage and never authorize a retry of a possibly delivered steer.
 
 These notices still advance transport turns and use normal delivery/quota
 accounting. They neither close conversations nor advance ordinary peer history.

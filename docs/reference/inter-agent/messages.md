@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-09-28
+last_updated: 2026-10-01
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -91,6 +91,8 @@ Only the `type` value and `payload` schema are new.
 | `meta.reject_reason` | MUST when `kind=reject` | String with the concrete reason for rejecting a proposal |
 | `error.code` | optional | Open-string error code indicating the peer became unable to respond (see [“Unresponsive-error notices”](errors.md#unresponsive-notices-payloaderror)) |
 | `error.message` | MUST when `error` exists | Human-readable reason with secrets masked and truncated |
+| `error.affected_deliveries` | optional on negotiated `turn_failure` notices | Nonempty, strictly increasing list of `{delivery_seq, peer_turn_number, batch_id}` identifying exactly which steer inputs the notice covers. The server validates shape, owner, generation, size and allowed error codes; old unscoped notices remain conservative. The receiving wrapper matches both CID and peer turn before consuming a synchronous waiter. |
+| `notice_attribution` | optional negotiated receiver marker | `"v1"` marks an early peer delivery whose sender supports sequence-attributed failure notices. It does not authorize a reply. |
 | `owner.kind` | MUST | `"user"` or `"agent"` |
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |
 | `delivery_intent` | optional | `normal` (default), `early`, or `yield`; the requested delivery mode. Non-normal values require negotiated delivery modes. |

@@ -1,8 +1,8 @@
 ---
 title: Wrapper configuration
-description: Runner-relayed WrapperConfig fields and Claude process-local delivery controls.
+description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 related: [protocol]
 ---
 
@@ -66,6 +66,17 @@ including `true`, leaves it off and defers to the persona list. An enabled wrapp
 early: "steer"}` at join and steers only while the server echoes it; the exec
 backend ignores both variables. The wrapper logs `codex: operator_steer=on|off`
 at startup. See [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
+
+### Codex inter-agent early delivery
+
+The app-server backend advertises inter-agent `early: "steer"` and
+`yield: "none"` independently of `KAOIRO_CODEX_OPERATOR_STEER`. It uses the
+early path only after the server echoes delivery modes and
+`notice_attribution: "v1"`, and grants the message early intent. The exec
+backend advertises no early mechanism. There is no phase-3 environment
+toggle or live dashboard policy switch; the revisioned per-agent switch is
+tracked by issue #463. A Codex yield request can receive an early downgrade,
+never a tool-boundary interruption.
 
 ### Codex approval axis controls
 
