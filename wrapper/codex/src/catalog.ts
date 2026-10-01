@@ -92,8 +92,8 @@ const LUNA_6: EngineModelInfo = {
 // Luna 6 4, gpt-5.6-sol 5, gpt-5.6-terra 8, gpt-5.6-luna 9). This
 // transcription follows that source order.
 const CHATGPT_PLUS_MODELS = [SOL_61, ASTRA, SOL_6, LUNA_6, SOL, TERRA, LUNA];
-// Free/Go exclusions follow the Plan × available-model table in
-// docs/reference/engines/codex-model-catalog.md.
+// kaoiro advertises only Terra on Free/Go; paid plans share the curated
+// catalog. See docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];
 
 const APIKEY_MODELS: EngineModelInfo[] = [
