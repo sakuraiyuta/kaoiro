@@ -79,6 +79,7 @@ export class CodexInterAgentTurnCoordinator {
   #steerRecoveryEvictions = 0;
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
   readonly #steerReservations = new Map<string, SteerReservation>();
+  readonly #frozenSteers = new Map<string, Envelope>();
   readonly #pendingFallbacks = new Map<string, SteerReservation[]>();
   readonly #batchByTurnToken = new Map<string, DispatchedCodexInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
@@ -107,6 +108,7 @@ export class CodexInterAgentTurnCoordinator {
   }
 
   get pendingSteerReservationCount(): number { return this.#steerReservations.size; }
+  get pendingFrozenSteerCount(): number { return this.#frozenSteers.size; }
 
   reserveSteer(id: string, envelope: Envelope, mode: InboundReplyMode, arrival: number): boolean {
     if (this.#closed || this.#steerReservations.has(id)) return false;
@@ -123,6 +125,11 @@ export class CodexInterAgentTurnCoordinator {
   }
 
   discardSteerReservation(id: string): void {
+    this.#frozenSteers.delete(id);
+    this.#releaseSteerReservation(id);
+  }
+
+  #releaseSteerReservation(id: string): void {
     const reservation = this.#steerReservations.get(id);
     if (reservation === undefined) return;
     this.#steerReservations.delete(id);
@@ -132,7 +139,13 @@ export class CodexInterAgentTurnCoordinator {
 
   settleSteerReservation(id: string, fallback: boolean): void {
     const reservation = this.#steerReservations.get(id);
-    if (reservation === undefined || reservation.status !== "steering") return;
+    if (reservation === undefined) {
+      const frozen = this.#frozenSteers.get(id);
+      this.#frozenSteers.delete(id);
+      if (frozen !== undefined && fallback) this.retireEnvelopes([frozen]);
+      return;
+    }
+    if (reservation.status !== "steering") return;
     if (!fallback) { this.discardSteerReservation(id); return; }
     if (!reservation.slot && !this.attachSteerPlaceholder(id)) {
       this.discardSteerReservation(id);
@@ -198,7 +211,8 @@ export class CodexInterAgentTurnCoordinator {
       droppedDispatched += 1;
     }
     for (const reservation of [...this.#steerReservations.values()]) {
-      this.discardSteerReservation(reservation.id);
+      if (reservation.status === "steering") this.#frozenSteers.set(reservation.id, reservation.envelope);
+      this.#releaseSteerReservation(reservation.id);
       if (reservation.status === "fallback") this.retireEnvelopes([reservation.envelope]);
       droppedPending += 1;
     }

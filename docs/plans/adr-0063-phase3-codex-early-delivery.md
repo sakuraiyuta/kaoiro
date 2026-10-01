@@ -558,17 +558,22 @@ failure. A failed replacement emits a diagnostic and retires the unstarted
 delivery through the existing skip-v1 sender-recovery path.
 
 At watchdog freeze, a reservation still in `steering` loses its slot and
-coordinator ownership without retirement. It may already have entered the
-active turn, so its delivery obligation remains unresolved until the steer
-observation or the sender's unknown-outcome recovery decides it. A reservation
-already in `fallback` has a definite non-delivery steer result and an unstarted
-root; freeze removes its slot and retires that envelope once. A late steer
-settlement cannot recreate either reservation after freeze.
+coordinator ownership without immediate retirement. The coordinator retains
+the exact frozen steer identity until its late settlement. An accepted steer,
+a written steer without a response, or a non-precondition rejection reports
+`unknown` without retirement. A precondition rejection with no observed item
+is definite non-delivery and retires the frozen envelope once. A reservation
+already in `fallback` has an unstarted root; freeze removes its slot and
+retires that envelope once. A queued or exceptional result discards the steer
+identity before ordinary requeue, so the late frozen-steer rule cannot retire
+the requeued input. A late settlement never recreates a host slot.
 
 | Reservation at freeze | Coordinator action | Delivery outcome |
 | --- | --- | --- |
-| `steering`, including accepted, written without response, or a precondition response not yet settled | Remove slot and reservation; do not retire | Keep the possibly delivered steer unresolved; observation or sender recovery may classify it as unknown. |
+| `steering`, later accepted, written without response, or non-precondition rejection | Remove slot and reservation; retain frozen identity until settlement | Report `unknown` at settlement; do not retire. |
+| `steering`, later precondition rejection with no observed item | Remove slot and reservation; retain frozen identity until settlement | Retire once at definite fallback settlement; do not report unknown. |
 | `fallback`, after definitive rejection and before root dispatch | Remove slot and reservation; retire once | Report definite non-delivery through skip-v1 recovery. |
+| Queued result or exception after an admitted attempt | Discard its frozen identity before ordinary requeue | The ordinary queue owns the delivery; a late steer settlement cannot retire it again. |
 | Already dispatched root | Retain only the exact active generation; retire an unstarted generation | The active generation remains unresolved. |
 
 Fallback reservations and their pending or unstarted roots are excluded from
