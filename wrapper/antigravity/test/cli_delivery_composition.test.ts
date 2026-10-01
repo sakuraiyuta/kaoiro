@@ -182,6 +182,83 @@ describe("Antigravity CLI delivery composition", () => {
     expect(disconnectReasons).toEqual(["stop"]);
   });
 
+  it("acknowledges a new delivery incarnation's sequence space from 1", async () => {
+    const acknowledgements: number[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let incarnation = "old";
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    const link = {
+      close: () => {},
+      send: () => {},
+      reportDisconnectIntent: async () => true,
+      acknowledgeInterAgentDelivery: (sequence: number) => acknowledgements.push(sequence),
+      deliveryIncarnation: () => incarnation,
+      deliveryGeneration: () => "generation",
+    };
+    let startHost!: () => void;
+    let finishHost!: () => void;
+    const ready = new Promise<void>((resolve) => { startHost = resolve; });
+    const finished = new Promise<void>((resolve) => { finishHost = resolve; });
+    let running: Promise<void> | undefined;
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      activeInterAgentTurnToken: () => null,
+      requestInterruptForTurn: () => true,
+      failStopTurnForWatchdog: () => true,
+      failStopForWatchdogAttributionUnknown: () => true,
+      run: async () => { startHost(); await finished; },
+      send: async (
+        _text: string,
+        _attachments: unknown,
+        conversationIds: readonly string[],
+        turnToken: string,
+      ) => {
+        hostOptions.onTurnStart({ turnToken, conversationIds });
+        hostOptions.onTurnEnd({ turnToken, conversationIds });
+        hostOptions.onTurnBoundary({ turnToken });
+      },
+    };
+    const deliver = (envelope: Envelope) =>
+      (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope);
+    const status = (ackedSeq: number) =>
+      (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
+        acked_seq: ackedSeq,
+      });
+
+    try {
+      running = runAntigravityCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => ({ ...config }),
+        createServerLink: (_url, _agentId, options) => {
+          linkOptions = options as unknown as Record<string, any>;
+          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+          return link as never;
+        },
+        createHost: (_config, options) => {
+          hostOptions = options as unknown as Record<string, any>;
+          return host as never;
+        },
+      });
+      await ready;
+
+      status(2);
+      await deliver(inbound(3, 1));
+      await vi.waitFor(() => expect(acknowledgements).toEqual([3]));
+
+      // The server lost its ledger entry: a new incarnation restarts at 0.
+      incarnation = "new";
+      status(0);
+      await deliver(inbound(1, 1));
+      await vi.waitFor(() => expect(acknowledgements).toEqual([3, 1]));
+    } finally {
+      finishHost();
+      await running;
+      stderr.mockRestore();
+    }
+  });
+
   it("runs an inbound delivery through the production default CLI and host to an agy child", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-inbound-default-"));
     const executable = join(root, "agy-fixture.mjs");
