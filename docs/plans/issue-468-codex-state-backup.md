@@ -1,6 +1,6 @@
 ---
 title: Codex state backup around runner pin updates
-status: accepted
+status: proposed
 last_updated: 2026-10-01
 ---
 
@@ -9,9 +9,12 @@ last_updated: 2026-10-01
 Tracking: [issue 468](https://github.com/sakuraiyuta/kaoiro/issues/468).
 Baseline: `3f35d77fc0218c60a9d54f08de54d11fe21efcef`; isolated dependency
 candidate: `0aa961238e8411e9b8161a11ba26ae1d3d950ea9` (CLI/SDK 0.159.3).
-Writer: kogane. Director: hisui. The director approved this design after
-round 4. Implementation and its review remain pending; approval is not
-production authorization. Native migration results remain pending.
+Writer: kogane. Director: hisui. This revision applies the operator's
+2026-10-01 recovery-policy decision to the round-4 design (`1f72cad1`).
+The changed contract awaits design review round 5; implementation is authorized
+in parallel by the director. Production activation remains separately
+controlled. Earlier native observations are historical evidence, not a
+requirement to repeat old-version compatibility measurements.
 
 ## Problem and evidence
 
@@ -25,14 +28,15 @@ updater when it stops its parent runner.
 The documented release rollback swaps code but does not restore Codex state.
 A new native binary may migrate the existing state databases. Successful
 release switching or a successful old-binary process exit does not establish
-that old threads can still resume. Issue 468 requires scratch measurement of
-old/new/old operation and a pre-update backup before any production activation.
+that old threads can still resume. Issue 468 requires a pre-update snapshot
+attempt whose failure stops activation. Guaranteed history retention and old
+binary compatibility with migrated databases are not adoption requirements.
 The Codex-home document's rollback relocates a home; it is not pin rollback.
 
 ## Options and choice
 
 A live file copy before the current updater runs does not give a common stopped
-boundary for DBs, WAL files and rollouts. A free-form external hook delegates
+boundary for the managed runner's DBs, WAL files and rollouts. A free-form external hook delegates
 success semantics to arbitrary commands. Choose an explicit optional Codex
 state operation in the existing detached update transaction, with a fixed
 snapshot/restore helper and failure propagated to the worker's control flow.
@@ -44,6 +48,34 @@ requires this state-aware operation. Same-pin deployments can omit it when
 no retained-reference rule requires a backup. Old unmodified update invocations
 do not automatically acquire either the comparison guard or a backup.
 Production rollout is separately authorized after gates 1–7.
+
+## Recovery policy and accepted limit
+
+A snapshot is a recovery convenience, not a promise of lossless or always
+successful restoration. The operator accepts losing Codex conversation state,
+login and caches if recovery requires creating a fresh home. Configuration,
+instruction links and hooks must also be recreated and checked by the existing
+[codex-home runbook](../operations/codex-home.md); a bare empty directory and
+login alone are not the complete setup procedure.
+
+Remove the external-process `/proc/*/fd` and `cwd` scan entirely. It cannot
+establish exclusive access on this shared host, and an unreadable unrelated
+process must not prevent this workflow. Emit one explicit warning per update
+or restore that external writers are not inspected and can invalidate the
+snapshot or restored state. Do not inspect, identify or signal those processes.
+Runner unit checks still require inactive, MainPID zero and an empty service
+cgroup. Configuration/home binding, credential exclusions, copy verification
+and the snapshot-failure stop remain mandatory. Detectable source changes can
+still make snapshot verification fail; the operator did not authorize ignoring
+a snapshot error. No check promises to exclude an external writer or prevent
+future writes after verification.
+
+Recovery has two ordered levels: first the verified snapshot restore below;
+if that fails or its resulting home is unusable, operator-led fresh setup.
+Never automatically discard the failed home or reset credentials. No new
+old-version authentication or old-opening-migrated-DB measurement is required.
+Candidate-only live checks use the already approved 0.159.3 home and remain
+within the existing maximum 20-turn budget.
 
 ## Interface and affected files
 
@@ -154,9 +186,11 @@ under `codex-rs/` in [0.156.1][old-src] and [0.159.3][new-src].
 Exclude these paths from snapshot payload and content hashes. At restore,
 move the current paths as whole entries from the stopped current home; do not
 read, duplicate, downgrade or selectively merge their content. Preserve the
-lock directories with them; no live lock may be held at that point. External
-keyring material is untouched. Credential-path symlinks, hard-linked credential
-files or unsupported platform credential layouts are refusals. The initial
+lock directories with them. The runner's processes must be stopped; external
+credential writers or locks are not inspected. Preservation is consequently
+best-effort with respect to those writers; unusable authentication requires a
+fresh operator login. External keyring material is untouched. Credential-path
+symlinks, hard-linked credential files or unsupported platform credential layouts are refusals. The initial
 implementation scope is Linux; no Windows/macOS credential coverage is claimed.
 
 This is not a promise that arbitrary home content is free of secrets. User
@@ -167,10 +201,12 @@ observations: current-only credentials, backed-up state/configuration, and
 explicitly excluded disposable content. Preserve `.sandbox_migration`, the
 one-shot policy-migration marker (`execpolicy/src/sandbox_migration.rs` in
 both pinned tags). Exclude `.tmp` maintenance/cache files and
-`thread-writer-locks` after all writers stop (`rollout/src/maintenance.rs` and
+`thread-writer-locks` after the runner unit stops (`rollout/src/maintenance.rs` and
 `rollout/src/writer_lock.rs`); copying a lock file cannot restore its OS lock.
 These entries are also present in a credential-free native-generated old
-home; the native gate must inventory both pins, not only handwritten fixtures.
+home. This existing observation supports the classification; additional old
+native runs are not required. Inventory candidate-generated entries as well
+as handwritten fixtures.
 Known session/DB subtrees include
 all their regular descendants/sidecars. Unknown top-level entries, unknown
 credential-like sidecars and unclassified extension paths cause refusal;
@@ -267,8 +303,9 @@ A fully completed prior transaction allows another state-aware update with a
 new snapshot; incomplete/failed transactions must first be recovered. Preserve
 all older references until explicit retirement; do not silently supersede them.
 
-Retirement requires gate 6 results accepted by the operator, successful actual
-production Codex start/history checks, a completed forward or restored
+Retirement requires the operator's acceptance of snapshot/fresh-setup recovery,
+successful actual production Codex start and the applicable history or explicit
+new-session checks, a completed forward or restored
 transaction, and the operator's explicit decision to abandon rollback to that
 snapshot (including its post-snapshot data-loss implications). Under both locks,
 verify that no active recovery depends on it, then mark the reference retired
@@ -364,14 +401,12 @@ committed backup or partially restored state and never start a service.
 3. Stop the runner through the service manager. Require the configured
    control-group stop behavior from the installed unit's effective
    `systemctl --user show -p KillMode`, not the repository template. Require
-   inactive, MainPID zero and no remaining service descendants. Scan same-UID
-   `/proc/*/fd` and `/proc/*/cwd` for paths/inodes inside the home, including
-   deleted-but-open entries; skip only the scanner's own known handles. Do
-   not print unrelated paths or environments. A still-live process whose
-   ownership/links cannot be read is a refusal; a disappearing PID can be
-   discarded only after checking its start identity. Another holder means
-   stop and report, not kill it. This initial workflow requires a private
-   same-user home on Linux and no external spawning during maintenance.
+   inactive, MainPID zero and no remaining service descendants. Check the
+   service's cgroup only; remove the external-process scan as described above.
+   An absent already-removed service cgroup is acceptable after inactive/PID
+   checks; unreadable state for a still-present service cgroup is a refusal.
+   This initial workflow requires a private same-user home on Linux. External
+   processes are outside the stop guarantee and produce no per-process gate.
 4. Create and verify the snapshot with an explicit
    `if ! helper ...; then ...; fi` failure branch, not merely `set -e`.
    Backup failure leaves current unchanged,
@@ -384,13 +419,20 @@ committed backup or partially restored state and never start a service.
    By contrast, the existing switch-failure restart follows a completed,
    verified snapshot and an atomic switch refusal with unchanged state.
 5. Immediately before switch, repeat inactive/MainPID/cgroup checks, the
-   external-holder scan, home/config binding and stopped-source verification.
-   Any new writer or changed source refuses switch. Recheck before start;
+   home/config binding and stopped-source verification. A restarted service
+   or a detected source change refuses switch; an external holder by itself
+   is not a refusal. Recheck before start;
    an unexpected external service start is not mistaken for candidate startup.
    Switch only after these checks, then start and run the existing release
    identity checks. Preserve the backup reference in success/failure output.
-   A switch failure can restart the unchanged old release as today. A failure
-   after new startup must not automatically start old code on migrated state;
+   On switch failure after a verified snapshot, attempt recovery to the
+   recorded source release before reporting failure. If current still names
+   that source and the bound snapshot/source state remains valid, restart the
+   unchanged source. If current moved to the recorded target without startup,
+   use the verified snapshot restore path to return to the source. An unknown
+   link, failed stop/binding check or failed recovery must remain stopped;
+   never guess which code to start. A failure after new startup must not
+   automatically start old code on migrated state;
    direct the operator to the state-aware rollback command. Replace the
    generic commands currently printed at update.sh:333-337 whenever a Codex
    backup record applies. Update `docs/operations/production.md`'s runner
@@ -432,8 +474,9 @@ reference restores may be chosen instead. Mark completed restores so subsequent
 selection follows the remaining lineage rather than repeatedly selecting an
 already-restored reference.
 
-Under the update lock and maintained no-dispatch interval, stop writers as in
-update. Retain the current home as a named failed-state sibling. Move its
+Under the update lock and maintained no-dispatch interval, stop the runner
+unit and its descendants as in update; external writers are not scanned.
+Retain the current home as a named failed-state sibling. Move its
 current credential entries from the inventory, if present, into the prepared
 restored home without reading or duplicating their content. Do not restore
 old tokens from the snapshot. External keyring credentials are untouched. An
@@ -457,12 +500,49 @@ out of scope. Server-side references to post-backup thread IDs are not deleted
 or silently redirected. Expected behavior is the runner's existing T3 resume
 existence check rejecting them, with a visible error and no substitute thread;
 this is an expectation to measure, not established evidence. The operator
-starts a new session explicitly. Gate 6 must submit such a retained server
-reference through the real runner resume path after restore, confirm refusal
-and zero wrapper spawn for the missing thread, and also confirm pre-backup
-thread resume plus a separately requested new session work. Even if the old
-binary can read migrated scratch state, keep this backup-based rollback path
-as the documented safe baseline.
+starts a new session explicitly. Recovery testing must submit a missing
+retained server reference through the real runner resume path and confirm
+visible refusal without an implicit replacement session; also confirm that an
+explicitly requested new session works. Snapshot recovery and fresh setup are
+the supported paths. Opening a migrated database with the old binary is not a
+fallback and is not an adoption gate.
+
+## Second-level recovery: fresh Codex setup
+
+If snapshot verification, restoration, or the restored home fails, leave the
+runner stopped and report the failed transaction. The operator may choose a
+fresh setup, explicitly accepting loss of old Codex history and login. Keep
+failed home/staging/quarantine trees private for diagnosis instead of deleting
+or merging them. Do not copy any auth or credential entry into the new home.
+
+Use the codex-home runbook's creation, configuration, instruction-link, hook
+and device-auth steps, at the configured canonical path, with the verified
+binary for the release being recovered. Normally retain the verified current
+release and create fresh state for it. If the operator instead requires a
+code downgrade, first provision a fresh installation of the verified selected
+release against this empty home; never run old code on the quarantined migrated
+state and never use an unguarded code-only rollback against it. Fresh setup is
+an explicit operator recovery procedure, not an automatic updater fallback.
+
+The old home inode and retention/barrier records do not certify the fresh
+home. While stopped, preserve the source/tool release paths, and under both
+update/links locks archive the affected installation's `codex-state` directory
+to a named private diagnostic directory before treating this as a fresh state
+history. Use this registry-archive procedure only for an installation dedicated
+to this home/unit. If records cannot establish that scope, preserve the entire
+old installation and provision a fresh selected-release installation instead.
+Do not selectively
+edit hashes or claim the new home matches old acceptance. Keep the referenced
+releases and diagnostic snapshots manually until the operator retires them;
+ordinary pruning must not run during reconstruction. The independent native
+hash comparison remains active for later updates, even without these records.
+
+The operator logs in again, starts the selected release, then requests new
+Codex sessions and checks hooks/configuration and one actual model turn as in
+codex-home.md. Retained server references to lost threads must visibly fail;
+do not redirect them to replacement sessions. External programs still holding
+the old home may interfere with the new one by path, so their shutdown is an
+operator recovery consideration, not a claimed property of the removed scan.
 
 ## First deployment and verification
 
@@ -500,7 +580,9 @@ Required evidence before implementation is called complete:
   restore and rerun. Backup failure must produce a nonzero worker invocation,
   zero new-release starts and no symlink switch. Include wrong but valid
   requested homes, changed runner.env/user-manager environment, already-stopped
-  forward updates, retirement/barrier enforcement, unreadable/live external holders,
+  forward updates and retirement/barrier enforcement. An unrelated unreadable
+  process or known external holder must no longer cause refusal by itself;
+  retain an explicit service-descendant/stopped-state negative. Cover
   deleted barrier (also deleted codex-state directory) with differing current /
   target hashes, corrupt-barrier repair and backup-based recovery, first barrier
   publication, changed-home binding, and non-latest restore selection. The
@@ -519,14 +601,21 @@ Required evidence before implementation is called complete:
   Disconnect the coverage check and require those self-tests to fail, while
   a prose-only documentation change remains accepted.
 - Rehearse the service lifecycle in owned disposable user-systemd units, with
-  owned fake runner/child state writers and then the native scratch state from
-  gate 6. Verify the detached worker survives its caller's stop and no writer
-  remains at snapshot time. A process-group stub alone cannot establish this.
+  owned fake runner/child state writers and candidate-generated scratch state.
+  Verify the detached worker survives its caller's stop and no runner-unit
+  descendant remains at snapshot time. This does not claim external writers
+  are absent. A process-group stub alone cannot establish this.
   Never stop, restart or signal the production runner as a test.
-- Gate 6 uses native-generated credential-free old state, old-to-old control,
-  candidate migration, old opening of migrated state, and restored old state.
-  Check thread IDs, sentinel history and read/write operation, not just exit
-  status or migration counts. Bind results to final binary and source hashes.
+- Gate 6 rehearses candidate-generated credential-free state snapshot/restore
+  and the documented fresh-home recovery path. Check snapshot verification,
+  credential exclusion, retained history where available, and explicit fresh
+  session behavior. No old-version login, model turn, or old-opening-migrated-DB
+  measurement is required. Existing old-version measurements are historical
+  observations only. Bind new results to final binary and source hashes.
+- Rehearse failed switch recovery with the source pointer unchanged and with
+  a pointer already moved to the recorded target. Recovery returns to the
+  verified source or remains stopped with both recovery levels reported;
+  a failed snapshot itself never switches or starts either release.
 - Run affected suites/build/typecheck and independent implementation review.
   Record warnings, exits and negative-control results. Missing systemd/native
   observations remain open gates; do not replace them with fixture assertions.
