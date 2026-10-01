@@ -120,6 +120,35 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
 
 describe("recovery ownership", () => {
   const message = (cid: string) => inbound(cid);
+  it("re-hands only an activated steer body to its exact peer turn and retires it on credit, newer input, and reset", () => {
+    const coordinator = new CodexInterAgentTurnCoordinator({ onDispatch: () => {} });
+    const first = message("cid");
+    coordinator.retainSteeredBody([first]);
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => false, 1))
+      .toMatchObject({ oversizedPending: true, foldedEarlier: true, recoverySource: "retained_fold" });
+    expect(coordinator.claimRecovery("cid", "other.agent", "active", () => true, 1)).toBeUndefined();
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => true, 2)).toBeUndefined();
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => true, 1))
+      .toMatchObject({ envelopes: [first], foldedEarlier: true, recoverySource: "retained_fold" });
+    coordinator.creditSteeredBody([first]);
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => true, 1)).toBeUndefined();
+    coordinator.retainSteeredBody([first]);
+    const newer = message("cid"); newer.payload.turn_number = 2;
+    coordinator.retireSteeredBeforeConfirmed([newer]);
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => true, 1)).toBeUndefined();
+    coordinator.retainSteeredBody([newer]);
+    coordinator.resetSteeredRecovery();
+    expect(coordinator.claimRecovery("cid", "peer.agent", "active", () => true, 2)).toBeUndefined();
+  });
+  it("counts bounded steered-body recovery evictions", () => {
+    const coordinator = new CodexInterAgentTurnCoordinator({ onDispatch: () => {} });
+    for (let index = 0; index <= 256; index += 1) {
+      coordinator.retainSteeredBody([message(`cid-${index}`)]);
+    }
+    expect(coordinator.steerRecoveryEvictions).toBe(1);
+    expect(coordinator.claimRecovery("cid-0", "peer.agent", "active", () => true, 1)).toBeUndefined();
+    expect(coordinator.claimRecovery("cid-256", "peer.agent", "active", () => true, 1)?.foldedEarlier).toBe(true);
+  });
   it("removes host-queued bodies before input preparation and preserves unrelated CIDs", () => {
     let next = 0;
     const coordinator = new CodexInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });

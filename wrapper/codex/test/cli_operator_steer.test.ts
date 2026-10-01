@@ -58,7 +58,8 @@ describe("operator steer opt-in", () => {
   it("declares operator_input_modes and wires the host only for an opted-in app-server persona", async () => {
     const on = await compose("app-server", true, { version: "v1", early: "steer" });
     expect(on.linkOptions.operatorInputModes).toEqual({ version: "v1", early: "steer" });
-    expect(on.linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "none", yield: "none", stage_reports: true });
+    expect(on.linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "steer", yield: "none", stage_reports: true });
+    expect(on.hostOptions).toHaveProperty("interAgentSteer");
     expect(on.hostOptions.operatorSteer.available()).toBe(true);
     expect(on.hostOptions.permissionSyncPending()).toBe(true);
     expect(on.hostOptions.liveInputBlocked()).toBe(false);
@@ -79,14 +80,23 @@ describe("operator steer opt-in", () => {
     expect(lines).toEqual(["Operator steering is unavailable: the server did not acknowledge operator_input_modes."]);
   });
 
-  it("leaves the exec and opted-out compositions without any steer surface", async () => {
+  it("keeps IA steering on app-server even when operator steering is opted out", async () => {
     for (const [backend, optIn] of [["exec", true], ["app-server", false], ["exec", false]] as const) {
       const off = await compose(backend, optIn);
       expect(off.linkOptions, `${backend}/${optIn}`).not.toHaveProperty("operatorInputModes");
       expect(off.linkOptions).not.toHaveProperty("onOperatorInputModes");
       expect(off.hostOptions).not.toHaveProperty("operatorSteer");
-      expect(off.hostOptions).not.toHaveProperty("permissionSyncPending");
-      expect(off.hostOptions).not.toHaveProperty("liveInputBlocked");
+      if (backend === "app-server") {
+        expect(off.linkOptions.interAgentDeliveryModes.early).toBe("steer");
+        expect(off.hostOptions).toHaveProperty("interAgentSteer");
+        expect(off.hostOptions).toHaveProperty("permissionSyncPending");
+        expect(off.hostOptions).toHaveProperty("liveInputBlocked");
+      } else {
+        expect(off.linkOptions.interAgentDeliveryModes.early).toBe("none");
+        expect(off.hostOptions).not.toHaveProperty("interAgentSteer");
+        expect(off.hostOptions).not.toHaveProperty("permissionSyncPending");
+        expect(off.hostOptions).not.toHaveProperty("liveInputBlocked");
+      }
     }
   });
 });

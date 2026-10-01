@@ -94,7 +94,7 @@ describe("ADR-0015 stage 2 server -> client version check", () => {
 });
 
 describe("parseDeliveryStatus (issue #237)", () => {
-  it("confirmed watermark と pending gap だけを受理する", () => {
+  it("confirmed watermark と pending gap を受理する", () => {
     expect(
       parseDeliveryStatus({
         issued_seq: 4,
@@ -108,6 +108,17 @@ describe("parseDeliveryStatus (issue #237)", () => {
     });
     expect(parseDeliveryStatus({ issued_seq: 4, acked_seq: 3 })).toBeNull();
     expect(parseDeliveryStatus({ issued_seq: 3, acked_seq: 4 })).toBeNull();
+  });
+
+  it("keeps the durable uncertainty count while omitting malformed detail", () => {
+    expect(parseDeliveryStatus({ issued_seq: 3, acked_seq: 3, lost_count: 0, uncertain_count: 2,
+      last_uncertain: { at: "2026-10-01T00:00:00Z", incarnation: "inc", generation: "gen",
+        delivery_seq: 3, reason: "turn_steer_timeout" } })).toMatchObject({
+      lost_count: 0, uncertain_count: 2, last_uncertain: { delivery_seq: 3 },
+    });
+    const malformed = parseDeliveryStatus({ issued_seq: 3, acked_seq: 3, uncertain_count: -1,
+      last_uncertain: { at: "T", incarnation: "inc", generation: "gen", delivery_seq: 0, reason: "x" } });
+    expect(malformed).toEqual({ issued_seq: 3, acked_seq: 3 });
   });
 
   it("snapshot では malformed agent entry だけを落とす", () => {

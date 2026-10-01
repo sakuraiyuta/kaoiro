@@ -62,8 +62,10 @@ function fixture(optIn = true, extra: Partial<CodexHostOptions> = {}) {
   const terminal = (status = "completed") => send({ method: "turn/completed", params: { threadId: "thread", turn: { id: `turn-${number}`, status } } });
   const inputItem = (clientId: string) => send({ method: "item/started", params: { threadId: "thread", turnId: `turn-${number}`,
     item: { type: "userMessage", id: `u-${clientId}`, clientId, content: [] } } });
+  const completedItem = (clientId: string, text: string) => send({ method: "item/completed", params: { threadId: "thread", turnId: `turn-${number}`,
+    item: { type: "userMessage", id: `u-${clientId}`, clientId, content: [{ type: "text", text }] } } });
   const clientId = (index: number) => (byMethod("turn/steer")[index]?.params as { clientUserMessageId: string }).clientUserMessageId;
-  return { host, sent, logs, rejected, send, exit, byMethod, texts, system, operator, terminal, inputItem, clientId,
+  return { host, sent, logs, rejected, send, exit, byMethod, texts, system, operator, terminal, inputItem, completedItem, clientId,
     get number() { return number; },
     set onSteer(fn: SteerReply) { onSteer = fn; },
     set holdStarts(value: boolean) { holdStarts = value; },
@@ -92,6 +94,98 @@ it("steers an operator input into the running turn and reports inclusion", async
   await vi.waitFor(() => expect(f.system()).toContain("Operator input was included in the running turn."));
   expect(f.system()).toContain("Operator input accepted into the running turn.");
   expect(f.texts("turn/start")).toEqual(["BASE"]);
+});
+
+it("attaches IA to the current turn only after admission and correlates the completed item text", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  const events: string[] = [];
+  const hooks = {
+    admit: () => null,
+    onAdmit: () => events.push("write"),
+    onResponse: (_token: string, _id: string, response: { kind: string }) => events.push(`response:${response.kind}`),
+    onItem: () => events.push("item"),
+    onTerminal: () => events.push("terminal"),
+    onSettle: (_token: string, _id: string, response: { kind: string }, observed: boolean) => events.push(`settle:${response.kind}:${observed}`),
+  };
+  const result = await f.host.steerInterAgentInput("PEER BODY", hooks, "kaoiro-ia-steer:test");
+  expect(result).toMatchObject({ kind: "sent", batchId: "kaoiro-ia-steer:test" });
+  await vi.waitFor(() => expect(events).toContain("response:A"));
+  f.completedItem("wrong-client", "PEER BODY");
+  await new Promise(resolve => setImmediate(resolve));
+  expect(events).not.toContain("item");
+  f.completedItem("kaoiro-ia-steer:test", "PEER BODY");
+  f.terminal();
+  await vi.waitFor(() => expect(events).toContain("settle:A:true"));
+  expect(events).toEqual(["write", "response:A", "item", "terminal", "settle:A:true"]);
+  expect(f.texts("turn/start")).toEqual(["BASE"]);
+});
+
+it("reconciles a response arriving after terminal without a second turn-end callback", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  let replyAfterTerminal: ((value: unknown) => void) | undefined;
+  f.onSteer = (_request, reply) => { replyAfterTerminal = reply; };
+  const events: string[] = [];
+  await f.host.steerInterAgentInput("PEER BODY", {
+    admit: () => null, onAdmit: () => events.push("write"),
+    onResponse: (_token, _id, response) => events.push(`response:${response.kind}`),
+    onItem: () => events.push("item"),
+    onTerminal: () => events.push("terminal"),
+    onSettle: (_token, _id, response, observed) => events.push(`settle:${response.kind}:${observed}`),
+  }, "kaoiro-ia-steer:late");
+  f.completedItem("kaoiro-ia-steer:late", "PEER BODY");
+  f.terminal();
+  await vi.waitFor(() => expect(events).toContain("terminal"));
+  expect(events).not.toContain("settle:A:true");
+  replyAfterTerminal?.({ turnId: "turn-1" });
+  await vi.waitFor(() => expect(events).toContain("settle:A:true"));
+  expect(events).toEqual(["write", "item", "terminal", "response:A", "settle:A:true"]);
+});
+
+it("a completed item with the right client ID but wrong text cannot authorize IA", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  const item = vi.fn(), settle = vi.fn();
+  await f.host.steerInterAgentInput("PEER BODY", {
+    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: item,
+    onTerminal: () => {}, onSettle: settle,
+  }, "kaoiro-ia-steer:conflict");
+  f.completedItem("kaoiro-ia-steer:conflict", "WRONG BODY");
+  f.completedItem("kaoiro-ia-steer:conflict", "PEER BODY");
+  f.terminal();
+  await vi.waitFor(() => expect(settle).toHaveBeenCalledOnce());
+  expect(item).not.toHaveBeenCalled();
+  expect(settle.mock.calls[0]?.[5]).toBe(true);
+});
+
+it("limits IA to three writes while preserving the common eight-write cap", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  const hooks = { admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {}, onSettle: () => {} };
+  for (let index = 0; index < 3; index += 1) {
+    expect((await f.host.steerInterAgentInput(`PEER ${index}`, hooks, `kaoiro-ia-steer:${index}`)).kind).toBe("sent");
+  }
+  expect(await f.host.steerInterAgentInput("PEER 3", hooks, "kaoiro-ia-steer:3"))
+    .toEqual({ kind: "queued", reason: "inter_agent_steer_cap" });
+  expect(f.byMethod("turn/steer")).toHaveLength(3);
+});
+
+it("holds a rejected IA steer at its arrival position before later root input", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  f.onSteer = turnChanged;
+  const batchId = "kaoiro-ia-steer:rejected";
+  await f.host.steerInterAgentInput("PEER BODY", {
+    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
+    onSettle: () => expect(f.host.replaceInterAgentPlaceholder(batchId, "PEER ROOT", ["cid"], "root-token")).toBe(true),
+  }, batchId);
+  await f.operator("LATER", "normal");
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(3));
+  expect(f.texts("turn/start")).toEqual(["BASE", "PEER ROOT", "LATER"]);
 });
 
 it("AC-1: after a P response a later operator input queues behind the placeholder (P -> op2 -> T)", async () => {

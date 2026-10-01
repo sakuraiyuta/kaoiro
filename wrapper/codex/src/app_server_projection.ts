@@ -15,8 +15,7 @@ export type AppServerProjection =
   | { kind: "adapter"; event: AdapterEvent }
   | { kind: "log"; payload: LogPayload }
   | { kind: "tasklist"; snapshot: TasklistSnapshot }
-  /** A user input item carrying a client ID (a steered input); no content. */
-  | { kind: "input_item"; itemId: string; clientId: string }
+  | { kind: "input_item"; itemId: string; clientId: string; phase: "started" | "completed"; text?: string }
   | { kind: "result"; status: "completed" | "failed" | "interrupted"; payload: ResultPayload };
 
 export interface AppServerProjectedTurn {
@@ -185,8 +184,12 @@ async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | nu
         const isComplete = notification.method === "item/completed";
         if (completed.has(item.id) || (!isComplete && started.has(item.id))) break;
         (isComplete ? completed : started).add(item.id);
-        if (!isComplete && item.type === "userMessage" && typeof item.clientId === "string") {
-          yield { kind: "input_item", itemId: item.id, clientId: item.clientId };
+        if (item.type === "userMessage" && typeof item.clientId === "string") {
+          const content = item.content;
+          const text = isComplete && Array.isArray(content) && content.every(part => rpcObject(part) && part.type === "text" && typeof part.text === "string")
+            ? content.map(part => (part as RpcObject).text as string).join("") : undefined;
+          yield { kind: "input_item", itemId: item.id, clientId: item.clientId,
+            phase: isComplete ? "completed" : "started", ...(text === undefined ? {} : { text }) };
           break;
         }
         if (item.type === "contextCompaction") {

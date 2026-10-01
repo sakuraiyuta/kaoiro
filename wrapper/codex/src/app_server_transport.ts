@@ -2,7 +2,7 @@ import { redactCredentials, writeRedactedStderr, type WrapperConfig } from "@kao
 import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
   AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject, serverRequestKey,
-  type AppServerNotification, type AppServerRpcOptions, type AppServerServerRequest, type RpcObject, type RpcTicket,
+  type AppServerNotification, type AppServerRpcOptions, type AppServerServerRequest, type RpcObject, type RpcTicket, type RpcWriteState,
 } from "./app_server_rpc.js";
 import {
   ApprovalRouter, createApprovalOwner, fileChangeKey, isApprovalPolicy,
@@ -63,7 +63,7 @@ export type AppServerSteerAttempt =
   | { kind: "refused"; reason: "idle" | "closed" | "foreign_turn" }
   | { kind: "starting"; ready: Promise<void> }
   | { kind: "declined"; reason: string }
-  | { kind: "sent"; turnId: string; requestId: number; response: Promise<SteerResponse> };
+  | { kind: "sent"; turnId: string; requestId: number; response: Promise<SteerResponse>; writeState: () => RpcWriteState };
 
 export interface AppServerForeignTurn { threadId: string; turnId: string }
 
@@ -434,7 +434,7 @@ export class AppServerTransport {
       if (rpcObject(result) && result.turnId === turnId) return { kind: "A" };
       return { kind: "V", turnId: rpcObject(result) && typeof result.turnId === "string" ? result.turnId : "" };
     }, classifySteerError);
-    return { kind: "sent", turnId, requestId: ticket.id, response };
+    return { kind: "sent", turnId, requestId: ticket.id, response, writeState: ticket.writeState };
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {

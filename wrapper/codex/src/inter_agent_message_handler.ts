@@ -13,7 +13,7 @@ export interface InterAgentMessageHandlerContext {
   acknowledgeDelivery?: (envelope: Envelope) => void;
   reportQueued?: (envelope: Envelope) => void;
   settleStage?: (envelope: Envelope, reason: "terminal_skip" | "stale_skip") => void;
-  inject: (envelope: Envelope, mode: InboundReplyMode) => void;
+  inject: (envelope: Envelope, mode: InboundReplyMode) => void | Promise<void>;
   log: (line: string) => void;
 }
 
@@ -59,5 +59,5 @@ export async function handleInterAgentMessage(
   }
   context.log(`  inter_agent_message: ${envelope.agent_id}\n`);
   context.reportQueued?.(envelope);
-  context.inject(envelope, disposition.mode);
+  await context.inject(envelope, disposition.mode);
 }

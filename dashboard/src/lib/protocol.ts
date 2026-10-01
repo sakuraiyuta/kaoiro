@@ -2592,6 +2592,9 @@ export interface InterAgentDeliveryStatus {
   issued_seq: number;
   acked_seq: number;
   pending_since?: string;
+  lost_count?: number;
+  uncertain_count?: number;
+  last_uncertain?: { at: string; incarnation: string; generation: string; delivery_seq: number; reason: string };
 }
 
 /** Build identity reported by a currently connected wrapper. The server
@@ -3267,6 +3270,19 @@ export function parseDeliveryStatus(value: unknown): InterAgentDeliveryStatus | 
     issued_seq: issued,
     acked_seq: acked,
     ...(typeof raw.pending_since === "string" ? { pending_since: raw.pending_since } : {}),
+    ...(typeof raw.lost_count === "number" && Number.isSafeInteger(raw.lost_count) && raw.lost_count >= 0
+      ? { lost_count: raw.lost_count } : {}),
+    ...(typeof raw.uncertain_count === "number" && Number.isSafeInteger(raw.uncertain_count) && raw.uncertain_count >= 0
+      ? { uncertain_count: raw.uncertain_count } : {}),
+    ...(typeof raw.last_uncertain === "object" && raw.last_uncertain !== null && !Array.isArray(raw.last_uncertain) &&
+      typeof (raw.last_uncertain as Record<string, unknown>).at === "string" &&
+      typeof (raw.last_uncertain as Record<string, unknown>).incarnation === "string" &&
+      typeof (raw.last_uncertain as Record<string, unknown>).generation === "string" &&
+      typeof (raw.last_uncertain as Record<string, unknown>).reason === "string" &&
+      typeof (raw.last_uncertain as Record<string, unknown>).delivery_seq === "number" &&
+      Number.isSafeInteger((raw.last_uncertain as Record<string, unknown>).delivery_seq) &&
+      (raw.last_uncertain as { delivery_seq: number }).delivery_seq > 0
+      ? { last_uncertain: raw.last_uncertain as NonNullable<InterAgentDeliveryStatus["last_uncertain"]> } : {}),
   };
 }
 

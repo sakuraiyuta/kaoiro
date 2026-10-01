@@ -3548,6 +3548,14 @@
                     未 dispatch
                   </span>
                 {/if}
+                {#if deliveryStatus.lost_count !== undefined}
+                  <span>喪失 {deliveryStatus.lost_count}</span>
+                {/if}
+                {#if deliveryStatus.uncertain_count !== undefined}
+                  <span title={deliveryStatus.last_uncertain ? `seq ${deliveryStatus.last_uncertain.delivery_seq}: ${deliveryStatus.last_uncertain.reason}` : undefined}>
+                    未確定 {deliveryStatus.uncertain_count}
+                  </span>
+                {/if}
               </dd>
             </div>
           {/if}
