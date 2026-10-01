@@ -2,7 +2,7 @@
   "baseline": "3794baa7f71f4736138ef6e3a9bfbb37743764ee",
   "candidate": "d1b403ba05a66ac047047243a0c48a3ecbd8e7c1",
   "recommendation": "adopt later",
-  "authenticated_probes": "not authorized; not run",
+  "authenticated_probes": "completed: 10 gpt-6-luna/low model turns (5 per pin); no production auth accessed",
   "scratch": "/tmp/kogane-462-eval.BgbjI8",
   "artifact_sha256": {
     "wrapper/codex/package.json": "72f4243f81f2acefb67635476de17124e3f8d77ba18cb991468a554036fca4f5",
@@ -19,7 +19,12 @@
     "check-rpc.py": "2ae4686e5ca2b5d94e0623d95c13e80d0178a5a3aab511b58c62f928d475ec6d",
     "l6-probe.mjs": "25df38d722434f908295fc0100e458f401b4b4301b18e12a035903ce8e929b33",
     "select-binary.mjs": "78c305f31d7973c72169cbc57210f57b2d1d8f49670c3627e0852bc6020bcea2",
-    "check-l6.py": "cbbee29e43f69c7b6dda4570703916d0e475d300811a928bf59a17c7745f671b"
+    "check-l6.py": "cbbee29e43f69c7b6dda4570703916d0e475d300811a928bf59a17c7745f671b",
+    "live-host-probe.mjs": "b5a314fcbd28f014d35c88b26c9f0cff775bda49c2f29c25cd5fe47721b8f946",
+    "live-approval-probe.mjs": "7f5658a8d686e3c249e0a2e9e32f8e8da7324396506f3de1be838fbb3674eca8",
+    "check-live-host.py": "0439ac097879c91a380e14f62685fece8436a1ccfe26a6e342f3d9dfbdb41ca0",
+    "check-live-approval.py": "9827c7532f073271a28994b25d7ab6e25d646d10ec0b81621e1a745d0195b85c",
+    "run-live-host.py": "1e019efe42590c82eff0b1c254f2a7af84ae132183b73aa54fe12d252834fa5d"
   },
   "native_binary_sha256": {
     "0.156.1": "0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f",
@@ -286,6 +291,435 @@
     "logs/final-old-L3.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
     "logs/final-old-L3b.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
     "logs/final-old-rpc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "logs/final-wrapper-build.log": "98a05f2bc1ae42aa7aa3401419a471862c1cb44fba8680c30636ecde45780a35"
+    "logs/final-wrapper-build.log": "98a05f2bc1ae42aa7aa3401419a471862c1cb44fba8680c30636ecde45780a35",
+    "live-old-L1-final/trace.jsonl": "d2ac961701c21f261e64505704300ce7add3a1b146b780c2c6b72955d4458875",
+    "live-old-P2-final/stderr.log": "54544df7f331e87a3e84c41416ffdc8315a04957396d8d3bbf76b3aa5c9c6b36",
+    "live-old-P2-final/trace.jsonl": "68417af1b4759de300b86601524a884824d095871f58536d132bc4d7d06de843",
+    "live-new-L1-final/trace.jsonl": "ffc5ccbd52e160051671674307a85bbf0d801736c94618f1bc88608d2f6cf26b",
+    "live-new-L3b-final/trace.jsonl": "6e6bff7776662ba84a33d9311292db7f16a8c43907b5482f0d9e3055bb26b47a",
+    "live-old-L3-final/trace.jsonl": "5c0d858d98182451229c7cbf0f6f541c23b1d889375e1aec2a34bc19f96f5ced",
+    "live-old-L3b-final/trace.jsonl": "341d4ed58c583e47d73fdbdeb321e8ae72beff330400313c1d03552395866519",
+    "live-new-L3-final/trace.jsonl": "fcb43ec332a0711dd6fedb41996d20822c061fc87781ed48de0563f5f6226422",
+    "live-new-P2-final/stderr.log": "8ccf31dc970faf4d009ecf2a6cb46ed6813d4a4e280f401c7b9436c4cb8ba05e",
+    "live-new-P2-final/trace.jsonl": "595780b93b27652e29dc64f68eb61de99d97f1b824f327380e11de61f77329f3",
+    "live-old-L2-final/trace.jsonl": "8ad794334d26a5b015da8c7671bf36d7dc97387c733d851e406667d1df67388f",
+    "live-new-L2-final/trace.jsonl": "eb85bcf6c1d553eb83f62fad5b20ea828229f216a5b1b764458420848b500f60",
+    "live-negative-new-L1/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-new-L1/trace.jsonl": "fff690d70a92f58cd9f05f924e8d88f2ed63182b39c3e9ab1781c378f22d489f",
+    "live-negative-new-P2/check.log": "48e940ff95bc0ce9a16de874abc68a0fde3479dc228cf98ff5029f9f25e04296",
+    "live-negative-new-P2/trace.jsonl": "5294b85246ab3a76f2bd6c429c88d612b912da583671867a24c6cd9041fbc70a",
+    "live-negative-new-L3/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-new-L3/trace.jsonl": "7bea33c36fa16bdc03f8e0d0cf1e1d670610149fb7504420394b74eeb2bb2202",
+    "live-negative-old-L3b/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-old-L3b/trace.jsonl": "e22e6d6f3ad582acf8217aa774fab4e99751cfdfab3f53a59a4b7c4a513bb77b",
+    "live-negative-old-L1/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-old-L1/trace.jsonl": "7c8a1e703c396aa813dcfc3afdca382f669cf9df8e7964ea2412d73d13cd674a",
+    "live-negative-old-L3/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-old-L3/trace.jsonl": "6418f3d78e23bcd98bc37be59d5039fbb1534ec0994456a95d257cc16aafd01d",
+    "live-negative-new-L2/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-new-L2/trace.jsonl": "61bce87630a879cc958cf6030decd9905d657827300414cd217c8010f7bd90f2",
+    "live-negative-old-L2/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-old-L2/trace.jsonl": "49a35360dbdd7962c5881734150f4f43b9063f0a2b2e38146b24d5e57714271c",
+    "live-negative-new-L3b/check.log": "525cf21497ecd6cdd86be6e51d750f34270956a675c030a8a27d74329d5f1e4f",
+    "live-negative-new-L3b/trace.jsonl": "ea4a5d49642893400916540732176cddd0411c5241a481e789a0999827630ec5",
+    "live-negative-old-P2/check.log": "48e940ff95bc0ce9a16de874abc68a0fde3479dc228cf98ff5029f9f25e04296",
+    "live-negative-old-P2/trace.jsonl": "aeede1861bd0f9f5c29e7bb246b5d1e224d595670e1aedb2097c54d3de464aa9",
+    "logs/live-old-P2-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/live-new-P2-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/live-old-L2-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-old-L3-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-old-L1-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-new-L3b-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-new-L1-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-new-L2-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-old-L3b-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "logs/live-new-L3-final.log": "0fc60c1a605c5c83ac152bb5ec5694c41cb7ed4f2942af24ada5b5c976aceeff",
+    "live-approval-results.json": "92b08c70dd16f4ae759f6195dbfe020be40084a8b32f7645b7bf0ccd51fac78e",
+    "live-observations.json": "3a96282975f9ee202ef23658e55e8512ca1fb75a43afeb06d080d7003445e010",
+    "live-approval-checks.json": "13f7cd4d12a0b73d3e059c5939e9990d58d544cdcdeba537e28f0dafa34b78fd",
+    "live-host-results.json": "aa7339d9d42bc37e17ac2150e38fee59171a0726a80c158472309ef7fb37c53d",
+    "live-host-checks.json": "75be5bc78b525102bf571843231bebebab746391578984e2b87def0d256c899b",
+    "live-negative-results.json": "2ad16de214e7f37b6f7e9fc1123b2067ab596ede94f26196b13cd0ec1f617e08",
+    "live-budget.jsonl": "f2e6450c2dbe2f4ea46cf0cd172ca0f8e8ceb62ebd2385c4bf639cc8809a1c46",
+    "live-features-old.log": "773338d5985ac7cf3184a27468bedf0096e366793906a6aa65bc4ca1989b9416",
+    "live-features-new.log": "b11fdfa3000a4efdc8124041dadb446d584c0c34a42970b6eb26f78b5e622eda"
+  },
+  "live": {
+    "host_checks": [
+      {
+        "version": "old",
+        "case": "L1",
+        "exit": 0,
+        "output": "{\"scenario\": \"L1\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 1}\n",
+        "stderr": ""
+      },
+      {
+        "version": "old",
+        "case": "L2",
+        "exit": 0,
+        "output": "{\"scenario\": \"L2\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 1}\n",
+        "stderr": ""
+      },
+      {
+        "version": "old",
+        "case": "L3",
+        "exit": 0,
+        "output": "{\"scenario\": \"L3\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 0}\n",
+        "stderr": ""
+      },
+      {
+        "version": "old",
+        "case": "L3b",
+        "exit": 0,
+        "output": "{\"scenario\": \"L3b\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 0}\n",
+        "stderr": ""
+      },
+      {
+        "version": "new",
+        "case": "L1",
+        "exit": 0,
+        "output": "{\"scenario\": \"L1\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 1}\n",
+        "stderr": ""
+      },
+      {
+        "version": "new",
+        "case": "L2",
+        "exit": 0,
+        "output": "{\"scenario\": \"L2\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 1}\n",
+        "stderr": ""
+      },
+      {
+        "version": "new",
+        "case": "L3",
+        "exit": 0,
+        "output": "{\"scenario\": \"L3\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 0}\n",
+        "stderr": ""
+      },
+      {
+        "version": "new",
+        "case": "L3b",
+        "exit": 0,
+        "output": "{\"scenario\": \"L3b\", \"verdict\": \"pass\", \"started\": 1, \"terminal\": 1, \"observed_inputs\": 0}\n",
+        "stderr": ""
+      }
+    ],
+    "approval_checks": [
+      {
+        "version": "old",
+        "case": "P2",
+        "exit": 0,
+        "output": "{\"scenario\": \"P2\", \"verdict\": \"pass\", \"requests\": 1, \"item\": \"declined\", \"terminal\": \"completed\", \"file_exists\": false}\n",
+        "stderr": ""
+      },
+      {
+        "version": "new",
+        "case": "P2",
+        "exit": 0,
+        "output": "{\"scenario\": \"P2\", \"verdict\": \"pass\", \"requests\": 1, \"item\": \"declined\", \"terminal\": \"completed\", \"file_exists\": false}\n",
+        "stderr": ""
+      }
+    ],
+    "negative_controls": [
+      {
+        "version": "old",
+        "scenario": "L1",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "old",
+        "scenario": "L2",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "old",
+        "scenario": "L3",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "old",
+        "scenario": "L3b",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "old",
+        "scenario": "P2",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "new",
+        "scenario": "L1",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "new",
+        "scenario": "L2",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "new",
+        "scenario": "L3",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "new",
+        "scenario": "L3b",
+        "exit": 1,
+        "next_mutation_count": 0
+      },
+      {
+        "version": "new",
+        "scenario": "P2",
+        "exit": 1,
+        "next_mutation_count": 0
+      }
+    ],
+    "observations": [
+      {
+        "version": "old",
+        "case": "L1",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 18174,
+        "command_completed_ms": [
+          16745
+        ],
+        "steer_sent_ms": [
+          4834
+        ],
+        "input_completed_ms": [
+          16759
+        ],
+        "stderr_lines": 0
+      },
+      {
+        "version": "old",
+        "case": "L2",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 25207,
+        "command_completed_ms": [],
+        "steer_sent_ms": [
+          4687
+        ],
+        "input_completed_ms": [
+          24016
+        ],
+        "assistant_items": [
+          {
+            "length": 1891,
+            "tail": "93\n494\n495\n496\n497\n498\n499\n500"
+          },
+          {
+            "length": 11,
+            "tail": "STEERED_462"
+          }
+        ],
+        "stderr_lines": 0
+      },
+      {
+        "version": "old",
+        "case": "L3",
+        "starts": 1,
+        "terminal": "interrupted",
+        "terminal_ms": 5721,
+        "command_completed_ms": [
+          15595
+        ],
+        "steer_sent_ms": [
+          3701
+        ],
+        "input_completed_ms": [],
+        "after_terminal_ms": 27028,
+        "stderr_lines": 0
+      },
+      {
+        "version": "old",
+        "case": "L3b",
+        "starts": 1,
+        "terminal": "interrupted",
+        "terminal_ms": 3143,
+        "command_completed_ms": [],
+        "steer_sent_ms": [
+          3078
+        ],
+        "input_completed_ms": [],
+        "after_terminal_ms": 26681,
+        "stderr_lines": 0
+      },
+      {
+        "version": "old",
+        "case": "P2",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 8639,
+        "command_completed_ms": [
+          6998
+        ],
+        "steer_sent_ms": [],
+        "input_completed_ms": [],
+        "stderr_lines": 1
+      },
+      {
+        "version": "new",
+        "case": "L1",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 19604,
+        "command_completed_ms": [
+          18340
+        ],
+        "steer_sent_ms": [
+          6468
+        ],
+        "input_completed_ms": [
+          18355
+        ],
+        "stderr_lines": 0
+      },
+      {
+        "version": "new",
+        "case": "L2",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 24043,
+        "command_completed_ms": [],
+        "steer_sent_ms": [
+          3565
+        ],
+        "input_completed_ms": [
+          22500
+        ],
+        "assistant_items": [
+          {
+            "length": 1891,
+            "tail": "93\n494\n495\n496\n497\n498\n499\n500"
+          },
+          {
+            "length": 11,
+            "tail": "STEERED_462"
+          }
+        ],
+        "stderr_lines": 0
+      },
+      {
+        "version": "new",
+        "case": "L3",
+        "starts": 1,
+        "terminal": "interrupted",
+        "terminal_ms": 6010,
+        "command_completed_ms": [
+          15860
+        ],
+        "steer_sent_ms": [
+          3980
+        ],
+        "input_completed_ms": [],
+        "after_terminal_ms": 26714,
+        "stderr_lines": 0
+      },
+      {
+        "version": "new",
+        "case": "L3b",
+        "starts": 1,
+        "terminal": "interrupted",
+        "terminal_ms": 2932,
+        "command_completed_ms": [],
+        "steer_sent_ms": [
+          2865
+        ],
+        "input_completed_ms": [],
+        "after_terminal_ms": 26704,
+        "stderr_lines": 0
+      },
+      {
+        "version": "new",
+        "case": "P2",
+        "starts": 1,
+        "terminal": "completed",
+        "terminal_ms": 6581,
+        "command_completed_ms": [
+          5248
+        ],
+        "steer_sent_ms": [],
+        "input_completed_ms": [],
+        "stderr_lines": 1
+      }
+    ],
+    "budget": [
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L1-final",
+        "scenario": "L1",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "reserved": 1
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L2-final",
+        "scenario": "L2",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "reserved": 2
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L3-final",
+        "scenario": "L3",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "reserved": 3
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L3b-final",
+        "scenario": "L3b",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "reserved": 4
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L1-final",
+        "scenario": "L1",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "reserved": 5
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L2-final",
+        "scenario": "L2",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "reserved": 6
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L3-final",
+        "scenario": "L3",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "reserved": 7
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L3b-final",
+        "scenario": "L3b",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "reserved": 8
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-old-P2-final",
+        "scenario": "P2",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "reserved": 9
+      },
+      {
+        "root": "/tmp/kogane-462-eval.BgbjI8/live-new-P2-final",
+        "scenario": "P2",
+        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "reserved": 10
+      }
+    ],
+    "homes_retained_pending_director": [
+      "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+      "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159"
+    ],
+    "approval_capture": "docs/evidence/codex-app-server/pin-0.159.2-approval-decline-2026-10-01.jsonl",
+    "approval_capture_sha256": "0af16a58aba3cc55f68872b3ecea8032b6de3d62c4e401e3adf472450e83f425"
   }
 }

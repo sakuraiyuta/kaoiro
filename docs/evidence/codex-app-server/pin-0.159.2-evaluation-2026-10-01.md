@@ -12,12 +12,12 @@ separate decision.
 
 ## Recommendation: adopt later
 
-Keep production on **0.156.1**. The unauthenticated measurements below found
-no incompatibility in the exercised Stage 1 and operator-steering contracts.
-However, the candidate does not pass the complete Codex suite, the Stage 3
-approval fixture is explicitly bound to the old pin, and authenticated model
-probes remain unauthorized. This is not a release approval or a claim that
-all adoption gates are complete.
+Keep production on **0.156.1** until the remaining adoption gates below are
+closed. Paired unauthenticated and authenticated measurements found no
+incompatibility in the exercised Stage 1, operator-steering and command-denial
+contracts. The candidate still fails two explicitly version-bound Codex tests;
+the current production fixtures have deliberately not been replaced by this
+evaluation. This is not a release approval or a green-suite claim.
 
 The isolated candidate requires the existing SDK stream patch. Upstream
 0.159.2 without that patch fails the existing reproduction; the unchanged
@@ -25,20 +25,17 @@ patch restores it. The patch must not disappear during a future bump.
 
 Outstanding adoption gates:
 
-1. Decide an isolated authentication method, then compare both binaries using
-   the same live probe tools and approved model budget. No production auth
-   file has been read or copied by this evaluation. The director has held
-   authentication access pending the operator's decision. The concern that
-   refresh-token reuse might affect production was raised by the director;
-   it has not been independently verified here.
-2. Re-measure the Stage 3 command-approval decline contract on 0.159.2 and
-   replace the version-bound fixture with actual new evidence. Do not change
-   its expected version alone to make it green.
-3. Update the catalog's bundled-version assertion as part of an approved pin
-   change, and obtain a green complete suite and final peer review.
-4. Before adoption, establish the required live network/filesystem enforcement
-   evidence. Policy-field assertions and the read-only `sleep` commands below
+1. Incorporate the newly measured Stage 3 command-approval decline evidence
+   into the version-bound test fixture as part of the approved pin change.
+   The new capture is linked below; changing the expected version alone is
+   insufficient.
+2. Update the catalog's bundled-version assertion, obtain a green complete
+   suite, and complete peer review of the resulting candidate.
+3. Before production adoption, establish the required network/filesystem
+   enforcement evidence. The measured denial and read-only `sleep` commands
    do not establish every shared-worktree Git or network restriction.
+4. Obtain the operator's adoption decision. This branch's dependency commit
+   must not be merged into `develop` merely to publish this evaluation.
 
 ## Candidate and isolation
 
@@ -56,11 +53,12 @@ Outstanding adoption gates:
   it does not independently reconstruct that state's earlier history.
 
 All Codex processes use a task-owned isolated `HOME`, and probes additionally
-set an isolated `CODEX_HOME`. The final full suites leave `CODEX_HOME` unset
+set an isolated `CODEX_HOME`. Authenticated homes are described separately
+below; they were created and logged into by the operator. The final full suites leave `CODEX_HOME` unset
 while retaining an isolated `HOME`, so tests exercising the default
-`HOME/.codex` path can do so. API-key variables are absent. Loopback Responses
+`HOME/.codex` path can do so. API-key variables are absent. In the unauthenticated runs, loopback Responses
 providers supply scripted responses, with analytics and plugins disabled.
-No live model service or account credential is used. CLI startup may still
+Those runs use no live model service or account credential. CLI startup may still
 attempt external update traffic; these runs are not proof of zero outward
 traffic. Local dev-server state, tokens, cache and DETS files are isolated.
 
@@ -207,12 +205,89 @@ client waited for `waiting_input` although the no-prompt CLI was `idle`.
 The final runs use complete native distributions and accept the actual
 initial idle state. Their earlier failing logs are retained separately.
 
+## Authenticated comparison and Stage 3 denial
+
+The operator separately logged into two scratch homes using device auth; the
+director then authorized ten live model turns in total. Every invocation
+explicitly paired the binary hash above with its allowed `CODEX_HOME`:
+
+- 0.156.1 only: `/home/yuta/.local/share/kaoiro-scratch/codex-462-v156`.
+- 0.159.2 only: `/home/yuta/.local/share/kaoiro-scratch/codex-462-v159`.
+
+Both directories were checked as mode 0700. The evaluator did not read, copy,
+print or compare either `auth.json`, and did not open a production Codex home.
+Each process used a separate scratch `HOME`; API-key variables were removed.
+`thread/start` or `thread/resume` explicitly selected `gpt-6-luna`, and every
+`turn/start` specified `effort: low`. The raw wire and a reservation ledger
+both contain **10 model turns**: five on each pin. No additional turn is
+approved or attempted. No authentication or refresh failure was observed.
+
+The offline tools were preserved unchanged. `live-host-probe.mjs` is a
+separate adaptation using the same built production Host/session/transport
+composition and forwarding binary-selection tap. It asserts the binary/home
+mapping, captures the wire, and reserves budget before writing `turn/start`.
+`live-approval-probe.mjs` uses built `AppServerRpc` with production launch
+arguments and `experimentalApi: false`, then requests `on-request` for the
+probe thread/turn. Its sandbox is `workspaceWrite` with only the probe's
+`work` directory writable, no network, `excludeSlashTmp` and
+`excludeTmpdirEnvVar`. The sibling `outside` target belongs to this probe.
+No production permission setting is changed.
+
+Reproduce using `node live-host-probe.mjs <worktree> <binary> <new-output-dir>
+L1|L2|L3|L3b <allowed-home> [resume-thread-id]` and
+`node live-approval-probe.mjs <worktree> <binary> <new-output-dir> <allowed-home>`.
+Use the same script on both pins. L2 resumes the thread from that pin's L1
+in a fresh process. Check with `python3 check-live-host.py <trace.jsonl>` or
+`python3 check-live-approval.py <trace.jsonl>`. Fresh authentication and a new
+explicit model budget would be required for any repeat.
+
+| Case, one live turn per pin | Observed on both pins |
+| --- | --- |
+| L1, tool running | Ask for exactly `sleep 12`; steer after the command starts. The command finishes normally, then the complete user input item matches the submitted text and client ID. The same turn answers `STEERED_462`. |
+| L2, resumed generation | Ask for integers 1–500, steer at the first output delta. The first answer finishes through 500, then the same turn emits `STEERED_462`. Two assistant items survive, and one final Host result uses the latter. |
+| L3, tool then interrupt | Interrupt two seconds after acceptance. The turn is interrupted, the accepted input remains unobserved, and Host records `unknown(not_observed)`. The sleep completion arrives about 9.9 seconds after terminal. No additional turn starts during the 25-second passive observation. |
+| L3b, generation then interrupt | Interrupt 50 ms after acceptance. One interrupted terminal, no matching input, Host `unknown(not_observed)`, no replay or additional turn during 25 seconds. |
+| P2, command approval denial | One escalation request for `touch <outside>/denied.txt`; `availableDecisions` offers accept, an exec-policy amendment, and cancel, but no decline. Replying `decline` resolves the request, leaves the item `declined`, and the turn completes. The file is absent. |
+
+All ten final drivers and their output checks exited 0. The ten negative
+captures also exercise the same checkers: remove steer writes (L1/L2), add a
+foreign turn start (L3/L3b), or change the denied command's item status to
+`completed` (P2). Each negative invocation exits 1 and prevents the next-step
+marker from being created (mutation count 0). These are capture mutations;
+they do not claim that a live foreign turn was induced in the service.
+
+The new P2 request/reply/resolution/item/terminal excerpt is preserved in
+[the 0.159.2 denial capture](pin-0.159.2-approval-decline-2026-10-01.jsonl).
+It is an actual wire capture, not a hand-built replacement fixture. Both
+pin captures and all tool/output hashes are bound in the manifest. The current
+built `parseApprovalRequest` accepts the new capture; removing its `turnId`
+returns null in the paired parser check (exit 0).
+
+The Host emits its existing unknown-catalog warning because these probe
+configs omit account catalog hints; this did not omit the explicit model
+or effort on the wire. Both P2 stderr logs contain the expected
+`Rejected("rejected by user")` diagnostic. No other native stderr lines
+were captured in these ten final runs.
+
+A preliminary old-pin L1 attempt stopped before `turn/start` because the
+probe's budget guard incorrectly required the model on that request instead
+of allowing its explicit thread-level inheritance. It sent no model turn.
+The guard was corrected before all ten final measurements; its failed log
+is retained separately. This was a probe defect, not an upstream regression.
+
+These live runs do not repeat live compact/review schedules or the full
+Phoenix operator route. L0/L4/L5 history checks and L6 default omitted-intent
+routing remain the paired real-binary/local-provider evidence above. P2 is
+a narrow remeasurement, not a rerun of all Stage 3 approval combinations.
+
 ## Interruption defaults
 
 The tagged [feature definitions](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/features/src/lib.rs)
 and 0.159.2's actual `features list` both report `instant_interrupt` and
 `defer_mailbox_preemption` disabled by default. Neither feature is enabled by
-these probes. `KAOIRO_CODEX_OPERATOR_STEER` enables kaoiro's operator lane,
+these probes. `features list` was also run with the candidate
+authenticated home and confirmed both false (exit 0); the old binary lists
+neither flag. `KAOIRO_CODEX_OPERATOR_STEER` enables kaoiro's operator lane,
 not either upstream feature.
 
 The [conditional interruption change](https://github.com/openai/codex/pull/47340)
@@ -220,8 +295,8 @@ introduces a separate `InterruptIfNoPendingInput` operation. The tagged
 [app-server turn processor](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/app-server/src/request_processors/turn_processor.rs)
 still sends `Op::Interrupt` from `turn_interrupt_inner`. That source
 inspection and the paired L3/L3b observations support compatibility for the
-measured default path. They do not establish live WebSocket continuation
-behavior; that remains part of authenticated testing.
+measured default path, including the authenticated L1–L3b samples. They do
+not establish every possible service-side continuation or timing schedule.
 
 ## SDK patch and complete suites
 
@@ -270,12 +345,15 @@ Vitest unhandled-error summary. The Codex suite is explicitly **not green**.
 Executable/driver/checker identities, final artifact hashes, command exits
 and output hashes are recorded in the
 [companion evaluation manifest](pin-0.159.2-evaluation-2026-10-01.json). Scratch
-is retained for the director's review and pending authentication decision;
-kogane owns its eventual cleanup. The old and candidate probe homes contain
-no copied credentials. Probe/server child processes are stopped by their
-owning scripts, using the handles returned when they were spawned.
+is retained at `/tmp/kogane-462-eval.BgbjI8` for the director's review;
+kogane owns its eventual cleanup. The two authenticated homes listed above
+are also retained pending the director's deletion decision, as instructed.
+They are not needed for another probe within this exhausted budget; retain
+them only if a separately authorized follow-up needs them. The third scratch
+home reserved for issue 461 was not used. Probe/server child processes are
+stopped through the handles returned to their owning scripts.
 
-The evaluation does not cover authenticated model behavior, all network or
-Git enforcement permutations, Windows/Darwin execution, production database
-migration/downgrade, or deployment. Historical 0.156.1 evidence and reference
-statements are intentionally unchanged pending an adoption decision.
+The evaluation does not cover all network or Git enforcement permutations,
+Windows/Darwin execution, production database migration/downgrade, or
+deployment. Historical 0.156.1 evidence and production reference statements
+are unchanged pending an adoption decision.
