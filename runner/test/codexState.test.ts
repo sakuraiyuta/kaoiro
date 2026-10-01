@@ -42,6 +42,17 @@ describe("Codex state snapshots", () => {
     expect(readFileSync(join(quarantine, "sessions", "old.jsonl"), "utf8")).toBe("NEW_HISTORY\n");
     expect(phases.at(-1)).toBe("state-restored");
   });
+  it("preserves native policy migration state and excludes stopped runtime locks", async () => {
+    writeFileSync(join(home, ".sandbox_migration"), "v1\n");
+    for (const name of [".tmp", "thread-writer-locks"]) {
+      mkdirSync(join(home, name)); writeFileSync(join(home, name, "lock"), "temporary");
+    }
+    const result = await take(home, dir);
+    expect(readFileSync(join(dir, "backup/state/.sandbox_migration"), "utf8")).toBe("v1\n");
+    expect(existsSync(join(dir, "backup/state/.tmp"))).toBe(false);
+    expect(existsSync(join(dir, "backup/state/thread-writer-locks"))).toBe(false);
+    expect(() => snap.verifySnapshot(join(dir, "backup"), result.sha256)).not.toThrow();
+  });
   it.each(["auth.json.tmp", "unclassified", "plugins"])("rejects unclassified entry %s before copying", async (name) => {
     writeFileSync(join(home, name), "secret");
     await expect(take(home, dir)).rejects.toThrow(/Unclassified/);

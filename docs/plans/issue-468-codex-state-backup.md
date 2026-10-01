@@ -57,7 +57,8 @@ A small Node helper in `runner/deploy/kaoiro-runner-codex-state.mjs` performs
 snapshot, verification and restore preparation; it is shipped by the release
 builder alongside deploy scripts. Use the deploy tool's selected Node runtime
 and the existing release-tree verification. The updater owns stop/switch/start
-and update locking; the helper never invokes systemctl or chooses a release.
+and update locking; the helper queries service-manager state for binding and
+stop verification, but never starts/stops a unit or chooses a release.
 
 Add a mutually exclusive rollback mode to the updater:
 `--restore-codex-backup <directory>` together with `--codex-home <home>`.
@@ -163,7 +164,14 @@ configuration, plugins, rollouts and logs may contain sensitive values, so
 all snapshots remain private. Before stop, construct an entry classification
 from a checked-in list derived from these two tags and native synthetic-home
 observations: current-only credentials, backed-up state/configuration, and
-explicitly excluded disposable content. Known session/DB subtrees include
+explicitly excluded disposable content. Preserve `.sandbox_migration`, the
+one-shot policy-migration marker (`execpolicy/src/sandbox_migration.rs` in
+both pinned tags). Exclude `.tmp` maintenance/cache files and
+`thread-writer-locks` after all writers stop (`rollout/src/maintenance.rs` and
+`rollout/src/writer_lock.rs`); copying a lock file cannot restore its OS lock.
+These entries are also present in a credential-free native-generated old
+home; the native gate must inventory both pins, not only handwritten fixtures.
+Known session/DB subtrees include
 all their regular descendants/sidecars. Unknown top-level entries, unknown
 credential-like sidecars and unclassified extension paths cause refusal;
 there is no copy-all default or blanket allow-unknown flag. A new path requires

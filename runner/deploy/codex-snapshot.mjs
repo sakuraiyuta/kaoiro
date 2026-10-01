@@ -12,8 +12,8 @@ export const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oa
 // have no copy-all exemption: their classification needs separate review.
 const DBS = ["state_5", "logs_2", "goals_1", "memories_1", "memories_v2_1", "queue_1", "thread_history_1"];
 const STATE_DIRS = new Set(["sessions", "archived_sessions", "db-backups", "memories", "memories_v2", "memories_extensions", "rules", "skills"]);
-const STATE_FILES = new Set(["config.toml", "managed_config.toml", "AGENTS.md", "AGENTS.override.md", "history.jsonl", "session_index.jsonl", "installation_id", "hooks.json"]);
-const DISPOSABLE = new Set(["tmp", "log", "shell_snapshots", "models_cache.json", "version.json"]);
+const STATE_FILES = new Set(["config.toml", "managed_config.toml", "AGENTS.md", "AGENTS.override.md", "history.jsonl", "session_index.jsonl", "installation_id", "hooks.json", ".sandbox_migration"]);
+const DISPOSABLE = new Set(["tmp", ".tmp", "thread-writer-locks", "log", "shell_snapshots", "models_cache.json", "version.json"]);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const inside = (root, path) => { const rel = relative(root, path); return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)); };
 export function must(condition, message) { if (!condition) throw new Error(message); }

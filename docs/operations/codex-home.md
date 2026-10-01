@@ -219,7 +219,14 @@ marker (step 5).
    the peer runs without its profile. Then start the others.
 6. Verify the separation (below).
 
-## Rollback
+## Rollback of home isolation
+
+This procedure reverses home isolation, not a Codex pin migration. After a
+pin update, use the [state-aware runner rollback](runner-update-and-rollback.md)
+to restore verified state at its original canonical path while preserving
+current credentials. A managed migration barrier also binds the installed
+unit to that path; changing homes requires the separately approved relocation
+procedure, not removal of the barrier.
 
 Remove `CODEX_HOME` from `runner.env` and restart the runner. The wrappers use
 `~/.codex` again and the old threads resume there. Threads created in the
