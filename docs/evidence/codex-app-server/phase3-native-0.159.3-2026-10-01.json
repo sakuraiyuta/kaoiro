@@ -1,0 +1,1690 @@
+{
+  "date": "2026-10-01",
+  "writer": "Fuji",
+  "pin": "0.159.3",
+  "model": "gpt-6-luna",
+  "effort": "low",
+  "state_home": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593",
+  "operator_home": "per-run disposable HOME under tmp/reviews",
+  "production_home_used": false,
+  "project_server": "localhost Phoenix protocol fixture; real delivery-ledger unit tests are separate",
+  "live_ledger": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-ledger.json",
+    "sha256": "77665607c9910c6e9fd524c6e608d9537965cc591a4ec8685b9b299f5577965a",
+    "bytes": 1436
+  },
+  "live_total": 5,
+  "live_maximum": 7,
+  "live_retry_count": 0,
+  "status": "codex_native_gate_passed",
+  "source_head": "d575184b04fa9dfebf3d227ef45aa8cc21e9f22e",
+  "branch": "adr-0063-phase3-codex-impl-pin",
+  "live_turns": 2,
+  "binary": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/node_modules/.pnpm/@openai+codex@0.159.3/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "bytes": 287086056
+  },
+  "build_artifacts": [
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/args.js",
+      "sha256": "a1300c4678fde79ceb3d6379d0a5eb5554e41106b923be0df049cbe069d62e45",
+      "bytes": 755
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/build_info.js",
+      "sha256": "99cb0a4baf04c9a2007e4f8aab2b8be67858739103482c06dcc1a02870d79b33",
+      "bytes": 3027
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/delivery_recovery.js",
+      "sha256": "ee201df7d00c81728af27cc044e5b140636de0010808c0e85a3a591a49793ef3",
+      "bytes": 6673
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/index.js",
+      "sha256": "12b7eed7c28895a112d2b79c6b514400498c4c1496b74c82b42c78de0c5e8d71",
+      "bytes": 725
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/persona.js",
+      "sha256": "35f94c4a7615272199c2fe91a2f675673be084510bb83cee22054b8a2423fd63",
+      "bytes": 23510
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/redact.js",
+      "sha256": "8f497371c7b25e449c00a0991526c7787b79e1e6501b99ff7ce360a887fd8c3c",
+      "bytes": 9028
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/core/dist/transport.js",
+      "sha256": "de7a642d11069061d1a5d9da9f176570b1156ecfb446a58b76c3f7f121cb7d1b",
+      "bytes": 99649
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/approval_gate.js",
+      "sha256": "5b28698a6bd18ddc104a9bb1872fea1a9212abaed321982517dfea63782e2bbd",
+      "bytes": 2892
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/ask_user_question.js",
+      "sha256": "e542d6cb568991c069df6afe75ac5bb54c4c8b6afed6375ba15c741ef7437a2c",
+      "bytes": 3634
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/catalog.js",
+      "sha256": "fc6dacd19052960239e683aa225d4a4f2d3c9a85a21dda25518d4fd1b8e274ef",
+      "bytes": 1672
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/delivery_ack.js",
+      "sha256": "774aa6235563572246439ada983284ef1f400b5e5862b67f63924380f64c0ab7",
+      "bytes": 9545
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/delivery_stages.js",
+      "sha256": "dd6cf6bb3658ac7b4f638a0e948af0133b1fe307e677a024e17c1b6ec41c4ff7",
+      "bytes": 11328
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/engine.js",
+      "sha256": "09620bd1232209b039ab93f7a5dd6e259c4264f35115a8d6d28b130f942cf7b8",
+      "bytes": 1806
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/history_replay.js",
+      "sha256": "d42b9c64b4c808f8fa492b43e873e4450bc83e45b38beeb0b9dc135b051cd6f8",
+      "bytes": 4907
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/ia_sidecar.js",
+      "sha256": "daa51a07ce6096ed5b98580b1b82c469cc717a907b3573b5cc59c7564461ed7c",
+      "bytes": 20421
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/index.js",
+      "sha256": "a63251982565bce34f05a4d3ba62eee5609e10b65999b3bbf80effcc1dc0db74",
+      "bytes": 2716
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/inter_agent.js",
+      "sha256": "61e13ea163139a717a2455724bf940adddabb987abf6681d508a470dca9b8725",
+      "bytes": 153317
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/logpayload.js",
+      "sha256": "0d1dac2d12ee38f02ec5fdfb9a08142b091fb47b5b655a01d22c899c8fe20583",
+      "bytes": 3040
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/pending.js",
+      "sha256": "d534cda1f59c132829a4ac72e6cc5d7b8cc604a74547b242b318648131a4c194",
+      "bytes": 2425
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/permission.js",
+      "sha256": "c0361c5047f7cfe813f897f71a97bf484de440be8fd2a6c3ede0fd8320afc328",
+      "bytes": 7313
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/persona_opt_in.js",
+      "sha256": "bf48a976403166f92e53ea336b4f7699a885e12d08b1fa4c32202f9c53c8e2a3",
+      "bytes": 866
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/question.js",
+      "sha256": "74497fb197689d42ab5fe072c06261462f30a1ed544b288d5516110c9ebe02eb",
+      "bytes": 3948
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/redact.js",
+      "sha256": "d4088296d085a07f2af635cb2418cc652d6b589546a6a56d916e4d1de6e9d093",
+      "bytes": 132
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/reply_basis.js",
+      "sha256": "d4aa965f95c07ba55a52e03516f62046ffd67530617bfc5a26bd91426a913fc8",
+      "bytes": 11479
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/request_session_reset.js",
+      "sha256": "768a4065a0a75078649e1f6cfd9707ab54643a3b8c1649b854aa91f50892f4ec",
+      "bytes": 19952
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/snapshot.js",
+      "sha256": "99840bdb0543b684ae4c6d8abd68e30c55577e65ea4a92e72e1d9df9fdcf6382",
+      "bytes": 4100
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/state.js",
+      "sha256": "8694a51bea59a8dee47acf09077fce2f9aa4467c53fe146976cb1362ac63021c",
+      "bytes": 14022
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/tasklist.js",
+      "sha256": "67bbe684d4f34d9979146957d2836ab41f63e41736a40a93e93518ad41a53609",
+      "bytes": 2541
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/tool_origins.js",
+      "sha256": "1803709154121cfe10c0b71c371443c5fd0f941e02f2b1f941d3c90fdaf30bac",
+      "bytes": 5398
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/tooling.js",
+      "sha256": "9ef74711266a21b134866f1cb7158f369acd17c5c0ec4a55fea56943fa2a07a4",
+      "bytes": 589
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/types.js",
+      "sha256": "47b7180d696b8f2b63a5ce3158bff0afd07974dce8d1cd2454ea095cd8128d71",
+      "bytes": 489
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/agent-common/dist/work_tools.js",
+      "sha256": "2421bbd2096bdb13a67ba88eab84badea334828076269769d2066ba59152a127",
+      "bytes": 4543
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/adapter.js",
+      "sha256": "c05c34f8da93da617836ae0dede6f528c332a493475106020aef9f185ae1ce27",
+      "bytes": 20100
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_approval.js",
+      "sha256": "91a80b228018acc510647982e7d503430c73ee11228724af0cca1a20b8270589",
+      "bytes": 10019
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_history.js",
+      "sha256": "f6ed14e11ed7b96c03f601f7d2c63cd7d036b5f404c563ae2a8b66d3a170af1c",
+      "bytes": 10117
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_host_runtime.js",
+      "sha256": "f9cb0344dbf7d2a22e359f3ab3921ac41a605afcc9d8e85862b6e0f018c09814",
+      "bytes": 12087
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_input.js",
+      "sha256": "9e216198aee21170d9374f4ffb4b2486049f03adc85533f2ae196c7cf6969ece",
+      "bytes": 902
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_permission.js",
+      "sha256": "9a4c5bc9ad17420939a32b6b3946855d3cd51495d50c9d1cdfb27b7ae26eea7e",
+      "bytes": 3738
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_projection.js",
+      "sha256": "8c535346b682262a96bb94695416d5ef25e5e2e021ed8946d30bc363b5457108",
+      "bytes": 12826
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_replay.js",
+      "sha256": "22c3e9ae9e4a61a171d0f5d28dda10959e909f41bd590d74277c30daea87b2b2",
+      "bytes": 4052
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_rpc.js",
+      "sha256": "a27af02f1decacffd411ef07b1fa1d62054ecffc7a1e737b8895c6e85d1ddddf",
+      "bytes": 11273
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_session.js",
+      "sha256": "a92b1ab5eeb3eea750a527fed75eb346cf20be9b3a5191bda0537da1aa4b8476",
+      "bytes": 7934
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_settings.js",
+      "sha256": "d3584fbf4c03d7a7a3b8cbde0576f7d3ccde91635b6b729870aee1b0bd1f4769",
+      "bytes": 5757
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_steer.js",
+      "sha256": "0401a974407651085548c378b82915feaf8077f19d0728a2d2fc58cb1742a419",
+      "bytes": 2613
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_stream.js",
+      "sha256": "da151f72a987f27991fa5f71b68fe382581d28471a1cf9fc056815d9d63cf03a",
+      "bytes": 1550
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_telemetry.js",
+      "sha256": "fe31dd99a1695f81d2890af618e62a4a3a8b86adbfb2cb5a6b450691e9d34c04",
+      "bytes": 3680
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/app_server_transport.js",
+      "sha256": "5da9c3f43c5146535e5c9337c02e7c5dc6c1ede3dbf7da117f03cc37acc02b1b",
+      "bytes": 27718
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/bridge.js",
+      "sha256": "2fcf440e2c0413b089e3ff519e8fb6a21342e97da4629a7f6f9eacf98b16633b",
+      "bytes": 5037
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/bridge_policy.js",
+      "sha256": "7429396454cbdf14a0399d621ab46c7753f78b8d1b98cb6a454a2e6be45dba52",
+      "bytes": 716
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/catalog.js",
+      "sha256": "7e323d09492f36104f4a3e858b5ca1581677ee0a9ea4a41f4f02459151300bb4",
+      "bytes": 13267
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/cli.js",
+      "sha256": "69bfc4d8f794f7dc48ea492cda68eae9a0c6f7d0787d1b355bdffa69498abed9",
+      "bytes": 59781
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/codex_home.js",
+      "sha256": "8b959564b0407c69218b6fcd0520d067707e7cb8abe290eeb9beaa4ccb9939d6",
+      "bytes": 1167
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/history.js",
+      "sha256": "652a3903fea375197efd1795d40c0bb7429fc82baa043122d5f6f0b17c58d61f",
+      "bytes": 7477
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/host.js",
+      "sha256": "a35bcbec87e81a121010046d490098db76074de4ae5c86bdcf9f50a2a69fff19",
+      "bytes": 136202
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/index.js",
+      "sha256": "e28f92cc92126d98ef949f64887980e8fe3221103f5fab6ea722c62b369e6bb0",
+      "bytes": 750
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/inter_agent_message_handler.js",
+      "sha256": "44ba404625a80a828feee5820aa478d86f558af0565bfa2b686033e009ad822a",
+      "bytes": 2036
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/inter_agent_turn_coordinator.js",
+      "sha256": "c62b458b4700b006c40a8f482ce41fef0cd94324cf21363f9d4c126d6cb1fff4",
+      "bytes": 23001
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/network_access.js",
+      "sha256": "e58d3affd6a14c04e6824a29b69d62f22c235fd090e36f3070b567d5916dd5dd",
+      "bytes": 336
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/permission_state.js",
+      "sha256": "7216f4b16e612bd3cc6e671c27682ed484587a14d12549374905f698a2f6987d",
+      "bytes": 11479
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/rollout.js",
+      "sha256": "9d92aeae3e02fb2a4772da59be66d0238a8645927682536a655c0e5d099cdbc0",
+      "bytes": 21697
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/source_resolution.js",
+      "sha256": "0d1d105ce653caa7c5f9d37dc056d21dbd74ca276d2e0beaa46f4050cc7b876b",
+      "bytes": 2906
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/startup.js",
+      "sha256": "1eee642c0bcaca7817c16a26e5e3b2eb17539f4c9ae99b6e879523035a438333",
+      "bytes": 1081
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/startup_rate_limits.js",
+      "sha256": "d98f74e5c31c41d6e8ccf149acb860d0f75b307d5f85cf71774bc19fe874dcf7",
+      "bytes": 894
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/toolhost.js",
+      "sha256": "717d35b0997c7c4105066d645cfeccf3364afb2480f2c042e6c98b7e1186c5c4",
+      "bytes": 6788
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/turn_diagnostics.js",
+      "sha256": "20f1a8cdc22a54c534bcefcaeb1049260a2c3537a9cb355f2648ee02942df570",
+      "bytes": 10436
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/turn_watchdog.js",
+      "sha256": "361975226e5f70abe47a80da10f44344d40e9c3284a42d647ae44c3161453ca7",
+      "bytes": 6049
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/codex/dist/upload.js",
+      "sha256": "25feab40e004463b8668c7389ecf1e19c892f65c2c0884a83c096363c123ddda",
+      "bytes": 5987
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/antigravity-catalog.js",
+      "sha256": "47b55dd5d7a31d5c97a71e47dd831aa13bc9eb503ead9f379e6c84765cc04b58",
+      "bytes": 2564
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/antigravity-version.js",
+      "sha256": "cdf34c4d76a65882be11b849f95f6e8f89595d8495afff9ff5bbd2728e73e74f",
+      "bytes": 2588
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/args.js",
+      "sha256": "b97bfda33a145e1040a175a99322afea76cc4471f63a98b0942e7335349ecf26",
+      "bytes": 619
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/build_info.js",
+      "sha256": "41c5003e201a96dfedac18d840db86c94545c60dee19ca396a6646d3b27b4133",
+      "bytes": 6280
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/claude_catalog_cache.js",
+      "sha256": "1ab810cc9907552c1ad0277d268ecc56f4a28dbdde3b76cb753ecf63b602605c",
+      "bytes": 5014
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/cli.js",
+      "sha256": "5ac72971af95e228cbb35ea170cb5784add4ac4e84c62650907c8d8130946a95",
+      "bytes": 215
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/codex-auth.js",
+      "sha256": "c03848528817eb6935b6cd7feec2b84079d26cc4c89d751b08bd05d2f1065e96",
+      "bytes": 2922
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/config-diff.js",
+      "sha256": "75daea93a623a6e46e04012512a589e227dcc4fc8771da6032a8683f73426415",
+      "bytes": 1086
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/config-watcher.js",
+      "sha256": "02bf28cf34a5366cf0a02c18efc9b5ff5bf2e64eca6fc8e0bdcf9b3760b399c5",
+      "bytes": 3862
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/config.js",
+      "sha256": "91a49c8d6c4e303c2395785ff99e8648ee49ee48144c87768b9578c6a0ff129c",
+      "bytes": 23919
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/engine_catalog_refresh.js",
+      "sha256": "b2cdfe491bf4eeb7869894b33feaeb779cf185c5c53e27b14deba8e7a692d04f",
+      "bytes": 4199
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/extra-models-options.js",
+      "sha256": "e3573b6d07d26d87abcd9657fef6915a889b6747038cb409d57b373c1ef20ab0",
+      "bytes": 1698
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/index.js",
+      "sha256": "75bda07d0eddbe90ed307c321237a2457cf9e2e1f9486560f09f9834e14ed19e",
+      "bytes": 632
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/permission_ceiling.js",
+      "sha256": "8e778ccc2c127e695bdcffee1ccb3d5e4dda54cf39aeaa1c8b7f00103f50b104",
+      "bytes": 5322
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/resume_snapshot.js",
+      "sha256": "196c389cfab93ee64371aa57486500e71313e84063c30b825760d871bf156945",
+      "bytes": 9931
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/runner-cli.js",
+      "sha256": "d4807c23bb8106194629869f5a783ac150b30e38d02c60b795502b121d178160",
+      "bytes": 18740
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/sessions.js",
+      "sha256": "b2ef79eab6a5321a104014ab2aa9a51226c96aae399f201d1889a8151e120888",
+      "bytes": 23937
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/setup-cli.js",
+      "sha256": "cfab6ac13959408baaa2afddfd6f0b9d28c676e4f4fb884c0ed2aab9366f658f",
+      "bytes": 3062
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/setup.js",
+      "sha256": "9fe9e613cd18ddd0222fe937df71c2b47b5eb671fb84cff109559a3f18ea0c83",
+      "bytes": 10729
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/spawn.js",
+      "sha256": "748a015fbe421db5ee0fb7ddd3e2933d430a6127499dc0ffd0c7107d9dfc4362",
+      "bytes": 5305
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/supervisor.js",
+      "sha256": "7740a42cea33ec371e32b7d291341053036ab113c54dcf5db05d50b4240dedec",
+      "bytes": 67990
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/runner/dist/transport.js",
+      "sha256": "4953f087d873cc287505dbc6af537042ceeb6e906658f318b433d40003390e67",
+      "bytes": 17258
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/adapter.js",
+      "sha256": "4ab3dd91e8a573aed37ece8592a4069ad93dceb90c437899be343dccf8d83935",
+      "bytes": 32444
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/bounded_spawn.js",
+      "sha256": "469fd7e351231d02426a6153a0539c2b3efcf3e478a6f4435fc967484f2c8ea4",
+      "bytes": 2588
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/catalog.js",
+      "sha256": "5430fc1ea5d0b5f25279f2e18ba505938509c2010cc5e845007759df496ab2ae",
+      "bytes": 1218
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/cli.js",
+      "sha256": "ebf0fbd474f2916b4d1a5c537525916129a06b9dca8912aba756474a0d43dbc5",
+      "bytes": 77770
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/history.js",
+      "sha256": "33b250e8aecbd410ed591a95140891dbcfc303de4bc8a85e7c62f35ee6a4c900",
+      "bytes": 7194
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/host.js",
+      "sha256": "d10bb01cd773c873bb130d65219dbc9ec467c4f60e1ad88cd2a2f0067b14c7f1",
+      "bytes": 215378
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/index.js",
+      "sha256": "bc7feafea3f5b4b2f00d79638806e2f8a3845cfd3bbe1e4cfe56e2e5ede8c9d8",
+      "bytes": 667
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/inter_agent_message_handler.js",
+      "sha256": "c1e52f10f0e470509cc350b670a9b97c445901e31879671fb600bfa58928dec3",
+      "bytes": 3289
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/inter_agent_sdk.js",
+      "sha256": "fd29313da93fb54cec3dde732819da10a0beeb1ab236a8c1e949e3689dc0c323",
+      "bytes": 3606
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/inter_agent_turn_coordinator.js",
+      "sha256": "d7921c1dc8f7dd19394111056b2a498cebdc198c64fc031c1e33782775d15b41",
+      "bytes": 24521
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/permission_axes.js",
+      "sha256": "c9792582b959c597d49bc215b992bcb504d01eaf9f99fc0ebef5436ecf6bc438",
+      "bytes": 961
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/probe-client.js",
+      "sha256": "23a60155ca504debef5f12993febca09dcbbc83fc807ba9073d23175e0471c06",
+      "bytes": 9497
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/probe.js",
+      "sha256": "f1638686a4a3e1a10b9d49dfb1527ddf55d23c148d67196b93bcdd8c38fabd45",
+      "bytes": 11072
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/read_only_tools.js",
+      "sha256": "fd3ea3742e2e8ed36cbe1ee7a5c66a6e9db056932342eb77dc811f8a2c3bdff2",
+      "bytes": 1373
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/request_compact.js",
+      "sha256": "c7ed7d77d89907d4f54fdc42763c7451d694d59bf72e7130340f7757f15d42f8",
+      "bytes": 10366
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/source_resolution.js",
+      "sha256": "688ed2f02402f432d53e4780aa638537cc860f83d038123a3639e0d3642d2462",
+      "bytes": 1792
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/tasklist.js",
+      "sha256": "50e6658370627d94a7343b109f1b949fa33a871a1f09c41da4bd43593bf5004b",
+      "bytes": 3978
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/turn_watchdog.js",
+      "sha256": "0072c96b521edd7d14c99e52a9f5ce95198a263db2002e020a4fdbaba8511c9f",
+      "bytes": 7824
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/claude-code/dist/upload.js",
+      "sha256": "045ca9b0827dac13ad886f6a542d3d10268d89893a93b7be507573419ce85a00",
+      "bytes": 24661
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/adapter.js",
+      "sha256": "61afbfbfaf621d87805632fab7ca306f5b912a1b1435215257e80f03fdb6457a",
+      "bytes": 6440
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/bridge.js",
+      "sha256": "ed91e4dca5eeaee288ff7919d9135ae5aa1c66ac3420ab8e25097e1f95c349a1",
+      "bytes": 4333
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/catalog.js",
+      "sha256": "addc9cf96f041136cd34f560c62cdfa8c1011c9a78c1f4a31ff6807c88c34ffd",
+      "bytes": 2274
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/cli-path.js",
+      "sha256": "d5db960f18f74d1892bf7f1ee91db90534a66dcd6d97121d4f0f6349c1c811a5",
+      "bytes": 2707
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/cli.js",
+      "sha256": "03f237e78f93264069ffcbcaaa92400a6e5d5b58b59ff2d71c1e226eb0f1558b",
+      "bytes": 32479
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/customization.js",
+      "sha256": "6478bea1d56ad1d2b67fb44feb52548b0ff88a1dc5553374d688cbb620d6f3bb",
+      "bytes": 5703
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/epoch.js",
+      "sha256": "357683fbfb2e1bbfedc055c6b748476a23a83759357c705abe42b4fa0854b73c",
+      "bytes": 1735
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/gate.js",
+      "sha256": "5831e41953aaa8316928deeb89507727c821e80bdde3ae5b22b73b5b648f483c",
+      "bytes": 25009
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/hook.js",
+      "sha256": "56a0508a0a5ccca3dd38ed6e32fbc9b820aa4106c0fd6caf26752c142c482a91",
+      "bytes": 1299
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/hook_client.js",
+      "sha256": "bf738d77181189c22f0c5a04433b0c2f1d2ba56840c471e594c142f377f0ad31",
+      "bytes": 2186
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/host.js",
+      "sha256": "a42195582e52cb830490bec86b3bbbe5b60dabeda3be8274ed23df5f744b45b1",
+      "bytes": 95331
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/index.js",
+      "sha256": "243d6fe7ff1b1d4e8211a62523a775bced3946c16bfdd716fde861133b6ca058",
+      "bytes": 1262
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/inter_agent_message_handler.js",
+      "sha256": "acc100b682b0de99b27fdca1f9efd07cbf3c6e1789ce850f15e1e669735b5936",
+      "bytes": 1485
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/inter_agent_turn_coordinator.js",
+      "sha256": "fd186dc2e598d9ef6f95f7d9163fc798029d54106ad82d9b2262864bc70f5fb7",
+      "bytes": 11179
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/network_access.js",
+      "sha256": "e58d3affd6a14c04e6824a29b69d62f22c235fd090e36f3070b567d5916dd5dd",
+      "bytes": 336
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/permission_switch.js",
+      "sha256": "cac37e3054748be68c3e3eb867ddd5024a91bb65f4be8f65b3098bba8db19212",
+      "bytes": 2132
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/source_resolution.js",
+      "sha256": "ffd2bc133290961e3136ef7aad50895ca9e924398e07a917ae88bd3b82ee5ee6",
+      "bytes": 912
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/ssh_agent_probe.js",
+      "sha256": "cb93282e3fa77986da3bb9c33c71442db1720dcf90fd3712b78ceaa1a9841b1f",
+      "bytes": 1566
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/subtree_termination.js",
+      "sha256": "1b72c7005fb7da2d9845c09aef3ea179ee2996544d4143b8df5b5de958beca02",
+      "bytes": 4067
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/tool_child_env.js",
+      "sha256": "e0e70523d395290fa0da91effb08b065a3db9b14e395fab564d510fe11a85306",
+      "bytes": 993
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/toolhost.js",
+      "sha256": "f7ff5aaaa5418d1f70778e2adbcd8065477705476a1c1da3ec8973eefeef1f46",
+      "bytes": 3683
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/transcript_path.js",
+      "sha256": "b66203833d58e01a9e8a5c3a1a479f3f52cf8728c01bf8502f94378e02fea6b1",
+      "bytes": 631
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/wrapper/antigravity/dist/turn_watchdog.js",
+      "sha256": "096fb16529a9a5f56eb4e44b8cdb2b8f22c778ea05c900d0ff5b705dfe60c70a",
+      "bytes": 8216
+    }
+  ],
+  "runs": [
+    {
+      "mode": "local-tool",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35a17d5d-438e-4712-a9cf-4637b7b00c83",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:36:25.430Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35a17d5d-438e-4712-a9cf-4637b7b00c83",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:36:25.433Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35a17d5d-438e-4712-a9cf-4637b7b00c83",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:36:27.338Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35a17d5d-438e-4712-a9cf-4637b7b00c83",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:36:27.384Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-tool-current/result.json",
+        "sha256": "68d193ae5a97132d8cb8c235b7e8fdc26a058dbc0669bdb8a76d9915d2bb23b5",
+        "bytes": 472694
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-tool-current.log",
+        "sha256": "ff3a8d7c28e35b1a55a1ca61b8a51f6bae136c6c7274000e3c726d74cacb4e2d",
+        "bytes": 1934
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/01a0f6d2-6e75-7643-87b1-530a6cee1e7f.ia.jsonl",
+          "sha256": "6969306150056b87a08bfa5db17685af62584c7f2f09750b68f743684c759f61",
+          "bytes": 1340
+        },
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-36-24-01a0f6d2-6e75-7643-87b1-530a6cee1e7f.jsonl",
+          "sha256": "5a6d0c24be9bf3599f3dfb4a10669526eb385e7a338904d5dc22066ea2ee62ba",
+          "bytes": 68384
+        }
+      ]
+    },
+    {
+      "mode": "local-generation",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "c3e7efcb-79f3-4c73-9f26-557a70f13bb4",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:36:42.024Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "c3e7efcb-79f3-4c73-9f26-557a70f13bb4",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:36:42.028Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "c3e7efcb-79f3-4c73-9f26-557a70f13bb4",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:36:42.290Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "c3e7efcb-79f3-4c73-9f26-557a70f13bb4",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:36:42.332Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-generation-current/result.json",
+        "sha256": "f2057c813892d71c86de9ccf803559018b364f1324f2dbc0e0643bc7bef424f6",
+        "bytes": 507139
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-generation-current.log",
+        "sha256": "9f44ef445ffce3ac1cda0abf4425cc170e8cbcda895a01474181c3e9b579e032",
+        "bytes": 1700
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/01a0f6d2-6e75-7643-87b1-530a6cee1e7f.ia.jsonl",
+          "sha256": "6969306150056b87a08bfa5db17685af62584c7f2f09750b68f743684c759f61",
+          "bytes": 1340
+        },
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-36-24-01a0f6d2-6e75-7643-87b1-530a6cee1e7f.jsonl",
+          "sha256": "5a6d0c24be9bf3599f3dfb4a10669526eb385e7a338904d5dc22066ea2ee62ba",
+          "bytes": 68384
+        }
+      ]
+    },
+    {
+      "mode": "local-watchdog",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35fd9d7c-6803-47cf-99f6-d2c2689f2de8",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:36:53.434Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35fd9d7c-6803-47cf-99f6-d2c2689f2de8",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:36:53.437Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "35fd9d7c-6803-47cf-99f6-d2c2689f2de8",
+          "delivery_seq": 1,
+          "stage": "unknown",
+          "reason": "turn_steer_not_observed",
+          "mode": "early",
+          "at": "2026-10-01T09:36:53.502Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-watchdog-current/result.json",
+        "sha256": "d3e629e8307ef83a1b04be18972270dec9d14b7336898535cd33a886e2ee863d",
+        "bytes": 155820
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-watchdog-current.log",
+        "sha256": "07d6e412bb4e79c346195eaaf95be3007dc65f522aa4be150e0cee016a5ebb41",
+        "bytes": 1447
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-36-52-01a0f6d2-dbb7-7aa3-ac70-392091d7a5bc.jsonl",
+          "sha256": "7e68bfe316ef10e3f9d3503f7befb74785c2004c6862e35b1bd30ae630ceec91",
+          "bytes": 37902
+        }
+      ]
+    },
+    {
+      "mode": "approval-on-request-allow",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "2eabec2b-dd98-4def-811b-5f09370b7737",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:37:04.791Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "2eabec2b-dd98-4def-811b-5f09370b7737",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:37:04.794Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "2eabec2b-dd98-4def-811b-5f09370b7737",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:37:06.883Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "2eabec2b-dd98-4def-811b-5f09370b7737",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:37:06.926Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-allow-current/result.json",
+        "sha256": "771cc0ec079ffe9d6b775494f563eec1ae4d933c3cb238d43e44724dd667e84a",
+        "bytes": 559804
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-allow-current.log",
+        "sha256": "dc0a5d350e0a7bfd3838939c56f51e64d0d4d7089a36910bf3c89bc9e4f8c288",
+        "bytes": 2357
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-37-03-01a0f6d3-0817-7913-85c1-09d881c8a560.jsonl",
+          "sha256": "e825045102616ad2f73368e8c84aa20a78f020b64061a7b801677e99e37bc247",
+          "bytes": 58404
+        }
+      ]
+    },
+    {
+      "mode": "approval-on-request-deny",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "405ee9cd-1a6a-4345-a019-5ac7eaf50225",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:37:21.050Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "405ee9cd-1a6a-4345-a019-5ac7eaf50225",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:37:21.053Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "405ee9cd-1a6a-4345-a019-5ac7eaf50225",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:37:21.128Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "405ee9cd-1a6a-4345-a019-5ac7eaf50225",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:37:21.177Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-deny-current/result.json",
+        "sha256": "2007761aeadcfbce449feb6ea83c7d5cd57beea73478432b9c55ec7615fbbf71",
+        "bytes": 552997
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-deny-current.log",
+        "sha256": "420c397ce89213097b0988674590f11278f2b1fe297b4c8251754eb3543ed8d9",
+        "bytes": 2308
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-37-20-01a0f6d3-48ce-7561-b227-b5f8df64c70f.jsonl",
+          "sha256": "c5b5761a93a7c8d21311ba4021d8717c01d13014ae100cc85846d1ad6d7f953e",
+          "bytes": 57490
+        }
+      ]
+    },
+    {
+      "mode": "approval-untrusted-allow",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "867e4645-e7eb-42ac-a7b5-947bff59f329",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:37:32.401Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "867e4645-e7eb-42ac-a7b5-947bff59f329",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:37:32.404Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "867e4645-e7eb-42ac-a7b5-947bff59f329",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:37:34.540Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "867e4645-e7eb-42ac-a7b5-947bff59f329",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:37:34.584Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-untrusted-allow-current/result.json",
+        "sha256": "9f6115c60b110ac8972633d7c295e2bc9fb47479d54de771af21cc0483942dfb",
+        "bytes": 538037
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-untrusted-allow-current.log",
+        "sha256": "5a54a4d5960a1c91d75e54d1bbe9dcd37564a73f7d7beedea7928f5837220358",
+        "bytes": 2354
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-37-31-01a0f6d3-7533-7062-9de0-04490ced4fe8.jsonl",
+          "sha256": "0479615fe6462b35ceb72d03bb4cffd4ac72efc31156d578910fb7e905cccafd",
+          "bytes": 54760
+        }
+      ]
+    },
+    {
+      "mode": "approval-untrusted-deny",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "d5b9abc3-cad9-4ff8-942f-fde25a8657a0",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:37:46.373Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "d5b9abc3-cad9-4ff8-942f-fde25a8657a0",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:37:46.376Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "d5b9abc3-cad9-4ff8-942f-fde25a8657a0",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:37:46.451Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "d5b9abc3-cad9-4ff8-942f-fde25a8657a0",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:37:46.498Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-untrusted-deny-current/result.json",
+        "sha256": "88291a9e6e1ca8891bef0ff521bf26ec134637ec0a1527443d1b01ca8256b7ea",
+        "bytes": 531233
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-untrusted-deny-current.log",
+        "sha256": "7c5788eaf40e574aa6b7f5ab48e7a42d15260c110e3a43876fc409f9d87280c6",
+        "bytes": 2305
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-37-44-01a0f6d3-a880-7242-8984-e6ba7fb18366.jsonl",
+          "sha256": "a1195d1564c7b18cf2c6f3be495f47393891da824f5413193bdd5cbb718e5070",
+          "bytes": 53844
+        }
+      ]
+    },
+    {
+      "mode": "optout-control",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 2,
+      "steer_requests": 0,
+      "finalized_turns": 2,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "3783c62f-4506-43d2-8b52-5afe6236d919",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "normal",
+          "at": "2026-10-01T09:38:00.871Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "3783c62f-4506-43d2-8b52-5afe6236d919",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_start_accepted",
+          "mode": "normal",
+          "at": "2026-10-01T09:38:02.804Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "3783c62f-4506-43d2-8b52-5afe6236d919",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:38:02.857Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/optout-control-current/result.json",
+        "sha256": "3813512af80b802b91bda5575040fe756dbb41396921f4be4f0a19ee38950123",
+        "bytes": 481107
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/optout-control-current.log",
+        "sha256": "ae974891b32e225916eca71dc13b31828ac103766b5e741e436e5e7df5b5b6d3",
+        "bytes": 2694
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-37-59-01a0f6d3-e2e7-7c11-9ef8-083a4e58a3b1.jsonl",
+          "sha256": "dcbfc1ef2fa9e1d73409683de32a3c112d120ac27b447c0b464d7f0d20bb4277",
+          "bytes": 49564
+        }
+      ]
+    },
+    {
+      "mode": "echo-control",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 2,
+      "steer_requests": 0,
+      "finalized_turns": 2,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "8a7e48a5-36b3-415b-8d62-e4596dff8062",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:38:14.178Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "8a7e48a5-36b3-415b-8d62-e4596dff8062",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_start_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:38:16.111Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "8a7e48a5-36b3-415b-8d62-e4596dff8062",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:38:16.162Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/echo-control-current/result.json",
+        "sha256": "10a51106c6e352a4b0b0341c6078638c32f248efba098186a1437470e6c10ec0",
+        "bytes": 481262
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/echo-control-current.log",
+        "sha256": "738a125f2429edfa6c9d0b171a7a45a0d522d037385f65e7fe602cb5c4e85478",
+        "bytes": 2684
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-38-12-01a0f6d4-163b-7682-9c72-6bd6cfbc8c07.jsonl",
+          "sha256": "bf5e8556056169a9a56a01bd0c81d153e9c9e0c8d1a6f60e02f848c9f3754e11",
+          "bytes": 49513
+        }
+      ]
+    },
+    {
+      "mode": "exec-control",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 0,
+      "steer_requests": 0,
+      "finalized_turns": 2,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "108126a0-2a73-4ad8-b871-01717ba1c3c4",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:38:29.527Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "108126a0-2a73-4ad8-b871-01717ba1c3c4",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "exec_input_written",
+          "mode": "early",
+          "at": "2026-10-01T09:38:35.108Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "108126a0-2a73-4ad8-b871-01717ba1c3c4",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:38:35.446Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/exec-control-current/result.json",
+        "sha256": "3e80eb21fe03ac2c40d3a5abf0c138ea94da45787453eaf3dc32de1403a87e5f",
+        "bytes": 438924
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/exec-control-current.log",
+        "sha256": "23bf50df7da6abe925126028b2b99b3e40390163fea3eb057cf5d0e07e794389",
+        "bytes": 4454
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-38-28-01a0f6d4-4a30-7663-9de3-e307d2f18f0a.jsonl",
+          "sha256": "9e496cb9de472608e24c510fb84a441eacd731dc2afb7dc07cd2949616fe879f",
+          "bytes": 50251
+        }
+      ]
+    },
+    {
+      "mode": "local-precondition",
+      "exit_code": 0,
+      "live": false,
+      "native_turn_starts": 2,
+      "steer_requests": 1,
+      "finalized_turns": 2,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "b48bebdb-a278-4ddc-a08e-05edf762fe43",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:51:00.622Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "b48bebdb-a278-4ddc-a08e-05edf762fe43",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_start_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:51:00.867Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "b48bebdb-a278-4ddc-a08e-05edf762fe43",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:51:00.952Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-precondition/result.json",
+        "sha256": "f23129319cbec227ddcef05040d436d266745e92f1c808e9ba3afec3ecbc5050",
+        "bytes": 335368
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-precondition.log",
+        "sha256": "2e899f928c8ee003087feb200fff2247ce379bd6897628a73ab87ea40869a7e8",
+        "bytes": 2580
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-50-59-01a0f6df-c85e-7583-afea-f5bc6c40a40c.jsonl",
+          "sha256": "d02634c57160e0e65b002403aaa4ff4e1c6df28be83788f61ead1f21b42e1b2d",
+          "bytes": 46245
+        }
+      ]
+    },
+    {
+      "mode": "live-tool",
+      "exit_code": 0,
+      "live": true,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "00a208f7-dd07-4955-a782-2d4431c33ae4",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:46:34.761Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "00a208f7-dd07-4955-a782-2d4431c33ae4",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:46:34.764Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "00a208f7-dd07-4955-a782-2d4431c33ae4",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:46:53.908Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "00a208f7-dd07-4955-a782-2d4431c33ae4",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:46:55.108Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-tool/result.json",
+        "sha256": "114bd7fe427e6f8a3e2565a32a531761a94509fbac0a90b825f91ecd6d519d90",
+        "bytes": 226908
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-tool.log",
+        "sha256": "6b03c68c9bab947e0c394c15c01dc5fa36f2548733aeda7a26f7424e712f2b79",
+        "bytes": 3096
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/01a0f6db-b7d7-7d93-ab49-9a398d864858.ia.jsonl",
+          "sha256": "fae2ba98643fa4683fc4126245eb6ad9848883750dc8d530dd26d1dfe0c3bc33",
+          "bytes": 1336
+        },
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-46-30-01a0f6db-b7d7-7d93-ab49-9a398d864858.jsonl",
+          "sha256": "5e24a81827e026d5d1e9b840c313adb2545efa1bb36d88efb866acc74c18b0b0",
+          "bytes": 80136
+        }
+      ]
+    },
+    {
+      "mode": "live-generation",
+      "exit_code": 0,
+      "live": true,
+      "native_turn_starts": 1,
+      "steer_requests": 1,
+      "finalized_turns": 1,
+      "delivery_stages": [
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "44cd7c89-95d0-4b66-8743-072167fedb06",
+          "delivery_seq": 1,
+          "stage": "queued",
+          "mode": "early",
+          "at": "2026-10-01T09:47:02.655Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "44cd7c89-95d0-4b66-8743-072167fedb06",
+          "delivery_seq": 1,
+          "stage": "submitted",
+          "handoff": "turn_steer_accepted",
+          "mode": "early",
+          "at": "2026-10-01T09:47:02.658Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "44cd7c89-95d0-4b66-8743-072167fedb06",
+          "delivery_seq": 1,
+          "stage": "included",
+          "evidence": "ticket_used",
+          "at": "2026-10-01T09:47:07.807Z",
+          "version": "0"
+        },
+        {
+          "incarnation": "fuji-native-inc",
+          "generation": "44cd7c89-95d0-4b66-8743-072167fedb06",
+          "delivery_seq": 1,
+          "stage": "settled",
+          "reason": "turn_end",
+          "at": "2026-10-01T09:47:09.144Z",
+          "version": "0"
+        }
+      ],
+      "quiescence": {
+        "placeholders": 0,
+        "reservations": 0,
+        "frozen": 0
+      },
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-generation/result.json",
+        "sha256": "8722029a9480c9ea56bb6ff7632424147d586d13a9400c50767597145993e7ad",
+        "bytes": 281531
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-generation.log",
+        "sha256": "277427b85a0ce626f41d767792136a3e0f47b8999f133299ce340be77fb6b6a6",
+        "bytes": 3276
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/01a0f6db-b7d7-7d93-ab49-9a398d864858.ia.jsonl",
+          "sha256": "fae2ba98643fa4683fc4126245eb6ad9848883750dc8d530dd26d1dfe0c3bc33",
+          "bytes": 1336
+        },
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-46-30-01a0f6db-b7d7-7d93-ab49-9a398d864858.jsonl",
+          "sha256": "5e24a81827e026d5d1e9b840c313adb2545efa1bb36d88efb866acc74c18b0b0",
+          "bytes": 80136
+        }
+      ]
+    }
+  ],
+  "targeted_suites": [
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/codex exec vitest run test/cli_inter_agent_steer.test.ts test/cli_inter_agent_fallback_reservation.test.ts test/app_server_approval_orders.test.ts test/cli_app_server_lifecycle.integration.test.ts test/app_server_host_runtime.integration.test.ts",
+      "exit_code": 0,
+      "passed": 41,
+      "skipped": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/additional-schedules.log",
+        "sha256": "1b06ff5d49f1621ec6abd92a1b88bc993a6130a1969f144062dbf471a6341fce",
+        "bytes": 51540
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/codex exec vitest run test/host_app_server_steer.test.ts test/app_server_steer_transport.test.ts",
+      "exit_code": 0,
+      "passed": 40,
+      "skipped": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/attribution-controls-current.log",
+        "sha256": "4b01c7d3076b9ee257c1119c9ba0f52bc82111f115128004df2f5ecadb4bbfe4",
+        "bytes": 754
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME mix test test/kaoiro_server/delivery_states_test.exs",
+      "exit_code": 0,
+      "passed": 38,
+      "skipped": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/server-generation-current.log",
+        "sha256": "be44dc87ea7251c5ce312e72b02ee884f84e0e767967d6f963e71ecab4a24d23",
+        "bytes": 2057
+      }
+    }
+  ],
+  "checker_controls": {
+    "local_positive_trace_defects": [
+      "missing steer",
+      "wrong clientId",
+      "missing provider request",
+      "missing included stage",
+      "nonzero frozen identity"
+    ],
+    "live_positive_trace_defects": [
+      "missing steer",
+      "wrong clientId",
+      "missing included stage",
+      "nonzero frozen identity"
+    ],
+    "tool_continuity": {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/tool-continuity-check.json",
+      "sha256": "f850b3d0075e41df7e36e2ed3a4c23050b9cb522fb1ec72e6e57ea5d84c69465",
+      "bytes": 664
+    },
+    "precondition_check": {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-precondition-check.log",
+      "sha256": "560455a254e722e371c4b3e87afbf2de36cfea9513d7af6f3975df5a65243496",
+      "bytes": 76
+    },
+    "results": {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/checker-results.json",
+      "sha256": "797e1244ff622d29a5727e0c7551207eed90f248d4d189adda209254d4c4aeae",
+      "bytes": 2089
+    }
+  },
+  "probe_sources": [
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/phase3.mjs",
+      "sha256": "5d2d161cc5fffb63dfe91db1fca1808dbf227fbd39a6b41d18d94720700adfe0",
+      "bytes": 11040
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/phase3-precondition.mjs",
+      "sha256": "c5f11245b42703b05e17374bdd1dfa434b07cb23438552e7be640c2e15312cd4",
+      "bytes": 11320
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/phoenix.mjs",
+      "sha256": "3d5a9292219d7ab0081a2982ccb990f62dc9091d36b201bacf80772704ed2cf1",
+      "bytes": 4499
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/check-phase3.py",
+      "sha256": "8324747b62e5eaca0175b384bf25b539e50aad9c4800ad3859ed17a930bca39a",
+      "bytes": 3119
+    }
+  ],
+  "retained_failures": [
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-tool.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/local-generation.log",
+      "sha256": "ec9e3836b9298bbef0abd6450af1a51eff9ddc40babb1aad2105964b4599a4ed",
+      "bytes": 2303
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-allow.log",
+      "sha256": "2eb067839827fb3cf86f72e0fdd4589a0fe66b636cc1431eb735d33f91b63e77",
+      "bytes": 2044
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/approval-on-request-allow-v2.log",
+      "sha256": "56a0c0868df432f408ac9e364f773aba111ab48bd8a5878711e251b7273368b2",
+      "bytes": 1923
+    }
+  ],
+  "limitations": [
+    "Live provider input is not observable; local-provider requests establish exact downstream text correlation, while live native completed items, reply authorization, and terminal establish authenticated same-turn behavior.",
+    "Permission on-request/untrusted and refusal are native local-provider measurements. Adversarial terminal/response, writing/backpressure, reset and matching negatives also use deterministic production-code tests; the script does not force every native transport race.",
+    "The normal-granted control checks the effective delivery decision; dashboard policy toggling belongs to issue 463.",
+    "The server generation-order test establishes ledger semantics independently of the native wrapper fail-stop measurement."
+  ],
+  "warnings": [
+    "The deliberate watchdog case emits a handled error terminal.",
+    "Server unit tests log absent test authentication configuration, writable test persona-cache permissions, and expected delivery-loss fixtures.",
+    "Native positive and live logs contain no unhandled errors or warnings."
+  ],
+  "markdown": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-phase3-pin/docs/evidence/codex-app-server/phase3-native-0.159.3-2026-10-01.md",
+    "sha256": "3b712031147214f3292e338726459a2a029ae00b5e460e3187a8b0d72cebf48d",
+    "bytes": 7423
+  },
+  "execution_count_record": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/current-exits.json",
+    "sha256": "054a1a91c715b51e3f64e679c9fbce8b4dcc2febb0dad3b750bab170848f1185",
+    "bytes": 566
+  }
+}
