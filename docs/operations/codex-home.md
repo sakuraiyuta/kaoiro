@@ -76,6 +76,18 @@ CODEX_HOME="$H" "$BIN" login status   # expect: Logged in using ChatGPT
 | `rules/default.rules` | Not carried: it holds the operator's own interactive approvals. |
 | `sessions/`, `state_5.sqlite`, `thread_history_1.sqlite`, other databases, caches, plugins, history | Not carried. Created fresh by the pinned binary. |
 
+### State-aware backup and restore
+
+The state-aware updater preserves `AGENTS.md`, `agents`, `hooks` and
+`model-profiles` as symlinks, without following or copying their external
+instruction targets. Restore recreates the recorded link text, not an older
+version of the external ai-settings repository. `plugins`, including installed
+bundles under `plugins/cache` and plugin data, is backed-up state. The distinct
+home-root `cache` is disposable and is re-fetched after restore. Snapshots remain
+private because plugin/configuration content can include sensitive values.
+Every pin update requires the candidate classifier's pre-stop check; see
+[Codex state backup](runner-update-and-rollback.md#codex-state-backup).
+
 ### Hooks
 
 The model-profile hook (`ai-settings/codex/hooks/model-profile.sh`) behaves as

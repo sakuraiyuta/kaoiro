@@ -264,17 +264,20 @@ The hash comparison does not prevent unmanaged replacement between checking
 and execution. The script rejects unsupported unit/shell configuration rather
 than executing it to discover the home.
 
-Before scheduling maintenance, obtain explicit operator approval to run the
-metadata-only classification preflight against the production home:
+For every Codex native pin update, before stopping the runner, obtain explicit
+operator approval and run the candidate release's metadata-only classification
+preflight against the production home. Build/install the candidate without
+activation first, then use its verified physical tool-release path:
 
 ```sh
 node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" classify "$codex_home"
 ```
 
 Keep the output private. It contains paths, modes and sizes, never credential
-contents. Unknown entries require reviewed classification; do not delete or
-rename files merely to make the check pass. Only the managed runner and its
-service descendants are checked for stop completion. External processes are
+contents. Any classification refusal aborts the update before stopping the
+runner. Unknown entries require a separately reviewed classification before
+retrying; do not delete or rename files merely to make the check pass. Only the
+managed runner and its service descendants are checked for stop completion. External processes are
 not scanned; an unreadable process or another writer does not itself refuse
 the update. Each state-aware invocation warns that external writes can make
 snapshot recovery fail. Detected copy/verification errors still stop the update
@@ -308,6 +311,9 @@ original canonical home path because secrets keyring account names derive
 from that path. Backups are private anyway: rollouts/configuration may contain
 sensitive information. New threads after the snapshot stay in quarantine;
 there is no lossless merge or silent replacement of missing resume targets.
+The disposable home-root cache is not restored; connector/plugin catalog lists
+may remain empty until re-fetch completes (especially offline). Check installed
+plugin state separately and do not infer history loss from an empty catalog.
 
 Successful runner startup leaves the transaction `awaiting-acceptance`.
 Perform actual Codex startup and applicable pre-existing history checks, or

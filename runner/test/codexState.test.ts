@@ -77,7 +77,7 @@ describe("Codex state snapshots", () => {
     expect(existsSync(join(dir, "backup/state/thread-writer-locks"))).toBe(false);
     expect(() => snap.verifySnapshot(join(dir, "backup"), result.sha256)).not.toThrow();
   });
-  it.each(["auth.json.tmp", "unclassified", "plugins"])("rejects unclassified entry %s before copying", async (name) => {
+  it.each(["auth.json.tmp", "unclassified", "unclassified-extension"])("rejects unclassified entry %s before copying", async (name) => {
     writeFileSync(join(home, name), "secret");
     await expect(take(home, dir)).rejects.toThrow(/Unclassified/);
     expect(existsSync(join(dir, "backup"))).toBe(false);

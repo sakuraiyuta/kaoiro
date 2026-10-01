@@ -1,13 +1,14 @@
 ---
 title: Production Codex home classification correction
-status: proposed
+status: accepted
 last_updated: 2026-10-01
 ---
 
 # Production Codex home classification correction
 
 Baseline: `b4770ee07628b25144ae34be39e396fe8efc39d3`.
-Branch: `issue-468-classify-home-links`. Design review precedes code edits.
+Branch: `issue-468-classify-home-links`. Design approved after independent
+review r1; remaining documentation/fixture findings are included below.
 The director reports production top-level names and three instruction symlinks;
 the implementer has not inspected production. The director confirmed 33 names
 (correcting the original count of 34), with no omitted name: memories_1.sqlite
@@ -102,3 +103,68 @@ record with source links/hashes, baseline failure, positive tests and mutation
 results. Keep the production plan's pre-stop refusal gate; revise its target
 only after review/landing supplies the actual deploy commit. Until then the old
 plan must not be interpreted as authorizing an allowlist bypass.
+
+## Accepted review follow-ups
+
+For every native pin update, run the **candidate release's** metadata-only
+classify preflight before stopping the runner. A refusal aborts before stop;
+an additional classification requires separate review. Do not extend the
+allowlist merely because a name appears in upstream code. Review r1 identified
+these unverified future candidates: `attachments`, `worktrees`, `packages`,
+`pets`, `avatars`, `themes`, `visualizations`, `visualization-viewers`, `ipc`,
+`app-server-daemon`, `.sandbox`, `.sandbox-bin`. Platform/runtime applicability
+was not independently established; none is allowed by this change.
+
+The director reports a metadata-only production inspection: plugins has
+411 descendants (148 directories, 263 files), cache 7 (4 directories, 3 files),
+and skills 88 (28 directories, 60 files). All three have zero symlinks,
+hard-linked files, special files and foreign-owned entries. Plugins contains
+`cache/openai-curated-remote` and `.remote-plugin-install-staging`. These are
+Hisui's observations, not the implementer's measurements. The fixture uses
+those structural forms without copying production contents or claiming to
+reproduce every installed plugin. Snapshot/restore still refuses unsupported
+entries if actual production metadata later changes.
+
+Director-confirmed complete root-name fixture (33 entries):
+
+```text
+.sandbox_migration
+AGENTS.md
+agents
+auth.json
+cache
+config.toml
+goals_1.sqlite
+goals_1.sqlite-shm
+goals_1.sqlite-wal
+hooks
+installation_id
+log
+logs_2.sqlite
+logs_2.sqlite-shm
+logs_2.sqlite-wal
+memories_1.sqlite
+model-profiles
+models_cache.json
+plugins
+queue_1.sqlite
+queue_1.sqlite-shm
+queue_1.sqlite-wal
+sessions
+shell_snapshots
+skills
+state_5.sqlite
+state_5.sqlite-shm
+state_5.sqlite-wal
+thread-writer-locks
+thread_history_1.sqlite
+thread_history_1.sqlite-shm
+thread_history_1.sqlite-wal
+tmp
+```
+
+Restore removes the disposable root cache. Connector/plugin catalogs may
+therefore appear empty until re-fetch completes, especially while offline;
+post-restore checks distinguish that from missing installed plugin state.
+Existing sessions remain resume candidates; clearing caches does not require
+silently replacing a session with a new one.

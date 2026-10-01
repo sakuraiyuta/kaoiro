@@ -210,6 +210,11 @@ These entries are also present in a credential-free native-generated old
 home. This existing observation supports the classification; additional old
 native runs are not required. Inventory candidate-generated entries as well
 as handwritten fixtures.
+Instruction links `AGENTS.md`, `agents`, `hooks` and `model-profiles` are state:
+copy their link text without following targets. `plugins`, including its
+installed cache and data subtrees, is state; the separate home-root `cache` is
+disposable. The source rationale, topology fixture and pre-stop classification
+requirement are in [the classification design](issue-468-home-classification.md).
 Known session/DB subtrees include
 all their regular descendants/sidecars. Unknown top-level entries, unknown
 credential-like sidecars and unclassified extension paths cause refusal;
