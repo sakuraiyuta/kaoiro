@@ -80,12 +80,38 @@ defmodule KaoiroServer.InterAgentReplyBasis do
     permitted_code and Enum.all?(Map.keys(payload), &(&1 in allowed)) and
       payload["new_conversation"] == false and payload["kind"] == "inform" and
       payload["meta"] == %{"done" => false, "propose_next" => ""} and
-      Enum.all?(Map.keys(error), &(&1 in ~w(code message reset_delay_seconds))) and
+      Enum.all?(
+        Map.keys(error),
+        &(&1 in ~w(code message reset_delay_seconds affected_deliveries))
+      ) and
+      valid_affected_deliveries?(payload["notice_type"], error) and
       valid_message?(code, message, error) and
       payload["body"] == "peer error (#{code}): #{message}"
   end
 
   defp valid_notice?(_), do: false
+
+  defp valid_affected_deliveries?("turn_failure", %{"affected_deliveries" => items})
+       when is_list(items) and length(items) in 1..16 do
+    Enum.reduce_while(items, 0, fn item, previous ->
+      case item do
+        %{"delivery_seq" => seq, "peer_turn_number" => turn, "batch_id" => batch}
+        when is_integer(seq) and seq > previous and seq <= @max_safe_integer and
+               is_integer(turn) and turn > 0 and turn <= @max_safe_integer and
+               is_binary(batch) and byte_size(batch) in 1..128 ->
+          if map_size(item) == 3, do: {:cont, seq}, else: {:halt, false}
+
+        _ ->
+          {:halt, false}
+      end
+    end) != false
+  end
+
+  defp valid_affected_deliveries?("turn_failure", error),
+    do: not Map.has_key?(error, "affected_deliveries")
+
+  defp valid_affected_deliveries?(_type, error),
+    do: not Map.has_key?(error, "affected_deliveries")
 
   defp valid_message?("rate_limit", message, %{"reset_delay_seconds" => seconds})
        when is_integer(seconds) and seconds in 0..@max_safe_integer do
