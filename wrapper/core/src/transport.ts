@@ -320,6 +320,8 @@ export function chunkReplayIaItems(
 
 export interface ServerLinkOptions {
   interAgentReplyBasis?: "v1";
+  noticeAttribution?: "v1";
+  onNoticeAttributionMode?: (mode: "v1" | "legacy" | "pending") => void;
   interAgentDeliveryModes?: DeliveryModesJoinRequest;
   operatorInputModes?: OperatorInputModesJoinRequest;
   workControl?: "v1";
@@ -830,6 +832,12 @@ function deliveryStatusFrom(value: unknown): InterAgentDeliveryStatus | undefine
     acked_seq: acked,
     ...(nonNegativeInteger(value.lost_count) === undefined ? {} : { lost_count: nonNegativeInteger(value.lost_count)! }),
     ...(isPlainObject(value.last_loss) && typeof value.last_loss.at === "string" && typeof value.last_loss.reason === "string" && nonNegativeInteger(value.last_loss.first_seq) !== undefined && nonNegativeInteger(value.last_loss.last_seq) !== undefined && nonNegativeInteger(value.last_loss.count) !== undefined ? { last_loss: value.last_loss as unknown as NonNullable<InterAgentDeliveryStatus["last_loss"]> } : {}),
+    ...(nonNegativeInteger(value.uncertain_count) === undefined ? {} : { uncertain_count: nonNegativeInteger(value.uncertain_count)! }),
+    ...(isPlainObject(value.last_uncertain) && typeof value.last_uncertain.at === "string" &&
+      typeof value.last_uncertain.incarnation === "string" && typeof value.last_uncertain.generation === "string" &&
+      typeof value.last_uncertain.reason === "string" && nonNegativeInteger(value.last_uncertain.delivery_seq) !== undefined &&
+      (nonNegativeInteger(value.last_uncertain.delivery_seq) ?? 0) > 0
+      ? { last_uncertain: value.last_uncertain as unknown as NonNullable<InterAgentDeliveryStatus["last_uncertain"]> } : {}),
     ...(typeof value.pending_since === "string" ? { pending_since: value.pending_since } : {}),
   };
 }
@@ -1264,6 +1272,9 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
 }
 
 export class ServerLink {
+  #noticeAttributionMode: "v1" | "legacy" | "pending" = "pending";
+  readonly #onNoticeAttributionMode: ServerLinkOptions["onNoticeAttributionMode"];
+  noticeAttributionMode(): "v1" | "legacy" | "pending" { return this.#noticeAttributionMode; }
   #replyBasisMode: "v1" | "legacy" | "pending" = "pending";
   #replyBasisGeneration = 0;
   readonly #protectReplyBasis: boolean;
@@ -1291,6 +1302,8 @@ export class ServerLink {
   #failReplyBasis(terminal: boolean, releaseWaiters: boolean): void {
     this.#replyBasisGeneration++;
     this.#replyBasisMode = "pending";
+    this.#noticeAttributionMode = "pending";
+    this.#onNoticeAttributionMode?.("pending");
     this.#replyBasisTerminal ||= terminal;
     this.#onReplyBasisMode?.("pending");
     if (releaseWaiters || this.#replyBasisTerminal) {
@@ -1358,6 +1371,7 @@ export class ServerLink {
       new Socket(url, socketOptions),
   ) {
     this.#onReplyBasisMode = options.onReplyBasisMode;
+    this.#onNoticeAttributionMode = options.onNoticeAttributionMode;
     this.#deliveryRecovery = new DeliveryRecovery({
       request: (request) => this.requestInterAgentDeliveryResync(request),
       resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
@@ -1385,6 +1399,7 @@ export class ServerLink {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
+      ...(options.noticeAttribution ? { notice_attribution: options.noticeAttribution } : {}),
       ...(options.interAgentDeliveryModes
         ? { inter_agent_delivery_modes: options.interAgentDeliveryModes }
         : {}),
@@ -1701,6 +1716,8 @@ export class ServerLink {
         this.#replyBasisGeneration++;
         this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
         options.onReplyBasisMode?.(this.#replyBasisMode);
+        this.#noticeAttributionMode = isObject(reply) && reply.notice_attribution === "v1" ? "v1" : "legacy";
+        options.onNoticeAttributionMode?.(this.#noticeAttributionMode);
         this.#deliveryModes = isObject(reply) && reply.inter_agent_delivery_modes === "v1"
           ? options.interAgentDeliveryModes ?? null
           : null;

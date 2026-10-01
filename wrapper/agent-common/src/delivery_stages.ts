@@ -19,6 +19,7 @@ interface TrackedDelivery {
   deliverySeq: number;
   mode?: DeliveryIntent;
   submitted: boolean;
+  steer?: boolean;
   retired: boolean;
   turnToken?: string;
 }
@@ -108,6 +109,42 @@ export class DeliveryStageReporter {
     this.#submit(turnToken, handoff);
   }
 
+  steerSubmitted(turnToken: string, envelopes: readonly Envelope[], handoff: "turn_steer_accepted" | "turn_steer_item_observed"): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.#recordTurnEnvelope(turnToken, envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery === undefined || delivery.submitted) continue;
+      delivery.steer = true;
+      delivery.submitted = true;
+      this.#report(delivery, "submitted", { handoff,
+        ...(delivery.mode === undefined ? {} : { mode: delivery.mode }) });
+    }
+  }
+
+  steerUnknown(envelopes: readonly Envelope[], reason: string, handoff: "turn_steer_write_uncertain" | "turn_steer_accepted" | "turn_steer_item_observed"): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.capture(envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery === undefined) continue;
+      this.#report(delivery, "unknown", { reason, mode: "early",
+        ...(delivery.submitted ? {} : { handoff }) });
+      this.#removeDelivery(delivery);
+    }
+  }
+
+  steerSettled(envelopes: readonly Envelope[]): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.capture(envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery === undefined) continue;
+      this.#report(delivery, "settled", { reason: "turn_end" });
+      this.#removeDelivery(delivery);
+    }
+  }
+
   includedEnvelopes(envelopes: readonly Envelope[]): void {
     this.#observeIdentity();
     for (const envelope of envelopes) {
@@ -141,6 +178,7 @@ export class DeliveryStageReporter {
       this.#recordTurnEnvelope(turnToken, envelope);
     }
     for (const delivery of [...(this.#deliveriesByTurn.get(turnToken)?.values() ?? [])]) {
+      if (delivery.steer) continue;
       this.#report(delivery, "settled", {
         reason: delivery.submitted ? "turn_end" : "failed_before_handoff",
       });
@@ -158,6 +196,7 @@ export class DeliveryStageReporter {
       this.#recordTurnEnvelope(turnToken, envelope);
     }
     for (const delivery of [...(this.#deliveriesByTurn.get(turnToken)?.values() ?? [])]) {
+      if (delivery.steer) continue;
       // Unreachable while the unknown outcome exists only before the reply,
       // hence before `submitted`; kept so a submitted delivery is never
       // reported as unknown.
@@ -179,7 +218,7 @@ export class DeliveryStageReporter {
 
   #submit(
     turnToken: string,
-    handoff: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result",
+    handoff: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result" | "turn_steer_accepted" | "turn_steer_item_observed",
   ): void {
     for (const delivery of this.#deliveriesByTurn.get(turnToken)?.values() ?? []) {
       if (delivery.submitted) continue;

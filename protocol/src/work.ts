@@ -20,12 +20,14 @@ export interface OperatorInputModesJoinRequest {
 
 export interface WorkJoinRequest {
   inter_agent_delivery_modes?: DeliveryModesJoinRequest;
+  notice_attribution?: "v1";
   operator_input_modes?: OperatorInputModesJoinRequest;
   work_control?: "v1";
 }
 
 export interface WorkJoinReply {
   inter_agent_delivery_modes?: "v1";
+  notice_attribution?: "v1";
   operator_input_modes?: "v1";
   inter_agent_delivery_incarnation?: string;
   work_control?: "v1";
@@ -285,7 +287,8 @@ export interface DeliveryStageReport {
   delivery_seq: number;
   stage: "queued" | "submitted" | "included" | "settled" | "unknown";
   mode?: "normal" | "early" | "yield";
-  handoff?: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result";
+  handoff?: "prompt_hook" | "fold_hook" | "exec_input_written" | "turn_start_accepted" | "tool_result" |
+    "turn_steer_accepted" | "turn_steer_item_observed" | "turn_steer_write_uncertain";
   evidence?: "ticket_used";
   reason?: string;
   yield_disposition?: YieldDisposition;
