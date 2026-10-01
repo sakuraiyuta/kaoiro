@@ -3590,12 +3590,17 @@ if (args[0] === "models") {
       }) + "\n");
       await waitFor(() => turnEnds.length === 1);
 
-      let rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string }>;
+      const expectedResetAt = Math.floor(Date.parse("2026-10-01T11:05:00Z") / 1000);
+      let rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string; utilization?: number; resets_at?: number }>;
       expect(rateLimits.seven_day?.status).toBe("blocked");
+      expect(rateLimits.seven_day?.utilization).toBe(1);
+      expect(rateLimits.seven_day?.resets_at).toBe(expectedResetAt);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
-      rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string }>;
+      rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string; utilization?: number; resets_at?: number }>;
       expect(rateLimits.seven_day?.status).toBe("blocked");
+      expect(rateLimits.seven_day?.utilization).toBe(1);
+      expect(rateLimits.seven_day?.resets_at).toBe(expectedResetAt);
 
       currentTime = "2026-10-01T10:10:00Z";
       await host.send("successful recovery turn");
@@ -3706,7 +3711,97 @@ if (args[0] === "models") {
       // Probe should trigger immediately despite 5-min throttle not being met!
       await waitFor(() => probeCallCount === 2);
       expect(probeCallCount).toBe(2);
-      host.close();
+      await host.close();
+    });
+
+    it("close() は in-flight の usage probe を kill して終了を待つ (must 1)", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      let probeChild: FakeAgy | null = null;
+      let probeKilled: string | undefined;
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        runtimeAssetsAvailable: () => true,
+        agyPath: "/test/agy",
+        usageProbeSpawn: () => {
+          probeChild = new FakeAgy();
+          const origKill = probeChild.kill.bind(probeChild);
+          probeChild.kill = (sig) => {
+            probeKilled = sig;
+            origKill(sig);
+            probeChild!.finish();
+            return true;
+          };
+          return probeChild as never;
+        },
+      });
+
+      await waitFor(() => probeChild !== null);
+      expect(probeKilled).toBeUndefined();
+
+      await host.close();
+      expect(probeKilled).toBe("SIGKILL");
+    });
+
+    it("モデル不明時はプローブ成功時刻が更新されず、モデル判明後のターンで即座にプローブが実行される (nit 2)", async () => {
+      const cfg = config();
+      delete cfg.model;
+      let probeCallCount = 0;
+      let probeFinishedCount = 0;
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+      const turnEnds: unknown[] = [];
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 5 * 60 * 1000,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          probeCallCount++;
+          const child = new FakeAgy();
+          child.on("close", () => {
+            probeFinishedCount++;
+          });
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.5, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => probeCallCount === 1);
+      await waitFor(() => probeFinishedCount === 1);
+      expect(host.statusSnapshot().rate_limits).toBeUndefined();
+
+      currentTime = "2026-10-01T10:00:30Z";
+      await host.send("turn after model becomes known");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"init","conversation_id":"c1","init":{"model":"gemini-2.5-flash","tools":[]}}\n');
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+      await waitFor(() => turnEnds.length === 1);
+
+      await waitFor(() => probeCallCount === 2);
+      await waitFor(() => {
+        const rl = host.statusSnapshot().rate_limits as Record<string, { utilization: number }> | undefined;
+        return rl?.five_hour?.utilization !== undefined;
+      });
+      expect(probeCallCount).toBe(2);
+      await host.close();
     });
   });
 });
