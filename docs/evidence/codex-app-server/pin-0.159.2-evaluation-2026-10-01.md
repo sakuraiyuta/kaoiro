@@ -28,14 +28,15 @@ Outstanding adoption gates:
 1. Incorporate the newly measured Stage 3 command-approval decline evidence
    into the version-bound test fixture as part of the approved pin change.
    The new capture is linked below; changing the expected version alone is
-   insufficient. Record the advertised decisions versus the accepted `decline`
-   response, and distinguish documented protocol support from an undocumented
-   fallback; this evaluation establishes behavior only.
+   insufficient. `decline` is a documented stable response value, as shown
+   below. Correct the existing fixture test's comment to say that
+   `availableDecisions` is absent from the stable schema but present in the
+   experimental schema; that test edit belongs to the adoption change.
 2. Update the catalog's bundled-version assertion, obtain a green complete
    suite, and complete peer review of the resulting candidate.
-3. Before production adoption, establish the required network/filesystem
-   enforcement evidence. The measured denial and read-only `sleep` commands
-   do not establish every shared-worktree Git or network restriction.
+3. Complete the paired network/Git, file-change approval and command-launch
+   checks under [the runtime gate below](#remaining-runtime-gate-procedure).
+   The measured command denial and read-only `sleep` do not close this gate.
 4. Obtain the operator's adoption decision. This branch's dependency commit
    must not be merged into `develop` merely to publish this evaluation.
 
@@ -48,21 +49,26 @@ Outstanding adoption gates:
 - Evaluation scratch: `/tmp/kogane-462-eval.BgbjI8`.
 - Both candidate packages are exactly 0.159.2. The SDK patch is renamed for
   that version with byte-identical content. Product TypeScript and existing
-  tests are unchanged from the baseline.
+  tests are unchanged from the baseline. The SDK range changed from
+  `^0.156.1` to exact `0.159.2`, deliberately keeping resolution on the
+  version named by `patchedDependencies`; carry that rationale into the
+  adoption PR.
 - No change has been merged to `develop`, deployed, or made in the main tree.
-  No new binary has opened either production Codex home. This work therefore
-  adds no version to the set of binaries that have migrated production state;
+  The evaluator reports that no new binary opened a production Codex home.
+  This work therefore adds no version to the set of binaries that have
+  migrated production state;
   it does not independently reconstruct that state's earlier history.
 
 All Codex processes use a task-owned isolated `HOME`, and probes additionally
 set an isolated `CODEX_HOME`. Authenticated homes are described separately
-below; they were created and logged into by the operator. The final full suites leave `CODEX_HOME` unset
-while retaining an isolated `HOME`, so tests exercising the default
-`HOME/.codex` path can do so. API-key variables are absent. In the unauthenticated runs, loopback Responses
-providers supply scripted responses, with analytics and plugins disabled.
-Those runs use no live model service or account credential. CLI startup may still
-attempt external update traffic; these runs are not proof of zero outward
-traffic. Local dev-server state, tokens, cache and DETS files are isolated.
+below; they were created and logged into by the operator. The final full
+suites leave `CODEX_HOME` unset while retaining an isolated `HOME`, so tests
+exercising the default `HOME/.codex` path can do so. API-key variables are
+absent. In the unauthenticated runs, loopback Responses providers supply
+scripted responses, with analytics and plugins disabled. Those runs use no
+live model service or account credential. CLI startup may still attempt
+external update traffic; these runs are not proof of zero outward traffic.
+Local dev-server state, tokens, cache and DETS files are isolated.
 
 The initial frozen offline install exited 0 with warnings for an unbuilt
 Claude probe executable and an ignored `tesseract.js` build script. An asdf
@@ -74,7 +80,8 @@ commands use `<operator-home>/.asdf/installs/nodejs/24.3.0/bin` directly.
 Both versions were obtained from the published Linux x64 packages. Their
 `--version`, `features list`, stable schema generation and experimental schema
 generation all exited 0 under isolated homes. The candidate extracted from
-`npm pack` and the installed candidate have the same binary SHA-256. Native helper executables are retained alongside each binary.
+`npm pack` and the installed candidate have the same binary SHA-256. Native
+helper executables are retained alongside each binary until scratch cleanup.
 
 | Native binary | SHA-256 |
 | --- | --- |
@@ -113,7 +120,25 @@ The adapter-relevant changes are additive:
 `TurnInterruptParams`, `TurnInterruptResponse`, `ItemStartedNotification`,
 `ItemCompletedNotification` and `CommandExecutionOutputDeltaNotification`
 are byte-identical between stable bundles. Schema compatibility is not used
-as a substitute for execution.
+as a substitute for execution. `ServerRequest.json` is also byte-identical
+between pins, in both stable and experimental bundles (the two bundle types
+are compared separately). Thus the generated request union adds no new
+server-request kind across these pins. This supports the terminal-input
+approval review for upstream changes 47799/48073, but does not prove that a
+particular existing request kind cannot be emitted in a new runtime path.
+
+`CommandExecutionRequestApprovalResponse.json` is byte-identical on both
+pins and includes `decline` in the stable `CommandExecutionApprovalDecision`
+definition, described as denying the command while continuing the turn.
+`CommandExecutionRequestApprovalParams.json` is likewise identical within
+each bundle type: `availableDecisions` is absent from stable and present in
+experimental, where its description identifies an ordered list of decisions
+the client may present. The interpretation as presentation candidates is
+supported by that description; it is not the complete response vocabulary.
+Both P2 captures carry the field even though initialization explicitly sets
+`experimentalApi: false`. The accepted `decline` and completed turn therefore
+match a documented response value, not evidence of an undocumented alias.
+The manifest binds the compared schema files and their hashes.
 
 Negative control: remove `expectedTurnId` from both `required` and
 `properties` in a copied `TurnSteerParams`. The same `diff -u` comparison
@@ -128,7 +153,10 @@ The existing real-binary integration tests were run unchanged on both pins:
 `host_app_server`, `cli_app_server_history`, and `backend_rollback`, all
 `.integration.test.ts` under `wrapper/codex/test/`.
 
-Both runs: **9 files, 11 tests, exit 0**. These exercise default production
+Both runs: **9 files, 11 tests, exit 0**. The baseline exit is recorded in
+`baseline-gates.json` (`baseline-stage1`); the candidate exit is recorded in
+`candidate-initial-gates.json` (`candidate-stage1`). The manifest now binds
+both records and their matching test logs. These exercise default production
 transport/session/host composition, sequential turns, restarted resume,
 paginated history, settings, permission rollout, bridge activity and
 app-server-to-exec resume with retained identity/history. The rollback uses
@@ -168,7 +196,7 @@ they do not claim to reproduce the earlier authenticated measurements.
   captured output. All tools remain verification-depth tier (c), disposable
   task tools, not product deliverables.
 
-Reproduction invocations (absolute paths supplied; each output directory is new):
+Reproduction invocations (supply absolute paths and a new output directory):
 `node host-probe.mjs <worktree> <native-binary> <output-dir> L1|L2|L3|L3b`,
 `node rpc-probe.mjs <worktree> <native-binary> <output-dir>`, and
 `node l6-probe.mjs <worktree> <native-binary> <output-dir> <dev-server-port> <select-binary.mjs>`.
@@ -205,7 +233,7 @@ Two setup failures were corrected before the final paired captures: copying
 only the old native binary omitted `codex-code-mode-host`, and the first L6
 client waited for `waiting_input` although the no-prompt CLI was `idle`.
 The final runs use complete native distributions and accept the actual
-initial idle state. Their earlier failing logs are retained separately.
+initial idle state. Their earlier failing logs remain in scratch until cleanup.
 
 ## Authenticated comparison and Stage 3 denial
 
@@ -218,8 +246,10 @@ explicitly paired the binary hash above with its allowed `CODEX_HOME`:
 
 `<scratch>` denotes the operator-managed scratch authentication directory;
 `<operator-home>` denotes the operator home. These are publication placeholders,
-not literal reproduction paths. Both directories were checked as mode 0700. The evaluator did not read, copy,
-print or compare either `auth.json`, and did not open a production Codex home.
+not literal reproduction paths. Both directories were checked as mode 0700.
+The evaluator reports not reading, copying, printing or comparing either
+`auth.json`, and not opening a production Codex home. This access statement
+is an evaluator report, not independently provable from the probe captures.
 Each process used a separate scratch `HOME`; API-key variables were removed.
 `thread/start` or `thread/resume` explicitly selected `gpt-6-luna`, and every
 `turn/start` specified `effort: low`. The raw wire and a reservation ledger
@@ -265,7 +295,21 @@ The new P2 request/reply/resolution/item/terminal excerpt is preserved in
 It is an actual wire capture, not a hand-built replacement fixture. Both
 pin captures and all tool/output hashes are bound in the manifest. The current
 built `parseApprovalRequest` accepts the new capture; removing its `turnId`
-returns null in the paired parser check (exit 0).
+returns null in the paired parser check (exit 0). The excerpt selects, in
+capture order, incoming command-approval requests, `serverRequest/resolved`,
+command-execution `item/completed`, and `turn/completed`, plus the outgoing
+approval reply. It omits intermediate status and assistant notifications;
+packet values are preserved, but the excerpt has no timing column. The
+manifest's hash for `live-new-P2-final/trace.jsonl` identifies the source.
+
+For L3/L3b, the driver waits until the Host's accepted-into log is observed,
+then sleeps 2000/50 ms before calling `interrupt`. In the live captures,
+steer-write to interrupt-write elapsed 2004/2006 ms (old/new L3) and 52/52 ms
+(L3b); accepted-log to interrupt-write elapsed 2002/2002 and 50/50 ms.
+`live.observations[].after_terminal_ms` means final capture summary time
+minus `turn/completed` receipt time, including child shutdown. It is not
+exactly the 25000 ms passive wait. The summary follows child close (by 1 ms
+in new L3b), so child-close time is not the field's exact definition.
 
 The Host emits its existing unknown-catalog warning because these probe
 configs omit account catalog hints; this did not omit the explicit model
@@ -277,12 +321,93 @@ A preliminary old-pin L1 attempt stopped before `turn/start` because the
 probe's budget guard incorrectly required the model on that request instead
 of allowing its explicit thread-level inheritance. It sent no model turn.
 The guard was corrected before all ten final measurements; its failed log
-is retained separately. This was a probe defect, not an upstream regression.
+remains in scratch until cleanup. This was a probe defect, not an upstream
+regression.
 
 These live runs do not repeat live compact/review schedules or the full
 Phoenix operator route. L0/L4/L5 history checks and L6 default omitted-intent
 routing remain the paired real-binary/local-provider evidence above. P2 is
 a narrow remeasurement, not a rerun of all Stage 3 approval combinations.
+The command lifecycle launch-failure/early-output changes identified in issue
+462 (upstream 47529/47665) have no dedicated launch-failure probe here.
+Unchanged event schemas and successful `sleep` runs do not cover that path.
+
+The issue's original approval-never premise predates
+[ADR-0064](../../adr/0064-codex-app-server-approval-requests.md). The director
+reports that production uses `KAOIRO_CODEX_APPROVAL_AXIS=1` and that the
+runner startup log shows `approval_axis=on`; this evaluator did not inspect
+production settings or that log. The repository's
+[approval-axis configuration](../../reference/configuration/wrapper.md#codex-approval-axis-controls)
+routes command and file-change approval requests. Candidate 0.159.2
+file-change approval under `on-request`/`untrusted` is **unmeasured** in this
+evaluation and remains part of gate 3 below.
+
+## Remaining runtime gate procedure
+
+These are acceptance steps for a later authorized adoption evaluation, not
+results of this run. Use both pinned native binaries with separate, fresh
+scratch homes and the same rebuilt production wrapper/runner composition.
+Use a task-owned repository, linked worktree, endpoint and files throughout;
+never reuse production homes or a shared peer's repository. Record binary
+SHA, source commit, selected/effective policy, actual `turn/start` fields,
+command exits, file/Git state and server-request lifecycles. Local scripted
+model responses may drive the native tools; any live model use needs fresh
+authentication and a new budget. The ten-turn budget above is exhausted.
+
+1. **Network selection.** Select `workspace-write` through the normal
+   permission path. From a native command, request a unique nonce from an
+   evaluator-controlled unauthenticated HTTP endpoint outside the command's
+   sandbox namespace, once with `networkAccess: false`, once with `true`.
+   Verify endpoint reachability from the host and the allowed command before
+   interpreting a denial. Require false to fail without a matching endpoint
+   request and true to return the nonce with a matching endpoint log. Repeat
+   in reverse order with fresh nonces and both pins. Do not use a loopback
+   model response as proof that the sandboxed command had network access.
+   As the negative control, change only the intended blocked run's selection
+   to true: its command must succeed and the blocked-case checker must fail.
+   A checker failure must stop subsequent mutation steps in the same flow.
+2. **Linked-worktree Git.** Create a scratch repository plus a linked
+   worktree whose `.git` file points to metadata outside the worktree's
+   writable root. Disable signing/hooks through task-local Git configuration
+   and use a scratch identity. With the production `workspace-write`
+   selection and its actual approval path, change one tracked fixture,
+   `git add` it and `git commit`; verify the committed blob, parent and clean
+   index. Require the intended authorized Git workflow to complete on both
+   pins. Do not silently add writable roots or disable protection to force
+   success. On fresh fixtures, the read-only selection must reject the same
+   mutation and leave file/index/HEAD state unchanged. Separately attempt a
+   write to a sibling directory outside authorized roots and require denial
+   without a sentinel file; approving an ordinary in-scope command must not
+   grant that sibling write. A copied positive result with its committed
+   blob removed or a negative result with its sentinel present must fail the
+   corresponding checker, with no next-step mutation. If baseline already
+   rejects the intended Git workflow, retain the failure and keep this gate
+   open for an explicit policy decision rather than call the candidate safe.
+3. **Approval axis.** Enable the actual approval-axis composition in the
+   isolated wrapper. Under both `on-request` and `untrusted`, elicit a native
+   file-change approval and exercise allow/deny against fresh task-owned
+   files on each pin. Require the request to reach the production permission
+   broker, one response/resolution for its ID, matching item/turn identity,
+   and the approved change only on allow. Deny is the behavioral negative:
+   no change may be applied. A capture altered to contain a change after deny
+   must make the output checker fail. Missing approval requests are an
+   unmeasured schedule, not a pass. Also check the `never` control does not
+   open a permission dialog. This extends P2's command-denial evidence;
+   it does not reuse it as proof of file-change behavior.
+4. **Command launch failure.** On each pin, drive an actual command-launch
+   failure through the native execution path (not merely a shell command
+   returning nonzero) and capture started/output/completed/error events.
+   Verify the adapter reaches one classified terminal with no orphan active
+   item or hung Host. Include a successful command control and a negative
+   capture missing the required terminal: the checker must reject it.
+   If the native tool cannot induce a launch failure with the chosen fixture,
+   record that path as unmeasured and retain this adoption gate.
+
+Gate 3 closes only when the paired observations meet these conditions on the
+final candidate, the negative controls fail as expected, and no policy or
+runtime difference remains unexplained. An observed enforcement change needs
+an explicit compatibility/policy decision and new final-artifact evidence;
+matching request fields alone cannot close the gate.
 
 ## Interruption defaults
 
@@ -349,8 +474,12 @@ Vitest unhandled-error summary. The Codex suite is explicitly **not green**.
 Executable/driver/checker identities, final artifact hashes, command exits
 and output hashes are recorded in the
 [companion evaluation manifest](pin-0.159.2-evaluation-2026-10-01.json). Scratch
-is retained at `/tmp/kogane-462-eval.BgbjI8` pending review clarification;
-kogane owns its eventual cleanup. The two authenticated homes listed above
+is retained at `/tmp/kogane-462-eval.BgbjI8` pending review;
+kogane owns its eventual cleanup. Scratch tools and raw logs will not remain
+after cleanup; their hashes identify bytes but do not preserve the bytes.
+Reproducing these probes after cleanup requires recreating the disposable
+tools from the recorded procedure and comparing both pins again. The
+committed P2 excerpt remains available. The two authenticated homes listed above
 were deleted with the director's authorization after the measurements. The
 scratch home reserved for issue 461 was not used or removed. Probe/server
 child processes were stopped through their owning scripts.

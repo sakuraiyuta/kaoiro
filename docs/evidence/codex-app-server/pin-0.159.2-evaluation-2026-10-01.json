@@ -58,16 +58,41 @@
   ],
   "stage1_negative": [
     {
+      "version": "0.156.1",
       "label": "terminal-negative",
-      "exit": 1
+      "exit": 1,
+      "log": "logs/baseline-terminal-negative.log",
+      "exit_source": "Evaluator original execution result; retained Vitest log reports one failing test but does not print shell exit status."
     },
     {
+      "version": "0.156.1",
+      "label": "terminal-restored",
+      "exit": 0,
+      "log": "logs/baseline-terminal-restored.log",
+      "exit_source": "Evaluator original execution result; retained Vitest log reports one passing test."
+    },
+    {
+      "version": "0.159.2",
+      "label": "terminal-negative",
+      "exit": 1,
+      "log": "logs/candidate-terminal-negative.log",
+      "exit_record": "candidate-negative-restored.json",
+      "exit_label": "terminal-negative"
+    },
+    {
+      "version": "0.159.2",
       "label": "restored-build",
-      "exit": 0
+      "exit": 0,
+      "exit_record": "candidate-negative-restored.json",
+      "exit_label": "restored-build"
     },
     {
+      "version": "0.159.2",
       "label": "restored-stage1",
-      "exit": 0
+      "exit": 0,
+      "log": "logs/restored-stage1.log",
+      "exit_record": "candidate-negative-restored.json",
+      "exit_label": "restored-stage1"
     }
   ],
   "stage2_runs": [
@@ -342,7 +367,32 @@
     "live-negative-results.json": "2ad16de214e7f37b6f7e9fc1123b2067ab596ede94f26196b13cd0ec1f617e08",
     "live-budget.jsonl": "f2e6450c2dbe2f4ea46cf0cd172ca0f8e8ceb62ebd2385c4bf639cc8809a1c46",
     "live-features-old.log": "773338d5985ac7cf3184a27468bedf0096e366793906a6aa65bc4ca1989b9416",
-    "live-features-new.log": "b11fdfa3000a4efdc8124041dadb446d584c0c34a42970b6eb26f78b5e622eda"
+    "live-features-new.log": "b11fdfa3000a4efdc8124041dadb446d584c0c34a42970b6eb26f78b5e622eda",
+    "logs/baseline-stage1-real-path.log": "b02c2786043cea45cfa93e16d77fc157be662b90eb5572f4ebf534e24ee52e3a",
+    "logs/candidate-stage1.log": "3d6d5f36ccb1dd88704dbdee19c885d44561a156227e01ae75cf0dafa9c2ee40",
+    "logs/baseline-terminal-negative.log": "3c6d2db87f50d39f047206fe80f45a02caac6cb4870ca54ce434e5f06a3ff42d",
+    "logs/baseline-terminal-restored.log": "0127e1c462ec60af75a25d1c362c52ef1437dd6d3783eb3a3b100b9fdf262d81",
+    "logs/candidate-terminal-negative.log": "6f9035efe040caa1e429d7db2d61c67d9d2bd83acfa20b8d9ba89eab167e1795",
+    "logs/restored-stage1.log": "7fc197d6b33a0c3f3e56c1022fefb03a40b740c555b7695e4cddd1d6d5abc9b4",
+    "logs/candidate-unpatched-reader-negative.log": "775a428fc027e130e3dcc506f88fb5e5f1e69b9b636ae3a58f6e83738dd7afc7",
+    "logs/patched-reader.log": "ac4fd92f625a0ec60627312c4df30fe5f91f1d42f1495b9a979a18ff2e68242e",
+    "logs/schema-negative.diff": "649bf943e9e2461cbbc86bb4002a1bf0f710e45b6fd181ae9794097239067750",
+    "baseline-gates.json": "1dc0a5bedf0dfb0a50ac4f6d527ba7f5b8fed7ff7808e1e048d39736f509a9b4",
+    "candidate-initial-gates.json": "a56b1a16434b0f1680c25cd5f73fc4c1e35acfc9f9ed2563c09e7a8ba316b8eb",
+    "candidate-negative-restored.json": "554e168f9af3d8d3a89b1edaf7e88f9d837ac7b2eaa4b31060f183428d84d609",
+    "candidate-gates.json": "62034619802931943012f74a293dfd55948f125533a871787d29f5023c9dd159",
+    "schema-old-stable/ServerRequest.json": "f339be472737a0003efa25fba2e6e6c9237e621cd065b6d6995c51256e9dc1fb",
+    "schema-new-stable/ServerRequest.json": "f339be472737a0003efa25fba2e6e6c9237e621cd065b6d6995c51256e9dc1fb",
+    "schema-old-stable/CommandExecutionRequestApprovalResponse.json": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7",
+    "schema-new-stable/CommandExecutionRequestApprovalResponse.json": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7",
+    "schema-old-stable/CommandExecutionRequestApprovalParams.json": "16a71816c2d66e319c2c4aa83dd636dfdc43c61e72b6d5475e421ce08d8e6558",
+    "schema-new-stable/CommandExecutionRequestApprovalParams.json": "16a71816c2d66e319c2c4aa83dd636dfdc43c61e72b6d5475e421ce08d8e6558",
+    "schema-old-experimental/ServerRequest.json": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6",
+    "schema-new-experimental/ServerRequest.json": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6",
+    "schema-old-experimental/CommandExecutionRequestApprovalResponse.json": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7",
+    "schema-new-experimental/CommandExecutionRequestApprovalResponse.json": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7",
+    "schema-old-experimental/CommandExecutionRequestApprovalParams.json": "c9728280b8f3204fd729d0fb3d1ca7bb05b1150de26b3653f7163e6a9bd941e7",
+    "schema-new-experimental/CommandExecutionRequestApprovalParams.json": "c9728280b8f3204fd729d0fb3d1ca7bb05b1150de26b3653f7163e6a9bd941e7"
   },
   "live": {
     "host_checks": [
@@ -538,7 +588,9 @@
         ],
         "input_completed_ms": [],
         "after_terminal_ms": 27028,
-        "stderr_lines": 0
+        "stderr_lines": 0,
+        "steer_write_to_interrupt_ms": 2004,
+        "accepted_log_to_interrupt_ms": 2002
       },
       {
         "version": "old",
@@ -552,7 +604,9 @@
         ],
         "input_completed_ms": [],
         "after_terminal_ms": 26681,
-        "stderr_lines": 0
+        "stderr_lines": 0,
+        "steer_write_to_interrupt_ms": 52,
+        "accepted_log_to_interrupt_ms": 50
       },
       {
         "version": "old",
@@ -623,7 +677,9 @@
         ],
         "input_completed_ms": [],
         "after_terminal_ms": 26714,
-        "stderr_lines": 0
+        "stderr_lines": 0,
+        "steer_write_to_interrupt_ms": 2006,
+        "accepted_log_to_interrupt_ms": 2002
       },
       {
         "version": "new",
@@ -637,7 +693,9 @@
         ],
         "input_completed_ms": [],
         "after_terminal_ms": 26704,
-        "stderr_lines": 0
+        "stderr_lines": 0,
+        "steer_write_to_interrupt_ms": 52,
+        "accepted_log_to_interrupt_ms": 50
       },
       {
         "version": "new",
@@ -720,7 +778,12 @@
     "homes_deleted": [
       "<scratch>/codex-462-v156",
       "<scratch>/codex-462-v159"
-    ]
+    ],
+    "timing_definitions": {
+      "after_terminal_ms": "Final capture summary time minus turn/completed receipt time, including host shutdown; it is not exactly the 25000 ms passive wait.",
+      "steer_write_to_interrupt_ms": "turn/interrupt send time minus turn/steer send time.",
+      "accepted_log_to_interrupt_ms": "turn/interrupt send time minus the Host accepted-into log time. The driver waits for this log then sleeps 2000 ms (L3) or 50 ms (L3b)."
+    }
   },
   "path_placeholders": {
     "<scratch>": "Operator-managed scratch authentication directory; not a literal reproduction path.",
@@ -730,5 +793,117 @@
   "cleanup": {
     "authenticated_homes": "Both deleted with director authorization; no credential contents read, copied or compared.",
     "evaluation_scratch": "Retained pending director clarification of review inconsistencies; evaluator owns cleanup."
-  }
+  },
+  "stage1_runs": [
+    {
+      "version": "0.156.1",
+      "files_passed": 9,
+      "tests_passed": 11,
+      "exit": 0,
+      "log": "logs/baseline-stage1-real-path.log",
+      "exit_record": "baseline-gates.json",
+      "exit_label": "baseline-stage1"
+    },
+    {
+      "version": "0.159.2",
+      "files_passed": 9,
+      "tests_passed": 11,
+      "exit": 0,
+      "log": "logs/candidate-stage1.log",
+      "exit_record": "candidate-initial-gates.json",
+      "exit_label": "candidate-stage1"
+    }
+  ],
+  "sdk_patch_checks": [
+    {
+      "version": "0.159.2",
+      "patched": false,
+      "exit": 1,
+      "tests_failed": 1,
+      "tests_skipped": 133,
+      "log": "logs/candidate-unpatched-reader-negative.log",
+      "exit_source": "Evaluator original execution result; retained Vitest log reports the failing reader test."
+    },
+    {
+      "version": "0.159.2",
+      "patched": true,
+      "exit": 0,
+      "tests_passed": 1,
+      "tests_skipped": 133,
+      "log": "logs/patched-reader.log",
+      "exit_record": "candidate-gates.json",
+      "exit_label": "patched-reader"
+    }
+  ],
+  "schema_negative": {
+    "version": "0.159.2",
+    "mutation": "Remove expectedTurnId from properties and required in a copy of TurnSteerParams.",
+    "comparator": "diff -u",
+    "exit": 1,
+    "log": "logs/schema-negative.diff",
+    "exit_source": "Evaluator original comparison result; diff text is retained separately."
+  },
+  "schema_surface_checks": [
+    {
+      "bundle": "stable",
+      "file": "ServerRequest.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "f339be472737a0003efa25fba2e6e6c9237e621cd065b6d6995c51256e9dc1fb"
+    },
+    {
+      "bundle": "stable",
+      "file": "CommandExecutionRequestApprovalResponse.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7"
+    },
+    {
+      "bundle": "stable",
+      "file": "CommandExecutionRequestApprovalParams.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "16a71816c2d66e319c2c4aa83dd636dfdc43c61e72b6d5475e421ce08d8e6558"
+    },
+    {
+      "bundle": "experimental",
+      "file": "ServerRequest.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6"
+    },
+    {
+      "bundle": "experimental",
+      "file": "CommandExecutionRequestApprovalResponse.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7"
+    },
+    {
+      "bundle": "experimental",
+      "file": "CommandExecutionRequestApprovalParams.json",
+      "versions": [
+        "0.156.1",
+        "0.159.2"
+      ],
+      "byte_identical": true,
+      "sha256": "c9728280b8f3204fd729d0fb3d1ca7bb05b1150de26b3653f7163e6a9bd941e7"
+    }
+  ],
+  "evidence_retention": "Scratch tools and raw logs are disposable and will be removed after review. Hashes identify original bytes but do not preserve them; rerunning probes after cleanup requires recreating the tools. The committed P2 excerpt remains available."
 }
