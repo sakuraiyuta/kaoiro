@@ -7,7 +7,7 @@
 //
 // Wire (stdout, one line, JSON):
 //   { "ok": true, "models": ModelInfo[], "elapsed_ms": number,
-//     "source": "init" | "supported_models" }
+//     "source": "init" | "supported_models", "commands"?: string[] }
 //   { "ok": false, "reason": EngineCatalogFailReason,
 //     "detail"?: string, "elapsed_ms": number }
 //
@@ -63,6 +63,7 @@ interface ProbeSuccess {
   elapsed_ms: number;
   source: "init" | "supported_models";
   rate_limits?: ProbeRateLimits;
+  commands?: string[];
 }
 
 interface ProbeFailure {
@@ -146,6 +147,24 @@ export function projectModel(m: unknown): ProbeModel | null {
     out.resolved_model = rec.resolvedModel;
   }
   return out;
+}
+
+/** Map an SDK SlashCommand item (structural) to the canonical slash command string.
+ *  Prefers a prefixed alias (e.g. "anthropic-skills:built-in-browser") if present,
+ *  matching system/init slash_commands behavior. */
+export function projectCommand(c: unknown): string | null {
+  if (typeof c !== "object" || c === null) return null;
+  const rec = c as Record<string, unknown>;
+  const name =
+    typeof rec.name === "string" && rec.name.length > 0 ? rec.name : null;
+  if (name === null) return null;
+  if (Array.isArray(rec.aliases)) {
+    const prefixed = rec.aliases.find(
+      (a): a is string => typeof a === "string" && a.includes(":"),
+    );
+    if (prefixed !== undefined) return prefixed;
+  }
+  return name;
 }
 
 function emit(result: ProbeSuccess | ProbeFailure): void {
@@ -240,6 +259,13 @@ export async function runProbe(
       .map(projectModel)
       .filter((m): m is ProbeModel => m !== null);
 
+    const initCommands = (init as { commands?: unknown }).commands;
+    const commands = Array.isArray(initCommands)
+      ? initCommands
+          .map(projectCommand)
+          .filter((c): c is string => c !== null)
+      : undefined;
+
     clearTimeout(deadline);
     const rate_limits = args.usage ? await readUsage(q, usageTimeoutMs) : undefined;
     q.close();
@@ -265,6 +291,7 @@ export async function runProbe(
       elapsed_ms: Math.round(performance.now() - t0),
       source,
       ...(rate_limits === undefined ? {} : { rate_limits }),
+      ...(commands !== undefined && commands.length > 0 ? { commands } : {}),
     });
     return 0;
   } catch (err) {

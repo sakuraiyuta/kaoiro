@@ -25,6 +25,7 @@ import {
   requestCompactDescriptor,
   RESUME_PROMPT_MAX_BYTES,
 } from "../src/request_compact.js";
+import type { ProbeOutcome } from "../src/probe-client.js";
 import type {
   Envelope,
   TasklistSourceItem,
@@ -246,6 +247,74 @@ describe("AgentHost whoami effective projection (#113)", () => {
     await expect(host.setEffort("high")).rejects.toThrow(
       "effort_catalog_unavailable",
     );
+  });
+
+  it("idle startup probe seeds slash_commands into ext before query is constructed (issue #424)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      probeFn: async () => ({
+        ok: true,
+        models: [],
+        commands: ["clear", "anthropic-skills:built-in-browser"],
+        elapsed_ms: 1,
+      }),
+    });
+    expect(host.statusExtSnapshot()).not.toHaveProperty("slash_commands");
+    await host.probeRateLimits();
+    expect(host.statusExtSnapshot().slash_commands).toEqual([
+      "clear",
+      "anthropic-skills:built-in-browser",
+    ]);
+    expect(envs).toHaveLength(1);
+    expect(envs[0]?.ext.slash_commands).toEqual([
+      "clear",
+      "anthropic-skills:built-in-browser",
+    ]);
+  });
+
+  it("delayed probe results do not overwrite live Query slash_commands (issue #424)", async () => {
+    let resolveProbe!: (outcome: ProbeOutcome) => void;
+    const probePromise = new Promise<ProbeOutcome>((res) => {
+      resolveProbe = res;
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: () => probePromise,
+      queryFn: makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield {
+            type: "system",
+            subtype: "init",
+            slash_commands: ["live-cmd"],
+          } as unknown as SDKMessage;
+        }
+        return asQuery(gen());
+      }),
+    });
+    const probeWait = host.probeRateLimits();
+    const runWait = host.run("prompt");
+    await runWait;
+    expect(host.statusExtSnapshot().slash_commands).toEqual(["live-cmd"]);
+
+    resolveProbe({
+      ok: true,
+      models: [],
+      commands: ["stale-probe-cmd"],
+      elapsed_ms: 1,
+    });
+    await probeWait;
+
+    expect(host.statusExtSnapshot().slash_commands).toEqual(["live-cmd"]);
+  });
+
+  it("probe failure leaves slash_commands absent until live Query arrives (issue #424)", async () => {
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async () => ({ ok: false, reason: "cli_error", elapsed_ms: 1 }),
+    });
+    await host.probeRateLimits();
+    expect(host.statusExtSnapshot()).not.toHaveProperty("slash_commands");
   });
 
   it("a successful startup probe with only the default row does not authorize effort selection", async () => {
@@ -3146,6 +3215,80 @@ describe("AgentHost — query injection", () => {
     await host.run();
     const e = envs.find((env) => env.state === "thinking");
     expect(e?.ext?.slash_commands).toEqual(["model", "review", "clear"]);
+  });
+
+  it("init 時に supportedCommands() を取得して ext.slash_commands を更新・即時 emit する (issue #424)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield msg({
+            type: "system",
+            subtype: "init",
+            slash_commands: ["init-cmd"],
+          });
+          yield assistant([{ type: "text", text: "working" }]);
+          yield result("success", { result: "done" });
+        }
+        const q = asQuery(gen());
+        q.supportedCommands = async () => [
+          { name: "supported-cmd", description: "", argumentHint: "" },
+          { name: "built-in-browser", description: "", argumentHint: "", aliases: ["anthropic-skills:built-in-browser"] },
+        ];
+        return q;
+      }),
+      now: () => "T",
+    });
+    await host.run("prompt");
+    expect(host.statusExtSnapshot().slash_commands).toEqual([
+      "supported-cmd",
+      "anthropic-skills:built-in-browser",
+    ]);
+    expect(
+      envs.some((env) =>
+        Array.isArray(env.ext?.slash_commands) &&
+        env.ext.slash_commands.includes("supported-cmd"),
+      ),
+    ).toBe(true);
+  });
+
+  it("commands_changed メッセージで slash_commands を動的更新・即時 emit する (issue #424)", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      queryFn: makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield msg({
+            type: "system",
+            subtype: "init",
+            slash_commands: ["init-cmd"],
+          });
+          yield assistant([{ type: "text", text: "working" }]);
+          yield msg({
+            type: "system",
+            subtype: "commands_changed",
+            commands: [
+              { name: "dynamic-cmd" },
+              { name: "built-in-browser", aliases: ["anthropic-skills:built-in-browser"] },
+            ],
+          });
+        }
+        return asQuery(gen());
+      }),
+      now: () => "T",
+    });
+    await host.run("prompt");
+    expect(host.statusExtSnapshot().slash_commands).toEqual([
+      "dynamic-cmd",
+      "anthropic-skills:built-in-browser",
+    ]);
+    expect(
+      envs.some((env) =>
+        Array.isArray(env.ext?.slash_commands) &&
+        env.ext.slash_commands.includes("dynamic-cmd"),
+      ),
+    ).toBe(true);
   });
 
   it("getContextUsage を version 付き ext.context / context_budget / ext.model として付与する (#16/#264)", async () => {

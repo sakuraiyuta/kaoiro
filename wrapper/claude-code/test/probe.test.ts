@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { sep } from "node:path";
-import { projectModel, runProbe } from "../src/probe.js";
+import { projectCommand, projectModel, runProbe } from "../src/probe.js";
 import type { query } from "@anthropic-ai/claude-agent-sdk";
 
 describe("projectModel", () => {
@@ -59,6 +59,49 @@ describe("projectModel", () => {
   });
 });
 
+describe("projectCommand", () => {
+  it("aliases にコロン付きのプレフィックスがあればそちらを優先する (issue #424)", () => {
+    const out = projectCommand({
+      name: "built-in-browser",
+      description: "in-app browser",
+      aliases: ["anthropic-skills:built-in-browser"],
+    });
+    expect(out).toBe("anthropic-skills:built-in-browser");
+  });
+
+  it("aliases にコロン付きが無ければ name を返す", () => {
+    const out = projectCommand({
+      name: "code-review",
+      description: "review diff",
+      aliases: ["review"],
+    });
+    expect(out).toBe("code-review");
+  });
+
+  it("aliases が空または未定義なら name を返す", () => {
+    expect(
+      projectCommand({
+        name: "my-commit",
+        description: "",
+      }),
+    ).toBe("my-commit");
+    expect(
+      projectCommand({
+        name: "clear",
+        description: "",
+        aliases: [],
+      }),
+    ).toBe("clear");
+  });
+
+  it("name が無効またはオブジェクトでないなら null を返す", () => {
+    expect(projectCommand(null)).toBeNull();
+    expect(projectCommand("not-object")).toBeNull();
+    expect(projectCommand({ name: "" })).toBeNull();
+    expect(projectCommand({ name: 123 })).toBeNull();
+  });
+});
+
 describe("optional usage probe", () => {
   it("uses an isolated cwd and minimal SDK options", async () => {
     let options: Record<string, unknown> | undefined;
@@ -106,5 +149,22 @@ describe("optional usage probe", () => {
     expect(emitted).toMatchObject([{ ok: true, models: [{ value: "sonnet" }] }]);
     expect(emitted[0]).not.toHaveProperty("rate_limits");
     expect(closed).toBe(true);
+  });
+
+  it("initializationResult の commands を射影して出力に含める (issue #424)", async () => {
+    const fakeQuery = (() => ({
+      initializationResult: async () => ({
+        models: [{ value: "sonnet", displayName: "Sonnet" }],
+        commands: [
+          { name: "clear" },
+          { name: "built-in-browser", aliases: ["anthropic-skills:built-in-browser"] },
+        ],
+      }),
+      close: () => {},
+    })) as unknown as typeof query;
+    const emitted: any[] = [];
+    const code = await runProbe([], fakeQuery, (result) => emitted.push(result));
+    expect(code).toBe(0);
+    expect(emitted[0].commands).toEqual(["clear", "anthropic-skills:built-in-browser"]);
   });
 });
