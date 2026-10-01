@@ -1,0 +1,1440 @@
+{
+  "date": "2026-10-01",
+  "writer": "Fuji",
+  "pin": "0.159.3",
+  "model": "gpt-6-luna",
+  "effort": "low",
+  "state_home": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593",
+  "operator_home": "per-run disposable HOME under tmp/reviews",
+  "production_home_used": false,
+  "project_server": "localhost Phoenix protocol fixture; real delivery-ledger unit tests are separate",
+  "live_ledger": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/live-ledger.json",
+    "sha256": "77665607c9910c6e9fd524c6e608d9537965cc591a4ec8685b9b299f5577965a",
+    "bytes": 1436
+  },
+  "live_total": 5,
+  "live_maximum": 7,
+  "live_retry_count": 0,
+  "status": "codex_native_gate_passed_other_engine_native_tools_pending_director_decision",
+  "source_head": "38bed7e0516d06e5e83263115b6cb62f4da32ea0",
+  "branch": "issue-464-codex-home-isolation-pin",
+  "live_turns": 3,
+  "binary": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/node_modules/.pnpm/@openai+codex@0.159.3/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "bytes": 287086056
+  },
+  "build_artifacts": [
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/args.js",
+      "sha256": "a1300c4678fde79ceb3d6379d0a5eb5554e41106b923be0df049cbe069d62e45",
+      "bytes": 755
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/build_info.js",
+      "sha256": "99cb0a4baf04c9a2007e4f8aab2b8be67858739103482c06dcc1a02870d79b33",
+      "bytes": 3027
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/delivery_recovery.js",
+      "sha256": "ee201df7d00c81728af27cc044e5b140636de0010808c0e85a3a591a49793ef3",
+      "bytes": 6673
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/index.js",
+      "sha256": "12b7eed7c28895a112d2b79c6b514400498c4c1496b74c82b42c78de0c5e8d71",
+      "bytes": 725
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/persona.js",
+      "sha256": "853a0772b1000c67ee9bf0de791dc102d119b920bd7ee76b647217ef5020bb12",
+      "bytes": 23650
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/redact.js",
+      "sha256": "8f497371c7b25e449c00a0991526c7787b79e1e6501b99ff7ce360a887fd8c3c",
+      "bytes": 9028
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/core/dist/transport.js",
+      "sha256": "480cebadcf8ea830977a2fddf391338eb498eb55089dda85e172854e65968c39",
+      "bytes": 98412
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/approval_gate.js",
+      "sha256": "5b28698a6bd18ddc104a9bb1872fea1a9212abaed321982517dfea63782e2bbd",
+      "bytes": 2892
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/ask_user_question.js",
+      "sha256": "e542d6cb568991c069df6afe75ac5bb54c4c8b6afed6375ba15c741ef7437a2c",
+      "bytes": 3634
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/catalog.js",
+      "sha256": "fc6dacd19052960239e683aa225d4a4f2d3c9a85a21dda25518d4fd1b8e274ef",
+      "bytes": 1672
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/delivery_ack.js",
+      "sha256": "774aa6235563572246439ada983284ef1f400b5e5862b67f63924380f64c0ab7",
+      "bytes": 9545
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/delivery_stages.js",
+      "sha256": "4224cd09027a695e5daa4a64692c2dba80467b1768921344c525e5f821928a70",
+      "bytes": 9736
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/engine.js",
+      "sha256": "09620bd1232209b039ab93f7a5dd6e259c4264f35115a8d6d28b130f942cf7b8",
+      "bytes": 1806
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/history_replay.js",
+      "sha256": "d42b9c64b4c808f8fa492b43e873e4450bc83e45b38beeb0b9dc135b051cd6f8",
+      "bytes": 4907
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/ia_sidecar.js",
+      "sha256": "daa51a07ce6096ed5b98580b1b82c469cc717a907b3573b5cc59c7564461ed7c",
+      "bytes": 20421
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/index.js",
+      "sha256": "a63251982565bce34f05a4d3ba62eee5609e10b65999b3bbf80effcc1dc0db74",
+      "bytes": 2716
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/inter_agent.js",
+      "sha256": "c5e86fea81bf17e43eab3c09bc3ae51235f2c491cff61da6ad17a7112ad79982",
+      "bytes": 144586
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/logpayload.js",
+      "sha256": "0d1dac2d12ee38f02ec5fdfb9a08142b091fb47b5b655a01d22c899c8fe20583",
+      "bytes": 3040
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/pending.js",
+      "sha256": "d534cda1f59c132829a4ac72e6cc5d7b8cc604a74547b242b318648131a4c194",
+      "bytes": 2425
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/permission.js",
+      "sha256": "c0361c5047f7cfe813f897f71a97bf484de440be8fd2a6c3ede0fd8320afc328",
+      "bytes": 7313
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/persona_opt_in.js",
+      "sha256": "bf48a976403166f92e53ea336b4f7699a885e12d08b1fa4c32202f9c53c8e2a3",
+      "bytes": 866
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/question.js",
+      "sha256": "74497fb197689d42ab5fe072c06261462f30a1ed544b288d5516110c9ebe02eb",
+      "bytes": 3948
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/redact.js",
+      "sha256": "d4088296d085a07f2af635cb2418cc652d6b589546a6a56d916e4d1de6e9d093",
+      "bytes": 132
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/reply_basis.js",
+      "sha256": "d4aa965f95c07ba55a52e03516f62046ffd67530617bfc5a26bd91426a913fc8",
+      "bytes": 11479
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/request_session_reset.js",
+      "sha256": "768a4065a0a75078649e1f6cfd9707ab54643a3b8c1649b854aa91f50892f4ec",
+      "bytes": 19952
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/snapshot.js",
+      "sha256": "99840bdb0543b684ae4c6d8abd68e30c55577e65ea4a92e72e1d9df9fdcf6382",
+      "bytes": 4100
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/state.js",
+      "sha256": "8694a51bea59a8dee47acf09077fce2f9aa4467c53fe146976cb1362ac63021c",
+      "bytes": 14022
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/tasklist.js",
+      "sha256": "67bbe684d4f34d9979146957d2836ab41f63e41736a40a93e93518ad41a53609",
+      "bytes": 2541
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/tool_origins.js",
+      "sha256": "1803709154121cfe10c0b71c371443c5fd0f941e02f2b1f941d3c90fdaf30bac",
+      "bytes": 5398
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/tooling.js",
+      "sha256": "9ef74711266a21b134866f1cb7158f369acd17c5c0ec4a55fea56943fa2a07a4",
+      "bytes": 589
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/types.js",
+      "sha256": "47b7180d696b8f2b63a5ce3158bff0afd07974dce8d1cd2454ea095cd8128d71",
+      "bytes": 489
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/agent-common/dist/work_tools.js",
+      "sha256": "2421bbd2096bdb13a67ba88eab84badea334828076269769d2066ba59152a127",
+      "bytes": 4543
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/adapter.js",
+      "sha256": "c05c34f8da93da617836ae0dede6f528c332a493475106020aef9f185ae1ce27",
+      "bytes": 20100
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_approval.js",
+      "sha256": "91a80b228018acc510647982e7d503430c73ee11228724af0cca1a20b8270589",
+      "bytes": 10019
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_history.js",
+      "sha256": "f6ed14e11ed7b96c03f601f7d2c63cd7d036b5f404c563ae2a8b66d3a170af1c",
+      "bytes": 10117
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_host_runtime.js",
+      "sha256": "f9cb0344dbf7d2a22e359f3ab3921ac41a605afcc9d8e85862b6e0f018c09814",
+      "bytes": 12087
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_input.js",
+      "sha256": "9e216198aee21170d9374f4ffb4b2486049f03adc85533f2ae196c7cf6969ece",
+      "bytes": 902
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_permission.js",
+      "sha256": "9a4c5bc9ad17420939a32b6b3946855d3cd51495d50c9d1cdfb27b7ae26eea7e",
+      "bytes": 3738
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_projection.js",
+      "sha256": "ac56c69f2a649aea191aaef2b3b2a53126308761eb273d18daececbd8d194c46",
+      "bytes": 12433
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_replay.js",
+      "sha256": "22c3e9ae9e4a61a171d0f5d28dda10959e909f41bd590d74277c30daea87b2b2",
+      "bytes": 4052
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_rpc.js",
+      "sha256": "a27af02f1decacffd411ef07b1fa1d62054ecffc7a1e737b8895c6e85d1ddddf",
+      "bytes": 11273
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_session.js",
+      "sha256": "b0f1c8842adad575946d83f245e47e13c045f4b6fd1485b2e6df455fa4f84cf7",
+      "bytes": 8103
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_settings.js",
+      "sha256": "d3584fbf4c03d7a7a3b8cbde0576f7d3ccde91635b6b729870aee1b0bd1f4769",
+      "bytes": 5757
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_steer.js",
+      "sha256": "0401a974407651085548c378b82915feaf8077f19d0728a2d2fc58cb1742a419",
+      "bytes": 2613
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_stream.js",
+      "sha256": "da151f72a987f27991fa5f71b68fe382581d28471a1cf9fc056815d9d63cf03a",
+      "bytes": 1550
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_telemetry.js",
+      "sha256": "fe31dd99a1695f81d2890af618e62a4a3a8b86adbfb2cb5a6b450691e9d34c04",
+      "bytes": 3680
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/app_server_transport.js",
+      "sha256": "fbf03c8b41023b0ad1a2450c8559f5f9234f3153801d4ef425f5209a6d644bda",
+      "bytes": 27687
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/bridge.js",
+      "sha256": "2fcf440e2c0413b089e3ff519e8fb6a21342e97da4629a7f6f9eacf98b16633b",
+      "bytes": 5037
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/bridge_policy.js",
+      "sha256": "7429396454cbdf14a0399d621ab46c7753f78b8d1b98cb6a454a2e6be45dba52",
+      "bytes": 716
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/catalog.js",
+      "sha256": "7e323d09492f36104f4a3e858b5ca1581677ee0a9ea4a41f4f02459151300bb4",
+      "bytes": 13267
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/cli.js",
+      "sha256": "624f167c948884c44675bb008695ba1e5eb24f7325e42fdde0a2d86ee3cbc94f",
+      "bytes": 49344
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/codex_home.js",
+      "sha256": "8b959564b0407c69218b6fcd0520d067707e7cb8abe290eeb9beaa4ccb9939d6",
+      "bytes": 1167
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/history.js",
+      "sha256": "652a3903fea375197efd1795d40c0bb7429fc82baa043122d5f6f0b17c58d61f",
+      "bytes": 7477
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/host.js",
+      "sha256": "e5abfba471b5429c7bc617523ac62c1311f67fd284fc601df5b753129100a2f8",
+      "bytes": 131238
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/index.js",
+      "sha256": "e28f92cc92126d98ef949f64887980e8fe3221103f5fab6ea722c62b369e6bb0",
+      "bytes": 750
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/inter_agent_message_handler.js",
+      "sha256": "c6444b18a60a5e516b8a84442084cfe5cc28815ae507de596ba5e4fa10811688",
+      "bytes": 2030
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/inter_agent_turn_coordinator.js",
+      "sha256": "fd8a68aef8779068dc39f9247c8697d657df854f407f009dab340ba92c7c7c83",
+      "bytes": 13071
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/network_access.js",
+      "sha256": "e58d3affd6a14c04e6824a29b69d62f22c235fd090e36f3070b567d5916dd5dd",
+      "bytes": 336
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/permission_state.js",
+      "sha256": "7216f4b16e612bd3cc6e671c27682ed484587a14d12549374905f698a2f6987d",
+      "bytes": 11479
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/rollout.js",
+      "sha256": "9d92aeae3e02fb2a4772da59be66d0238a8645927682536a655c0e5d099cdbc0",
+      "bytes": 21697
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/source_resolution.js",
+      "sha256": "0d1d105ce653caa7c5f9d37dc056d21dbd74ca276d2e0beaa46f4050cc7b876b",
+      "bytes": 2906
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/startup.js",
+      "sha256": "1eee642c0bcaca7817c16a26e5e3b2eb17539f4c9ae99b6e879523035a438333",
+      "bytes": 1081
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/startup_rate_limits.js",
+      "sha256": "d98f74e5c31c41d6e8ccf149acb860d0f75b307d5f85cf71774bc19fe874dcf7",
+      "bytes": 894
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/tool_home.js",
+      "sha256": "6c8487c69bda94dff8a03aa776a402ed0bcf78b5bb1220a70649d58917c61dad",
+      "bytes": 1364
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/toolhost.js",
+      "sha256": "717d35b0997c7c4105066d645cfeccf3364afb2480f2c042e6c98b7e1186c5c4",
+      "bytes": 6788
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/turn_diagnostics.js",
+      "sha256": "20f1a8cdc22a54c534bcefcaeb1049260a2c3537a9cb355f2648ee02942df570",
+      "bytes": 10436
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/turn_watchdog.js",
+      "sha256": "361975226e5f70abe47a80da10f44344d40e9c3284a42d647ae44c3161453ca7",
+      "bytes": 6049
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/codex/dist/upload.js",
+      "sha256": "25feab40e004463b8668c7389ecf1e19c892f65c2c0884a83c096363c123ddda",
+      "bytes": 5987
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/antigravity-catalog.js",
+      "sha256": "47b55dd5d7a31d5c97a71e47dd831aa13bc9eb503ead9f379e6c84765cc04b58",
+      "bytes": 2564
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/antigravity-version.js",
+      "sha256": "cdf34c4d76a65882be11b849f95f6e8f89595d8495afff9ff5bbd2728e73e74f",
+      "bytes": 2588
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/args.js",
+      "sha256": "b97bfda33a145e1040a175a99322afea76cc4471f63a98b0942e7335349ecf26",
+      "bytes": 619
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/build_info.js",
+      "sha256": "41c5003e201a96dfedac18d840db86c94545c60dee19ca396a6646d3b27b4133",
+      "bytes": 6280
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/claude_catalog_cache.js",
+      "sha256": "1ab810cc9907552c1ad0277d268ecc56f4a28dbdde3b76cb753ecf63b602605c",
+      "bytes": 5014
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/cli.js",
+      "sha256": "5ac72971af95e228cbb35ea170cb5784add4ac4e84c62650907c8d8130946a95",
+      "bytes": 215
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/codex-auth.js",
+      "sha256": "c03848528817eb6935b6cd7feec2b84079d26cc4c89d751b08bd05d2f1065e96",
+      "bytes": 2922
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/config-diff.js",
+      "sha256": "75daea93a623a6e46e04012512a589e227dcc4fc8771da6032a8683f73426415",
+      "bytes": 1086
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/config-watcher.js",
+      "sha256": "02bf28cf34a5366cf0a02c18efc9b5ff5bf2e64eca6fc8e0bdcf9b3760b399c5",
+      "bytes": 3862
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/config.js",
+      "sha256": "91a49c8d6c4e303c2395785ff99e8648ee49ee48144c87768b9578c6a0ff129c",
+      "bytes": 23919
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/engine_catalog_refresh.js",
+      "sha256": "b2cdfe491bf4eeb7869894b33feaeb779cf185c5c53e27b14deba8e7a692d04f",
+      "bytes": 4199
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/extra-models-options.js",
+      "sha256": "e3573b6d07d26d87abcd9657fef6915a889b6747038cb409d57b373c1ef20ab0",
+      "bytes": 1698
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/index.js",
+      "sha256": "75bda07d0eddbe90ed307c321237a2457cf9e2e1f9486560f09f9834e14ed19e",
+      "bytes": 632
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/permission_ceiling.js",
+      "sha256": "8e778ccc2c127e695bdcffee1ccb3d5e4dda54cf39aeaa1c8b7f00103f50b104",
+      "bytes": 5322
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/resume_snapshot.js",
+      "sha256": "196c389cfab93ee64371aa57486500e71313e84063c30b825760d871bf156945",
+      "bytes": 9931
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/runner-cli.js",
+      "sha256": "d4807c23bb8106194629869f5a783ac150b30e38d02c60b795502b121d178160",
+      "bytes": 18740
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/sessions.js",
+      "sha256": "b2ef79eab6a5321a104014ab2aa9a51226c96aae399f201d1889a8151e120888",
+      "bytes": 23937
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/setup-cli.js",
+      "sha256": "cfab6ac13959408baaa2afddfd6f0b9d28c676e4f4fb884c0ed2aab9366f658f",
+      "bytes": 3062
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/setup.js",
+      "sha256": "9fe9e613cd18ddd0222fe937df71c2b47b5eb671fb84cff109559a3f18ea0c83",
+      "bytes": 10729
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/spawn.js",
+      "sha256": "4c44146ba41ec2ac6673dcd43d8bc3f25678de8dab9ddb09dd32170363b41677",
+      "bytes": 6195
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/supervisor.js",
+      "sha256": "7740a42cea33ec371e32b7d291341053036ab113c54dcf5db05d50b4240dedec",
+      "bytes": 67990
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/runner/dist/transport.js",
+      "sha256": "4953f087d873cc287505dbc6af537042ceeb6e906658f318b433d40003390e67",
+      "bytes": 17258
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/adapter.js",
+      "sha256": "4ab3dd91e8a573aed37ece8592a4069ad93dceb90c437899be343dccf8d83935",
+      "bytes": 32444
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/bounded_spawn.js",
+      "sha256": "39df5e70b9b37d3845a8cb09d557cf530d2b9e5457f128264e0704280ba81e9c",
+      "bytes": 2720
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/catalog.js",
+      "sha256": "5430fc1ea5d0b5f25279f2e18ba505938509c2010cc5e845007759df496ab2ae",
+      "bytes": 1218
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/cli.js",
+      "sha256": "d1b2c6c68e244095a8c49d64e70bd1341e1c632291f7a6355f0817100a2f34f2",
+      "bytes": 77654
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/history.js",
+      "sha256": "33b250e8aecbd410ed591a95140891dbcfc303de4bc8a85e7c62f35ee6a4c900",
+      "bytes": 7194
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/host.js",
+      "sha256": "04c48bbeac738faca6ad8b474e3e0676aad47c3944f4dceb0b67ae74257759cb",
+      "bytes": 215523
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/index.js",
+      "sha256": "bc7feafea3f5b4b2f00d79638806e2f8a3845cfd3bbe1e4cfe56e2e5ede8c9d8",
+      "bytes": 667
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/inter_agent_message_handler.js",
+      "sha256": "c1e52f10f0e470509cc350b670a9b97c445901e31879671fb600bfa58928dec3",
+      "bytes": 3289
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/inter_agent_sdk.js",
+      "sha256": "fd29313da93fb54cec3dde732819da10a0beeb1ab236a8c1e949e3689dc0c323",
+      "bytes": 3606
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/inter_agent_turn_coordinator.js",
+      "sha256": "d7921c1dc8f7dd19394111056b2a498cebdc198c64fc031c1e33782775d15b41",
+      "bytes": 24521
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/permission_axes.js",
+      "sha256": "c9792582b959c597d49bc215b992bcb504d01eaf9f99fc0ebef5436ecf6bc438",
+      "bytes": 961
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/probe-client.js",
+      "sha256": "ecc6af0e3850906a7efa4ed4bcb78214c3f3bc862debb28fcc63e77a823532e7",
+      "bytes": 9542
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/probe.js",
+      "sha256": "f1638686a4a3e1a10b9d49dfb1527ddf55d23c148d67196b93bcdd8c38fabd45",
+      "bytes": 11072
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/read_only_tools.js",
+      "sha256": "fd3ea3742e2e8ed36cbe1ee7a5c66a6e9db056932342eb77dc811f8a2c3bdff2",
+      "bytes": 1373
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/request_compact.js",
+      "sha256": "c7ed7d77d89907d4f54fdc42763c7451d694d59bf72e7130340f7757f15d42f8",
+      "bytes": 10366
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/source_resolution.js",
+      "sha256": "688ed2f02402f432d53e4780aa638537cc860f83d038123a3639e0d3642d2462",
+      "bytes": 1792
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/tasklist.js",
+      "sha256": "50e6658370627d94a7343b109f1b949fa33a871a1f09c41da4bd43593bf5004b",
+      "bytes": 3978
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/turn_watchdog.js",
+      "sha256": "0072c96b521edd7d14c99e52a9f5ce95198a263db2002e020a4fdbaba8511c9f",
+      "bytes": 7824
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/claude-code/dist/upload.js",
+      "sha256": "045ca9b0827dac13ad886f6a542d3d10268d89893a93b7be507573419ce85a00",
+      "bytes": 24661
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/adapter.js",
+      "sha256": "61afbfbfaf621d87805632fab7ca306f5b912a1b1435215257e80f03fdb6457a",
+      "bytes": 6440
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/bridge.js",
+      "sha256": "ed91e4dca5eeaee288ff7919d9135ae5aa1c66ac3420ab8e25097e1f95c349a1",
+      "bytes": 4333
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/catalog.js",
+      "sha256": "addc9cf96f041136cd34f560c62cdfa8c1011c9a78c1f4a31ff6807c88c34ffd",
+      "bytes": 2274
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/cli-path.js",
+      "sha256": "d5db960f18f74d1892bf7f1ee91db90534a66dcd6d97121d4f0f6349c1c811a5",
+      "bytes": 2707
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/cli.js",
+      "sha256": "0fa988fd2f4602a9a750e4cd56f256caa620587f6139f23b71a2062df24daaf1",
+      "bytes": 32363
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/customization.js",
+      "sha256": "6478bea1d56ad1d2b67fb44feb52548b0ff88a1dc5553374d688cbb620d6f3bb",
+      "bytes": 5703
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/epoch.js",
+      "sha256": "357683fbfb2e1bbfedc055c6b748476a23a83759357c705abe42b4fa0854b73c",
+      "bytes": 1735
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/gate.js",
+      "sha256": "5831e41953aaa8316928deeb89507727c821e80bdde3ae5b22b73b5b648f483c",
+      "bytes": 25009
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/hook.js",
+      "sha256": "56a0508a0a5ccca3dd38ed6e32fbc9b820aa4106c0fd6caf26752c142c482a91",
+      "bytes": 1299
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/hook_client.js",
+      "sha256": "bf738d77181189c22f0c5a04433b0c2f1d2ba56840c471e594c142f377f0ad31",
+      "bytes": 2186
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/host.js",
+      "sha256": "6822f367bd8fde741425582d554b49cd8b60736966193465054b497201f90afd",
+      "bytes": 95607
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/index.js",
+      "sha256": "243d6fe7ff1b1d4e8211a62523a775bced3946c16bfdd716fde861133b6ca058",
+      "bytes": 1262
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/inter_agent_message_handler.js",
+      "sha256": "acc100b682b0de99b27fdca1f9efd07cbf3c6e1789ce850f15e1e669735b5936",
+      "bytes": 1485
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/inter_agent_turn_coordinator.js",
+      "sha256": "fd186dc2e598d9ef6f95f7d9163fc798029d54106ad82d9b2262864bc70f5fb7",
+      "bytes": 11179
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/network_access.js",
+      "sha256": "e58d3affd6a14c04e6824a29b69d62f22c235fd090e36f3070b567d5916dd5dd",
+      "bytes": 336
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/permission_switch.js",
+      "sha256": "cac37e3054748be68c3e3eb867ddd5024a91bb65f4be8f65b3098bba8db19212",
+      "bytes": 2132
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/source_resolution.js",
+      "sha256": "ffd2bc133290961e3136ef7aad50895ca9e924398e07a917ae88bd3b82ee5ee6",
+      "bytes": 912
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/ssh_agent_probe.js",
+      "sha256": "0a65ceac93aa6a844a3be6fc347dca931614ba616da79a91c84846a525fb1a93",
+      "bytes": 1629
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/subtree_termination.js",
+      "sha256": "1b72c7005fb7da2d9845c09aef3ea179ee2996544d4143b8df5b5de958beca02",
+      "bytes": 4067
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/tool_child_env.js",
+      "sha256": "e0e70523d395290fa0da91effb08b065a3db9b14e395fab564d510fe11a85306",
+      "bytes": 993
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/toolhost.js",
+      "sha256": "f7ff5aaaa5418d1f70778e2adbcd8065477705476a1c1da3ec8973eefeef1f46",
+      "bytes": 3683
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/transcript_path.js",
+      "sha256": "b66203833d58e01a9e8a5c3a1a479f3f52cf8728c01bf8502f94378e02fea6b1",
+      "bytes": 631
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/wrapper/antigravity/dist/turn_watchdog.js",
+      "sha256": "096fb16529a9a5f56eb4e44b8cdb2b8f22c778ea05c900d0ff5b705dfe60c70a",
+      "bytes": 8216
+    }
+  ],
+  "runs": [
+    {
+      "mode": "local-exec",
+      "exit_code": 0,
+      "live": false,
+      "backend": "exec",
+      "resume": null,
+      "tool_home": "/tmp/fuji464-native.51shj9es/kaoiro-runner-xNe4AB/codex-tool-jHdrP6",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6d9-9c01-7023-b562-f915763fd3e3",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec-v2/result.json",
+        "sha256": "ce269cb0ad84151c32b325548d1771ea140d17cb03b67282021cb4d7b028ce91",
+        "bytes": 163452
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec-v2/observer.jsonl",
+        "sha256": "87d688debc96e393682c886548c156226208a1b3fcdd46162608ff10c6850e35",
+        "bytes": 3916
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec-v2.log",
+        "sha256": "290bd06cf53438da0beab7c4268543be6f011e1d35c5349e29bbd83db3aecffd",
+        "bytes": 2396
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec-v2-check.log",
+        "sha256": "e97b45fdbda78dacaea3a12d564503f33bbec0848fcd147d5e000b245bf05169",
+        "bytes": 112
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-44-11-01a0f6d9-9c01-7023-b562-f915763fd3e3.jsonl",
+          "sha256": "3764ceb32175c77919c9cfeff7442cc1ea756e400ae7c40fd9bd1d0048aaa772",
+          "bytes": 45915
+        }
+      ]
+    },
+    {
+      "mode": "local-start",
+      "exit_code": 0,
+      "live": false,
+      "backend": "app-server",
+      "resume": null,
+      "tool_home": "/tmp/fuji464-native.qk719ssv/kaoiro-runner-igz8ci/codex-tool-77hkPc",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6d9-a492-75b1-9597-d661f716a868",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-start-v2/result.json",
+        "sha256": "0b58df07e6c1c6f6237e19120818566433c2fc6ba829c3da5afc93c14d8d5299",
+        "bytes": 187662
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-start-v2/observer.jsonl",
+        "sha256": "3ac5f8c0f345f1d73b0c766a82b2de4f17735d87a7ab47e5314ddf04cef0ea0d",
+        "bytes": 5067
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-start-v2.log",
+        "sha256": "1cde8db9ee921ec4ce570c6ad825064dc20344924bbd91b98ee3502f1c44d1ea",
+        "bytes": 1474
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-start-v2-check.log",
+        "sha256": "1cdd65e3f69998d58e75893fa9477a8ebd14242e2921fae272a199dae3131d20",
+        "bytes": 113
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-44-13-01a0f6d9-a492-75b1-9597-d661f716a868.jsonl",
+          "sha256": "47db34af58cb78302191aa5364baa79d23cd4d63520f1e6473e3c563614905fc",
+          "bytes": 62253
+        }
+      ]
+    },
+    {
+      "mode": "local-resume-forced",
+      "exit_code": 0,
+      "live": false,
+      "backend": "app-server",
+      "resume": "01a0f6d9-a492-75b1-9597-d661f716a868",
+      "tool_home": "/tmp/fuji464-native.cgrw012o/kaoiro-runner-h0Y6pW/codex-tool-3PKh7J",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6d9-a492-75b1-9597-d661f716a868",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-resume-forced-v2/result.json",
+        "sha256": "564a9e6ccd1fbcf4ffbffcdbecf77dc22a29291772b9aa2e720aa0c8494d2d8d",
+        "bytes": 207787
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-resume-forced-v2/observer.jsonl",
+        "sha256": "0cadf8f26f09a88be138f4fb3689645f5cd08daae732c655a47cc35a85295a65",
+        "bytes": 5170
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-resume-forced-v2.log",
+        "sha256": "3cac2ac25f7af4ddc6cf3c0952eeb9ee94dfdd75b9b9e4ca41cbb5eb5ba67be6",
+        "bytes": 1257
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-resume-forced-v2-check.log",
+        "sha256": "8af96e0be437260b51aa4101adcc1480d56dbf803a93660618805762617f16fc",
+        "bytes": 121
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-44-13-01a0f6d9-a492-75b1-9597-d661f716a868.jsonl",
+          "sha256": "47db34af58cb78302191aa5364baa79d23cd4d63520f1e6473e3c563614905fc",
+          "bytes": 62253
+        }
+      ]
+    },
+    {
+      "mode": "live-exec",
+      "exit_code": 0,
+      "live": true,
+      "backend": "exec",
+      "resume": null,
+      "tool_home": "/tmp/fuji-native.fkemdjdb/kaoiro-runner-ebKYCW/codex-tool-gQsLG7",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6dc-7ab8-7152-a4f4-e50de6920a43",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-exec/result.json",
+        "sha256": "b6e7cf120d06f6d1a3065efe715aa8e39bad8245b122ddabdccc1a1e8e292583",
+        "bytes": 41201
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-exec/observer.jsonl",
+        "sha256": "616078077892631dd76d04eaddfb8bcf3515b4036bf9a2e2d14f932976b857c1",
+        "bytes": 4452
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-exec.log",
+        "sha256": "a0e1a4762816b124540463c71f27158c28f793116a4964079fcaa78447317bc5",
+        "bytes": 3028
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-exec-check.log",
+        "sha256": "b7e41e4b31bc9d5969c2919d4593fd4605ef80104c93426997c3a9c203df3c60",
+        "bytes": 111
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-47-19-01a0f6dc-7ab8-7152-a4f4-e50de6920a43.jsonl",
+          "sha256": "7cdd7c40f3f48b4e891c4017dcdaee492a8e752d139837eaad098a3a3a16f4de",
+          "bytes": 51959
+        }
+      ]
+    },
+    {
+      "mode": "live-start",
+      "exit_code": 0,
+      "live": true,
+      "backend": "app-server",
+      "resume": null,
+      "tool_home": "/tmp/fuji-native.n0sxajtl/kaoiro-runner-H0Dspw/codex-tool-2tHvGq",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6dc-a761-7130-b9ea-e5474376a23d",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-start/result.json",
+        "sha256": "2dfc42069cd80f6b948e6dbc5099417d72b912f2573691277ae712e586b0ab92",
+        "bytes": 78859
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-start/observer.jsonl",
+        "sha256": "fc23f1486cb71b60b0218dcd0af968240039c8d0bc8b23c72e088aceb6305067",
+        "bytes": 5092
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-start.log",
+        "sha256": "1839bd79195708bf73ad10a9055ff1ce5c15690b70e59370fb4a809d7f2ee79e",
+        "bytes": 1629
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-start-check.log",
+        "sha256": "ada54507f81c09f0c930c1bd051f8d2ab798457602ebdd70465e8fdeb23e57ec",
+        "bytes": 112
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-47-31-01a0f6dc-a761-7130-b9ea-e5474376a23d.jsonl",
+          "sha256": "f1acb016d21609a409fdadae641fba2d94d9d157f2a3fedc8b6b6000011bb858",
+          "bytes": 63433
+        }
+      ]
+    },
+    {
+      "mode": "live-resume",
+      "exit_code": 0,
+      "live": true,
+      "backend": "app-server",
+      "resume": "01a0f6dc-a761-7130-b9ea-e5474376a23d",
+      "tool_home": "/tmp/fuji-native.5fpfbsmc/kaoiro-runner-dpM4St/codex-tool-d9YFkN",
+      "marker": "FUJI464",
+      "tool_home_cleaned": true,
+      "hook_markers": [
+        {
+          "file": ".codex-cc-model-injected-01a0f6dc-a761-7130-b9ea-e5474376a23d",
+          "value": "gpt-6"
+        }
+      ],
+      "trusted_hook_metadata": [
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:session_start:0:0",
+          "eventName": "sessionStart",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:4a420cef60ee0ff99dbf360eee375c5636beeb8f18694ff7432832246fb3bd33",
+          "trustStatus": "untrusted"
+        },
+        {
+          "key": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml:user_prompt_submit:0:0",
+          "eventName": "userPromptSubmit",
+          "handlerType": "command",
+          "command": "bash ~/.codex/hooks/model-profile.sh",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 5,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/config.toml",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:009b0c425c6cc86416da01a3cd4b9e0d7c769267c20d7b7919e264d60f765f5d",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-resume/result.json",
+        "sha256": "2d52e438ae165186f72ba0c173a4e48b431e6ccb342b654a9a49584bbf4b9684",
+        "bytes": 88259
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-resume/observer.jsonl",
+        "sha256": "7791d555364d6a58e6d469536411630482f0ce6ad60611b46cb960b8cba6be59",
+        "bytes": 5168
+      },
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-resume.log",
+        "sha256": "a0355c20d334cacd3917c2439a731933bb0febc9bfbb2edef7a35979b87b837d",
+        "bytes": 1402
+      },
+      "checker_log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/live-resume-check.log",
+        "sha256": "69db44461a8292de30a0727308e584a06f383937ea9b4fa81931b454a8ebbe71",
+        "bytes": 113
+      },
+      "rollouts": [
+        {
+          "path": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593/sessions/2026/10/01/rollout-2026-10-01T18-47-31-01a0f6dc-a761-7130-b9ea-e5474376a23d.jsonl",
+          "sha256": "f1acb016d21609a409fdadae641fba2d94d9d157f2a3fedc8b6b6000011bb858",
+          "bytes": 63433
+        }
+      ]
+    }
+  ],
+  "native_mutations": [
+    {
+      "backend": "exec",
+      "exit": 1,
+      "state_home_marker": "FUJI464",
+      "result_path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/exec-mutation-v2/result.json",
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/exec-mutation-v2/result.json",
+        "sha256": "82e59a218ee8caa34232c943f5f7a857b970e68ea5699a4b9b24a80f0bb048e5",
+        "bytes": 163389
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/exec-mutation-v2/observer.jsonl",
+        "sha256": "03213e4b5e1ccdd80bf5863da4fc63c0f714f3cd0c3b795c5dbd4622fd421ca8",
+        "bytes": 3771
+      }
+    },
+    {
+      "backend": "app-server",
+      "exit": 1,
+      "state_home_marker": "FUJI464",
+      "result_path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/app-server-mutation-v2/result.json",
+      "result": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/app-server-mutation-v2/result.json",
+        "sha256": "4cf62fea410cd58f93708485cea4739242be30c9e5f6e6d8f2c4a6e3267b83f7",
+        "bytes": 187668
+      },
+      "observer": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/app-server-mutation-v2/observer.jsonl",
+        "sha256": "8b7e6b4c38a158aa5849d0d13ee6a626ef3bc78392cc7c8a48dd0fde75c951ba",
+        "bytes": 4953
+      }
+    }
+  ],
+  "boundary_mutations": [
+    {
+      "mutation": "runner-filter",
+      "exit": 1
+    },
+    {
+      "mutation": "claude-filter",
+      "exit": 1
+    },
+    {
+      "mutation": "ag-turn-filter",
+      "exit": 1
+    },
+    {
+      "mutation": "ag-discovery-filter",
+      "exit": 1
+    }
+  ],
+  "preflight_invocations": [
+    {
+      "mutated": false,
+      "exit": 1,
+      "executed_marker": false,
+      "canary_entries": []
+    },
+    {
+      "mutated": true,
+      "exit": 0,
+      "executed_marker": true,
+      "canary_entries": []
+    }
+  ],
+  "targeted_suites": [
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/codex exec vitest run test/codex_home_preflight.test.ts test/tool_home.test.ts test/permission_compaction.test.ts",
+      "exit_code": 0,
+      "passed": 10,
+      "skipped": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/preflight-targeted.log",
+        "sha256": "99d4670fa3883c6767ff5fddf3cb2f7399bf5e465fdda3f944d1a790a7251a8c",
+        "bytes": 496
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/runner exec vitest run test/spawn.test.ts",
+      "exit_code": 0,
+      "passed": 8,
+      "skipped": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/runner-boundary-restored.log",
+        "sha256": "f7653b50ee69e1f76bf37b584e9f28a09e06b9df2fe4035ea8b8ad1874ce22c0",
+        "bytes": 289
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/claude-code exec vitest run test/host.test.ts test/cli_sigterm_abort_real_process.test.ts -t 'filters CODEX_HOME|SDK child'",
+      "exit_code": 0,
+      "passed": 2,
+      "skipped": 308,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/claude-boundary.log",
+        "sha256": "b93b33e08b6c7b971e36ff19f23ea8f0a92f8a4b76c6c19c97ba84fd15d0c3fe",
+        "bytes": 1521
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/claude-code exec vitest run test/host.test.ts -t 'filters CODEX_HOME'",
+      "exit_code": 0,
+      "passed": 1,
+      "skipped": 305,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/claude-boundary-restored.log",
+        "sha256": "6e130d6bd0b9abc565804bd4bff80782c7bf82189bb4b28406066f594ac2fe46",
+        "bytes": 331
+      }
+    },
+    {
+      "command": "env -u CODEX_HOME pnpm --filter @kaoiro/antigravity exec vitest run test/host.test.ts -t 'uses the configured executable through default child processes'",
+      "exit_code": 0,
+      "passed": 1,
+      "skipped": 130,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/antigravity-boundary-restored.log",
+        "sha256": "c499c3b4063975db1796ecbb7a169e8bce6debd55be1fb8ba747c0e2847aa5a1",
+        "bytes": 335
+      }
+    }
+  ],
+  "probe_sources": [
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/home-gate.mjs",
+      "sha256": "88728374a380575328d914c4363dbc9c8736e9d856685064060c16bd3c7326cc",
+      "bytes": 7694
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/observe.mjs",
+      "sha256": "ef0de2eaf0d766f599184ff6368c41a4a94e3dd491790156784595665b3319cc",
+      "bytes": 2079
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/check-home.py",
+      "sha256": "60ffd02267f8cd228fee85512ed4996380e0c9e23629c40de3128205d597b617",
+      "bytes": 2741
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-346/fuji-native-pin/phoenix.mjs",
+      "sha256": "3d5a9292219d7ab0081a2982ccb990f62dc9091d36b201bacf80772704ed2cf1",
+      "bytes": 4499
+    }
+  ],
+  "mutation_logs": [
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/exec-mutation-v2.log",
+      "sha256": "b731266a044041efaee8f50c601a458f332d3991101446143c1a25a6ac3d6d5b",
+      "bytes": 2519
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/app-server-mutation-v2.log",
+      "sha256": "870e464e9144c1336cea0d090ad5ca04fec3cc7586256aa49519e99907c1fc1b",
+      "bytes": 1602
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/runner-filter-mutation.log",
+      "sha256": "7cdc5994c074af6b57981864794c4434bbe4b3c070b00d1f0eb79ffe071fa3ca",
+      "bytes": 1369
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/claude-filter-mutation.log",
+      "sha256": "39ef5efc815063ce1be0a2f4ba0672226d3409ff533a1c6d9a8181e119ee9c5a",
+      "bytes": 1438
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/ag-turn-filter-mutation.log",
+      "sha256": "e56f206741021b3dff7c55580e675e89ac811336fee76372b5093177e1ac940a",
+      "bytes": 1562
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/ag-discovery-filter-mutation.log",
+      "sha256": "e755e8ad8ea2812e678475b1b2ae630db5d35dc595409d1fcbd5364f9424c134",
+      "bytes": 1561
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/preflight-mutation.log",
+      "sha256": "5ad14c8ca1ede6ca4db7fffa98749daa84545ee53b1acb56dee7204257b00efa",
+      "bytes": 1309
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/sentinel-control.log",
+      "sha256": "17761973de24a1a4109f7fc418d5fa9cfbb5f126f9c75ca2b66a0ad75dd925c8",
+      "bytes": 1895
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/sentinel-mutated.log",
+      "sha256": "068fea3175e05e7066fcefbfdac6a0d31b877347bbffd5134f41ed09c60aea1d",
+      "bytes": 315
+    }
+  ],
+  "retained_harness_failure": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/exec-mutation-current.log",
+    "sha256": "933dba153fca5ba16ed1e6346f2a807942512607c101465b630ee056d0094dc2",
+    "bytes": 808
+  },
+  "cleanup": {
+    "state_home": "/home/yuta/.local/share/kaoiro-scratch/codex-468-v1593",
+    "probe_config_removed": true,
+    "owned_profile_files_removed": true,
+    "state_home_canary_absent": true,
+    "shared_authenticated_home_preserved": true,
+    "live_turns_used": 5
+  },
+  "limitations": [
+    "Claude Code evidence reaches real SDK child startup and the supplied SDK environment; Antigravity evidence reaches default OS child processes for discovery, hook registration, and a turn with a fixture executable. Actual native model-driven tool shells for these two engines remain unmeasured pending the director scope query.",
+    "All three authenticated Codex turns completed against the default ChatGPT provider using the scratch state home. No production credential was copied.",
+    "Hook bodies use the real model-profile hook and resolver with a disposable gpt-6 profile. Hooks were discovered and trusted with native hooks/list."
+  ],
+  "warnings": [
+    "Claude SDK emits CLAUDE_SDK_CAN_USE_TOOL_SHADOWED for allowed tools in the real-process escalation test; that warning is unrelated to the environment boundary.",
+    "The deliberately bypassed preflight and deliberately removed home policies produce expected failures/canaries.",
+    "Positive native and authenticated Codex runs emit no unhandled errors or warnings."
+  ],
+  "markdown": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/docs/evidence/issue-464/codex-home-isolation-native-0.159.3-2026-10-01.md",
+    "sha256": "c4ead705025dbc9c5e2f405614f6b6de8cc3c6663d9a72c629a338d93619721a",
+    "bytes": 7893
+  },
+  "execution_count_record": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/current-exits.json",
+    "sha256": "08bad3c59c968658ea8442aaafddb80ddbda11950a815ce8fd3793204fab22bc",
+    "bytes": 160
+  },
+  "native_mutation_count_record": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/native-mutations-current.json",
+    "sha256": "3106f8df795b1ddb716419ce7ecc47df6119adbe2f46c09c0cc672933ba50182",
+    "bytes": 401
+  },
+  "boundary_mutation_count_record": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/filter-mutations.json",
+    "sha256": "6aece5fafe333448f4fab27d7b775d62e8afbd69a30ad278143f875660e64889",
+    "bytes": 234
+  },
+  "preflight_count_record": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/preflight-invocations.json",
+    "sha256": "978a4d1f5c99384378255b7bd4d9778a55bd7ff90feeb9cb7b7e1b7d387a9acd",
+    "bytes": 202
+  },
+  "model_profile_hook_source": {
+    "path": "/home/yuta/git/ai-settings/codex/hooks/model-profile.sh",
+    "sha256": "25bd59d1dd5a021e3dd88bee5dd6e0c79f47a0818344356b3683c1fa316e6b22",
+    "bytes": 3039
+  },
+  "model_profile_resolver_source": {
+    "path": "/home/yuta/git/ai-settings/model-profiles/resolve.sh",
+    "sha256": "cabfad39f4c457a0e4725b64efef4c448cb4de1ad3611e6a245795d691b80335",
+    "bytes": 6627
+  }
+}
