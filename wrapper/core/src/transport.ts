@@ -1742,10 +1742,12 @@ export class ServerLink {
         this.#deliveryIncarnation = isObject(reply) && typeof reply.inter_agent_delivery_incarnation === "string" && reply.inter_agent_delivery_incarnation.length > 0
           ? reply.inter_agent_delivery_incarnation
           : null;
+        const delivery = isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null;
         // A different incarnation means the server no longer recognises this
         // wrapper's per-sequence state, so the old ledger must neither resend
         // nor dedupe against it. Replace it before the status callback below:
-        // that callback can confirm an ACK synchronously.
+        // that callback can confirm an ACK synchronously, and the new ledger
+        // must already know the issued range to admit it.
         if (this.#deliveryIncarnation !== null) {
           if (
             this.#deliveryRecoveryIncarnation !== null &&
@@ -1753,6 +1755,7 @@ export class ServerLink {
           ) {
             this.#deliveryRecovery.dispose();
             this.#deliveryRecovery = createDeliveryRecovery();
+            this.#deliveryRecovery.observe(delivery);
           }
           this.#deliveryRecoveryIncarnation = this.#deliveryIncarnation;
         }
@@ -1771,7 +1774,6 @@ export class ServerLink {
         }
         this.#historyJoinGeneration += 1;
         options.onHydration?.(hydrationVerdictFrom(reply));
-        const delivery = isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null;
         options.onInterAgentDeliveryStatus?.(delivery);
         this.#deliveryRecovery.join(isObject(reply) && reply.delivery_resync === "skip-v1", delivery);
       })

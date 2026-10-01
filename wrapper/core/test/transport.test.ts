@@ -3150,6 +3150,26 @@ describe("delivery ACK reconnect through production ServerLink", () => {
     }
   });
 
+  it("admits a join-time ACK when a new incarnation continues the sequence", () => {
+    const { disconnect, envelope, joinedWith, link, runtime } = setup({ identity: false });
+    try {
+      joinedWith("old", { issued_seq: 2, acked_seq: 2 });
+      (envelope as unknown as { delivery_seq: number }).delivery_seq = 4;
+      emit("envelope", envelope);
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+      expect(ackedSeqs()).toEqual([]);
+
+      // The server re-minted its incarnation but kept the sequence; the join
+      // baseline closes the gap and the status callback acknowledges 4.
+      disconnect();
+      joinedWith("new", { issued_seq: 4, acked_seq: 3, pending_since: "T" });
+      expect(ackedSeqs()).toEqual([4]);
+      expect(mock.pushes.filter(push => push.event === "delivery_resync")).toEqual([]);
+    } finally {
+      link.close();
+    }
+  });
+
   it("drops a watermark beyond every sequence the current ledger has seen", async () => {
     const { delivered, disconnect, envelope, joinedWith, link, runtime, withSeq } = setup({ identity: false });
     try {
