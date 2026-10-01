@@ -43,15 +43,18 @@ function holdCleanup(): () => void {
   return gate.resolve;
 }
 
-function build(hold?: Promise<void>) {
+/** `holds[n]` keeps the n-th SDK turn in flight until it resolves. */
+function build(holds: ReadonlyArray<Promise<void>> = []) {
   const ran: string[] = [];
+  const signals: Array<AbortSignal | undefined> = [];
   const thread: CodexThreadLike = {
-    async runStreamed(input) {
+    async runStreamed(input, turnOptions) {
+      signals.push(turnOptions?.signal);
       const index = ran.push(
         typeof input === "string" ? input : (input[0] as { text: string }).text,
       ) - 1;
       async function* events(): AsyncGenerator<ThreadEvent> {
-        if (index === 0) await hold;
+        await holds[index];
         yield {
           type: "turn.completed",
           usage: {
@@ -82,7 +85,7 @@ function build(hold?: Promise<void>) {
       return { dir, paths: [`${dir}/image.png`] };
     },
   });
-  return { host, ran };
+  return { host, ran, signals };
 }
 
 /** Sends a text + one-image turn whose temp dir is dirOf(id). */
@@ -152,7 +155,7 @@ describe("CodexHost.interrupt while a queued image turn's cleanup is pending", (
 
   it("neither runs the dropped image turn nor loses the one behind it", async () => {
     const hold = deferred();
-    const { host, ran } = build(hold.promise);
+    const { host, ran } = build([hold.promise]);
     const running = host.run("first");
     let release = () => {};
     try {
@@ -175,6 +178,36 @@ describe("CodexHost.interrupt while a queued image turn's cleanup is pending", (
     } finally {
       release();
       hold.resolve();
+      host.close();
+      await running;
+    }
+  });
+
+  it("does not abort a turn the run loop started during the cleanup", async () => {
+    const first = deferred();
+    const second = deferred();
+    const { host, ran, signals } = build([first.promise, second.promise]);
+    const running = host.run("first");
+    let release = () => {};
+    try {
+      await vi.waitFor(() => expect(ran).toEqual(["first"]), RUN_PROGRESS);
+      await sendImage(host, "a");
+      await host.send("text-b");
+      release = holdCleanup();
+      const interrupting = host.interrupt();
+      await vi.waitFor(() => expect(cleanup.dirs).toEqual([dirOf("a")]));
+      first.resolve();
+      await vi.waitFor(
+        () => expect(ran.length).toBeGreaterThan(1),
+        RUN_PROGRESS,
+      );
+      release();
+      await interrupting;
+      expect(signals[1]?.aborted).toBe(false);
+    } finally {
+      release();
+      first.resolve();
+      second.resolve();
       host.close();
       await running;
     }
