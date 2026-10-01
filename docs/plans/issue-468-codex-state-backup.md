@@ -344,7 +344,8 @@ completing
 transaction UUID and timestamp; no credentials. The state-aware updater is its
 only writer under update/links locking, using a temporary sibling and atomic
 rename. Create it at the **first completed forward or restore transaction**,
-after the actual start/history acceptance checks; persist that acceptance in
+after actual startup and applicable history or explicit new-session checks;
+persist that acceptance in
 the transaction first, so a crash before barrier publication is recoverable.
 Retained references and this barrier coexist. Update it at each subsequent
 accepted forward/restore, and retain it when snapshots/releases are retired.

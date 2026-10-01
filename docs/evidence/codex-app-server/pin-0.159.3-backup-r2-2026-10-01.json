@@ -1,0 +1,955 @@
+{
+  "schema": 1,
+  "status": "implementation r2 review requested; not deployment approval",
+  "implementation_commit": "cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
+  "review_baseline": "c4cf6fa1b0dc30730ef48cdef9a6eb5d3ca725d4",
+  "report": {
+    "path": "docs/evidence/codex-app-server/pin-0.159.3-backup-r2-2026-10-01.md",
+    "sha256": "25587e13e999e2bf5c5e41ba0e6883bfb561e9621c1dd0bb65817156ec70f6e3"
+  },
+  "source_files": [
+    {
+      "path": "runner/deploy/codex-native.mjs",
+      "sha256": "e811d9172786195e8d6f3817b2735839384d28e9cfefe4dec111a2ef024eb672"
+    },
+    {
+      "path": "runner/deploy/codex-service.mjs",
+      "sha256": "122f7ff3378a11c421970061323749f36eb24e51499cbb17516c90bc4dadfdae"
+    },
+    {
+      "path": "runner/deploy/codex-snapshot.mjs",
+      "sha256": "bd5602e234bcd370ec13001af4049e80eee28688ff19af6140bbe30ad8c9bcc3"
+    },
+    {
+      "path": "runner/deploy/kaoiro-runner-codex-state.mjs",
+      "sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c"
+    },
+    {
+      "path": "runner/deploy/kaoiro-runner-update.sh",
+      "sha256": "ec9483b27b9ea27b9ec327c31c9ab559dcdfc0760c9fb4b93e17cf1e65858aa9"
+    },
+    {
+      "path": "runner/test/codexState.test.ts",
+      "sha256": "57a5d2a4344128153ad14b2179523f620c19153123665ca23c5ff9f5fe540fe5"
+    },
+    {
+      "path": "runner/test/codexStateWorkflow.test.ts",
+      "sha256": "b5171f440939ace371b048b939f3bacb151e2c0e6b22b1370239ec55a0f59a4a"
+    }
+  ],
+  "suites": [
+    {
+      "name": "r2-runner-test",
+      "exit": 0,
+      "log": "<scratch>/logs/r2-runner-test.log",
+      "summary": [
+        "Test Files  37 passed (37)",
+        "Tests  849 passed (849)",
+        "Duration  92.82s (transform 5.19s, setup 596ms, collect 23.87s, tests 148.37s, environment 9ms, prepare 4.60s)"
+      ]
+    },
+    {
+      "name": "r2-runner-typecheck",
+      "exit": 0,
+      "log": "<scratch>/logs/r2-runner-typecheck.log",
+      "summary": []
+    },
+    {
+      "name": "r2-codex-test",
+      "exit": 0,
+      "log": "<scratch>/logs/r2-codex-test.log",
+      "summary": [
+        "Test Files  79 passed (79)",
+        "Tests  1200 passed (1200)",
+        "Duration  27.93s (transform 7.03s, setup 632ms, collect 40.24s, tests 154.82s, environment 26ms, prepare 9.26s)"
+      ]
+    },
+    {
+      "name": "r2-codex-typecheck",
+      "exit": 0,
+      "log": "<scratch>/logs/r2-codex-typecheck.log",
+      "summary": []
+    }
+  ],
+  "mutations": [
+    {
+      "name": "snapshot-failure-boundary",
+      "file": "kaoiro-runner-update.sh",
+      "source_sha256": "ec9483b27b9ea27b9ec327c31c9ab559dcdfc0760c9fb4b93e17cf1e65858aa9",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-snapshot-failure-boundary.log",
+      "log_sha256": "b3fab1eee662731a43c83707f6e09022ac3341384df5da6a73fe1f89bb0c243a"
+    },
+    {
+      "name": "minimal-journal",
+      "file": "kaoiro-runner-update.sh",
+      "source_sha256": "ec9483b27b9ea27b9ec327c31c9ab559dcdfc0760c9fb4b93e17cf1e65858aa9",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-minimal-journal.log",
+      "log_sha256": "b3a283216dd192159f505810496bc798b02694597bd7f14c47e0c044de73bc94"
+    },
+    {
+      "name": "code-only-recovery-selection",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-code-only-recovery-selection.log",
+      "log_sha256": "36e18cb4b14aaf590c378a697b6badfc25afce80c54d86fafa37925356220d19"
+    },
+    {
+      "name": "startup-uncertainty-restore",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-startup-uncertainty-restore.log",
+      "log_sha256": "ce399891d73a673e91d186c8574e31480d4dc597933cac13c84d3ed867d29395"
+    },
+    {
+      "name": "switch-proof-wiring",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-switch-proof-wiring.log",
+      "log_sha256": "01445163be5d7060b51ea806c5f4c2a11a1e11d942072491b41a390ddb3382e1"
+    },
+    {
+      "name": "start-proof-wiring",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-start-proof-wiring.log",
+      "log_sha256": "2fb52e486be13bbc22cfcd481869aee3af211670e95b6e3f1c1dd3f4202f99cb"
+    },
+    {
+      "name": "no-state-promotion",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-no-state-promotion.log",
+      "log_sha256": "5e0906225b38b5493bd16af6ca564d723279e73ca3cef82ab3317e8a170fdbe6"
+    },
+    {
+      "name": "code-recovery-target",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-code-recovery-target.log",
+      "log_sha256": "b051d8f43b8982e2e573a291b5fc868001545b76989319668d457d65a531bdb6"
+    },
+    {
+      "name": "cgroup-v2",
+      "file": "codex-service.mjs",
+      "source_sha256": "122f7ff3378a11c421970061323749f36eb24e51499cbb17516c90bc4dadfdae",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-cgroup-v2.log",
+      "log_sha256": "9afc1dc60b79e20e45fb3fe27ba61da106b891ce0f1d6f8a7868a776cbeffd3f"
+    },
+    {
+      "name": "new-session-acceptance",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-new-session-acceptance.log",
+      "log_sha256": "d452b40959b500280cc1e3fe656d9546181e077e12a40f6e2979c5289713670a"
+    },
+    {
+      "name": "new-session-retirement",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-new-session-retirement.log",
+      "log_sha256": "7529faff4fc869a66fd04cc5bbcea17b56fcf3fdf00a23ce5ecef7c3823baf29"
+    },
+    {
+      "name": "retirement-evidence-guard",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-retirement-evidence-guard.log",
+      "log_sha256": "7ad1abbd4368cba33dc7ec5ab7f71e577f7c0c5068da986370268eb6a2d46c40"
+    },
+    {
+      "name": "acceptance-evidence-guard",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "b3b07f0787341ba71a1c13f8ca285de653d77e863bb9cc17ceb34697be4c590c",
+      "exit": 1,
+      "log": "<scratch>/logs/r2-mutation-acceptance-evidence-guard.log",
+      "log_sha256": "1dd592dec891b36070bec8d3f482c9fa071daab118ccf05f37ae1a51c0ed7d41"
+    }
+  ],
+  "build": {
+    "commit": "cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
+    "archive": "<scratch>/built-r2/kaoiro-runner-cdf790e8cf78c046e44ffd08c956fc8c4ca952c3-linux-x64.tar.gz",
+    "archive_sha256": "7acaff1e30e3f82903cb902054c282bb555f04b57a4d93303edbc96e58f7a319",
+    "install_root": "<scratch>/installed-r2",
+    "manifest_sha256": "d95666ac2f89925c2bd55e3206fa5a61349e718164cf10d8e7ed6a2c67e922e9",
+    "native": {
+      "path": "node_modules/.pnpm/@openai+codex@0.159.3-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
+      "version": "0.159.3",
+      "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+    },
+    "strict_verify_exit": 0,
+    "negative": [
+      {
+        "missing": "kaoiro-runner-launch.sh",
+        "exit": 71,
+        "next_mutations": 0
+      },
+      {
+        "missing": "kaoiro-runner-codex-state.mjs",
+        "exit": 71,
+        "next_mutations": 0
+      }
+    ],
+    "restored_verify_exit": 0
+  },
+  "real_service": {
+    "A": "f0808401811768255663ddc4b00ade9524f6fccb",
+    "B": "cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
+    "sourcePid": "2294829",
+    "results": [
+      {
+        "mode": "update",
+        "workerExit": "0",
+        "sourceState": "active",
+        "pid": "2295327",
+        "current": "releases/cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
+        "joins": 2,
+        "beforeJoins": 1,
+        "history": "SYNTHETIC_HISTORY"
+      },
+      {
+        "mode": "restore",
+        "workerExit": "0",
+        "sourceState": "active",
+        "pid": "2295826",
+        "current": "releases/f0808401811768255663ddc4b00ade9524f6fccb",
+        "joins": 3,
+        "beforeJoins": 2,
+        "history": "SYNTHETIC_HISTORY"
+      }
+    ]
+  },
+  "real_service_negative": {
+    "exit": "78",
+    "beforePid": "2295327",
+    "afterPid": "2295327",
+    "current": "releases/cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
+    "homeUnchanged": true,
+    "nextMutations": 0
+  },
+  "native_resume": {
+    "preSnapshotId": "01a0f63f-4b3e-71b1-bbf0-6311af035518",
+    "resumedId": "01a0f63f-4b3e-71b1-bbf0-6311af035518",
+    "postSnapshotId": "01a0f63f-8f8f-7741-a14e-31d1b20e1dc3",
+    "missing": {
+      "version": "0",
+      "host_id": "kogane468-r2-c50ef614-b2de-4989-96b0-29a13df9594b",
+      "agent_id": "kogane468-r2-c50ef614-b2de-4989-96b0-29a13df9594b.probe",
+      "ok": false,
+      "reason": "session_not_found"
+    },
+    "fresh": {
+      "version": "0",
+      "host_id": "kogane468-r2-c50ef614-b2de-4989-96b0-29a13df9594b",
+      "agent_id": "kogane468-r2-c50ef614-b2de-4989-96b0-29a13df9594b.probe",
+      "ok": true
+    },
+    "wrapperJoins": 1,
+    "modelRequests": 4
+  },
+  "database_boundary": {
+    "before": {
+      "goals_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "goals_1.sqlite-shm": "69b8c6de99ee3e4ddbc8198244db1fa478f670828984e60545e91010916a65ea",
+      "goals_1.sqlite-wal": "20d896f9a4edcd912281221181b87e58d5fc978f1809b79983672c522952ed16",
+      "logs_2.sqlite": "af19bfa4b6a71556eba6dc76cd49aceba23bd4f20e42a1234dbddec84b51b373",
+      "logs_2.sqlite-shm": "a603e3af03ff1a92c07156684567f42b0489e113bb584e9b9e735a640dbaec61",
+      "logs_2.sqlite-wal": "3646a6a12e96ffd4b8a132b1def20ac5b630279d4e535e49013ad9e2dbf57763",
+      "memories_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "memories_1.sqlite-shm": "16ab50ee9ec3d2cb6489440cdbaa0b0a5266b1b452bda0285e373eec83be1144",
+      "memories_1.sqlite-wal": "edb3f209b3585aaad614f606aad8e46b3c5dae2142f941e1b1248906e5779cc6",
+      "queue_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "queue_1.sqlite-shm": "c1a7349f3ff246b679c4da83d7c10e3656e8bdabc3cffbaac6b09bc79d7599a1",
+      "queue_1.sqlite-wal": "1749778598a7192ed63e4987bd9083671ca348b7dc35e4151d4b7a5ed3c2e3bf",
+      "state_5.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "state_5.sqlite-shm": "97f1a82a6e4d0443ca511cc3ecee13c310a463e36b71097820d561a2c9360306",
+      "state_5.sqlite-wal": "4258790eb518e9ef6d1c80d58858e0dec792457f062a7d5c0e035e927c4ae1f5",
+      "thread_history_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "thread_history_1.sqlite-shm": "670cbb2fb7aaa93ddb585de4f025c9d9877b57a4562179facc970d702d36aa18",
+      "thread_history_1.sqlite-wal": "5c235360950c70418502bcede5c2e222128ce17f06bcd9780e444466832a430e"
+    },
+    "after": {
+      "goals_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "goals_1.sqlite-shm": "69b8c6de99ee3e4ddbc8198244db1fa478f670828984e60545e91010916a65ea",
+      "goals_1.sqlite-wal": "20d896f9a4edcd912281221181b87e58d5fc978f1809b79983672c522952ed16",
+      "logs_2.sqlite": "af19bfa4b6a71556eba6dc76cd49aceba23bd4f20e42a1234dbddec84b51b373",
+      "logs_2.sqlite-shm": "a603e3af03ff1a92c07156684567f42b0489e113bb584e9b9e735a640dbaec61",
+      "logs_2.sqlite-wal": "3646a6a12e96ffd4b8a132b1def20ac5b630279d4e535e49013ad9e2dbf57763",
+      "memories_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "memories_1.sqlite-shm": "16ab50ee9ec3d2cb6489440cdbaa0b0a5266b1b452bda0285e373eec83be1144",
+      "memories_1.sqlite-wal": "edb3f209b3585aaad614f606aad8e46b3c5dae2142f941e1b1248906e5779cc6",
+      "queue_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "queue_1.sqlite-shm": "c1a7349f3ff246b679c4da83d7c10e3656e8bdabc3cffbaac6b09bc79d7599a1",
+      "queue_1.sqlite-wal": "1749778598a7192ed63e4987bd9083671ca348b7dc35e4151d4b7a5ed3c2e3bf",
+      "state_5.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "state_5.sqlite-shm": "97f1a82a6e4d0443ca511cc3ecee13c310a463e36b71097820d561a2c9360306",
+      "state_5.sqlite-wal": "4258790eb518e9ef6d1c80d58858e0dec792457f062a7d5c0e035e927c4ae1f5",
+      "thread_history_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "thread_history_1.sqlite-shm": "670cbb2fb7aaa93ddb585de4f025c9d9877b57a4562179facc970d702d36aa18",
+      "thread_history_1.sqlite-wal": "5c235360950c70418502bcede5c2e222128ce17f06bcd9780e444466832a430e"
+    },
+    "migrationLevels": {
+      "goals_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "logs_2.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "memories_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "queue_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "state_5.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        },
+        {
+          "version": 3,
+          "success": 1
+        },
+        {
+          "version": 4,
+          "success": 1
+        },
+        {
+          "version": 5,
+          "success": 1
+        },
+        {
+          "version": 6,
+          "success": 1
+        },
+        {
+          "version": 7,
+          "success": 1
+        },
+        {
+          "version": 8,
+          "success": 1
+        },
+        {
+          "version": 9,
+          "success": 1
+        },
+        {
+          "version": 10,
+          "success": 1
+        },
+        {
+          "version": 11,
+          "success": 1
+        },
+        {
+          "version": 12,
+          "success": 1
+        },
+        {
+          "version": 13,
+          "success": 1
+        },
+        {
+          "version": 14,
+          "success": 1
+        },
+        {
+          "version": 15,
+          "success": 1
+        },
+        {
+          "version": 16,
+          "success": 1
+        },
+        {
+          "version": 17,
+          "success": 1
+        },
+        {
+          "version": 18,
+          "success": 1
+        },
+        {
+          "version": 19,
+          "success": 1
+        },
+        {
+          "version": 20,
+          "success": 1
+        },
+        {
+          "version": 21,
+          "success": 1
+        },
+        {
+          "version": 22,
+          "success": 1
+        },
+        {
+          "version": 23,
+          "success": 1
+        },
+        {
+          "version": 24,
+          "success": 1
+        },
+        {
+          "version": 25,
+          "success": 1
+        },
+        {
+          "version": 26,
+          "success": 1
+        },
+        {
+          "version": 27,
+          "success": 1
+        },
+        {
+          "version": 28,
+          "success": 1
+        },
+        {
+          "version": 29,
+          "success": 1
+        },
+        {
+          "version": 30,
+          "success": 1
+        },
+        {
+          "version": 31,
+          "success": 1
+        },
+        {
+          "version": 32,
+          "success": 1
+        },
+        {
+          "version": 33,
+          "success": 1
+        },
+        {
+          "version": 34,
+          "success": 1
+        },
+        {
+          "version": 35,
+          "success": 1
+        },
+        {
+          "version": 36,
+          "success": 1
+        },
+        {
+          "version": 37,
+          "success": 1
+        },
+        {
+          "version": 38,
+          "success": 1
+        },
+        {
+          "version": 39,
+          "success": 1
+        },
+        {
+          "version": 40,
+          "success": 1
+        },
+        {
+          "version": 41,
+          "success": 1
+        },
+        {
+          "version": 42,
+          "success": 1
+        },
+        {
+          "version": 43,
+          "success": 1
+        },
+        {
+          "version": 44,
+          "success": 1
+        },
+        {
+          "version": 45,
+          "success": 1
+        },
+        {
+          "version": 46,
+          "success": 1
+        },
+        {
+          "version": 47,
+          "success": 1
+        },
+        {
+          "version": 48,
+          "success": 1
+        },
+        {
+          "version": 49,
+          "success": 1
+        },
+        {
+          "version": 50,
+          "success": 1
+        },
+        {
+          "version": 51,
+          "success": 1
+        },
+        {
+          "version": 52,
+          "success": 1
+        },
+        {
+          "version": 53,
+          "success": 1
+        },
+        {
+          "version": 54,
+          "success": 1
+        },
+        {
+          "version": 55,
+          "success": 1
+        },
+        {
+          "version": 56,
+          "success": 1
+        },
+        {
+          "version": 57,
+          "success": 1
+        },
+        {
+          "version": 58,
+          "success": 1
+        }
+      ],
+      "thread_history_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        },
+        {
+          "version": 3,
+          "success": 1
+        },
+        {
+          "version": 4,
+          "success": 1
+        },
+        {
+          "version": 5,
+          "success": 1
+        },
+        {
+          "version": 6,
+          "success": 1
+        },
+        {
+          "version": 7,
+          "success": 1
+        }
+      ]
+    }
+  },
+  "checks": {
+    "old_sqlite_fixture_tests_exit": 1,
+    "old_sqlite_fixture_failed": 2,
+    "evidence_checker_exit": 0,
+    "evidence_checker_negative_exit": 1,
+    "service_probe_exit": 0,
+    "cleanup_unit_absent": true,
+    "cleanup_late_kill_exit": 1
+  },
+  "discarded_harness_failures": [
+    "r2-sqlite-before.log (Vite loader)",
+    "r2-proof-boundaries.log (fixture positional argument)",
+    "r2-mutation-start-proof-wiring-invalid-fixture.log"
+  ],
+  "artifacts": [
+    {
+      "path": "<scratch>/built-r2-result.json",
+      "sha256": "67fcaa3d41da6c6cc67a63b9477d89c9b1b4113b532b986e6ccac8c54495cd18"
+    },
+    {
+      "path": "<scratch>/check-r2-evidence.py",
+      "sha256": "20ca84fd96910288e548a0234bc3a06af4245ceee63a3c14d9941c9a965fee70"
+    },
+    {
+      "path": "<scratch>/check-r2-suites.py",
+      "sha256": "bee440b7ca58225c45732d1f22f86c8d24a87170c564eff5849d204e8d0dce0d"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-install.log",
+      "sha256": "c40590dc0e1235430ead3a719026f2dacbb74a45d8fd28a36dc2fd5d61b1e9fb"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-native.log",
+      "sha256": "615780ece04353ecb07c746ef80032b5f21200ec58b24d67736a5d5da04f897e"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-negative-kaoiro-runner-codex-state.mjs.log",
+      "sha256": "1a1adde55b03788de42fce6f072a04402cda3a02cefba4cd6a93e508e69e1f73"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-negative-kaoiro-runner-launch.sh.log",
+      "sha256": "0783033f98d1e530680db28ada4d8da8757cc8cbf4db1fb021af9cab936e70fd"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-restored-verify.log",
+      "sha256": "e6594290425caabc04d9f3ac64c23285e0acb00abe6caa14b628ff9b5b132d36"
+    },
+    {
+      "path": "<scratch>/logs/built-r2-verify.log",
+      "sha256": "369259aad2ac8f2c67e68d53b9ccb6b04761189b0454df81f3a5a74936dec2bc"
+    },
+    {
+      "path": "<scratch>/logs/r2-artifact.log",
+      "sha256": "6ee8cd0fa0ba1dde5212ce7fe4253bdb5b46fe1703c2b4d0f83b5f447548c959"
+    },
+    {
+      "path": "<scratch>/logs/r2-build.log",
+      "sha256": "59f9c3570a7749f5a5141562b3b2b43d6ce6b2d2287de234c576ef1e79953fe5"
+    },
+    {
+      "path": "<scratch>/logs/r2-codex-test.log",
+      "sha256": "3737722ac78573e9aa984615c321cfb8df866a890ce4885abb17d3df779f5c6c"
+    },
+    {
+      "path": "<scratch>/logs/r2-codex-typecheck.log",
+      "sha256": "0e0b54de291756bab1de2f738e535d7af6bf9f13d497a8590a120b65ce243ad3"
+    },
+    {
+      "path": "<scratch>/logs/r2-evidence-check-negative.log",
+      "sha256": "650b14f2801cf18bd78851fd7bbf618c29491c75de38cc78f9b4221c585f4cd1"
+    },
+    {
+      "path": "<scratch>/logs/r2-evidence-check.log",
+      "sha256": "ab9093d6b2b6d00b6aa90c87e352cced887a114bd01010e17d522e886f3ef38f"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-acceptance-evidence-guard.log",
+      "sha256": "1dd592dec891b36070bec8d3f482c9fa071daab118ccf05f37ae1a51c0ed7d41"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-cgroup-v2.log",
+      "sha256": "9afc1dc60b79e20e45fb3fe27ba61da106b891ce0f1d6f8a7868a776cbeffd3f"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-code-only-recovery-selection.log",
+      "sha256": "36e18cb4b14aaf590c378a697b6badfc25afce80c54d86fafa37925356220d19"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-code-recovery-target.log",
+      "sha256": "b051d8f43b8982e2e573a291b5fc868001545b76989319668d457d65a531bdb6"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-minimal-journal.log",
+      "sha256": "b3a283216dd192159f505810496bc798b02694597bd7f14c47e0c044de73bc94"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-new-session-acceptance.log",
+      "sha256": "d452b40959b500280cc1e3fe656d9546181e077e12a40f6e2979c5289713670a"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-new-session-retirement.log",
+      "sha256": "7529faff4fc869a66fd04cc5bbcea17b56fcf3fdf00a23ce5ecef7c3823baf29"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-no-state-promotion.log",
+      "sha256": "5e0906225b38b5493bd16af6ca564d723279e73ca3cef82ab3317e8a170fdbe6"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-retirement-evidence-guard.log",
+      "sha256": "7ad1abbd4368cba33dc7ec5ab7f71e577f7c0c5068da986370268eb6a2d46c40"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-snapshot-failure-boundary.log",
+      "sha256": "b3fab1eee662731a43c83707f6e09022ac3341384df5da6a73fe1f89bb0c243a"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-start-proof-wiring-invalid-fixture.log",
+      "sha256": "0434e7b494d0358e0b57445bf2da25c6277dbabe0068d04fdf2bb95ad5164a1e"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-start-proof-wiring.log",
+      "sha256": "2fb52e486be13bbc22cfcd481869aee3af211670e95b6e3f1c1dd3f4202f99cb"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-startup-uncertainty-restore.log",
+      "sha256": "ce399891d73a673e91d186c8574e31480d4dc597933cac13c84d3ed867d29395"
+    },
+    {
+      "path": "<scratch>/logs/r2-mutation-switch-proof-wiring.log",
+      "sha256": "01445163be5d7060b51ea806c5f4c2a11a1e11d942072491b41a390ddb3382e1"
+    },
+    {
+      "path": "<scratch>/logs/r2-new-guards.log",
+      "sha256": "6a1a89b670ce65ca36995e758b363e5c3e6c0bbdf9e29f5e98ba6dc8299b1e60"
+    },
+    {
+      "path": "<scratch>/logs/r2-owned-cleanup-status.log",
+      "sha256": "449ec8ca36dfeaffcb0635eeebb6d721ea5a397bc9c8f285200f84bfaa5ad3d6"
+    },
+    {
+      "path": "<scratch>/logs/r2-owned-cleanup.log",
+      "sha256": "566b76eb6730ea4e99ca77c25fec416dd0df1bfae3692a6974da71225fd04e67"
+    },
+    {
+      "path": "<scratch>/logs/r2-owned-final-journal.log",
+      "sha256": "6d9134576c39c6e1c9c9d9fe4411fc332dc84ca6830d3ebe3becc6e7702f5f9e"
+    },
+    {
+      "path": "<scratch>/logs/r2-proof-boundaries.log",
+      "sha256": "dde0575d5a40884852ad24a9e8e71b0997a48aa95ea0ca740f0fe4d43dd79ba3"
+    },
+    {
+      "path": "<scratch>/logs/r2-readonly-preconditioning.log",
+      "sha256": "2d86f3252c40fce0e1ab3f9d3d1b3b23d8cd6186f8c4df71104978701a0965ea"
+    },
+    {
+      "path": "<scratch>/logs/r2-recovery-final.log",
+      "sha256": "c3828f5d60d8a971741dd8024884a025c3b753f666587282b3b8ea549189fbb0"
+    },
+    {
+      "path": "<scratch>/logs/r2-runner-test.log",
+      "sha256": "42f1e5a37d210e127eee476c02a8c6f111e2d72261d0af18bc97ea17593c9ebe"
+    },
+    {
+      "path": "<scratch>/logs/r2-runner-typecheck.log",
+      "sha256": "b86167c5337065a4c59389f16d1c491331b6b36b9bc27bdb743ceb1341628e1a"
+    },
+    {
+      "path": "<scratch>/logs/r2-sqlite-before.log",
+      "sha256": "4f1b895c8136ca04d556417e4f2bcc2710e20b30ed2ca6fdaea2edcd18c787e2"
+    },
+    {
+      "path": "<scratch>/logs/r2-sqlite-fixed.log",
+      "sha256": "80eb43720d7742389261c651a2b3e346bb3fddbd65734846d40b25febef22085"
+    },
+    {
+      "path": "<scratch>/logs/r2-sqlite-negative.log",
+      "sha256": "917953ffe146c69f09fb67db7ef94fa4c8fe60789e1e2bfb38a669eb28605926"
+    },
+    {
+      "path": "<scratch>/logs/r2-start-proof-restored.log",
+      "sha256": "0c58f5df00afc913445091d6e1ec460d3cafdf98bea98ca223b10f2a9fe9fe80"
+    },
+    {
+      "path": "<scratch>/logs/r2-systemd.log",
+      "sha256": "00923df762171bd74eb01819d33c0f73b44318f4ca7fd3f64387f1afaba053dd"
+    },
+    {
+      "path": "<scratch>/logs/r2-targeted.log",
+      "sha256": "dc003a88954735dab02131f089d5a3f6d2c7520a76179744e93357192d618b5c"
+    },
+    {
+      "path": "<scratch>/mutate-r2.py",
+      "sha256": "9e397052f298288a59c669042f9f0a0240ccdd1a292342b4537ee25ac2ba4be3"
+    },
+    {
+      "path": "<scratch>/r2-mutations.json",
+      "sha256": "1e2211516cb0c2f5ca4e1671f2962fec9c1d3a19a3bfbfb037f5985e2466c816"
+    },
+    {
+      "path": "<scratch>/r2-readonly-preconditioning/False.log",
+      "sha256": "63137b8000d192d9751f46b0d3e1d9898d1ea588f6c3ce9e1af3cf29a40e5601"
+    },
+    {
+      "path": "<scratch>/r2-readonly-preconditioning/True.log",
+      "sha256": "f3a06d3a1d903f4518d617155e634b51842dd02568c36a0073b0b71aeb98939d"
+    },
+    {
+      "path": "<scratch>/r2-readonly-preconditioning/old-snapshot.mjs",
+      "sha256": "630342b6da8401bc7f2a634e17a2ae0fd9b1d4b47925618d13ecabc85ad4fdc5"
+    },
+    {
+      "path": "<scratch>/r2-readonly-preconditioning/result.json",
+      "sha256": "e73965517dab4af14a1403af6a2048acb075f39fd5c46463d1ff5be0c3b53f13"
+    },
+    {
+      "path": "<scratch>/r2-readonly-preconditioning.py",
+      "sha256": "b3731301482b8928091fafaa63b95b2979b0de36698efa622a486d1ee669f182"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/PRE_SNAPSHOT_NATIVE_468.jsonl",
+      "sha256": "5cfa52432d982e0c33f77b2f7d3845ad2957581c82c63f7fbf5bffe1fe83c7f0"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/PRE_SNAPSHOT_NATIVE_468.stderr",
+      "sha256": "af99697b11a421bd1dbf8cdd06757f09d6595cca712a514204529f29396b6df8"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/RESUME_PRE_SNAPSHOT_NATIVE_468.jsonl",
+      "sha256": "5cfa52432d982e0c33f77b2f7d3845ad2957581c82c63f7fbf5bffe1fe83c7f0"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/RESUME_PRE_SNAPSHOT_NATIVE_468.stderr",
+      "sha256": "f94dd78d296157f654c1cfccb6537fde65ae78a5b894fdbe508cbbbda3c2582f"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/corrupt-backup-journal.log",
+      "sha256": "a52523799d557f101abd6544a38d040a811c1ea6165506bb1082b2628fcc52ae"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/database-boundary.json",
+      "sha256": "5c75a9a7205953619907ea9f292ec25b9e2174e03d894a89de09903f7e0ca248"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/kogane468-r2-c50ef614-b2de-4989-96b0-29a13df9594b.service",
+      "sha256": "bd733e1cd3717e744e39ff581b2bcacbbf0f31da65297f39303bbaf6e89a1e72"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/native-post-snapshot.jsonl",
+      "sha256": "57649ad27764ab355d1f47973ff641d198d624cdab62abba5d8c37ed4026b56a"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/native-post-snapshot.stderr",
+      "sha256": "af99697b11a421bd1dbf8cdd06757f09d6595cca712a514204529f29396b6df8"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/negative.json",
+      "sha256": "1107df6477eb8bcd82e3baee4cfdbb7947cdbfab4335c6f2eb25428405ec8c2a"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/requests.jsonl",
+      "sha256": "b62e89ac273810d1a2489156f3465d5fad8c8fad6363212419b3302e376ed439"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/restore-journal.log",
+      "sha256": "bb50276d1df91bf9fa57382b83c7aaf2cdb8f72d69e40b1fe556ce6e04748fbd"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/result.json",
+      "sha256": "1c5441638261d9d646bdb7e93421353a294d7ad55522b03d8eb6e457149bbd59"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/resume-result.json",
+      "sha256": "d4107177aa739c40863e8265d0da374837681d441b20bedd8d6d88bf329b498d"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/runner-journal.log",
+      "sha256": "620b0dcbe14d4a23ced7ecf21689ed89916cd7b3d86ecbbdbe754475a4b447b9"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/update-journal.log",
+      "sha256": "bbcdf751b74aea79dfb0444121a2a9745527c4e99d6a504bd6829b74ff29bee9"
+    },
+    {
+      "path": "<scratch>/r2-real-recovery-f9d81682-d47b-4c6a-a761-62b534001012/wrapper-wire.json",
+      "sha256": "9505a2d1be6b2a64b9edc6115e6270756b7a3095d1008d02dbbf8289bdee2c6c"
+    },
+    {
+      "path": "<scratch>/r2-suites.json",
+      "sha256": "8cfc6a9030cb0d22400fb9eca09b7a3de39a2f36b510793d6458a8942ad00eb3"
+    },
+    {
+      "path": "<scratch>/systemd-r2-recovery.mjs",
+      "sha256": "d01400e6471ada0841227911ab97f8e08e80e162c0b2d2cbb776fd779ebf7c97"
+    },
+    {
+      "path": "<scratch>/verify-built-r2.py",
+      "sha256": "505285b4774a74c314db47dee84de99f110c62c3fed076679f1b0e09a40695ca"
+    }
+  ],
+  "live_model_turns": 0,
+  "local_provider_requests": 4,
+  "reviews": [
+    {
+      "path": "tmp/reviews/issue-468/impl-r1-kuroe.md",
+      "sha256": "71239f1597f9043d37a218fe1f2ea2c4fa2fdf0a8cec3a1e8f79f4cb7c69a7e7"
+    },
+    {
+      "path": "tmp/reviews/issue-468/design-r5-kuroe.md",
+      "sha256": "7898059cd29db8378bc548a3f1d070c5797e6a0b55ecef7acd96bc617181b40f"
+    }
+  ],
+  "documents": [
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-adoption-gates-2026-10-01.json",
+      "sha256": "ada2877d9f5283f005cb3c02fb60cbebd52cf7119b9b165f576c877a3308c9f7"
+    },
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-adoption-gates-2026-10-01.md",
+      "sha256": "8450c940bd4ff7b0d2949cd1b18838f0f39081d278be42e8538dacb56c489c2b"
+    },
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-native-state-2026-10-01.json",
+      "sha256": "60a972740241f4b2866a2774dfa0fa9d30dd6ac1250cf399bb74ca357d182483"
+    },
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-native-state-2026-10-01.md",
+      "sha256": "ca7df102533eda28f5d129dfdc73ad2b8db73068e08b4ddacbdbf08d30a20641"
+    },
+    {
+      "path": "docs/operations/codex-home.md",
+      "sha256": "f30c63308cb2a04278f1c4ca4f81d94b27301c70904cf504156e4cde055465d8"
+    },
+    {
+      "path": "docs/operations/production.md",
+      "sha256": "e3aa45d8495cd06f596641324a080b991135148cd346349ad66afbcaaa46b093"
+    },
+    {
+      "path": "docs/operations/runner-update-and-rollback.md",
+      "sha256": "aef9b601ec188d4ba13dc8e766193eb57e5522112fca4a3f1e6cec6bef76b00c"
+    },
+    {
+      "path": "docs/plans/issue-468-codex-state-backup.md",
+      "sha256": "cd9c9b4f5cc44766dfc9fafce2983b195e742d074dde3555cba0c6fd6388f8df"
+    }
+  ]
+}
