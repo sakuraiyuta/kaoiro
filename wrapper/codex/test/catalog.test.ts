@@ -22,6 +22,44 @@ const values = (authMode: "chatgpt" | "apikey" | "unknown", plan?:
   resolveCodexCatalog(authMode, plan).map((model) => model.value);
 
 describe("resolveCodexCatalog", () => {
+  it("curated model descriptions match the verified upstream snapshot", () => {
+    expect(
+      resolveCodexCatalog("chatgpt", "plus").map(({ value, description }) => ({
+        value,
+        description,
+      })),
+    ).toEqual([
+      {
+        value: "gpt-6.1-sol",
+        description: "Latest workhorse model for coding and everyday work.",
+      },
+      {
+        value: "gpt-6-astra",
+        description: "Frontier intelligence for the most demanding work.",
+      },
+      {
+        value: "gpt-6-sol",
+        description: "Previous generation workhorse model.",
+      },
+      {
+        value: "gpt-6-luna",
+        description: "Fast and affordable model for easier tasks.",
+      },
+      {
+        value: "gpt-5.6-sol",
+        description: "Older generation workhorse model.",
+      },
+      {
+        value: "gpt-5.6-terra",
+        description: "Older balanced model for straightforward work.",
+      },
+      {
+        value: "gpt-5.6-luna",
+        description: "Older fast and efficient model.",
+      },
+    ]);
+  });
+
   it.each([
     [
       "gpt-6.1-sol",
