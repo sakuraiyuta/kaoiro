@@ -133,6 +133,13 @@ describe("Codex pin activation guard through installed symlinks", () => {
     expect(result.status).not.toBe(0);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
+  it("refuses dangling current instead of treating it as a fresh installation", () => {
+    rmSync(join(root, "releases", A), { recursive: true });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), [B, "--install-dir", root]);
+    expect(result.status).not.toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${B}`);
+  });
   it("refuses backend resolver disagreement", () => {
     const rpc = join(root, "releases", B, "node_modules/@kaoiro/codex/dist/app_server_rpc.js");
     writeFileSync(rpc, 'export function resolveAppServerBinary() { return import.meta.filename; }');
@@ -141,6 +148,15 @@ describe("Codex pin activation guard through installed symlinks", () => {
     const result = rollback();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("backend native paths disagree");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+  });
+  it("refuses multiple native candidates even when both backends select the same file", () => {
+    const alternate = join(root, "releases", B, "node_modules/@openai/codex/vendor/fixture/codex");
+    mkdirSync(alternate); writeFileSync(join(alternate, "codex"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(alternate, "codex"), 0o755);
+    const result = rollback();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Ambiguous Codex native candidates");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
   it("refuses missing native payload", () => {

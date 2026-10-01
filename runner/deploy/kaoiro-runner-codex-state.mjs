@@ -1,19 +1,15 @@
 #!/usr/bin/env node
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
-import { atomicJSON, capacity, digest, identity, inside, inventory, must, prepareRestore, promoteRestore, sameState, snapshot, throughputEstimate, verifySnapshot } from "./codex-snapshot.mjs";
+import { atomicJSON, capacity, digest, hasEntry, identity, inside, inventory, must, prepareRestore, promoteRestore, sameState, snapshot, throughputEstimate, verifySnapshot } from "./codex-snapshot.mjs";
 import { assertStopped, captureBinding, checkBinding, staticBinding } from "./codex-service.mjs";
 
 const ID = /^[a-f0-9]{40}(?:-dirty)?$|^unknown$/;
-function hasEntry(path) {
-  try { lstatSync(path); return true; }
-  catch (error) { if (error.code === "ENOENT") return false; throw error; }
-}
 function privateDir(path) {
-  if (!existsSync(path)) mkdirSync(path, { mode: 0o700 });
+  if (!hasEntry(path)) mkdirSync(path, { mode: 0o700 });
   identity(path);
 }
 function readJSON(path) {
@@ -123,7 +119,7 @@ function barrierCheck(root, current, binding) {
   }
 }
 export async function guard(root, target, uuid, preflight = false) {
-  if (!existsSync(join(root, "current"))) {
+  if (!hasEntry(join(root, "current"))) {
     must(!uuid, "State transaction requires an existing release");
     await releaseIdentity(root, target);
     return;
@@ -153,7 +149,7 @@ export async function guard(root, target, uuid, preflight = false) {
 }
 async function prepare(root, target, home, destination, service, tool, owner) {
   must(process.platform === "linux", "State-aware operation requires Linux");
-  must(existsSync(join(root, ".lock.update")), "Update lock is required");
+  must(hasEntry(join(root, ".lock.update")), "Update lock is required");
   const pending = records(root, "transactions").filter((tx) => !["completed", "restored", "retired"].includes(tx.phase));
   must(!pending.length, "Recover or accept the previous Codex state transaction first");
   const source = await releaseIdentity(root, currentRelease(root));
@@ -161,7 +157,7 @@ async function prepare(root, target, home, destination, service, tool, owner) {
   await releaseIdentity(root, tool, true);
   const binding = captureBinding(root, service, home);
   barrierCheck(root, source, binding);
-  must(!existsSync(destination) && resolve(destination) === destination && realpathSync(dirname(destination)) === dirname(destination), "Backup destination must be new and canonical");
+  must(!hasEntry(destination) && resolve(destination) === destination && realpathSync(dirname(destination)) === dirname(destination), "Backup destination must be new and canonical");
   identity(dirname(destination));
   must(!inside(home, destination) && !inside(destination, home) && !inside(join(root, "releases"), destination) && !inside(destination, root), "Backup destination overlaps protected state/releases");
   const entries = inventory(home);
@@ -254,7 +250,7 @@ function protectedReleases(root) {
   return [...ids].join("\n");
 }
 async function accept(root, uuid, evidenceFile) {
-  must(existsSync(join(root, ".lock.update")) && existsSync(join(root, ".lock.links")), "Acceptance requires update and links locks");
+  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Acceptance requires update and links locks");
   const tx = transaction(root, uuid);
   must(tx.phase === "awaiting-acceptance", "Transaction has not reached startup checks");
   must(currentRelease(root) === tx.target.id, "Acceptance target is not current");
@@ -275,13 +271,13 @@ async function accept(root, uuid, evidenceFile) {
     old.phase = "restored"; save(root, old);
   }
   const file = join(paths(root).barriers, barrierName(binding));
-  if (existsSync(file)) {
+  if (hasEntry(file)) {
     try { readJSON(file); } catch { renameSync(file, `${file}.damaged-${randomUUID()}`); }
   }
   atomicJSON(file, { schema: 1, binding, native, uuid, acceptance: tx.acceptance });
 }
 async function repairBarrier(root, uuid) {
-  must(existsSync(join(root, ".lock.update")) && existsSync(join(root, ".lock.links")), "Barrier repair requires both locks");
+  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Barrier repair requires both locks");
   const tx = transaction(root, uuid);
   must(["completed", "restored", "retired"].includes(tx.phase) && tx.acceptance, "Barrier repair requires an accepted transaction");
   must(currentRelease(root) === tx.target.id, "Repair transaction does not identify current release");
@@ -290,11 +286,11 @@ async function repairBarrier(root, uuid) {
   checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
   const binding = staticBinding(root, tx.service, tx.binding.home.path);
   const file = join(paths(root).barriers, barrierName(binding));
-  if (existsSync(file)) renameSync(file, `${file}.damaged-${randomUUID()}`);
+  if (hasEntry(file)) renameSync(file, `${file}.damaged-${randomUUID()}`);
   atomicJSON(file, { schema: 1, binding, native, uuid, acceptance: tx.acceptance, repaired: new Date().toISOString() });
 }
 async function retire(root, uuid, evidenceFile) {
-  must(existsSync(join(root, ".lock.update")) && existsSync(join(root, ".lock.links")), "Retirement requires both locks");
+  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Retirement requires both locks");
   const tx = transaction(root, uuid), ref = reference(root, tx);
   must(["completed", "restored"].includes(tx.phase), "Cannot retire an incomplete transaction");
   const current = await releaseIdentity(root, currentRelease(root));
@@ -307,7 +303,7 @@ async function retire(root, uuid, evidenceFile) {
     ref.retired = true; ref.retirementEvidence = digest(readFileSync(evidenceFile));
     atomicJSON(join(paths(root).backups, `${uuid}.json`), ref);
   }
-  if (existsSync(ref.snapshot)) {
+  if (hasEntry(ref.snapshot)) {
     verifySnapshot(ref.snapshot, ref.manifestHash);
     rmSync(ref.snapshot, { recursive: true });
   }

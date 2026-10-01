@@ -1,5 +1,6 @@
+import { hasEntry } from "./codex-snapshot.mjs";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,7 +20,7 @@ export async function nativeIdentity(release) {
   const fromWrapper = createRequire(cli);
   const sdkManifest = (fromWrapper.resolve.paths("@openai/codex-sdk") ?? [])
     .map((dir) => join(dir, "@openai/codex-sdk/package.json"))
-    .find((path) => existsSync(path));
+    .find((path) => hasEntry(path));
   if (!sdkManifest) throw new Error("Codex SDK is missing");
   const sdkPackage = contained(root, sdkManifest);
   const importEntry = JSON.parse(readFileSync(sdkPackage, "utf8")).exports?.["."]?.import;
@@ -54,14 +55,14 @@ export async function nativeIdentity(release) {
   const roots = new Set([dirname(pkg)]);
   for (let dir = dirname(pkg); ; dir = dirname(dir)) {
     const candidate = join(dir, "node_modules/@openai", `codex-${platform}-${process.arch}`);
-    if (existsSync(join(candidate, "package.json"))) roots.add(realpathSync(candidate));
+    if (hasEntry(join(candidate, "package.json"))) roots.add(realpathSync(candidate));
     if (dirname(dir) === dir) break;
   }
   const candidates = new Set();
   for (const pkgRoot of roots) {
     for (const layout of ["bin", "codex"]) {
       const candidate = join(pkgRoot, "vendor", triple, layout, "codex");
-      if (existsSync(candidate)) candidates.add(contained(root, candidate));
+      if (hasEntry(candidate)) candidates.add(contained(root, candidate));
     }
   }
   if (candidates.size !== 1 || !candidates.has(exec)) {

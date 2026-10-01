@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync,
+  chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync,
   readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statfsSync, symlinkSync,
   writeFileSync, openSync, closeSync, fsyncSync,
 } from "node:fs";
@@ -17,6 +17,11 @@ const DISPOSABLE = new Set(["tmp", ".tmp", "thread-writer-locks", "log", "shell_
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const inside = (root, path) => { const rel = relative(root, path); return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)); };
 export function must(condition, message) { if (!condition) throw new Error(message); }
+// A dangling link is a present, invalid entry, never an empty installation.
+export function hasEntry(path) {
+  try { lstatSync(path); return true; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
 export function identity(path) {
   must(isAbsolute(path) && realpathSync(path) === resolve(path), "Directory must use its original canonical absolute path");
   const st = lstatSync(path);
@@ -130,7 +135,7 @@ export async function migrationLevels(home, entries) {
 export async function snapshot(home, destination, metadata) {
   const source = identity(home);
   const parent = realpathSync(dirname(destination));
-  must(isAbsolute(destination) && !existsSync(destination) && join(parent, basename(destination)) === destination, "Snapshot destination must be new and canonical");
+  must(isAbsolute(destination) && !hasEntry(destination) && join(parent, basename(destination)) === destination, "Snapshot destination must be new and canonical");
   must(!inside(home, destination) && !inside(destination, home), "Snapshot overlaps Codex home");
   const entries = inventory(home, true);
   capacity(parent, entries);
@@ -170,13 +175,13 @@ export function promoteRestore(home, stage, quarantine, recordMove) {
   inventory(home);
   identity(stage);
   must(dirname(home) === dirname(stage) && dirname(home) === dirname(quarantine), "Restore directories must be siblings");
-  must(!existsSync(quarantine), "Restore quarantine already exists");
+  must(!hasEntry(quarantine), "Restore quarantine already exists");
   recordMove("quarantine-intent");
   renameSync(home, quarantine);
   recordMove("quarantined");
   for (const name of CREDENTIALS) {
     const path = join(quarantine, name);
-    if (existsSync(path)) {
+    if (hasEntry(path)) {
       recordMove(`credential-intent:${name}`);
       renameSync(path, join(stage, name));
       recordMove(`credential-moved:${name}`);

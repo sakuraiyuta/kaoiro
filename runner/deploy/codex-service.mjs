@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { digest, identity, inside, must } from "./codex-snapshot.mjs";
+import { digest, hasEntry, identity, inside, must } from "./codex-snapshot.mjs";
 
 const KEYS = new Set(["HOME", "XDG_CONFIG_HOME", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "CODEX_HOME"]);
 function systemctl(service, ...args) {
@@ -97,7 +97,7 @@ export function staticBinding(root, service, requestedHome) {
   const config = env.KAOIRO_RUNNER_ENV || join(configDir, "runner.env");
   must(config.startsWith("/"), "runner.env path must be absolute");
   let sourceHash = null, configIdentity = null;
-  if (existsSync(config)) {
+  if (hasEntry(config)) {
     must(realpathSync(config) === resolve(config), "runner.env symlinks are unsupported for state updates");
     const st = lstatSync(config);
     must(st.isFile() && st.uid === process.getuid() && !(st.mode & 0o077), "runner.env must be a private owned file");
@@ -137,7 +137,7 @@ export function checkBinding(root, service, binding, restored = false) {
 export function assertStopped(service, home) {
   must(["inactive", "failed"].includes(prop(service, "ActiveState")) && prop(service, "MainPID") === "0", "Runner is not fully stopped");
   const group = prop(service, "ControlGroup");
-  if (group && existsSync(join("/sys/fs/cgroup", group, "cgroup.events"))) {
+  if (group && hasEntry(join("/sys/fs/cgroup", group, "cgroup.events"))) {
     must(/^populated 0$/m.test(readFileSync(join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")), "Runner descendants remain");
   }
   const inodes = new Set();
@@ -170,7 +170,7 @@ export function assertStopped(service, home) {
         must(!inside(home, target) && !inodes.has(`${st.dev}:${st.ino}`), `Codex home is held by another process (${name})`);
       }
     } catch (error) {
-      if (!existsSync(proc)) continue;
+      if (!hasEntry(proc)) continue;
       if (start && pidIdentity(name) !== start) continue;
       throw error;
     }

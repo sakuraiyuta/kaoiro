@@ -81,7 +81,8 @@ The following remain required before Gate 6 is complete:
 
 - The real runner's retained-session resume path after restore, including its
   refusal without silently creating a new session and an explicitly requested
-  new session succeeding; native tool-item history is also unmeasured here.
+  new session succeeding; native tool-item history and old-version resume of
+  a candidate-created thread before restore are also unmeasured here.
 - A successful complete detached update and restore with owned real systemd
   units and a final built release. The shared host currently prevents the
   required same-UID `/proc` inspection for an unrelated live process; the

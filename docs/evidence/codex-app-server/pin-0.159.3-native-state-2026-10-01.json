@@ -7,253 +7,257 @@
   },
   "implementation": {
     "path": "runner/deploy/codex-snapshot.mjs",
-    "sha256": "bd89bbb23ed41d5621529a37db83f4761a681945a14009c023c873cbfddb3f14"
+    "sha256": "630342b6da8401bc7f2a634e17a2ae0fd9b1d4b47925618d13ecabc85ad4fdc5"
   },
   "live_model_turns": 0,
   "local_provider_requests": 11,
   "artifacts": [
     {
-      "path": "<scratch>/gate6-native/arms.py",
+      "path": "<scratch>/gate6-native-final/arms.py",
       "sha256": "99108bf81e02a0e2167e461850e12a078441263819f04c47e0c0f4e059640284"
     },
     {
-      "path": "<scratch>/gate6-native/arms.result.json",
-      "sha256": "636488190bb032641a91b69afe55a4a0db635013ddd82270ac5cd9d3e74bf108"
+      "path": "<scratch>/gate6-native-final/arms.result.json",
+      "sha256": "6b43c7738f0bdda842b45f0b33bd7f963636936e0447cf309f9f9cd30b04961f"
     },
     {
-      "path": "<scratch>/gate6-native/before-migration.db.json",
+      "path": "<scratch>/gate6-native-final/arms.run.log",
+      "sha256": "72b4122c626479ba7b03deaa4a58d16b74662733a080e9521952bd06e000abcd"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/before-migration.db.json",
       "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
     },
     {
-      "path": "<scratch>/gate6-native/candidate-app.rpc.jsonl",
-      "sha256": "2c84e69c033ef6600b883f862d7c988a38a5db8056b778d67bff7287af91d9c0"
+      "path": "<scratch>/gate6-native-final/candidate-app.rpc.jsonl",
+      "sha256": "8ca2611a218bd8fd2c53cf007a53eb1d5fd71987de030af2bdaeb73cce1d565c"
     },
     {
-      "path": "<scratch>/gate6-native/candidate-app.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
+      "path": "<scratch>/gate6-native-final/candidate-app.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
     },
     {
-      "path": "<scratch>/gate6-native/candidate-new-thread.db.json",
+      "path": "<scratch>/gate6-native-final/candidate-new-thread.db.json",
       "sha256": "48792f328cef821d216180e039097b5ffccaa8fd4619920b41a2eaa876a343ef"
     },
     {
-      "path": "<scratch>/gate6-native/candidate-new-thread.rpc.jsonl",
-      "sha256": "19e9583ea4fa7d22a1d3efd76f05bb979ef2da3a13cb5fa9f019cbe9f904e748"
+      "path": "<scratch>/gate6-native-final/candidate-new-thread.rpc.jsonl",
+      "sha256": "8dde45655d3909acf6d40b337c5088aabb15df91d4955caacf120f0ccf5202ce"
     },
     {
-      "path": "<scratch>/gate6-native/candidate-new-thread.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
+      "path": "<scratch>/gate6-native-final/candidate-new-thread.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
     },
     {
-      "path": "<scratch>/gate6-native/candidate.db.json",
+      "path": "<scratch>/gate6-native-final/candidate.db.json",
       "sha256": "48792f328cef821d216180e039097b5ffccaa8fd4619920b41a2eaa876a343ef"
     },
     {
-      "path": "<scratch>/gate6-native/candidate.history.json",
-      "sha256": "a0e3b4a3a9902cddc6014b4bef64e42ded306fa9cd653c965220cc8d04ca41a4"
+      "path": "<scratch>/gate6-native-final/candidate.history.json",
+      "sha256": "cf1d38683229e873ac654aab9115a8c92efb076f409ea793f9bfefd4554fb3e3"
     },
     {
-      "path": "<scratch>/gate6-native/candidate.result.json",
-      "sha256": "51298a91a987143a6de30e5f7d0584fdf211870307edd06a349e7b8d5c39b567"
+      "path": "<scratch>/gate6-native-final/candidate.result.json",
+      "sha256": "f6340fd5284b00e9188100d5eb90e0fb935670555926a2bc9561224a1ecb3c6d"
     },
     {
-      "path": "<scratch>/gate6-native/candidate.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
+      "path": "<scratch>/gate6-native-final/candidate.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
     },
     {
-      "path": "<scratch>/gate6-native/candidate.stdout.jsonl",
-      "sha256": "1a969f883f8928fc210814a6b5ce0dee1eba80bbe4355d3cc104c18f52ec0718"
+      "path": "<scratch>/gate6-native-final/candidate.stdout.jsonl",
+      "sha256": "8a8f8dfb839fbde3fd6d438ac7b129a2dbc0df35d527489474171e2a23ab15f2"
     },
     {
-      "path": "<scratch>/gate6-native/check.py",
-      "sha256": "019e1337c76fe3afb1ddcac9c9741fcaa1f16f656f4b79089fb314044339dde6"
+      "path": "<scratch>/gate6-native-final/check.py",
+      "sha256": "d5ac41a9d3a9fd08548346c4518d4d014a5e16e78a59839ef70a6a014976c624"
     },
     {
-      "path": "<scratch>/gate6-native/checker-negatives.json",
-      "sha256": "97f80dcc4ad89f145dc07be68f399e27be63388b598a14eddf82145ec8952ded"
-    },
-    {
-      "path": "<scratch>/gate6-native/native-diagnostics.json",
-      "sha256": "62fd8a881241f4f360e8bc8dd59f1953d2b890bcc9266c446c59ead3269fe99d"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate-app.rpc.jsonl",
-      "sha256": "5da661054417963016e5cba5749bd588c9074e52df1a791544e0a0b7527f0ca1"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate-app.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate.db.json",
-      "sha256": "48792f328cef821d216180e039097b5ffccaa8fd4619920b41a2eaa876a343ef"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate.history.json",
-      "sha256": "0d9f7c481e6708c5b140e0e618a6048099a71f6b249a29e3f2b2605bc761b4b2"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate.result.json",
-      "sha256": "a8712ae590d1153442153a041d07f7c33622ee9e6d83afd9fe051e2b8422b7f9"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-after-candidate.stdout.jsonl",
-      "sha256": "911f402926256111a436894760c8945d057ee4f7ba2c5bad4da8bceaa1c5e5f3"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-app-create.rpc.jsonl",
-      "sha256": "fddd60ae61388f1eed9c911734c9e5aff1f2a942dad1ef3f3c72d08eec0e7e8f"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-app-create.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control-app.rpc.jsonl",
-      "sha256": "cd1f332fa0240c2885ed06d57eefb3c63cd34a5a35b9bbf413d06c2d1a34d583"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control-app.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control.db.json",
-      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control.history.json",
-      "sha256": "be7e366bb45d019f3dcd1504443b7b753cacdd70a42e813c5ba0ea88a3936c3a"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control.result.json",
-      "sha256": "299a4120215619eaa43345fb6606df33d0e5d54304d8764f507bbb47cb3625f6"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-control.stdout.jsonl",
-      "sha256": "b39024776c101b983aad976069150797ed6b83ad622728ae04f122b81a38e1c7"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-exec-create.result.json",
-      "sha256": "15a9171c74838ae364e5c300f9d26467f19f7e6b8f4483b860523874e996072a"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-exec-create.stderr.log",
-      "sha256": "83021329a702a57dd8ac4121cca619a034dfa00fc3de3653cdd0a05cbbc70b2c"
-    },
-    {
-      "path": "<scratch>/gate6-native/old-exec-create.stdout.jsonl",
-      "sha256": "802c64e5a8c997d842eed88651bb9260d1296a5a863b520cf9354e179b39ac05"
-    },
-    {
-      "path": "<scratch>/gate6-native/probe.py",
-      "sha256": "a84746f275245a12c829a00090dfb1d5a4d04a1098bc4b7d53272c7d175739df"
-    },
-    {
-      "path": "<scratch>/gate6-native/requests.jsonl",
-      "sha256": "d0fd5e59698820c5899567aaa85506d059f707f10507aac21bec28f3a1434514"
-    },
-    {
-      "path": "<scratch>/gate6-native/restore-1790832341392167500.log",
-      "sha256": "09204dbfbdb8fc121fb2a47988fe1a42a1981ac4e16ea4afc915e2d87b40d324"
-    },
-    {
-      "path": "<scratch>/gate6-native/restore-1790832441778937512.log",
-      "sha256": "09204dbfbdb8fc121fb2a47988fe1a42a1981ac4e16ea4afc915e2d87b40d324"
-    },
-    {
-      "path": "<scratch>/gate6-native/restore-history.py",
-      "sha256": "4d2fea976d14ac4cf39564816392badcd03b9f2d60c85e87b0eb26eeafaab17b"
-    },
-    {
-      "path": "<scratch>/gate6-native/restore-history.result.json",
-      "sha256": "65c0847f6d3295817dd8a46e2890e8dd5f0622d707457fdff5a00a109cb62cbe"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-app-history.db.json",
-      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-app-history.rpc.jsonl",
-      "sha256": "d9560b9117b2b792230ce0834f9c58aed6a37d3b05fdb9a48505340de13550ed"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-app-history.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-app.history.json",
-      "sha256": "be7e366bb45d019f3dcd1504443b7b753cacdd70a42e813c5ba0ea88a3936c3a"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-old.db.json",
-      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-old.result.json",
-      "sha256": "634bf071a35f6fb3044eee5a6f0279aaf1f4a82179662aa4625dd6c5929f99d0"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-old.stderr.log",
-      "sha256": "416b952b2a293222c47404b8ab823cf434c85983f5b46eec9694d26b6f5ce9eb"
-    },
-    {
-      "path": "<scratch>/gate6-native/restored-old.stdout.jsonl",
-      "sha256": "267161ce7d79e56720b6c6dec85b904c42205aeb1526d71f5f459ad4cc0b6689"
-    },
-    {
-      "path": "<scratch>/gate6-native/seed-thread.json",
-      "sha256": "15d14f1aeaacc6a92105cf2582738ef5b6bfc7c25fd4a98ac095c429f30e2a94"
-    },
-    {
-      "path": "<scratch>/gate6-native/snapshot-1790832334724698624.log",
-      "sha256": "1334937dba969cc96c817d9bf14b34a7be9351ebf0730ed97b07c6d49b1050d2"
-    },
-    {
-      "path": "<scratch>/gate6-native/threads.json",
-      "sha256": "b6ceeb9b1b78bed5af0754e4e214f6d94cefb5cb8274a61f28179e92a25d5035"
-    },
-    {
-      "path": "<scratch>/gate6-native/wrong-sentinel.log",
-      "sha256": "75949c8159d59d07d7c949b5cc8dc68a3e6aefd1b7c5b660876d7afe37ab9053"
-    },
-    {
-      "path": "<scratch>/gate6-native/wrong-thread.log",
-      "sha256": "a85073265235a1d7ee6376730e24a6df4ce2128b85abeb16d6d40ed56a818119"
-    },
-    {
-      "path": "<scratch>/logs/gate6-arms.log",
-      "sha256": "db3d25e7dbb151254215c79ed4748310eaede542e31489c357a67113797ecda5"
-    },
-    {
-      "path": "<scratch>/logs/gate6-check-positive.log",
+      "path": "<scratch>/gate6-native-final/check.run.log",
       "sha256": "9cf38fd4a03393a8fc1aa3dbe785a9f3b8d27d8b53753c6e1c388b4ed6e8f2bb"
     },
     {
-      "path": "<scratch>/logs/gate6-initial.log",
-      "sha256": "8b2d535fc32cd196ca37ae35ffaa378f458dca4ea6a9e2db2e893b5007fb733c"
+      "path": "<scratch>/gate6-native-final/checker-negatives.json",
+      "sha256": "97f80dcc4ad89f145dc07be68f399e27be63388b598a14eddf82145ec8952ded"
     },
     {
-      "path": "<scratch>/logs/gate6-restore-history.log",
-      "sha256": "a74260cd55e7a58ba98c84df156891c40569932801b511396b22a6c3c8087f54"
+      "path": "<scratch>/gate6-native-final/native-diagnostics.json",
+      "sha256": "edaf22cdcb89396de8b7fabf5ff3122b4e7430d2b539f8dc09dd23953522e186"
     },
     {
-      "path": "<scratch>/logs/native-classification-mutation-native-policy-marker.log",
-      "sha256": "17331865d9205d9b47cabe96110f726f33886dd71c7788d1e90a293e3afd6f2e"
+      "path": "<scratch>/gate6-native-final/old-after-candidate-app.rpc.jsonl",
+      "sha256": "fb5de9421646da341ee9efce1678b9db46a9a4925ffd6c3eec4abbd558900422"
     },
     {
-      "path": "<scratch>/logs/native-classification-mutation-native-runtime-locks.log",
-      "sha256": "f788e8787d93cde917ae0f5edfdd78049fc3ed91bc88d158dc5e84265eed2353"
+      "path": "<scratch>/gate6-native-final/old-after-candidate-app.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-after-candidate.db.json",
+      "sha256": "48792f328cef821d216180e039097b5ffccaa8fd4619920b41a2eaa876a343ef"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-after-candidate.history.json",
+      "sha256": "c9d23370d899cf1dae3a9203c727c2640330be3f1b0d92b93e191f43f228ff11"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-after-candidate.result.json",
+      "sha256": "d85b618d65db5fd20e22090c44defd72a5acf141f534dc66556ce6ded973455d"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-after-candidate.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-after-candidate.stdout.jsonl",
+      "sha256": "71fb4d333fa39c7bccf6bdb2eee662420286d93b3b1c51f199b7adc769cd9a22"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-app-create.rpc.jsonl",
+      "sha256": "9719e3a4996c2e3a4aaf4179aa3f5bc30de9a0fcd66dfcf89bffa8c4f8c59e7f"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-app-create.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control-app.rpc.jsonl",
+      "sha256": "8173861a60aaa6fc75bdebda79a2f3be3cea9e1645eb7833e9cc660192b2ab2f"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control-app.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control.db.json",
+      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control.history.json",
+      "sha256": "424314e31f501351aa445fe644ed24b69048759c4434097dc71c54cf54a9a86a"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control.result.json",
+      "sha256": "212816f51b37d52cf1458abb5b5d3575f84963823129fbd7825ed5331b86f662"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-control.stdout.jsonl",
+      "sha256": "565f1eca3664d6fbf7f373d615a54a5802e01b13027e554b7e24a4d623816b55"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-exec-create.result.json",
+      "sha256": "8ded5189bc0d5a99c30bfd520c10bdbf345c1929eac427a39f79e63c2acd83b1"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-exec-create.stderr.log",
+      "sha256": "8ce2547fe1a36414d7f9321fca89f5097ac218d3a6a1b869375a5abcb51d6c70"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/old-exec-create.stdout.jsonl",
+      "sha256": "f4dd22cc2b47a6c8084cf8468c9ce3db0fe53dc8dc9189fc23b77fcaea3031f6"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/probe.py",
+      "sha256": "0c65cab6a324be7d6d9087fd1801d92914be183fd5ca42ac0284615f8c179d0f"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/probe.run.log",
+      "sha256": "a759dcb9d6edd8eebf11f83bb5d20bc358eb54bf79bd588625fb6676c3926d69"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/requests.jsonl",
+      "sha256": "8b6313f4a4f58ca682f71c53e451578aca3a267ae33da202aff994fb6375b8e0"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restore-1790833102197697615.log",
+      "sha256": "09204dbfbdb8fc121fb2a47988fe1a42a1981ac4e16ea4afc915e2d87b40d324"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restore-1790833104044235622.log",
+      "sha256": "09204dbfbdb8fc121fb2a47988fe1a42a1981ac4e16ea4afc915e2d87b40d324"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restore-history.py",
+      "sha256": "4d2fea976d14ac4cf39564816392badcd03b9f2d60c85e87b0eb26eeafaab17b"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restore-history.result.json",
+      "sha256": "28ca43c79b886f2dc5ece39d9832944cc6057e43e6b5b075e0b89338df0d3989"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restore-history.run.log",
+      "sha256": "a04d5bf609a12f68f375fd685f8a836b4332d475781678ac85ea816bde8d1815"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-app-history.db.json",
+      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-app-history.rpc.jsonl",
+      "sha256": "a74987512b15aef5e6118048ec451eaca38dc45b1159796ee7de1ab905a3bfa6"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-app-history.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-app.history.json",
+      "sha256": "424314e31f501351aa445fe644ed24b69048759c4434097dc71c54cf54a9a86a"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-old.db.json",
+      "sha256": "da79b613cd32267215d913e2b6a14a026e4dc5766586ab27e61d1da5b55aa570"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-old.result.json",
+      "sha256": "cf097c02b78a6783d0467a87ecd3fb06d2cea7b84af3fd7e334d720a3e875b37"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-old.stderr.log",
+      "sha256": "5828ffd66364464553360662b6683f01e9ea26fa0c11b941b05ff18eeade1d67"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/restored-old.stdout.jsonl",
+      "sha256": "f9c902042ed3ea273b4e77f3c51e8be5202e4728707f52eab5c7e9ca325c87fa"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/run-exits.json",
+      "sha256": "3c0b07f00c710508f3e333a7f1df0b5d25af63cff25e239aab111cef2886d2ae"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/seed-thread.json",
+      "sha256": "93f2966d071a5c5285203b97e5150f239ec7048ec525f08528c54167f25aaad3"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/snapshot-1790833097832172710.log",
+      "sha256": "b92d22e43c3ab46fb6cc7454c9e124a265fcc9d33c18ff780dac020c9efe983f"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/threads.json",
+      "sha256": "aa7ca138f53612e33e8b27d73627992598e26532b577d10f22a7c9af4822aabf"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/wrong-sentinel.log",
+      "sha256": "26204ab85663f26ea87e7f1f6af618aa660bf8d932290e10d8034f5d3bffde03"
+    },
+    {
+      "path": "<scratch>/gate6-native-final/wrong-thread.log",
+      "sha256": "03f13dfa858196ae645a7304160b912f672aefc3a22e31630b98285d7e3dba36"
+    },
+    {
+      "path": "<scratch>/logs/checkpoint-final-mutation-native-policy-marker.log",
+      "sha256": "518008b0bc5b2ce485f954b9c9e0d619838144433ae472f92987023b4e9ce414"
+    },
+    {
+      "path": "<scratch>/logs/checkpoint-final-mutation-native-runtime-locks.log",
+      "sha256": "3100cefdc8aeeddbe408e0c5fa25706101165b0c34a148b94c00dde5541f72f5"
     }
   ],
-  "native_snapshot_manifest_sha256": "ba5d217363e3e3771578f7e487bead455abf9c9ec110ed92674e9c8c095748d5",
+  "native_snapshot_manifest_sha256": "580a398ca5cc82ebeb4d3286f92e1ef0b6117a0e2f274dc0be2f9afc5b36645a",
   "checker_negative_exits": {
     "wrong_thread": 1,
     "wrong_sentinel": 1
@@ -261,6 +265,7 @@
   "remaining": [
     "real runner missing-session path",
     "tool-item history",
+    "old-version resume of a candidate-created thread before restore",
     "real systemd success with built release",
     "remaining guards and independent review"
   ]
