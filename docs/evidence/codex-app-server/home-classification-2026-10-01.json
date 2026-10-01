@@ -1,0 +1,337 @@
+{
+  "schema": 1,
+  "date": "2026-10-01",
+  "baseline_commit": "b4770ee07628b25144ae34be39e396fe8efc39d3",
+  "implementation_commit": "a747ea6406fd610a4a6047dfe5a324b421a8deb3",
+  "evidence_md_sha256": "344a5161e3da16660eed260182b623a432d7a0514a47ba636c4fd614d908ec37",
+  "design_review": {
+    "path": "tmp/reviews/issue-468/classify-design-r1-kuroe.md",
+    "sha256": "714040bfb3686ea2e5fa0a1edfb169d81b1171e890c8df8b67e6664d21c1b8d1"
+  },
+  "source_files": [
+    {
+      "path": "docs/operations/codex-home.md",
+      "sha256": "6a3916c330ea9076604caa285bad8e455a2d71e6504cd542082de9333377d887"
+    },
+    {
+      "path": "docs/operations/runner-update-and-rollback.md",
+      "sha256": "b71e2417dd8c5b1727694fd9c36f6602a7b649a99dbea68f70d9e244c4ab2de3"
+    },
+    {
+      "path": "docs/plans/issue-468-codex-state-backup.md",
+      "sha256": "2582abb16ac8cf9f73976c9220b7ef31c6f479d69468c2abf83b1925eb2d4623"
+    },
+    {
+      "path": "docs/plans/issue-468-home-classification.md",
+      "sha256": "89a3592f93f62bcf66c863f4f54f1a68d5ebeae41ddf4e8c775f0bf9403e2658"
+    },
+    {
+      "path": "runner/deploy/codex-snapshot.mjs",
+      "sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "path": "runner/test/codexHomeClassification.test.ts",
+      "sha256": "67bfe42abb38d268348248a625be2d127a9dd1e9aac77fa061819980e80f3e5e"
+    },
+    {
+      "path": "runner/test/codexHomeFixture.ts",
+      "sha256": "3568fe3d08c225415b945018a287d82066a2a1785b25678b91cb0aa830f1ffc7"
+    },
+    {
+      "path": "runner/test/codexState.test.ts",
+      "sha256": "34460404491144c3d42b93e5801050202c43da8a62001c7d07f11707077295cf"
+    }
+  ],
+  "upstream": {
+    "tag": "rust-v0.159.3",
+    "commit": "01fc69f4026735edfdf6789820549727a4867b11",
+    "sources": [
+      {
+        "path": "codex-rs/core-plugins/src/store.rs",
+        "sha256": "d3656d4a763f198608c46c77b6463b140c5236572d87661736a4424db9b34116"
+      },
+      {
+        "path": "codex-rs/core-plugin-common/src/installed.rs",
+        "sha256": "c82fba4fe5d96d4f54b7e9b068f410559d8b8478421dfe3c33cf76278f6991c0"
+      },
+      {
+        "path": "codex-rs/core-plugins/src/remote/catalog_cache.rs",
+        "sha256": "db0e9f48e0d294c46ac1378a8e5f659f66148994805d40261fd3c0cec32c89d3"
+      },
+      {
+        "path": "codex-rs/connectors/src/directory_cache.rs",
+        "sha256": "bc14d6ae62945feff88d4421caaad5b8ec6e45b722357856e88abb50c53860d0"
+      },
+      {
+        "path": "codex-rs/connectors/src/connector_runtime/persistence.rs",
+        "sha256": "6d241cb034720dfca44384ba74fe678696c8df11dd4b11764169833240eaf12b"
+      },
+      {
+        "path": "codex-rs/tui/src/pets/asset_pack.rs",
+        "sha256": "f6635fdbe27f7702df63c36c6c9aec5b91b6dd6e5c8b37bac6bb17c4ea078d21"
+      },
+      {
+        "path": "codex-rs/tui/src/pets/ambient.rs",
+        "sha256": "3adbf9f082f32df25ae57cc3d253e693f232da11acef855bed5ae6e92fb336c5"
+      }
+    ]
+  },
+  "environment": {
+    "node": "24.3.0",
+    "inherited_CODEX_HOME": "removed",
+    "HOME": "<scratch>/test-home",
+    "production_access": false,
+    "live_turns": 0
+  },
+  "checks": {
+    "baseline_focused": {
+      "files_failed": 1,
+      "tests_failed": 5,
+      "exit": 1
+    },
+    "fixed_focused": {
+      "files_passed": 1,
+      "tests_passed": 5,
+      "exit": 0
+    },
+    "runner_full_final": {
+      "files_passed": 38,
+      "tests_passed": 858,
+      "exit": 0,
+      "duration_seconds": 95.06
+    },
+    "runner_typecheck": {
+      "exit": 0
+    },
+    "archive_build": {
+      "exit": 0
+    },
+    "archive_install": {
+      "exit": 0
+    },
+    "packaged_probe": {
+      "exit": 0,
+      "result": {
+        "release": "<scratch>/installed/releases/a747ea6406fd610a4a6047dfe5a324b421a8deb3",
+        "classifyExit": 0,
+        "rootCount": 33,
+        "snapshotRestoreExit": 0,
+        "sourceUnchanged": true,
+        "dbCount": 6,
+        "links": [
+          "AGENTS.md",
+          "agents",
+          "hooks",
+          "model-profiles"
+        ],
+        "rootCacheOmitted": true,
+        "pluginStateRestored": true,
+        "currentCredentialPreserved": true,
+        "unknownExit": 78,
+        "unknownSnapshotExit": 1,
+        "nextMutations": 0,
+        "classifierSHA256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+      }
+    },
+    "probe_negative": {
+      "exit": 1,
+      "reason": "observed cache category corrupted; assertion fails"
+    },
+    "artifact_verifier": {
+      "negative_exit": 70,
+      "restored_exit": 0,
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    }
+  },
+  "mutations": [
+    {
+      "name": "agents",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  5 failed (5)"
+      ],
+      "log": "<scratch>/mutation-agents.log",
+      "sha256": "2eb4cac13e369d3fc394d6a1f0e34ede85e1e809fe2b073acf5a3bd05838f17e",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "hooks",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  4 failed | 1 passed (5)"
+      ],
+      "log": "<scratch>/mutation-hooks.log",
+      "sha256": "4a5397214e2533bd89cd2a526ef9a27af08b92c247b64398cd8a734d32ae5a45",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "model-profiles",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  4 failed | 1 passed (5)"
+      ],
+      "log": "<scratch>/mutation-model-profiles.log",
+      "sha256": "9d9b2473694bfa2989d356f13f54a119af27d3d848188604d4727a75a0e249bb",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "plugins",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  4 failed | 1 passed (5)"
+      ],
+      "log": "<scratch>/mutation-plugins.log",
+      "sha256": "8a51162e173748a1ea1ed136d729dae511eaffde4468f11383fa37438a5504d8",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "cache",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  4 failed | 1 passed (5)"
+      ],
+      "log": "<scratch>/mutation-cache.log",
+      "sha256": "e3d728831abb10aa4f870789bfa7e5d48e7f0d9e33d1f280dd409fb294e30472",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "unknown-root-guard",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  3 failed | 2 passed (5)"
+      ],
+      "log": "<scratch>/mutation-unknown-root-guard.log",
+      "sha256": "9ddabdc4f6ff70761e74deaf684941f5948f8bf269e8b197e1d8a02a35fc702a",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    },
+    {
+      "name": "root-cache-state",
+      "exit": 1,
+      "summary": [
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 3 passed (5)"
+      ],
+      "log": "<scratch>/mutation-root-cache-state.log",
+      "sha256": "3596ccdf4c3df3c611e7bc9452849e01fc02aafe9e6e00e5f6fc85b5713ce279",
+      "restored_source_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+    }
+  ],
+  "logs": [
+    {
+      "path": "<scratch>/baseline-focused.log",
+      "sha256": "dd4a392dcccf3a795b6d3b6671d6d9cbf0a7fad132163acf2f1d710eaf4e0cd3"
+    },
+    {
+      "path": "<scratch>/fixed-final-focused.log",
+      "sha256": "b71887458aa4263316a60e854bae196a36e1515fe189001f8d66bd651c1de0ca"
+    },
+    {
+      "path": "<scratch>/runner-full-final.log",
+      "sha256": "5aad4b4b688598a2e68d39d03bdf465503410b9de9446e3b7b0cb6371d4db971"
+    },
+    {
+      "path": "<scratch>/typecheck-final.log",
+      "sha256": "0aa0e15346caed44a371ecd4891d6f9f11f08378ddf09722cbbff218b6d4cfda"
+    },
+    {
+      "path": "<scratch>/wrapper-build.log",
+      "sha256": "0cb9fb1162750b4e9890db5ec09f34d99a4261d240855d8a01ac0e81f92e5461"
+    },
+    {
+      "path": "<scratch>/build.log",
+      "sha256": "1917ccb96a6272bd709417c59aaa2666fc7198e944004db318813f310822e785"
+    },
+    {
+      "path": "<scratch>/install-artifact.log",
+      "sha256": "c26715a37c8c62bb819811adfbf48134e1960b4f683fa45de25f29e08d43e733"
+    },
+    {
+      "path": "<scratch>/packaged.log",
+      "sha256": "4129166b368a0de87d2c3e6fea3b69528582bb99b4f8c8ffbd5b0386758ea174"
+    },
+    {
+      "path": "<scratch>/packaged-negative.log",
+      "sha256": "f2c5574e2719f7273f77a686d246359c9e01ea37e8a63a338b0e33d8656dbd92"
+    },
+    {
+      "path": "<scratch>/packaged-classify.json",
+      "sha256": "036b9016402d0ae816d32b89bcaa42795e715e344111083e0d641d3a43facb20"
+    },
+    {
+      "path": "<scratch>/packaged-snapshot.json",
+      "sha256": "78f4f4209f99fad6ff0a12b7572e7a82706a05214fa660005d4f17ed4a0afe30"
+    },
+    {
+      "path": "<scratch>/packaged-snapshot.stderr",
+      "sha256": "bd61d4ba491cf6d5ed474e40aaa7ba2e2aa8c24e3ea2f9a956e63ba0abdff674"
+    },
+    {
+      "path": "<scratch>/packaged-unknown.stderr",
+      "sha256": "c8ea781a26a48d8b7d4e2b577607e45b6e915a2955256af0e5d894863c4240f9"
+    },
+    {
+      "path": "<scratch>/packaged-result.json",
+      "sha256": "8b070db47bae67a4120e3349a456b534e24631d02085fb792617acef09f07d72"
+    },
+    {
+      "path": "<scratch>/verify-artifact.log",
+      "sha256": "e5d9aa04043de9803b92bc436585a51f06e083a5ba75f15053e5c2a294ea31fc"
+    },
+    {
+      "path": "<scratch>/verify-artifact-negative.log",
+      "sha256": "ffc3c00470cf9d8227bded7c0fd768f378aae095ded843a106bf3a9796d7330f"
+    },
+    {
+      "path": "<scratch>/verify-artifact-restored.log",
+      "sha256": "e5d9aa04043de9803b92bc436585a51f06e083a5ba75f15053e5c2a294ea31fc"
+    },
+    {
+      "path": "<scratch>/verify-artifact-result.json",
+      "sha256": "76deb637994ddf6b5029c2e0356b7726b8e2c1de2280c84922ba8258a819d566"
+    },
+    {
+      "path": "<scratch>/mutations.py",
+      "sha256": "83c7875ef356db625e1ad0987e3a6a97768ae67c1c6a8292bcbd713227b77073"
+    },
+    {
+      "path": "<scratch>/packaged.mts",
+      "sha256": "67f0562322f5056f7bebd0cee502b4bcc8ccf4e1477f98daad767aef169f63f6"
+    }
+  ],
+  "discarded_logs": [
+    {
+      "path": "<scratch>/baseline.log",
+      "sha256": "68e690ee76e70a0ef2ca8952d25bab8bb9a329fe591ce70951f1b6b4c8449609"
+    },
+    {
+      "path": "<scratch>/fixed-focused.log",
+      "sha256": "240918c655a22ec5911ec9d212fcc7a691f816b14cb9157f05fb79e9d1c0f404"
+    },
+    {
+      "path": "<scratch>/typecheck.log",
+      "sha256": "94207fb8d0f7716d61f1b56beb1e5acfd0710494cffdba5f54c67bd088a40a8f"
+    },
+    {
+      "path": "<scratch>/packaged-launch-error.log",
+      "sha256": "e8dbb9bbb0988adf40acc25d9271a4611d2e1ec98cf76073ea134c5766d3bdd2"
+    }
+  ],
+  "artifact": {
+    "archive": "<scratch>/built/kaoiro-runner-a747ea6406fd610a4a6047dfe5a324b421a8deb3-linux-x64.tar.gz",
+    "archive_sha256": "aadd21ab2f890b52f70d2d27c46506e9c88625f383b92a6f1b045e2dbc3397c3",
+    "deploy_manifest_sha256": "c786c0cec61addaa98479c5820fd8781831cd7de22ce906216899b51b8be4322",
+    "deploy_manifest_file_count": 153,
+    "classifier_sha256": "6735d96a458e1cd2db441d73e5bfabe039f66274f485b1ee31a6871cea833786"
+  },
+  "cleanup": {
+    "fixture_trees": "removed by test/probe cleanup handlers",
+    "evaluation_scratch": "retained by evaluator until review completes",
+    "authenticated_homes": "not accessed"
+  }
+}
