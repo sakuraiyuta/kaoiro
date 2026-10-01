@@ -9,9 +9,10 @@ last_updated: 2026-10-01
 Baseline: `b4770ee07628b25144ae34be39e396fe8efc39d3`.
 Branch: `issue-468-classify-home-links`. Design review precedes code edits.
 The director reports production top-level names and three instruction symlinks;
-the implementer has not inspected production. The supplied expanded list has
-33 names although its stated count is 34; the director is asked to confirm the
-missing name or corrected count before the exact-topology test is finalized.
+the implementer has not inspected production. The director confirmed 33 names
+(correcting the original count of 34), with no omitted name: memories_1.sqlite
+has no sidecars; goals_1/logs_2/queue_1/state_5/thread_history_1 each have the
+main DB plus -shm and -wal. The fixture will assert exactly that topology.
 
 ## Problem and decision
 
