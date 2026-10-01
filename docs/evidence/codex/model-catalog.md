@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog evidence
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-10-01
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -162,6 +162,44 @@ upstream SDK to expose the information.
   [#26892 (gpt-5.5 404 while gpt-5.4 works)](https://github.com/openai/codex/issues/26892)
 - Local verification: `codex doctor --json --no-color` (Codex CLI 0.144.1,
   run 2026-07-11)
+
+## Codex catalog snapshot (2026-10-01)
+
+The source is
+[`codex-rs/models-manager/models.json`](https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json).
+The issue's 2026-09-30 03:54:09 UTC retrieval and an independent re-fetch at
+2026-10-01 00:08:06 UTC had the same SHA-256:
+`fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b`.
+This preserves the earlier dated table above; it does not rewrite that
+historical snapshot.
+
+| Slug | Priority | Minimum CLI | Default effort | Default service tier | Upstream description |
+|---|---:|---:|---|---|---|
+| `gpt-6.1-sol` | 1 | 0.153.0 | low | none | Latest workhorse model for coding and everyday work. |
+| `gpt-6-astra` | 2 | 0.153.0 | low | none | Frontier intelligence for the most demanding work. |
+| `gpt-6-sol` | 3 | 0.155.0 | medium | priority | Previous generation workhorse model. |
+| `gpt-6-luna` | 4 | 0.155.0 | medium | priority | Fast and affordable model for easier tasks. |
+| `gpt-5.6-sol` | 5 | 0.144.0 | low | none | Older generation workhorse model. |
+| `gpt-5.6-terra` | 8 | 0.144.0 | medium | none | Older balanced model for straightforward work. |
+| `gpt-5.6-luna` | 9 | 0.144.0 | medium | none | Older fast and efficient model. |
+
+All seven rows support the reasoning levels `low`, `medium`, `high`,
+`xhigh`, and `max`; `ultra` is supported except by `gpt-6-luna` and
+`gpt-5.6-luna`.
+
+The source's `available_in_plans` values include Free and Go for the GPT-6
+rows, including Sol 6.1. That upstream declaration does not establish actual
+account entitlement. kaoiro's catalog policy advertises the GPT-6 models only
+for Plus and above and advertises only Terra for Free/Go. The current source
+also contains `prolite` and `promax` IDs. It does not establish that the
+marketed “Pro 500” plan maps to `promax`; that correspondence remains unknown.
+
+The existing API-key `gpt-5.4-mini` catalog row was retained. This change
+confirms row inclusion only; it did not synchronize that model's metadata.
+
+Live service-tier and entitlement probes for `gpt-6-sol` and `gpt-6.1-sol`
+remain unmeasured pending authenticated scratch-home access. No production
+Codex home or live peer model was used to create this snapshot.
 
 ## Migration links
 

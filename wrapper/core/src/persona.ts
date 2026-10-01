@@ -400,14 +400,16 @@ export function parseConfig(raw: unknown): WrapperConfig {
     raw.codex_chatgpt_plan === "go" ||
     raw.codex_chatgpt_plan === "plus" ||
     raw.codex_chatgpt_plan === "pro" ||
+    raw.codex_chatgpt_plan === "prolite" ||
+    raw.codex_chatgpt_plan === "promax" ||
     raw.codex_chatgpt_plan === "business" ||
     raw.codex_chatgpt_plan === "enterprise"
   ) {
     config.codex_chatgpt_plan = raw.codex_chatgpt_plan;
   } else if (raw.codex_chatgpt_plan !== undefined) {
     throw new ConfigError(
-      "codex_chatgpt_plan must be one of: free, go, plus, pro, " +
-        "business, enterprise",
+      "codex_chatgpt_plan must be one of: free, go, plus, pro, prolite, " +
+        "promax, business, enterprise",
     );
   }
   if (raw.codex_backend !== undefined) {

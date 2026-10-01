@@ -2632,23 +2632,26 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
     expect(h.configs.at(-1)?.context_work_budget_percent).toBe(75);
   });
 
-  it("codexChatgptPlan を差替え、以降の codex spawn の WrapperConfig に載る", () => {
-    const h = harness({ cwdAllowlist: ["/cwd"] });
-    h.sup.updateRuntimeConfig({
-      cwdAllowlist: ["/cwd"],
-      wrapperServerUrl: "ws://localhost:4000/wrapper",
-      codexAuthMode: "chatgpt",
-      codexChatgptPlan: "pro",
-      codexInternalSubagents: undefined,
-      codexExtraModels: undefined,
-      antigravityExtraModels: undefined,
-      contextWorkBudgetPercent: undefined,
-      getClaudeEngineCatalog: undefined,
-    });
-    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
-    expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe("pro");
-    expect(h.configs.at(-1)?.codex_auth_mode).toBe("chatgpt");
-  });
+  it.each(["pro", "prolite", "promax"] as const)(
+    "codexChatgptPlan %s を以降の codex spawn の WrapperConfig に載せる",
+    (plan) => {
+      const h = harness({ cwdAllowlist: ["/cwd"] });
+      h.sup.updateRuntimeConfig({
+        cwdAllowlist: ["/cwd"],
+        wrapperServerUrl: "ws://localhost:4000/wrapper",
+        codexAuthMode: "chatgpt",
+        codexChatgptPlan: plan,
+        codexInternalSubagents: undefined,
+        codexExtraModels: undefined,
+        antigravityExtraModels: undefined,
+        contextWorkBudgetPercent: undefined,
+        getClaudeEngineCatalog: undefined,
+      });
+      h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+      expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe(plan);
+      expect(h.configs.at(-1)?.codex_auth_mode).toBe("chatgpt");
+    },
+  );
 
   it("swapping codexExtraModels reaches subsequent codex spawns' WrapperConfig (issue #292)", () => {
     const h = harness({ cwdAllowlist: ["/cwd"] });

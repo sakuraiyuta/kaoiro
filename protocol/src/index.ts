@@ -259,6 +259,8 @@ export interface WrapperConfig {
     | "go"
     | "plus"
     | "pro"
+    | "prolite"
+    | "promax"
     | "business"
     | "enterprise";
   /** Codex internal sub-agent toggle relayed from the runner config
