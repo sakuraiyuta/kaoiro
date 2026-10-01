@@ -177,6 +177,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
           "inter_agent_reply_basis",
           if(params["inter_agent_reply_basis"] == "v1", do: "v1")
         )
+        |> maybe_put_optional_field(
+          "notice_attribution",
+          if(params["notice_attribution"] == "v1", do: "v1")
+        )
         |> maybe_put_optional_field("delivery", delivery)
         |> maybe_put_optional_field(
           "inter_agent_delivery_incarnation",
@@ -207,6 +211,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:inter_agent_reply_basis, params["inter_agent_reply_basis"] == "v1")
+       |> assign(:notice_attribution, params["notice_attribution"] == "v1")
        |> assign(:activity_replay_id, nil)
        |> assign(:delivery_generation, params["delivery_generation"])
        |> assign(:delivery_resync, delivery != nil and params["delivery_resync"] == "skip-v1")
@@ -1383,6 +1388,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
           payload |> Map.delete("work_control") |> Map.put("delivery_authority", authority)
 
         payload =
+          if socket.assigns[:notice_attribution] and payload["error"] == nil,
+            do: Map.put(payload, "notice_attribution", "v1"),
+            else: payload
+
+        payload =
           if work_result, do: Map.put(payload, "work_control_result", work_result), else: payload
 
         if work_stamp, do: Map.put(payload, "work", work_stamp), else: payload
@@ -2432,9 +2442,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
             not is_boolean(payload["new_conversation"]) ->
           {:error, "invalid value: payload.new_conversation"}
 
-        Enum.any?(~w(delivery_authority work work_control_result), &Map.has_key?(payload, &1)) ->
+        Enum.any?(
+          ~w(delivery_authority work work_control_result notice_attribution),
+          &Map.has_key?(payload, &1)
+        ) ->
           field =
-            Enum.find(~w(delivery_authority work work_control_result), &Map.has_key?(payload, &1))
+            Enum.find(
+              ~w(delivery_authority work work_control_result notice_attribution),
+              &Map.has_key?(payload, &1)
+            )
 
           {:error, "invalid value: payload.#{field}"}
 

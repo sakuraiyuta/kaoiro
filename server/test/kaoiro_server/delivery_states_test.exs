@@ -1264,6 +1264,171 @@ defmodule KaoiroServer.DeliveryStatesTest do
     end
   end
 
+  test "only a fenced, possibly written early steer resolves an unknown without loss", %{
+    name: name,
+    path: path
+  } do
+    recipient = "phase3-recipient"
+    owner = self()
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+    incarnation = DeliveryStates.incarnation(recipient, name)
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               recipient,
+               %{sender: "sender", conversation_id: "phase3", turn_number: 1, mode: "early"},
+               name
+             )
+
+    base = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "delivery_seq" => 1,
+      "mode" => "early",
+      "at" => at
+    }
+
+    for changed <- [
+          Map.merge(base, %{"stage" => "unknown", "reason" => "turn_steer_timeout"}),
+          Map.merge(base, %{
+            "stage" => "unknown",
+            "handoff" => "turn_steer_write_uncertain",
+            "reason" => "arbitrary"
+          }),
+          Map.merge(base, %{
+            "stage" => "unknown",
+            "handoff" => "turn_steer_write_uncertain",
+            "reason" => "turn_steer_timeout",
+            "generation" => "old"
+          }),
+          Map.merge(base, %{
+            "stage" => "unknown",
+            "handoff" => "turn_steer_write_uncertain",
+            "reason" => "turn_steer_timeout",
+            "incarnation" => "old"
+          })
+        ] do
+      assert {:error, _} =
+               DeliveryStates.report_stage(recipient, "generation", owner, changed, name)
+    end
+
+    uncertain =
+      Map.merge(base, %{
+        "stage" => "unknown",
+        "handoff" => "turn_steer_write_uncertain",
+        "reason" => "turn_steer_timeout"
+      })
+
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
+
+    assert %{uncertain_count: 1, lost_count: 0, last_uncertain: %{delivery_seq: 1}} =
+             DeliveryStates.get(recipient, name)
+
+    entry = :sys.get_state(name).entries[recipient]
+    assert 1 in entry.resolved
+    refute Map.has_key?(entry.metadata, 1)
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               recipient,
+               "generation",
+               owner,
+               Map.put(uncertain, "reason", "turn_steer_disconnected"),
+               name
+             )
+
+    DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
+    assert %{uncertain_count: 1, lost_count: 0} = DeliveryStates.get(recipient, name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+    assert %{uncertain_count: 1, last_uncertain: %{reason: "turn_steer_timeout"}} =
+             DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
+
+    assert :ok = DeliveryStates.delete(recipient, name)
+
+    assert %{uncertain_count: 0, last_uncertain: nil} =
+             DeliveryStates.bind_resync(recipient, "fresh", owner, name)
+  end
+
+  test "post-submission uncertainty counts once and legacy unknown remains history-only", %{
+    name: name
+  } do
+    recipient = "phase3-submitted"
+    owner = self()
+    DeliveryStates.bind_resync(recipient, "generation", owner, name)
+    incarnation = DeliveryStates.incarnation(recipient, name)
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    for {seq, mode} <- [{1, "early"}, {2, "normal"}] do
+      assert ^seq =
+               DeliveryStates.issue_synthetic(
+                 recipient,
+                 %{
+                   sender: "sender",
+                   conversation_id: "phase3-#{seq}",
+                   turn_number: seq,
+                   mode: mode
+                 },
+                 name
+               )
+    end
+
+    base = %{
+      "incarnation" => incarnation,
+      "generation" => "generation",
+      "at" => at
+    }
+
+    submitted =
+      Map.merge(base, %{
+        "delivery_seq" => 1,
+        "stage" => "submitted",
+        "mode" => "early",
+        "handoff" => "turn_steer_accepted"
+      })
+
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, submitted, name)
+
+    uncertain =
+      Map.merge(base, %{
+        "delivery_seq" => 1,
+        "stage" => "unknown",
+        "mode" => "early",
+        "reason" => "turn_steer_not_observed"
+      })
+
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
+
+    legacy =
+      Map.merge(base, %{
+        "delivery_seq" => 2,
+        "stage" => "unknown",
+        "mode" => "normal",
+        "reason" => "legacy_timeout"
+      })
+
+    assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, legacy, name)
+
+    entry = :sys.get_state(name).entries[recipient]
+    assert entry.resolved == [1]
+    assert Map.has_key?(entry.metadata, 2)
+    assert %{uncertain_count: 1, lost_count: 0} = DeliveryStates.get(recipient, name)
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               recipient,
+               "generation",
+               owner,
+               Map.put(uncertain, "reason", "turn_steer_item_conflict"),
+               name
+             )
+  end
+
   # Issues one synthetic delivery for `cid` and reports `stages` in order.
   defp retention_record(%{owner: owner, incarnation: incarnation} = ctx, cid, stages) do
     name = ctx.name

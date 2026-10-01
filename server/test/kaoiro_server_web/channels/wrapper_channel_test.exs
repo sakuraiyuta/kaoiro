@@ -3016,6 +3016,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert ConversationStates.get(payload["conversation_id"]) == nil
     end
 
+    test "server stamps negotiated notice attribution and rejects a forged stamp" do
+      from = "test.notice-attribution-from"
+      to = "test.notice-attribution-to"
+      _recipient = seed_known(to)
+
+      {join_reply, sender} =
+        join_wrapper_with_reply(from, "default", %{"notice_attribution" => "v1"})
+
+      assert join_reply["notice_attribution"] == "v1"
+      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
+      @endpoint.subscribe("wrapper:" <> to)
+
+      incoming = inter_envelope(from, to)
+      assert_reply push(sender, "envelope", incoming), :ok
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to,
+        event: "envelope",
+        payload: %{"payload" => %{"notice_attribution" => "v1"}}
+      }
+
+      forged = inter_envelope(from, to, cid: "forged-#{System.unique_integer([:positive])}")
+      forged = put_in(forged, ["payload", "notice_attribution"], "v1")
+
+      assert_reply push(sender, "envelope", forged), :error, %{
+        reason: "invalid value: payload.notice_attribution"
+      }
+    end
+
     test "V35 work control requires join negotiation" do
       from = "test.work-unnegotiated-from"
       to = "test.work-unnegotiated-to"

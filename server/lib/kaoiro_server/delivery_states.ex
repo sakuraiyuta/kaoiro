@@ -271,7 +271,9 @@ defmodule KaoiroServer.DeliveryStates do
           issued_seq: issued,
           acked_seq: issued,
           pending_since: nil,
-          stage_history: if(old, do: old.stage_history, else: %{})
+          stage_history: if(old, do: old.stage_history, else: %{}),
+          uncertain_count: if(old, do: old.uncertain_count, else: 0),
+          last_uncertain: if(old, do: old.last_uncertain, else: nil)
         })
       end
       |> Map.put(:resync, true)
@@ -551,6 +553,7 @@ defmodule KaoiroServer.DeliveryStates do
     key = if entry, do: {agent_id, entry.incarnation}
     stage = if key, do: get_in(state.stages, [key, seq])
     disposition = report["yield_disposition"]
+    uncertainty = phase3_uncertainty(stage, report)
 
     cond do
       entry != nil and report["incarnation"] != entry.incarnation ->
@@ -568,6 +571,12 @@ defmodule KaoiroServer.DeliveryStates do
 
       not valid_stage_report?(report) ->
         {:reply, {:error, :invalid_delivery_stage}, state}
+
+      uncertainty == :invalid ->
+        {:reply, {:error, :invalid_delivery_stage}, state}
+
+      uncertainty == :duplicate ->
+        {:reply, :ok, state}
 
       stage[:yield_disposition] != nil and disposition != nil and
           disposition != stage.yield_disposition ->
@@ -587,6 +596,7 @@ defmodule KaoiroServer.DeliveryStates do
           |> maybe_put(:handoff, report["handoff"])
           |> maybe_put(:evidence, report["evidence"])
           |> maybe_put(:reason, report["reason"])
+          |> maybe_put(:uncertainty_qualified, if(uncertainty in [:resolve, :count], do: true))
 
         histories =
           entry.stage_history
@@ -594,7 +604,8 @@ defmodule KaoiroServer.DeliveryStates do
           |> bound_stage_histories()
 
         resolving? =
-          report["stage"] == "submitted" and seq > entry.acked_seq and
+          (report["stage"] == "submitted" or uncertainty == :resolve) and
+            seq > entry.acked_seq and
             seq not in entry.resolved and seq not in entry.skipped
 
         next_entry = %{entry | stage_history: histories}
@@ -610,6 +621,21 @@ defmodule KaoiroServer.DeliveryStates do
               next_entry
               | metadata: Map.delete(entry.metadata, seq),
                 resolved: [seq | entry.resolved]
+            },
+            else: next_entry
+
+        next_entry =
+          if uncertainty in [:resolve, :count],
+            do: %{
+              next_entry
+              | uncertain_count: entry.uncertain_count + 1,
+                last_uncertain: %{
+                  at: at,
+                  incarnation: entry.incarnation,
+                  generation: generation,
+                  delivery_seq: seq,
+                  reason: report["reason"]
+                }
             },
             else: next_entry
 
@@ -913,13 +939,53 @@ defmodule KaoiroServer.DeliveryStates do
     valid_time?(report["at"]) and
       (report["mode"] == nil or report["mode"] in ~w(normal early yield)) and
       (report["handoff"] == nil or
-         report["handoff"] in ~w(prompt_hook fold_hook exec_input_written turn_start_accepted tool_result)) and
+         report["handoff"] in ~w(prompt_hook fold_hook exec_input_written turn_start_accepted tool_result turn_steer_accepted turn_steer_item_observed turn_steer_write_uncertain)) and
       (report["evidence"] == nil or report["evidence"] == "ticket_used") and
       (report["reason"] == nil or is_binary(report["reason"])) and
       (report["stage"] != "submitted" or is_binary(report["handoff"])) and
       (report["stage"] != "included" or report["evidence"] == "ticket_used") and
       valid_yield_disposition?(report["yield_disposition"])
   end
+
+  @write_uncertain_reasons ~w(turn_steer_timeout turn_steer_disconnected turn_steer_invalid_response turn_steer_item_conflict)
+  @post_submit_reasons ~w(turn_steer_not_observed turn_steer_no_valid_response turn_steer_item_conflict)
+
+  defp phase3_uncertainty(nil, _report), do: :none
+
+  defp phase3_uncertainty(stage, %{"stage" => "unknown", "reason" => reason} = report)
+       when reason in @write_uncertain_reasons or reason in @post_submit_reasons do
+    cond do
+      stage[:uncertainty_qualified] == true ->
+        if stage.last_stage == "unknown" and stage.reason == reason and
+             report["mode"] == "early" and
+             (report["handoff"] == nil or report["handoff"] == stage[:handoff]),
+           do: :duplicate,
+           else: :invalid
+
+      stage[:mode] != "early" or report["mode"] != "early" or
+          Map.has_key?(stage.stages, "unknown") ->
+        :invalid
+
+      report["handoff"] == "turn_steer_write_uncertain" ->
+        if reason in @write_uncertain_reasons and stage.last_stage in ~w(accepted queued) and
+             not Map.has_key?(stage.stages, "submitted"),
+           do: :resolve,
+           else: :invalid
+
+      report["handoff"] == nil and
+          stage[:handoff] in ~w(turn_steer_accepted turn_steer_item_observed) ->
+        if reason in @post_submit_reasons and stage.last_stage in ~w(submitted included) and
+             Map.has_key?(stage.stages, "submitted"),
+           do: :count,
+           else: :invalid
+
+      true ->
+        :invalid
+    end
+  end
+
+  defp phase3_uncertainty(_stage, %{"handoff" => "turn_steer_write_uncertain"}), do: :invalid
+  defp phase3_uncertainty(_stage, _report), do: :none
 
   defp valid_yield_disposition?(nil), do: true
 
@@ -1022,7 +1088,9 @@ defmodule KaoiroServer.DeliveryStates do
       skipped: [],
       resolved: [],
       lost_count: 0,
-      last_loss: nil
+      last_loss: nil,
+      uncertain_count: 0,
+      last_uncertain: nil
     }
   end
 
@@ -1073,7 +1141,12 @@ defmodule KaoiroServer.DeliveryStates do
     status = %{issued_seq: issued, acked_seq: acked, pending_since: pending}
 
     if entry.resync do
-      Map.merge(status, %{lost_count: entry.lost_count, last_loss: entry.last_loss})
+      Map.merge(status, %{
+        lost_count: entry.lost_count,
+        last_loss: entry.last_loss,
+        uncertain_count: entry.uncertain_count,
+        last_uncertain: entry.last_uncertain
+      })
     else
       status
     end
@@ -1091,7 +1164,9 @@ defmodule KaoiroServer.DeliveryStates do
        :skipped,
        :resolved,
        :lost_count,
-       :last_loss
+       :last_loss,
+       :uncertain_count,
+       :last_uncertain
      ])}
   end
 
