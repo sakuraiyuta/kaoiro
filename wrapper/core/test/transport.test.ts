@@ -2967,4 +2967,54 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       link.close();
     }
   });
+
+  const ackedSeqs = (): unknown[] => mock.pushes
+    .filter(push => push.event === "delivery_ack")
+    .map(push => (push.payload as { delivery_seq: unknown }).delivery_seq);
+
+  it("sends the outstanding watermark once per join across repeated same-identity rejoins", async () => {
+    const { disconnect, envelope, joined, link, runtime } = setup();
+    try {
+      joined("same", 0);
+      emit("envelope", envelope);
+      disconnect();
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+      joined("same");
+      await Promise.resolve();
+      expect(ackedSeqs()).toEqual([1]);
+
+      // The server has not acknowledged that push when the socket drops again.
+      mock.pushes = [];
+      disconnect();
+      joined("same");
+      await Promise.resolve();
+      expect(ackedSeqs()).toEqual([1]);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("sends one watermark when a rejoin baseline closes an out-of-order gap", async () => {
+    const { disconnect, envelope, joined, link, runtime } = setup();
+    try {
+      joined("same", 0);
+      (envelope as unknown as { delivery_seq: number }).delivery_seq = 2;
+      emit("envelope", envelope);
+      disconnect();
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+      expect(ackedSeqs()).toEqual([]);
+
+      mock.connected = true;
+      mock.channelState = "joined";
+      mock.joinReceivers.get("ok")?.({
+        delivery_resync: "skip-v1",
+        inter_agent_delivery_incarnation: "same",
+        delivery: { issued_seq: 2, acked_seq: 1, lost_count: 0, pending_since: "T" },
+      });
+      await Promise.resolve();
+      expect(ackedSeqs()).toEqual([2]);
+    } finally {
+      link.close();
+    }
+  });
 });
