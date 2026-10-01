@@ -536,3 +536,31 @@ automatic reset; Codex cooperative yield without a native boundary probe;
 Claude and Antigravity implementation; changing work-grant authority or
 revision checks; cross-work resource exclusion; making tickets proof of model
 obedience; replacing the current backend default before #463's gate.
+
+## Fallback reservation refinement
+
+The Codex coordinator owns each admitted IA steer reservation and every
+decision that resolves its host placeholder. The CLI computes the fallback
+predicate once from response, write state, observed item, and conflict, then
+passes that decision to one coordinator settlement transition. The host stores
+the placeholder at the original arrival position and never independently
+reclassifies fallback. Operator-steer placeholders remain a separate mechanism.
+
+An admitted fallback must acquire that arrival-position slot before it can own
+a peer root token. A precondition rejection attaches the slot on the response;
+an exceptional admitted but unwritten RPC acquires it at settlement. A failed
+slot creation retires the unstarted delivery instead of appending behind a
+later turn. Same-peer reservations finish before successor roots dispatch.
+Each fallback is one ordinary-format root, independent of coalescing limits.
+The slot is replaced by that exact root or removed on terminal
+reclassification, contradiction, watchdog stop, host close, or replacement
+failure. A failed replacement emits a diagnostic and retires the unstarted
+delivery through the existing skip-v1 sender-recovery path.
+
+Fallback reservations and their pending or unstarted roots are excluded from
+inline recovery claims and the unread advisory: a caller is never told to
+claim an input that only its reserved root may deliver. The current transport
+checks its failed/closing state before admission; its RPC request may
+otherwise reject without writing. A focused transport test pins the
+pre-admission refusal, and the exceptional arrival-slot path remains
+defensive if that transport ordering changes.

@@ -30,6 +30,7 @@ export interface DispatchedCodexInterAgentBatch {
   items: readonly CodexInterAgentBatchItem[];
   conversationIds: readonly string[];
   text: string;
+  fallbackId?: string;
 }
 
 interface PendingBatch {
@@ -37,16 +38,30 @@ interface PendingBatch {
   bytes: number;
 }
 
+interface SteerReservation {
+  id: string;
+  envelope: Envelope;
+  mode: InboundReplyMode;
+  peer: string;
+  arrival: number;
+  slot: boolean;
+  status: "steering" | "fallback";
+}
+
 const MAX_STEER_RECOVERY_RECORDS = 256;
 
 export interface CodexInterAgentTurnCoordinatorOptions {
   /** Runs synchronously once a free peer receives its oldest queued batch. */
-  onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  onDispatch: (batch: DispatchedCodexInterAgentBatch) => unknown;
   reclassifyQueued?: (item: CodexInterAgentBatchItem) => InboundReplyMode;
   onTerminalQueued?: (item: CodexInterAgentBatchItem) => void;
   canDispatchPeer?: (peer: string) => boolean;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
+  createPlaceholder?: (id: string, arrival: number) => boolean;
+  removePlaceholder?: (id: string) => void;
+  retireDiscarded?: (envelopes: readonly Envelope[]) => void;
+  onFallbackDispatchFailure?: (batch: DispatchedCodexInterAgentBatch) => void;
 }
 
 /**
@@ -63,13 +78,19 @@ export class CodexInterAgentTurnCoordinator {
   readonly #steeredRecovery = new Map<string, Envelope>();
   #steerRecoveryEvictions = 0;
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
+  readonly #steerReservations = new Map<string, SteerReservation>();
+  readonly #pendingFallbacks = new Map<string, SteerReservation[]>();
   readonly #batchByTurnToken = new Map<string, DispatchedCodexInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
-  readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => unknown;
   readonly #reclassifyQueued: ((item: CodexInterAgentBatchItem) => InboundReplyMode) | undefined;
   readonly #onTerminalQueued: ((item: CodexInterAgentBatchItem) => void) | undefined;
   readonly #canDispatchPeer: ((peer: string) => boolean) | undefined;
   readonly #createTurnToken: () => string;
+  readonly #createPlaceholder: ((id: string, arrival: number) => boolean) | undefined;
+  readonly #removePlaceholder: ((id: string) => void) | undefined;
+  readonly #onFallbackDispatchFailure: ((batch: DispatchedCodexInterAgentBatch) => void) | undefined;
+  readonly #retired = new WeakSet<Envelope>();
   #closed = false;
   #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
 
@@ -79,6 +100,79 @@ export class CodexInterAgentTurnCoordinator {
     this.#onTerminalQueued = options.onTerminalQueued;
     this.#canDispatchPeer = options.canDispatchPeer;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
+    this.#createPlaceholder = options.createPlaceholder;
+    this.#removePlaceholder = options.removePlaceholder;
+    this.#retireDiscarded = options.retireDiscarded;
+    this.#onFallbackDispatchFailure = options.onFallbackDispatchFailure;
+  }
+
+  get pendingSteerReservationCount(): number { return this.#steerReservations.size; }
+
+  reserveSteer(id: string, envelope: Envelope, mode: InboundReplyMode, arrival: number): boolean {
+    if (this.#closed || this.#steerReservations.has(id)) return false;
+    this.#steerReservations.set(id, { id, envelope, mode, peer: envelope.agent_id, arrival, slot: false, status: "steering" });
+    return true;
+  }
+
+  attachSteerPlaceholder(id: string): boolean {
+    const reservation = this.#steerReservations.get(id);
+    if (reservation === undefined || reservation.status !== "steering" || reservation.slot || this.#closed ||
+        this.#createPlaceholder?.(id, reservation.arrival) !== true) return false;
+    reservation.slot = true;
+    return true;
+  }
+
+  discardSteerReservation(id: string): void {
+    const reservation = this.#steerReservations.get(id);
+    if (reservation === undefined) return;
+    this.#steerReservations.delete(id);
+    this.#removePendingFallback(reservation);
+    if (reservation.slot) this.#removePlaceholder?.(id);
+  }
+
+  settleSteerReservation(id: string, fallback: boolean): void {
+    const reservation = this.#steerReservations.get(id);
+    if (reservation === undefined || reservation.status !== "steering") return;
+    if (!fallback) { this.discardSteerReservation(id); return; }
+    if (!reservation.slot && !this.attachSteerPlaceholder(id)) {
+      this.discardSteerReservation(id);
+      this.retireEnvelopes([reservation.envelope]);
+      return;
+    }
+    const item = { envelope: reservation.envelope, mode: reservation.mode };
+    if ((this.#reclassifyQueued?.(item) ?? item.mode) === "terminal") {
+      this.#onTerminalQueued?.(item);
+      this.discardSteerReservation(id);
+      return;
+    }
+    if (this.#closed) {
+      this.discardSteerReservation(id);
+      this.retireEnvelopes([reservation.envelope]);
+      return;
+    }
+    reservation.status = "fallback";
+    const queue = this.#pendingFallbacks.get(reservation.peer) ?? [];
+    queue.push(reservation);
+    queue.sort((a, b) => a.arrival - b.arrival);
+    this.#pendingFallbacks.set(reservation.peer, queue);
+    this.#dispatchNext(reservation.peer);
+  }
+
+  retireEnvelopes(envelopes: readonly Envelope[]): void {
+    const fresh = envelopes.filter(envelope => {
+      if (this.#retired.has(envelope)) return false;
+      this.#retired.add(envelope);
+      return true;
+    });
+    if (fresh.length > 0) this.#retireDiscarded?.(fresh);
+  }
+
+  #removePendingFallback(reservation: SteerReservation): void {
+    const queue = this.#pendingFallbacks.get(reservation.peer);
+    if (queue === undefined) return;
+    const index = queue.indexOf(reservation);
+    if (index !== -1) queue.splice(index, 1);
+    if (queue.length === 0) this.#pendingFallbacks.delete(reservation.peer);
   }
 
   /** Stops future dispatch after a watchdog fail-stop while retaining the
@@ -91,7 +185,7 @@ export class CodexInterAgentTurnCoordinator {
   } {
     if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
     this.#closed = true;
-    this.#retireDiscarded = retire;
+    if (retire !== undefined) this.#retireDiscarded = retire;
     let droppedDispatched = 0;
     let droppedPending = 0;
     for (const [turnToken, batch] of this.#batchByTurnToken) {
@@ -100,11 +194,16 @@ export class CodexInterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
-      retire?.(batch.items.map((item) => item.envelope));
+      this.retireEnvelopes(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
+    for (const reservation of [...this.#steerReservations.values()]) {
+      this.discardSteerReservation(reservation.id);
+      this.retireEnvelopes([reservation.envelope]);
+      droppedPending += 1;
+    }
     for (const batches of this.#pendingBatches.values()) {
-      retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
+      this.retireEnvelopes(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
@@ -113,7 +212,7 @@ export class CodexInterAgentTurnCoordinator {
 
   /** Queue an accepted inbound and dispatch immediately if its peer is free. */
   unreadCount(activeToken: string | null): number {
-    return [...this.#batchByTurnToken.values()].filter(batch => batch.turnToken !== activeToken).reduce((n, batch) => n + batch.items.length, 0)
+    return [...this.#batchByTurnToken.values()].filter(batch => batch.turnToken !== activeToken && batch.fallbackId === undefined).reduce((n, batch) => n + batch.items.length, 0)
       + [...this.#pendingBatches.values()].flat().reduce((n, batch) => n + batch.items.length, 0)
       + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
   }
@@ -128,7 +227,7 @@ export class CodexInterAgentTurnCoordinator {
     }
     const selected: CodexInterAgentBatchItem[] = [];
     const candidates = [
-      ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken)).flatMap(batch => batch.items),
+      ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken) && batch.fallbackId === undefined).flatMap(batch => batch.items),
       ...(this.#pendingBatches.get(peer) ?? []).flatMap(batch => batch.items),
     ];
     for (const item of candidates) {
@@ -158,7 +257,7 @@ export class CodexInterAgentTurnCoordinator {
       commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); },
       rollback: () => {
         if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
-        if (this.#closed) { this.#retireDiscarded?.(selected.map(item => item.envelope)); return; }
+        if (this.#closed) { this.retireEnvelopes(selected.map(item => item.envelope)); return; }
         const remaining = new Set(selected);
         const restore = (before: readonly CodexInterAgentBatchItem[], current: readonly CodexInterAgentBatchItem[]): CodexInterAgentBatchItem[] => {
           const restored = before.filter(item => remaining.delete(item));
@@ -221,7 +320,7 @@ export class CodexInterAgentTurnCoordinator {
   get steerRecoveryEvictions(): number { return this.#steerRecoveryEvictions; }
 
   receive(envelope: Envelope, mode: InboundReplyMode): void {
-    if (this.#closed) { this.#retireDiscarded?.([envelope]); return; }
+    if (this.#closed) { this.retireEnvelopes([envelope]); return; }
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: CodexInterAgentBatchItem = { envelope, mode };
@@ -316,14 +415,17 @@ export class CodexInterAgentTurnCoordinator {
   }
 
   hasQueuedForPeer(peer: string): boolean {
-    return this.#activeTokenByPeer.has(peer) || (this.#pendingBatches.get(peer)?.length ?? 0) > 0;
+    return this.#activeTokenByPeer.has(peer) || (this.#pendingBatches.get(peer)?.length ?? 0) > 0 ||
+      (this.#pendingFallbacks.get(peer)?.length ?? 0) > 0;
   }
 
   hasRootConversation(conversationId: string): boolean {
     const has = (items: readonly CodexInterAgentBatchItem[]) => items.some(item =>
       (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id === conversationId);
     return [...this.#batchByTurnToken.values()].some(batch => has(batch.items)) ||
-      [...this.#pendingBatches.values()].some(batches => batches.some(batch => has(batch.items)));
+      [...this.#pendingBatches.values()].some(batches => batches.some(batch => has(batch.items))) ||
+      [...this.#pendingFallbacks.values()].some(reservations => reservations.some(reservation =>
+        reservation.envelope.payload.conversation_id === conversationId));
   }
 
   /** Rechecks a host-queued batch synchronously at the SDK input boundary. */
@@ -353,6 +455,42 @@ export class CodexInterAgentTurnCoordinator {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
     if (this.#canDispatchPeer?.(peer) === false) return;
+    if ([...this.#steerReservations.values()].some(reservation =>
+      reservation.peer === peer && reservation.status === "steering")) return;
+    while (true) {
+      const fallback = this.#pendingFallbacks.get(peer)?.[0];
+      if (fallback === undefined) break;
+      this.#removePendingFallback(fallback);
+      const item = { envelope: fallback.envelope, mode: fallback.mode };
+      const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+      if (mode === "terminal") {
+        this.#onTerminalQueued?.(item);
+        this.discardSteerReservation(fallback.id);
+        continue;
+      }
+      const selected = mode === item.mode ? item : { ...item, mode };
+      const conversationId = (selected.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id;
+      const batch: DispatchedCodexInterAgentBatch = {
+        turnToken: this.#createTurnToken(), peer, items: [selected],
+        conversationIds: typeof conversationId === "string" ? [conversationId] : [],
+        text: formatInboundMessage(selected.envelope, { mode: selected.mode }),
+        fallbackId: fallback.id,
+      };
+      this.#batchByTurnToken.set(batch.turnToken, batch);
+      this.#activeTokenByPeer.set(peer, batch.turnToken);
+      let replaced = false;
+      try { replaced = this.#onDispatch(batch) === true; } catch { replaced = false; }
+      if (replaced) {
+        fallback.slot = false;
+        this.discardSteerReservation(fallback.id);
+        return;
+      }
+      this.#batchByTurnToken.delete(batch.turnToken);
+      this.#activeTokenByPeer.delete(peer);
+      try { this.#onFallbackDispatchFailure?.(batch); } catch { /* Diagnostic output cannot strand the slot. */ }
+      this.discardSteerReservation(fallback.id);
+      this.retireEnvelopes([fallback.envelope]);
+    }
     let items: CodexInterAgentBatchItem[];
     while (true) {
       const queue = this.#pendingBatches.get(peer);

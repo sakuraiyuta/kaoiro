@@ -61,8 +61,11 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
     sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted" }; },
     reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
     acknowledgeInterAgentDelivery: (sequence: number) => acknowledged.push(sequence) };
+  const replace = vi.fn(() => true);
   const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => activeToken, send, steerInterAgentInput: steer,
-    replaceInterAgentPlaceholder: () => false,
+    replaceInterAgentPlaceholder: replace,
+    createInterAgentPlaceholder: () => true,
+    removeInterAgentPlaceholder: () => {},
     run: async () => {
       linkOptions.onReplyBasisMode("v1");
       linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
@@ -111,7 +114,7 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
   }); } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
   }
-  return { reports, acknowledged, notices, send, steer, linkOptions };
+  return { reports, acknowledged, notices, send, steer, replace, linkOptions };
 }
 
 describe("production Codex IA steer composition", () => {
@@ -168,7 +171,8 @@ describe("production Codex IA steer composition", () => {
 
   it.each(["unwritten", "precondition"] as const)("queues %s without a write-uncertain report", async schedule => {
     const result = await compose("app-server", true, "early", schedule);
-    expect(result.send).toHaveBeenCalledOnce();
+    expect(result.replace).toHaveBeenCalledOnce();
+    expect(result.send).not.toHaveBeenCalled();
     expect(result.reports.map(report => report.stage)).toEqual(["queued"]);
     expect(result.notices).toEqual([]);
   });
