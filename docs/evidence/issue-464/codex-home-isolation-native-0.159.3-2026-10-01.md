@@ -96,6 +96,9 @@ inferred from the Codex measurements.
 An earlier disposable probe used a TMPDIR path too long for a Unix socket.
 It failed before model-provider execution, with zero authenticated turns;
 its full log is retained. Short dedicated temporary paths fixed the harness.
+The first local-provider attempt also failed because its handler parsed an
+empty native models GET as JSON; explicitly handling that GET fixed the probe.
+Its complete `local-exec.log` is retained and bound in the JSON.
 The initial local batch also stopped on a disposable result-field extraction
 error after successful exec/start gates; the resumed gate was then measured
 using the actual envelope session ID. Final records include all three positive

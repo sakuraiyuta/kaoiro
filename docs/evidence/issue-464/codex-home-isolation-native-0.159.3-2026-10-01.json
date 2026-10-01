@@ -1404,8 +1404,8 @@
   ],
   "markdown": {
     "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/docs/evidence/issue-464/codex-home-isolation-native-0.159.3-2026-10-01.md",
-    "sha256": "c4ead705025dbc9c5e2f405614f6b6de8cc3c6663d9a72c629a338d93619721a",
-    "bytes": 7893
+    "sha256": "508b99409a33dcc3b8ba4759f7b964d78f9df6cdc16b2f64dce0b93b4e8df395",
+    "bytes": 8112
   },
   "execution_count_record": {
     "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/current-exits.json",
@@ -1436,5 +1436,10 @@
     "path": "/home/yuta/git/ai-settings/model-profiles/resolve.sh",
     "sha256": "cabfad39f4c457a0e4725b64efef4c448cb4de1ad3611e6a245795d691b80335",
     "bytes": 6627
+  },
+  "initial_provider_failure": {
+    "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec.log",
+    "sha256": "cecfff9bfa7bf07ca23495c710c2bc37b9fda2ec8a1e32619613ddbe1cdbbac8",
+    "bytes": 930
   }
 }
