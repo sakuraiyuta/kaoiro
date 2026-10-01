@@ -220,6 +220,8 @@ it("keeps a P fallback in its original slot while the RPC write callback is pend
   await vi.waitFor(() => expect(f.settledWriteStates).toEqual(["writing"]));
   f.assertQuiescent();
   expect(f.retired).toHaveLength(0);
+  expect(f.reports.map(r => r.stage)).toContain("queued");
+  expect(f.reports.map(r => r.stage)).not.toContain("unknown");
   f.releaseSteerWrite();
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
   expect(f.texts("turn/start")[1]).toContain("EARLY BODY");
@@ -240,12 +242,28 @@ it("removes an E reservation while the RPC write callback is pending", async () 
   await vi.waitFor(() => expect(f.settledWriteStates).toEqual(["writing"]));
   f.assertQuiescent();
   expect(f.retired).toHaveLength(0);
+  expect(f.reports.at(-1)).toMatchObject({ stage: "unknown", handoff: "turn_steer_write_uncertain" });
   f.releaseSteerWrite();
   await f.host.send("LATER ROOT", undefined, undefined, undefined, { source: "operator", intent: "normal" });
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
   expect(f.texts("turn/start")[1]).toContain("LATER ROOT");
   expect(f.texts("turn/start")[1]).not.toContain("EARLY BODY");
   f.assertQuiescent();
+});
+
+it("keeps an unanswered writing steer unknown without replay", async () => {
+  const f = await compose({ holdSteerWrite: true, steerOutcome: "none" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  f.terminal();
+  await vi.waitFor(() => expect(f.settledWriteStates).toEqual(["writing"]), { timeout: 3000 });
+  f.assertQuiescent();
+  expect(f.reports.at(-1)).toMatchObject({ stage: "unknown", handoff: "turn_steer_write_uncertain", reason: "turn_steer_timeout" });
+  expect(f.retired).toHaveLength(0);
+  expect(f.texts("turn/start").join("\n")).not.toContain("EARLY BODY");
+  f.releaseSteerWrite();
 });
 
 it("Kohaku review control: one queued successor stays behind the fallback", async () => {
