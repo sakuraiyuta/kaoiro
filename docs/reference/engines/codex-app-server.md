@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # Codex app-server transport
@@ -45,9 +45,9 @@ An opted-in Codex persona on the app-server backend may deliver an operator
 instruction into the running turn with `turn/steer` instead of queueing it
 (opt-in: [wrapper configuration](../configuration/wrapper.md#codex-operator-steer-controls);
 capability: [`operator_input_modes`](../protocol/channels.md#adr-0063-capability-and-event-contract)).
-Only operator text whose delivered intent is `early` is eligible. Inter-agent
-input, work notices, session-reset notices and inputs with attachments always
-queue; IA steering is ADR-0063 phase 3.
+Only operator text whose delivered intent is `early` is eligible. Work notices,
+session-reset notices and inputs with attachments queue. Inter-agent early
+input has a separate [lease and admission path](#inter-agent-early-steering-adr-0063-phase-3).
 
 `AppServerTransport.steer` takes the active-turn snapshot, calls the host's
 `admit(turnId)` and writes `turn/steer {threadId, expectedTurnId, input,
@@ -81,6 +81,33 @@ behind the rejected one instead of being steered ahead of it.
 Precondition rejections are classified from `error.data.codexErrorInfo.activeTurnNotSteerable`
 and from the two measured `-32600` messages for an expected-turn mismatch and
 no active turn; see the [Stage 2 probes](../../evidence/codex-app-server/stage2-steer-probes-2026-09-30.md).
+
+## Inter-agent early steering (ADR-0063 phase 3)
+
+An app-server wrapper advertises `early: "steer", yield: "none"` at join. It
+steers only a server-granted early peer input after both delivery-mode and
+`notice_attribution: "v1"` echoes. The exec backend always queues peer input.
+This path has a distinct per-sequence lease, reply ticket, write-state guard,
+and three-write IA quota within the common eight-steer turn cap. An older
+same-peer root or unresolved steer blocks a successor; a rejected steer keeps
+its queue position through a placeholder. An operator steer cannot bypass
+the common pending-settings, approval, reset, foreign-turn, and watchdog
+guards.
+
+A steer request's valid response and a completed `userMessage` with matching
+`clientId` and exact text are independent facts. Both must arrive before turn
+terminal to activate its reply ticket. `submitted` can be reported from either
+fact. A possibly written request without corroboration reports `unknown` and
+is never automatically replayed; an unwritten request queues. A late response
+may settle delivery evidence after terminal, but cannot activate a ticket.
+The wrapper retains only activated bodies for bounded stale-basis recovery.
+Sequence-scoped failure notices identify which peer turns were affected.
+See [delivery status](../inter-agent/delivery.md#codex-app-server-early-handoff).
+
+On pin 0.156.1 the write and response order is based on the app-server RPC
+and projected item stream. The changed interruption primitives in later
+pins require a new native comparison before any pin migration; the phase-3
+design records the [0.159.2 comparison](../../evidence/codex-app-server/pin-0.159.2-evaluation-2026-10-01.md#authenticated-comparison-and-stage-3-denial).
 
 The transport records its bound thread and up to 256 turn IDs it started;
 past that, the oldest ID is forgotten, so a late item of a turn started more

@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -14,7 +14,7 @@ The structural type `InterAgentDeliveryStatus` is defined in
 
 `ingress_stamp` records server acceptance, not confirmation that the receiving
 wrapper read an SDK turn. Per-recipient
-`inter_agent_delivery = {issued_seq, acked_seq, pending_since?, lost_count?, last_loss?}`
+`inter_agent_delivery = {issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain?}`
 observes later dispatch confirmation and negotiated explicit retirement. It
 retains no payloads and does not guarantee retransmission or delivery.
 
@@ -73,7 +73,12 @@ deliveries.
 For negotiated recipients, `acked_seq` denotes a **resolved prefix**, which
 can include explicit losses, not proof that every message was dispatched.
 `lost_count` and `last_loss {at, first_seq, last_seq, count, reason}` distinguish
-those outcomes. A retirement behind an earlier received-but-unstarted input
+those outcomes. The dashboard also displays `uncertain_count` and
+`last_uncertain {at, incarnation, generation, delivery_seq, reason}` separately:
+the wrapper reported a possibly delivered Codex steer whose final inclusion
+could not be proved. The counters survive stage-history expiry and process
+incarnation replacement for this recipient ledger's lifetime. A retirement
+behind an earlier received-but-unstarted input
 does not move the prefix past that input. The wrapper applies the response's
 skip ranges to its completion ledger and rebinds the post-skip prefix so later
 completed turns can acknowledge again. A locally confirmed ack lost during a
@@ -216,16 +221,46 @@ grant early or normal with a downgrade such as `yield_token_unavailable`,
 result; the receipt does not store that downgrade. See [work authority and
 operations](work.md#work-authority-and-operations).
 
+### Codex app-server early handoff
+
+The app-server path writes a bounded peer input through `turn/steer` while its
+current turn runs. The wrapper validates the current turn, ledger identity,
+server grant, negotiated capabilities, permission and reset state, older
+same-peer input, and the per-turn steer limits before writing. A declined or
+unwritten input enters the root queue. An accepted response reports
+`submitted` with `turn_steer_accepted`; a matching completed user-message item
+can report `submitted` with `turn_steer_item_observed`. The item must carry the
+request's `clientId` and exact text. Only both facts activate a reply ticket.
+
+The wrapper keeps one delivery obligation per sequence even when several
+steers share a conversation. At terminal, a corroborated input reports
+`settled`; a possibly written input without both facts reports `unknown` and
+is never resent automatically. A completed item before the RPC response is
+retained until that response or a bounded timeout. A valid response after
+terminal can reconcile delivery, but cannot activate a ticket. Failure notices
+from a negotiated sender identify the affected delivery sequences and peer
+turns; a legacy notice is conservative and does not claim that a particular
+sequence failed. The server records a separate lifetime `uncertain_count` and
+`last_uncertain` summary when an eligible unknown resolves a delivery gap. It
+cannot independently verify the wrapper's write observation. Per-message
+stage history expires after its retention window; the summary survives for
+the recipient ledger's lifetime and resets when that ledger is deleted.
+
+`yield` is downgraded to early steering when eligible; Codex has no measured
+tool-boundary cut. The app-server backend remains an explicit launch choice
+until the backend switch tracked by issue #463. Live per-agent policy toggles
+need a revisioned server acknowledgement and are outside this phase.
+
 ### Claude recipient handoff
 
 The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` only
 when `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` is set; it uses those modes only after
-the server echoes delivery modes v1. The flag is off by default. Codex and
-Antigravity do not advertise these modes. An opted-in Codex app-server wrapper
-declares `operator_input_modes` instead, which lets operator instructions steer
-into its running turn while inter-agent delivery stays `early: "none"`, so peer
-senders keep receiving `unsupported_by_recipient` (see
-[Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2)).
+the server echoes delivery modes v1. The flag is off by default. A Codex
+app-server wrapper advertises `early: "steer", yield: "none"`; Codex exec and
+Antigravity advertise `early: "none", yield: "none"`. The Codex app-server
+uses early peer steering only after the server echoes both delivery modes v1
+and `notice_attribution: "v1"`, and only for a server-granted early input.
+See [Codex app-server transport](../engines/codex-app-server.md#inter-agent-early-steering-adr-0063-phase-3).
 Operator steering can delay injection of a queued peer batch by at most one
 steer response time, because both share the wrapper's instruction chain. A granted early peer delivery can
 bypass the same peer's ordinary turn queue to enter its live Claude `Query`;

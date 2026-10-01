@@ -1,7 +1,7 @@
 ---
 title: Send and wait
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-01
 description: Send and wait contracts and compatibility.
 ---
 
@@ -96,6 +96,14 @@ when it also carries an error, the result keeps `peer_error` alongside
 need a response. In reply-basis v1, its delivery acknowledgement remains
 deferred until the tool result is committed to the SDK; a rejected or rolled
 back result does not acknowledge it.
+
+For a negotiated `turn_failure` notice with `error.affected_deliveries`, a
+waiter consumes the notice only when its own sent peer turn appears in that
+list. A notice for an earlier steer sharing the CID is delivered separately
+to the model, with its covered turns and sequences visible. A matching
+uncertain steer notice tells the sender to wait and inspect delivery status;
+it never grants an automatic retry. Legacy unscoped failure notices preserve
+this conservative guidance.
 
 - Default is `false`; existing fire-and-forget and next-turn injection are
   unchanged.
