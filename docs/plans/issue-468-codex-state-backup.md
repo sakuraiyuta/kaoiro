@@ -12,7 +12,8 @@ candidate: `0aa961238e8411e9b8161a11ba26ae1d3d950ea9` (CLI/SDK 0.159.3).
 Writer: kogane. Director: hisui. The round-5 design (`07ba8c64`) is approved,
 including the director's acceptance of all remaining should/nit findings.
 This contract includes those findings and implementation-review corrections.
-Implementation review and production activation remain separately controlled. Earlier native observations are historical evidence, not a
+Implementation review and production activation remain separately controlled.
+Earlier native observations are historical evidence, not a
 requirement to repeat old-version compatibility measurements.
 
 ## Problem and evidence
@@ -253,8 +254,13 @@ storage path resolving outside the tree makes this workflow unsupported.
 
 Before stop, count classified files and logical bytes and query available
 space/inodes on the snapshot and restore-staging filesystems. Require the
-copy's estimated space plus a 20% reserve (at least 1 GiB) and one inode per
-entry. A sparse file is charged its logical size unless sparse copying is
+snapshot payload plus the additional diagnostic DB/sidecar copy on its
+filesystem, and a 20% payload reserve (at least 1 GiB). Account for diagnostic
+file/directory inodes and SQLite-created WAL/SHM entries as well. Use the same
+DB/sidecar selector for estimation and diagnostic copying. Both pre-stop
+preflight and post-stop snapshot recheck include this extra copy. Restore
+staging does not read migration levels and needs no diagnostic copy allowance. A
+sparse file is charged its logical size unless sparse copying is
 explicitly supported and measured. Record estimated downtime from a local
 scratch copy-plus-hash throughput sample and file count; it is an estimate,
 not a guarantee. Insufficient space rejects before stop. Recheck capacity
@@ -434,7 +440,8 @@ committed backup or partially restored state and never start a service.
    Switch only after these checks, then start and run the existing release
    identity checks. Preserve the backup reference in success/failure output.
    On switch failure after a verified snapshot, attempt recovery to the
-   recorded source release before reporting failure. If the forward transaction remains `snapshot-verified` or
+   recorded source release before reporting failure. If the forward transaction
+   remains `snapshot-verified` or
    `switch-authorized`, it proves startup was not attempted: `before-start`
    persists `start-attempted` before launching. Create a `code-recovery`
    transaction bound to that original transaction, verified snapshot, stopped
@@ -442,7 +449,8 @@ committed backup or partially restored state and never start a service.
    Switch only the link back to the recorded source; do not replace the home
    or move credentials. The switch guard rechecks the original pre-start phase
    and source bytes. This exception is not available to generic rollback.
-   If startup absence cannot be proved, use verified snapshot restoration. An unknown
+   If startup absence cannot be proved, use verified snapshot restoration. An
+   unknown
    link, failed stop/binding check or failed recovery must remain stopped;
    never guess which code to start. A failure after new startup must not
    automatically start old code on migrated state;
@@ -456,7 +464,8 @@ committed backup or partially restored state and never start a service.
    `--restore-codex-backup` / `--codex-home` arguments. A warning beside the
    old command is insufficient: `previous` may point to unguarded old tooling.
 6. Release maintenance only after actual Codex startup and the applicable
-   history or explicit new-session checks, not merely `runner --version`. Record gate 5 separately from rollout identity.
+   history or explicit new-session checks, not merely `runner --version`. Record
+   gate 5 separately from rollout identity.
 
 The snapshot helper is never a log-only advisory: a failing child and the
 switch/start operations are in the same shell control flow. Interruption or

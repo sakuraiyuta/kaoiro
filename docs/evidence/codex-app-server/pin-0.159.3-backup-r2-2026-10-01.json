@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "status": "implementation r2 review requested; not deployment approval",
+  "status": "Historical implementation r2; capacity accounting is superseded by implementation r3. Not deployment approval.",
   "implementation_commit": "cdf790e8cf78c046e44ffd08c956fc8c4ca952c3",
   "review_baseline": "c4cf6fa1b0dc30730ef48cdef9a6eb5d3ca725d4",
   "report": {
     "path": "docs/evidence/codex-app-server/pin-0.159.3-backup-r2-2026-10-01.md",
-    "sha256": "25587e13e999e2bf5c5e41ba0e6883bfb561e9621c1dd0bb65817156ec70f6e3"
+    "sha256": "43434898cb4d78679387710bc68162a49f8ef90a405c0fa7a0632a55985a0212"
   },
   "source_files": [
     {
@@ -951,5 +951,6 @@
       "path": "docs/plans/issue-468-codex-state-backup.md",
       "sha256": "cd9c9b4f5cc44766dfc9fafce2983b195e742d074dde3555cba0c6fd6388f8df"
     }
-  ]
+  ],
+  "historical_document_commit": "77f54ed30a4379f4fc8501953d2b3a7c6167ee53"
 }

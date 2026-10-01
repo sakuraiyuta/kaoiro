@@ -111,6 +111,40 @@ describe("Codex state snapshots", () => {
     expect(readFileSync(join(dir, "restore/auth.json"), "utf8")).toBe("CURRENT_AUTH_SECRET");
     expect(readFileSync(join(dir, "quarantine/.credentials.json"), "utf8")).toBe("MCP_SECRET");
   });
+  it("counts top-level diagnostic DB and sidecar copies without charging restore", () => {
+    const entries = [
+      { path: "state_5.sqlite", category: "state", type: "file", size: 4096 },
+      { path: "state_5.sqlite-wal", category: "state", type: "file", size: 8192 },
+      { path: "state_5.sqlite-shm", category: "state", type: "file", size: 32768 },
+      { path: "state_5.sqlite-journal", category: "state", type: "file", size: 512 },
+      { path: "sessions/nested.sqlite", category: "state", type: "file", size: 2048 },
+      { path: "auth.json", category: "credential", type: "file", size: 65536 },
+    ];
+    expect(snap.capacity(dir, entries, true)).toMatchObject({ logicalBytes: 47616, migrationCopyBytes: 45568, migrationCopyInodes: 6 });
+    expect(snap.capacity(dir, entries)).toMatchObject({ logicalBytes: 47616, migrationCopyBytes: 0, migrationCopyInodes: 0 });
+  });
+  it.each(["bytes", "inodes"])("rechecks diagnostic %s capacity before creating snapshot staging", (limit) => {
+    writeFileSync(join(home, "state_5.sqlite"), "capacity fixture; never opened as SQLite");
+    const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const snap = await import(process.argv[1]);
+      const entries = snap.inventory(process.argv[2]);
+      const bytes = snap.stateEntries(entries).reduce((n,e)=>n+(e.type==='file'?e.size:0),0);
+      const dbBytes = entries.find(e=>e.path==='state_5.sqlite').size;
+      const reserve = Math.max(Math.ceil(bytes*0.2),1024**3);
+      const original = fs.statfsSync;
+      fs.statfsSync = (path) => ({...original(path), ...(process.argv[5]==='bytes'
+        ? {bsize:1,bavail:bytes+reserve+Math.floor(dbBytes/2)}
+        : {ffree:entries.length+10})});
+      syncBuiltinESMExports();
+      await snap.snapshot(process.argv[2],process.argv[3],{uuid:'test',staging:process.argv[4]});
+    `, snapshotModule, home, join(dir, "backup"), join(dir, ".staging.codex-test"), limit], { encoding: "utf8" });
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain(limit === "bytes" ? "Insufficient snapshot/restore disk capacity" : "Insufficient snapshot/restore inodes");
+    expect(existsSync(join(dir, ".staging.codex-test"))).toBe(false);
+    expect(existsSync(join(dir, "backup"))).toBe(false);
+  });
   it("requires logical space plus reserve without performing a copy", () => {
     const fs = statfsSync(dir);
     expect(() => snap.capacity(dir, [{ path: "history.jsonl", category: "state", type: "file", size: fs.bavail * fs.bsize + 1 }])).toThrow(/Insufficient/);

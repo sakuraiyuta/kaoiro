@@ -77,13 +77,19 @@ function stableEntries(entries) {
 export function sameState(a, b) {
   return JSON.stringify(stableEntries(stateEntries(a))) === JSON.stringify(stableEntries(stateEntries(b)));
 }
-export function capacity(parent, entries) {
+function migrationFiles(entries) {
+  return stateEntries(entries).filter((e) => e.type === "file" && /^[^/]+\.sqlite(?:-wal|-shm|-journal)?$/.test(e.path));
+}
+export function capacity(parent, entries, migrationCopy = false) {
   const bytes = stateEntries(entries).reduce((sum, e) => sum + (e.type === "file" ? e.size : 0), 0);
+  const diagnostics = migrationCopy ? migrationFiles(entries) : [];
+  const migrationCopyBytes = diagnostics.reduce((sum, e) => sum + e.size, 0);
+  const migrationCopyInodes = diagnostics.length + diagnostics.filter((e) => e.path.endsWith(".sqlite")).length * 2;
   const reserve = Math.max(Math.ceil(bytes * 0.2), 1024 ** 3);
   const fs = statfsSync(parent);
-  must(fs.bavail * fs.bsize >= bytes + reserve, "Insufficient snapshot/restore disk capacity");
-  must(fs.ffree >= entries.length + 10, "Insufficient snapshot/restore inodes");
-  return { logicalBytes: bytes, reserveBytes: reserve, entries: entries.length };
+  must(fs.bavail * fs.bsize >= bytes + migrationCopyBytes + reserve, "Insufficient snapshot/restore disk capacity");
+  must(fs.ffree >= entries.length + migrationCopyInodes + 10, "Insufficient snapshot/restore inodes");
+  return { logicalBytes: bytes, migrationCopyBytes, migrationCopyInodes, reserveBytes: reserve, entries: entries.length };
 }
 export function throughputEstimate(parent, entries) {
   const stage = join(parent, `.codex-throughput-${randomUUID()}`);
@@ -127,7 +133,7 @@ export async function migrationLevels(payload, entries) {
   // source nor the hash-bound snapshot payload may be opened by SQLite.
   const scratch = mkdtempSync(join(dirname(payload), ".migration-levels-"));
   try {
-    for (const e of entries.filter((entry) => entry.type === "file" && /^[^/]+\.sqlite(?:-wal|-shm|-journal)?$/.test(entry.path))) {
+    for (const e of migrationFiles(entries)) {
       copyFileSync(join(payload, e.path), join(scratch, e.path));
     }
     for (const e of dbs) {
@@ -146,7 +152,7 @@ export async function snapshot(home, destination, metadata) {
   must(isAbsolute(destination) && !hasEntry(destination) && join(parent, basename(destination)) === destination, "Snapshot destination must be new and canonical");
   must(!inside(home, destination) && !inside(destination, home), "Snapshot overlaps Codex home");
   const entries = inventory(home, true);
-  capacity(parent, entries);
+  capacity(parent, entries, true);
   const stage = metadata.staging;
   must(stage === join(parent, `.staging.codex-${metadata.uuid}`), "Invalid snapshot staging ownership");
   mkdirSync(stage, { mode: 0o700 });

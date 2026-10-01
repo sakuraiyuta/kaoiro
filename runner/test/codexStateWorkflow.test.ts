@@ -35,7 +35,7 @@ const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
 const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
+if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
 else if (args.includes('start')) {
  fs.appendFileSync(dir+'/calls','start\\n');
  const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
@@ -367,6 +367,25 @@ else if (args.includes('show')) {
     expect(result.stderr).toContain("Code recovery must return to original source");
     expect(readFileSync(calls, "utf8")).toBe("stop\n");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+  });
+  it("budgets the migration DB copy before stopping the runner", () => {
+    const fs = statfsSync(dir), available = fs.bavail * fs.bsize;
+    const bytes = Math.floor(available * 0.6);
+    const reserve = Math.max(Math.ceil(bytes * 0.2), 1024 ** 3);
+    expect(bytes).toBeGreaterThan(reserve);
+    expect(bytes + reserve).toBeLessThan(available);
+    expect(bytes * 2 + reserve).toBeGreaterThan(available);
+    const fd = openSync(join(home, "state_5.sqlite"), "w");
+    try { ftruncateSync(fd, bytes); } finally { closeSync(fd); }
+    // The negative control must not hash/copy a filesystem-sized sparse DB.
+    writeFileSync(join(dir, "reject-stop"), "stop invocation fails immediately");
+    const result = update();
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("Insufficient snapshot/restore disk capacity");
+    expect(existsSync(calls)).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(dir, "backup"))).toBe(false);
+    expect(existsSync(join(root, "codex-state"))).toBe(false);
   });
   it("charges sparse files by logical size and rejects insufficient capacity before stop", () => {
     const fs = statfsSync(dir);

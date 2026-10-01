@@ -162,7 +162,7 @@ async function prepare(root, target, home, destination, service, tool, owner) {
   identity(dirname(destination));
   must(!inside(home, destination) && !inside(destination, home) && !inside(join(root, "releases"), destination) && !inside(destination, root), "Backup destination overlaps protected state/releases");
   const entries = inventory(home);
-  const estimate = { backup: capacity(dirname(destination), entries), restore: capacity(dirname(home), entries), throughput: throughputEstimate(dirname(destination), entries) };
+  const estimate = { backup: capacity(dirname(destination), entries, true), restore: capacity(dirname(home), entries), throughput: throughputEstimate(dirname(destination), entries) };
   if (entries.some((e) => e.path.endsWith(".sqlite"))) await import("node:sqlite");
   const p = init(root);
   const uuid = randomUUID();

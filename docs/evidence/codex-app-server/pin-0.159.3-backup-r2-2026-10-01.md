@@ -1,7 +1,8 @@
 # Codex 0.159.3 backup implementation review r2 evidence
 
-Status: submitted for independent implementation review, not adoption or
-production activation approval. Source implementation: `cdf790e8cf78c046e44ffd08c956fc8c4ca952c3`,
+Status: historical implementation-r2 evidence, not production approval.
+Review r2 accepted the SQLite fix and requested additional capacity accounting;
+the implementation-r3 record supplies that replacement capacity evidence. Source implementation: `cdf790e8cf78c046e44ffd08c956fc8c4ca952c3`,
 on branch `issue-468-codex-pin`. The subsequent report commit changes docs only.
 No production runner/home or authenticated evaluation home was accessed in
 this round. No push or deploy occurred. Tests unset inherited `CODEX_HOME`;
@@ -129,6 +130,17 @@ A subsequent explicit kill attempt found the unit already unloaded and did
 nothing (exit 1); final observation is `MainPID=0`, `LoadState=not-found`,
 `ActiveState=inactive`. This is not evidence of graceful Codex shutdown or a
 newly diagnosed production defect. No production service was signalled.
+
+This timeout can also occur during production updates. The director reports
+read-only production journal confirmation at 2026-09-30 11:49 and 2026-10-01
+00:02 JST; the evaluator did not read those production logs. Implementation
+review r2 concludes that the effect is up to 30 seconds of additional stop
+latency and forced child termination (`TimeoutStopSec=30` in the shipped
+unit). Snapshot still waits for stopped/empty service state, and the real
+uncheckpointed-WAL controls cover the resulting SQLite state; this timeout
+does not invalidate backup correctness. Graceful-shutdown root cause remains
+a separate issue; a forced stop can also leave a partial final rollout line,
+independently of backup.
 
 ## Remaining decisions and retained material
 
