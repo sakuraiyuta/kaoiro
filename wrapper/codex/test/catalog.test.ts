@@ -15,12 +15,19 @@ const values = (authMode: "chatgpt" | "apikey" | "unknown", plan?:
   | "go"
   | "plus"
   | "pro"
+  | "prolite"
+  | "promax"
   | "business"
   | "enterprise") =>
   resolveCodexCatalog(authMode, plan).map((model) => model.value);
 
 describe("resolveCodexCatalog", () => {
   it.each([
+    [
+      "gpt-6.1-sol",
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "low",
+    ],
     [
       "gpt-5.6-sol",
       ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -66,10 +73,13 @@ describe("resolveCodexCatalog", () => {
     expect(values("chatgpt", plan)).toEqual(["gpt-5.6-terra"]);
   });
 
-  it.each(["plus", "pro", "business", "enterprise"] as const)(
-    "ChatGPT %s は Astra / Sol6 / Luna6 / Sol / Terra / Luna (upstream priority順, issue #399)",
+  it.each(
+    ["plus", "pro", "prolite", "promax", "business", "enterprise"] as const,
+  )(
+    "ChatGPT %s は Sol6.1 / Astra / Sol6 / Luna6 / Sol / Terra / Luna (upstream priority順)",
     (plan) => {
       expect(values("chatgpt", plan)).toEqual([
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -82,6 +92,7 @@ describe("resolveCodexCatalog", () => {
 
   it("API-key auth は plan と別の curated catalog を返す", () => {
     expect(values("apikey")).toEqual([
+      "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6-sol",
       "gpt-6-luna",
@@ -151,7 +162,7 @@ describe("resolveCodexCatalog", () => {
     const first = resolveCodexCatalog("chatgpt", "plus");
     first[0]!.display_name = "mutated";
     expect(resolveCodexCatalog("chatgpt", "plus")[0]?.display_name).toBe(
-      "GPT-6-Astra",
+      "GPT-6.1-Sol",
     );
   });
 
@@ -181,6 +192,7 @@ describe("resolveCodexCatalog", () => {
     ["gpt-5.6-terra", "0.144.0"],
     ["gpt-5.6-luna", "0.144.0"],
     ["gpt-6-astra", "0.153.0"],
+    ["gpt-6.1-sol", "0.153.0"],
     ["gpt-6-sol", "0.155.0"],
     ["gpt-6-luna", "0.155.0"],
     ["gpt-5.5", "0.124.0"],
@@ -190,6 +202,33 @@ describe("resolveCodexCatalog", () => {
       (entry) => entry.value === value,
     );
     expect(model?.minimal_client_version).toBe(minimum);
+  });
+
+  it("pins gpt-6.1-sol's compatibility boundary at 0.153.0", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const below = resolveCodexCatalog(
+        "chatgpt",
+        "plus",
+        undefined,
+        "0.152.9",
+      );
+      const atMinimum = resolveCodexCatalog(
+        "chatgpt",
+        "plus",
+        undefined,
+        "0.153.0",
+      );
+      expect(below.map((model) => model.value)).not.toContain("gpt-6.1-sol");
+      expect(atMinimum.map((model) => model.value)).toContain("gpt-6.1-sol");
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("gpt-6.1-sol: requires Codex >= 0.153.0"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("excludes curated models newer than the bundled Codex CLI", () => {
@@ -362,6 +401,18 @@ describe("effortLevelsForModel (intersection fail-closed helper)", () => {
       "high",
       "xhigh",
       "max",
+    ]);
+  });
+
+  it("gpt-6.1-sol の advertised efforts は low..ultra", () => {
+    const catalog = resolveCodexCatalog("chatgpt", "plus");
+    expect(effortLevelsForModel(catalog, "gpt-6.1-sol")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
     ]);
   });
 

@@ -10,12 +10,17 @@ export type ChatGptPlan =
   | "go"
   | "plus"
   | "pro"
+  | "prolite"
+  | "promax"
   | "business"
   | "enterprise";
 
 // Snapshot from openai/codex main (2026-07-13, gpt-6-astra added from a
 // 2026-09-05 re-fetch — issue #292, gpt-6-sol/gpt-6-luna added and existing
 // rows' descriptions re-synced from a 2026-09-23 re-fetch — issue #399).
+// Fetched 2026-09-30 and re-fetched 2026-10-01 00:08:06 UTC; both
+// openai/codex models.json snapshots have SHA-256
+// fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b.
 // openai_models.rs defines the ReasoningEffort wire vocabulary and ModelInfo
 // fields; per-model values live in codex-rs/models-manager/models.json and
 // are copied here so catalog advertisement never depends on a runtime
@@ -56,10 +61,19 @@ const ASTRA: EngineModelInfo = {
   minimal_client_version: "0.153.0",
 };
 
+const SOL_61: EngineModelInfo = {
+  value: "gpt-6.1-sol",
+  display_name: "GPT-6.1-Sol",
+  description: "Latest workhorse model for coding and everyday work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
+  minimal_client_version: "0.153.0",
+};
+
 const SOL_6: EngineModelInfo = {
   value: "gpt-6-sol",
   display_name: "GPT-6-Sol",
-  description: "Workhorse model for coding and everyday work.",
+  description: "Previous generation workhorse model.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "medium",
   minimal_client_version: "0.155.0",
@@ -74,11 +88,10 @@ const LUNA_6: EngineModelInfo = {
   minimal_client_version: "0.155.0",
 };
 
-// Ordered by upstream models.json `priority` (Astra 1, Sol 2, Luna 3,
-// gpt-5.6-sol 4, gpt-5.6-terra 7, gpt-5.6-luna 8), not by addition order —
-// this file is a transcription of that source, so its own row order follows
-// it (issue #399).
-const CHATGPT_PLUS_MODELS = [ASTRA, SOL_6, LUNA_6, SOL, TERRA, LUNA];
+// Ordered by upstream models.json `priority` (Sol 6.1 1, Astra 2, Sol 6 3,
+// Luna 6 4, gpt-5.6-sol 5, gpt-5.6-terra 8, gpt-5.6-luna 9). This
+// transcription follows that source order.
+const CHATGPT_PLUS_MODELS = [SOL_61, ASTRA, SOL_6, LUNA_6, SOL, TERRA, LUNA];
 // Free/Go exclusions follow the Plan × available-model table in
 // docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];

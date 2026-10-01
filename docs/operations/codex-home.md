@@ -1,7 +1,7 @@
 ---
 title: "Codex home for production"
 status: implemented
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # Codex home for production
@@ -211,8 +211,9 @@ marker (step 5).
 5. Start the Codex peers as new sessions from the dashboard, one first. After its
    first good turn check the rate-limit windows, one permission decision, and the
    hook marker: `cat ~/.cache/codex-cc/.codex-cc-model-injected-<session>` must
-   print the profile key expected for that peer's model (for example `gpt-6` for
-   `gpt-6-sol`), and `ls <CODEX_HOME>/model-profiles/<key>.md` must exist. No marker means
+   print the profile key expected for that peer's model (for example `gpt-6.1` for
+   `gpt-6.1-sol` or `gpt-6` for `gpt-6-sol`), and
+   `ls <CODEX_HOME>/model-profiles/<key>.md` must exist. No marker means
    the hook did not inject (trust entry, `~/.codex/hooks` link or the new home's
    `model-profiles` link); the key `none` means no profile matches the model, so
    the peer runs without its profile. Then start the others.
