@@ -103,7 +103,7 @@ it.skipIf(!isLinux)(
     expect(ownedPids(tag).sort(byNumber)).toEqual(expected);
 
     const rootExit = exited(root);
-    expect(reapOwned(tag).sort(byNumber)).toEqual(expected);
+    expect((await reapOwned(tag)).sort(byNumber)).toEqual(expected);
     expect(await rootExit).toBe("SIGKILL");
     await waitUntil(() => !isRunning(orphanPid));
     expect(ownedPids(tag)).toEqual([]);
@@ -112,7 +112,7 @@ it.skipIf(!isLinux)(
 
 it.skipIf(!isLinux)(
   "neither finds nor signals processes without the tag or with a different tag",
-  () => {
+  async () => {
     const tag = randomUUID();
     const otherTag = `${tag}-other`;
     const untagged = start("sleep", ["60"]);
@@ -122,9 +122,26 @@ it.skipIf(!isLinux)(
     // `tag` is not an empty scan.
     expect(ownedPids(otherTag)).toEqual([other.pid]);
     expect(ownedPids(tag)).toEqual([]);
-    expect(reapOwned(tag)).toEqual([]);
+    expect(await reapOwned(tag)).toEqual([]);
     expect(isRunning(untagged.pid!)).toBe(true);
     expect(isRunning(other.pid!)).toBe(true);
+  },
+);
+
+it.skipIf(!isLinux)(
+  "reaps a process that appears after the first pass has already run",
+  async () => {
+    const tag = randomUUID();
+    const first = start("sleep", ["60"], tag);
+    // The first pass runs synchronously, up to its wait before the rescan.
+    const reaping = reapOwned(tag);
+    const late = start("sleep", ["60"], tag);
+
+    expect((await reaping).sort(byNumber)).toEqual(
+      [first.pid!, late.pid!].sort(byNumber),
+    );
+    await waitUntil(() => !isRunning(late.pid!));
+    expect(ownedPids(tag)).toEqual([]);
   },
 );
 
@@ -140,7 +157,7 @@ it.skipIf(!isLinux)(
     await gone;
 
     expect(isOwned(child.pid!, tag)).toBe(false);
-    expect(reapOwned(tag)).toEqual([]);
+    expect(await reapOwned(tag)).toEqual([]);
   },
 );
 

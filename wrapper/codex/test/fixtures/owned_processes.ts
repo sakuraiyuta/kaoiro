@@ -51,17 +51,29 @@ export function ownedProcessSummary(tag: string): string {
     .join("\n");
 }
 
-/** SIGKILLs every process still carrying the tag; returns the PIDs signalled. */
-export function reapOwned(tag: string): number[] {
+const MAX_REAP_PASSES = 5;
+const REAP_SETTLE_MS = 25;
+
+/**
+ * SIGKILLs every process still carrying the tag and returns the PIDs
+ * signalled. Rescans after a short wait until nothing is left: a process
+ * forked, or still mid-exec, while a pass ran is only visible to the next.
+ */
+export async function reapOwned(tag: string): Promise<number[]> {
   const signalled: number[] = [];
-  for (const pid of ownedPids(tag)) {
-    if (!isOwned(pid, tag)) continue;
-    try {
-      process.kill(pid, "SIGKILL");
-      signalled.push(pid);
-    } catch {
-      // Exited between the scan and the kill -- fine.
+  for (let pass = 0; pass < MAX_REAP_PASSES; pass++) {
+    const pids = ownedPids(tag);
+    if (pids.length === 0) break;
+    for (const pid of pids) {
+      if (!isOwned(pid, tag)) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+        signalled.push(pid);
+      } catch {
+        // Exited between the scan and the kill -- fine.
+      }
     }
+    await new Promise((resolve) => setTimeout(resolve, REAP_SETTLE_MS));
   }
   return signalled;
 }

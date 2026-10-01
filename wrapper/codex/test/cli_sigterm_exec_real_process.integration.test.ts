@@ -459,7 +459,7 @@ enabled=false
         () => `\nowned survivors:\n${ownedProcessSummary(ownerTag)}`,
       );
     } finally {
-      reapOwned(ownerTag);
+      await reapOwned(ownerTag);
       forceKill(execChildPid ?? undefined);
       forceKill(sleepPid ?? undefined);
       for (const listener of process.listeners("SIGTERM")) {

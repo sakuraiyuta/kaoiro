@@ -284,7 +284,7 @@ enabled=false
         () => `\nowned survivors:\n${ownedProcessSummary(ownerTag)}`,
       );
     } finally {
-      reapOwned(ownerTag);
+      await reapOwned(ownerTag);
       forceKill(execChildPid ?? undefined);
       forceKill(sleepPid ?? undefined);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
