@@ -89,4 +89,24 @@ defmodule KaoiroServer.TestTimeouts do
   def supervised_restart(base) when is_integer(base) and base > 0 do
     @supervised_restart_multiplier * base
   end
+
+  @durable_reply_multiplier 5
+
+  @doc """
+  Budget for a channel reply that waits on a durable write: the handler
+  replies only after a `GenServer.call` that ends in `:dets.sync/1` (an
+  fsync). #{@durable_reply_multiplier}x the base, so 500 ms locally and
+  2500 ms under `CI`.
+
+  Sized against the tail of one such fsync, measured on a shared host
+  (issue #477, 2026-10-01): p50 18 ms, and in one 300-call window 7 calls
+  exceeded 100 ms (p99 161 ms, max 333 ms). Locally 500 ms is only 1.5x that
+  maximum, so a longer stall still misses it: this narrows the flake, it does
+  not remove it.
+  """
+  def durable_reply(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def durable_reply(base) when is_integer(base) and base > 0 do
+    @durable_reply_multiplier * base
+  end
 end
