@@ -39,6 +39,12 @@ not routed receives JSON-RPC error `-32601` and an optional diagnostic without
 its payload. The `stderrTail` accessor retains up to 16,384 characters for
 diagnostics; callers must redact it before logging.
 
+The wrapper sends `shell_environment_policy.set.CODEX_HOME` with a private
+tool home on both `thread/start` and `thread/resume`. The app-server process
+retains the state home for auth and sessions. Whether the final pinned native
+binary applies the per-thread policy to a resumed thread remains a release
+gate; a successful RPC alone does not establish the tool environment.
+
 ## Operator steering (ADR-0058 Stage 2)
 
 An opted-in Codex persona on the app-server backend may deliver an operator

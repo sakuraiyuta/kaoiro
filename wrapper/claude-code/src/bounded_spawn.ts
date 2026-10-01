@@ -19,12 +19,15 @@ export function spawnBoundedClaudeProcess(
   options: SpawnOptions,
   binding: BoundedSpawnOptions,
 ): SpawnedProcess {
+  const env = { ...options.env };
+  delete env.CODEX_HOME;
+  const safeOptions = { ...options, env };
   const child = binding.spawnOverride
-    ? binding.spawnOverride(options)
-    : spawn(options.command, options.args, {
-        cwd: options.cwd,
-        env: options.env,
-        signal: options.signal,
+    ? binding.spawnOverride(safeOptions)
+    : spawn(safeOptions.command, safeOptions.args, {
+        cwd: safeOptions.cwd,
+        env: safeOptions.env,
+        signal: safeOptions.signal,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });

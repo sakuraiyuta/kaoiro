@@ -31,7 +31,7 @@ describe("hook gate client", () => {
   it("malformed responseはdist/hook.jsのproduction pathでもdenyしてexitする", async () => {
     await withServer((socket) => socket.end("not-json\n"), async (path) => {
       const child = spawn(process.execPath, [hookPath], {
-        env: { ...process.env, KAOIRO_GATE_SOCKET: path, KAOIRO_GATE_NONCE: "nonce", KAOIRO_GATE_DEADLINE_MS: "500" },
+        env: { ...process.env, CODEX_HOME: undefined, KAOIRO_GATE_SOCKET: path, KAOIRO_GATE_NONCE: "nonce", KAOIRO_GATE_DEADLINE_MS: "500" },
         stdio: ["pipe", "pipe", "pipe"],
       });
       let stdout = "";

@@ -55,6 +55,7 @@ const ROUND_TRIP_CASES: {
   antigravity_probe_timeout_ms: { value: 30_000 },
   codex_internal_subagents: { value: true },
   codex_backend: { value: "app-server" },
+  codex_tool_home: { value: "/tmp/kaoiro-tool-home" },
   claude_engine_catalog: {
     value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
   },
@@ -113,6 +114,11 @@ describe("parseConfig", () => {
 
   it("正しい設定をそのまま受け入れる", () => {
     expect(parseConfig(valid)).toEqual(valid);
+  });
+
+  it("codex_tool_home must be a nonempty local handoff path", () => {
+    expect(() => parseConfig({ ...valid, codex_tool_home: "" })).toThrow("codex_tool_home");
+    expect(() => parseConfig({ ...valid, codex_tool_home: 42 })).toThrow("codex_tool_home");
   });
 
   it("antigravity CLI fields reject relative, empty, NUL, and invalid timeout values", () => {

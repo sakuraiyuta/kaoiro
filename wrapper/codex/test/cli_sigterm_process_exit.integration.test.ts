@@ -26,7 +26,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
@@ -67,10 +68,11 @@ function allProcesses(): { pid: number; ppid: number; args: string }[] {
   }
 }
 
-function timeoutDiagnostics(stderr: string): string {
+function timeoutDiagnostics(stderr: string, home: string): string {
   let version: string;
   try {
-    version = execSync("codex --version", { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+    version = execFileSync(process.execPath, [createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js"), "--version"],
+      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CODEX_HOME: home } }).toString().trim();
   } catch (error) {
     version = `unavailable: ${String(error)}`;
   }
@@ -216,7 +218,7 @@ enabled=false
     let timeoutDiagnosticsCalls = 0;
     const describeTimeout = () => {
       timeoutDiagnosticsCalls++;
-      return timeoutDiagnostics(stderr);
+      return timeoutDiagnostics(stderr, home);
     };
     try {
       await waitFor(() => wire.joins >= 1, 10_000);

@@ -15,6 +15,7 @@ import type { AppServerRateLimits } from "./app_server_telemetry.js";
 
 export interface AppServerSessionOptions {
   thread?: Omit<AppServerThreadOptions, "config">;
+  toolHome?: string;
   internalSubagents?: boolean;
   tools?: ToolDescriptor[];
   turnSignal: () => AbortSignal | null;
@@ -81,6 +82,9 @@ export class AppServerSession {
       ...options.thread,
       config: {
         features: { multi_agent: options.internalSubagents ?? true },
+        ...(options.toolHome === undefined ? {} : {
+          shell_environment_policy: { set: { CODEX_HOME: options.toolHome } },
+        }),
         ...(host === null ? {} : {
           mcp_servers: {
             kaoiro: {

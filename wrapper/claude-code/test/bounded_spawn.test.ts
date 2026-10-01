@@ -5,6 +5,23 @@ import { spawnBoundedClaudeProcess } from "../src/bounded_spawn.js";
 const base = { command: process.execPath, cwd: process.cwd(), env: process.env };
 
 describe("bounded Claude CLI spawn", () => {
+  it("strips CODEX_HOME at the final SDK spawn boundary", async () => {
+    const seen: Array<Record<string, string | undefined>> = [];
+    const child = spawnBoundedClaudeProcess(
+      { ...base, env: { ...process.env, CODEX_HOME: "/tmp/fuji464-hostile", FUJI464_KEEP: "yes" },
+        args: ["-e", "process.exit(0)"], signal: new AbortController().signal },
+      { hostAbort: new AbortController().signal, deadlineMs: null,
+        spawnOverride: options => {
+          seen.push(options.env);
+          return spawn(options.command, options.args, { cwd: options.cwd, env: options.env,
+            stdio: ["pipe", "pipe", "pipe"] });
+        }, warn: () => {} },
+    );
+    await new Promise<void>(resolve => child.once("exit", () => resolve()));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.CODEX_HOME).toBeUndefined();
+    expect(seen[0]?.FUJI464_KEEP).toBe("yes");
+  });
   it("drains stderr, forwards it to the caller, and redacts a bounded exit diagnostic", async () => {
     const seen: string[] = [];
     const warnings: string[] = [];

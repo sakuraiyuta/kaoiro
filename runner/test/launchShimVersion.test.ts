@@ -94,7 +94,7 @@ describe("kaoiro-runner-launch.sh --version (issue #218 round 2 MF-5)", () => {
       ["--version"],
       {
         encoding: "utf8",
-        env: { ...process.env, KAOIRO_RUNNER_DIR: join(tmpDir, "no-config-here") },
+        env: { ...process.env, CODEX_HOME: undefined, KAOIRO_RUNNER_DIR: join(tmpDir, "no-config-here") },
       },
     );
 
@@ -115,7 +115,7 @@ describe("kaoiro-runner-launch.sh --version (issue #218 round 2 MF-5)", () => {
     expect(() =>
       execFileSync(join(tmpDir!, "deploy", "kaoiro-runner-launch.sh"), [], {
         encoding: "utf8",
-        env: { ...process.env, KAOIRO_RUNNER_DIR: join(tmpDir!, "no-config-here") },
+        env: { ...process.env, CODEX_HOME: undefined, KAOIRO_RUNNER_DIR: join(tmpDir!, "no-config-here") },
       }),
     ).toThrowError(expect.objectContaining({ status: 78 }));
   });

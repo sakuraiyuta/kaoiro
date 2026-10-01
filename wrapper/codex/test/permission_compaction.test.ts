@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, readFile, writeFile, appendFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, appendFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,10 @@ describe("permission observations across real compaction records", () => {
     const bytes = await readFile(new URL(record.file, fixtureRoot));
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(record.sha256);
     const home = await mkdtemp(join(tmpdir(), "fuji340-default-rollout-"));
+    const hostile = await mkdtemp(join(tmpdir(), "fuji464-rollout-canary-"));
+    const priorCodexHome = process.env.CODEX_HOME;
     try {
+      process.env.CODEX_HOME = hostile;
       // A fresh process uses the production homedir root and the compiled
       // reader. The recorded SDK contexts are replayed byte-for-byte; no
       // permission resolver or observation result is injected.
@@ -34,11 +37,19 @@ describe("permission observations across real compaction records", () => {
         process.stdout.write(JSON.stringify({root, observed}));
         if (observed === null) process.exitCode = 1;
       `;
+      const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+      delete childEnv.CODEX_HOME;
       const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "--eval", source], {
-        env: { ...process.env, HOME: home }, encoding: "utf8", timeout: 10_000,
+        env: childEnv, encoding: "utf8", timeout: 10_000,
       });
       expect(JSON.parse(stdout)).toEqual({ root: join(home, ".codex", "sessions"), observed: record.expected });
-    } finally { await rm(home, { recursive: true, force: true }); }
+      expect(await readdir(hostile)).toEqual([]);
+    } finally {
+      if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorCodexHome;
+      await rm(home, { recursive: true, force: true });
+      await rm(hostile, { recursive: true, force: true });
+    }
   });
 
   it.each(["turn_id", "sandbox", "network", "approval"])("rejects a conflicting %s instead of choosing the newest context", async (axis) => {

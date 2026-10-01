@@ -55,7 +55,7 @@ describe("Antigravity CLI", () => {
         fileURLToPath(new URL("../dist/bridge.js", import.meta.url)),
         "call", "whoami", Buffer.from("{}").toString("base64url"),
       ], {
-        env: { ...process.env, KAOIRO_BRIDGE_SOCKET: toolHost.socketPath, KAOIRO_BRIDGE_NONCE: toolHost.nonce },
+        env: { ...process.env, CODEX_HOME: undefined, KAOIRO_BRIDGE_SOCKET: toolHost.socketPath, KAOIRO_BRIDGE_NONCE: toolHost.nonce },
         stdio: ["ignore", "pipe", "pipe"],
       });
       const childPid = child.pid;

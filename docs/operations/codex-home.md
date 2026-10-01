@@ -23,6 +23,12 @@ operator action, done after the reader fix is deployed.
 - `CODEX_HOME=<absolute dir>` in `runner.env`: the runner's resume scan, every
   Codex wrapper, the Codex SDK and the `codex app-server` child use that
   directory for `auth.json`, `config.toml`, `sessions/` and the state databases.
+- Agent tool shells launched by Codex use an empty private `CODEX_HOME` under
+  the runner's temporary root. They do not inherit this state directory. The
+  native Codex process still uses the dedicated state directory. A restarted
+  wrapper receives a new private tool home; the runner removes the previous
+  one when its wrapper exits. Claude and Antigravity wrapper children do not
+  receive `CODEX_HOME` from the runner.
 - The directory must exist. Codex does not create it and fails fast otherwise
   (`CODEX_HOME points to "<path>", but that path does not exist`). The runner
   checks it and refuses Codex launches with a reason instead of letting every

@@ -52,6 +52,34 @@ function childFixture(closeDelayMs = 0, openDelayMs = 0) {
 }
 const tool = { name: "probe", description: "probe", inputSchema: { type: "object" }, handler: async () => ({ content: [] }) };
 
+it.each(["start", "resume"])("sends the tool-home policy on thread/%s before any turn", async action => {
+  const fixture = childFixture();
+  const session = await AppServerSession.create({
+    toolHome: "/tmp/fuji464-private-tool-home",
+    turnSignal: () => null,
+    transport: { spawnChild: () => fixture.child },
+  }); sessions.push(session);
+  if (action === "start") await session.startThread();
+  else await session.resumeThread("existing-thread");
+  const open = fixture.sent.find(r => r.method === `thread/${action}`);
+  expect(open?.params.config).toMatchObject({
+    shell_environment_policy: { set: { CODEX_HOME: "/tmp/fuji464-private-tool-home" } },
+  });
+  expect(fixture.sent.some(r => r.method === "turn/start")).toBe(false);
+});
+
+it("does not start a turn after native resume rejects the policy", async () => {
+  const fixture = childFixture();
+  const session = await AppServerSession.create({
+    toolHome: "/tmp/fuji464-private-tool-home",
+    turnSignal: () => null,
+    transport: { spawnChild: () => fixture.child },
+  }); sessions.push(session);
+  fixture.fail();
+  await expect(session.resumeThread("existing-thread")).rejects.toThrow("fixture failure");
+  expect(fixture.sent.some(r => r.method === "turn/start")).toBe(false);
+});
+
 it.each([undefined, false, true])("uses exec-equivalent bridge settings and explicit multi_agent=%s", async internalSubagents => {
   const fixture = childFixture();
   const listen = vi.spyOn(ToolHost, "listen");

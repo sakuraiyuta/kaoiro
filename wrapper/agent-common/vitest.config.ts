@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import "../../scripts/vitest-codex-home-guard.mjs";
 
 // Resolve sibling workspace packages to their TS source so tests run
 // against fresh code without a prior `pnpm -r build` (package.json main

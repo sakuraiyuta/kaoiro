@@ -85,13 +85,15 @@ export async function runClaudeProbe(
       child = deps.spawnProbe();
     } else {
       const probePath = resolveProbePath();
+      const childEnv = { ...process.env };
+      delete childEnv.CODEX_HOME;
       child = spawn(
         process.execPath,
         [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS), ...(deps.includeUsage ? ["--usage"] : [])],
         {
-          // Inherit env so the SDK's auth resolution (keychain / OAuth /
-          // ANTHROPIC_API_KEY) still works — same posture as spike.
+          // Preserve the SDK's auth sources without exporting Codex state.
           stdio: ["ignore", "pipe", "pipe"],
+          env: childEnv,
         },
       );
     }

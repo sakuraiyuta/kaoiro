@@ -333,6 +333,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       stdio: "ignore",
       env: {
         ...process.env,
+        CODEX_HOME: undefined,
         KAOIRO_SYSTEMCTL: systemctl,
         KAOIRO_SYSTEMD_RUN: detachingSystemdRun,
       },

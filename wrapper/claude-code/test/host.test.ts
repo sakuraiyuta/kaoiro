@@ -97,6 +97,20 @@ describe("initialStatusExt", () => {
 });
 
 describe("AgentHost whoami effective projection (#113)", () => {
+  it("filters CODEX_HOME from the SDK options without adding omitted caller keys", async () => {
+    let seen: NodeJS.ProcessEnv | undefined;
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryOptions: { env: { CODEX_HOME: "/tmp/fuji464-hostile", FUJI464_KEEP: "yes" } },
+      queryFn: makeQueryFn(({ options }) => {
+        seen = options.env;
+        return asQuery((async function* () { yield result("success", { result: "ok" }); })());
+      }),
+    });
+    await host.run("hello");
+    expect(seen).toEqual({ FUJI464_KEEP: "yes" });
+    host.close();
+  });
   it("model/effort/source と engine-neutral permission を同じ snapshot から返す", () => {
     const host = new AgentHost(
       { ...config, permission_mode: "plan" },

@@ -44,6 +44,13 @@ identifies the known deployment state.
 
 **Remedy.** If the directory is missing, create it (`mkdir -p` and `chmod 700`; Codex does not create it): the runner checks it at every launch, so no restart is needed. If the value in `runner.env` is wrong, correct it and restart the runner service (the value is read at startup). To go back to the default home, remove the line and restart. Then start again any Codex agent that went offline, from the dashboard. See [Codex home for production](codex-home.md).
 
+If a Codex wrapper rejects `codex_tool_home`, inspect its local runner config:
+the path must exist, be absolute, and resolve to a directory distinct from
+the Codex state home. Restarting the wrapper creates a new private directory.
+Before deploying the isolation change, verify the pinned native CLI applies
+the policy to both new and resumed app-server threads; the RPC payload by
+itself is insufficient evidence.
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).

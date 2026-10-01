@@ -307,7 +307,12 @@ it("keeps the default exec factory, arguments and callbacks despite unrelated co
   let running: Promise<void> | undefined;
   try {
     await host.send("A", undefined, ["c"], "token");running = host.run();await vi.waitFor(() => expect(finals).toHaveBeenCalledTimes(1));
-    expect(appFactory).not.toHaveBeenCalled();expect(options).toEqual([{ config: { developer_instructions: "PERSONA", approvals_reviewer: "user", features: { multi_agent: true } } }]);
+    expect(appFactory).not.toHaveBeenCalled();
+    expect(options).toEqual([{ config: {
+      developer_instructions: "PERSONA", approvals_reviewer: "user",
+      features: { multi_agent: true },
+      shell_environment_policy: { set: { CODEX_HOME: expect.stringContaining("kaoiro-codex-tool-") } },
+    } }]);
     expect(threadOptions).toEqual([expect.objectContaining({ model: "gpt-5.6-sol", modelReasoningEffort: "high", approvalPolicy: "never", sandboxMode: "workspace-write", networkAccessEnabled: false })]);
     expect(starts).toHaveBeenCalledWith({ turnToken: "token", conversationIds: ["c"] });
     expect(ends).toHaveBeenCalledWith({ turnToken: "token", conversationIds: ["c"], terminal: "turn.completed" });

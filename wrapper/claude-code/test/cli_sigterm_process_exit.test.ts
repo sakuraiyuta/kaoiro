@@ -146,7 +146,7 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
     const wire = await phoenixLoopback();
     const runnerScript = writeRunnerScript(root, envVar, wire.url);
     const child = spawn(tsxBin, [runnerScript], {
-      env: { ...process.env, [envVar]: fixtureExecutable },
+      env: { ...process.env, CODEX_HOME: undefined, [envVar]: fixtureExecutable },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
@@ -211,7 +211,7 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
     const wire = await phoenixLoopback();
     const runnerScript = writeRunnerScript(root, envVar, wire.url);
     const child = spawn(tsxBin, [runnerScript], {
-      env: { ...process.env, [envVar]: executable },
+      env: { ...process.env, CODEX_HOME: undefined, [envVar]: executable },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
