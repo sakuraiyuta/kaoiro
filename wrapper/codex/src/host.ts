@@ -378,8 +378,9 @@ const MAX_STEERS_PER_TURN = 8;
 const MAX_IA_STEERS_PER_TURN = 3;
 
 export interface CodexInterAgentSteerHooks {
-  admit: (turnToken: string) => string | null;
+  admit: (turnToken: string, arrival: number) => string | null;
   onAdmit: (turnToken: string, batchId: string) => void;
+  onPrecondition: (turnToken: string, batchId: string, arrival: number) => boolean;
   onResponse: (turnToken: string, batchId: string, response: SteerResponse) => void;
   onItem: (turnToken: string, batchId: string) => void;
   onTerminal: (turnToken: string, batchId: string) => void;
@@ -2689,6 +2690,26 @@ export class CodexHost implements EngineAdapter {
     return true;
   }
 
+  createInterAgentPlaceholder(batchId: string, arrival: number): boolean {
+    if (this.#closed || this.#iaPlaceholders.has(batchId)) return false;
+    const placeholder: QueuedTurn = { input: "", arrival, placeholder: true };
+    const index = this.#queue.findIndex(turn => (turn.arrival ?? 0) > arrival);
+    this.#queue.splice(index === -1 ? this.#queue.length : index, 0, placeholder);
+    this.#iaPlaceholders.set(batchId, placeholder);
+    return true;
+  }
+
+  removeInterAgentPlaceholder(batchId: string): void {
+    const placeholder = this.#iaPlaceholders.get(batchId);
+    if (placeholder === undefined) return;
+    this.#iaPlaceholders.delete(batchId);
+    const index = this.#queue.indexOf(placeholder);
+    if (index !== -1) this.#queue.splice(index, 1);
+    this.#wake?.();
+  }
+
+  get pendingInterAgentPlaceholderCount(): number { return this.#iaPlaceholders.size; }
+
   /** The single commit point (design r3 §3): runs in the same synchronous
    * section as the `turn/steer` write, and is the only place the admission
    * guards decide. Creating the record here means it exists before the write. */
@@ -2697,8 +2718,7 @@ export class CodexHost implements EngineAdapter {
     if (ia === undefined && this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
     if (ia !== undefined && this.#options.interAgentSteer?.available() !== true) return "inter_agent_steer_unavailable";
     if (this.#pendingIaPreconditions.size > 0) return "behind_earlier_input";
-    if (this.#queue.some(turn => turn.source !== "reset_notice" &&
-        (turn.arrival === undefined || turn.arrival < arrival))) return "behind_earlier_input";
+    if (this.#queue.some(turn => turn.source !== "reset_notice")) return "behind_earlier_input";
     const permission = this.#permissionState;
     if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
         permission.blocked !== null || this.#options.permissionSyncPending?.() === true ||
@@ -2709,7 +2729,7 @@ export class CodexHost implements EngineAdapter {
     if (this.#options.liveInputBlocked?.() === true || this.#queue.some(turn => turn.source === "reset_notice")) return "reset_pending";
     if ((this.#steerWritesByToken.get(token) ?? 0) >= MAX_STEERS_PER_TURN) return "steer_cap";
     if (ia !== undefined && (this.#iaSteerWritesByToken.get(token) ?? 0) >= MAX_IA_STEERS_PER_TURN) return "inter_agent_steer_cap";
-    const leaseReason = ia?.admit(token);
+    const leaseReason = ia?.admit(token, arrival);
     if (leaseReason !== undefined && leaseReason !== null) return leaseReason;
     const record = new SteerRecord(id, turnId, {
       onResponse: response => this.#onSteerResponse(id, response),
@@ -2727,12 +2747,8 @@ export class CodexHost implements EngineAdapter {
     if (steer === undefined) return;
     steer.response = response;
     if (steer.ia !== undefined) {
-      if (response.kind === "P") {
+      if (response.kind === "P" && steer.ia.onPrecondition(steer.token, id, steer.arrival)) {
         this.#pendingIaPreconditions.add(id);
-        const placeholder: QueuedTurn = { input: steer.text, arrival: steer.arrival, placeholder: true };
-        const index = this.#queue.findIndex(turn => (turn.arrival ?? 0) > steer.arrival);
-        this.#queue.splice(index === -1 ? this.#queue.length : index, 0, placeholder);
-        this.#iaPlaceholders.set(id, placeholder);
       }
       steer.ia.onResponse(steer.token, id, response);
       return;
@@ -2753,16 +2769,6 @@ export class CodexHost implements EngineAdapter {
     this.#pendingIaPreconditions.delete(id);
     if (steer?.ia !== undefined) {
       const writeState = steer.writeState?.() ?? "unwritten";
-      const fallback = (steer.response?.kind === "P" || writeState === "unwritten") &&
-        steer.observed !== true && steer.itemConflict !== true;
-      if (!fallback || this.#closed) {
-        const placeholder = this.#iaPlaceholders.get(id);
-        if (placeholder !== undefined) {
-          this.#iaPlaceholders.delete(id);
-          const index = this.#queue.indexOf(placeholder);
-          if (index !== -1) this.#queue.splice(index, 1);
-        }
-      }
       steer.ia.onSettle(steer.token, id, steer.response ?? { kind: "C" }, steer.observed === true,
         writeState, steer.itemConflict === true, steer.terminal ?? "X");
       this.#wake?.();

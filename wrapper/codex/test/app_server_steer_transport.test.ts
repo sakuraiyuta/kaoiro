@@ -111,6 +111,17 @@ describe("turn/steer request", () => {
     expect(f.sent.some(r => r.method === "turn/steer")).toBe(false);
   });
 
+  it("refuses before admission when the RPC is already failed", async () => {
+    const f = steerFixture();
+    await activeTurn(f);
+    f.stdin.emit("error", new Error("closed before steer"));
+    let admitted = false;
+    const attempt = steer(f, () => { admitted = true; return null; });
+    expect(attempt).toEqual({ kind: "refused", reason: "closed" });
+    expect(admitted).toBe(false);
+    expect(f.sent.some(request => request.method === "turn/steer")).toBe(false);
+  });
+
   it("is idle without an active turn of the same token and after the terminal is read", async () => {
     const f = steerFixture();
     await f.transport.startThread();

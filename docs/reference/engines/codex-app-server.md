@@ -90,7 +90,11 @@ steers only a server-granted early peer input after both delivery-mode and
 This path has a distinct per-sequence lease, reply ticket, write-state guard,
 and three-write IA quota within the common eight-steer turn cap. An older
 same-peer root or unresolved steer blocks a successor; a rejected steer keeps
-its queue position through a placeholder. An operator steer cannot bypass
+its queue position through a placeholder owned by the IA coordinator. Each
+rejected fallback becomes one ordinary-format root, regardless of the
+coalescing cap, before later same-peer input. Terminal reclassification removes
+the slot; failed replacement retires the unstarted delivery and emits a
+diagnostic. Operator placeholders have separate ownership. An operator steer cannot bypass
 the common pending-settings, approval, reset, foreign-turn, and watchdog
 guards.
 

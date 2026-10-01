@@ -103,6 +103,7 @@ it("attaches IA to the current turn only after admission and correlates the comp
   const hooks = {
     admit: () => null,
     onAdmit: () => events.push("write"),
+    onPrecondition: (_token: string, id: string, arrival: number) => f.host.createInterAgentPlaceholder(id, arrival),
     onResponse: (_token: string, _id: string, response: { kind: string }) => events.push(`response:${response.kind}`),
     onItem: () => events.push("item"),
     onTerminal: () => events.push("terminal"),
@@ -121,6 +122,21 @@ it("attaches IA to the current turn only after admission and correlates the comp
   expect(f.texts("turn/start")).toEqual(["BASE"]);
 });
 
+it("inserts an exceptional fallback slot at its original arrival before later input", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } });
+  await running(f);
+  await f.operator("LATER ROOT", "normal");
+  expect(f.host.createInterAgentPlaceholder("exceptional", 1.5)).toBe(true);
+  expect(f.host.replaceInterAgentPlaceholder("exceptional", "EXCEPTIONAL FALLBACK", ["cid"], "fallback-token")).toBe(true);
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toContain("EXCEPTIONAL FALLBACK");
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(3));
+  expect(f.texts("turn/start")[2]).toContain("LATER ROOT");
+  expect(f.host.pendingInterAgentPlaceholderCount).toBe(0);
+});
+
 it("reconciles a response arriving after terminal without a second turn-end callback", async () => {
   const f = fixture(false, { interAgentSteer: { available: () => true } });
   await running(f);
@@ -129,6 +145,7 @@ it("reconciles a response arriving after terminal without a second turn-end call
   const events: string[] = [];
   await f.host.steerInterAgentInput("PEER BODY", {
     admit: () => null, onAdmit: () => events.push("write"),
+    onPrecondition: (_token, id, arrival) => f.host.createInterAgentPlaceholder(id, arrival),
     onResponse: (_token, _id, response) => events.push(`response:${response.kind}`),
     onItem: () => events.push("item"),
     onTerminal: () => events.push("terminal"),
@@ -148,7 +165,9 @@ it("a completed item with the right client ID but wrong text cannot authorize IA
   await running(f);
   const item = vi.fn(), settle = vi.fn();
   await f.host.steerInterAgentInput("PEER BODY", {
-    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: item,
+    admit: () => null, onAdmit: () => {},
+    onPrecondition: (_token, id, arrival) => f.host.createInterAgentPlaceholder(id, arrival),
+    onResponse: () => {}, onItem: item,
     onTerminal: () => {}, onSettle: settle,
   }, "kaoiro-ia-steer:conflict");
   f.completedItem("kaoiro-ia-steer:conflict", "WRONG BODY");
@@ -162,7 +181,9 @@ it("a completed item with the right client ID but wrong text cannot authorize IA
 it("limits IA to three writes while preserving the common eight-write cap", async () => {
   const f = fixture(false, { interAgentSteer: { available: () => true } });
   await running(f);
-  const hooks = { admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {}, onSettle: () => {} };
+  const hooks = { admit: () => null, onAdmit: () => {},
+    onPrecondition: (_token: string, id: string, arrival: number) => f.host.createInterAgentPlaceholder(id, arrival),
+    onResponse: () => {}, onItem: () => {}, onTerminal: () => {}, onSettle: () => {} };
   for (let index = 0; index < 3; index += 1) {
     expect((await f.host.steerInterAgentInput(`PEER ${index}`, hooks, `kaoiro-ia-steer:${index}`)).kind).toBe("sent");
   }
@@ -177,7 +198,9 @@ it("holds a rejected IA steer at its arrival position before later root input", 
   f.onSteer = turnChanged;
   const batchId = "kaoiro-ia-steer:rejected";
   await f.host.steerInterAgentInput("PEER BODY", {
-    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
+    admit: () => null, onAdmit: () => {},
+    onPrecondition: (_token, id, arrival) => f.host.createInterAgentPlaceholder(id, arrival),
+    onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
     onSettle: () => expect(f.host.replaceInterAgentPlaceholder(batchId, "PEER ROOT", ["cid"], "root-token")).toBe(true),
   }, batchId);
   await f.operator("LATER", "normal");
@@ -383,7 +406,9 @@ it("a later peer steer cannot overtake a queued operator root", async () => {
   await running(f);
   await f.operator("EARLIER OPERATOR ROOT", "normal");
   const result = await f.host.steerInterAgentInput("LATER PEER", {
-    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {},
+    admit: () => null, onAdmit: () => {},
+    onPrecondition: (_token, id, arrival) => f.host.createInterAgentPlaceholder(id, arrival),
+    onResponse: () => {}, onItem: () => {},
     onTerminal: () => {}, onSettle: () => {},
   }, "kaoiro-ia-steer:later-peer");
   expect(result).toMatchObject({ kind: "queued", reason: "behind_earlier_input" });
@@ -396,8 +421,13 @@ it("a conflicting IA item after precondition rejection releases its placeholder"
   f.onSteer = turnChanged;
   let conflict = false;
   await f.host.steerInterAgentInput("PEER BODY", {
-    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
-    onSettle: (_token, _id, _response, _observed, _write, itemConflict) => { conflict = itemConflict; },
+    admit: () => null, onAdmit: () => {},
+    onPrecondition: (_token, id, arrival) => f.host.createInterAgentPlaceholder(id, arrival),
+    onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
+    onSettle: (_token, id, _response, _observed, _write, itemConflict) => {
+      conflict = itemConflict;
+      f.host.removeInterAgentPlaceholder(id);
+    },
   }, "kaoiro-ia-steer:review-conflict");
   await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
   f.completedItem("kaoiro-ia-steer:review-conflict", "WRONG BODY");

@@ -318,6 +318,17 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
     canDispatchPeer: peer => !interAgent?.hasPendingSteerPeer(peer),
+    createPlaceholder: (id, arrival) => host.createInterAgentPlaceholder(id, arrival),
+    removePlaceholder: id => host.removeInterAgentPlaceholder(id),
+    retireDiscarded: envelopes => { link?.retireInterAgentDeliveries?.(envelopes); },
+    onFallbackDispatchFailure: batch => {
+      const item = batch.items[0];
+      writeRedactedStderr(
+        `[kaoiro] inter-agent fallback slot replacement failed: batch_id=${batch.fallbackId} ` +
+        `delivery_seq=${String((item?.envelope as Envelope & { delivery_seq?: number } | undefined)?.delivery_seq)}; ` +
+        "unstarted delivery retired for sender recovery\n",
+      );
+    },
     reclassifyQueued: (item) =>
       interAgent?.queuedInboundMode(item.envelope, item.mode) ?? item.mode,
     onTerminalQueued: (item) => {
@@ -330,6 +341,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       deliveryStages?.settleEnvelope(item.envelope, "terminal_skip");
     },
     onDispatch: (batch) => {
+      if (batch.fallbackId !== undefined &&
+          !host.replaceInterAgentPlaceholder(batch.fallbackId, batch.text, batch.conversationIds, batch.turnToken)) {
+        return false;
+      }
       const range = interAgentTurns.deliverySequenceRangeForTurn(batch.turnToken);
       if (range !== undefined) {
         lifecycleRanges.set(batch.turnToken, {
@@ -349,11 +364,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       for (const item of batch.items) {
         interAgent?.notePendingInjection(item.envelope, batch.turnToken);
       }
-      const placeholderId = batch.items.map(item => fallbackPlaceholders.get(item.envelope)).find((id): id is string => id !== undefined);
-      if (placeholderId !== undefined && host.replaceInterAgentPlaceholder(placeholderId, batch.text, batch.conversationIds, batch.turnToken)) {
-        for (const item of batch.items) fallbackPlaceholders.delete(item.envelope);
-        return;
-      }
+      if (batch.fallbackId !== undefined) return true;
       instructionChain = instructionChain.then(() =>
         host.send(
           batch.text,
@@ -685,7 +696,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   });
 
   const steerTickets = new Map<string, readonly Envelope[]>();
-  const fallbackPlaceholders = new WeakMap<Envelope, string>();
   const phase3Enabled = backend === "app-server";
   const trySteerInterAgent = async (envelope: Envelope, mode: InboundReplyMode): Promise<boolean> => {
     const payload = envelope.payload as { conversation_id?: string; delivery_authority?: { granted?: string } };
@@ -718,16 +728,22 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       }
     };
     const hooks = {
-      admit: (ownerToken: string): string | null => {
+      admit: (ownerToken: string, arrival: number): string | null => {
         const current = deliveryIdentity();
         if (ownerToken !== token || current?.incarnation !== identity.incarnation || current.generation !== identity.generation) return "stale_delivery_generation";
         if (link?.deliveryModes()?.early !== "steer" || link.noticeAttributionMode() !== "v1" ||
             interAgent.queuedInboundMode(envelope, mode) === "terminal") return "inter_agent_steer_unavailable";
         if (interAgentTurns.hasQueuedForPeer(envelope.agent_id) || interAgent.hasPendingRootConversation(payload.conversation_id!) ||
             interAgentTurns.hasRootConversation(payload.conversation_id!)) return "behind_earlier_input";
+        if (!interAgentTurns.reserveSteer(batchId, envelope, mode, arrival)) return "inter_agent_steer_unavailable";
+        if (!interAgent.noteSteerAttempt(envelope, ownerToken, batchId)) {
+          interAgentTurns.discardSteerReservation(batchId);
+          return "behind_earlier_input";
+        }
         return null;
       },
-      onAdmit: (ownerToken: string, id: string): void => { interAgent.noteSteerAttempt(envelope, ownerToken, id); },
+      onAdmit: (): void => {},
+      onPrecondition: (_ownerToken: string, id: string): boolean => interAgentTurns.attachSteerPlaceholder(id),
       onResponse: (ownerToken: string, _id: string, response: SteerResponse): void => {
         if (response.kind !== "A") return;
         responseValid = true;
@@ -750,12 +766,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         writeState: "unwritten" | "writing" | "written" | "failed", conflict: boolean, end: "T" | "X"): void => {
         terminal = true;
         tickets.discard();
-        if ((response.kind === "P" || writeState === "unwritten") && !observed && !conflict) {
+        const fallback = (response.kind === "P" || writeState === "unwritten") && !observed && !conflict;
+        if (fallback) {
           interAgent.abandonSteerAttempt(ownerToken, sequence);
-          if (response.kind === "P") fallbackPlaceholders.set(envelope, batchId);
-          interAgentTurns.receive(envelope, mode);
+          interAgentTurns.settleSteerReservation(batchId, true);
           return;
         }
+        interAgentTurns.settleSteerReservation(batchId, false);
         const corroborated = response.kind === "A" && observed && !conflict;
         if (corroborated) deliveryStages.steerSettled([envelope]);
         else {
@@ -773,16 +790,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         for (const notice of interAgent.settleSteerInjection(ownerToken, sequence, corroborated ? "corroborated" : "uncertain")) {
           interAgent.sendInternalNotice(notice);
         }
-        if (!interAgent.hasPendingSteerPeer(envelope.agent_id) && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(envelope.agent_id);
+        if (!interAgent.hasPendingSteerPeer(envelope.agent_id)) interAgentTurns.dispatchNextForPeer(envelope.agent_id);
       },
     };
     try {
       const result = await host.steerInterAgentInput(text, hooks, batchId);
       if (result.kind === "sent") return true;
+      interAgentTurns.discardSteerReservation(batchId);
+      interAgent.abandonSteerAttempt(token, sequence);
       tickets.discard();
       writeRedactedStderr(`[kaoiro] inter-agent early input queued: ${result.reason}\n`);
       return false;
     } catch (error) {
+      interAgentTurns.discardSteerReservation(batchId);
+      interAgent.abandonSteerAttempt(token, sequence);
       tickets.discard();
       writeRedactedStderr(`[kaoiro] inter-agent steer attempt failed: ${String(error)}\n`);
       return false;
@@ -1106,7 +1127,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         }
         const cancelled = interAgentTurns.settle(turnToken);
         if (cancelled !== undefined) {
-          link?.retireInterAgentDeliveries?.(cancelled.items.map(item => item.envelope));
+          interAgentTurns.retireEnvelopes(cancelled.items.map(item => item.envelope));
         }
         return;
       }
@@ -1124,13 +1145,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       // pending CIDs above have resolved; a later same-CID batch can then be
       // dispatched without overwriting its predecessor's pending record.
       const settled = interAgentTurns.settle(turnToken);
-      if (settled !== undefined && !watchdogFailStopped) {
+      if (settled !== undefined) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
-      if (!watchdogFailStopped) {
-        for (const peer of steerPeers) {
-          if (!interAgent?.hasPendingSteerPeer(peer)) interAgentTurns.dispatchNextForPeer(peer);
-        }
+      for (const peer of steerPeers) {
+        if (!interAgent?.hasPendingSteerPeer(peer)) interAgentTurns.dispatchNextForPeer(peer);
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {

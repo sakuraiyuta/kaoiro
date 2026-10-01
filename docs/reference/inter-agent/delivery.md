@@ -232,6 +232,14 @@ unwritten input enters the root queue. An accepted response reports
 `submitted` with `turn_steer_accepted`; a matching completed user-message item
 can report `submitted` with `turn_steer_item_observed`. The item must carry the
 request's `clientId` and exact text. Only both facts activate a reply ticket.
+The IA coordinator keeps an admitted fallback at its original host arrival
+position. It delivers that envelope as a single ordinary-format root, before
+later same-peer batches and outside the coalescing cap. A terminal fallback
+loses its slot without starting a root. If exact slot replacement fails, the
+wrapper diagnoses and retires the unstarted delivery; skip-v1 recovery then
+reports the loss to the sender. A reserved fallback is unavailable to inline
+recovery and is excluded from the unread advisory until ordinary queued input
+exists.
 
 The wrapper keeps one delivery obligation per sequence even when several
 steers share a conversation. At terminal, a corroborated input reports
