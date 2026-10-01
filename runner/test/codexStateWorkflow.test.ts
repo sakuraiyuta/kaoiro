@@ -6,20 +6,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { makeReleaseTarball, revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
 
-// The stopped-home scan intentionally refuses unreadable same-user processes.
-// Give the workflow its own PID namespace instead of weakening that guard or
-// making the suite depend on unrelated processes on the developer's host.
-if (process.env.KAOIRO_ISOLATED_STATE_TEST !== "1") {
-  describe.skipIf(process.platform !== "linux")("isolated state-aware workflow", () => {
-    it("runs the complete shipped-helper workflow in a private PID namespace", () => {
-      const env: NodeJS.ProcessEnv = { ...process.env, KAOIRO_ISOLATED_STATE_TEST: "1" };
-      delete env.CODEX_HOME;
-      const result = spawnSync("unshare", ["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "setpriv", "--bounding-set=-all", process.execPath, "node_modules/vitest/vitest.mjs", "run", "test/codexStateWorkflow.test.ts"], { env, encoding: "utf8", timeout: 120_000 });
-      expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toMatch(/Tests\s+[1-9][0-9]* passed/);
-    }, 125_000);
-  });
-} else describe("state-aware updater control flow", () => {
+describe.skipIf(process.platform !== "linux")("state-aware updater control flow", () => {
   let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string;
   const A = revisionOf("state-workflow-a"), B = revisionOf("state-workflow-b");
   beforeEach(async () => {
@@ -48,7 +35,7 @@ const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
 const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } fs.writeFileSync(dir+'/active','inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
+if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
 else if (args.includes('start')) {
  fs.appendFileSync(dir+'/calls','start\\n');
  const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
@@ -261,15 +248,43 @@ else if (args.includes('show')) {
     expect(readFileSync(calls, "utf8")).toBe("stop\n");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
-  it("refuses another process holding a state file after stop", () => {
+  it("continues with an explicit warning while an external process holds state", () => {
     const fd = openSync(join(home, "sessions/old.jsonl"), "r");
     try {
       const result = update();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("home is held by another process");
-      expect(readFileSync(calls, "utf8")).toBe("stop\n");
-      expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr.match(/external Codex-home writers are not inspected/g)).toHaveLength(1);
+      expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     } finally { closeSync(fd); }
+  });
+  it("refuses a service still active after stop with no switch or start", () => {
+    writeFileSync(join(dir, "remain-active"), "trigger");
+    const result = update();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Runner is not fully stopped");
+    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(dir, "backup"))).toBe(false);
+  });
+  it.each(["before-move", "after-move", "recovery-failure"])("handles switch failure %s without starting the candidate", (mode) => {
+    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
+    const failBefore = `if [ "$1" = "${B}" ]; then exit 70; fi\n`;
+    const changed = mode === "before-move" ? original.replace("set -eu\n", "set -eu\n" + failBefore)
+      : mode === "after-move" ? original + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`
+      : original.replace("set -eu\n", "set -eu\nexit 70\n");
+    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "failure-tarball"));
+    archive = makeReleaseTarball(join(dir, "failure-tarball"), B, { extraFiles });
+    const result = update();
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
+    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("CURRENT_TOKEN");
+    expect(readFileSync(calls, "utf8"), result.stderr).toBe(mode === "recovery-failure" ? "stop\n" : "stop\nstart\n");
+    expect(result.stderr).toContain(mode === "recovery-failure" ? "operator fresh setup" : "recorded source was restored and restarted");
   });
   it("charges sparse files by logical size and rejects insufficient capacity before stop", () => {
     const fs = statfsSync(dir);

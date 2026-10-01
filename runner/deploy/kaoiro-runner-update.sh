@@ -87,6 +87,7 @@ codex_home=
 codex_backup=
 codex_restore=
 codex_transaction=
+switch_recovered=no
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -333,6 +334,7 @@ fi
 fi
 
 if [ -n "$codex_home" ]; then
+  printf '%s: WARNING: external Codex-home writers are not inspected; snapshot recovery may fail and require fresh setup (docs/operations/codex-home.md)\n' "$prog" >&2
   tool_id=$(cat "$deploy_dir/../VERSION")
   if [ -n "$codex_restore" ]; then
     codex_transaction=$(kaoiro_codex_state prepare-restore "$root" "$codex_restore" "$codex_home" "$service" "$tool_id" "$$") ||
@@ -366,13 +368,27 @@ fi
 # shellcheck disable=SC2086 # same reasoning as the install call above.
 if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" --codex-transaction "$codex_transaction" $install_args >/dev/null; then
   if [ -n "$codex_transaction" ]; then
-    kaoiro_die "State-aware switch refused; runner remains stopped; recover transaction $codex_transaction" 78
+    [ -z "$codex_restore" ] ||
+      kaoiro_die "Restore switch failed; runner remains stopped; inspect transaction $codex_transaction, then use operator fresh setup (docs/operations/codex-home.md) if snapshot recovery cannot succeed" 78
+    printf '%s: switch failed; recovering the recorded source from its verified snapshot\n' "$prog" >&2
+    codex_restore=$codex_backup
+    codex_transaction=$(kaoiro_codex_state prepare-restore "$root" "$codex_restore" "$codex_home" "$service" "$tool_id" "$$") ||
+      kaoiro_die "Source recovery preflight failed; runner remains stopped; inspect snapshot or use operator fresh setup (docs/operations/codex-home.md)" 78
+    id=$(kaoiro_codex_state target "$root" "$codex_transaction")
+    if ! kaoiro_codex_state restore "$root" "$codex_transaction"; then
+      kaoiro_die "Source snapshot restore failed; runner remains stopped; preserve transaction $codex_transaction for operator fresh setup (docs/operations/codex-home.md)" 78
+    fi
+    # shellcheck disable=SC2086 # install_args is empty or --allow-dirty.
+    if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" --codex-transaction "$codex_transaction" $install_args >/dev/null; then
+      kaoiro_die "Source recovery switch failed; runner remains stopped; preserve transaction $codex_transaction for operator fresh setup (docs/operations/codex-home.md)" 78
+    fi
+    switch_recovered=yes
+  else
+    # The legacy non-state switch is atomic; no native pin change was allowed.
+    printf '%s: switch failed; restarting the previous release\n' "$prog" >&2
+    "$systemctl_bin" --user start "$service" || true
+    kaoiro_die "switch to $id failed; $service was restarted on the release it was already using" 70
   fi
-  # The switch is atomic, so a failure means `current` never moved. Undoing
-  # our own stop restores the exact state we started from.
-  printf '%s: switch failed; restarting the previous release\n' "$prog" >&2
-  "$systemctl_bin" --user start "$service" || true
-  kaoiro_die "switch to $id failed; $service was restarted on the release it was already using" 70
 fi
 
 if [ -n "$codex_transaction" ]; then
@@ -402,6 +418,7 @@ if [ "$start_failed" = yes ] ||
     printf '%s: runner needs state-aware recovery; transaction %s\n' "$prog" "$codex_transaction" >&2
     printf '  %s --install-dir "%s" --service "%s" --restore-codex-backup "%s" --codex-home "%s" --detach\n' \
       "$self" "$root" "$service" "${codex_restore:-$codex_backup}" "$codex_home" >&2
+    printf '%s: if snapshot recovery cannot succeed, keep the runner stopped and use operator fresh setup (docs/operations/codex-home.md)\n' "$prog" >&2
     exit 70
   fi
   printf '%s: roll back with:\n'  "$prog" >&2
@@ -416,6 +433,9 @@ if [ -n "$codex_transaction" ]; then
   kaoiro_codex_state started "$root" "$codex_transaction" ||
     kaoiro_die "Cannot record startup; preserve transaction $codex_transaction" 78
   printf '%s: awaiting actual Codex start/history acceptance: transaction %s\n' "$prog" "$codex_transaction" >&2
+  if [ "$switch_recovered" = yes ]; then
+    kaoiro_die "Update switch failed; recorded source was restored and restarted; verify actual Codex recovery for transaction $codex_transaction" 70
+  fi
   [ -z "$codex_restore" ] || exit 0
 fi
 

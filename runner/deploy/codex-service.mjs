@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { digest, hasEntry, identity, inside, must } from "./codex-snapshot.mjs";
+import { digest, hasEntry, identity, must } from "./codex-snapshot.mjs";
 
 const KEYS = new Set(["HOME", "XDG_CONFIG_HOME", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "CODEX_HOME"]);
 function systemctl(service, ...args) {
@@ -139,40 +139,5 @@ export function assertStopped(service, home) {
   const group = prop(service, "ControlGroup");
   if (group && hasEntry(join("/sys/fs/cgroup", group, "cgroup.events"))) {
     must(/^populated 0$/m.test(readFileSync(join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")), "Runner descendants remain");
-  }
-  const inodes = new Set();
-  const collect = (path) => {
-    const st = lstatSync(path);
-    inodes.add(`${st.dev}:${st.ino}`);
-    if (st.isDirectory()) for (const name of readdirSync(path)) collect(join(path, name));
-  };
-  collect(home);
-  for (const name of readdirSync("/proc")) {
-    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-    const proc = `/proc/${name}`;
-    let start;
-    try {
-      if (lstatSync(proc).uid !== process.getuid()) continue;
-      start = pidIdentity(name);
-      const row = readFileSync(join(proc, "stat"), "utf8");
-      const fields = row.slice(row.lastIndexOf(")") + 2).split(" ");
-      // An unreaped, exited child has released its descriptors; /proc/fd can
-      // already deny access while its parent's event loop has not reaped it.
-      if (fields[0] === "Z" && fields[19] === start) continue;
-      const paths = [join(proc, "cwd"), ...readdirSync(join(proc, "fd")).map((fd) => join(proc, "fd", fd))];
-      for (const path of paths) {
-        let target;
-        try { target = readlinkSync(path).replace(/ \(deleted\)$/, ""); }
-        catch (error) { if (error.code === "ENOENT" && path.includes("/fd/")) continue; throw error; }
-        let st;
-        try { st = statSync(path); }
-        catch (error) { if (error.code === "ENOENT" && path.includes("/fd/")) continue; throw error; }
-        must(!inside(home, target) && !inodes.has(`${st.dev}:${st.ino}`), `Codex home is held by another process (${name})`);
-      }
-    } catch (error) {
-      if (!hasEntry(proc)) continue;
-      if (start && pidIdentity(name) !== start) continue;
-      throw error;
-    }
   }
 }

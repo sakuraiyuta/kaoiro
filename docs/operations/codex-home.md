@@ -219,6 +219,22 @@ marker (step 5).
    the peer runs without its profile. Then start the others.
 6. Verify the separation (below).
 
+## Fresh setup after failed snapshot recovery
+
+When [snapshot recovery](runner-update-and-rollback.md#463-rollback) fails, an
+operator may recover by rebuilding the home, accepting loss of Codex history,
+login and cache. Keep the runner stopped; preserve the failed home and private
+transaction records. Follow the registry/release handling in
+[second-level recovery](runner-update-and-rollback.md#second-level-recovery-fresh-setup)
+before restarting. An old migration barrier does not certify a fresh home.
+
+Recreate the directory at its configured canonical path, then repeat the
+operator login, minimal configuration, instruction links and hook trust steps
+above using the verified selected release's pinned binary. Do not copy auth or
+credential files out of the failed home. New state does not recover old session
+IDs: start peers as new sessions explicitly, and verify the first turn and hook
+marker as in Cutover. This procedure is manual, never an updater error trap.
+
 ## Rollback of home isolation
 
 This procedure reverses home isolation, not a Codex pin migration. After a

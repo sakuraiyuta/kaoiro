@@ -254,6 +254,11 @@ the verified backup-capable tool release; never invoke an older script through
   --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
 ```
 
+If snapshot recovery fails, keep the runner stopped and use the operator-led
+[fresh setup](runner-update-and-rollback.md#second-level-recovery-fresh-setup).
+This loses Codex history/login/cache and requires configuration, hooks and a
+new operator login; never run the old binary on the migrated failed home.
+
 This initial state-aware workflow requires Linux/systemd. New generic switch
 scripts also compare the actual native payloads on macOS; they refuse a pin
 change rather than skipping the check. See [runner update and rollback](runner-update-and-rollback.md#codex-state-backup)

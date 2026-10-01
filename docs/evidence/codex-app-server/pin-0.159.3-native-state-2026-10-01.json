@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "partial Gate 6; remaining requirements listed in companion Markdown",
+  "status": "historical partial Gate 6; current adoption uses snapshot recovery or fresh setup, not old-binary access to migrated state",
   "binary_sha256": {
     "0.156.1": "0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f",
     "0.159.3": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
@@ -262,11 +262,16 @@
     "wrong_thread": 1,
     "wrong_sentinel": 1
   },
-  "remaining": [
+  "unmeasured_in_this_capture": [
     "real runner missing-session path",
     "tool-item history",
     "old-version resume of a candidate-created thread before restore",
     "real systemd success with built release",
     "remaining guards and independent review"
+  ],
+  "superseded_requirements": [
+    "old-version resume of a candidate-created thread before restore",
+    "external-process inspection as a refusal condition",
+    "old-home login"
   ]
 }

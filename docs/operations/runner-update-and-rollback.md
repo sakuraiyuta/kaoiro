@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-01
 related: [deployment]
 ---
 
@@ -210,9 +210,34 @@ this operation. Prepare a verified physical tool-release path before updating:
 ```
 
 Same-native, code-only switching remains possible with the new guarded switch
-when there are no retained state references or incomplete transactions. A
-state-aware failure leaves the service stopped for diagnosis. Never restart
-old code against potentially migrated state as an automatic failure action.
+when there are no retained state references or incomplete transactions. A switch failure after a verified snapshot attempts snapshot recovery to the
+recorded source, restarts it only after verification, and still reports a failed
+update. A snapshot or recovery failure leaves the service stopped. Never
+restart old code against potentially migrated state.
+
+### Second-level recovery: fresh setup
+
+If snapshot recovery cannot succeed, keep the runner stopped and let the
+operator choose a fresh Codex setup. This deliberately loses Codex conversation
+history, login and caches; it is not an automatic credential reset. Preserve
+failed home/staging/quarantine trees privately instead of deleting them.
+
+Use [Codex home creation and login](codex-home.md#fresh-setup-after-failed-snapshot-recovery)
+at the configured canonical path with the verified selected release. Normally
+keep the verified current release. A requested code downgrade instead needs a
+fresh installation of that selected release against an empty home, never an
+old binary against the failed migrated database.
+
+Before restarting, the operator must preserve the recorded source/tool releases
+and archive the installation's `codex-state` registry into a private diagnostic
+directory under both update/links locks. This manual registry reset is allowed
+only after confirming that the installation's records all belong to this
+home/unit. If that scope cannot be established, preserve the entire old
+installation and provision a fresh installation instead. Do not edit hashes,
+remove just a barrier, or claim that old acceptance certifies the new home.
+Recreate configuration, instruction links and hook trust, then have the
+operator log in. Start Codex peers as explicitly new sessions and verify their
+first turn and hook/profile marker; old session IDs must remain visibly missing.
 
 ## Codex state backup
 
@@ -233,9 +258,12 @@ node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" classify "$codex_home"
 
 Keep the output private. It contains paths, modes and sizes, never credential
 contents. Unknown entries require reviewed classification; do not delete or
-rename files merely to make the check pass. A running same-user process whose
-file descriptors cannot be inspected also prevents the stopped-state check.
-Resolve the inspection/maintenance environment before stopping production.
+rename files merely to make the check pass. Only the managed runner and its
+service descendants are checked for stop completion. External processes are
+not scanned; an unreadable process or another writer does not itself refuse
+the update. Each state-aware invocation warns that external writes can make
+snapshot recovery fail. Detected copy/verification errors still stop the update
+before switching or starting.
 
 Build/install the candidate without activation, verify its deploy manifest,
 and invoke its fixed physical updater path. An existing updater does not gain
@@ -291,7 +319,8 @@ home, preserving the damaged record for diagnosis. Otherwise use independently
 verified snapshot recovery; absence of either proof requires an explicit
 operator recovery plan. Home relocation is a separate reviewed operation.
 
-Retirement requires accepted gate-6 results, actual production startup/history
+Retirement requires accepted gate-6 snapshot/fresh-setup recovery results
+(not old-binary compatibility with migrated databases), actual production startup/history
 checks, and explicit abandonment of rollback. Supply a private JSON record
 with `schema: 1`, `uuid`, and true `gate6`, `productionCodexStart`,
 `productionHistory`, `abandonRollback` to

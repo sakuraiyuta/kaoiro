@@ -1,6 +1,9 @@
 # Codex 0.159.3 native state rehearsal
 
-Status: partial Gate 6 evidence, not adoption or deployment approval.
+Status: historical partial Gate 6 evidence, not adoption or deployment approval.
+The [current recovery design](../../plans/issue-468-codex-state-backup.md)
+requires snapshot recovery or fresh setup, not old-binary access to migrated
+databases. No further old-binary run or old-home login is required.
 The companion JSON binds the native binaries, snapshot implementation, probe
 scripts and observations by SHA-256. All data came from a newly created,
 credential-free scratch home. No production home, database, authentication
@@ -77,25 +80,29 @@ compatibility. No migration/fallback error appeared in the captured stderr;
 the inspected scratch logs database also had no matching diagnostic rows.
 Absence of a log message alone is not the compatibility criterion.
 
-The following remain required before Gate 6 is complete:
+This capture did not measure the following:
 
 - The real runner's retained-session resume path after restore, including its
   refusal without silently creating a new session and an explicitly requested
-  new session succeeding; native tool-item history and old-version resume of
-  a candidate-created thread before restore are also unmeasured here.
-- A successful complete detached update and restore with owned real systemd
-  units and a final built release. The shared host currently prevents the
-  required same-UID `/proc` inspection for an unrelated live process; the
-  shipped guard refuses it. The owned-unit negative rehearsal demonstrated
-  detached-worker survival, exit 78, zero link changes and zero candidate
-  starts. A fixture workflow in a private PID namespace is not a substitute
-  for the missing real-service success case.
+  new session succeeding; native tool-item history is also unmeasured here.
+- A successful detached update and restore with owned real systemd units and
+  a final built release. At this capture's implementation revision, the external
+  process scan refused an unreadable unrelated process. The owned-unit negative
+  rehearsal returned exit 78 with zero link changes/candidate starts. That
+  historical refusal does not describe the simplified design, which removes
+  the external scan; new implementation evidence must measure its real-service
+  success independently.
 - Remaining new-guard mutation coverage and independent implementation review.
+
+Old-version resume of a candidate-created thread before restore was also
+unmeasured. It is no longer an adoption requirement. The observed old-version
+results below are retained as limited historical observations, not a supported
+rollback route.
 
 The observed old binary can operate on these migrated synthetic threads.
 This narrow result does not authorize code-only rollback or removal of the
 pre-switch backup: extensions, additional state and production history were
-not part of the fixture. Authenticated paired runtime gates remain separate.
+not part of the fixture. Candidate-only authenticated runtime gates remain separate.
 
 Scratch artifacts are retained by Kogane for review and remaining Gate 6
 checks, with cleanup after the evaluation closes.

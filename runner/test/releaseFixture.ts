@@ -324,16 +324,16 @@ export function resolveAppServerBinary() {
   chmodSync(join(tree, native), 0o755);
   symlinkSync(triple, join(tree, "node_modules/@openai/codex/vendor/fixture"));
 
-  // LAST, so a test can override a standard-tree file and not merely add one.
-  for (const [rel, content] of Object.entries(options.extraFiles ?? {})) {
-    put(rel, content);
-  }
-
   mkdirSync(join(tree, "deploy"), { recursive: true });
   for (const script of DEPLOY_SCRIPTS) {
     const dest = join(tree, "deploy", script);
     copyFileSync(join(deploySrc, script), dest);
     chmodSync(dest, script === "kaoiro-runner-common.sh" ? 0o644 : 0o755);
+  }
+
+  // Overrides must also reach deploy scripts used for failure injection.
+  for (const [rel, content] of Object.entries(options.extraFiles ?? {})) {
+    put(rel, content);
   }
 
   // Built by the REAL generator the builder runs, so the fixture cannot
