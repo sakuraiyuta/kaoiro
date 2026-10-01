@@ -1111,6 +1111,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         return;
       }
       const classified = error ? classifyInterAgentError(error) : undefined;
+      const steerPeers = interAgent?.pendingSteerPeersForTurn(turnToken) ?? [];
       for (const envelope of interAgent?.steerTurnEnded(turnToken, classified) ?? []) interAgent?.sendInternalNotice(envelope);
       for (const envelope of interAgent?.resolveTurnEnd(
         turnToken,
@@ -1125,6 +1126,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       const settled = interAgentTurns.settle(turnToken);
       if (settled !== undefined && !watchdogFailStopped) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
+      }
+      if (!watchdogFailStopped) {
+        for (const peer of steerPeers) {
+          if (!interAgent?.hasPendingSteerPeer(peer)) interAgentTurns.dispatchNextForPeer(peer);
+        }
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {

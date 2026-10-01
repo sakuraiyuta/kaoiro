@@ -354,9 +354,8 @@ type QueuedTurn = {
   turnToken?: string;
   source?: CodexSendSource;
   arrival?: number;
-  /** Marks an operator slot held for a precondition-rejected steer; settlement
-   * clears it (requeue) or removes the entry. The terminal settles the record
-   * before the run loop takes the next entry, so dispatch never meets it. */
+  /** A precondition-rejected steer holds its receive-order slot until its
+   * fallback decision is known. Dispatch must never consume the placeholder. */
   placeholder?: true;
 };
 
@@ -2698,7 +2697,8 @@ export class CodexHost implements EngineAdapter {
     if (ia === undefined && this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
     if (ia !== undefined && this.#options.interAgentSteer?.available() !== true) return "inter_agent_steer_unavailable";
     if (this.#pendingIaPreconditions.size > 0) return "behind_earlier_input";
-    if (this.#queue.some(turn => ia !== undefined || turn.source === "operator")) return "behind_earlier_input";
+    if (this.#queue.some(turn => turn.source !== "reset_notice" &&
+        (turn.arrival === undefined || turn.arrival < arrival))) return "behind_earlier_input";
     const permission = this.#permissionState;
     if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
         permission.blocked !== null || this.#options.permissionSyncPending?.() === true ||
@@ -2752,7 +2752,10 @@ export class CodexHost implements EngineAdapter {
     this.#steers.delete(id);
     this.#pendingIaPreconditions.delete(id);
     if (steer?.ia !== undefined) {
-      if (outcome.kind !== "requeued") {
+      const writeState = steer.writeState?.() ?? "unwritten";
+      const fallback = (steer.response?.kind === "P" || writeState === "unwritten") &&
+        steer.observed !== true && steer.itemConflict !== true;
+      if (!fallback || this.#closed) {
         const placeholder = this.#iaPlaceholders.get(id);
         if (placeholder !== undefined) {
           this.#iaPlaceholders.delete(id);
@@ -2761,7 +2764,7 @@ export class CodexHost implements EngineAdapter {
         }
       }
       steer.ia.onSettle(steer.token, id, steer.response ?? { kind: "C" }, steer.observed === true,
-        steer.writeState?.() ?? "unwritten", steer.itemConflict === true, steer.terminal ?? "X");
+        writeState, steer.itemConflict === true, steer.terminal ?? "X");
       this.#wake?.();
       return;
     }

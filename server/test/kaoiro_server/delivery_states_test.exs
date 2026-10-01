@@ -1330,6 +1330,16 @@ defmodule KaoiroServer.DeliveryStatesTest do
              )
 
     assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
+
+    assert {:error, :invalid_delivery_stage} =
+             DeliveryStates.report_stage(
+               recipient,
+               "generation",
+               owner,
+               Map.merge(base, %{"stage" => "settled", "reason" => "turn_end"}),
+               name
+             )
+
     assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
 
     assert %{uncertain_count: 1, lost_count: 0, last_uncertain: %{delivery_seq: 1}} =

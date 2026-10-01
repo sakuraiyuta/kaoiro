@@ -952,16 +952,17 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp phase3_uncertainty(nil, _report), do: :none
 
+  defp phase3_uncertainty(%{uncertainty_qualified: true} = stage, report) do
+    if report["stage"] == "unknown" and stage.last_stage == "unknown" and
+         stage.reason == report["reason"] and report["mode"] == "early" and
+         (report["handoff"] == nil or report["handoff"] == stage[:handoff]),
+       do: :duplicate,
+       else: :invalid
+  end
+
   defp phase3_uncertainty(stage, %{"stage" => "unknown", "reason" => reason} = report)
        when reason in @write_uncertain_reasons or reason in @post_submit_reasons do
     cond do
-      stage[:uncertainty_qualified] == true ->
-        if stage.last_stage == "unknown" and stage.reason == reason and
-             report["mode"] == "early" and
-             (report["handoff"] == nil or report["handoff"] == stage[:handoff]),
-           do: :duplicate,
-           else: :invalid
-
       stage[:mode] != "early" or report["mode"] != "early" or
           Map.has_key?(stage.stages, "unknown") ->
         :invalid
