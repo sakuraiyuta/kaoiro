@@ -1,15 +1,27 @@
 defmodule KaoiroServer.ConversationStatesTest do
   # Per-conversation hard limits + participant guard + GC for inter-agent
   # messaging (protocol-inter-agent spec, phase-8 Stage B). Each test boots
-  # its own isolated GenServer instance via `:name` so config overrides do
-  # not leak.
-  use ExUnit.Case, async: true
+  # its own GenServer instance via `:name`, but the instance reads its limits
+  # from the global `:inter_agent` Application env, so this module is sync: an
+  # async module writing it is visible to every concurrent reader
+  # (async_env_convention_test).
+  use ExUnit.Case, async: false
 
   alias KaoiroServer.ConversationStates
 
-  defp start_tracker(name, limits \\ []) do
+  defp put_limits(limits) do
+    original = Application.get_env(:kaoiro_server, :inter_agent)
     Application.put_env(:kaoiro_server, :inter_agent, limits)
-    on_exit(fn -> Application.delete_env(:kaoiro_server, :inter_agent) end)
+    on_exit(fn -> restore_inter_agent(original) end)
+  end
+
+  defp restore_inter_agent(nil), do: Application.delete_env(:kaoiro_server, :inter_agent)
+
+  defp restore_inter_agent(original),
+    do: Application.put_env(:kaoiro_server, :inter_agent, original)
+
+  defp start_tracker(name, limits \\ []) do
+    put_limits(limits)
     start_supervised!({ConversationStates, name: name})
     name
   end
@@ -23,8 +35,7 @@ defmodule KaoiroServer.ConversationStatesTest do
   # alongside the clock; existing callers passing none get identical
   # behaviour to before (default no-op callback).
   defp start_tracker_with_clock(name, limits, extra_opts \\ []) do
-    Application.put_env(:kaoiro_server, :inter_agent, limits)
-    on_exit(fn -> Application.delete_env(:kaoiro_server, :inter_agent) end)
+    put_limits(limits)
     {:ok, clock_agent} = Agent.start_link(fn -> 0 end)
     clock = fn -> Agent.get(clock_agent, & &1) end
     start_supervised!({ConversationStates, [name: name, clock: clock] ++ extra_opts})

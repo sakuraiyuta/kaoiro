@@ -1,5 +1,7 @@
 defmodule KaoiroServer.QuagmireSettingsTest do
-  use ExUnit.Case, async: true
+  # Sync: one test writes the OS environment, which no async module may
+  # (async_env_convention_test).
+  use ExUnit.Case, async: false
 
   import KaoiroServer.TestTeardown
 
