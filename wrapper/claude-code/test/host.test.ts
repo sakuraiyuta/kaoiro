@@ -274,6 +274,10 @@ describe("AgentHost whoami effective projection (#113)", () => {
   });
 
   it("delayed probe results do not overwrite live Query slash_commands (issue #424)", async () => {
+    let resolveTurn!: () => void;
+    const turnWait = new Promise<void>((r) => {
+      resolveTurn = r;
+    });
     let resolveProbe!: (outcome: ProbeOutcome) => void;
     const probePromise = new Promise<ProbeOutcome>((res) => {
       resolveProbe = res;
@@ -288,14 +292,27 @@ describe("AgentHost whoami effective projection (#113)", () => {
             subtype: "init",
             slash_commands: ["live-cmd"],
           } as unknown as SDKMessage;
+          await turnWait;
+          yield {
+            type: "assistant",
+            message: { content: [{ type: "text", text: "working" }] },
+          } as unknown as SDKMessage;
+          yield {
+            type: "result",
+            subtype: "success",
+            result_index: nextResultIndex(),
+            result: "done",
+          } as unknown as SDKMessage;
         }
         return asQuery(gen());
       }),
     });
     const probeWait = host.probeRateLimits();
     const runWait = host.run("prompt");
-    await runWait;
-    expect(host.statusExtSnapshot().slash_commands).toEqual(["live-cmd"]);
+
+    await vi.waitFor(() => {
+      expect(host.statusExtSnapshot().slash_commands).toEqual(["live-cmd"]);
+    });
 
     resolveProbe({
       ok: true,
@@ -306,6 +323,9 @@ describe("AgentHost whoami effective projection (#113)", () => {
     await probeWait;
 
     expect(host.statusExtSnapshot().slash_commands).toEqual(["live-cmd"]);
+
+    resolveTurn();
+    await runWait;
   });
 
   it("probe failure leaves slash_commands absent until live Query arrives (issue #424)", async () => {
