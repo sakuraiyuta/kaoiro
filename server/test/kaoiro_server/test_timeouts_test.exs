@@ -10,6 +10,11 @@ defmodule KaoiroServer.TestTimeoutsTest do
     assert TestTimeouts.purge_reply(500) == 2500
   end
 
+  test "the durable-write budget is the same multiple of either environment's base" do
+    assert TestTimeouts.durable_reply(100) == 500
+    assert TestTimeouts.durable_reply(500) == 2500
+  end
+
   test "the purge budget leaves headroom over the base it was derived from" do
     for base <- [100, 500] do
       assert TestTimeouts.purge_reply(base) > base
