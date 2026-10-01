@@ -61,7 +61,12 @@ Use two process boundaries and one test boundary:
    Reject a missing, non-directory, or realpath-equal-to-state-home value
    before starting a turn. `CodexHost` injects only
    `shell_environment_policy.set.CODEX_HOME = <tool home>` into the native
-   `codex exec` configuration and app-server `thread/start` configuration.
+   `codex exec` configuration and the shared app-server thread options passed
+   to both `thread/start` and `thread/resume`. On the measured source baseline,
+   `AppServerSession.#openThread()` passes the same `#threadOptions` to both
+   transport methods, and `AppServerTransport.resumeThread()` forwards those
+   options in the `thread/resume` RPC. Whether the native binary applies this
+   override to a resumed thread is unmeasured and remains a release gate.
    Preserve all other shell policy fields, especially existing `exclude` and
    `set` entries. The runner removes the home on that child's exit or spawn
    error, after the native child and tool calls have stopped; standalone
@@ -69,7 +74,12 @@ Use two process boundaries and one test boundary:
    its existing temporary root behind until host cleanup, so the native gate
    must report this residual. The tool home has no copied auth. A bare `codex`
    command inside an agent tool can write there or fail for lack of auth, but
-   cannot select the production home by inheritance.
+   cannot select the production home by inheritance. If the final pin ignores
+   or rejects the per-thread setting on resume, resumed turns must fail closed
+   before agent tools run. A process-level Codex configuration override is an
+   alternative only after the same isolated-home, merge-preservation, and
+   resume probes establish it on the final pin; persistence of an earlier
+   thread's tool home is not an acceptable fallback.
 4. At the Vitest configuration boundary, fail before test files load whenever
    the suite inherits a nonempty `CODEX_HOME`. Apply one shared assertion from
    the runner, all wrapper test configurations, and the dashboard test
@@ -100,17 +110,29 @@ the native comparison showed it erases an existing exclusion.
 
 ## Test and command audit
 
-The source sweep covered `...process.env`, `env: process.env`, and implicit
-environment inheritance in `runner/test`, `wrapper/*/test`, and the Codex
-native probes. Implementation must repeat the sweep after edits.
+The initial source sweep sampled `...process.env`, `env: process.env`, and
+implicit environment inheritance in `runner/test`, `wrapper/*/test`, and the
+Codex native probes. It was not exhaustive: the Claude SDK spawn callback in
+`cli_sigterm_abort_real_process.test.ts` forwards `spawnOptions.env` without
+a literal `process.env` at the spawn. Implementation must inventory every
+child-process call site in these scopes, including `spawn`, `exec`, `execFile`,
+`fork`, synchronous variants, imported aliases, SDK spawn callbacks, and calls
+with no explicit `env`. Trace each site's environment back through helpers and
+callbacks to its source. Record one row per site in the implementation evidence
+with file and line, executable, environment source, and a disposition:
+`CODEX_HOME` removed, an explicit disposable home supplied, or no Codex-aware
+child possible with a concrete reason. Compare the complete site list before
+and after edits and account for each addition or removal. The preflight is a
+last-resort guard, not evidence that each child site was handled.
 
-| Test sites | Required handling |
+| Known test sites from the initial sample | Required handling |
 | --- | --- |
 | `wrapper/codex/test/permission_compaction.test.ts` | Remove `CODEX_HOME` from the child environment before setting the fixture `HOME`; keep the compiled production reader assertion. This is the reproduced writer. |
 | `wrapper/codex/test/approval_config.integration.test.ts`, `cli_sigterm_process_exit.integration.test.ts`, `stderr_production_default.test.ts` | Retain their explicit disposable `CODEX_HOME` override; assert it wins over a hostile inherited value. The saved environment in `cli_operator_steer.test.ts` is restoration state, not a spawn. |
 | `wrapper/codex/test/cli_sigterm_exec_real_process.integration.test.ts`, `cli_sigterm_process_exit.integration.test.ts` | Replace the diagnostic `codex --version` through `PATH` with the pinned absolute binary and an explicit disposable home; audit every other implicit-env native spawn. |
 | `runner/test/codex_app_server_supervision.test.ts` | Keep the explicit disposable home. `launchShimVersion.test.ts`, `releaseFixture.ts`, and `releaseUpdate.test.ts` forward inherited environments to children or scripts; strip `CODEX_HOME` unless the fixture deliberately supplies its own disposable value. Audit `cli-entrypoint.test.ts` and other spawns without `env` as inheritance sites. |
 | `wrapper/claude-code/test/bounded_spawn.test.ts`, `cli_sigterm_process_exit.test.ts`; `wrapper/antigravity/test/bridge.test.ts`, `cli.test.ts`, `hook.test.ts`, `ssh_agent_probe.test.ts` | Use a sanitized child map for inherited environments. Tests specifically checking environment forwarding must use a disposable `CODEX_HOME` and assert the new boundary removes it. The probe fixtures still keep required `PATH`, SSH, gate, and bridge values. |
+| `wrapper/claude-code/test/cli_sigterm_abort_real_process.test.ts` | Its SDK callback spawns the child with `env: spawnOptions.env`. Assert that the host's final SDK environment has already removed an inherited `CODEX_HOME`; the callback must forward that sanitized map unchanged while preserving signal and stdio behavior. |
 
 Do not rely on a source-pattern scan alone: native SDKs, `execSync`, and
 `spawn` without an `env` option inherit the test process environment. The
@@ -129,8 +151,16 @@ boundaries.
   Codex tool commands must see only the private tool home under both exec and
   app-server. Assert the Codex native process itself selects the injected
   state home, including `auth.json` lookup, a written session, and a resumed
-  session. Use local providers and isolated credentials where needed. A mock
-  `spawn` argument alone is not sufficient evidence for the tool command.
+  session. For app-server, start a thread with private tool home A, stop the
+  wrapper, then resume the same thread through the real wrapper with a newly
+  created private tool home B. Inspect the actual `thread/resume` RPC and run a
+  shell tool in the resumed turn: it must report B, not A or the state home,
+  and its marker must appear only under B. The native session, auth lookup,
+  and model-profile hook must still resolve from the production-like state
+  home. A fresh-thread tool result or a resumed native session alone does not
+  satisfy this gate. Use local providers and isolated credentials where needed;
+  without evidence for the state-home auth lookup, keep release blocked.
+  A mock `spawn` argument alone is not sufficient evidence for the tool command.
 - In the Codex native fixture, keep a separate pre-existing exclusion and
   `set` entry. Assert both survive the tool-home injection. Verify a
   production-equivalent model-profile hook still resolves from the native
@@ -148,7 +178,16 @@ boundaries.
   tool-home `set` in each backend (a shell tool writes a marker into the
   production-like canary); remove the fixture's child-env filter (the two
   fixture rollouts appear in that canary); disconnect the Vitest preflight
-  (its invocation no longer stops before tests). Also remove the runner's
+  (its invocation no longer stops before tests). For this last mutation, run a
+  safe sentinel test with a disposable hostile `CODEX_HOME`. Its test body
+  writes an execution marker outside the canary, and the Vitest reporter count
+  is recorded. With the preflight present, the child Vitest invocation must
+  exit nonzero with zero executed cases, no marker, and an unchanged canary
+  manifest. With its wiring removed, the child must report at least one
+  executed case, write the marker, and leave that manifest unchanged;
+  the outer test asserting preflight rejection must itself fail nonzero. This
+  distinguishes bypass of the preflight from another startup failure. Also
+  remove the runner's
   override of an inbound `codex_tool_home` and the wrapper's realpath
   inequality guard separately: a supplied path or symlink to the
   production-like canary must then make the corresponding test fail. Restore
