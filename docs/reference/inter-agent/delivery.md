@@ -36,6 +36,17 @@ retains no payloads and does not guarantee retransmission or delivery.
   acknowledges while disconnected (currently Antigravity, which supplies no
   delivery identity) can still send a duplicate. The guarantee is the server's:
   a stale or duplicate watermark is a no-op.
+- A join `ok` whose `inter_agent_delivery_incarnation` differs from the one the
+  wrapper's recovery ledger was built under means the server no longer
+  recognises that ledger's per-sequence state. `ServerLink` discards the
+  ledger (its resend, duplicate filter, and pending gap) and starts a new one.
+  This does not imply the sequence restarted from 0. A received input not yet
+  dispatched when that happens may then be reported lost. A join that reports
+  no incarnation keeps the current ledger. `ServerLink` also drops a
+  `delivery_ack` above every sequence the current ledger has received or seen
+  issued, so a late completion from the old space cannot poison the new one.
+  That covers a wrapper without delivery identity only until the new space
+  passes the stale value.
 - `whoami`, `list_agents` entries, and the operator dashboard's
   `snapshot.deliveries` / `delivery_status` all read the same server ledger. An
   absent field is **unknown** (legacy/disarmed), not zero.

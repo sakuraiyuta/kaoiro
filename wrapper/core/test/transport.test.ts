@@ -1748,7 +1748,11 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       workControl: "v1",
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
-    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1" });
+    // delivery_ack(1) must name a sequence the ledger has seen issued.
+    mock.joinReceivers.get("ok")?.({
+      inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
+      delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     expect(mock.pushes.map((push) => push.event).sort()).toEqual(Object.keys(fire).sort());
   });
@@ -1761,7 +1765,11 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       workControl: "v1",
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
-    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1" });
+    // delivery_ack(1) must name a sequence the ledger has seen issued.
+    mock.joinReceivers.get("ok")?.({
+      inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
+      delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
   });
@@ -2889,7 +2897,7 @@ describe("delivery ACK reconnect through production ServerLink", () => {
     mock.onClose = null;
   });
 
-  function setup() {
+  function setup({ identity = true } = {}) {
     let link!: ServerLink;
     const envelope = {
       version: "0", agent_id: "a.agent", persona: { id: "p", name: "P", sprite_set: "p" },
@@ -2897,17 +2905,25 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       payload: { to: "self", conversation_id: "cid", turn_number: 1, kind: "inform", body: "hi" },
       delivery_seq: 1,
     } as unknown as Envelope;
+    let turnEnvelopes = [envelope];
+    const delivered: Envelope[] = [];
     const runtime = createDeliveryAcknowledgementRuntime(
       seq => link.acknowledgeInterAgentDelivery(seq),
-      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => [envelope] },
-      () => {
-        const incarnation = link?.deliveryIncarnation() ?? null;
-        return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
-      },
+      { deliverySequencesForTurn: () => [1], deliveryEnvelopesForTurn: () => turnEnvelopes },
+      // Antigravity builds its runtime without this callback.
+      identity
+        ? () => {
+          const incarnation = link?.deliveryIncarnation() ?? null;
+          return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+        }
+        : undefined,
     );
     const options: ServerLinkOptions = runtime.withServerLinkOptions({
       personaId: "p",
-      onInterAgentMessage: (received: Envelope) => runtime.captureDelivery(received),
+      onInterAgentMessage: (received: Envelope) => {
+        delivered.push(received);
+        runtime.captureDelivery(received);
+      },
     });
     link = new ServerLink("ws://x/wrapper", "a.agent", options);
     const joined = (incarnation: string, issuedSeq = 1) => {
@@ -2929,7 +2945,20 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       mock.channelState = "closed";
       mock.onClose?.({ code: 1006 });
     };
-    return { disconnect, envelope, joined, link, runtime };
+    const joinedWith = (incarnation: string | null, delivery: Record<string, unknown>) => {
+      mock.connected = true;
+      mock.channelState = "joined";
+      mock.joinReceivers.get("ok")?.({
+        delivery_resync: "skip-v1",
+        ...(incarnation === null ? {} : { inter_agent_delivery_incarnation: incarnation }),
+        delivery: { lost_count: 0, ...delivery },
+      });
+    };
+    const setTurnEnvelopes = (envelopes: Envelope[]) => {
+      turnEnvelopes = envelopes;
+    };
+    const withSeq = (seq: number) => ({ ...envelope, delivery_seq: seq }) as unknown as Envelope;
+    return { delivered, disconnect, envelope, joined, joinedWith, link, runtime, setTurnEnvelopes, withSeq };
   }
 
   it("replays the completed turn watermark after same-identity socket rejoin", async () => {
@@ -3032,6 +3061,110 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       joined("same");
       await Promise.resolve();
       expect(ackedSeqs()).toEqual([1]);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("starts a fresh sequence space when the rejoin reports a new incarnation", async () => {
+    const { delivered, disconnect, envelope, joinedWith, link, runtime, setTurnEnvelopes, withSeq } = setup();
+    try {
+      joinedWith("old", { issued_seq: 2, acked_seq: 2 });
+      (envelope as unknown as { delivery_seq: number }).delivery_seq = 3;
+      emit("envelope", envelope);
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "old-turn" });
+      expect(ackedSeqs()).toEqual([3]);
+
+      // The server lost its ledger entry and restarted the sequence space.
+      mock.pushes = [];
+      disconnect();
+      joinedWith("new", { issued_seq: 0, acked_seq: 0 });
+      await Promise.resolve();
+      expect(ackedSeqs()).toEqual([]);
+
+      const fresh = withSeq(1);
+      emit("envelope", fresh);
+      expect(delivered.at(-1)).toBe(fresh);
+      setTurnEnvelopes([fresh]);
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "new-turn" });
+      expect(ackedSeqs()).toEqual([1]);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("keeps the received ledger across a same-incarnation rejoin", () => {
+    const { delivered, disconnect, joinedWith, link, withSeq } = setup();
+    try {
+      joinedWith("same", { issued_seq: 0, acked_seq: 0 });
+      emit("envelope", withSeq(1));
+      expect(delivered).toHaveLength(1);
+
+      disconnect();
+      joinedWith("same", { issued_seq: 1, acked_seq: 0, pending_since: "T" });
+      emit("envelope", withSeq(1));
+      expect(delivered).toHaveLength(1);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("keeps the ledger across a join that reports no incarnation", () => {
+    const { delivered, disconnect, joinedWith, link, withSeq } = setup();
+    try {
+      joinedWith("old", { issued_seq: 0, acked_seq: 0 });
+      emit("envelope", withSeq(1));
+      disconnect();
+      joinedWith(null, { issued_seq: 1, acked_seq: 0, pending_since: "T" });
+      disconnect();
+      joinedWith("old", { issued_seq: 1, acked_seq: 0, pending_since: "T" });
+      emit("envelope", withSeq(1));
+      expect(delivered).toHaveLength(1);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("does not resync the replaced ledger's gap into the new incarnation", async () => {
+    vi.useFakeTimers();
+    const { delivered, joinedWith, link, withSeq } = setup();
+    try {
+      joinedWith("old", { issued_seq: 1, acked_seq: 1 });
+      emit("envelope", withSeq(3));
+      expect(delivered).toHaveLength(1);
+
+      // Channel-only rejoin: the socket stays open, so nothing calls
+      // DeliveryRecovery.disconnected() on the old ledger's gap timer.
+      emit("phx_error", {});
+      joinedWith("new", { issued_seq: 0, acked_seq: 0 });
+      mock.pushes = [];
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mock.pushes.filter(push => push.event === "delivery_resync")).toEqual([]);
+    } finally {
+      link.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a watermark beyond every sequence the current ledger has seen", async () => {
+    const { delivered, disconnect, envelope, joinedWith, link, runtime, withSeq } = setup({ identity: false });
+    try {
+      joinedWith("old", { issued_seq: 2, acked_seq: 2 });
+      (envelope as unknown as { delivery_seq: number }).delivery_seq = 3;
+      emit("envelope", envelope);
+
+      // An old-space input reaches its turn only after the new join. With no
+      // identity callback the acknowledgement ledger cannot tell it is stale.
+      disconnect();
+      joinedWith("new", { issued_seq: 0, acked_seq: 0 });
+      await Promise.resolve();
+      mock.pushes = [];
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "late-old-turn" });
+      expect(ackedSeqs()).toEqual([]);
+
+      const fresh = withSeq(1);
+      emit("envelope", fresh);
+      expect(delivered.at(-1)).toBe(fresh);
     } finally {
       link.close();
     }
