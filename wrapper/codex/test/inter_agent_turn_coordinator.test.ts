@@ -410,6 +410,44 @@ describe("steer fallback reservations", () => {
     expect(coordinator.attachSteerPlaceholder("first")).toBe(false);
   });
 
+  it("retires a frozen steer only after a certain fallback settles", () => {
+    const retired: Envelope[] = [];
+    const definite = inbound("definite"), uncertain = inbound("uncertain");
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      onDispatch: () => true,
+    });
+    coordinator.reserveSteer("definite", definite, "reply-owed", 1);
+    coordinator.reserveSteer("uncertain", uncertain, "reply-owed", 2);
+    coordinator.freezeForWatchdogFailStop();
+    expect(retired).toEqual([]);
+    expect(coordinator.pendingFrozenSteerCount).toBe(2);
+    coordinator.settleSteerReservation("uncertain", false);
+    expect(retired).toEqual([]);
+    expect(coordinator.pendingFrozenSteerCount).toBe(1);
+    coordinator.settleSteerReservation("definite", true);
+    coordinator.settleSteerReservation("definite", true);
+    expect(retired).toEqual([definite]);
+    expect(coordinator.pendingFrozenSteerCount).toBe(0);
+  });
+
+  it("does not retire a requeued input again when its frozen steer settles late", () => {
+    const retired: Envelope[] = [];
+    const envelope = inbound("requeued");
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      onDispatch: () => true,
+    });
+    coordinator.reserveSteer("S", envelope, "reply-owed", 1);
+    coordinator.freezeForWatchdogFailStop();
+    coordinator.discardSteerReservation("S");
+    expect(coordinator.pendingFrozenSteerCount).toBe(0);
+    coordinator.settleSteerReservation("S", true);
+    expect(retired).toEqual([]);
+    coordinator.receive(envelope, "reply-owed");
+    expect(retired).toEqual([envelope]);
+  });
+
   it("keeps an undispatched fallback visible to peer and conversation admission", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({
       canDispatchPeer: () => false,

@@ -14,15 +14,16 @@ import type { RpcObject } from "../src/app_server_rpc.js";
 const config: WrapperConfig = { agent_id: "self.agent", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
   server_url: "ws://localhost:4000/wrapper", model: "gpt-5.6-sol", effort: "high", codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
 const cleanup: (() => Promise<void>)[] = [];
-const quiescenceChecks: (() => void)[] = [];
+const quiescenceChecks: (() => true)[] = [];
 let skipAutomaticQuiescence = false;
 let fixturesCreated = 0;
 let fixturesChecked = 0;
+let fixturesOptedOut = 0;
 afterEach(async () => {
   try {
     for (const check of quiescenceChecks) {
-      if (!skipAutomaticQuiescence) check();
-      fixturesChecked += 1;
+      if (skipAutomaticQuiescence) fixturesOptedOut += 1;
+      else fixturesChecked += check() ? 1 : 0;
     }
   } finally {
     quiescenceChecks.length = 0;
@@ -31,7 +32,7 @@ afterEach(async () => {
     vi.restoreAllMocks();
   }
 });
-afterAll(() => expect(fixturesChecked).toBe(fixturesCreated));
+afterAll(() => expect(fixturesChecked + fixturesOptedOut).toBe(fixturesCreated));
 
 function inbound(seq: number, cid: string, body: string, granted: "early" | "normal"): Envelope {
   return { version: "0", agent_id: "peer.agent", persona: { id: "peer", name: "Peer", sprite_set: "peer" },
@@ -148,9 +149,11 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     send({ method: "item/completed", params: { threadId: "thread", turnId: `turn-${number}`,
       item: { type: "userMessage", id: `u-${clientId}`, clientId, content: [{ type: "text", text }] } } });
   };
-  const assertQuiescent = () => {
+  const assertQuiescent = (): true => {
     expect(host!.pendingInterAgentPlaceholderCount).toBe(0);
     expect(coordinator?.pendingSteerReservationCount).toBe(0);
+    expect(coordinator?.pendingFrozenSteerCount).toBe(0);
+    return true;
   };
   fixturesCreated += 1;
   quiescenceChecks.push(assertQuiescent);
@@ -325,16 +328,21 @@ it("removes a fallback slot when its conversation becomes terminal before settle
   expect(f.texts("turn/start")[1]).toContain("LATER ROOT");
 });
 
-it("keeps a precondition response uncertain when watchdog stops before settlement", async () => {
-  const f = await scenario(10);
+it("retires a precondition response after its frozen steer settles", async () => {
+  const f = await compose({ steerOutcome: "P" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.host.pendingInterAgentPlaceholderCount).toBe(1));
   expect(f.host.failStopForWatchdogAttributionUnknown()).toBe(true);
   await f.host.waitForWatchdogCleanup();
-  f.assertQuiescent();
   expect(f.byMethod("turn/start")).toHaveLength(1);
   expect(f.host.state).toBe("error");
-  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
+  await vi.waitFor(() => expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(1), { timeout: 3000 });
+  f.assertQuiescent();
   expect(f.reports.map(r => r.stage)).toContain("queued");
-  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+  expect(f.reports.map(r => r.stage)).not.toContain("unknown");
+  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(1);
 });
 
 it("does not retire an accepted steer when watchdog stops the active turn", async () => {
@@ -347,7 +355,7 @@ it("does not retire an accepted steer when watchdog stops the active turn", asyn
   await f.host.waitForWatchdogCleanup();
   expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
   expect(f.reports.map(r => r.stage)).toEqual(expect.arrayContaining(["queued", "submitted"]));
-  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+  await vi.waitFor(() => expect(f.reports.at(-1)).toMatchObject({ stage: "unknown", reason: "turn_steer_not_observed" }), { timeout: 3000 });
 });
 
 it("does not retire a written steer awaiting RPC response at watchdog stop", async () => {
@@ -360,7 +368,21 @@ it("does not retire a written steer awaiting RPC response at watchdog stop", asy
   await f.host.waitForWatchdogCleanup();
   expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
   expect(f.reports.map(r => r.stage)).toContain("queued");
-  expect(f.reports.map(r => r.stage)).not.toContain("lost");
+  await vi.waitFor(() => expect(f.reports.at(-1)).toMatchObject({ stage: "unknown", handoff: "turn_steer_write_uncertain" }), { timeout: 3000 });
+  expect(["turn_steer_timeout", "turn_steer_disconnected"]).toContain(f.reports.at(-1)?.reason);
+});
+
+it("reports a rejected non-precondition steer as unknown after watchdog freeze", async () => {
+  const f = await compose({ steerOutcome: "E" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  expect(f.host.failStopForWatchdogAttributionUnknown()).toBe(true);
+  await f.host.waitForWatchdogCleanup();
+  await vi.waitFor(() => expect(f.reports.at(-1)).toMatchObject({ stage: "unknown", handoff: "turn_steer_write_uncertain" }), { timeout: 3000 });
+  expect(["turn_steer_timeout", "turn_steer_disconnected"]).toContain(f.reports.at(-1)?.reason);
+  expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(0);
 });
 
 it("releases admission reservation when the reply lease refuses the steer", async () => {

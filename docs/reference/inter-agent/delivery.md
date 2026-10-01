@@ -127,7 +127,9 @@ remaining descriptors as interrupted before reclaiming the old ledger.
 A wrapper may explicitly retire received but permanently discarded, unstarted
 inputs using `delivery_resync` with `reason: "interrupted"`. This is distinct
 from missing-sequence detection: watchdog fail-stop preserves the active turn,
-while retiring discarded queued batches. Shutdown attempts retirement before
+while retiring discarded queued batches and a frozen steer later proven to
+have failed its precondition without an observed item. Possibly written steers
+report an unknown outcome after settlement instead. Shutdown attempts retirement before
 closing transport, bounded to five seconds; it cannot promise acceptance after
 a broken connection. A subsequent generation bind retires surviving metadata.
 
