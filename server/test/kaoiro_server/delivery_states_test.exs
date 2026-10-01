@@ -1585,4 +1585,212 @@ defmodule KaoiroServer.DeliveryStatesTest do
       end)
     end)
   end
+
+  describe "a retirement and its loss intents" do
+    @descriptor %{sender: "sender", conversation_id: "cid", turn_number: 1, kind: "request"}
+
+    test "writes each intent as its own object before the recipient entry", %{name: name} do
+      owner = self()
+      DeliveryStates.bind_resync("recipient", "generation", owner, name)
+      assert 1 = DeliveryStates.issue_synthetic("recipient", @descriptor, name)
+      assert 2 = DeliveryStates.issue_synthetic("recipient", @descriptor, name)
+
+      parent = self()
+
+      tracer =
+        spawn(fn ->
+          for _ <- 1..3 do
+            receive do
+              event -> send(parent, {:dets_trace, event})
+            end
+          end
+        end)
+
+      pid = Process.whereis(name)
+      :erlang.trace_pattern({:dets, :insert, 2}, true, [])
+      :erlang.trace(pid, true, [:call, {:tracer, tracer}])
+
+      try do
+        assert {:ok, %{lost_count: 2}} =
+                 DeliveryStates.retire("recipient", "generation", owner, 2, [[1, 2]], name)
+
+        objects =
+          for _ <- 1..3 do
+            assert_receive {:dets_trace, {:trace, ^pid, :call, {:dets, :insert, [^name, object]}}}
+            object
+          end
+
+        assert [{{:loss, _}, %{seq: 1}}, {{:loss, _}, %{seq: 2}}, entry] = objects
+        assert elem(entry, 0) == "recipient"
+      after
+        :erlang.trace(pid, false, [:call])
+        :erlang.trace_pattern({:dets, :insert, 2}, false, [])
+      end
+    end
+
+    test "an intent whose retirement never committed is deleted at restart", %{
+      name: name,
+      path: path
+    } do
+      loss = uncommitted_retirement(name, path, "recipient")
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert DeliveryStates.pending_losses(name) == []
+      assert %{acked_seq: 0, lost_count: 0} = DeliveryStates.get("recipient", name)
+
+      # Once the delivery is acknowledged the entry no longer holds its
+      # metadata; an intent left on disk would then look committed.
+      DeliveryStates.bind_resync("recipient", "generation", self(), name)
+
+      assert %{acked_seq: 1} =
+               DeliveryStates.acknowledge("recipient", "generation", self(), 1, name)
+
+      GenServer.stop(Process.whereis(name))
+      assert raw(name, path, &:dets.lookup(&1, {:loss, loss.id})) == []
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      assert DeliveryStates.pending_losses(name) == []
+    end
+
+    test "the wrapper's resent retire rebuilds the dropped intent exactly once", %{
+      name: name,
+      path: path
+    } do
+      loss = uncommitted_retirement(name, path, "recipient")
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      assert DeliveryStates.pending_losses(name) == []
+
+      DeliveryStates.bind_resync("recipient", "generation", self(), name)
+
+      assert {:ok, %{acked_seq: 1, lost_count: 1}} =
+               DeliveryStates.retire("recipient", "generation", self(), 1, [[1, 1]], name)
+
+      assert DeliveryStates.pending_losses(name) == [loss]
+    end
+
+    test "a bind under another generation rebuilds the dropped intent exactly once", %{
+      name: name,
+      path: path
+    } do
+      loss = uncommitted_retirement(name, path, "recipient")
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      assert DeliveryStates.pending_losses(name) == []
+
+      DeliveryStates.bind_resync("recipient", "replacement", self(), name)
+
+      assert DeliveryStates.pending_losses(name) == [loss]
+    end
+
+    test "a committed intent survives a restart", %{name: name, path: path} do
+      loss = committed_retirement(name, "recipient")
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert DeliveryStates.pending_losses(name) == [loss]
+    end
+
+    test "an intent outlives its recipient's entry", %{name: name, path: path} do
+      loss = committed_retirement(name, "recipient")
+      assert :ok = DeliveryStates.delete("recipient", name)
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert DeliveryStates.pending_losses(name) == [loss]
+    end
+
+    test "an intent survives a recreated entry that reissues the same sequence", %{
+      name: name,
+      path: path
+    } do
+      loss = committed_retirement(name, "recipient")
+      assert :ok = DeliveryStates.delete("recipient", name)
+      DeliveryStates.bind_resync("recipient", "generation", self(), name)
+      assert 1 = DeliveryStates.issue_synthetic("recipient", @descriptor, name)
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert DeliveryStates.pending_losses(name) == [loss]
+    end
+
+    test "a retired loss notice that never committed is rebuilt under the original id", %{
+      name: name,
+      path: path
+    } do
+      original = committed_retirement(name, "recipient")
+
+      # The dispatcher delivers the notice to the sender as a synthetic
+      # delivery that carries the original loss id.
+      notice = Map.put(@descriptor, :loss_id, original.id)
+      DeliveryStates.bind_resync("sender", "sender-generation", self(), name)
+      assert 1 = DeliveryStates.issue_synthetic("sender", notice, name)
+      GenServer.stop(Process.whereis(name))
+      [before_retirement] = raw(name, path, &:dets.lookup(&1, "sender"))
+
+      # Retiring the notice overwrites the original intent under the same key.
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      DeliveryStates.bind_resync("sender", "sender-generation", self(), name)
+
+      assert {:ok, _} =
+               DeliveryStates.retire("sender", "sender-generation", self(), 1, [[1, 1]], name)
+
+      assert [%{id: id, revision: revision, recipient: "sender"} = replacement] =
+               DeliveryStates.pending_losses(name)
+
+      assert id == original.id
+      assert revision != original.revision
+      GenServer.stop(Process.whereis(name))
+      raw(name, path, &:dets.insert(&1, before_retirement))
+
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      assert DeliveryStates.pending_losses(name) == []
+
+      DeliveryStates.bind_resync("sender", "sender-generation", self(), name)
+
+      assert {:ok, _} =
+               DeliveryStates.retire("sender", "sender-generation", self(), 1, [[1, 1]], name)
+
+      assert DeliveryStates.pending_losses(name) == [replacement]
+    end
+  end
+
+  defp raw(name, path, fun) do
+    {:ok, table} = :dets.open_file(:"#{name}_raw", file: String.to_charlist(path))
+
+    try do
+      fun.(table)
+    after
+      :dets.close(table)
+    end
+  end
+
+  # Issues seq 1 to `recipient` and retires it, leaving one committed intent.
+  defp committed_retirement(name, recipient) do
+    DeliveryStates.bind_resync(recipient, "generation", self(), name)
+    assert 1 = DeliveryStates.issue_synthetic(recipient, @descriptor, name)
+
+    assert {:ok, %{acked_seq: 1, lost_count: 1}} =
+             DeliveryStates.retire(recipient, "generation", self(), 1, [[1, 1]], name)
+
+    assert [loss] = DeliveryStates.pending_losses(name)
+    loss
+  end
+
+  # Leaves the store stopped with the state a crash between the intent write
+  # and the entry write produces: the intent on disk, the entry not retired.
+  defp uncommitted_retirement(name, path, recipient) do
+    DeliveryStates.bind_resync(recipient, "generation", self(), name)
+    assert 1 = DeliveryStates.issue_synthetic(recipient, @descriptor, name)
+    GenServer.stop(Process.whereis(name))
+    [before_retirement] = raw(name, path, &:dets.lookup(&1, recipient))
+
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+    DeliveryStates.bind_resync(recipient, "generation", self(), name)
+
+    assert {:ok, _} =
+             DeliveryStates.retire(recipient, "generation", self(), 1, [[1, 1]], name)
+
+    assert [loss] = DeliveryStates.pending_losses(name)
+    GenServer.stop(Process.whereis(name))
+    raw(name, path, &:dets.insert(&1, before_retirement))
+    loss
+  end
 end

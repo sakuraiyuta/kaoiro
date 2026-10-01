@@ -12,6 +12,24 @@ defmodule KaoiroServer.DeliveryStates do
   to `issued`) rather than being reported forever as a delivery failure.
   `transition_id` must not be used for this: runner crash relaunches can keep
   the same session-transition id while replacing the wrapper process.
+
+  ## Retirement and loss intents
+
+  A retirement writes its loss intents first, one DETS object each, and the
+  recipient entry last. An intent alone cannot rebuild the retirement
+  (`skipped`, `lost_count`, `last_loss`, the advanced prefix), so a crash
+  between the two leaves an intent whose retirement never committed. `init/1`
+  detects that intent by the entry still holding the sequence's metadata
+  under the same incarnation and generation, and deletes it.
+
+  Dropping it loses no notification only because the retirement runs again:
+  the wrapper resends its pending resync on join, a bind under another
+  generation retires the old one, and a disarm retires before it deletes.
+  Each rebuilds the same intent from the metadata the entry still holds.
+
+  Residual: an entry persisted before `incarnation` existed gets a fresh one
+  on every load until it is next written, so an uncommitted intent for it is
+  not recognised and can still be dispatched.
   """
   use GenServer
   require Logger
@@ -206,7 +224,7 @@ defmodule KaoiroServer.DeliveryStates do
        stages: stages,
        owners: %{},
        reservations: %{},
-       losses: load_losses(table)
+       losses: table |> load_losses() |> drop_uncommitted_losses(entries, table)
      }}
   end
 
@@ -346,7 +364,7 @@ defmodule KaoiroServer.DeliveryStates do
                 }
             }
 
-        {next, state} =
+        {next, state, intents} =
           record_losses(
             agent_id,
             next,
@@ -356,7 +374,7 @@ defmodule KaoiroServer.DeliveryStates do
           )
 
         next = advance_skipped(next)
-        persist_with_losses(state, agent_id, next)
+        persist_with_losses(state, agent_id, next, intents)
 
         if added != [],
           do:
@@ -406,9 +424,9 @@ defmodule KaoiroServer.DeliveryStates do
           }
         end
 
-      {next, state} = record_losses(agent_id, next, unresolved, "interrupted", state)
+      {next, state, intents} = record_losses(agent_id, next, unresolved, "interrupted", state)
       next = advance_skipped(next)
-      persist_with_losses(state, agent_id, next)
+      persist_with_losses(state, agent_id, next, intents)
 
       {:reply, {:ok, public(next)}, %{state | entries: Map.put(state.entries, agent_id, next)}}
     else
@@ -842,10 +860,10 @@ defmodule KaoiroServer.DeliveryStates do
   defp retire_generation(state, agent_id, generation) do
     case state.entries[agent_id] do
       %{generation: old} = entry when old != generation ->
-        {next, state} =
+        {next, state, intents} =
           record_losses(agent_id, entry, Map.keys(entry.metadata), "interrupted", state)
 
-        persist_with_losses(state, agent_id, next)
+        persist_with_losses(state, agent_id, next, intents)
         %{state | entries: Map.put(state.entries, agent_id, next)}
 
       _ ->
@@ -878,51 +896,80 @@ defmodule KaoiroServer.DeliveryStates do
 
     state = %{state | stages: replace_agent_stages(state.stages, agent_id, histories)}
 
-    losses =
-      Enum.reduce(seqs, state.losses, fn seq, acc ->
-        case entry.metadata[seq] do
-          nil ->
-            acc
+    intents =
+      for seq <- seqs, descriptor = entry.metadata[seq], descriptor != nil do
+        revision = loss_revision(agent_id, entry.incarnation, entry.generation, seq)
 
-          descriptor ->
-            generated_id =
-              :crypto.hash(
-                :sha256,
-                :erlang.term_to_binary({agent_id, entry.incarnation, entry.generation, seq})
-              )
-              |> Base.url_encode64(padding: false)
+        %{
+          id: descriptor[:loss_id] || revision,
+          revision: revision,
+          recipient: agent_id,
+          generation: entry.generation,
+          seq: seq,
+          descriptor: descriptor,
+          reason: reason
+        }
+      end
 
-            id = descriptor[:loss_id] || generated_id
-
-            intent = %{
-              id: id,
-              revision: generated_id,
-              recipient: agent_id,
-              generation: entry.generation,
-              seq: seq,
-              descriptor: descriptor,
-              reason: reason
-            }
-
-            Map.put(acc, id, intent)
-        end
-      end)
+    losses = Enum.reduce(intents, state.losses, &Map.put(&2, &1.id, &1))
 
     {%{
        entry
        | metadata: Map.drop(entry.metadata, seqs),
          early_pending: Map.drop(entry.early_pending, seqs),
          stage_history: histories
-     }, %{state | losses: losses}}
+     }, %{state | losses: losses}, intents}
   end
 
-  defp persist_with_losses(state, agent_id, entry) do
-    # The retirement and its notification intent share one DETS insertion.
-    records = Enum.map(state.losses, fn {id, loss} -> {{:loss, id}, loss} end)
+  defp loss_revision(agent_id, incarnation, generation, seq) do
+    :crypto.hash(:sha256, :erlang.term_to_binary({agent_id, incarnation, generation, seq}))
+    |> Base.url_encode64(padding: false)
+  end
 
-    :ok = :dets.insert(state.table, [entry_record(agent_id, entry) | records])
+  # Intents before the entry, one object each: see "Retirement and loss
+  # intents" in the moduledoc for why this order is the recoverable one.
+  defp persist_with_losses(state, agent_id, entry, intents) do
+    Enum.each(intents, fn intent -> :ok = :dets.insert(state.table, loss_record(intent)) end)
+    if intents != [], do: :ok = :dets.sync(state.table)
+
+    :ok = :dets.insert(state.table, entry_record(agent_id, entry))
     :ok = :dets.sync(state.table)
   end
+
+  defp loss_record(intent) do
+    {{:loss, intent.id}, intent}
+  end
+
+  defp drop_uncommitted_losses(losses, entries, table) do
+    {uncommitted, committed} =
+      Enum.split_with(losses, fn {_id, loss} -> uncommitted_loss?(loss, entries) end)
+
+    Enum.each(uncommitted, fn {id, loss} ->
+      :ok = :dets.delete(table, {:loss, id})
+
+      Logger.warning(
+        "inter-agent delivery loss intent dropped: retirement never committed recipient=#{loss.recipient} seq=#{loss.seq}"
+      )
+    end)
+
+    if uncommitted != [], do: :ok = :dets.sync(table)
+    Map.new(committed)
+  end
+
+  # A committed retirement has already dropped the sequence's metadata, so an
+  # entry that still holds it under the intent's own revision never retired it.
+  defp uncommitted_loss?(%{recipient: recipient, seq: seq, revision: revision}, entries) do
+    case entries[recipient] do
+      %{metadata: metadata, incarnation: incarnation, generation: generation}
+      when is_map_key(metadata, seq) ->
+        loss_revision(recipient, incarnation, generation, seq) == revision
+
+      _ ->
+        false
+    end
+  end
+
+  defp uncommitted_loss?(_loss, _entries), do: false
 
   defp load_losses(table) do
     :dets.foldl(

@@ -113,7 +113,11 @@ guesses its sender. Known ordinary losses produce a sender-addressed
 `delivery_lost` error. Each loss has a stable identifier derived from recipient,
 ledger incarnation, generation and sequence. The incarnation is persisted and
 changes after ledger deletion, so a recreated generation cannot reuse an ID.
-Skip and the durable notification intent are written together; notifications
+The durable notification intents are written first, one object each, and the
+skip that retires the sequences last. A crash between them leaves an intent
+whose retirement never committed; the ledger deletes it on restart, and the
+retirement's next run (the wrapper's resent resync, a bind under another
+generation, or a disarm) writes it again. Notifications
 are dispatched outside the ledger process. Completion compares the intent's
 revision so an older dispatcher attempt cannot delete a newer loss of its
 recovery notice. A lost response or dispatcher
