@@ -6,9 +6,10 @@ last_updated: 2026-10-01
 
 # Phase 3 fallback reservation verification
 
-The implementation under review is commits `faa0ca48caeae88f38de069985b81d8ec9688e22`
-and `922fad6e82d0d55331d569af3c966c178c2a4684`, based on
-`842ec5a8`. All commands below used `env -u CODEX_HOME`. The scripted
+The implementation under review is commits `faa0ca48caeae88f38de069985b81d8ec9688e22`,
+`922fad6e82d0d55331d569af3c966c178c2a4684`, and
+`26336da0c1406e1c56b7cb3e8f20b37e374e8427`, based on `842ec5a8`.
+All commands below used `env -u CODEX_HOME`. The scripted
 app-server tests did not use an authenticated live turn or the production
 Codex home. The final native gate remains due on the landing pin after issue
 #468.
@@ -26,7 +27,7 @@ their separate host mechanism.
 
 | Gate | Tests or result | Exit |
 | --- | ---: | ---: |
-| Codex full suite, final test commit | 1,244 passed in 81 files | 0 |
+| Codex full suite, final test commit | 1,246 passed in 81 files | 0 |
 | Agent common full suite | 505 passed in 20 files | 0 |
 | Wrapper core full suite | 306 passed in 6 files | 0 |
 | Claude Code full suite | 761 passed in 32 files | 0 |
@@ -60,6 +61,19 @@ Every settled or fail-stopped integration case checks zero host placeholders
 and zero coordinator reservations. A separate test makes each half of that
 shared assertion fail on a deliberate orphan.
 
+The pending-write tests use the real CLI, host, session, transport, and RPC,
+with a fake child stream that delivers the response but holds the
+`stdin.write` callback through terminal settlement. Both P and E schedules
+record `writeState() === "writing"` at settlement. P replaces its
+arrival-position slot and precedes a same-peer successor; E removes its
+reservation without replaying the body and lets a later operator root run.
+Both reach zero placeholders and reservations. These observations establish
+the wrapper's behavior for this controlled schedule; the child stream does
+not measure native pipe timing. Once the ordinary `#write` route begins, the
+state changes to `writing` synchronously; it need not reach `written` by
+settlement. The earlier two-`written` probe had an immediate callback and
+does not establish an eventual-write invariant.
+
 ## Negative controls
 
 Each row removed only the named production boundary or assertion, ran its
@@ -89,10 +103,16 @@ and declined to mutate either. The second script selected only the IA
 placeholder insertion and produced the red result above. This was a verifier
 selection issue, not a product failure.
 
+For the pending-write case, replacing the RPC's synchronous `writing`
+assignment with `unwritten` made both selected tests fail (2 failed,
+12 skipped, exit 1). Disabling the fake stream's callback hold also made
+both fail (2 failed, 12 skipped, exit 1), pinning the verifier wiring.
+Both mutations were restored before the final 1,246-test run.
+
 Review artifacts under
 `tmp/reviews/issue-346/impl-r3-fuji-artifacts/` include the logs and
 mutation scripts. The final Codex log is SHA-256
-`a04e7cf32adf5d4bff5796622ae24509f9d7f963bb33f9795ec4aceb4feedc79`;
+`1d4d8bbe9ea94e5b4ac7975a37c46656dd95edb5019c01c3d50996ef0633e9cf`;
 the green server rerun is
 `a2eaac731e08c3724789383844e28f26eac6bcb4196c5c22de0b277f471b30f1`.
 The final mutation logs are
@@ -101,3 +121,7 @@ and
 `c530f62c5456e8ac3293c74179d1951a133cb357f277330f26f8641c63e98345`;
 the diagnostic mutation log is
 `841428681546c50de98136479a0f486b5bc2c402e420398aaf8365f75d16c95c`.
+The RPC-state and fake-stream-wiring mutation logs are
+`94e87df6ea383dd60f95ef0ba58676963f276d30e1f9b6a8b868df2b86040994`
+and
+`7aadcd0513c7543b86bc71c39dad85bbe21877fde7c39cf96793152529e88385`.
