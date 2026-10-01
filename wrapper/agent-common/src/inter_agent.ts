@@ -1554,6 +1554,10 @@ export class InterAgentTool {
     return [...this.#steerInjections.values()].some(records => [...records.values()].some(record => record.from === peer));
   }
 
+  pendingSteerPeersForTurn(turnToken: string): string[] {
+    return [...new Set(Array.from(this.#steerInjections.get(turnToken)?.values() ?? [], record => record.from))];
+  }
+
   noteSteerAttempt(envelope: Envelope, turnToken: string, batchId: string): boolean {
     const payload = envelope.payload as unknown as InterAgentMessagePayload;
     const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;

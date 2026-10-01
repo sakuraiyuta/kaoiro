@@ -19,33 +19,40 @@ function inbound(granted: "early" | "normal" = "early"): Envelope {
     ext: {} } as Envelope;
 }
 
-type SteerSchedule = "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
+type SteerSchedule = "queued-successor" | "terminal-before-settle" | "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
 
 async function compose(backend: "app-server" | "exec", echo: boolean, grant: "early" | "normal" = "early",
-  schedule: SteerSchedule = "included", noticeEcho = echo) {
+  schedule: SteerSchedule = "included", noticeEcho = echo, otherPeerRoot = false) {
   let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>;
   const reports: Record<string, unknown>[] = [], acknowledged: number[] = [], notices: Envelope[] = [];
-  const send = vi.fn(async () => {}), steer = vi.fn(async (text: string, hooks: Record<string, any>, batchId: string) => {
-    expect(hooks.admit("active")).toBe(null);
-    hooks.onAdmit("active", batchId);
-    if (schedule === "item-before-response") hooks.onItem("active", batchId);
-    if (schedule === "precondition") hooks.onResponse("active", batchId, { kind: "P", reason: "no_active_turn" });
-    else if (schedule !== "unwritten" && schedule !== "write-failed" && schedule !== "write-timeout") hooks.onResponse("active", batchId, { kind: "A" });
-    if (schedule === "included" || schedule === "ticket-use") hooks.onItem("active", batchId);
+  let activeToken = "active";
+  let held: { hooks: Record<string, any>; batchId: string } | undefined;
+  const send = vi.fn(async (..._args: unknown[]) => {}), steer = vi.fn(async (text: string, hooks: Record<string, any>, batchId: string) => {
+    expect(hooks.admit(activeToken)).toBe(null);
+    hooks.onAdmit(activeToken, batchId);
+    if (schedule === "queued-successor" || schedule === "terminal-before-settle") {
+      hooks.onResponse(activeToken, batchId, { kind: "A" }); hooks.onItem(activeToken, batchId);
+      held = { hooks, batchId };
+      return { kind: "sent" as const, turnToken: activeToken, batchId, text };
+    }
+    if (schedule === "item-before-response") hooks.onItem(activeToken, batchId);
+    if (schedule === "precondition") hooks.onResponse(activeToken, batchId, { kind: "P", reason: "no_active_turn" });
+    else if (schedule !== "unwritten" && schedule !== "write-failed" && schedule !== "write-timeout") hooks.onResponse(activeToken, batchId, { kind: "A" });
+    if (schedule === "included" || schedule === "ticket-use") hooks.onItem(activeToken, batchId);
     if (schedule === "ticket-use") {
       const authText = text.split("\n").find(line => line.startsWith("reply_authorization: "))!;
       const authorization = JSON.parse(authText.slice("reply_authorization: ".length));
       const sendTool = (hostOptions.toolDescriptors as Array<{ name: string; handler: (input: Record<string, unknown>, context: unknown) => Promise<any> }>)
         .find(descriptor => descriptor.name === "send_to_agent")!;
       const reply = await sendTool.handler({ to: "peer.agent", conversation_id: "cid", kind: "response", body: "ANSWER", ...authorization },
-        { origin: { token: "active" } });
+        { origin: { token: activeToken } });
       expect(reply.isError).toBeFalsy();
     }
-    hooks.onTerminal("active", batchId);
-    hooks.onSettle("active", batchId, schedule === "precondition" ? { kind: "P", reason: "no_active_turn" }
+    hooks.onTerminal(activeToken, batchId);
+    hooks.onSettle(activeToken, batchId, schedule === "precondition" ? { kind: "P", reason: "no_active_turn" }
       : schedule === "unwritten" || schedule === "write-failed" || schedule === "write-timeout" ? { kind: "C" } : { kind: "A" },
     schedule === "included" || schedule === "ticket-use" || schedule === "item-before-response", schedule === "unwritten" ? "unwritten" : schedule === "write-failed" ? "failed" : "written", false, "T");
-    return { kind: "sent" as const, turnToken: "active", batchId, text };
+    return { kind: "sent" as const, turnToken: activeToken, batchId, text };
   });
   const link = { close: () => {}, currentSessionId: () => null, send: () => {},
     deliveryModes: () => echo ? { version: "v1", early: "steer", yield: "none", stage_reports: true } : null,
@@ -54,15 +61,39 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
     sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted" }; },
     reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
     acknowledgeInterAgentDelivery: (sequence: number) => acknowledged.push(sequence) };
-  const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => "active", send, steerInterAgentInput: steer,
+  const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => activeToken, send, steerInterAgentInput: steer,
     replaceInterAgentPlaceholder: () => false,
     run: async () => {
       linkOptions.onReplyBasisMode("v1");
       linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
-      hostOptions.onTurnStart({ turnToken: "active", kind: "wrapper_input" });
-      await linkOptions.onInterAgentMessage(inbound(grant));
-      if (steer.mock.calls.length > 0) {
-        hostOptions.onTurnEnd({ turnToken: "active", conversationIds: [], terminal: "turn.completed" });
+      if (otherPeerRoot) {
+        const root = inbound("normal") as any;
+        root.agent_id = "other.agent"; root.payload.conversation_id = "other-cid";
+        root.payload.body = "OTHER ROOT"; root.payload.turn_number = 1;
+        await linkOptions.onInterAgentMessage(root);
+        expect(send).toHaveBeenCalledOnce();
+        activeToken = String(send.mock.calls[0]![3]);
+        send.mockClear();
+      }
+      hostOptions.onTurnStart({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [] });
+      const early = inbound(grant) as any;
+      if (otherPeerRoot) early.delivery_seq = 2;
+      await linkOptions.onInterAgentMessage(early);
+      if (schedule === "queued-successor" || schedule === "terminal-before-settle") {
+        const next = inbound("normal") as any;
+        next.delivery_seq = otherPeerRoot ? 3 : 2; next.payload.turn_number = 3; next.payload.body = "SUCCESSOR";
+        await linkOptions.onInterAgentMessage(next);
+        expect(send).not.toHaveBeenCalled();
+        if (schedule === "terminal-before-settle") {
+          held!.hooks.onTerminal(activeToken, held!.batchId);
+          hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [], terminal: "turn.completed" });
+          expect(send).not.toHaveBeenCalled();
+        }
+        if (schedule !== "terminal-before-settle") held!.hooks.onTerminal(activeToken, held!.batchId);
+        held!.hooks.onSettle(activeToken, held!.batchId, { kind: "A" }, true, "written", false, "T");
+      }
+      if (steer.mock.calls.length > 0 && schedule !== "terminal-before-settle") {
+        hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [], terminal: "turn.completed" });
       }
       await new Promise(resolve => setImmediate(resolve));
     } };
@@ -158,4 +189,16 @@ describe("production Codex IA steer composition", () => {
     expect(result.steer).not.toHaveBeenCalled();
     expect(result.send).toHaveBeenCalledOnce();
   });
+});
+
+it.each(["queued-successor", "terminal-before-settle"] as const)(
+  "resumes a queued peer root when its steer resolves in the %s order", async schedule => {
+    const result = await compose("app-server", true, "early", schedule);
+    expect(result.send).toHaveBeenCalledOnce();
+  },
+);
+
+it("resumes a steered peer after a different peer's root turn ends", async () => {
+  const result = await compose("app-server", true, "early", "queued-successor", true, true);
+  expect(result.send).toHaveBeenCalledOnce();
 });

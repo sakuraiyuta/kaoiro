@@ -368,3 +368,42 @@ it("fences a foreign turn with IA steering enabled and operator steering disable
   await vi.waitFor(() => expect(ends.mock.calls.map(([end]) => end.turnToken)).toContain("ia-1"));
   expect(f.byMethod("turn/start")).toHaveLength(1);
 });
+
+
+it("a later operator steer cannot overtake a queued peer root", async () => {
+  const f = fixture(true, { interAgentSteer: { available: () => true } });
+  await running(f);
+  await f.host.send("EARLIER PEER ROOT", undefined, ["peer-cid"], "peer-root-token");
+  await f.operator("LATER OPERATOR");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+});
+
+it("a later peer steer cannot overtake a queued operator root", async () => {
+  const f = fixture(true, { interAgentSteer: { available: () => true } });
+  await running(f);
+  await f.operator("EARLIER OPERATOR ROOT", "normal");
+  const result = await f.host.steerInterAgentInput("LATER PEER", {
+    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {},
+    onTerminal: () => {}, onSettle: () => {},
+  }, "kaoiro-ia-steer:later-peer");
+  expect(result).toMatchObject({ kind: "queued", reason: "behind_earlier_input" });
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+});
+
+it("a conflicting IA item after precondition rejection releases its placeholder", async () => {
+  const f = fixture(true, { interAgentSteer: { available: () => true } });
+  await running(f);
+  f.onSteer = turnChanged;
+  let conflict = false;
+  await f.host.steerInterAgentInput("PEER BODY", {
+    admit: () => null, onAdmit: () => {}, onResponse: () => {}, onItem: () => {}, onTerminal: () => {},
+    onSettle: (_token, _id, _response, _observed, _write, itemConflict) => { conflict = itemConflict; },
+  }, "kaoiro-ia-steer:review-conflict");
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  f.completedItem("kaoiro-ia-steer:review-conflict", "WRONG BODY");
+  await f.operator("LATER ROOT", "normal");
+  f.terminal();
+  await vi.waitFor(() => expect(conflict).toBe(true));
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")).toEqual(["BASE", "LATER ROOT"]);
+});

@@ -76,8 +76,9 @@ can include explicit losses, not proof that every message was dispatched.
 those outcomes. The dashboard also displays `uncertain_count` and
 `last_uncertain {at, incarnation, generation, delivery_seq, reason}` separately:
 the wrapper reported a possibly delivered Codex steer whose final inclusion
-could not be proved. The counters survive stage-history expiry and process
-incarnation replacement for this recipient ledger's lifetime. A retirement
+could not be proved. `uncertain_count` and `last_uncertain` survive stage-history
+expiry and process incarnation replacement for this recipient ledger's lifetime.
+`lost_count` and `last_loss` reset when the delivery generation changes. A retirement
 behind an earlier received-but-unstarted input
 does not move the prefix past that input. The wrapper applies the response's
 skip ranges to its completion ledger and rebinds the post-skip prefix so later
