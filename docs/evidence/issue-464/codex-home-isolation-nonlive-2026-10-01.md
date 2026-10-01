@@ -91,8 +91,8 @@ for the explicit production boundary.
 | `wrapper/codex/test/cli_sigterm_process_exit.integration.test.ts:81` | `"ps -eo pid,ppid,args"` | inherits guarded Vitest env | process listing only; no Codex CLI |
 | `wrapper/codex/test/cli_sigterm_process_exit.integration.test.ts:212` | `process.execPath` | inherits guarded Vitest env | process listing only; no Codex CLI |
 | `wrapper/codex/test/codex_home_preflight.test.ts:17` | `pnpm nested Vitest` | explicit disposable hostile home | guard rejects before test body |
-| `wrapper/codex/test/permission_compaction.test.ts:40` | `Node compiled rollout reader` | child map deletes CODEX_HOME; HOME disposable | canary remains empty |
-| `wrapper/codex/test/stderr_production_default.test.ts:50` | `Node + native Codex` | explicit disposable home | native test deferred |
+| `wrapper/codex/test/permission_compaction.test.ts:42` | `Node compiled rollout reader` | child map deletes CODEX_HOME; HOME disposable | canary remains empty |
+| `wrapper/codex/test/stderr_production_default.test.ts:51` | `Node + native Codex` | explicit disposable home | native test deferred |
 
 Production call-path audit: `runner/src/spawn.ts:152` passes an explicit
 environment to each built wrapper and retains the state home only for Codex.
