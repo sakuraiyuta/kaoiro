@@ -403,7 +403,7 @@
     ],
     "restored_verify_exit": 0
   },
-  "evidence_md_sha256": "aa9595a6747efb589a9fd81203562dc925b229f345cd25ce034ceacff0694f14",
+  "evidence_md_sha256": "8450c940bd4ff7b0d2949cd1b18838f0f39081d278be42e8538dacb56c489c2b",
   "fixture": {
     "path": "wrapper/codex/test/fixtures/app_server_approval_decline_0.159.3.jsonl",
     "sha256": "262baefe21bc077403a1b0ccd46fd585868b0384dee7c47c85992f3abf8c4770"
