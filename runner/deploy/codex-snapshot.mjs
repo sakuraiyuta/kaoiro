@@ -85,6 +85,8 @@ export function capacity(parent, entries, migrationCopy = false) {
   const diagnostics = migrationCopy ? migrationFiles(entries) : [];
   const migrationCopyBytes = diagnostics.reduce((sum, e) => sum + e.size, 0);
   const migrationCopyInodes = diagnostics.length + diagnostics.filter((e) => e.path.endsWith(".sqlite")).length * 2;
+  // Logical sizes omit block rounding and new SQLite SHM (~32 KiB per DB);
+  // the reserve of at least 1 GiB is assumed to absorb both.
   const reserve = Math.max(Math.ceil(bytes * 0.2), 1024 ** 3);
   const fs = statfsSync(parent);
   must(fs.bavail * fs.bsize >= bytes + migrationCopyBytes + reserve, "Insufficient snapshot/restore disk capacity");
