@@ -85,6 +85,19 @@ describe("parseProbeStdout", () => {
     });
   });
 
+  it("commands 配列を parse 結果に残す (issue #424)", () => {
+    const out = parseProbeStdout(
+      JSON.stringify({
+        ok: true,
+        models: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
+        commands: ["clear", "anthropic-skills:built-in-browser"],
+        elapsed_ms: 100,
+        source: "init",
+      }),
+    );
+    expect(out?.commands).toEqual(["clear", "anthropic-skills:built-in-browser"]);
+  });
+
   it("resolved_model を落とさず parse 結果に残す (isEngineModelInfo は行を丸ごと通す)", () => {
     const out = parseProbeStdout(
       JSON.stringify({

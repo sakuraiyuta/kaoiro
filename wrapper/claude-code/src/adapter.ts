@@ -460,6 +460,22 @@ export function sdkMessageToResultMeta(
   return { fast_mode: m.fast_mode_state };
 }
 
+/** Mid-session push of the full slash-command list from an
+ *  SDKCommandsChangedMessage (issue #424). Returns the raw commands array,
+ *  or null if this is not a commands_changed message. */
+export function sdkMessageToCommandsChanged(
+  message: SDKMessage,
+): unknown[] | null {
+  if (
+    message.type !== "system" ||
+    (message as { subtype?: unknown }).subtype !== "commands_changed"
+  ) {
+    return null;
+  }
+  const m = message as { commands?: unknown };
+  return Array.isArray(m.commands) ? m.commands : null;
+}
+
 /** new_cwd from a CwdChanged hook input (#64), or null for other hook events
  *  or empty values. init carries cwd at session start, but never updates
  *  mid-session — the CwdChanged hook is the only path that does. */

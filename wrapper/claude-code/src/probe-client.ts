@@ -43,6 +43,7 @@ export interface ProbeOutcome {
    *  wrapper-host probes. */
   source?: "init" | "supported_models" | "cache";
   rate_limits?: ProbeRateLimits;
+  commands?: string[];
 }
 
 /** Resolve the probe entrypoint against this package's exports. Same
@@ -226,12 +227,16 @@ export function parseProbeStdout(stdout: string): ProbeOutcome | null {
     }
     const source =
       r.source === "init" || r.source === "supported_models" ? r.source : undefined;
+    const commands = Array.isArray(r.commands)
+      ? r.commands.filter((c): c is string => typeof c === "string")
+      : undefined;
     return {
       ok: true,
       models,
       elapsed_ms: 0,
       ...(source === undefined ? {} : { source }),
       ...(rateLimits === undefined ? {} : { rate_limits: rateLimits }),
+      ...(commands !== undefined && commands.length > 0 ? { commands } : {}),
     };
   }
   if (r.ok === false) {

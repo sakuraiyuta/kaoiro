@@ -38,6 +38,7 @@ type SDKMessage =
 | Variant | type / subtype | Main fields |
 |---|---|---|
 | SDKSystemMessage | system / init | session_id, model, tools[], cwd, permissionMode, mcp_servers, slash_commands |
+| SDKCommandsChangedMessage | system / commands_changed | commands (SlashCommand[]) |
 | SDKAssistantMessage | assistant | message(APIAssistantMessage: content contains text/thinking/tool_use), parent_tool_use_id, error? |
 | SDKUserMessage | user | message(APIUserMessage: includes tool_result), parent_tool_use_id |
 | SDKPartialAssistantMessage | stream_event | event(RawMessageStreamEvent) — only with `includePartialMessages: true` |
@@ -331,7 +332,12 @@ in streaming-input mode. Boundaries settled by a headless live run:
   `supportedEffortLevels`. The live return values were `default` / `opus[1m]` /
   `sonnet` / `sonnet[1m]` / `haiku` (only haiku does not support effort).
   The slash-command list is separately available from `supportedCommands()` /
-  init's `slash_commands` (#34). Bare `/model` and `/effort` do not surface as
+  init's `slash_commands` (#34). During fresh idle before the first turn, the
+  startup probe's `initializationResult.commands` seeds `ext.slash_commands`
+  with probe source priority, surfacing `/` completions immediately. Live
+  `system/init`, `supportedCommands()`, and mid-session `commands_changed`
+  messages supersede probe readings with live Query authority (issue #424).
+  Bare `/model` and `/effort` do not surface as
   SDK control and are only input text, so the dashboard constructs the
   selection UI from these lists.
 - **Selection before the first turn (#107)**: Because `supportedModels()` waits

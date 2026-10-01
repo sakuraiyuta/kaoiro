@@ -86,6 +86,7 @@ import {
   sdkMessageToTasklistTriggers,
   sdkMessageToToolResultIds,
   sdkMessageToTerminalReason,
+  sdkMessageToCommandsChanged,
 } from "./adapter.js";
 import {
   clipText,
@@ -98,6 +99,7 @@ import type {
 } from "@kaoiro/protocol";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
+import { projectCommand } from "./probe.js";
 import { runClaudeProbe, type ProbeOutcome, type ProbeSpawnDeps, type ProbeRateLimits } from "./probe-client.js";
 import { DEFAULT_CHILD_KILL_DEADLINE_MS, spawnBoundedClaudeProcess } from "./bounded_spawn.js";
 import {
@@ -169,6 +171,12 @@ const MODEL_CATALOG_PRIORITY: Record<ModelCatalogSource, number> = {
   startup_probe: 1,
   manual_probe: 2,
   live_query: 3,
+};
+
+type SlashCommandsSource = "startup_probe" | "live_query";
+const SLASH_COMMANDS_PRIORITY: Record<SlashCommandsSource, number> = {
+  startup_probe: 1,
+  live_query: 2,
 };
 
 type EffortCatalogErrorReason =
@@ -888,6 +896,7 @@ export class AgentHost implements EngineAdapter {
   /** Slash commands the SDK reported at session init (#34); surfaced so the
    *  dashboard can offer `/` completion. */
   #slashCommands: string[] | null = null;
+  #slashCommandsSource: SlashCommandsSource | null = null;
   /** Current Claude Code permission mode (#57). Init carries it as required;
    *  SDKStatusMessage updates it on mid-session changes (e.g. `/mode`).
    *  Stamped into ext.permission_mode. */
@@ -2658,6 +2667,7 @@ export class AgentHost implements EngineAdapter {
           // The session is initialized once init meta lands, so the
           // supportedModels control request can resolve; fetch it once (#54).
           void this.#refreshSupportedModels();
+          void this.#refreshSupportedCommands();
           // Context usage is also reachable once init lands (ADR-0040 phase-21).
           // Use the init-time bounded-retry helper so a transient control-request
           // race gets one more shot before we fall back to result-time refresh
@@ -2687,6 +2697,15 @@ export class AgentHost implements EngineAdapter {
         if (resultMeta?.fast_mode !== undefined) {
           this.#fastMode = resultMeta.fast_mode;
         }
+        const changedCommands = sdkMessageToCommandsChanged(message);
+        if (changedCommands !== null) {
+          const projected = changedCommands
+            .map(projectCommand)
+            .filter((c): c is string => c !== null);
+          if (this.#applySlashCommands(projected, "live_query")) {
+            this.#emitState(this.#machine.state);
+          }
+        }
         if (message.type === "result") {
           await this.#reconcilePendingTasklistRefreshes("result");
           void this.#refreshContextUsage();
@@ -2695,6 +2714,7 @@ export class AgentHost implements EngineAdapter {
           // an earlier retry failed. Guarded internally against overrun of
           // MAX_MODEL_REFRESH_RETRIES and post-success no-ops.
           void this.#refreshSupportedModels();
+          void this.#refreshSupportedCommands();
         }
 
         // issue #287: stash the assistant-level SDK error class so the
@@ -3265,6 +3285,24 @@ export class AgentHost implements EngineAdapter {
     return ext;
   }
 
+  #applySlashCommands(commands: string[], source: SlashCommandsSource): boolean {
+    const currentPriority =
+      this.#slashCommandsSource !== null
+        ? SLASH_COMMANDS_PRIORITY[this.#slashCommandsSource]
+        : 0;
+    const newPriority = SLASH_COMMANDS_PRIORITY[source];
+    if (newPriority < currentPriority) {
+      return false;
+    }
+    const unchanged =
+      this.#slashCommands !== null &&
+      this.#slashCommands.length === commands.length &&
+      this.#slashCommands.every((c, i) => c === commands[i]);
+    this.#slashCommands = commands;
+    this.#slashCommandsSource = source;
+    return !unchanged;
+  }
+
   /** Records the active model, working directory, and slash commands from
    *  session init (#16, #34). */
   #applyInitMeta(meta: {
@@ -3277,7 +3315,7 @@ export class AgentHost implements EngineAdapter {
     if (meta.model !== undefined) this.#observeReportedModel(meta.model);
     if (meta.cwd !== undefined) this.#cwd = meta.cwd;
     if (meta.slash_commands !== undefined) {
-      this.#slashCommands = meta.slash_commands;
+      this.#applySlashCommands(meta.slash_commands, "live_query");
     }
     if (meta.permission_mode !== undefined) {
       this.#permissionMode = meta.permission_mode;
@@ -3459,11 +3497,23 @@ export class AgentHost implements EngineAdapter {
     try {
       const outcome = await this.#probeFn({ includeUsage: true, signal: this.#startupProbeAbort.signal });
       if (this.#closed) return;
+      let stateChanged = false;
       if (
         outcome.ok &&
         outcome.models !== undefined &&
         this.#applyProbeCatalog(outcome.models, "startup_probe")
       ) {
+        stateChanged = true;
+      }
+      if (
+        outcome.ok &&
+        outcome.commands !== undefined &&
+        outcome.commands.length > 0 &&
+        this.#applySlashCommands(outcome.commands, "startup_probe")
+      ) {
+        stateChanged = true;
+      }
+      if (stateChanged) {
         this.#emitState(this.#machine.state);
       }
       if (!this.#nativeRateLimitsSeen && outcome.rate_limits !== undefined) {
@@ -3619,6 +3669,27 @@ export class AgentHost implements EngineAdapter {
       }
     } finally {
       this.#modelsInflight = false;
+    }
+  }
+
+  /** Fetches the available slash commands from the live Query (issue #424).
+   *  Called fire-and-forget from init (first-chance) and turn boundary.
+   *  When resolved, updates #slashCommands with live_query priority and emits
+   *  state_change if the list changed. */
+  async #refreshSupportedCommands(): Promise<void> {
+    const current = this.#query;
+    if (!current || typeof current.supportedCommands !== "function") return;
+    try {
+      const commands = await current.supportedCommands();
+      if (!Array.isArray(commands) || commands.length === 0) return;
+      const projected = commands
+        .map(projectCommand)
+        .filter((c): c is string => c !== null);
+      if (this.#applySlashCommands(projected, "live_query")) {
+        this.#emitState(this.#machine.state);
+      }
+    } catch {
+      // Control request failure leaves last-known slash commands intact.
     }
   }
 
