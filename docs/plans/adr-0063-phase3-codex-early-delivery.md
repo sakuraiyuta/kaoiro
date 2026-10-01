@@ -371,13 +371,11 @@ that server back requires rolling the wrapper back.
   `Op::Interrupt`; `Op::InterruptIfNoPendingInput` is a distinct operation.
   Its reconstructed offline probes passed on both binaries, including an
   accepted/unobserved steer followed by hard interrupt. Issue #462's
-  paired live evaluation in branch `issue-462-codex-pin-eval`, file
-  `docs/evidence/codex-app-server/pin-0.159.2-evaluation-2026-10-01.md`,
-  at commit `a3801e2235fd071203e7c51f81b16c5873b4a3b7` (record SHA-256
-  `2d768d0f3dc22b4b3c4079682b65765cd8022c35d000e8a80daa898bb727cff9`)
+  [paired live evaluation](../evidence/codex-app-server/pin-0.159.2-evaluation-2026-10-01.md#authenticated-comparison-and-stage-3-denial)
   reports both pins passing its L1/L2/resume/L3/L3b and P2 samples with
-  negative controls. That evaluation is under independent review and does
-  not prove the new IA path or decide pin adoption. [Version-sensitive,
+  negative controls and recommends adopting the new pin later. That
+  evaluation is under independent review and does not prove the new IA path
+  or decide pin adoption. [Version-sensitive,
   0.159.0+] Issue #462 found
   `instant_interrupt` and `defer_mailbox_preemption` false by default in its
   candidate source; verify the final effective configuration. The
