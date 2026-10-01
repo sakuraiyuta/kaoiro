@@ -1232,6 +1232,39 @@ if (args[0] === "models") {
     host.close();
   });
 
+  it("statusSnapshot includes session_id after init event and omits it before init (issue #418)", async () => {
+    const { host, calls } = hostHarness();
+    expect(host.statusSnapshot()).not.toHaveProperty("session_id");
+
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const call = calls[0]!;
+    call.child.stdout.write('{"event":"init","conversation_id":"cid-unit-418","init":{"tools":[]}}\n');
+    call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    call.child.finish();
+
+    await waitFor(() => host.statusSnapshot().session_id === "cid-unit-418");
+    expect(host.statusSnapshot().session_id).toBe("cid-unit-418");
+    host.close();
+  });
+
+  it("statusSnapshot includes session_id from resumeSessionId option (issue #418)", () => {
+    const resumedHost = new AntigravityHost(config(), {
+      cwd: process.cwd(),
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
+      onState: () => {},
+      onLog: () => {},
+      resumeSessionId: "resumed-session-123",
+      verifyGate: async () => true,
+      runtimeAssetsAvailable: () => true,
+    });
+    expect(resumedHost.statusSnapshot()).toMatchObject({
+      session_id: "resumed-session-123",
+    });
+    resumedHost.close();
+  });
+
   it("F4bの未観測tool完了はchildをSIGTERMしてsessionをerrorにする", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
@@ -3214,41 +3247,6 @@ if (args[0] === "models") {
         await waitFor(() => turnEnds.length === 2);
         expect(calls).toHaveLength(1);
         host.close();
-      });
-    });
-
-    describe("statusSnapshot session_id (issue #418)", () => {
-      it("statusSnapshot includes session_id after init event and omits it before init", async () => {
-        const { host, calls } = hostHarness();
-        expect(host.statusSnapshot()).not.toHaveProperty("session_id");
-
-        await host.send("hello");
-        await waitFor(() => calls.length === 1);
-        const call = calls[0]!;
-        call.child.stdout.write('{"event":"init","conversation_id":"cid-unit-418","init":{"tools":[]}}\n');
-        call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-        call.child.finish();
-
-        await waitFor(() => host.statusSnapshot().session_id === "cid-unit-418");
-        expect(host.statusSnapshot().session_id).toBe("cid-unit-418");
-        host.close();
-      });
-
-      it("statusSnapshot includes session_id from resumeSessionId option", () => {
-        const resumedHost = new AntigravityHost(config(), {
-          cwd: process.cwd(),
-          appendSystemPrompt: "persona",
-          permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
-          onState: () => {},
-          onLog: () => {},
-          resumeSessionId: "resumed-session-123",
-          verifyGate: async () => true,
-          runtimeAssetsAvailable: () => true,
-        });
-        expect(resumedHost.statusSnapshot()).toMatchObject({
-          session_id: "resumed-session-123",
-        });
-        resumedHost.close();
       });
     });
   });
