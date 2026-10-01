@@ -613,6 +613,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
   interAgent = new InterAgentTool({
     workTools,
+    noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     replyBasisMode: () => replyBasisMode,
     canSendInterAgent: () => !admissionFailStopped,
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
@@ -957,6 +958,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
+    noticeAttribution: "v1",
     interAgentDeliveryModes: {
       version: "v1",
       early: phase2Delivery ? "fold" : "none",

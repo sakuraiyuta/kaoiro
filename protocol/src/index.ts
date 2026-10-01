@@ -1157,6 +1157,7 @@ export type InterAgentMessageKind =
  *  secret-masked, length-clipped reason so the receiving agent can decide
  *  whether to retry, wait, or escalate to the operator. */
 export interface InterAgentErrorPayload {
+  affected_deliveries?: { delivery_seq: number; peer_turn_number: number; batch_id: string }[];
   reset_delay_seconds?: number;
   peer?: string;
   synthetic?: boolean;
@@ -1223,6 +1224,8 @@ export interface InterAgentMessagePayload {
   work_control?: WorkControl;
   /** Server-owned fields; a sender-supplied value is rejected. */
   delivery_authority?: DeliveryAuthority;
+  /** Server-stamped sender capability; clients cannot author this field. */
+  notice_attribution?: "v1";
   work?: WorkStamp;
   work_control_result?: WorkControlResult;
 }
@@ -1230,9 +1233,10 @@ export interface InterAgentMessagePayload {
 /** A wrapper can request an operation but cannot author server stamps. */
 export type OutboundInterAgentMessagePayload = Omit<
   InterAgentMessagePayload,
-  "delivery_authority" | "work" | "work_control_result"
+  "delivery_authority" | "notice_attribution" | "work" | "work_control_result"
 > & {
   delivery_authority?: never;
+  notice_attribution?: never;
   work?: never;
   work_control_result?: never;
 };
@@ -1278,6 +1282,8 @@ export interface InterAgentDeliveryStatus {
   /** Explicit retirements are unresolved-delivery outcomes, not dispatches. */
   lost_count?: number;
   last_loss?: { at: string; first_seq: number; last_seq: number; count: number; reason: string };
+  uncertain_count?: number;
+  last_uncertain?: { at: string; incarnation: string; generation: string; delivery_seq: number; reason: string };
   /** Bounded resync response only; not part of directory snapshots. */
   skipped_ranges?: [number, number][];
 }

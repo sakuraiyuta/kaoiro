@@ -186,6 +186,7 @@ export async function runAntigravityCli(
   };
   const interAgent = new InterAgentTool({
     workTools,
+    noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     config,
     getState: () => host?.state ?? "idle",
     getActiveInterAgentTurnToken: () =>
@@ -339,6 +340,7 @@ export async function runAntigravityCli(
   );
   const buildInfo = loadBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
   link = createServerLink(config.server_url, config.agent_id, deliveryAcknowledgementRuntime.withServerLinkOptions({
+    noticeAttribution: "v1",
     personaId: config.persona.id,
     ...(config.server_token === undefined ? {} : { token: config.server_token }),
     ...(config.transition_id === undefined ? {} : { transitionId: config.transition_id }),

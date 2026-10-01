@@ -815,6 +815,8 @@ export type InboundDisposition =
 interface ReplyWaiter {
   resolve: (envelope: Envelope | undefined) => void;
   timeout: ReturnType<typeof setTimeout>;
+  peer: string;
+  sentTurnNumber: number;
 }
 
 /** One inbound inter-agent message injected into the SDK as ordinary user
@@ -829,7 +831,19 @@ interface PendingInjection {
   turnToken: string;
 }
 
+interface PendingSteerInjection {
+  from: string;
+  conversationId: string;
+  peerTurnNumber: number;
+  deliverySeq: number;
+  batchId: string;
+  attributed: boolean;
+  result?: "corroborated" | "uncertain";
+  replied: boolean;
+}
+
 export interface InterAgentToolOptions {
+  noticeAttributionMode?: () => "v1" | "legacy" | "pending";
   replyTicketClock?: () => number;
   waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending" | "closed">;
   unreadCount?: () => number;
@@ -968,6 +982,10 @@ export class InterAgentTool {
         }
         for (const { ticket, envelope } of tickets) {
           if (!ticket.activate()) return false;
+          const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
+          if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {
+            this.#steerTicketCoverage.set(ticket.authorization.reply_ticket, { token, sequence });
+          }
           this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, token, [envelope]);
         }
         this.replyBasis.observeFolded(envelopes);
@@ -997,6 +1015,9 @@ export class InterAgentTool {
   readonly #conversations = new Map<string, ConversationTrack>();
   readonly #replyWaiters = new Map<string, ReplyWaiter>();
   readonly #pendingInjections = new Map<string, PendingInjection>();
+  readonly #steerInjections = new Map<string, Map<number, PendingSteerInjection>>();
+  readonly #steerTerminals = new Map<string, InterAgentErrorPayload | null>();
+  readonly #steerTicketCoverage = new Map<string, { token: string; sequence: number }>();
   /** Per-conversation_id serialization for `invoke()`'s turn-allocation-
    *  through-acceptance-handling segment (issue #167 review M1). Holds the
    *  tail promise of the current lock chain for a conversation_id; absent
@@ -1470,7 +1491,16 @@ export class InterAgentTool {
     const mode = modeForTrack(track);
 
     const waiter = this.#replyWaiters.get(conversationId);
-    if (waiter) {
+    const scopedFailure = payload.notice_type === "turn_failure" && payload.error?.affected_deliveries;
+    const matchesWaiter = waiter !== undefined && (
+      Array.isArray(scopedFailure)
+        ? envelope.agent_id === waiter.peer && scopedFailure.some(item =>
+          item.peer_turn_number === waiter.sentTurnNumber &&
+          Number.isSafeInteger(item.delivery_seq) && item.delivery_seq > 0)
+        : !(payload.notice_type === "turn_failure" &&
+            this.#options.noticeAttributionMode !== undefined)
+    );
+    if (waiter && matchesWaiter) {
       this.#replyWaiters.delete(conversationId);
       clearTimeout(waiter.timeout);
       waiter.resolve(envelope);
@@ -1514,6 +1544,107 @@ export class InterAgentTool {
 
   pendingConversationIdsForTurn(turnToken: string): string[] {
     return [...this.#pendingInjections].filter(([, pending]) => pending.turnToken === turnToken).map(([cid]) => cid);
+  }
+
+  hasPendingRootConversation(conversationId: string): boolean {
+    return this.#pendingInjections.has(conversationId);
+  }
+
+  hasPendingSteerPeer(peer: string): boolean {
+    return [...this.#steerInjections.values()].some(records => [...records.values()].some(record => record.from === peer));
+  }
+
+  noteSteerAttempt(envelope: Envelope, turnToken: string, batchId: string): boolean {
+    const payload = envelope.payload as unknown as InterAgentMessagePayload;
+    const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
+    if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0 ||
+        typeof payload.conversation_id !== "string" || !Number.isSafeInteger(payload.turn_number) ||
+        this.#pendingInjections.has(payload.conversation_id)) return false;
+    const records = this.#steerInjections.get(turnToken) ?? new Map<number, PendingSteerInjection>();
+    if (records.has(sequence)) return false;
+    records.set(sequence, { from: envelope.agent_id, conversationId: payload.conversation_id,
+      peerTurnNumber: payload.turn_number, deliverySeq: sequence, batchId,
+      attributed: payload.notice_attribution === "v1", replied: false });
+    this.#steerInjections.set(turnToken, records);
+    return true;
+  }
+
+  abandonSteerAttempt(turnToken: string, deliverySeq: number): void {
+    const records = this.#steerInjections.get(turnToken);
+    records?.delete(deliverySeq);
+    if (records?.size === 0) {
+      this.#steerInjections.delete(turnToken);
+      this.#steerTerminals.delete(turnToken);
+    }
+  }
+
+  steerTurnEnded(turnToken: string, error?: InterAgentErrorPayload): Envelope[] {
+    if (!this.#steerInjections.has(turnToken)) return [];
+    this.#steerTerminals.set(turnToken, error ?? null);
+    return this.#resolveSteerNotices(turnToken);
+  }
+
+  settleSteerInjection(turnToken: string, deliverySeq: number, result: "corroborated" | "uncertain"): Envelope[] {
+    const record = this.#steerInjections.get(turnToken)?.get(deliverySeq);
+    if (record === undefined || record.result !== undefined) return [];
+    record.result = result;
+    return this.#resolveSteerNotices(turnToken);
+  }
+
+  #resolveSteerNotices(turnToken: string): Envelope[] {
+    if (!this.#steerTerminals.has(turnToken)) return [];
+    const records = this.#steerInjections.get(turnToken);
+    if (records === undefined || [...records.values()].some(record => record.result === undefined)) return [];
+    this.#steerInjections.delete(turnToken);
+    const error = this.#steerTerminals.get(turnToken);
+    this.#steerTerminals.delete(turnToken);
+    for (const [ticket, coverage] of this.#steerTicketCoverage) if (coverage.token === turnToken) this.#steerTicketCoverage.delete(ticket);
+    const groups = new Map<string, PendingSteerInjection[]>();
+    for (const record of records.values()) {
+      const key = JSON.stringify([record.conversationId, record.from]);
+      const group = groups.get(key) ?? [];
+      group.push(record);
+      groups.set(key, group);
+    }
+    const notices: Envelope[] = [];
+    for (const group of groups.values()) {
+      const first = group[0]!;
+      const unresolved = group.filter(record => !record.replied);
+      if (!unresolved.length) continue;
+      const attributed = group.every(record => record.attributed) && this.#options.noticeAttributionMode?.() === "v1";
+      const uncertain = unresolved.filter(record => record.result === "uncertain");
+      const classified = unresolved.filter(record => record.result === "corroborated");
+      const noticeGroups: Array<{ entries: PendingSteerInjection[]; error: InterAgentErrorPayload }> = attributed
+        ? [
+            ...(error === null || error === undefined || classified.length === 0 ? [] : [{ entries: classified, error }]),
+            ...(uncertain.length === 0 ? [] : [{ entries: uncertain, error: { code: "timeout", message: "Input may have reached the peer turn; wait and do not retry automatically" } }]),
+          ]
+        : [{ entries: unresolved, error: uncertain.length > 0
+            ? { code: "timeout", message: "At least one input may have reached the peer turn; wait and do not retry any input from that turn" }
+            : error ?? { code: "timeout", message: "Unattributed turn failure" } }];
+      for (const noticeGroup of noticeGroups) {
+        if (!attributed && uncertain.length === 0 && error == null) continue;
+        const sorted = [...noticeGroup.entries].sort((a, b) => a.deliverySeq - b.deliverySeq);
+        for (let offset = 0; offset < sorted.length; offset += attributed ? 16 : sorted.length) {
+          const slice = sorted.slice(offset, offset + (attributed ? 16 : sorted.length));
+          const noticeError: InterAgentErrorPayload = attributed
+            ? { ...noticeGroup.error, affected_deliveries: slice.map(record => ({ delivery_seq: record.deliverySeq,
+                peer_turn_number: record.peerTurnNumber, batch_id: record.batchId })) }
+            : noticeGroup.error;
+          const track = this.#getTrack(first.conversationId);
+          track.turnNumber += 1;
+          notices.push(makeInterAgentMessage(this.#options.config, this.#options.getState(), this.#now(), {
+            to: first.from, conversation_id: first.conversationId, turn_number: track.turnNumber,
+            kind: "inform", body: `peer error (${noticeError.code}): ${noticeError.message}`,
+            meta: { done: false, propose_next: "" }, owner: { kind: "user", id: "operator" },
+            new_conversation: false,
+            ...(this.#options.replyBasisMode?.() === "v1" ? { notice_type: "turn_failure" as const } : {}),
+            error: noticeError,
+          }));
+        }
+      }
+    }
+    return notices;
   }
 
   /** Called by cli.ts once per SDK turn boundary (success or error), with the
@@ -2027,7 +2158,7 @@ export class InterAgentTool {
 
         const timeoutMs = args.timeout_ms ?? DEFAULT_REPLY_TIMEOUT_MS;
         const reply = waitForResponse
-          ? this.#waitForReply(conversationId, timeoutMs)
+          ? this.#waitForReply(conversationId, args.to, sentTurnNumber, timeoutMs)
           : undefined;
 
         const sent = `sent to ${args.to} (conversation_id=${conversationId}, turn_number=${sentTurnNumber})`;
@@ -2072,6 +2203,13 @@ export class InterAgentTool {
             pending?.turnToken === activeTurnToken
           ) {
             this.#pendingInjections.delete(conversationId);
+          }
+          if (acceptance.kind !== "rejected" && captured?.ticket && args.reply_ticket !== undefined) {
+            const coverage = this.#steerTicketCoverage.get(args.reply_ticket);
+            if (coverage?.token === captured.origin.token) {
+              const steered = this.#steerInjections.get(coverage.token)?.get(coverage.sequence);
+              if (steered?.conversationId === conversationId && steered.from === args.to) steered.replied = true;
+            }
           }
 
           // issue #165 review round 4 (ふじ design-review approve, #201
@@ -2402,6 +2540,11 @@ export class InterAgentTool {
                   code: inboundPayload.error.code,
                   message: inboundPayload.error.message,
                   from: inbound.agent_id === "server" ? inboundPayload.error.peer ?? inbound.agent_id : inbound.agent_id,
+                  ...(inboundPayload.error.affected_deliveries === undefined ? {} : {
+                    affected_deliveries: inboundPayload.error.affected_deliveries,
+                    awaited_turn_number: sentTurnNumber,
+                    guidance_scope: "only the listed inputs",
+                  }),
                   ...(disconnect ?? {}),
                 },
               },
@@ -2525,6 +2668,8 @@ export class InterAgentTool {
 
   #waitForReply(
     conversationId: string,
+    peer: string,
+    sentTurnNumber: number,
     timeoutMs: number,
   ): Promise<Envelope | undefined> {
     return new Promise((resolve) => {
@@ -2532,7 +2677,7 @@ export class InterAgentTool {
         this.#replyWaiters.delete(conversationId);
         resolve(undefined);
       }, timeoutMs);
-      this.#replyWaiters.set(conversationId, { resolve, timeout });
+      this.#replyWaiters.set(conversationId, { resolve, timeout, peer, sentTurnNumber });
     });
   }
 }
@@ -2620,13 +2765,22 @@ export function formatInboundMessage(
   const error = payload.error;
   const disconnect = error === undefined ? undefined : disconnectErrorFrom(error);
   const mode = opts?.mode ?? "reply-owed";
+  const affected = error?.affected_deliveries;
+  const scope = Array.isArray(affected) && affected.length > 0
+    ? ` [affected inputs: ${affected.map(item => `turn ${item.peer_turn_number}, sequence ${item.delivery_seq}`).join("; ")}; guidance applies only to these inputs]`
+    : payload.notice_type === "turn_failure" && error !== undefined
+      ? " [unattributed failure; wait and do not retry any input from the failed turn]"
+      : "";
+  const guidance = payload.notice_type === "turn_failure" && !Array.isArray(affected)
+    ? "wait and do not retry until the affected input is identified"
+    : error === undefined ? "" : errorGuidance(error.code);
   // issue #127: an error notice gets its own line format — a plain
   // "kind: body" render would bury the machine-readable code the receiving
   // model needs to decide whether retrying is worthwhile.
   const messageLine = error
     ? `[from ${from}] peer-error(${error.code}${
         disconnect === undefined ? "" : `, origin=${disconnect.origin}, reason=${disconnect.reason}`
-      }): ${error.message} — ${errorGuidance(error.code)}.`
+      }): ${error.message}${scope} — ${guidance}.`
     : `[from ${from}] ${kind}: ${body}`;
   return [
     markerLine(conversationId, mode),

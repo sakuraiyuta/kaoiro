@@ -111,6 +111,74 @@ function inboundEnvelope(
   };
 }
 
+function steeredEnvelope(conversationId: string, sequence: number, turnNumber: number, attributed = true): Envelope {
+  const envelope = inboundEnvelope(conversationId);
+  (envelope as Envelope & { delivery_seq: number }).delivery_seq = sequence;
+  Object.assign(envelope.payload, { turn_number: turnNumber,
+    ...(attributed ? { notice_attribution: "v1" } : {}) });
+  return envelope;
+}
+
+describe("sequence-scoped steer failure obligations", () => {
+  const make = () => new InterAgentTool({ config: configFor("self.agent"), getState: () => "tool_running",
+    noticeAttributionMode: () => "v1", replyBasisMode: () => "v1", now: () => "2026-10-01T03:00:00Z",
+    send: () => {} });
+
+  it("keeps same-CID sequences separate and emits classified and uncertain coverage", () => {
+    const tool = make(), a = steeredEnvelope("cid", 4, 2), b = steeredEnvelope("cid", 5, 4);
+    expect(tool.noteSteerAttempt(a, "token", "batch-a")).toBe(true);
+    expect(tool.noteSteerAttempt(b, "token", "batch-b")).toBe(true);
+    expect(tool.settleSteerInjection("token", 4, "corroborated")).toEqual([]);
+    expect(tool.steerTurnEnded("token", { code: "api_error", message: "failed" })).toEqual([]);
+    const notices = tool.settleSteerInjection("token", 5, "uncertain");
+    expect(notices).toHaveLength(2);
+    expect(notices.map(notice => (notice.payload as unknown as InterAgentMessagePayload).error)).toEqual([
+      { code: "api_error", message: "failed", affected_deliveries: [{ delivery_seq: 4, peer_turn_number: 2, batch_id: "batch-a" }] },
+      { code: "timeout", message: expect.stringContaining("wait and do not retry"),
+        affected_deliveries: [{ delivery_seq: 5, peer_turn_number: 4, batch_id: "batch-b" }] },
+    ]);
+    expect(tool.hasPendingSteerPeer("peer.agent")).toBe(false);
+    expect(tool.settleSteerInjection("token", 5, "uncertain")).toEqual([]);
+  });
+
+  it("a reply using A's ticket clears only A while B still receives its timeout notice", async () => {
+    const tool = new InterAgentTool({ config: configFor("self.agent"), getState: () => "tool_running",
+      noticeAttributionMode: () => "v1", replyBasisMode: () => "v1", send: () => {},
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }) });
+    const a = steeredEnvelope("cid", 4, 2), b = steeredEnvelope("cid", 5, 4);
+    tool.prepareReplyInput("token", [steeredEnvelope("cid", 3, 1)]);
+    tool.beginReplyInput("token");
+    tool.noteSteerAttempt(a, "token", "batch-a");
+    tool.noteSteerAttempt(b, "token", "batch-b");
+    const foldA = tool.prepareFoldInput("token", [a])!;
+    expect(foldA.activate()).toBe(true);
+    const auth = foldA.authorizations[0]!;
+    const reply = await tool.invoke({ to: "peer.agent", conversation_id: "cid", kind: "response", body: "A reply",
+      in_reply_to: auth.in_reply_to, reply_ticket: auth.reply_ticket }, { origin: { token: "token" } });
+    expect(reply.isError).toBeFalsy();
+    const foldB = tool.prepareFoldInput("token", [b])!;
+    expect(foldB.activate()).toBe(true);
+    tool.settleSteerInjection("token", 4, "corroborated");
+    tool.steerTurnEnded("token", { code: "api_error", message: "failed" });
+    const notices = tool.settleSteerInjection("token", 5, "uncertain");
+    expect(notices).toHaveLength(1);
+    expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error?.affected_deliveries)
+      .toEqual([{ delivery_seq: 5, peer_turn_number: 4, batch_id: "batch-b" }]);
+  });
+
+  it("uses one conservative CID-wide notice for an older sender", () => {
+    const tool = make(), a = steeredEnvelope("cid", 4, 2, false), b = steeredEnvelope("cid", 5, 4, false);
+    tool.noteSteerAttempt(a, "token", "batch-a");
+    tool.noteSteerAttempt(b, "token", "batch-b");
+    tool.settleSteerInjection("token", 4, "corroborated");
+    tool.settleSteerInjection("token", 5, "uncertain");
+    const notices = tool.steerTurnEnded("token", { code: "api_error", message: "failed" });
+    expect(notices).toHaveLength(1);
+    expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error).toMatchObject({ code: "timeout" });
+    expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error).not.toHaveProperty("affected_deliveries");
+  });
+});
+
 // Direct dispatch via the public invoke() entry point — the same handler the
 // SDK MCP wiring runs once the operator approves the call. Going through
 // invoke instead of the SDK transport keeps the test deterministic and
@@ -416,6 +484,77 @@ describe("InterAgentTool", () => {
       message: "peer hit its rate limit",
       from: "peer.agent",
     });
+  });
+
+  it.each(["A-before-B", "B-before-A"] as const)(
+    "scoped failures attribute the awaited turn without consuming another sequence (%s)",
+    async (order) => {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        noticeAttributionMode: () => "v1",
+      });
+      const pending = callTool(tool, {
+        to: "peer.agent", body: "B", kind: "request", conversation_id: "cid-scoped",
+        wait_for_response: true, timeout_ms: 1_000,
+      });
+      const notice = (peerTurn: number, seq: number, turn: number) => {
+        const envelope = inboundEnvelope("cid-scoped", "inform", {
+          code: peerTurn === 1 ? "api_error" : "timeout",
+          message: peerTurn === 1 ? "the peer reported an unspecified error" : "the peer's turn timed out",
+          affected_deliveries: [{ delivery_seq: seq, peer_turn_number: peerTurn, batch_id: `steer-${seq}` }],
+        });
+        envelope.payload.notice_type = "turn_failure";
+        envelope.payload.turn_number = turn;
+        return envelope;
+      };
+      const a = notice(4, 10, order === "A-before-B" ? 2 : 3);
+      const b = notice(1, 11, order === "A-before-B" ? 3 : 2);
+      const first = order === "A-before-B" ? a : b;
+      const second = order === "A-before-B" ? b : a;
+      const firstDisposition = await tool.receiveInbound(first);
+      expect(firstDisposition.consumed).toBe(first === b);
+      if (first === a) {
+        expect(firstDisposition.inject).toBe(true);
+        expect(formatInboundMessage(a)).toContain("turn 4, sequence 10");
+        expect(formatInboundMessage(a)).toContain("guidance applies only to these inputs");
+      }
+      const secondDisposition = await tool.receiveInbound(second);
+      expect(secondDisposition.consumed).toBe(second === b);
+      const { result } = await pending;
+      const parsed = JSON.parse(result.content[0]!.text);
+      expect(parsed.peer_error.affected_deliveries).toEqual([
+        { delivery_seq: 11, peer_turn_number: 1, batch_id: "steer-11" },
+      ]);
+      expect(parsed.peer_error.awaited_turn_number).toBe(1);
+    },
+  );
+
+  it("unscoped legacy failure under negotiated attribution leaves the waiter pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"), getState: () => "tool_running", send: () => {},
+        noticeAttributionMode: () => "v1",
+      });
+      const pending = callTool(tool, {
+        to: "peer.agent", body: "B", kind: "request", conversation_id: "cid-legacy-notice",
+        wait_for_response: true, timeout_ms: 1_000,
+      });
+      const legacy = inboundEnvelope("cid-legacy-notice", "inform", {
+        code: "api_error", message: "the peer reported an unspecified error",
+      });
+      legacy.payload.notice_type = "turn_failure";
+      const disposition = await tool.receiveInbound(legacy);
+      expect(disposition.consumed).toBe(false);
+      expect(disposition.inject).toBe(true);
+      expect(formatInboundMessage(legacy)).toContain("unattributed failure; wait and do not retry");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await pending).result.content[0]?.text).toContain("reply_pending=true");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

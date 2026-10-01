@@ -1205,6 +1205,19 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     mock.pushes = [];
   });
 
+  it("projects the durable uncertainty summary without inventing a delivery outcome", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const pending = link.requestDirectory();
+    mock.lastPush!.receivers.get("ok")!({ agents: [{ agent_id: "peer.1", persona: {}, state: "idle",
+      inter_agent_delivery: { issued_seq: 3, acked_seq: 3, lost_count: 0, uncertain_count: 2,
+        last_uncertain: { at: "2026-10-01T00:00:00Z", incarnation: "inc", generation: "gen",
+          delivery_seq: 3, reason: "turn_steer_timeout" } } }], users: [] });
+    expect((await pending).agents[0]?.inter_agent_delivery).toMatchObject({
+      acked_seq: 3, lost_count: 0, uncertain_count: 2,
+      last_uncertain: { delivery_seq: 3, reason: "turn_steer_timeout" },
+    });
+  });
+
   it("directory_request の reply から agents 配列を返す", async () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     const pending = link.requestDirectory();
@@ -2830,6 +2843,20 @@ it("captures a read-only replay fence invalidated by disconnection, channel loss
 });
 
 describe("reply-basis negotiation", () => {
+  it("uses the notice attribution echo only for the current joined channel", () => {
+    const modes: string[] = [];
+    const link = new ServerLink("ws://test", "self", { personaId: "p", noticeAttribution: "v1",
+      onNoticeAttributionMode: mode => modes.push(mode) });
+    try {
+      expect(mock.lastChannelParams).toMatchObject({ notice_attribution: "v1" });
+      expect(link.noticeAttributionMode()).toBe("pending");
+      mock.joinReceivers.get("ok")?.({ notice_attribution: "v1" });
+      expect(link.noticeAttributionMode()).toBe("v1");
+      mock.joinReceivers.get("ok")?.({});
+      expect(link.noticeAttributionMode()).toBe("legacy");
+      expect(modes).toEqual(["v1", "legacy"]);
+    } finally { link.close(); }
+  });
   it("advertises v1, waits for the echo, and reports a legacy rejoin", async () => {
     const modes: string[] = [];
     const link = new ServerLink("ws://test", "self", { personaId: "p", interAgentReplyBasis: "v1", onReplyBasisMode: mode => modes.push(mode) });
