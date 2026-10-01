@@ -121,20 +121,39 @@ export function makeLauncher(): LaunchFn {
   ): ManagedChild => {
     const configPath = join(dir, `${agentId}-${counter}.json`);
     counter += 1;
-    writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+    const prefix = launchPrefixFor(engine);
+    const toolHome = engine === "codex"
+      ? mkdtempSync(join(dir, "codex-tool-")) : undefined;
+    const childConfig = { ...config };
+    if (toolHome === undefined) delete childConfig.codex_tool_home;
+    else childConfig.codex_tool_home = toolHome;
+    const childEnv = { ...process.env };
+    if (engine !== "codex") delete childEnv.CODEX_HOME;
+    let cleaned = false;
+    const cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      try { rmSync(configPath, { force: true }); }
+      finally {
+        if (toolHome !== undefined) rmSync(toolHome, { recursive: true, force: true });
+      }
+    };
 
     // wrapper CLI: [configPath] [prompt] [--resume <id>]. The prompt is the
     // positional after configPath, so it must precede the --resume flag.
     // The prefix is the engine's dist entry (prod) or `tsx watch src/cli.ts`
     // (dev).
-    const args = [...launchPrefixFor(engine), configPath];
+    const args = [...prefix, configPath];
     if (initialPrompt !== undefined) args.push(initialPrompt);
     if (resumeSessionId !== undefined) args.push("--resume", resumeSessionId);
-    const child = spawn(process.execPath, args, { cwd, stdio: "inherit" });
-
-    const cleanup = (): void => {
-      rmSync(configPath, { force: true });
-    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      writeFileSync(configPath, JSON.stringify(childConfig), { mode: 0o600 });
+      child = spawn(process.execPath, args, { cwd, stdio: "inherit", env: childEnv });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
     child.on("exit", cleanup);
     child.on("error", cleanup);
 

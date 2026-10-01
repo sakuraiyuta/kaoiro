@@ -1796,17 +1796,19 @@ export class AntigravityHost implements EngineAdapter {
       const args = this.#epochArguments(spec);
       let child: SpawnedAgy;
       try {
+        const childEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          ...nonInteractiveToolEnv(process.env).additions,
+          KAOIRO_GATE_SOCKET: gateServer.socketPath,
+          KAOIRO_GATE_NONCE: gateServer.nonce,
+          KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
+          KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+          KAOIRO_BRIDGE_NONCE: toolHost.nonce,
+        };
+        delete childEnv.CODEX_HOME;
         child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
           cwd: this.#options.cwd,
-          env: {
-            ...process.env,
-            ...nonInteractiveToolEnv(process.env).additions,
-            KAOIRO_GATE_SOCKET: gateServer.socketPath,
-            KAOIRO_GATE_NONCE: gateServer.nonce,
-            KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
-            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-            KAOIRO_BRIDGE_NONCE: toolHost.nonce,
-          },
+          env: childEnv,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -2024,7 +2026,7 @@ export class AntigravityHost implements EngineAdapter {
       let probeChild: GateProbe;
       try {
         probeChild = this.#options.probeSpawn?.(executable, args, { cwd: this.#options.cwd })
-          ?? spawn(executable, args, { cwd: this.#options.cwd, stdio: ["ignore", "pipe", "pipe"] });
+          ?? spawn(executable, args, { cwd: this.#options.cwd, env: this.#safeChildEnv(), stdio: ["ignore", "pipe", "pipe"] });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(detail)}` });
@@ -2093,6 +2095,7 @@ export class AntigravityHost implements EngineAdapter {
         child = this.#options.modelsProbeSpawn?.(executable, ["models"], { cwd: this.#options.cwd })
           ?? spawn(executable, ["models"], {
             cwd: this.#options.cwd,
+            env: this.#safeChildEnv(),
             stdio: ["ignore", "pipe", "pipe"],
           });
       } catch {
@@ -2195,6 +2198,12 @@ export class AntigravityHost implements EngineAdapter {
     if (code === "ENOENT" || code === "ENOTDIR") return "executable_missing";
     if (code === "EACCES" || code === "EPERM") return "permission_denied";
     return "spawn_failure";
+  }
+
+  #safeChildEnv(): NodeJS.ProcessEnv {
+    const environment = { ...process.env };
+    delete environment.CODEX_HOME;
+    return environment;
   }
 
   #defaultSpawn(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): SpawnedAgy {

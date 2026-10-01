@@ -20,6 +20,7 @@ import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTra
 import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
 import { successfulResetEffort, AppServerSettingsError } from "./app_server_settings.js";
 import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
+import { prepareCodexToolHome } from "./tool_home.js";
 export { BRIDGE_TOOL_TIMEOUT_SEC } from "./bridge_policy.js";
 import { randomUUID } from "node:crypto";
 import { Codex } from "@openai/codex-sdk";
@@ -1497,6 +1498,8 @@ export class CodexHost implements EngineAdapter {
   }
 
   async run(initialPrompt?: string): Promise<void> {
+    const toolHome = prepareCodexToolHome(this.#config.codex_tool_home);
+    try {
     // The CLI normally has already done this before its initial idle/sending
     // state. Keep the host self-sufficient for non-CLI callers; the per-
     // session guard makes the second call a no-op (issue #241).
@@ -1522,6 +1525,7 @@ export class CodexHost implements EngineAdapter {
       // Host-level auto_review can override exec's non-interactive policy.
       // Pinning both reviewer and approvalPolicy is defense in depth.
       approvals_reviewer: "user",
+      shell_environment_policy: { set: { CODEX_HOME: toolHome.path } },
     };
     // Runner config is authoritative over any user-global Codex config
     // (ADR-0038 F2): always inject the effective toggle so a positive
@@ -1530,7 +1534,7 @@ export class CodexHost implements EngineAdapter {
     codexConfig.features = {
       multi_agent: this.#config.codex_internal_subagents ?? true,
     };
-    if (appServer) this.#appRuntime = this.#createAppServerRuntime();
+    if (appServer) this.#appRuntime = this.#createAppServerRuntime(toolHome.path);
 
     if (initialPrompt !== undefined) {
       this.#apply({ kind: "user_send" });
@@ -1622,11 +1626,15 @@ export class CodexHost implements EngineAdapter {
       toolHost?.close();
       await this.#appRuntime?.close();
     }
+    } finally {
+      toolHome.cleanup();
+    }
   }
 
-  #createAppServerRuntime(): AppServerHostRuntime {
+  #createAppServerRuntime(toolHome: string): AppServerHostRuntime {
     return new AppServerHostRuntime({
       session: {
+        toolHome,
         thread: { cwd: this.#cwd, sandbox: this.#sandbox, developerInstructions: this.#options.appendSystemPrompt,
           ...(this.#model !== null && this.#modelSource !== "default" ? { model: this.#model } : {}) },
         tools: this.#options.toolDescriptors ?? [], internalSubagents: this.#config.codex_internal_subagents ?? true,

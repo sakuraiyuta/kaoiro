@@ -418,6 +418,9 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
     config.codex_backend = raw.codex_backend;
   }
+  if (raw.codex_tool_home !== undefined) {
+    config.codex_tool_home = nonEmptyString(raw.codex_tool_home, "codex_tool_home");
+  }
   if (raw.codex_internal_subagents !== undefined) {
     if (typeof raw.codex_internal_subagents !== "boolean") {
       throw new ConfigError("codex_internal_subagents must be a boolean");

@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { execFileSync, execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { redactCredentials } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { runCodexCli } from "../src/cli.js";
@@ -255,7 +256,8 @@ function commandSummary(command: string, args: readonly string[]): string {
 function timeoutDiagnostics(home: string, stderr: string): string {
   let version: string;
   try {
-    version = execSync("codex --version", { stdio: ["ignore", "pipe", "pipe"] })
+    version = execFileSync(process.execPath, [createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js"), "--version"],
+      { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CODEX_HOME: home } })
       .toString()
       .trim();
   } catch (error) {

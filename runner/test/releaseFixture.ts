@@ -94,6 +94,7 @@ export function runScript(
   for (const [key, value] of Object.entries({ ...process.env, ...env })) {
     if (value !== undefined) merged[key] = value;
   }
+  if (env.CODEX_HOME === undefined) delete merged.CODEX_HOME;
   const result = spawnSync(script, args, { encoding: "utf8", env: merged });
   if (result.error !== undefined) throw result.error;
   return {

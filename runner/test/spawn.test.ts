@@ -1,5 +1,8 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
+import { makeLauncher, resolveWrapperLaunch, toManagedChild } from "../src/spawn.js";
 
 describe("resolveWrapperLaunch", () => {
   afterEach(() => {
@@ -81,4 +84,51 @@ describe("toManagedChild", () => {
     toManagedChild(child).kill();
     expect(child.kills).toBe(1);
   });
+});
+
+it("the default launcher isolates every built wrapper before its first action", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "fuji464-runner-"));
+  const previous = { CODEX_HOME: process.env.CODEX_HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,
+    FUJI464_CAPTURE: process.env.FUJI464_CAPTURE };
+  const capture = join(scratch, "capture.cjs");
+  writeFileSync(capture, `const fs = require('node:fs');
+const path = require('node:path');
+const configPath = process.argv[2];
+fs.writeFileSync(path.join(process.env.FUJI464_CAPTURE, path.basename(configPath) + '.result'),
+  JSON.stringify({ home: process.env.CODEX_HOME ?? null, config: JSON.parse(fs.readFileSync(configPath, 'utf8')) }));
+process.exit(0);`);
+  try {
+    process.env.CODEX_HOME = join(scratch, "state");
+    process.env.NODE_OPTIONS = `--require=${capture}`;
+    process.env.FUJI464_CAPTURE = scratch;
+    const launch = makeLauncher();
+    for (const engine of ["codex", "claude-code", "antigravity"] as const) {
+      const id = `fuji464-${engine}`;
+      await new Promise<void>((resolve, reject) => {
+        const child = launch(id, { agent_id: id, codex_tool_home: process.env.CODEX_HOME } as never, scratch, undefined, undefined, engine);
+        child.on("exit", resolve);
+        setTimeout(() => reject(new Error(`${engine} did not exit`)), 10_000).unref();
+      });
+      const resultFile = join(scratch, `${id}-${["codex", "claude-code", "antigravity"].indexOf(engine)}.json.result`);
+      const result = JSON.parse(readFileSync(resultFile, "utf8")) as { home: string | null; config: { codex_tool_home?: string } };
+      if (engine === "codex") {
+        expect(result.home).toBe(process.env.CODEX_HOME);
+        expect(result.config.codex_tool_home).not.toBe(result.home);
+        expect(result.config.codex_tool_home).toContain("codex-tool-");
+        expect(existsSync(result.config.codex_tool_home!)).toBe(false);
+      } else {
+        expect(result.home).toBeNull();
+        expect(result.config.codex_tool_home).toBeUndefined();
+      }
+    }
+    expect(statSync(scratch).isDirectory()).toBe(true);
+  } finally {
+    if (previous.CODEX_HOME === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous.CODEX_HOME;
+    if (previous.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previous.NODE_OPTIONS;
+    if (previous.FUJI464_CAPTURE === undefined) delete process.env.FUJI464_CAPTURE;
+    else process.env.FUJI464_CAPTURE = previous.FUJI464_CAPTURE;
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

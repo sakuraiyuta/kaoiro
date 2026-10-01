@@ -7,7 +7,7 @@ const bridgePath = fileURLToPath(new URL("../dist/bridge.js", import.meta.url));
 
 async function runBridge(environment: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = (await import("node:child_process")).spawn(process.execPath, [bridgePath, "list"], {
-    env: environment,
+    env: { ...environment, CODEX_HOME: undefined },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";

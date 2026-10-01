@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import {
   parseProbeStdout,
@@ -27,6 +30,30 @@ function fakeChild(): ChildProcess & {
   ee.kill = vi.fn(() => true);
   return ee;
 }
+
+it("the default probe child does not inherit the Codex state home", async () => {
+  const root = mkdtempSync(join(tmpdir(), "fuji464-claude-probe-"));
+  const preload = join(root, "capture.cjs"), marker = join(root, "observed");
+  writeFileSync(preload, `require('node:fs').writeFileSync(process.env.FUJI464_PROBE_MARKER, process.env.CODEX_HOME ?? '<unset>'); process.exit(0);`);
+  const prior = { CODEX_HOME: process.env.CODEX_HOME, NODE_OPTIONS: process.env.NODE_OPTIONS,
+    FUJI464_PROBE_MARKER: process.env.FUJI464_PROBE_MARKER };
+  try {
+    process.env.CODEX_HOME = join(root, "hostile-state");
+    process.env.NODE_OPTIONS = `--require=${preload}`;
+    process.env.FUJI464_PROBE_MARKER = marker;
+    await runClaudeProbe({ hardTimeoutMs: 5_000 });
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(marker, "utf8")).toBe("<unset>");
+  } finally {
+    if (prior.CODEX_HOME === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prior.CODEX_HOME;
+    if (prior.NODE_OPTIONS === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = prior.NODE_OPTIONS;
+    if (prior.FUJI464_PROBE_MARKER === undefined) delete process.env.FUJI464_PROBE_MARKER;
+    else process.env.FUJI464_PROBE_MARKER = prior.FUJI464_PROBE_MARKER;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("parseProbeStdout", () => {
   it("成功 JSON をそのまま返す", () => {

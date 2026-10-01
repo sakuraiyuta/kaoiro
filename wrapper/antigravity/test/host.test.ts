@@ -137,6 +137,17 @@ function hostHarness(options: {
 }
 
 describe("AntigravityHost", () => {
+  it("omits inherited CODEX_HOME from the CLI child", async () => {
+    vi.stubEnv("CODEX_HOME", "/tmp/fuji464-hostile");
+    try {
+      const { host, calls } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]?.env.CODEX_HOME).toBeUndefined();
+      calls[0]?.child.finish();
+      host.close();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it.each([
     ["bridge", "native"],
     ["native", "bridge"],
@@ -976,9 +987,12 @@ describe("AntigravityHost", () => {
   it("uses the configured executable through default child processes for models, hooks, and a turn", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-host-"));
     const executable = join(root, "agy fixture with spaces.mjs");
+    const capture = join(root, "child-env.jsonl");
     const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
     writeFileSync(executable, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, home: process.env.CODEX_HOME ?? null }) + "\\n");
 if (args[0] === "models") {
   process.stdout.write("fixture-model\\tFixture Model\\n");
 } else if (args[0] === "-p" && args[1] === "/hooks") {
@@ -1006,6 +1020,7 @@ if (args[0] === "models") {
 }
 `);
     chmodSync(executable, 0o755);
+    vi.stubEnv("CODEX_HOME", join(root, "hostile-state"));
     const cfg = config({ antigravity_cli_path: executable });
     const logs: Envelope[] = [];
     const host = new AntigravityHost(cfg, {
@@ -1026,8 +1041,12 @@ if (args[0] === "models") {
         () => ({ status: host.statusExtSnapshot(), logs }),
       );
       expect(logs.at(-1)?.payload).toMatchObject({ text: "hello" });
+      const children = readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; home: string | null });
+      expect(children.map(child => child.args[0]).sort()).toEqual(["--print", "-p", "models"]);
+      expect(children.every(child => child.home === null)).toBe(true);
     } finally {
       host.close();
+      vi.unstubAllEnvs();
       rmSync(root, { force: true, recursive: true });
     }
   });

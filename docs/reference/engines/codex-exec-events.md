@@ -201,6 +201,10 @@ kaoiro. Therefore:
   as kaoiro `session_id`, and write it to `AgentStates` / `SessionPointers`
   ([ADR-0014](../../adr/0014-session-resume-and-restore.md)).
 - Resume: Resume with `codex.resumeThread(thread_id)` on a restore instruction.
+- Agent shell commands receive a separate private home via
+  `shell_environment_policy.set.CODEX_HOME`. The SDK and native `codex exec`
+  process retain the state home for auth and session resume. The wrapper
+  rejects a tool home resolving to that state home before starting a turn.
 - Enumeration: Asynchronously walk
   `<codex home>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` newest-first as a
   fixed-depth date tree, matching the `cwd` field in the first `session_meta`

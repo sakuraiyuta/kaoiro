@@ -27,13 +27,15 @@ export function probeSshAgentIdentities(
   const socket = options.env.SSH_AUTH_SOCK;
   if (socket === undefined || socket === "") return Promise.resolve("unknown");
   const execFile = options.execFile ?? nodeExecFile;
+  const childEnv: NodeJS.ProcessEnv = { ...options.env, LC_ALL: "C" };
+  delete childEnv.CODEX_HOME;
   return new Promise((resolve) => {
     try {
       execFile(
         "ssh-add",
         ["-l"],
         {
-          env: { ...options.env, LC_ALL: "C" },
+          env: childEnv,
           timeout: options.timeoutMs ?? SSH_AGENT_PROBE_TIMEOUT_MS,
           encoding: "utf8",
         },

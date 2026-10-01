@@ -2489,6 +2489,8 @@ export class AgentHost implements EngineAdapter {
       (this.#permissionMode as PermissionMode | null) ??
       this.#config.permission_mode ??
       "default";
+    const childEnv = { ...(this.#options.queryOptions?.env ?? process.env) };
+    delete childEnv.CODEX_HOME;
     this.#abort = new AbortController();
     const options: Options = {
       permissionMode: initialMode,
@@ -2503,6 +2505,7 @@ export class AgentHost implements EngineAdapter {
           : {}),
       },
       ...this.#options.queryOptions,
+      env: childEnv,
       // PRE-run model / effort switches override the constructor snapshot;
       // queryOptions alone would retain the spawn-time values and silently
       // lose a fresh-idle dashboard choice.

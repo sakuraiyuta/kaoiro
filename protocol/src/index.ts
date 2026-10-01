@@ -271,6 +271,8 @@ export interface WrapperConfig {
   codex_internal_subagents?: boolean;
   /** Runner-local launch selection. Omitted = exec; never sourced from spawn. */
   codex_backend?: "exec" | "app-server";
+  /** Runner-owned private home for Codex agent tool shells. Never a server setting. */
+  codex_tool_home?: string;
   /** Operator-declared extra models from `runner.config.json`'s
    *  `codex.extra_models` (issue #292), already merged by the runner's
    *  `buildRegister` into the launch catalog it advertises. Relayed here so

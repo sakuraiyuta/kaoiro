@@ -19,6 +19,14 @@ runner/src/supervisor.ts). This section documents the fields that instead
 come from `runner.config.json`'s per-engine blocks. Claude's delivery controls
 below are process-local options, not runner-relayed fields.
 
+`codex_tool_home?: string` is a local runner-to-Codex-wrapper field. The runner
+creates a private empty directory for each Codex wrapper and overwrites any
+inbound value before launch; it is not a server or dashboard setting. A directly
+launched Codex wrapper creates its own private directory when the field is
+absent. The wrapper rejects a missing path or one resolving to its state home
+before a turn. The directory is passed to native shell tools, while the native
+Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
+
 - `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
   resolved to `"exec"` when omitted and relayed only for Codex launches. The
   wrapper validates the closed enum. It is not accepted from `spawn` or a
@@ -109,8 +117,9 @@ themselves. With neither condition met, both modes remain unadvertised.
 The wrapper logs one startup line with `source=flag`, `source=persona_list`,
 or `source=off`, without printing the list or unrelated environment values.
 
-The runner passes its environment to every wrapper, without a per-peer env
-override or config relay for these controls. A runner-managed single-peer
+The runner passes these delivery-control variables to Claude wrappers, without
+a per-peer env override or config relay for them. It removes `CODEX_HOME` from
+Claude and Antigravity wrapper environments. A runner-managed single-peer
 canary therefore sets only the persona list in `runner.env` and restarts the
 runner; setting the global flag to `1` enables every Claude peer. The server
 must also echo delivery modes v1 before the wrapper uses either mode. Keep

@@ -80,9 +80,12 @@ emits the full log to `tmp/dogfood-logs/runner.log`.
 
 `CODEX_HOME` in `runner.env` selects the Codex state directory (auth, sessions,
 state databases) for the whole runner. It is an environment variable, not a
-`runner.config.json` key: the runner, every wrapper, the Codex SDK and the
-`codex app-server` child inherit it, so all of them agree without a relay, and
-it is read once at startup (restart the runner after changing it).
+`runner.config.json` key: the runner, Codex wrappers, the Codex SDK and the
+`codex app-server` child retain it for state and resume. Claude Code and
+Antigravity wrapper children receive an environment without it. Codex shell
+tools receive a separate private home through `shell_environment_policy.set`.
+The runner removes that tool home when its wrapper exits. The value is read
+once at startup (restart the runner after changing it).
 
 - Unset or empty means `~/.codex`, as for the Codex CLI itself.
 - It must be an absolute path of an existing directory. Otherwise the runner

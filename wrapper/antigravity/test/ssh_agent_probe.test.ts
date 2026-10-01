@@ -20,12 +20,13 @@ describe("probeSshAgentIdentities (issue #350)", () => {
       error: Object.assign(new Error("Command failed"), { code: 1 }),
       stdout: "The agent has no identities.\n",
     });
-    await expect(probeSshAgentIdentities({ env: { SSH_AUTH_SOCK: "/run/agent.sock", LANG: "ja_JP.UTF-8" }, execFile: fake }))
+    await expect(probeSshAgentIdentities({ env: { SSH_AUTH_SOCK: "/run/agent.sock", LANG: "ja_JP.UTF-8", CODEX_HOME: "/tmp/fuji464-hostile" }, execFile: fake }))
       .resolves.toBe("no_identities");
     expect(calls).toEqual([{
       file: "ssh-add", args: ["-l"], timeout: SSH_AGENT_PROBE_TIMEOUT_MS,
       env: expect.objectContaining({ SSH_AUTH_SOCK: "/run/agent.sock", LC_ALL: "C" }),
     }]);
+    expect(calls[0]?.env?.CODEX_HOME).toBeUndefined();
   });
 
   it.each([
