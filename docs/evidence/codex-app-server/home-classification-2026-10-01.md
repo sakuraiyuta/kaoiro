@@ -78,7 +78,12 @@ prerequisites; typecheck uses `pnpm --filter @kaoiro/runner typecheck`.
 | linux-x64 archive build and scratch install | n/a | n/a | 0 each |
 
 Baseline fails on unclassified `agents`; the fixture therefore does not assume
-that the new names already work. Full suite duration was 95.06 seconds. Expected
+that the new names already work. In particular, the three "refuses unknown
+root" cases fail there before reaching their deliberately unknown names; their
+baseline failures do not demonstrate unknown-name refusal. That refusal is
+supported by the corrected positive assertions and the separate mutation that
+removes the unknown-root guard (3 failed / 2 passed, exit 1).
+Full suite duration was 95.06 seconds. Expected
 fixture error messages and Node experimental SQLite warnings remain in the log;
 there were no failing tests. The focused/mutation runs preceded two type-only
 non-null annotations; the final full suite ran after the implementation commit.

@@ -3,7 +3,7 @@
   "date": "2026-10-01",
   "baseline_commit": "b4770ee07628b25144ae34be39e396fe8efc39d3",
   "implementation_commit": "a747ea6406fd610a4a6047dfe5a324b421a8deb3",
-  "evidence_md_sha256": "344a5161e3da16660eed260182b623a432d7a0514a47ba636c4fd614d908ec37",
+  "evidence_md_sha256": "67b95540dc29a99ef8748c952e22724376b0057fdb347a667cab4f69b5a48ec8",
   "design_review": {
     "path": "tmp/reviews/issue-468/classify-design-r1-kuroe.md",
     "sha256": "714040bfb3686ea2e5fa0a1edfb169d81b1171e890c8df8b67e6664d21c1b8d1"
