@@ -38,9 +38,10 @@ snapshot/restore helper and failure propagated to the worker's control flow.
 Use existing file copies, hashes and directory rename; do not invent a database
 migration or downgrade mechanism.
 
-The option is opt-in for existing deployments. This pin's runbook requires it;
-the design does not claim all old unmodified update invocations automatically
-acquire a backup. Production rollout is separately authorized after gates 1–7.
+With the new tooling, a differing current/target Codex native hash always
+requires this state-aware operation. Same-pin deployments can omit it when
+no retained-reference rule requires a backup. Old unmodified update invocations
+do not automatically acquire either the comparison guard or a backup. Production rollout is separately authorized after gates 1–7.
 
 ## Interface and affected files
 
@@ -97,7 +98,6 @@ is authoritative for the next start; prohibit environment import/reload and
 manager restart during maintenance. Bind the relevant effective values in the
 private transaction and re-read them immediately before switch and start.
 Unsupported unit precedence/expansion is rejected rather than approximated.
-This includes `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV`, XDG configuration and HOME.
 Resolve the actual runner.env path; do not assume the default location. Use a
 non-executing, restricted assignment parser for runner.env: blank/comment
 lines and simple optional-export assignments with literal or quoted values;
@@ -264,27 +264,66 @@ atomically before removing only its named snapshot and releasing its source/tool
 release protection. Interrupted deletion is retried from that record; no glob
 cleanup. Retire one reference without invalidating other retained references.
 
-Keep a compact per-home migration barrier after retirement, binding the current
-accepted native hash and home/config identity, without retaining snapshots or
-protecting old releases. Retirement must not re-enable code-only rollback to an
-incompatible pin. With no retained rollback points, ordinary no-backup updates
-and generic rollback may proceed only when the target native hash equals this
-accepted hash; a pin change still requires a new state-aware update. Update the
-barrier only after a verified completed forward/restore transaction. Unreadable
-barriers refuse the operation. A successful backup-based restore records the
-restored native hash. The explicit retirement command reports which snapshots
-and release protections were removed and which migration barrier remains.
+Always compare the current and target Codex native hashes computed from their
+verified release trees, even when `$root/codex-state/` is absent. The updater
+checks before stop; the shared switch path rechecks under the links lock before
+changing links. New `switch.sh --rollback` compares previous against current.
+A differing hash requires a validated state-aware transaction: a verified
+snapshot for forward activation, or verified restored state for rollback.
+Missing/unverifiable current or target native artifacts refuse the operation.
+This is the primary pin-change guard; deletion of any backup record or barrier
+cannot turn a differing-pin activation into a permitted code-only switch.
+Same-hash equality permits only omission of the pin-change backup requirement,
+not bypassing retained-reference, home-binding or other activation checks.
 
-New switch tooling rejects generic `--rollback` while a retained record marks
-unrestored migrated state. The state-aware updater may switch to the specific
-recorded source only after the verified restoration phase and home binding,
+Keep an auxiliary per-home migration barrier at
+`$root/codex-state/barriers/<sha256-canonical-home-path>.json`, mode 0600 in a
+0700 directory. It contains a schema version, canonical home and device/inode,
+installed unit identity, config binding, accepted release/native hash, completing
+transaction UUID and timestamp; no credentials. The state-aware updater is its
+only writer under update/links locking, using a temporary sibling and atomic
+rename. Create it at the **first completed forward or restore transaction**,
+after the actual start/history acceptance checks; persist that acceptance in
+the transaction first, so a crash before barrier publication is recoverable.
+Retained references and this barrier coexist. Update it at each subsequent
+accepted forward/restore, and retain it when snapshots/releases are retired.
+
+Before ordinary forward activation or generic rollback, compare the physical
+current native hash with the barrier's accepted hash if present. A mismatch
+indicates unmanaged mutation and refuses activation. Malformed/unreadable
+barriers refuse both forward-update modes, generic switching and retirement;
+they do not prevent read-only diagnosis or explicitly selected backup-based
+restore/recovery. Absence never bypasses the independent release-hash check.
+
+For barrier repair, the operator first selects the verified completed
+transaction whose recorded acceptance matches the current physical release,
+original home and fresh service/config binding. Under both locks, the helper
+preserves the damaged barrier as a named diagnostic file and regenerates it
+from that evidence, recording the repair. It must not bless the current hash
+merely because it is current. If no matching accepted transaction is available,
+use a verified snapshot's state-aware restore/recovery; that path validates
+home, snapshot, release and transaction independently, retains the damaged
+barrier, and publishes the restored hash only after acceptance. Without either
+proof, stop for an operator-approved recovery plan; deleting the record is not
+a repair. An interrupted transaction must be reconciled before normal updates.
+
+Identify barriers by installed unit as well as canonical home, so changing
+CODEX_HOME cannot silently evade the old binding by selecting an empty filename.
+A home/config identity mismatch refuses ordinary activation. Home relocation
+is outside this pin-update operation: require a separately approved relocation
+procedure that handles path-derived keyring identity, validates the moved
+state and transfers/rebinds the barrier under both locks. Do not auto-copy a
+barrier to an unrelated new home or treat a path change as first installation.
+
+New switch tooling also rejects generic `--rollback` while a retained record
+marks unrestored migrated state. The state-aware updater may switch to the
+specific recorded source only after verified restoration and home binding,
 passing a transaction reference checked against the held update lock and
-recorded target. No environment-only bypass. Unrelated no-backup behavior
-remains unchanged only where neither a retained reference nor a migration
-barrier exists. A later update
-while such a record exists must use the state-aware path, not silently reset
-its protection. Legacy old scripts cannot acquire this new guard retroactively;
-the runbook explicitly forbids invoking them for pin rollback.
+recorded target. No environment-only bypass. Without records, unchanged-pin
+no-backup behavior is retained, subject to the independent hash comparison.
+Legacy old scripts cannot acquire this guard retroactively; the runbook
+explicitly forbids invoking them for pin rollback. Retirement output lists
+removed snapshots/release protections and the auxiliary barrier that remains.
 
 Own snapshot staging names by transaction, e.g. `.staging.codex-<uuid>`,
 recorded before creation. Under the update lock, cleanup may remove only
@@ -361,6 +400,20 @@ entry. The same-user operator-controlled backup is trusted input only after
 its manifest checks;
 reject traversal and unexpected entry types rather than extracting an archive.
 
+Order retained references by their recorded transaction completion sequence,
+not filename or filesystem mtime. Normal restore accepts only the most recent
+completed, not-yet-restored reference for that home (LIFO), with the current
+release/state lineage matching its target. Recovery of an incomplete latest
+transaction uses that transaction's own verified snapshot and recorded phase;
+it does not skip to an unrelated older reference. An older selection is rejected
+before stop with the intervening transaction UUIDs and affected state interval.
+It requires a separate explicit operator-approved recovery plan naming those
+transactions and the discarded newer work, with fresh home/config binding;
+there is no general force/ignore-lineage flag. A sequence of validated latest-
+reference restores may be chosen instead. Mark completed restores so subsequent
+selection follows the remaining lineage rather than repeatedly selecting an
+already-restored reference.
+
 Under the update lock and maintained no-dispatch interval, stop writers as in
 update. Retain the current home as a named failed-state sibling. Move its
 current credential entries from the inventory, if present, into the prepared
@@ -428,6 +481,12 @@ Required evidence before implementation is called complete:
   zero new-release starts and no symlink switch. Include wrong but valid
   requested homes, changed runner.env/user-manager environment, already-stopped
   forward updates, retirement/barrier enforcement, unreadable/live external holders,
+  deleted barrier (also deleted codex-state directory) with differing current /
+  target hashes, corrupt-barrier repair and backup-based recovery, first barrier
+  publication, changed-home binding, and non-latest restore selection. The
+  deleted-barrier generic rollback and no-backup update must exit nonzero with
+  zero switch/start mutations; unchanged-pin controls must still succeed when
+  no other guard applies. Also cover
   restart immediately before switch, insufficient space, unclassified paths
   and all credential exclusions. Restore failure must leave
   the service stopped with no old-binary start on an unchecked state.
