@@ -169,7 +169,8 @@ jobs:
           # pass-through. Value omitted so a local manual run of this same
           # command (no CI var set) leaves it unset inside the container
           # too, matching the local default.
-          tar --no-xattrs -cf - server scripts VERSION docs/reference/configuration/server.md | docker run --rm -i -w /w \
+          tar --no-xattrs -cf - server scripts VERSION docs/reference/configuration/server.md \
+            protocol/fixtures runner/test/fixtures | docker run --rm -i -w /w \
             -e CI \
             -e KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
