@@ -196,6 +196,10 @@ export class AntigravityInterAgentTurnCoordinator {
       );
   }
 
+  deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[] {
+    return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
+  }
+
   deliverySequenceRangeForTurn(
     turnToken: string,
   ): { first: number; last: number } | undefined {

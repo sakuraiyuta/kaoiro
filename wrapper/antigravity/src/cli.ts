@@ -326,6 +326,11 @@ export async function runAntigravityCli(
     failStop: (turnToken) => host?.failStopTurnForWatchdog(turnToken) ?? false,
     failStopUnattributed: () => { host?.failStopForWatchdogAttributionUnknown(); },
   });
+  const deliveryIdentity = () => {
+    if (link === undefined || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
+    const incarnation = link.deliveryIncarnation();
+    return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
+  };
   const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => {
       const turnToken = interAgentTurns.turnTokenForDeliverySequence(deliverySeq);
@@ -337,6 +342,7 @@ export async function runAntigravityCli(
       link?.acknowledgeInterAgentDelivery(deliverySeq);
     },
     interAgentTurns,
+    deliveryIdentity,
   );
   const buildInfo = loadBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
   link = createServerLink(config.server_url, config.agent_id, deliveryAcknowledgementRuntime.withServerLinkOptions({
@@ -391,8 +397,11 @@ export async function runAntigravityCli(
     },
     onSetPermissionMode: () => writeRedactedStderr("antigravity: permission-mode switching is unsupported; use set_permission (ADR-0057 F4c)\n"),
     onRenameDisplayName: (displayName, revision) => host?.renameDisplayName(displayName, revision),
-    onInterAgentMessage: (envelope) =>
-      handleAntigravityInterAgentMessage(
+    onInterAgentMessage: (envelope) => {
+      // The handler awaits before it classifies the envelope; the join
+      // identity must be captured before that await can span a rejoin.
+      deliveryAcknowledgementRuntime.captureDelivery(envelope);
+      return handleAntigravityInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           send: (notice) => link?.send(notice),
@@ -400,7 +409,8 @@ export async function runAntigravityCli(
           log: (line) => process.stdout.write(line),
         }),
         envelope,
-      ),
+      );
+    },
   }));
   const timer = setTimeout(() => rejectPersona(new Error("timed out waiting for persona_prompt")), PERSONA_PROMPT_TIMEOUT_MS);
   let appendSystemPrompt: string;

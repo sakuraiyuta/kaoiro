@@ -182,10 +182,13 @@ describe("Antigravity CLI delivery composition", () => {
     expect(disconnectReasons).toEqual(["stop"]);
   });
 
-  it("acknowledges a new delivery incarnation's sequence space from 1", async () => {
+  /** Runs the production CLI against a link that reports a delivery identity.
+   *  `incarnation: null` models a detected disconnect. */
+  async function startWithDeliveryIdentity() {
     const acknowledgements: number[] = [];
+    const turnStarts: string[] = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    let incarnation = "old";
+    const state = { incarnation: "old" as string | null, holdTurn: null as Promise<void> | null };
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
     const link = {
@@ -193,14 +196,13 @@ describe("Antigravity CLI delivery composition", () => {
       send: () => {},
       reportDisconnectIntent: async () => true,
       acknowledgeInterAgentDelivery: (sequence: number) => acknowledgements.push(sequence),
-      deliveryIncarnation: () => incarnation,
+      deliveryIncarnation: () => state.incarnation,
       deliveryGeneration: () => "generation",
     };
     let startHost!: () => void;
     let finishHost!: () => void;
     const ready = new Promise<void>((resolve) => { startHost = resolve; });
     const finished = new Promise<void>((resolve) => { finishHost = resolve; });
-    let running: Promise<void> | undefined;
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
@@ -215,47 +217,108 @@ describe("Antigravity CLI delivery composition", () => {
         conversationIds: readonly string[],
         turnToken: string,
       ) => {
+        await state.holdTurn;
         hostOptions.onTurnStart({ turnToken, conversationIds });
+        turnStarts.push(turnToken);
         hostOptions.onTurnEnd({ turnToken, conversationIds });
         hostOptions.onTurnBoundary({ turnToken });
       },
     };
-    const deliver = (envelope: Envelope) =>
-      (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope);
-    const status = (ackedSeq: number) =>
-      (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
-        acked_seq: ackedSeq,
-      });
+    const running = runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return host as never;
+      },
+    });
+    await ready;
+    return {
+      acknowledgements,
+      turnStarts,
+      state,
+      deliver: (envelope: Envelope) =>
+        (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope),
+      status: (ackedSeq: number) =>
+        (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
+          acked_seq: ackedSeq,
+        }),
+      stop: async () => {
+        finishHost();
+        await running;
+        stderr.mockRestore();
+      },
+    };
+  }
 
+  function heldTurn(): { held: Promise<void>; release: () => void } {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    return { held, release };
+  }
+
+  it("acknowledges a new delivery incarnation's sequence space from 1", async () => {
+    const cli = await startWithDeliveryIdentity();
     try {
-      running = runAntigravityCli({
-        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
-        loadConfig: () => ({ ...config }),
-        createServerLink: (_url, _agentId, options) => {
-          linkOptions = options as unknown as Record<string, any>;
-          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
-          return link as never;
-        },
-        createHost: (_config, options) => {
-          hostOptions = options as unknown as Record<string, any>;
-          return host as never;
-        },
-      });
-      await ready;
-
-      status(2);
-      await deliver(inbound(3, 1));
-      await vi.waitFor(() => expect(acknowledgements).toEqual([3]));
+      cli.status(2);
+      await cli.deliver(inbound(3, 1));
+      await vi.waitFor(() => expect(cli.acknowledgements).toEqual([3]));
 
       // The server lost its ledger entry: a new incarnation restarts at 0.
-      incarnation = "new";
-      status(0);
-      await deliver(inbound(1, 1));
-      await vi.waitFor(() => expect(acknowledgements).toEqual([3, 1]));
+      cli.state.incarnation = "new";
+      cli.status(0);
+      await cli.deliver(inbound(1, 1));
+      await vi.waitFor(() => expect(cli.acknowledgements).toEqual([3, 1]));
     } finally {
-      finishHost();
-      await running;
-      stderr.mockRestore();
+      await cli.stop();
+    }
+  });
+
+  it("does not acknowledge an input received under a replaced delivery identity", async () => {
+    const cli = await startWithDeliveryIdentity();
+    const turn = heldTurn();
+    try {
+      cli.status(2);
+      cli.state.holdTurn = turn.held;
+      await cli.deliver(inbound(3, 1));
+
+      cli.state.incarnation = "new";
+      cli.status(3);
+      turn.release();
+      await vi.waitFor(() => expect(cli.turnStarts).toHaveLength(1));
+      expect(cli.acknowledgements).toEqual([]);
+    } finally {
+      turn.release();
+      await cli.stop();
+    }
+  });
+
+  it("holds a completion made while disconnected and sends it once after a same-identity rejoin", async () => {
+    const cli = await startWithDeliveryIdentity();
+    const turn = heldTurn();
+    try {
+      cli.status(2);
+      cli.state.holdTurn = turn.held;
+      await cli.deliver(inbound(3, 1));
+
+      cli.state.incarnation = null;
+      turn.release();
+      await vi.waitFor(() => expect(cli.turnStarts).toHaveLength(1));
+      expect(cli.acknowledgements).toEqual([]);
+
+      cli.state.incarnation = "old";
+      cli.status(2);
+      await vi.waitFor(() => expect(cli.acknowledgements).toEqual([3]));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(cli.acknowledgements).toEqual([3]);
+    } finally {
+      turn.release();
+      await cli.stop();
     }
   });
 

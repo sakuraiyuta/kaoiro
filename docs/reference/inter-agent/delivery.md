@@ -32,10 +32,13 @@ retains no payloads and does not guarantee retransmission or delivery.
 - After a join `ok`, `ServerLink` does not issue a `delivery_ack` at or below
   the highest watermark it has issued since that `ok`, so the join-time resends
   of its replay owners collapse into one push. A push buffered by the Phoenix
-  client before the join and flushed at `ok` is not counted, so a wrapper that
-  acknowledges while disconnected (currently Antigravity, which supplies no
-  delivery identity) can still send a duplicate. The guarantee is the server's:
-  a stale or duplicate watermark is a no-op.
+  client before the join and flushed at `ok` is not counted. A wrapper that
+  supplies a delivery identity holds an ACK while it knows it is disconnected
+  and resends it once after rejoining under the same identity; the bundled
+  Claude Code, Codex, and Antigravity wrappers all do. A wrapper that supplies
+  no identity pushes while disconnected, so the buffered flush and the
+  join-time resend can duplicate. The guarantee is the server's: a stale or
+  duplicate watermark is a no-op.
 - A join `ok` whose `inter_agent_delivery_incarnation` differs from the one the
   wrapper's recovery ledger was built under means the server no longer
   recognises that ledger's per-sequence state. `ServerLink` discards the
