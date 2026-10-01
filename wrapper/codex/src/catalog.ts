@@ -28,7 +28,7 @@ export type ChatGptPlan =
 const SOL: EngineModelInfo = {
   value: "gpt-5.6-sol",
   display_name: "GPT-5.6-Sol",
-  description: "Older coding model for complex work.",
+  description: "Older generation workhorse model.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "low",
   minimal_client_version: "0.144.0",
