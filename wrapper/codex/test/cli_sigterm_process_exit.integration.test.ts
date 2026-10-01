@@ -33,6 +33,7 @@ import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   OWNER_ENV,
+  isOwned,
   ownedPids,
   ownedProcessSummary,
   reapOwned,
@@ -250,9 +251,11 @@ enabled=false
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
       // Positive control for the survivor check below: the owner marker must
       // reach the sandboxed command, or an empty scan would prove nothing.
-      expect(ownedPids(ownerTag)).toEqual(
-        expect.arrayContaining([child.pid!, execChildPid!, sleepPid!]),
-      );
+      // Per-PID reads, not a /proc scan: a scan is slow enough to delay the
+      // SIGTERM past the sandbox setup window this test must not depend on.
+      for (const pid of [child.pid!, execChildPid!, sleepPid!]) {
+        expect(isOwned(pid, ownerTag), `pid ${pid}`).toBe(true);
+      }
 
       const t0 = performance.now();
       // A real OS signal to a real separate process -- not process.emit().

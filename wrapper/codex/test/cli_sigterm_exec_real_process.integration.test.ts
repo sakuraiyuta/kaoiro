@@ -33,6 +33,7 @@ import { runCodexCli } from "../src/cli.js";
 import { clipTail } from "../src/turn_diagnostics.js";
 import {
   OWNER_ENV,
+  isOwned,
   ownedPids,
   ownedProcessSummary,
   reapOwned,
@@ -431,9 +432,10 @@ enabled=false
       expect(isAlive(sleepPid!)).toBe(true);
       // Positive control for the survivor check below: the owner marker must
       // reach the sandboxed command, or an empty scan would prove nothing.
-      expect(ownedPids(ownerTag)).toEqual(
-        expect.arrayContaining([execChildPid!, sleepPid!]),
-      );
+      // Per-PID reads, not a /proc scan: a scan is slow enough to delay the
+      // SIGTERM past the sandbox setup window this test must not depend on.
+      expect(isOwned(execChildPid!, ownerTag)).toBe(true);
+      expect(isOwned(sleepPid!, ownerTag)).toBe(true);
 
       // The SIGTERM handler this test exists to cover is registered on the
       // real `process` object by `runCodexCli` itself -- fire it the same
