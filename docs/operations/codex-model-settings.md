@@ -44,8 +44,11 @@ Codex CLI help:
 (The help text names `~/.codex/config.toml`; with `CODEX_HOME` set the file is
 `$CODEX_HOME/config.toml`.)
 
-- One-off override: `codex -m gpt-5.6-terra "..."`
+- One-off override: `codex -m gpt-6.1-sol "..."`
 - Dot notation: `codex -c model="gpt-5.6-luna" "..."`
+
+`gpt-6.1-sol` is in kaoiro's curated catalog and can be selected directly; it
+does not need an `extra_models` declaration.
 
 The same flags pass to subcommands such as `codex exec` / `codex mcp-server`
 (and to kaoiro through `@openai/codex-sdk`). Under ChatGPT auth, however,
@@ -77,8 +80,10 @@ The `CODEX_HOME` environment variable can also relocate `~/.codex` itself.
 
 kaoiro advertises a CURATED static snapshot of the entitled-model set
 (`wrapper/codex/src/catalog.ts`, ADR-0035 H3) rather than probing Codex at
-runtime, so a brand-new upstream model (like `gpt-6-astra`) is invisible to
-LaunchDialog / AgentDetail until a kaoiro release updates that snapshot.
+runtime, so a brand-new upstream model is invisible to LaunchDialog /
+AgentDetail until a kaoiro release updates that snapshot. The `gpt-6-astra`
+example below was added when that model was not yet in the catalog; it
+illustrates the escape hatch only for models missing from the catalog.
 `runner.config.json`'s `codex.extra_models` lets an operator declare one
 themselves in the meantime:
 
