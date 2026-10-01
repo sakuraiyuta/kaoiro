@@ -213,3 +213,85 @@ wrapper core serial
 `42e6878fa82ff69836ca001a8861c3336c2274380de33724cb503af6019a47b8`,
 server
 `3dcf8511b95678418f2aad76d7f4a41025582258fe1155de5b611e10b55e28f9`.
+
+## Review round 5 correction
+
+Product and contract commit: `a6e4251b07d901285b67a481d98eee0af979d5da`.
+This section supersedes the round-4 account of a frozen `P` steer. The old
+implementation discarded its reservation at watchdog freeze. A later definite
+precondition fallback reached `settleSteerReservation` with no reservation and
+returned without delivery, retirement, or an unknown stage. The pre-fix
+selected run failed (1 failed, exit 1; `pre-fix-frozen-p.log`). The final
+production-composition test now waits for the late settlement and asserts one
+retirement, no unknown stage, and zero host slots and both
+coordinator counts. The other three fail-stop cases wait for their late
+`unknown` report and assert no retirement. A non-precondition rejection may
+settle with either timeout or disconnected reason under the scripted shutdown;
+both are unknown, never definite non-delivery.
+
+The coordinator records the identity of a steer removed by freeze. Late
+settlement consumes that identity exactly once and retires only if the CLI's
+single fallback predicate is true. A queued or exceptional host result clears
+the frozen identity before ordinary requeue. The unit test places a late
+settlement between that clearing and `receive` and verifies that it cannot
+retire the requeued envelope. The automatic `afterEach` verifier counts only
+completed checks, with an explicit count for its one opt-out self-test; it
+also checks the frozen-identity count at test end.
+
+The final Codex and wrapper typecheck runs followed the last mutation and
+used `env -u CODEX_HOME`. Other gates ran at the same product code before the
+last test-only type annotation correction. Counts and exit codes are copied
+from the logs under `tmp/reviews/issue-346/impl-r5-fuji-artifacts/`.
+
+| Gate | Result | Exit |
+| --- | ---: | ---: |
+| Codex full suite, final run | 1,256 passed, 81 files | 0 |
+| Agent common full suite | 505 passed, 20 files | 0 |
+| Wrapper core full suite | 306 passed, 6 files | 0 |
+| Claude Code full suite | 761 passed, 32 files | 0 |
+| Antigravity full suite | 406 passed, 2 skipped, 28 files | 0 |
+| Runner full suite | 787 passed, 35 files | 0 |
+| Dashboard full suite | 1,077 passed, 76 files | 0 |
+| Server full suite | 1,771 passed, 1 excluded | 0 |
+| Wrapper, runner, protocol typecheck | each completed | 0 each |
+| Dashboard check | 0 errors, 0 warnings | 0 |
+| Wrapper, runner, dashboard build | each completed | 0 each |
+| `git diff --check` | no errors | 0 |
+
+The first wrapper typecheck found a test-only `void` return annotation
+(exit 2); changing the check array to `() => true` made the rerun exit 0.
+No final Codex or core run reports a Vitest unhandled error. The server log
+contains expected fixture warnings; dashboard build retains its existing
+chunk-size warning. No live turn or native gate was run.
+
+| Removed boundary | Selected result |
+| --- | --- |
+| Record frozen steer identity | 1 failed, exit 1 |
+| Clear frozen identity on queued requeue | 1 failed, exit 1 |
+| Clear frozen identity on settlement | 1 failed, exit 1 |
+| Require definite fallback for late retirement | 1 failed, exit 1 |
+| Release the host reservation during freeze | 1 failed, exit 1 |
+| Report the frozen-identity count | 1 failed, exit 1 |
+| Run the automatic `afterEach` check | final verifier hook failed, exit 1 |
+
+The mutation logs retain the exact test names. The first selection for the
+`afterEach` mutation ran the explicitly opted-out verifier self-test and
+survived; selecting a normal production-composition test made the final
+mutation fail. All mutated files were restored before the final Codex suite.
+
+Incarnation replacement during the gap before a late `P` settlement was not
+measured. By source inspection, `DeliveryStates.bind_resync` calls
+`retire_generation` for the old generation; that function records unresolved
+metadata as interrupted and persists notification intents before a new
+incarnation is assigned. `DeliveryRecovery.retire` only requests retirement
+for received sequences still above its acknowledged prefix. Thus generation
+replacement has a server recovery path for an unresolved old sequence, but
+the exact sender-visible race between replacement and this late local
+retirement remains a native-gate question on the final pin.
+
+Final log SHA-256: Codex
+`bd0682ebf18ef01cd420f121345dffb38603e7f89219470f31d3f00d57b3dddd`,
+wrapper typecheck
+`9cf1e9ae4b654017d851ccc60b3cb0e010f1ab7283b71d225a2c5885e0a3b434`,
+core `67133b60e1a83755cade0b5ff0496001d892e9bb4a50f68b3e321df80a387e6e`,
+server `dffa505e9e77b56ff774ff196a3227de333d288d490ba55d8f114a175a5a8770`.
