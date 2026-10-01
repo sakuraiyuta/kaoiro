@@ -998,6 +998,8 @@ if (args[0] === "models") {
 } else if (args[0] === "-p" && args[1] === "/hooks") {
   const customization = args[args.lastIndexOf("--add-dir") + 1];
   process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
+} else if (args[0] === "-p" && args[1] === "/usage") {
+  process.stdout.write(JSON.stringify({ status: "SUCCESS", command: { name: "usage", data: { groups: [] } } }));
 } else if (args[0] === "--print") {
   // issue #377 Stage 1/2: the real prompt arrives as one NDJSON line on
   // stdin (--input-format stream-json), not as an argv positional; echo
@@ -1042,7 +1044,7 @@ if (args[0] === "models") {
       );
       expect(logs.at(-1)?.payload).toMatchObject({ text: "hello" });
       const children = readFileSync(capture, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; home: string | null });
-      expect(children.map(child => child.args[0]).sort()).toEqual(["--print", "-p", "models"]);
+      expect(children.map(child => child.args[0]).sort()).toEqual(["--print", "-p", "-p", "models"]);
       expect(children.every(child => child.home === null)).toBe(true);
     } finally {
       host.close();
@@ -3286,6 +3288,425 @@ if (args[0] === "models") {
         expect(calls).toHaveLength(1);
         host.close();
       });
+    });
+  });
+
+  describe("issue #384: usage probe rate limits", () => {
+    function makeUsageStdout(gemini5hRemaining = 0.5, geminiWeeklyRemaining = 0.7): string {
+      return JSON.stringify({
+        status: "SUCCESS",
+        command: {
+          name: "usage",
+          data: {
+            groups: [
+              {
+                name: "Gemini Models",
+                buckets: [
+                  {
+                    id: "gemini-weekly",
+                    window: "weekly",
+                    remaining_fraction: geminiWeeklyRemaining,
+                    reset_time: "2026-10-03T04:39:01Z",
+                  },
+                  {
+                    id: "gemini-5h",
+                    window: "5h",
+                    remaining_fraction: gemini5hRemaining,
+                    reset_time: "2026-10-01T16:06:46Z",
+                  },
+                ],
+              },
+              {
+                name: "Claude and GPT models",
+                buckets: [
+                  {
+                    id: "3p-weekly",
+                    window: "weekly",
+                    remaining_fraction: 0.9,
+                    reset_time: "2026-10-01T15:47:19Z",
+                  },
+                  {
+                    id: "3p-5h",
+                    window: "5h",
+                    remaining_fraction: 1.0,
+                    reset_time: "2026-10-01T18:39:44Z",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+    }
+
+    it("起動時プローブで rate_limits が ext に反映される", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      const states: Envelope[] = [];
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: (envelope) => states.push(envelope),
+        runtimeAssetsAvailable: () => true,
+        agyPath: "/test/agy",
+        usageProbeSpawn: () => {
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.5, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => states.some((envelope) => envelope.ext?.rate_limits !== undefined));
+      const rateLimits = host.statusSnapshot().rate_limits as Record<string, { utilization: number; resets_at?: number }>;
+      expect(rateLimits).toBeDefined();
+      expect(rateLimits.five_hour?.utilization).toBeCloseTo(0.5);
+      expect(rateLimits.five_hour?.resets_at).toBe(Math.floor(Date.parse("2026-10-01T16:06:46Z") / 1000));
+      expect(rateLimits.seven_day?.utilization).toBeCloseTo(0.3);
+      expect(rateLimits.seven_day?.resets_at).toBe(Math.floor(Date.parse("2026-10-03T04:39:01Z") / 1000));
+      host.close();
+    });
+
+    it("ターン完了時 (result) に probe が走り rate_limits が更新される", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      const states: Envelope[] = [];
+      const turnEnds: unknown[] = [];
+      let probeCallCount = 0;
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: (envelope) => states.push(envelope),
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 100,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          probeCallCount++;
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            const remaining5h = probeCallCount === 1 ? 0.5 : 0.2;
+            child.stdout.write(makeUsageStdout(remaining5h, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => probeCallCount === 1);
+      await waitFor(() => {
+        const rl = host.statusSnapshot().rate_limits as Record<string, { utilization: number }> | undefined;
+        return rl?.five_hour?.utilization === 0.5;
+      });
+
+      currentTime = "2026-10-01T10:10:00Z";
+
+      await host.send("run turn");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"init","init":{"tools":[]}}\n');
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+
+      await waitFor(() => turnEnds.length === 1);
+      await waitFor(() => probeCallCount === 2);
+      await waitFor(() => {
+        const rl = host.statusSnapshot().rate_limits as Record<string, { utilization: number }> | undefined;
+        return Math.abs((rl?.five_hour?.utilization ?? 0) - 0.8) < 1e-6;
+      });
+
+      expect(probeCallCount).toBe(2);
+      host.close();
+    });
+
+    it("5分以内のターンではプローブが throttling され実行されない", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      let probeCallCount = 0;
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+      const turnEnds: unknown[] = [];
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 5 * 60 * 1000,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          probeCallCount++;
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.5, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => probeCallCount === 1);
+
+      currentTime = "2026-10-01T10:02:00Z";
+
+      await host.send("turn within throttle interval");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+      await waitFor(() => turnEnds.length === 1);
+
+      expect(probeCallCount).toBe(1);
+
+      currentTime = "2026-10-01T10:08:00Z";
+      await host.send("turn after throttle interval");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok 2"}}\n');
+      await waitFor(() => turnEnds.length === 2);
+
+      await waitFor(() => probeCallCount === 2);
+      expect(probeCallCount).toBe(2);
+      host.close();
+    });
+
+    it("プローブが連続 3 回失敗するとそれ以降はプローブがトリガーされない", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      let probeCallCount = 0;
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+      const turnEnds: unknown[] = [];
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 100,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          probeCallCount++;
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.emit("error", new Error("spawn failed"));
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => probeCallCount === 1);
+
+      currentTime = "2026-10-01T10:05:00Z";
+      await host.send("turn 1");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+      await waitFor(() => turnEnds.length === 1);
+      await waitFor(() => probeCallCount === 2);
+
+      currentTime = "2026-10-01T10:10:00Z";
+      await host.send("turn 2");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+      await waitFor(() => turnEnds.length === 2);
+      await waitFor(() => probeCallCount === 3);
+
+      currentTime = "2026-10-01T10:15:00Z";
+      await host.send("turn 3");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+      await waitFor(() => turnEnds.length === 3);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(probeCallCount).toBe(3);
+      host.close();
+    });
+
+    it("RESOURCE_EXHAUSTED 由来の seven_day: blocked はプローブ結果で解除されない", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+      const turnEnds: unknown[] = [];
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 100,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.8, 0.8));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => {
+        const rl = host.statusSnapshot().rate_limits as Record<string, { status?: string }> | undefined;
+        return rl?.seven_day !== undefined;
+      });
+
+      currentTime = "2026-10-01T10:05:00Z";
+      await host.send("exhaust quota");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write(JSON.stringify({
+        event: "result",
+        result: {
+          status: "ERROR",
+          error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1h.",
+        },
+      }) + "\n");
+      await waitFor(() => turnEnds.length === 1);
+
+      let rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string }>;
+      expect(rateLimits.seven_day?.status).toBe("blocked");
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string }>;
+      expect(rateLimits.seven_day?.status).toBe("blocked");
+
+      currentTime = "2026-10-01T10:10:00Z";
+      await host.send("successful recovery turn");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
+      await waitFor(() => turnEnds.length === 2);
+
+      await waitFor(() => {
+        const rl = host.statusSnapshot().rate_limits as Record<string, { status?: string }> | undefined;
+        return rl?.seven_day?.status === undefined;
+      });
+      host.close();
+    });
+
+    it("モデル不明のときは rate_limits を出力しない", async () => {
+      const cfg = config();
+      delete cfg.model;
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        runtimeAssetsAvailable: () => true,
+        agyPath: "/test/agy",
+        usageProbeSpawn: () => {
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.5, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const ext = host.statusSnapshot();
+      expect(ext.rate_limits).toBeUndefined();
+      host.close();
+    });
+
+    it("seven_day: blocked の resets_at 経過後は 5分間隔を待たずに即座にプローブが実行される", async () => {
+      const cfg = config({ model: "gemini-2.5-flash" });
+      let probeCallCount = 0;
+      let childAgy: FakeAgy | null = null;
+      let currentTime = "2026-10-01T10:00:00Z";
+      const turnEnds: unknown[] = [];
+
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(),
+        appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {},
+        onTurnEnd: (info) => turnEnds.push(info),
+        runtimeAssetsAvailable: () => true,
+        verifyGate: async () => true,
+        agyPath: "/test/agy",
+        now: () => currentTime,
+        usageProbeIntervalMs: 5 * 60 * 1000,
+        spawn: () => {
+          childAgy = new FakeAgy();
+          return childAgy as unknown as SpawnedAgy;
+        },
+        usageProbeSpawn: () => {
+          probeCallCount++;
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.write(makeUsageStdout(0.5, 0.7));
+            child.finish();
+          });
+          return child as never;
+        },
+      });
+
+      await waitFor(() => probeCallCount === 1);
+
+      currentTime = "2026-10-01T10:01:00Z";
+      await host.send("fail with quota");
+      await waitFor(() => childAgy !== null);
+      childAgy!.stdout.write(JSON.stringify({
+        event: "result",
+        result: {
+          status: "ERROR",
+          error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1m.",
+        },
+      }) + "\n");
+      await waitFor(() => turnEnds.length === 1);
+
+      // Verify seven_day is blocked and resets_at is 10:02:00
+      let rateLimits = host.statusSnapshot().rate_limits as Record<string, { status?: string; resets_at?: number }>;
+      expect(rateLimits.seven_day?.status).toBe("blocked");
+      expect(rateLimits.seven_day?.resets_at).toBe(Math.floor(Date.parse("2026-10-01T10:02:00Z") / 1000));
+      expect(probeCallCount).toBe(1);
+
+      // Advance time past resets_at (10:02:05Z, only ~2 min since last probe at 10:00:00Z)
+      currentTime = "2026-10-01T10:02:05Z";
+      await host.send("turn after blocked resets_at passed");
+      await waitFor(() => childAgy !== null);
+      // Turn finishes with error (not successful, so seven_day is not unblocked)
+      childAgy!.stdout.write(JSON.stringify({
+        event: "result",
+        result: {
+          status: "ERROR",
+          error: "some other error",
+        },
+      }) + "\n");
+      await waitFor(() => turnEnds.length === 2);
+
+      // Probe should trigger immediately despite 5-min throttle not being met!
+      await waitFor(() => probeCallCount === 2);
+      expect(probeCallCount).toBe(2);
+      host.close();
     });
   });
 });
