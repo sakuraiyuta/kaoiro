@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog reference
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-10-01
 related: [codex-exec-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -15,18 +15,25 @@ For model-change procedures, see [Codex model settings](../../operations/codex-m
 ## Advertised catalog
 
 [The plan table](../../evidence/codex/model-catalog.md#plan--available-model-2026-07-11-astra-column-added-2026-09-05-sol6luna6-columns-added-2026-09-23) is an **upstream availability snapshot**, not kaoiro's advertised
-catalog. The current kaoiro snapshot advertises Astra / Sol6 / Luna6 / Sol /
-Terra / Luna for ChatGPT Plus and above, Terra for Free/Go, and additionally
+catalog. The current kaoiro snapshot advertises Sol6.1 / Astra / Sol6 / Luna6 /
+Sol / Terra / Luna for ChatGPT Plus and above, Terra for Free/Go, and additionally
 only `gpt-5.5` and `gpt-5.4-mini` for API-key authentication. It deliberately
 does not advertise `gpt-5.3-codex-spark` or non-mini `gpt-5.4`; an operator
 can still declare an unadvertised model through `codex.extra_models`.
 
-`gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna` are marked `visibility: list`
-upstream. Their `models.json` plan lists also name Free/Go, but that
-combination is unverified against the live Free/Go experience — kaoiro's own
-catalog (`wrapper/codex/src/catalog.ts`) therefore only advertises them for
-Plus and above, matching Sol/Terra/Luna's existing tiering (issue #292,
-extended to Sol6/Luna6 by issue #399).
+The current upstream `models.json` lists `gpt-6.1-sol`, `gpt-6-astra`,
+`gpt-6-sol` and `gpt-6-luna` in `available_in_plans` for Free and Go. These
+values are upstream metadata, not proof of live entitlement. kaoiro's catalog
+(`wrapper/codex/src/catalog.ts`) advertises these GPT-6 models only for Plus
+and above, and only `gpt-5.6-terra` for Free/Go. The dated source record and
+the distinction between those two policies are in
+[the 2026-10-01 evidence addendum](../../evidence/codex/model-catalog.md#codex-catalog-snapshot-2026-10-01).
+
+The plan parser recognizes `prolite` and `promax` as upstream plan IDs. The
+mapping from the marketed “Pro 500” plan to either ID remains unknown; kaoiro
+does not infer that mapping. `gpt-5.4-mini` remains in the API-key catalog;
+this update only confirms that its existing row is retained and does not
+resynchronize its metadata.
 
 The advertised set is then filtered by the bundled Codex CLI version: an
 entry whose `minimal_client_version` is newer is not offered.

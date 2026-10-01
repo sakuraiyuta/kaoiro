@@ -1,7 +1,7 @@
 ---
 title: Codex model settings
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-10-01
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -123,6 +123,16 @@ themselves in the meantime:
   remains advertised and the wrapper writes one process-wide warning per
   model; runner validation itself does not emit that warning. CLI compatibility
   is the operator's responsibility for that escape-hatch declaration.
+
+## ChatGPT plan declaration
+
+`codex.chatgpt_plan` accepts the plan IDs `free`, `go`, `plus`, `pro`,
+`prolite`, `promax`, `business`, and `enterprise`. The declaration chooses the
+catalog policy; it does not check account entitlement. In particular, the
+mapping from the marketed “Pro 500” plan to an upstream plan ID is unknown and
+is not inferred here. Upstream `available_in_plans` metadata and kaoiro's
+advertising policy are recorded separately in the
+[catalog evidence](../evidence/codex/model-catalog.md#codex-catalog-snapshot-2026-10-01).
 
 
 ## Migration links

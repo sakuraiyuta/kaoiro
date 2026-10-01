@@ -246,18 +246,21 @@ describe("parseConfig", () => {
     );
   });
 
-  it("Codex catalog contextを受け入れる", () => {
-    expect(
-      parseConfig({
-        ...valid,
+  it.each(["plus", "prolite", "promax"] as const)(
+    "Codex catalog context %s を受け入れる",
+    (plan) => {
+      expect(
+        parseConfig({
+          ...valid,
+          codex_auth_mode: "chatgpt",
+          codex_chatgpt_plan: plan,
+        }),
+      ).toMatchObject({
         codex_auth_mode: "chatgpt",
-        codex_chatgpt_plan: "plus",
-      }),
-    ).toMatchObject({
-      codex_auth_mode: "chatgpt",
-      codex_chatgpt_plan: "plus",
-    });
-  });
+        codex_chatgpt_plan: plan,
+      });
+    },
+  );
 
   it("未知のCodex catalog contextを弾く", () => {
     expect(() =>

@@ -136,6 +136,8 @@ describe("parseRunnerConfig", () => {
     "go",
     "plus",
     "pro",
+    "prolite",
+    "promax",
     "business",
     "enterprise",
   ])("codex.chatgpt_plan の closed enum %s を受け入れる", (plan) => {
@@ -158,8 +160,8 @@ describe("parseRunnerConfig", () => {
         codex: { chatgpt_plan: "team" },
       }),
     ).toThrowError(
-      "codex.chatgpt_plan must be one of: free, go, plus, pro, business, " +
-        "enterprise",
+      "codex.chatgpt_plan must be one of: free, go, plus, pro, prolite, " +
+        "promax, business, enterprise",
     );
   });
 
@@ -767,23 +769,27 @@ describe("buildRegister", () => {
     expect(buildRegister(config, undefined).allowed_personas).toEqual(["ao", "kuroe"]);
   });
 
-  it("検出auth modeと申告planからCodex catalogを解決する", () => {
-    const config = parseRunnerConfig({
-      ...valid,
-      codex: { chatgpt_plan: "plus" },
-    });
-    const codex = buildRegister(config, undefined, "chatgpt").engines?.find(
-      (engine) => engine.id === "codex",
-    );
-    expect(codex?.models.map((model) => model.value)).toEqual([
-      "gpt-6-astra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ]);
-  });
+  it.each(["plus", "prolite", "promax"] as const)(
+    "ChatGPT %s の申告からPlus-and-above Codex catalogを解決する",
+    (plan) => {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: { chatgpt_plan: plan },
+      });
+      const codex = buildRegister(config, undefined, "chatgpt").engines?.find(
+        (engine) => engine.id === "codex",
+      );
+      expect(codex?.models.map((model) => model.value)).toEqual([
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]);
+    },
+  );
 
   it("layers codex.extra_models onto the resolved catalog (issue #292)", () => {
     const config = parseRunnerConfig({
@@ -802,6 +808,7 @@ describe("buildRegister", () => {
       (engine) => engine.id === "codex",
     );
     expect(codex?.models.map((model) => model.value)).toEqual([
+      "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6-sol",
       "gpt-6-luna",

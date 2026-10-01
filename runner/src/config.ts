@@ -73,6 +73,8 @@ export type ChatGptPlan =
   | "go"
   | "plus"
   | "pro"
+  | "prolite"
+  | "promax"
   | "business"
   | "enterprise";
 
@@ -142,6 +144,8 @@ const CHATGPT_PLANS = new Set<ChatGptPlan>([
   "go",
   "plus",
   "pro",
+  "prolite",
+  "promax",
   "business",
   "enterprise",
 ]);
@@ -452,8 +456,8 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
         !CHATGPT_PLANS.has(raw.codex.chatgpt_plan as ChatGptPlan)
       ) {
         throw new ConfigError(
-          "codex.chatgpt_plan must be one of: free, go, plus, pro, " +
-            "business, enterprise",
+          "codex.chatgpt_plan must be one of: free, go, plus, pro, prolite, " +
+            "promax, business, enterprise",
         );
       }
       codex.chatgpt_plan = raw.codex.chatgpt_plan as ChatGptPlan;

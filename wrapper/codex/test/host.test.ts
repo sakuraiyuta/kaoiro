@@ -76,6 +76,7 @@ describe("initialStatusExt", () => {
     expect(
       (initial.ext.models as { value: string }[]).map((m) => m.value),
     ).toEqual([
+      "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6-sol",
       "gpt-6-luna",
@@ -115,6 +116,7 @@ describe("initialStatusExt", () => {
     expect(
       (initial.models as { value: string }[]).map((m) => m.value),
     ).toEqual([
+      "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6-sol",
       "gpt-6-luna",
@@ -768,6 +770,7 @@ describe("CodexHost", () => {
       "chatgpt",
       "plus",
       [
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -780,6 +783,7 @@ describe("CodexHost", () => {
       "chatgpt",
       "pro",
       [
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -792,6 +796,7 @@ describe("CodexHost", () => {
       "chatgpt",
       "business",
       [
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -804,6 +809,7 @@ describe("CodexHost", () => {
       "chatgpt",
       "enterprise",
       [
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -816,6 +822,7 @@ describe("CodexHost", () => {
       "apikey",
       undefined,
       [
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -931,6 +938,7 @@ describe("CodexHost", () => {
         (model) => model.value,
       ),
     ).toEqual([
+      "gpt-6.1-sol",
       "gpt-6-astra",
       "gpt-6-sol",
       "gpt-6-luna",
