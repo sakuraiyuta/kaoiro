@@ -1320,6 +1320,15 @@ defmodule KaoiroServer.DeliveryStatesTest do
         "reason" => "turn_steer_timeout"
       })
 
+    assert {:error, _} =
+             DeliveryStates.report_stage(
+               recipient,
+               "generation",
+               spawn(fn -> :ok end),
+               uncertain,
+               name
+             )
+
     assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
     assert :ok = DeliveryStates.report_stage(recipient, "generation", owner, uncertain, name)
 
@@ -1348,10 +1357,61 @@ defmodule KaoiroServer.DeliveryStatesTest do
     assert %{uncertain_count: 1, last_uncertain: %{reason: "turn_steer_timeout"}} =
              DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
 
+    expired_at = DateTime.utc_now() |> DateTime.add(-7_200, :second) |> DateTime.to_iso8601()
+    key = {recipient, incarnation}
+
+    :sys.replace_state(name, fn state ->
+      entry = state.entries[recipient]
+      entry = put_in(entry.stage_history[key][1].changed_at, expired_at)
+
+      %{
+        state
+        | entries: Map.put(state.entries, recipient, entry),
+          stages: put_in(state.stages[key][1].changed_at, expired_at)
+      }
+    end)
+
+    assert {:ok, %{status: "expired"}} =
+             DeliveryStates.message_status("sender", "phase3", 1, name)
+
+    assert %{uncertain_count: 1, lost_count: 0} = DeliveryStates.get(recipient, name)
+
     assert :ok = DeliveryStates.delete(recipient, name)
 
     assert %{uncertain_count: 0, last_uncertain: nil} =
              DeliveryStates.bind_resync(recipient, "fresh", owner, name)
+  end
+
+  test "an older persisted ledger initializes uncertainty without inventing a history count", %{
+    name: name,
+    path: path
+  } do
+    recipient = "phase3-old-format"
+    owner = self()
+
+    assert %{uncertain_count: 0} =
+             DeliveryStates.bind_resync(recipient, "generation", owner, name)
+
+    GenServer.stop(Process.whereis(name))
+    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+
+    [{^recipient, generation, issued, acked, pending_since, recovery}] =
+      :dets.lookup(name, recipient)
+
+    :ok =
+      :dets.insert(
+        name,
+        {recipient, generation, issued, acked, pending_since,
+         Map.drop(recovery, [:uncertain_count, :last_uncertain])}
+      )
+
+    :ok = :dets.sync(name)
+    :ok = :dets.close(name)
+
+    {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+    assert %{uncertain_count: 0, last_uncertain: nil} =
+             DeliveryStates.bind_resync(recipient, "generation", owner, name)
   end
 
   test "post-submission uncertainty counts once and legacy unknown remains history-only", %{
