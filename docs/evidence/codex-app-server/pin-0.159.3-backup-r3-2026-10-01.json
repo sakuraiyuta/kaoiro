@@ -1,0 +1,800 @@
+{
+  "schema": 1,
+  "status": "implementation r3 review requested; not deployment approval",
+  "implementation_commit": "68e38cff12cedae689f2c7d4cb165b10d04fe844",
+  "review_baseline": "77f54ed30a4379f4fc8501953d2b3a7c6167ee53",
+  "review": {
+    "path": "tmp/reviews/issue-468/impl-r2-kuroe.md",
+    "sha256": "c7ec3b64378422c37218f769e631c093d007f9d9da4c594b092e2551e859d0f8"
+  },
+  "report": {
+    "path": "docs/evidence/codex-app-server/pin-0.159.3-backup-r3-2026-10-01.md",
+    "sha256": "a80a79e599dbd5caabc1ed9592b598185c59f74ed5681aa0fb166490a92b8fec"
+  },
+  "source_files": [
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-backup-r2-2026-10-01.json",
+      "sha256": "391006be164a645152e86375c8992e457a615a8dae144816324b323a4e8d99f9"
+    },
+    {
+      "path": "docs/evidence/codex-app-server/pin-0.159.3-backup-r2-2026-10-01.md",
+      "sha256": "43434898cb4d78679387710bc68162a49f8ef90a405c0fa7a0632a55985a0212"
+    },
+    {
+      "path": "docs/plans/issue-468-codex-state-backup.md",
+      "sha256": "dc30fd3b02c711fba50c8481f7962eff79a2d31eeca9eb548f28bf6a57a20564"
+    },
+    {
+      "path": "runner/deploy/codex-snapshot.mjs",
+      "sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3"
+    },
+    {
+      "path": "runner/deploy/kaoiro-runner-codex-state.mjs",
+      "sha256": "4bf76e09c02ee1b7c1d87628503424dd86f813522d30af0068babf9b69772425"
+    },
+    {
+      "path": "runner/test/codexState.test.ts",
+      "sha256": "53eab4d0091236419d0dddc26142692140606f565e3ecd6f79c236a995178ae8"
+    },
+    {
+      "path": "runner/test/codexStateWorkflow.test.ts",
+      "sha256": "e2ef023d0ecdb5f3524a7e24de4a592f02186bc45d80de0b8bc7b755e1f76023"
+    }
+  ],
+  "suites": [
+    {
+      "name": "r3-runner-test",
+      "exit": 0,
+      "log": "<scratch>/logs/r3-runner-test.log",
+      "summary": [
+        "Test Files  37 passed (37)",
+        "Tests  853 passed (853)",
+        "Duration  93.89s (transform 5.37s, setup 668ms, collect 25.54s, tests 148.35s, environment 9ms, prepare 4.19s)"
+      ]
+    },
+    {
+      "name": "r3-runner-typecheck",
+      "exit": 0,
+      "log": "<scratch>/logs/r3-runner-typecheck.log",
+      "summary": []
+    },
+    {
+      "name": "r3-codex-test",
+      "exit": 0,
+      "log": "<scratch>/logs/r3-codex-test.log",
+      "summary": [
+        "Test Files  79 passed (79)",
+        "Tests  1200 passed (1200)",
+        "Duration  27.81s (transform 5.43s, setup 548ms, collect 36.28s, tests 150.49s, environment 21ms, prepare 8.12s)"
+      ]
+    },
+    {
+      "name": "r3-codex-typecheck",
+      "exit": 0,
+      "log": "<scratch>/logs/r3-codex-typecheck.log",
+      "summary": []
+    }
+  ],
+  "mutations": [
+    {
+      "name": "diagnostic-bytes",
+      "file": "codex-snapshot.mjs",
+      "source_sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-diagnostic-bytes.log",
+      "log_sha256": "099e85170fa06eae206db6aaeedb9e2629cfd4d3a5dcc24c3238e2bca2e3ab86"
+    },
+    {
+      "name": "preflight-wiring",
+      "file": "kaoiro-runner-codex-state.mjs",
+      "source_sha256": "4bf76e09c02ee1b7c1d87628503424dd86f813522d30af0068babf9b69772425",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-preflight-wiring.log",
+      "log_sha256": "ebee68b5258a1b7320c4356d86fd3e92a710da9a2ff7e5dcacb2fe2b66c76afc"
+    },
+    {
+      "name": "snapshot-recheck-wiring",
+      "file": "codex-snapshot.mjs",
+      "source_sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-snapshot-recheck-wiring.log",
+      "log_sha256": "f3374bca206e4550d9e5c758cefb2d91a2b63337287b7c0179b7f75b536ae2f1"
+    },
+    {
+      "name": "diagnostic-inodes",
+      "file": "codex-snapshot.mjs",
+      "source_sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-diagnostic-inodes.log",
+      "log_sha256": "7c0f2bde56a1783e7fdb0680427cf3d2688034509f5061979896b6a7313cc4f7"
+    },
+    {
+      "name": "sidecar-selection",
+      "file": "codex-snapshot.mjs",
+      "source_sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-sidecar-selection.log",
+      "log_sha256": "01fa1c6d6187b017f526ac5b0428c893123627ce50113a029372a72796dd94f8"
+    },
+    {
+      "name": "restore-budget",
+      "file": "codex-snapshot.mjs",
+      "source_sha256": "15534f42eb0e10fc9c97b79300b4835cb69f4f98d2f2bfab365884374752c7a3",
+      "exit": 1,
+      "log": "<scratch>/logs/r3-mutation-restore-budget.log",
+      "log_sha256": "d85558e42df2c0f41786578886b61fc65f57eddba5b94d83d72ef53d3994aed1"
+    }
+  ],
+  "build": {
+    "commit": "68e38cff12cedae689f2c7d4cb165b10d04fe844",
+    "archive": "<scratch>/built-r3/kaoiro-runner-68e38cff12cedae689f2c7d4cb165b10d04fe844-linux-x64.tar.gz",
+    "archive_sha256": "a68bc0822a4e8630917e04079057364b5093b2980f958e0637a102eaf79a22be",
+    "install_root": "<scratch>/installed-r3",
+    "manifest_sha256": "1203f66cbb4029017328f34460e11cb4618de2b792a58a0ba5af2dd0c485b8b4",
+    "native": {
+      "path": "node_modules/.pnpm/@openai+codex@0.159.3-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
+      "version": "0.159.3",
+      "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+    },
+    "strict_verify_exit": 0,
+    "negative": [
+      {
+        "missing": "kaoiro-runner-launch.sh",
+        "exit": 71,
+        "next_mutations": 0
+      },
+      {
+        "missing": "kaoiro-runner-codex-state.mjs",
+        "exit": 71,
+        "next_mutations": 0
+      }
+    ],
+    "restored_verify_exit": 0
+  },
+  "real_service": {
+    "A": "f0808401811768255663ddc4b00ade9524f6fccb",
+    "B": "68e38cff12cedae689f2c7d4cb165b10d04fe844",
+    "sourcePid": "2399598",
+    "results": [
+      {
+        "mode": "update",
+        "workerExit": "0",
+        "sourceState": "active",
+        "pid": "2400745",
+        "current": "releases/68e38cff12cedae689f2c7d4cb165b10d04fe844",
+        "joins": 2,
+        "beforeJoins": 1,
+        "history": "SYNTHETIC_HISTORY"
+      },
+      {
+        "mode": "restore",
+        "workerExit": "0",
+        "sourceState": "active",
+        "pid": "2401353",
+        "current": "releases/f0808401811768255663ddc4b00ade9524f6fccb",
+        "joins": 3,
+        "beforeJoins": 2,
+        "history": "SYNTHETIC_HISTORY"
+      }
+    ]
+  },
+  "capacity_negative": {
+    "exit": "78",
+    "beforePid": "2399598",
+    "afterPid": "2399598",
+    "current": "releases/f0808401811768255663ddc4b00ade9524f6fccb",
+    "joins": 1,
+    "backupExists": false,
+    "registryExists": false,
+    "availableBytes": 586679353344,
+    "sparseBytes": 352007612006,
+    "nextMutations": 0
+  },
+  "restore_negative": {
+    "exit": "78",
+    "beforePid": "2400745",
+    "afterPid": "2400745",
+    "current": "releases/68e38cff12cedae689f2c7d4cb165b10d04fe844",
+    "homeUnchanged": true,
+    "nextMutations": 0
+  },
+  "native_resume": {
+    "preSnapshotId": "01a0f655-c596-7ea3-828b-e6cc1394cf59",
+    "resumedId": "01a0f655-c596-7ea3-828b-e6cc1394cf59",
+    "postSnapshotId": "01a0f656-35c1-7290-9b68-13042c3db9eb",
+    "missing": {
+      "version": "0",
+      "host_id": "kogane468-r3-577d6d2b-5e60-4008-841b-b93286d0b869",
+      "agent_id": "kogane468-r3-577d6d2b-5e60-4008-841b-b93286d0b869.probe",
+      "ok": false,
+      "reason": "session_not_found"
+    },
+    "fresh": {
+      "version": "0",
+      "host_id": "kogane468-r3-577d6d2b-5e60-4008-841b-b93286d0b869",
+      "agent_id": "kogane468-r3-577d6d2b-5e60-4008-841b-b93286d0b869.probe",
+      "ok": true
+    },
+    "wrapperJoins": 1,
+    "modelRequests": 4
+  },
+  "database_boundary": {
+    "before": {
+      "goals_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "goals_1.sqlite-shm": "a1bbf0d59ef23c3ac683f85beaa6fcab7716558cf7c4b16ed0a852913b96db09",
+      "goals_1.sqlite-wal": "6ff1ab459d5df3255d9da242d2d70aa1a2abf039a56828189a04192adbca8fd5",
+      "logs_2.sqlite": "212a395656e6ce4ecdd79164c4a4de431f87c794b7147b3ce6005dd80d8d779a",
+      "logs_2.sqlite-shm": "29be8773468749285fb4a1ae2d73bbcf37944e9d4e11875409d121660f702352",
+      "logs_2.sqlite-wal": "6ebf05c8990b9b3aa36aae4cca2a1324ebe1b5bccd02ae2276ed217833a454fe",
+      "memories_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "memories_1.sqlite-shm": "98e3cb20c1e034a5ce515a43fdb5b1f6f8afec330731cded6b16de16100673e1",
+      "memories_1.sqlite-wal": "3aafbe8af42ca8f1a413c7e9ec1a8411de559ba771e9d6c159cc8279452e0bbf",
+      "queue_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "queue_1.sqlite-shm": "52f8e91566ed8dbc8d1400c9ff67c16f550d6ba1d9e61b61ac521ebf48cb94dc",
+      "queue_1.sqlite-wal": "54a5128e4b28ca244ee5f22d64ef52c5160b603274af3cc89ee549bb6f329f78",
+      "state_5.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "state_5.sqlite-shm": "c0653d07db6e49afa209e17b4d43ec66c54fce78ba7d4f13172b11d62ada1bf0",
+      "state_5.sqlite-wal": "9835e6d03548990a4a5905abafbe17dfbefe069a2944d91ff420ef1639fe0790",
+      "thread_history_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "thread_history_1.sqlite-shm": "6e8b8f179e693ef7beb18e46399317d98bc1afffc6ae6ff3223558ac4b47d22f",
+      "thread_history_1.sqlite-wal": "fec857e7f99d6753d9761e0e640fd5a3f5d07162885f02fa0ad22260ec230e07"
+    },
+    "after": {
+      "goals_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "goals_1.sqlite-shm": "a1bbf0d59ef23c3ac683f85beaa6fcab7716558cf7c4b16ed0a852913b96db09",
+      "goals_1.sqlite-wal": "6ff1ab459d5df3255d9da242d2d70aa1a2abf039a56828189a04192adbca8fd5",
+      "logs_2.sqlite": "212a395656e6ce4ecdd79164c4a4de431f87c794b7147b3ce6005dd80d8d779a",
+      "logs_2.sqlite-shm": "29be8773468749285fb4a1ae2d73bbcf37944e9d4e11875409d121660f702352",
+      "logs_2.sqlite-wal": "6ebf05c8990b9b3aa36aae4cca2a1324ebe1b5bccd02ae2276ed217833a454fe",
+      "memories_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "memories_1.sqlite-shm": "98e3cb20c1e034a5ce515a43fdb5b1f6f8afec330731cded6b16de16100673e1",
+      "memories_1.sqlite-wal": "3aafbe8af42ca8f1a413c7e9ec1a8411de559ba771e9d6c159cc8279452e0bbf",
+      "queue_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "queue_1.sqlite-shm": "52f8e91566ed8dbc8d1400c9ff67c16f550d6ba1d9e61b61ac521ebf48cb94dc",
+      "queue_1.sqlite-wal": "54a5128e4b28ca244ee5f22d64ef52c5160b603274af3cc89ee549bb6f329f78",
+      "state_5.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "state_5.sqlite-shm": "c0653d07db6e49afa209e17b4d43ec66c54fce78ba7d4f13172b11d62ada1bf0",
+      "state_5.sqlite-wal": "9835e6d03548990a4a5905abafbe17dfbefe069a2944d91ff420ef1639fe0790",
+      "thread_history_1.sqlite": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f",
+      "thread_history_1.sqlite-shm": "6e8b8f179e693ef7beb18e46399317d98bc1afffc6ae6ff3223558ac4b47d22f",
+      "thread_history_1.sqlite-wal": "fec857e7f99d6753d9761e0e640fd5a3f5d07162885f02fa0ad22260ec230e07"
+    },
+    "migrationLevels": {
+      "goals_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "logs_2.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "memories_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "queue_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        }
+      ],
+      "state_5.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        },
+        {
+          "version": 3,
+          "success": 1
+        },
+        {
+          "version": 4,
+          "success": 1
+        },
+        {
+          "version": 5,
+          "success": 1
+        },
+        {
+          "version": 6,
+          "success": 1
+        },
+        {
+          "version": 7,
+          "success": 1
+        },
+        {
+          "version": 8,
+          "success": 1
+        },
+        {
+          "version": 9,
+          "success": 1
+        },
+        {
+          "version": 10,
+          "success": 1
+        },
+        {
+          "version": 11,
+          "success": 1
+        },
+        {
+          "version": 12,
+          "success": 1
+        },
+        {
+          "version": 13,
+          "success": 1
+        },
+        {
+          "version": 14,
+          "success": 1
+        },
+        {
+          "version": 15,
+          "success": 1
+        },
+        {
+          "version": 16,
+          "success": 1
+        },
+        {
+          "version": 17,
+          "success": 1
+        },
+        {
+          "version": 18,
+          "success": 1
+        },
+        {
+          "version": 19,
+          "success": 1
+        },
+        {
+          "version": 20,
+          "success": 1
+        },
+        {
+          "version": 21,
+          "success": 1
+        },
+        {
+          "version": 22,
+          "success": 1
+        },
+        {
+          "version": 23,
+          "success": 1
+        },
+        {
+          "version": 24,
+          "success": 1
+        },
+        {
+          "version": 25,
+          "success": 1
+        },
+        {
+          "version": 26,
+          "success": 1
+        },
+        {
+          "version": 27,
+          "success": 1
+        },
+        {
+          "version": 28,
+          "success": 1
+        },
+        {
+          "version": 29,
+          "success": 1
+        },
+        {
+          "version": 30,
+          "success": 1
+        },
+        {
+          "version": 31,
+          "success": 1
+        },
+        {
+          "version": 32,
+          "success": 1
+        },
+        {
+          "version": 33,
+          "success": 1
+        },
+        {
+          "version": 34,
+          "success": 1
+        },
+        {
+          "version": 35,
+          "success": 1
+        },
+        {
+          "version": 36,
+          "success": 1
+        },
+        {
+          "version": 37,
+          "success": 1
+        },
+        {
+          "version": 38,
+          "success": 1
+        },
+        {
+          "version": 39,
+          "success": 1
+        },
+        {
+          "version": 40,
+          "success": 1
+        },
+        {
+          "version": 41,
+          "success": 1
+        },
+        {
+          "version": 42,
+          "success": 1
+        },
+        {
+          "version": 43,
+          "success": 1
+        },
+        {
+          "version": 44,
+          "success": 1
+        },
+        {
+          "version": 45,
+          "success": 1
+        },
+        {
+          "version": 46,
+          "success": 1
+        },
+        {
+          "version": 47,
+          "success": 1
+        },
+        {
+          "version": 48,
+          "success": 1
+        },
+        {
+          "version": 49,
+          "success": 1
+        },
+        {
+          "version": 50,
+          "success": 1
+        },
+        {
+          "version": 51,
+          "success": 1
+        },
+        {
+          "version": 52,
+          "success": 1
+        },
+        {
+          "version": 53,
+          "success": 1
+        },
+        {
+          "version": 54,
+          "success": 1
+        },
+        {
+          "version": 55,
+          "success": 1
+        },
+        {
+          "version": 56,
+          "success": 1
+        },
+        {
+          "version": 57,
+          "success": 1
+        },
+        {
+          "version": 58,
+          "success": 1
+        }
+      ],
+      "thread_history_1.sqlite": [
+        {
+          "version": 1,
+          "success": 1
+        },
+        {
+          "version": 2,
+          "success": 1
+        },
+        {
+          "version": 3,
+          "success": 1
+        },
+        {
+          "version": 4,
+          "success": 1
+        },
+        {
+          "version": 5,
+          "success": 1
+        },
+        {
+          "version": 6,
+          "success": 1
+        },
+        {
+          "version": 7,
+          "success": 1
+        }
+      ]
+    }
+  },
+  "checks": {
+    "old_capacity_test_exit": 1,
+    "old_capacity_test_failed": 1,
+    "old_updater_stop_guard_exit": 77,
+    "evidence_checker_exit": 0,
+    "evidence_checker_negative_exit": 1,
+    "service_probe_exit": 0,
+    "cleanup_unit": {
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "MainPID": 0
+    },
+    "owned_unit_timeout_stop_seconds": 5,
+    "shipped_unit_timeout_stop_seconds": 30
+  },
+  "artifacts": [
+    {
+      "path": "<scratch>/built-r3-result.json",
+      "sha256": "a15e404162d75aca3bdc3d844908db9e23e0fbb019b3f23758e8211d6aaab5b1"
+    },
+    {
+      "path": "<scratch>/check-r3-evidence.py",
+      "sha256": "f7442a941fae71d50efdef3612a3d8450d5071359d34203c083cfc4a7dd85f2e"
+    },
+    {
+      "path": "<scratch>/check-r3-suites.py",
+      "sha256": "97fb1e9b2e368e363c3404145560d04b87e4ca9100f954f74093197c1026764a"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-install.log",
+      "sha256": "4b7ed90b9cb4c44daa4583415b232b11b8445a21cc7c9530db948a7d2d68b18a"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-native.log",
+      "sha256": "615780ece04353ecb07c746ef80032b5f21200ec58b24d67736a5d5da04f897e"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-negative-kaoiro-runner-codex-state.mjs.log",
+      "sha256": "7d1859cbf4a3617aa1aaae8bcd693bd5416c4401b72b3498ade9b54a1e73833d"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-negative-kaoiro-runner-launch.sh.log",
+      "sha256": "a5d130164da299136b262c479146e4b7058a1353f31f6313edc0efcad445c37a"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-restored-verify.log",
+      "sha256": "fff65315caaf8342f28cccc263198be47d0eddb07d5e48fc8f513a2da1b815a7"
+    },
+    {
+      "path": "<scratch>/logs/built-r3-verify.log",
+      "sha256": "064231c0d5be546917a8d73c3d63335da4b7d5b554353ee4228905e24f74d3e0"
+    },
+    {
+      "path": "<scratch>/logs/r3-artifact.log",
+      "sha256": "664f552ba242909e88b0a0e14c6576d193a04b6e0afdc10c64738f0382073bfe"
+    },
+    {
+      "path": "<scratch>/logs/r3-build.log",
+      "sha256": "876b24b922c7e2ed07aa3e051173bda9e808a8dbd4ecd089470528f04fdddebd"
+    },
+    {
+      "path": "<scratch>/logs/r3-capacity-before.log",
+      "sha256": "ef460fe560612afe44686f3b66824d6d4027526011e60015dfa37c09571a080a"
+    },
+    {
+      "path": "<scratch>/logs/r3-capacity-fixed.log",
+      "sha256": "4d043a6b6f9e97e402587d7c73fe26271f7c3053e01168cd961a6da75325cdb8"
+    },
+    {
+      "path": "<scratch>/logs/r3-codex-test.log",
+      "sha256": "b3cb3c8636fcaa54344fa53446d80b75a5c8f73dfeebde1ef6ad55668cdf1ddc"
+    },
+    {
+      "path": "<scratch>/logs/r3-codex-typecheck.log",
+      "sha256": "0e0b54de291756bab1de2f738e535d7af6bf9f13d497a8590a120b65ce243ad3"
+    },
+    {
+      "path": "<scratch>/logs/r3-evidence-check-negative.log",
+      "sha256": "bf5b732909b79ac24697be25907ea5a53fcfbb21b1418e12e33053c49cb4ef77"
+    },
+    {
+      "path": "<scratch>/logs/r3-evidence-check.log",
+      "sha256": "04cc88ef8661de32983b14ab4d3c50d578fc39dec09de6ec5227b7f40c430804"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-diagnostic-bytes.log",
+      "sha256": "099e85170fa06eae206db6aaeedb9e2629cfd4d3a5dcc24c3238e2bca2e3ab86"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-diagnostic-inodes.log",
+      "sha256": "7c0f2bde56a1783e7fdb0680427cf3d2688034509f5061979896b6a7313cc4f7"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-preflight-wiring.log",
+      "sha256": "ebee68b5258a1b7320c4356d86fd3e92a710da9a2ff7e5dcacb2fe2b66c76afc"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-restore-budget.log",
+      "sha256": "d85558e42df2c0f41786578886b61fc65f57eddba5b94d83d72ef53d3994aed1"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-sidecar-selection.log",
+      "sha256": "01fa1c6d6187b017f526ac5b0428c893123627ce50113a029372a72796dd94f8"
+    },
+    {
+      "path": "<scratch>/logs/r3-mutation-snapshot-recheck-wiring.log",
+      "sha256": "f3374bca206e4550d9e5c758cefb2d91a2b63337287b7c0179b7f75b536ae2f1"
+    },
+    {
+      "path": "<scratch>/logs/r3-recheck-fixed.log",
+      "sha256": "3e35377dca880ed3a813906a0307c6dda12f15764db2d0b6980047a6ff8256c8"
+    },
+    {
+      "path": "<scratch>/logs/r3-runner-test.log",
+      "sha256": "b6081a3299fcbfa26d39467ad0cb1d934e12bd41fa249951471a31185b996f14"
+    },
+    {
+      "path": "<scratch>/logs/r3-runner-typecheck.log",
+      "sha256": "b86167c5337065a4c59389f16d1c491331b6b36b9bc27bdb743ceb1341628e1a"
+    },
+    {
+      "path": "<scratch>/logs/r3-systemd.log",
+      "sha256": "4da8c910ea6e7c932a6ca6ee42140d3bb8b14b429406a4a29c7abdaca56d9e5a"
+    },
+    {
+      "path": "<scratch>/mutate-r3.py",
+      "sha256": "a737b6d87cda28196bdd171bbe0a5c92afaf346eac13e3ef94926d7131df65ce"
+    },
+    {
+      "path": "<scratch>/r3-mutations.json",
+      "sha256": "17cec38ddd10ba4c27dda40b9bb3365f6959b0e237c723cb3826469507da2268"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/PRE_SNAPSHOT_NATIVE_468.jsonl",
+      "sha256": "66c4be5d68c14fd0d434963c3720bfd38df5cadb7005b7518c0caab3c2e718b7"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/PRE_SNAPSHOT_NATIVE_468.stderr",
+      "sha256": "5df3a9fb67461fc5ed521aa11b1c0d5565256929add9c88b8c1622256ae1652f"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/RESUME_PRE_SNAPSHOT_NATIVE_468.jsonl",
+      "sha256": "66c4be5d68c14fd0d434963c3720bfd38df5cadb7005b7518c0caab3c2e718b7"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/RESUME_PRE_SNAPSHOT_NATIVE_468.stderr",
+      "sha256": "ccc8313d4f674010e0a4d7dff77066b421690eba7ccd7c507f82ba842238103f"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/capacity-journal.log",
+      "sha256": "19b576fe6c30c0a9f7e27288528c6eb91d667b2324e8b573403cfc38305ab864"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/capacity-negative.json",
+      "sha256": "d7a0e5db9319c97ae894e5a8807309c76de36328b227ecc70152a0400a4b35e8"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/corrupt-backup-journal.log",
+      "sha256": "66bb9b03e1bdbdf22b15e422a85e7e80f088f1100f79a5976296fbbf64ae8a57"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/database-boundary.json",
+      "sha256": "1ed713118c3f2996755c35ecca8aeb62e9e9d2b3b433c413e2011dc5fe22e169"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/kogane468-r3-577d6d2b-5e60-4008-841b-b93286d0b869.service",
+      "sha256": "246528d5e713aa15ae1456a253a033c4bb071e206b948cd18fdb7783af6bb0db"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/native-post-snapshot.jsonl",
+      "sha256": "adcacb7be5732f9cc4e64955d45b6b4dfbffce560bd513e474cc96b885db11f6"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/native-post-snapshot.stderr",
+      "sha256": "5df3a9fb67461fc5ed521aa11b1c0d5565256929add9c88b8c1622256ae1652f"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/negative.json",
+      "sha256": "a5e04a412f0aa3c708cd00f975fe62dc77dc33095432b6e6d6e5fb733b25b7fc"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/requests.jsonl",
+      "sha256": "4c84afa94ee3da0cd84d2f75c79b7568ea7626ad8f28f48ab17c44453dae103a"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/restore-journal.log",
+      "sha256": "4c44135711e5335aa9f81516ca699daf06d5adc7322ad1a245dc2865fb01cda5"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/result.json",
+      "sha256": "5efbd1e1cb1b29bcec5c65f0c1184d5be980a93be12491708e0b9c9931d0586a"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/resume-result.json",
+      "sha256": "72d34ee68152c9160188377a490e811393837295977176ad5bff6830b0eec396"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/runner-journal.log",
+      "sha256": "200ff7736617a10a6e0c98735d650749520776f5b3ced05d9eb0c3515ef104ac"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/update-journal.log",
+      "sha256": "423435e48509ff154e0522171c5ebb36d94ba096c8cb20563a2dbae5f5206c10"
+    },
+    {
+      "path": "<scratch>/r3-real-recovery-71f4a22b-0ca3-44d9-af62-8acfe879ee80/wrapper-wire.json",
+      "sha256": "8901be47f96322ab765970a5f9f0303c8abfa749dd645ec1652a9949345fdef1"
+    },
+    {
+      "path": "<scratch>/r3-suites.json",
+      "sha256": "01e7840731113813b44a2f6df3547980d8e77f951d9b155c604c3a8f7945c6db"
+    },
+    {
+      "path": "<scratch>/systemd-r3-recovery.mjs",
+      "sha256": "86442b977c3617352d098f6f5f6e84e1b063a601ca5a89e84743ffc2a0e1c8a8"
+    },
+    {
+      "path": "<scratch>/verify-built-r3.py",
+      "sha256": "b3a94206041bf51f4fe0eb8858dfa7c35397e18c19d904440aeb17ea81a238bc"
+    },
+    {
+      "path": "<scratch>/write-r3-report.py",
+      "sha256": "f904ae10101a19b6e6eb80773bd891d03e5207df7165af89e2afe85296c6a4ca"
+    }
+  ],
+  "live_model_turns": 0,
+  "local_provider_requests": 4,
+  "cleanup": {
+    "scratch": "retained for independent review; evaluator removes after director confirmation",
+    "authenticated_homes": "untouched in this round"
+  }
+}
