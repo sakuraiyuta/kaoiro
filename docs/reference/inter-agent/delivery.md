@@ -29,6 +29,13 @@ retains no payloads and does not guarantee retransmission or delivery.
   `pending_since` is the timestamp of the first divergence.
   Recovery and waiter inputs follow the same
   [tool-result handoff boundary](reply-basis.md#inline-recovery-and-ownership).
+- After a join `ok`, `ServerLink` does not issue a `delivery_ack` at or below
+  the highest watermark it has issued since that `ok`, so the join-time resends
+  of its replay owners collapse into one push. A push buffered by the Phoenix
+  client before the join and flushed at `ok` is not counted, so a wrapper that
+  acknowledges while disconnected (currently Antigravity, which supplies no
+  delivery identity) can still send a duplicate. The guarantee is the server's:
+  a stale or duplicate watermark is a no-op.
 - `whoami`, `list_agents` entries, and the operator dashboard's
   `snapshot.deliveries` / `delivery_status` all read the same server ledger. An
   absent field is **unknown** (legacy/disarmed), not zero.

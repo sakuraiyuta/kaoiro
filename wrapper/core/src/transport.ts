@@ -1354,6 +1354,8 @@ export class ServerLink {
   #deliveryModesSettled = false;
   #workControlSupported = false;
   #deliveryIncarnation: string | null = null;
+  /** Highest `delivery_ack` watermark issued since the last join "ok". */
+  #deliveryAckIssued = 0;
   #lastDeliveryStageIdentity: DeliveryStageIdentity | null = null;
   readonly #pendingDeliveryStages = new Map<string, PendingDeliveryStage>();
   #deliveryStageOverflowWarned = false;
@@ -1712,6 +1714,10 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         if (this.#replyBasisTerminal) return;
+        // Reset here, not on disconnect: a watermark buffered before this
+        // join may have timed out unsent, and a channel-only rejoin never
+        // closes the socket. The join-time resends below must still go out.
+        this.#deliveryAckIssued = 0;
         this.#acceptPermissionSyncJoin(reply);
         this.#replyBasisGeneration++;
         this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
@@ -1895,10 +1901,14 @@ export class ServerLink {
   }
 
   /** Records contiguous SDK-dispatch completion.  The server treats a stale,
-   * future, or duplicate watermark as a harmless no-op. */
+   * future, or duplicate watermark as a harmless no-op. Several replay owners
+   * converge here, so a watermark at or below one already issued since the
+   * last join "ok" is not pushed again. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
     this.#deliveryRecovery.confirm(deliverySeq);
+    if (deliverySeq <= this.#deliveryAckIssued) return;
+    this.#deliveryAckIssued = deliverySeq;
     this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
   }
 

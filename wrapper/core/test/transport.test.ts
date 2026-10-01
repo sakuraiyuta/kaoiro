@@ -9,7 +9,7 @@ type PushReceivers = Map<string, (payload: unknown) => void>;
 // `lastChannelParams` exposes the join params the channel was opened with,
 // so a test can assert what rides the handshake (persona_id / transition_id).
 // `handlers` maps an event to EVERY callback registered for it, not just the
-// last one. Phoenix 1.8.9's Channel.on appends and its trigger invokes all of
+// last one. Phoenix 1.8.8's Channel.on appends and its trigger invokes all of
 // them; a Map<string, callback> silently collapsed duplicates, which hid a
 // raw `channel.on` added on top of an already-bound event (ふじ #218 レビュー
 // MF-4 — the structural meta-test below could not see it).
@@ -3013,6 +3013,25 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       });
       await Promise.resolve();
       expect(ackedSeqs()).toEqual([2]);
+    } finally {
+      link.close();
+    }
+  });
+
+  it("resends the watermark after a channel-only rejoin on an open socket", async () => {
+    const { envelope, joined, link, runtime } = setup();
+    try {
+      joined("same", 0);
+      emit("envelope", envelope);
+      runtime.withHostOptions({}).onTurnStart({ turnToken: "turn" });
+      expect(ackedSeqs()).toEqual([1]);
+
+      // The channel errors and rejoins; the socket never closes.
+      mock.pushes = [];
+      emit("phx_error", {});
+      joined("same");
+      await Promise.resolve();
+      expect(ackedSeqs()).toEqual([1]);
     } finally {
       link.close();
     }
