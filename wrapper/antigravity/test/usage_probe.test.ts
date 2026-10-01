@@ -205,7 +205,7 @@ describe("runAgyUsageProbe", () => {
       }) as any;
       queueMicrotask(() => {
         const largeChunk = Buffer.alloc(1024 * 1024 + 10, "x");
-        child.stdout.emit("data", largeChunk);
+        child.stdout!.emit("data", largeChunk);
       });
       return child;
     }) as any;
