@@ -29,7 +29,12 @@ defmodule KaoiroServer.AsyncEnvConventionTest do
     * Other process-global state: `:persistent_term` (three production
       modules write it), `Logger.configure/1`, global Phoenix.PubSub topics.
     * Writes made through a helper under `test/support`, such as
-      `OAuthAllowlistFixture.put_allowlist/1`. No async module calls one.
+      `OAuthAllowlistFixture.put_allowlist/1`, or through a helper module
+      declared beside a test module with no `use` of its own. No async
+      module does either today.
+
+  A definition head or `@spec` named like a writer (`defp put_env/2`) is
+  reported as a call: the match is on the name alone.
   """
   use ExUnit.Case, async: true
 
