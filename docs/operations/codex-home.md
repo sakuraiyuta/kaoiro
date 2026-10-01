@@ -227,6 +227,10 @@ login and cache. Keep the runner stopped; preserve the failed home and private
 transaction records. Follow the registry/release handling in
 [second-level recovery](runner-update-and-rollback.md#second-level-recovery-fresh-setup)
 before restarting. An old migration barrier does not certify a fresh home.
+Keep snapshots and failed trees outside cloud-synchronized or externally
+backed-up directories. After recovery, explicitly record whether old credential
+entries are deleted or retained privately with a deletion date. New login does
+not prove old token revocation; use account-side revocation if available.
 
 Recreate the directory at its configured canonical path, then repeat the
 operator login, minimal configuration, instruction links and hook trust steps

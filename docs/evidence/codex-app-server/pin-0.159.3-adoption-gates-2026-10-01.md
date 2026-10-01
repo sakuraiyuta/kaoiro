@@ -3,8 +3,12 @@
 Status: candidate runtime checks recorded; independent implementation review
 and the operator's final adoption/rollout decision remain pending. No production
 home or runner was accessed, and no branch was pushed or deployed.
-The backup implementation submitted for review is `c4cf6fa1`; the companion
-JSON binds the precise source, native, built archive, fixtures and output logs.
+The backup observations here bind historical implementation `c4cf6fa1`; the
+companion JSON binds its source, native, built archive, fixtures and output
+logs. Implementation review found a source-SQLite mutation defect in that
+backup helper. Those backup observations do not establish the corrected
+snapshot boundary; implementation r2 must supply replacement backup evidence.
+The native/model/runtime observations are separate from that backup defect.
 
 ## Pin, schema and suite
 

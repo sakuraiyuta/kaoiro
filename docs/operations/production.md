@@ -243,6 +243,21 @@ node server/deploy/kaoiro-server-deploy.mjs rollback \
   --transaction <transaction-id> --confirm-restore
 ```
 
+For an ordinary same-native runner rollback, use the fixed physical path of a
+verified release containing the guarded switch. Keep stop, switch and start
+in one success chain; a refused switch must leave the runner stopped:
+
+```sh
+systemctl --user stop kaoiro-runner &&
+  "$tool_release/deploy/kaoiro-runner-switch.sh" --rollback \
+    --install-dir "$install_root" &&
+  systemctl --user start kaoiro-runner
+```
+
+The guard refuses differing native hashes, retained state references or an
+incomplete transaction. Use snapshot recovery below in those cases; never
+retry with an older script through `previous`.
+
 Runner rollback across a Codex native pin change must restore the recorded
 state snapshot before starting the old binary. Use the fixed physical path of
 the verified backup-capable tool release; never invoke an older script through

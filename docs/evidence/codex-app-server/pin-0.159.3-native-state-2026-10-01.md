@@ -9,6 +9,21 @@ scripts and observations by SHA-256. All data came from a newly created,
 credential-free scratch home. No production home, database, authentication
 file or authenticated evaluation home was read or copied.
 
+## Snapshot evidence correction
+
+Implementation review r1 found that the historical snapshot helper opened
+source SQLite databases read-only, which can create or rewrite WAL/SHM files.
+Its successful rehearsal does not establish a non-mutating snapshot boundary.
+The retained `arms.py` calls Python SQLite read-only inspection before taking
+the snapshot. A separate real-DB reproduction confirms that this pre-inspection
+can create the sidecars first and make the old helper succeed; without that
+pre-inspection it fails and changes source entries. The old implementation's
+unit fixtures had no real SQLite databases. The earlier built-runner rehearsal
+also took its snapshot before creating native DBs. These gaps invalidate any
+inference of source immutability from these observations. The persistence
+captures below remain historical observations, not proof of the corrected
+snapshot implementation.
+
 ## Method and observations
 
 The absolute 0.156.1 native executable created an exec thread and an

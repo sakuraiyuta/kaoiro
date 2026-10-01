@@ -210,9 +210,14 @@ this operation. Prepare a verified physical tool-release path before updating:
 ```
 
 Same-native, code-only switching remains possible with the new guarded switch
-when there are no retained state references or incomplete transactions. A switch failure after a verified snapshot attempts snapshot recovery to the
-recorded source, restarts it only after verification, and still reports a failed
-update. A snapshot or recovery failure leaves the service stopped. Never
+when there are no retained state references or incomplete transactions. See
+[the same-native command](production.md#5-rollback). A failed switch with a
+verified snapshot and a forward phase of `snapshot-verified` or
+`switch-authorized` uses code-only source recovery: the candidate has not been
+started, so home and credentials stay in place. The original phase, state,
+release and home bindings are checked again by the switch guard. If startup
+absence cannot be proved, recovery restores the verified snapshot. Both paths
+restart the recorded source only after verification and report a failed update. A snapshot or recovery failure leaves the service stopped. Never
 restart old code against potentially migrated state.
 
 ### Second-level recovery: fresh setup
@@ -220,13 +225,23 @@ restart old code against potentially migrated state.
 If snapshot recovery cannot succeed, keep the runner stopped and let the
 operator choose a fresh Codex setup. This deliberately loses Codex conversation
 history, login and caches; it is not an automatic credential reset. Preserve
-failed home/staging/quarantine trees privately instead of deleting them.
+failed home/staging/quarantine trees privately until recovery is complete.
+Snapshots and diagnostic trees must stay outside cloud-synchronized or
+externally backed-up directories. Once fresh setup succeeds, the operator must
+record which old credential entries/trees are deleted or explicitly retained.
+Retained trees need private local storage and a deletion date. A new login is
+not evidence that old tokens were revoked. Use account-side session revocation
+if available; do not guess a logout invocation that could affect the new home.
 
 Use [Codex home creation and login](codex-home.md#fresh-setup-after-failed-snapshot-recovery)
 at the configured canonical path with the verified selected release. Normally
 keep the verified current release. A requested code downgrade instead needs a
 fresh installation of that selected release against an empty home, never an
-old binary against the failed migrated database.
+old binary against the failed migrated database. For a new installation root,
+reinstall the unit with `ExecStart` pointing to that root's `current` launch
+shim, run `systemctl --user daemon-reload`, and verify static unit/environment
+home binding before startup and MainPID home binding afterward. Do not reuse
+the former installation's acceptance or binding records.
 
 Before restarting, the operator must preserve the recorded source/tool releases
 and archive the installation's `codex-state` registry into a private diagnostic
@@ -241,7 +256,7 @@ first turn and hook/profile marker; old session IDs must remain visibly missing.
 
 ## Codex state backup
 
-This workflow requires Linux/systemd, a private same-user Codex home and an
+This workflow requires Linux/systemd with unified cgroup v2, a private same-user Codex home and an
 operator-controlled maintenance interval with no dispatch, process spawning,
 unit/environment reload, or release modification. Same-native comparison is
 also enforced on macOS, where state-aware migration is currently unsupported.
@@ -295,9 +310,11 @@ sensitive information. New threads after the snapshot stay in quarantine;
 there is no lossless merge or silent replacement of missing resume targets.
 
 Successful runner startup leaves the transaction `awaiting-acceptance`.
-Perform actual Codex startup and pre-existing history checks. Record their
+Perform actual Codex startup and applicable pre-existing history checks, or
+explicitly verify a new session after accepting history loss. Record their
 observed result in a private mode-0600 JSON file with `schema: 1`, the transaction
-`uuid`, its `nativeHash`, and boolean `codexStart` / `history`. Then run:
+`uuid`, its `nativeHash`, `codexStart: true`, and either `history: true` or
+`explicitNewSession: true`. Then run:
 
 ```sh
 node --experimental-vm-modules \
@@ -320,10 +337,12 @@ verified snapshot recovery; absence of either proof requires an explicit
 operator recovery plan. Home relocation is a separate reviewed operation.
 
 Retirement requires accepted gate-6 snapshot/fresh-setup recovery results
-(not old-binary compatibility with migrated databases), actual production startup/history
-checks, and explicit abandonment of rollback. Supply a private JSON record
+(not old-binary compatibility with migrated databases), actual production
+startup, applicable history or explicit new-session checks, and explicit
+abandonment of rollback. Supply a private JSON record
 with `schema: 1`, `uuid`, and true `gate6`, `productionCodexStart`,
-`productionHistory`, `abandonRollback` to
+`abandonRollback`, plus either `productionHistory: true` or
+`explicitNewSession: true`, to
 `retire <install-root> <uuid> <evidence-file>`. The helper acquires update/link
 locks, marks the reference retired before deleting its named snapshot, and
 leaves the migration barrier. Releases needed by other references stay

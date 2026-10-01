@@ -360,7 +360,7 @@ if [ -n "$codex_transaction" ]; then
   state_action=snapshot
   [ -z "$codex_restore" ] || state_action=restore
   if ! kaoiro_codex_state "$state_action" "$root" "$codex_transaction"; then
-    kaoiro_codex_state inspect "$root" "$codex_transaction" >&2 || true
+    kaoiro_codex_state summary "$root" "$codex_transaction" >&2 || true
     kaoiro_die "Codex state preparation failed; runner remains stopped; transaction $codex_transaction" 78
   fi
 fi
@@ -370,9 +370,9 @@ if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" --codex-t
   if [ -n "$codex_transaction" ]; then
     [ -z "$codex_restore" ] ||
       kaoiro_die "Restore switch failed; runner remains stopped; inspect transaction $codex_transaction, then use operator fresh setup (docs/operations/codex-home.md) if snapshot recovery cannot succeed" 78
-    printf '%s: switch failed; recovering the recorded source from its verified snapshot\n' "$prog" >&2
+    printf '%s: switch failed; recovering the recorded source according to the startup phase\n' "$prog" >&2
     codex_restore=$codex_backup
-    codex_transaction=$(kaoiro_codex_state prepare-restore "$root" "$codex_restore" "$codex_home" "$service" "$tool_id" "$$") ||
+    codex_transaction=$(kaoiro_codex_state prepare-recovery "$root" "$codex_transaction" "$$") ||
       kaoiro_die "Source recovery preflight failed; runner remains stopped; inspect snapshot or use operator fresh setup (docs/operations/codex-home.md)" 78
     id=$(kaoiro_codex_state target "$root" "$codex_transaction")
     if ! kaoiro_codex_state restore "$root" "$codex_transaction"; then
@@ -397,7 +397,7 @@ if [ -n "$codex_transaction" ]; then
   fi
 fi
 
-printf '%s: starting %s\n'  "$prog" "$service" >&2
+printf '%s: starting %s\n' "$prog" "$service" >&2
 start_failed=no
 "$systemctl_bin" --user start "$service" || start_failed=yes
 
@@ -421,7 +421,7 @@ if [ "$start_failed" = yes ] ||
     printf '%s: if snapshot recovery cannot succeed, keep the runner stopped and use operator fresh setup (docs/operations/codex-home.md)\n' "$prog" >&2
     exit 70
   fi
-  printf '%s: roll back with:\n'  "$prog" >&2
+  printf '%s: roll back with:\n' "$prog" >&2
   printf '  %s --user stop %s\n' "$systemctl_bin" "$service" >&2
   printf '  %s --rollback --install-dir %s\n' \
     "$deploy_dir/kaoiro-runner-switch.sh" "$root" >&2

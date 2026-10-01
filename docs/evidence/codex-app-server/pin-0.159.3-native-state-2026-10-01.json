@@ -273,5 +273,6 @@
     "old-version resume of a candidate-created thread before restore",
     "external-process inspection as a refusal condition",
     "old-home login"
-  ]
+  ],
+  "snapshot_limit": "Historical source SQLite read-only inspection could mutate WAL/SHM; preceding Python inspection could mask the defect. This capture does not establish source immutability or corrected snapshot behavior."
 }

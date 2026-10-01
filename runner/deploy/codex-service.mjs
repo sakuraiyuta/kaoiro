@@ -136,6 +136,7 @@ export function checkBinding(root, service, binding, restored = false) {
 }
 export function assertStopped(service, home) {
   must(["inactive", "failed"].includes(prop(service, "ActiveState")) && prop(service, "MainPID") === "0", "Runner is not fully stopped");
+  must(hasEntry("/sys/fs/cgroup/cgroup.controllers"), "State-aware operation requires unified cgroup v2");
   const group = prop(service, "ControlGroup");
   if (group && hasEntry(join("/sys/fs/cgroup", group, "cgroup.events"))) {
     must(/^populated 0$/m.test(readFileSync(join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")), "Runner descendants remain");

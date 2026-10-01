@@ -36,8 +36,8 @@ function validateRecord(record, root, kind, name) {
   if (kind === "backups") {
     must(typeof record.retired === "boolean" && typeof record.restored === "boolean" && sha(record.manifestHash), "Malformed backup retention state");
   } else {
-    const phases = ["prepared", "stopped", "snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "completed", "restore-prepared", "restore-intent", "quarantine-intent", "quarantined", "promote-intent", "state-restored", "restored", "retired"];
-    must(record.root === root && ["forward", "restore"].includes(record.mode) && typeof record.phase === "string" && (phases.includes(record.phase) || /^credential-(?:intent|moved):(?:auth\.json|\.credentials\.json|secrets|mcp-oauth-locks)$/.test(record.phase)), "Malformed state transaction phase");
+    const phases = ["prepared", "stopped", "snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "completed", "restore-prepared", "code-recovery-prepared", "restore-intent", "quarantine-intent", "quarantined", "promote-intent", "state-restored", "restored", "retired"];
+    must(record.root === root && ["forward", "restore", "code-recovery"].includes(record.mode) && typeof record.phase === "string" && (phases.includes(record.phase) || /^credential-(?:intent|moved):(?:auth\.json|\.credentials\.json|secrets|mcp-oauth-locks)$/.test(record.phase)), "Malformed state transaction phase");
   }
 }
 function records(root, kind) {
@@ -138,11 +138,12 @@ export async function guard(root, target, uuid, preflight = false) {
   lockOwner(root, tx);
   must(tx.target.id === target && tx.source.id === source.id && tx.source.sha256 === source.sha256 && tx.target.sha256 === candidate.sha256, "Transaction release binding mismatch");
   checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
-  if (tx.mode !== "restore") barrierCheck(root, source, tx.binding);
+  if (tx.mode === "forward") barrierCheck(root, source, tx.binding);
   if (preflight) return;
   assertStopped(tx.service, tx.binding.home.path);
-  const { ref, manifest } = verifiedReference(root, tx.mode === "restore" ? transaction(root, tx.backupUUID) : tx);
-  must(tx.phase === (tx.mode === "restore" ? "state-restored" : "snapshot-verified"), "State transaction is not ready for switching");
+  const { ref, manifest } = verifiedReference(root, tx.mode !== "forward" ? transaction(root, tx.backupUUID) : tx);
+  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
+  must(tx.phase === (tx.mode === "restore" ? "state-restored" : tx.mode === "code-recovery" ? "code-recovery-prepared" : "snapshot-verified"), "State transaction is not ready for switching");
   must(sameState(inventory(tx.binding.home.path, true), manifest.entries), "Stopped state differs from verified snapshot");
   tx.phase = "switch-authorized";
   save(root, tx);
@@ -183,16 +184,28 @@ async function takeSnapshot(root, uuid) {
 }
 async function beforeStart(root, uuid) {
   const tx = transaction(root, uuid); lockOwner(root, tx);
+  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
   must(tx.phase === "switch-authorized" && currentRelease(root) === tx.target.id, "Switch did not reach the recorded target");
   const current = await releaseIdentity(root, tx.target.id);
   must(current.sha256 === tx.target.sha256, "Target native changed after switch");
   checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
   assertStopped(tx.service, tx.binding.home.path);
-  const { ref, manifest } = verifiedReference(root, tx.mode === "restore" ? transaction(root, tx.backupUUID) : tx);
+  const { ref, manifest } = verifiedReference(root, tx.mode !== "forward" ? transaction(root, tx.backupUUID) : tx);
   must(sameState(inventory(tx.binding.home.path, true), manifest.entries), "Stopped state changed before startup");
   tx.phase = "start-attempted"; save(root, tx);
 }
-async function prepareRollback(root, snapshotPath, home, service, tool, owner) {
+function assertNeverStarted(root, tx) {
+  const original = transaction(root, tx.backupUUID);
+  must(original.mode === "forward" && ["snapshot-verified", "switch-authorized"].includes(original.phase), "Cannot prove candidate never started");
+  must(tx.target.id === original.source.id && tx.target.sha256 === original.source.sha256, "Code recovery must return to original source");
+}
+async function prepareRecovery(root, uuid, owner) {
+  const original = transaction(root, uuid);
+  lockOwner(root, original);
+  const neverStarted = original.mode === "forward" && ["snapshot-verified", "switch-authorized"].includes(original.phase);
+  return prepareRollback(root, original.snapshot, original.binding.home.path, original.service, original.tool, owner, neverStarted ? original.uuid : undefined);
+}
+async function prepareRollback(root, snapshotPath, home, service, tool, owner, neverStartedUUID) {
   const refs = activeReferences(root);
   const selected = refs.find((r) => r.snapshot === snapshotPath && !r.restored);
   must(selected, "No retained reference matches this snapshot");
@@ -223,14 +236,15 @@ async function prepareRollback(root, snapshotPath, home, service, tool, owner) {
   must(target.sha256 === old.source.sha256, "Backup source native changed");
   capacity(dirname(home), original.entries);
   const uuid = randomUUID();
-  const tx = { schema: 1, uuid, root, mode: "restore", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target, tool, binding: { ...binding, live: old.binding.live }, service, backupUUID: old.uuid, snapshot: snapshotPath, staging: join(dirname(home), `.restore.codex-${uuid}`), quarantine: join(dirname(home), `.failed.codex-${uuid}`), phase: "restore-prepared", created: new Date().toISOString() };
+  const tx = { schema: 1, uuid, root, mode: neverStartedUUID ? "code-recovery" : "restore", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target, tool, binding: { ...binding, live: old.binding.live }, service, backupUUID: old.uuid, snapshot: snapshotPath, staging: join(dirname(home), `.restore.codex-${uuid}`), quarantine: join(dirname(home), `.failed.codex-${uuid}`), phase: neverStartedUUID ? "code-recovery-prepared" : "restore-prepared", created: new Date().toISOString() };
   atomicJSON(join(root, ".lock.update", "codex-owner.json"), { schema: 1, uuid, owner: tx.owner });
   save(root, tx);
   return uuid;
 }
 function restore(root, uuid) {
   const tx = transaction(root, uuid); lockOwner(root, tx);
-  must(tx.phase === "restore-prepared", "Restore transaction is not prepared");
+  if (tx.mode === "code-recovery") return;
+  must(tx.mode === "restore" && tx.phase === "restore-prepared", "Restore transaction is not prepared");
   checkBinding(root, tx.service, tx.binding);
   assertStopped(tx.service, tx.binding.home.path);
   const { ref } = verifiedReference(root, transaction(root, tx.backupUUID));
@@ -259,12 +273,12 @@ async function accept(root, uuid, evidenceFile) {
   const binding = captureBinding(root, tx.service, tx.binding.home.path);
   checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
   const evidence = readJSON(evidenceFile);
-  must(evidence.uuid === uuid && evidence.nativeHash === native.sha256 && evidence.codexStart === true && evidence.history === true, "Acceptance requires operator-recorded actual Codex start/history evidence");
+  must(evidence.uuid === uuid && evidence.nativeHash === native.sha256 && evidence.codexStart === true && (evidence.history === true || evidence.explicitNewSession === true), "Acceptance requires actual Codex start and history or explicit new-session evidence");
   tx.acceptance = { evidenceHash: digest(readFileSync(evidenceFile)), accepted: new Date().toISOString() };
   tx.sequence = Math.max(0, ...records(root, "transactions").map((r) => r.sequence || 0)) + 1;
-  tx.phase = tx.mode === "restore" ? "restored" : "completed";
+  tx.phase = tx.mode !== "forward" ? "restored" : "completed";
   save(root, tx);
-  if (tx.mode === "restore") {
+  if (tx.mode !== "forward") {
     const old = transaction(root, tx.backupUUID);
     const ref = reference(root, old); ref.restored = true;
     atomicJSON(join(paths(root).backups, `${ref.uuid}.json`), ref);
@@ -297,7 +311,7 @@ async function retire(root, uuid, evidenceFile) {
   barrierCheck(root, current);
   must(!records(root, "transactions").some((r) => r.backupUUID === uuid && !["restored", "retired"].includes(r.phase)), "Recovery still depends on this snapshot");
   const evidence = readJSON(evidenceFile);
-  must(evidence.uuid === uuid && evidence.gate6 === true && evidence.productionCodexStart === true && evidence.productionHistory === true && evidence.abandonRollback === true, "Explicit accepted migration and rollback-retirement evidence is required");
+  must(evidence.uuid === uuid && evidence.gate6 === true && evidence.productionCodexStart === true && (evidence.productionHistory === true || evidence.explicitNewSession === true) && evidence.abandonRollback === true, "Explicit accepted migration and rollback-retirement evidence is required");
   if (!ref.retired) {
     verifySnapshot(ref.snapshot, ref.manifestHash);
     ref.retired = true; ref.retirementEvidence = digest(readFileSync(evidenceFile));
@@ -318,6 +332,8 @@ async function main(argv) {
   else if (action === "snapshot") await takeSnapshot(root, args[0]);
   else if (action === "before-start") await beforeStart(root, args[0]);
   else if (action === "started") { const tx = transaction(root, args[0]); lockOwner(root, tx); must(tx.phase === "start-attempted", "Invalid startup phase"); tx.phase = "awaiting-acceptance"; save(root, tx); }
+  else if (action === "prepare-recovery") console.log(await prepareRecovery(root, ...args));
+  else if (action === "summary") { const { uuid, mode, phase } = transaction(root, args[0]); console.log(JSON.stringify({ uuid, mode, phase })); }
   else if (action === "prepare-restore") console.log(await prepareRollback(root, ...args));
   else if (action === "restore") restore(root, args[0]);
   else if (action === "inspect") console.log(JSON.stringify(transaction(root, args[0]), null, 2));

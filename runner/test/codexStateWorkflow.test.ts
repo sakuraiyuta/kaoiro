@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -80,12 +80,24 @@ else if (args.includes('show')) {
     expect(result.stderr).toContain("awaiting actual Codex start/history acceptance");
   });
   it("keeps stop failure in the same control flow as switch/start", () => {
+    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
+    const marker = join(dir, "switch-invocations");
+    const extraFiles = { "deploy/kaoiro-runner-switch.sh": original.replace("set -eu\n", `set -eu\nprintf 'switch\\n' >> '${marker}'\n`) };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "snapshot-failure-tarball"));
+    archive = makeReleaseTarball(join(dir, "snapshot-failure-tarball"), B, { extraFiles });
     writeFileSync(join(dir, "late-unknown"), "trigger");
     const result = update();
     expect(result.status).not.toBe(0);
     expect(readFileSync(calls, "utf8")).toBe("stop\n");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
+    expect(result.stderr).toContain("Codex state preparation failed");
+    expect(existsSync(marker)).toBe(false);
+    expect(result.stderr).not.toContain('"sourceHash"');
+    expect(result.stderr).not.toContain(join(conf, "runner.env"));
+    expect(result.stderr).toContain('"phase":"stopped"');
   });
   it("restores verified old state while retaining the current token", () => {
     const forward = update();
@@ -140,17 +152,33 @@ else if (args.includes('show')) {
     expect(readdirSync(join(root, "codex-state/barriers")).some((name) => name.includes("damaged"))).toBe(true);
     expect(JSON.parse(readFileSync(join(root, "codex-state/barriers", file), "utf8")).native.sha256).toBe(tx.target.sha256);
   });
-  it("retires an accepted snapshot with explicit abandonment and keeps its barrier", () => {
+  it.each(["history", "new-session"])("retires an accepted snapshot with %s evidence and keeps its barrier", (basis) => {
     expect(update().status).toBe(0);
     const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+    const acceptanceFile = acceptance(tx);
+    if (basis === "new-session") {
+      const value = JSON.parse(readFileSync(acceptanceFile, "utf8"));
+      value.history = false; value.explicitNewSession = true;
+      writeFileSync(acceptanceFile, JSON.stringify(value));
+    }
+    expect(stateAction("accept", root, tx.uuid, acceptanceFile).status).toBe(0);
     const proof = join(dir, "retire.json");
-    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: true, abandonRollback: true }), { mode: 0o600 });
+    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: basis === "history", explicitNewSession: basis === "new-session", abandonRollback: true }), { mode: 0o600 });
     const result = stateAction("retire", root, tx.uuid, proof);
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(join(dir, "backup"))).toBe(false);
     expect(readdirSync(join(root, "codex-state/barriers"))).toHaveLength(1);
     expect(forwardTransaction().phase).toBe("retired");
+  });
+  it("refuses retirement without either history or explicit new-session evidence", () => {
+    expect(update().status).toBe(0);
+    const tx = forwardTransaction();
+    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+    const file = join(dir, "retire-missing.json");
+    writeFileSync(file, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: false, explicitNewSession: false, abandonRollback: true }), { mode: 0o600 });
+    expect(stateAction("retire", root, tx.uuid, file).status).not.toBe(0);
+    expect(existsSync(join(dir, "backup"))).toBe(true);
+    expect(forwardTransaction().phase).toBe("completed");
   });
   it("refuses restoring an older retained reference before stopping", () => {
     expect(update().status).toBe(0);
@@ -267,24 +295,78 @@ else if (args.includes('show')) {
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
   });
-  it.each(["before-move", "after-move", "recovery-failure"])("handles switch failure %s without starting the candidate", (mode) => {
+  it.each(["before-move", "after-move", "start-attempted", "recovery-failure"])("handles switch failure %s without starting the candidate", (mode) => {
     const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
     const failBefore = `if [ "$1" = "${B}" ]; then exit 70; fi\n`;
     const changed = mode === "before-move" ? original.replace("set -eu\n", "set -eu\n" + failBefore)
+      : mode === "start-attempted" ? original + `\nif [ "$id" = "${B}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";const f=p+fs.readdirSync(p)[0];const t=JSON.parse(fs.readFileSync(f));t.phase="start-attempted";fs.writeFileSync(f,JSON.stringify(t));'\nexit 70\nfi\n`
       : mode === "after-move" ? original + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`
       : original.replace("set -eu\n", "set -eu\nexit 70\n");
-    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
+    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed, "node_modules/@openai/codex/vendor/fixture/bin/codex": "#!/bin/sh\n# different candidate native\nexit 0\n" };
     rmSync(join(root, "releases", B), { recursive: true });
     writeReleaseTree(join(root, "releases", B), B, { extraFiles });
     mkdirSync(join(dir, "failure-tarball"));
     archive = makeReleaseTarball(join(dir, "failure-tarball"), B, { extraFiles });
+    const inode = statSync(home).ino, credentialInode = statSync(join(home, "auth.json")).ino;
     const result = update();
     expect(result.status, result.stderr).not.toBe(0);
+    const quarantines = readdirSync(dir).filter((name) => name.startsWith(".failed.codex-"));
+    expect(quarantines).toHaveLength(mode === "start-attempted" ? 1 : 0);
+    if (mode === "start-attempted") expect(statSync(home).ino).not.toBe(inode);
+    else expect(statSync(home).ino).toBe(inode);
+    expect(statSync(join(home, "auth.json")).ino).toBe(credentialInode);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
     expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("CURRENT_TOKEN");
     expect(readFileSync(calls, "utf8"), result.stderr).toBe(mode === "recovery-failure" ? "stop\n" : "stop\nstart\n");
     expect(result.stderr).toContain(mode === "recovery-failure" ? "operator fresh setup" : "recorded source was restored and restarted");
+  });
+  it("refuses a host without unified cgroup v2 before snapshot or switch", () => {
+    const original = readFileSync(join(root, "releases", B, "deploy/codex-service.mjs"), "utf8");
+    const extraFiles = { "deploy/codex-service.mjs": original.replace('"/sys/fs/cgroup/cgroup.controllers"', JSON.stringify(join(dir, "missing-controllers"))) };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "cgroup-tarball"));
+    archive = makeReleaseTarball(join(dir, "cgroup-tarball"), B, { extraFiles });
+    const result = update();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("requires unified cgroup v2");
+    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(dir, "backup"))).toBe(false);
+  });
+  it.each(["before-switch", "before-start"])("refuses code-only recovery if its original startup proof changes %s", (boundary) => {
+    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
+    const corruptProof = `if [ "$1" = "${A}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";for(const f of fs.readdirSync(p)){const t=JSON.parse(fs.readFileSync(p+f));if(t.mode==="forward"){t.phase="start-attempted";fs.writeFileSync(p+f,JSON.stringify(t));}}'\nfi\n`;
+    const changed = (boundary === "before-switch" ? original.replace("set -eu\n", "set -eu\n" + corruptProof) : original + "\n" + corruptProof.replace('"$1"', '"$id"')) + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`;
+    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "proof-tarball"));
+    archive = makeReleaseTarball(join(dir, "proof-tarball"), B, { extraFiles });
+    const inode = statSync(home).ino;
+    const result = update();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Cannot prove candidate never started");
+    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${boundary === "before-switch" ? B : A}`);
+    expect(statSync(home).ino).toBe(inode);
+    expect(readdirSync(dir).filter((name) => name.startsWith(".failed.codex-"))).toEqual([]);
+  });
+  it("refuses code-only recovery redirected away from the original source", () => {
+    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
+    const redirect = `if [ "$1" = "${A}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";const all=fs.readdirSync(p).map(f=>[f,JSON.parse(fs.readFileSync(p+f))]);const old=all.find(x=>x[1].mode==="forward")[1];for(const [f,t] of all){if(t.mode==="code-recovery"){t.target=old.target;fs.writeFileSync(p+f,JSON.stringify(t));}}'\nshift\nset -- "${B}" "$@"\nfi\n`;
+    const changed = original.replace("set -eu\n", "set -eu\n" + redirect) + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`;
+    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "redirect-tarball"));
+    archive = makeReleaseTarball(join(dir, "redirect-tarball"), B, { extraFiles });
+    const result = update();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Code recovery must return to original source");
+    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
   });
   it("charges sparse files by logical size and rejects insufficient capacity before stop", () => {
     const fs = statfsSync(dir);

@@ -25,6 +25,30 @@ describe("Codex state snapshots", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
   const take = async (home: string, dir: string) => snap.snapshot(home, join(dir, "backup"), { uuid: "test", staging: join(dir, ".staging.codex-test") });
+  it.each(["closed", "uncheckpointed"])("snapshots a real %s WAL database without changing source bytes", async (state) => {
+    const path = join(home, "state_5.sqlite");
+    const fixture = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { DatabaseSync } from 'node:sqlite';
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec("PRAGMA journal_mode=WAL; CREATE TABLE _sqlx_migrations(version INTEGER, success INTEGER); INSERT INTO _sqlx_migrations VALUES(58,1);");
+      if (process.argv[2] === 'closed') db.close();
+      else process.kill(process.pid, 'SIGKILL');
+    `, path, state], { encoding: "utf8" });
+    expect(state === "closed" ? fixture.status : fixture.signal, fixture.stderr).toBe(state === "closed" ? 0 : "SIGKILL");
+    expect(existsSync(`${path}-wal`)).toBe(state === "uncheckpointed");
+    const before = snap.inventory(home, true);
+    const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const snap = await import(process.argv[1]);
+      console.log(JSON.stringify(await snap.snapshot(process.argv[2], process.argv[3], {
+        uuid: 'test', staging: process.argv[4]
+      })));
+    `, snapshotModule, home, join(dir, "backup"), join(dir, ".staging.codex-test")], { encoding: "utf8" });
+    expect.soft(probe.status, probe.stderr).toBe(0);
+    expect(snap.inventory(home, true)).toEqual(before);
+    const result = JSON.parse(probe.stdout);
+    expect(result.manifest.migrationLevels["state_5.sqlite"]).toEqual([{ version: 58, success: 1 }]);
+    expect(snap.verifySnapshot(join(dir, "backup"), result.sha256).entries).toEqual(snap.stateEntries(before));
+  });
   it("excludes all current credentials, verifies state, and preserves refreshed credentials on restore", async () => {
     const result = await take(home, dir);
     const backup = join(dir, "backup");

@@ -1163,5 +1163,6 @@
     "wrapper/codex/src/turn_diagnostics.ts": "15a0a76786b1b15d18874637c1422b2a9436fce152a2da0dd6d17d0831d731dd",
     "wrapper/codex/src/turn_watchdog.ts": "f039216fe5bc65c847a2f609b9dbb0c544d9ae24c518e87a11827f1f67c4b917",
     "wrapper/codex/src/upload.ts": "8ba9bb81f28dc7ad99fca305aca9a2771aff994438aa4881ad59b4806e5f55d4"
-  }
+  },
+  "backup_limit": "Historical c4cf6fa1 backup evidence; source-SQLite mutation found in implementation review r1. Corrected backup requires r2 evidence. Native/runtime observations remain separately bound."
 }

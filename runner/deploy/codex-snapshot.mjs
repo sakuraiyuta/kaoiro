@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync,
+  chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statfsSync, symlinkSync,
   writeFileSync, openSync, closeSync, fsyncSync,
 } from "node:fs";
@@ -118,19 +118,27 @@ function copyEntries(source, dest, entries) {
     if (e.type === "directory") chmodSync(join(dest, e.path), e.mode);
   }
 }
-export async function migrationLevels(home, entries) {
+export async function migrationLevels(payload, entries) {
   const dbs = entries.filter((e) => e.category === "state" && e.type === "file" && /^[^/]+\.sqlite$/.test(e.path));
   if (!dbs.length) return {};
   const { DatabaseSync } = await import("node:sqlite");
   const levels = {};
-  for (const e of dbs) {
-    const db = new DatabaseSync(join(home, e.path), { readOnly: true });
-    try {
-      const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'").get();
-      levels[e.path] = has ? db.prepare("SELECT version, success FROM _sqlx_migrations ORDER BY version").all() : [];
-    } finally { db.close(); }
-  }
-  return levels;
+  // SQLite readOnly still creates or rewrites WAL sidecars. Neither the
+  // source nor the hash-bound snapshot payload may be opened by SQLite.
+  const scratch = mkdtempSync(join(dirname(payload), ".migration-levels-"));
+  try {
+    for (const e of entries.filter((entry) => entry.type === "file" && /^[^/]+\.sqlite(?:-wal|-shm|-journal)?$/.test(entry.path))) {
+      copyFileSync(join(payload, e.path), join(scratch, e.path));
+    }
+    for (const e of dbs) {
+      const db = new DatabaseSync(join(scratch, e.path), { readOnly: true });
+      try {
+        const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'").get();
+        levels[e.path] = has ? db.prepare("SELECT version, success FROM _sqlx_migrations ORDER BY version").all() : [];
+      } finally { db.close(); }
+    }
+    return levels;
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 export async function snapshot(home, destination, metadata) {
   const source = identity(home);
@@ -143,7 +151,7 @@ export async function snapshot(home, destination, metadata) {
   must(stage === join(parent, `.staging.codex-${metadata.uuid}`), "Invalid snapshot staging ownership");
   mkdirSync(stage, { mode: 0o700 });
   copyEntries(home, join(stage, "state"), entries);
-  const manifest = { schema: 1, classification: 1, ...metadata, source, entries: stateEntries(entries), credentialsOmitted: CREDENTIALS, migrationLevels: await migrationLevels(home, entries) };
+  const manifest = { schema: 1, classification: 1, ...metadata, source, entries: stateEntries(entries), credentialsOmitted: CREDENTIALS, migrationLevels: await migrationLevels(join(stage, "state"), entries) };
   must(sameState(entries, inventory(join(stage, "state"), true)), "Snapshot copy differs from source");
   must(sameState(entries, inventory(home, true)), "Source changed during snapshot");
   atomicJSON(join(stage, "manifest.json"), manifest);

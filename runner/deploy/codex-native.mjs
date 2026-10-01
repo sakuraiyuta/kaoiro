@@ -29,6 +29,8 @@ export async function nativeIdentity(release) {
   }
   const sdkEntry = contained(root, join(dirname(sdkPackage), importEntry));
   const rpcEntry = contained(root, join(dirname(cli), "app_server_rpc.js"));
+  // Resolution executes trusted release code. Hash/manifest verification
+  // detects accidental corruption; it does not sandbox an untrusted archive.
   const [{ Codex }, { resolveAppServerBinary }] = await Promise.all([
     import(pathToFileURL(sdkEntry).href),
     import(pathToFileURL(rpcEntry).href),
