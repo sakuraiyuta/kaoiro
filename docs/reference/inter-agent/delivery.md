@@ -238,8 +238,8 @@ later same-peer batches and outside the coalescing cap. A terminal fallback
 loses its slot without starting a root. If exact slot replacement fails, the
 wrapper diagnoses and retires the unstarted delivery; skip-v1 recovery then
 reports the loss to the sender. A reserved fallback is unavailable to inline
-recovery and is excluded from the unread advisory until ordinary queued input
-exists.
+recovery and is always excluded from the unread advisory. Ordinary queued
+input is counted independently.
 
 The wrapper keeps one delivery obligation per sequence even when several
 steers share a conversation. At terminal, a corroborated input reports

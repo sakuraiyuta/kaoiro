@@ -387,7 +387,7 @@ describe("steer fallback reservations", () => {
     expect(retired).toEqual([first]);
   });
 
-  it("freezes unresolved and queued fallback reservations and retires each once", () => {
+  it("freezes steering without retirement and retires queued fallback once", () => {
     const slots = new Set<string>();
     const retired: Envelope[] = [];
     const first = inbound("first"), second = inbound("second");
@@ -404,11 +404,46 @@ describe("steer fallback reservations", () => {
     coordinator.settleSteerReservation("second", true);
     expect(coordinator.pendingSteerReservationCount).toBe(2);
     coordinator.freezeForWatchdogFailStop();
-    coordinator.retireEnvelopes([first, second]);
-    expect(retired).toEqual([first, second]);
+    expect(retired).toEqual([second]);
     expect(coordinator.pendingSteerReservationCount).toBe(0);
     expect(slots.size).toBe(0);
     expect(coordinator.attachSteerPlaceholder("first")).toBe(false);
+  });
+
+  it("keeps an undispatched fallback visible to peer and conversation admission", () => {
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      canDispatchPeer: () => false,
+      createPlaceholder: () => true,
+      removePlaceholder: () => {},
+      onDispatch: () => true,
+    });
+    coordinator.reserveSteer("S", inbound("pending-cid"), "reply-owed", 1);
+    coordinator.attachSteerPlaceholder("S");
+    coordinator.settleSteerReservation("S", true);
+    expect(coordinator.hasQueuedForPeer("peer.agent")).toBe(true);
+    expect(coordinator.hasRootConversation("pending-cid")).toBe(true);
+    coordinator.discardSteerReservation("S");
+  });
+
+  it("retires a definite fallback if watchdog closes during reclassification", () => {
+    const retired: Envelope[] = [];
+    const envelope = inbound("reentrant");
+    let coordinator!: CodexInterAgentTurnCoordinator;
+    coordinator = new CodexInterAgentTurnCoordinator({
+      createPlaceholder: () => true,
+      removePlaceholder: () => {},
+      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      reclassifyQueued: item => {
+        coordinator.freezeForWatchdogFailStop();
+        return item.mode;
+      },
+      onDispatch: () => true,
+    });
+    coordinator.reserveSteer("S", envelope, "reply-owed", 1);
+    coordinator.attachSteerPlaceholder("S");
+    coordinator.settleSteerReservation("S", true);
+    expect(retired).toEqual([envelope]);
+    expect(coordinator.pendingSteerReservationCount).toBe(0);
   });
 
   it("does not retire a cancelled queued fallback twice at watchdog freeze", () => {
