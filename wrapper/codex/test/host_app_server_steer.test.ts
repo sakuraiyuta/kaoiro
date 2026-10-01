@@ -355,3 +355,16 @@ it("after a foreign turn the next dispatch fails closed and settles every queued
     }
   }
 });
+
+it("fences a foreign turn with IA steering enabled and operator steering disabled", async () => {
+  const ends = vi.fn();
+  const f = fixture(false, { interAgentSteer: { available: () => true }, onTurnEnd: ends });
+  await running(f);
+  f.send({ method: "turn/started", params: { threadId: "thread", turn: { id: "foreign-1" } } });
+  await vi.waitFor(() => expect(f.system()).toContain(
+    "The app-server ran a turn this wrapper did not start; steering and new turns are stopped pending operator recovery."));
+  await f.host.send("IA", undefined, ["cid-ia"], "ia-1");
+  f.terminal();
+  await vi.waitFor(() => expect(ends.mock.calls.map(([end]) => end.turnToken)).toContain("ia-1"));
+  expect(f.byMethod("turn/start")).toHaveLength(1);
+});

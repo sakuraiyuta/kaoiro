@@ -22,7 +22,7 @@ function inbound(granted: "early" | "normal" = "early"): Envelope {
 type SteerSchedule = "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
 
 async function compose(backend: "app-server" | "exec", echo: boolean, grant: "early" | "normal" = "early",
-  schedule: SteerSchedule = "included") {
+  schedule: SteerSchedule = "included", noticeEcho = echo) {
   let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>;
   const reports: Record<string, unknown>[] = [], acknowledged: number[] = [], notices: Envelope[] = [];
   const send = vi.fn(async () => {}), steer = vi.fn(async (text: string, hooks: Record<string, any>, batchId: string) => {
@@ -49,7 +49,7 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
   });
   const link = { close: () => {}, currentSessionId: () => null, send: () => {},
     deliveryModes: () => echo ? { version: "v1", early: "steer", yield: "none", stage_reports: true } : null,
-    noticeAttributionMode: () => echo ? "v1" : "legacy",
+    noticeAttributionMode: () => noticeEcho ? "v1" : "legacy",
     deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
     sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted" }; },
     reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
@@ -149,5 +149,13 @@ describe("production Codex IA steer composition", () => {
     expect(result.steer).not.toHaveBeenCalled();
     expect(result.send).toHaveBeenCalledOnce();
     expect(result.reports.map(report => report.stage)).toEqual(["queued"]);
+  });
+
+  it.each([
+    [true, false], [false, true],
+  ] as const)("queues when delivery-mode echo=%s and attribution echo=%s", async (modes, attribution) => {
+    const result = await compose("app-server", modes, "early", "included", attribution);
+    expect(result.steer).not.toHaveBeenCalled();
+    expect(result.send).toHaveBeenCalledOnce();
   });
 });
