@@ -28,7 +28,9 @@ Outstanding adoption gates:
 1. Incorporate the newly measured Stage 3 command-approval decline evidence
    into the version-bound test fixture as part of the approved pin change.
    The new capture is linked below; changing the expected version alone is
-   insufficient.
+   insufficient. Record the advertised decisions versus the accepted `decline`
+   response, and distinguish documented protocol support from an undocumented
+   fallback; this evaluation establishes behavior only.
 2. Update the catalog's bundled-version assertion, obtain a green complete
    suite, and complete peer review of the resulting candidate.
 3. Before production adoption, establish the required network/filesystem
@@ -42,7 +44,7 @@ Outstanding adoption gates:
 - Baseline: `3794baa7f71f4736138ef6e3a9bfbb37743764ee`.
 - Candidate dependency commit: `d1b403ba05a66ac047047243a0c48a3ecbd8e7c1`.
 - Branch: `issue-462-codex-pin-eval`.
-- Worktree: `/home/yuta/git/kaoiro/worktrees/kogane-462`.
+- Worktree: `<operator-home>/git/kaoiro/worktrees/kogane-462`.
 - Evaluation scratch: `/tmp/kogane-462-eval.BgbjI8`.
 - Both candidate packages are exactly 0.159.2. The SDK patch is renamed for
   that version with byte-identical content. Product TypeScript and existing
@@ -65,7 +67,7 @@ traffic. Local dev-server state, tokens, cache and DETS files are isolated.
 The initial frozen offline install exited 0 with warnings for an unbuilt
 Claude probe executable and an ignored `tesseract.js` build script. An asdf
 shim invocation under the isolated home exited 126 before building; later
-commands use `/home/yuta/.asdf/installs/nodejs/24.3.0/bin` directly.
+commands use `<operator-home>/.asdf/installs/nodejs/24.3.0/bin` directly.
 
 ## Binary identities and schemas
 
@@ -211,10 +213,12 @@ The operator separately logged into two scratch homes using device auth; the
 director then authorized ten live model turns in total. Every invocation
 explicitly paired the binary hash above with its allowed `CODEX_HOME`:
 
-- 0.156.1 only: `/home/yuta/.local/share/kaoiro-scratch/codex-462-v156`.
-- 0.159.2 only: `/home/yuta/.local/share/kaoiro-scratch/codex-462-v159`.
+- 0.156.1 only: `<scratch>/codex-462-v156`.
+- 0.159.2 only: `<scratch>/codex-462-v159`.
 
-Both directories were checked as mode 0700. The evaluator did not read, copy,
+`<scratch>` denotes the operator-managed scratch authentication directory;
+`<operator-home>` denotes the operator home. These are publication placeholders,
+not literal reproduction paths. Both directories were checked as mode 0700. The evaluator did not read, copy,
 print or compare either `auth.json`, and did not open a production Codex home.
 Each process used a separate scratch `HOME`; API-key variables were removed.
 `thread/start` or `thread/resume` explicitly selected `gpt-6-luna`, and every
@@ -345,13 +349,11 @@ Vitest unhandled-error summary. The Codex suite is explicitly **not green**.
 Executable/driver/checker identities, final artifact hashes, command exits
 and output hashes are recorded in the
 [companion evaluation manifest](pin-0.159.2-evaluation-2026-10-01.json). Scratch
-is retained at `/tmp/kogane-462-eval.BgbjI8` for the director's review;
+is retained at `/tmp/kogane-462-eval.BgbjI8` pending review clarification;
 kogane owns its eventual cleanup. The two authenticated homes listed above
-are also retained pending the director's deletion decision, as instructed.
-They are not needed for another probe within this exhausted budget; retain
-them only if a separately authorized follow-up needs them. The third scratch
-home reserved for issue 461 was not used. Probe/server child processes are
-stopped through the handles returned to their owning scripts.
+were deleted with the director's authorization after the measurements. The
+scratch home reserved for issue 461 was not used or removed. Probe/server
+child processes were stopped through their owning scripts.
 
 The evaluation does not cover all network or Git enforcement permutations,
 Windows/Darwin execution, production database migration/downgrade, or

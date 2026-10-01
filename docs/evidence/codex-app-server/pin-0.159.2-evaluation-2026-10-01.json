@@ -657,69 +657,78 @@
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L1-final",
         "scenario": "L1",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "authHome": "<scratch>/codex-462-v156",
         "reserved": 1
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L2-final",
         "scenario": "L2",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "authHome": "<scratch>/codex-462-v156",
         "reserved": 2
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L3-final",
         "scenario": "L3",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "authHome": "<scratch>/codex-462-v156",
         "reserved": 3
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-old-L3b-final",
         "scenario": "L3b",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "authHome": "<scratch>/codex-462-v156",
         "reserved": 4
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L1-final",
         "scenario": "L1",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "authHome": "<scratch>/codex-462-v159",
         "reserved": 5
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L2-final",
         "scenario": "L2",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "authHome": "<scratch>/codex-462-v159",
         "reserved": 6
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L3-final",
         "scenario": "L3",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "authHome": "<scratch>/codex-462-v159",
         "reserved": 7
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-new-L3b-final",
         "scenario": "L3b",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "authHome": "<scratch>/codex-462-v159",
         "reserved": 8
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-old-P2-final",
         "scenario": "P2",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
+        "authHome": "<scratch>/codex-462-v156",
         "reserved": 9
       },
       {
         "root": "/tmp/kogane-462-eval.BgbjI8/live-new-P2-final",
         "scenario": "P2",
-        "authHome": "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159",
+        "authHome": "<scratch>/codex-462-v159",
         "reserved": 10
       }
     ],
-    "homes_retained_pending_director": [
-      "/home/yuta/.local/share/kaoiro-scratch/codex-462-v156",
-      "/home/yuta/.local/share/kaoiro-scratch/codex-462-v159"
-    ],
     "approval_capture": "docs/evidence/codex-app-server/pin-0.159.2-approval-decline-2026-10-01.jsonl",
-    "approval_capture_sha256": "0af16a58aba3cc55f68872b3ecea8032b6de3d62c4e401e3adf472450e83f425"
+    "approval_capture_sha256": "0af16a58aba3cc55f68872b3ecea8032b6de3d62c4e401e3adf472450e83f425",
+    "homes_deleted": [
+      "<scratch>/codex-462-v156",
+      "<scratch>/codex-462-v159"
+    ]
+  },
+  "path_placeholders": {
+    "<scratch>": "Operator-managed scratch authentication directory; not a literal reproduction path.",
+    "<operator-home>": "Operator home directory.",
+    "hash_semantics": "Hashes identify original captured bytes; publication placeholders in this manifest do not rewrite those captures."
+  },
+  "cleanup": {
+    "authenticated_homes": "Both deleted with director authorization; no credential contents read, copied or compared.",
+    "evaluation_scratch": "Retained pending director clarification of review inconsistencies; evaluator owns cleanup."
   }
 }
