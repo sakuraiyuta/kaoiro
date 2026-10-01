@@ -28,10 +28,12 @@ function inbound(seq: number, cid: string, body: string, granted: "early" | "nor
     ext: {} } as Envelope;
 }
 
-async function compose() {
+async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" | "E" } = {}) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
   let number = 0;
+  let heldSteerWrite: (() => void) | undefined;
+  const settledWriteStates: string[] = [];
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   let coordinator: CodexInterAgentTurnCoordinator | undefined;
   const originalReserve = CodexInterAgentTurnCoordinator.prototype.reserveSteer;
@@ -52,7 +54,13 @@ async function compose() {
       const id = `turn-${number}`;
       reply({ turn: { id } }); send({ method: "turn/started", params: { threadId: "thread", turn: { id } } });
     }
-    if (request.method === "turn/steer") send({ id: request.id, error: { code: -32600, message: "no active turn to steer" } });
+    if (request.method === "turn/steer") {
+      send({ id: request.id, error: options.steerOutcome === "P"
+        ? { code: -32600, message: "cannot steer a compact turn",
+          data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } } }
+        : { code: -32600, message: options.steerOutcome === "E" ? "invalid request" : "no active turn to steer" } });
+      if (options.holdSteerWrite) { heldSteerWrite = cb; return; }
+    }
     cb();
   } });
   Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
@@ -91,13 +99,21 @@ async function compose() {
     createHost: (hostConfig, options) => {
       const o0 = options as CodexHostOptions;
       hostOptions = o0;
-      host = new CodexHost(hostConfig, { ...o0, backend: "app-server",
+      const created = new CodexHost(hostConfig, { ...o0, backend: "app-server",
         appServerSessionFactory: o => AppServerSession.create({ ...o, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }) });
-      return host as never;
+      const originalSteer = created.steerInterAgentInput.bind(created);
+      vi.spyOn(created, "steerInterAgentInput").mockImplementation((text, hooks, batchId) =>
+        originalSteer(text, { ...hooks, onSettle: (...args) => {
+          settledWriteStates.push(args[4]);
+          hooks.onSettle(...args);
+        } }, batchId));
+      host = created;
+      return created as never;
     },
     prepareStartup: async () => {},
   });
   cleanup.push(async () => {
+    heldSteerWrite?.();
     host?.close(); await cli.catch(() => {});
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
   });
@@ -117,6 +133,7 @@ async function compose() {
     expect(coordinator?.pendingSteerReservationCount).toBe(0);
   };
   return { host: host!, hostOptions, linkOptions, byMethod, texts, terminal, completedSteerItem, retired, assertQuiescent,
+    settledWriteStates, releaseSteerWrite: () => { heldSteerWrite?.(); heldSteerWrite = undefined; },
     get coordinator() { return coordinator; } };
 }
 
@@ -168,6 +185,45 @@ it("a completed item after precondition rejection prevents fallback replay", asy
   await f.host.send("LATER ROOT", undefined, undefined, undefined, { source: "operator", intent: "normal" });
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
   expect(f.texts("turn/start")[1]).toContain("LATER ROOT");
+});
+
+it("keeps a P fallback in its original slot while the RPC write callback is pending", async () => {
+  const f = await compose({ holdSteerWrite: true, steerOutcome: "P" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.host.pendingInterAgentPlaceholderCount).toBe(1));
+  await f.linkOptions.onInterAgentMessage(inbound(2, "successor", "SUCCESSOR BODY", "normal"));
+  f.terminal();
+  await vi.waitFor(() => expect(f.settledWriteStates).toEqual(["writing"]));
+  f.assertQuiescent();
+  expect(f.retired).toHaveLength(0);
+  f.releaseSteerWrite();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toContain("EARLY BODY");
+  expect(f.texts("turn/start")[1]).not.toContain("SUCCESSOR BODY");
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(3));
+  expect(f.texts("turn/start")[2]).toContain("SUCCESSOR BODY");
+  f.assertQuiescent();
+});
+
+it("removes an E reservation while the RPC write callback is pending", async () => {
+  const f = await compose({ holdSteerWrite: true, steerOutcome: "E" });
+  await f.host.send("BASE", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  await f.linkOptions.onInterAgentMessage(inbound(1, "cid", "EARLY BODY", "early"));
+  await vi.waitFor(() => expect(f.byMethod("turn/steer")).toHaveLength(1));
+  f.terminal();
+  await vi.waitFor(() => expect(f.settledWriteStates).toEqual(["writing"]));
+  f.assertQuiescent();
+  expect(f.retired).toHaveLength(0);
+  f.releaseSteerWrite();
+  await f.host.send("LATER ROOT", undefined, undefined, undefined, { source: "operator", intent: "normal" });
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toContain("LATER ROOT");
+  expect(f.texts("turn/start")[1]).not.toContain("EARLY BODY");
+  f.assertQuiescent();
 });
 
 it("Kohaku review control: one queued successor stays behind the fallback", async () => {

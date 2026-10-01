@@ -560,7 +560,13 @@ delivery through the existing skip-v1 sender-recovery path.
 Fallback reservations and their pending or unstarted roots are excluded from
 inline recovery claims and the unread advisory: a caller is never told to
 claim an input that only its reserved root may deliver. The current transport
-checks its failed/closing state before admission; its RPC request may
-otherwise reject without writing. A focused transport test pins the
-pre-admission refusal, and the exceptional arrival-slot path remains
+checks its failed/closing state before admission. Once the ordinary RPC
+request enters `#write`, its ticket advances synchronously from `unwritten`
+to `writing` before `stdin.write`; a stream callback may still be pending
+at settlement, so `written` is not guaranteed. The earlier two-`written`
+probe used a child-stream double whose callback returned immediately and
+establishes only that fixture's schedule. An exceptional re-entrant failure
+between the transport check and `#write` can leave an admitted ticket
+`unwritten`. The pre-admission refusal and `writing`-at-settlement tests
+pin the ordinary boundary; the exceptional arrival-slot path remains
 defensive if that transport ordering changes.
