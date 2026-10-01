@@ -85,9 +85,19 @@ An unset/empty value means the launch user's effective HOME plus `.codex`,
 not the updater's HOME. If that HOME cannot be established from the supported
 unit/environment configuration, refuse rather than guess.
 
-Also resolve what the *next* launch will use. Parse the installed unit's
-literal environment sources and the launch shim's config-directory rules,
-including `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV`, XDG configuration and HOME.
+Also resolve what the *next* launch will use. Include the user manager's
+current effective environment from `systemctl --user show-environment`,
+including values loaded through `environment.d`, before applying the installed
+unit's environment overrides/unsets and the launch shim's config-directory
+rules. Retain only HOME, XDG_CONFIG_HOME, KAOIRO_RUNNER_DIR, KAOIRO_RUNNER_ENV
+and CODEX_HOME in memory; never log the full command output or unrelated
+values. Failure to read or interpret these inputs is a refusal. The current
+manager environment, not a fresh independent interpretation of environment.d,
+is authoritative for the next start; prohibit environment import/reload and
+manager restart during maintenance. Bind the relevant effective values in the
+private transaction and re-read them immediately before switch and start.
+Unsupported unit precedence/expansion is rejected rather than approximated.
+This includes `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV`, XDG configuration and HOME.
 Resolve the actual runner.env path; do not assume the default location. Use a
 non-executing, restricted assignment parser for runner.env: blank/comment
 lines and simple optional-export assignments with literal or quoted values;
@@ -113,6 +123,13 @@ recorded live binding and matching unchanged installed unit/config sources,
 plus matching current static resolution and snapshot binding. Missing/stale
 binding is a refusal requiring operator repair. The restore must not infer
 its target merely from an arbitrary backup's supplied home path.
+
+A forward update requesting a Codex backup requires a running source runner
+for the initial live binding. If it is already stopped, refuse before any
+switch/start; do not start it implicitly or reuse a previous update's binding.
+The operator may explicitly restart the unchanged source release and retry.
+Resuming an interrupted transaction uses its recorded recovery/restore path,
+not a new forward update. The inactive-restore exception above remains narrow.
 
 ## Credential inventory and unclassified entries
 
@@ -153,6 +170,18 @@ credential contents. The director reports that production currently lacks
 `.credentials.json`; this evaluator has not inspected production, and absence
 is not used to weaken the rule.
 
+Before scheduling maintenance, the director obtains explicit operator approval
+for a production-home **metadata-only classification preflight**. It enumerates
+names, entry types, sizes, ownership/modes and symlink metadata without opening
+file contents or following symlink targets; it performs no hashing, copying,
+login or native Codex invocation. Keep its output private. Run it while peers
+are still available, resolve unknown entries through reviewed classification,
+and record the classification version before scheduling their shutdown.
+This document authorizes no production read: that approval is a separate step.
+The preflight is advisory because the home can change; the updater repeats
+classification and binding before stop and at the stopped boundary and refuses
+any new unknown entry.
+
 ## Snapshot contract
 
 Before service stop, validate both arguments, same-user ownership, executable
@@ -161,6 +190,10 @@ be an existing absolute directory and not a symlink. Destination must be new,
 outside the home and release trees. Reject overlapping paths, special files
 and unusable permissions. Recheck source identity at the stopped boundary.
 A snapshot directory is mode 0700 and its manifest is mode 0600.
+Keep the original canonical home path on restore and reject a symlink home:
+`rust-v0.159.3/codex-rs/secrets/src/lib.rs:184-195` derives the keyring account
+from that canonical path's hash. Relocation can select a different encryption
+key even when the encrypted credential files are preserved.
 
 Copy the classified stopped-home state as a tree, preserving regular files,
 directories, modes and symlinks without dereferencing symlinks. Apply the
@@ -215,12 +248,40 @@ operator deletion is outside this protection and prohibited by the runbook.
 Keep all retained references, not just the newest. Retirement is an explicit
 operator procedure under update/links locking; no automatic backup pruning.
 
+While any rollback reference is retained, a new forward update without both
+backup arguments fails before stopping the runner, with the retained UUID and
+instructions to supply both arguments or explicitly retire the rollback point.
+A fully completed prior transaction allows another state-aware update with a
+new snapshot; incomplete/failed transactions must first be recovered. Preserve
+all older references until explicit retirement; do not silently supersede them.
+
+Retirement requires gate 6 results accepted by the operator, successful actual
+production Codex start/history checks, a completed forward or restored
+transaction, and the operator's explicit decision to abandon rollback to that
+snapshot (including its post-snapshot data-loss implications). Under both locks,
+verify that no active recovery depends on it, then mark the reference retired
+atomically before removing only its named snapshot and releasing its source/tool
+release protection. Interrupted deletion is retried from that record; no glob
+cleanup. Retire one reference without invalidating other retained references.
+
+Keep a compact per-home migration barrier after retirement, binding the current
+accepted native hash and home/config identity, without retaining snapshots or
+protecting old releases. Retirement must not re-enable code-only rollback to an
+incompatible pin. With no retained rollback points, ordinary no-backup updates
+and generic rollback may proceed only when the target native hash equals this
+accepted hash; a pin change still requires a new state-aware update. Update the
+barrier only after a verified completed forward/restore transaction. Unreadable
+barriers refuse the operation. A successful backup-based restore records the
+restored native hash. The explicit retirement command reports which snapshots
+and release protections were removed and which migration barrier remains.
+
 New switch tooling rejects generic `--rollback` while a retained record marks
 unrestored migrated state. The state-aware updater may switch to the specific
 recorded source only after the verified restoration phase and home binding,
 passing a transaction reference checked against the held update lock and
 recorded target. No environment-only bypass. Unrelated no-backup behavior
-remains unchanged where no active migration record exists. A later update
+remains unchanged only where neither a retained reference nor a migration
+barrier exists. A later update
 while such a record exists must use the state-aware path, not silently reset
 its protection. Legacy old scripts cannot acquire this new guard retroactively;
 the runbook explicitly forbids invoking them for pin rollback.
@@ -277,7 +338,11 @@ committed backup or partially restored state and never start a service.
    generic commands currently printed at update.sh:333-337 whenever a Codex
    backup record applies. Update `docs/operations/production.md`'s runner
    rollback example and the dedicated rollback runbook to forbid code-only
-   `switch.sh --rollback` after a pin migration.
+   `switch.sh --rollback` after a pin migration. Replace the command itself,
+   including production.md's `previous/deploy/...switch.sh --rollback`, with
+   the verified tool release's fixed physical updater path and explicit
+   `--restore-codex-backup` / `--codex-home` arguments. A warning beside the
+   old command is insufficient: `previous` may point to unguarded old tooling.
 6. Release maintenance only after actual Codex start/history checks, not merely
    `runner --version`. Record gate 5 separately from rollout identity.
 
@@ -361,7 +426,8 @@ Required evidence before implementation is called complete:
   that guard or disconnect its wiring, see its corresponding test fail, then
   restore and rerun. Backup failure must produce a nonzero worker invocation,
   zero new-release starts and no symlink switch. Include wrong but valid
-  requested homes, changed runner.env, unreadable/live external holders,
+  requested homes, changed runner.env/user-manager environment, already-stopped
+  forward updates, retirement/barrier enforcement, unreadable/live external holders,
   restart immediately before switch, insufficient space, unclassified paths
   and all credential exclusions. Restore failure must leave
   the service stopped with no old-binary start on an unchecked state.
