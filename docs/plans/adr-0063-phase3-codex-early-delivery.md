@@ -118,12 +118,49 @@ new admission; it is not a reason to migrate a steered input to another turn.
 | Event | IA outcome and accounting |
 | --- | --- |
 | Server accepts inbound | `accepted`, then `queued`; no delivery ack, reply basis, or turn-failure obligation yet. |
-| Valid steer response for the captured turn | Report `submitted` with a new closed-vocabulary handoff `turn_steer_accepted`, then resolve that delivery sequence in the server ledger. Only here attach any new CID's failure obligation to the active host token. An existing same-token CID retains its original obligation. Record an accepted-but-unobserved input separately. |
-| Matching completed `userMessage` item before terminal, with the client ID and exact submitted text digest | This also proves app-server intake if the RPC response was lost. Report `submitted` with the distinct handoff `turn_steer_item_observed` if not already submitted, and attach the obligation. It is not a captured model request, does not publish the turn's default basis, and does not alone report `included`. An `item/started` without full content is only a correlation hint. Duplicate items do nothing. |
+| Valid steer response for the captured turn | Report `submitted` with a new closed-vocabulary handoff `turn_steer_accepted`, then resolve that delivery sequence in the server ledger. Attach each sequence's failure obligation to the captured host token, even when another sequence has the same CID. Record an accepted-but-unobserved input separately. |
+| Matching completed `userMessage` item before terminal, with the client ID and exact submitted text digest | This also proves app-server intake if the RPC response was lost. Report `submitted` with the distinct handoff `turn_steer_item_observed` if not already submitted, and attach that sequence's obligation. It is not a captured model request, does not publish the turn's default basis, and does not alone report `included`. An `item/started` without full content is only a correlation hint. Duplicate items do nothing. |
 | Tool call spending the input's one-use ticket | Report optional `included(evidence:ticket_used)` and credit only that input to completed reply history. This proves that the call saw the authorization carried with the input; it does not prove the model followed the message. |
-| Authoritative terminal | Resolve all attached unresolved CIDs by exact host token before allowing a later same-CID root to own them. Report `settled(turn_end)` only for corroborated input. An accepted response with no matching item ends as `unknown(not_observed)`, never `settled`, even though it already reported `submitted`. On turn error, fan out one classified failure notice per corroborated unresolved CID; an uncertain input gets a `timeout`-class peer notice instructing the sender to wait, not retry. No duplicate notice follows a reply already sent. |
+| Authoritative terminal | Close ticket activation and capture the host error. Reconcile the captured token after every written steer has a response or bounded timeout; a late response reconciles directly on its `SteerRecord`, without a second `onTurnEnd`. Release only that token's obligations before a later same-CID root can own them. Report `settled(turn_end)` only for corroborated input. An accepted response with no matching item ends as `unknown(not_observed)`, never `settled`, even though it already reported `submitted`. The notice decision is per sequence, as below. |
 | Definite precondition rejection | Queue the original lease at its arrival position, report the rejection reason, and leave its delivery sequence unresolved until a later root handoff or intentional non-injection. |
-| Lost response after a possibly delivered write, mismatched response, or contradictory item | Report `unknown` once, never queue or retry the same body, and retain the exact owner for operator recovery. Do not mark it `failed_before_handoff` or send an ordinary failure notice that invites retry. |
+| Lost response after a possibly delivered write, mismatched response, or contradictory item | Report `unknown` once, never queue or retry the same body, and retain the exact owner and sequence in the bounded diagnostic record. Do not mark it `failed_before_handoff` or send an ordinary failure notice that invites retry. |
+
+The phase-3 failure ledger extends `notePendingInjection` from one CID slot to
+one record per `(host token, delivery incarnation, generation, delivery_seq)`.
+Each record contains the peer, CID, peer turn, batch ID, handoff evidence,
+reply coverage and final uncertainty class. A second same-CID steer on the
+same token does not overwrite the first record. `pendingConversationIdsForTurn`
+and `resolveTurnEnd` become projections over these records; the old CID map
+alone cannot settle this path. A successful or possibly-delivered reply
+discharges **only** the input sequences named by its captured default basis
+or activated ticket; a rejected reply discharges none. Ticket preparation
+records its exact sequence coverage, not merely its CID. No reply basis
+implicitly covers a later steer. The existing root obligation joins the same
+token ledger, but an unhanded priority lease has no failure obligation.
+
+At captured-token reconciliation, reduce unresolved records by `(peer, CID,
+notice class)` in delivery-sequence order. Send at most one notice for each
+class in a CID on that token, with a bounded `affected_deliveries` list of
+`{delivery_seq, peer_turn_number, batch_id}` in `error`; split an oversized
+list into ordered, non-overlapping chunks. The two classes are `classified`
+(corroborated intake, host turn error) and `uncertain` (possible write or
+accepted-but-unobserved input, `timeout` code). A classified notice carries
+the host's classified error; an uncertain notice always says wait and do not
+retry. A successful terminal clears corroborated obligations without notice,
+but an unresolved uncertain sequence still gets its timeout notice. A reply
+already sent for A cannot discharge B. One batch may own several sequences;
+batch identity never replaces per-sequence accounting. Notice construction
+and exact-token release happen once in the same reconciliation, before any
+successor root can acquire the CID.
+
+| Same-CID state at reconciliation | Notice and release |
+| --- | --- |
+| A corroborated, B unobserved, neither replied, host error | One classified notice naming A and one timeout notice naming B; release A and B. |
+| A corroborated and replied, B unobserved, host error | No notice for A; one timeout notice naming B; release both. |
+| A and B corroborated, neither replied, host error | One classified notice naming both; release both. |
+| A and B corroborated, reply covers A only, host error | One classified notice naming B; release both. |
+| B item before terminal, response after terminal | Keep B's captured-token record until the response or bounded timeout. A valid response plus the pre-terminal item corroborates B but cannot activate a post-terminal ticket; then apply the host's success/error rule. Invalid or missing response leaves B uncertain and gets a timeout notice. Release B immediately when that `SteerRecord` reconciles, without waiting for another turn-end callback. |
+| Later same-CID root while the earlier token awaits a response | Keep the root behind the CID owner fence. Reconcile and release the earlier token first; the root then takes a distinct token and can never inherit the earlier notice or ticket. |
 
 The active turn's default reply snapshot remains fixed (ADR-0062 D7). Before
 writing a steer, use `InterAgentTool.prepareFoldInput(activeToken, envelopes)`
@@ -144,29 +181,102 @@ cannot retroactively authorize it. Ticket use is checked again at the send
 sink, and tickets retire with the active turn. A matching item after the
 terminal is too late to activate.
 
+Use explicit transitions: `SteerWriteAttempted` captures the write state and
+owner; `SteerResponseValidated` and `UserMessageCompletedMatched` latch the
+two facts; `SteerTicketActivated` occurs only after both latches and before
+terminal; `SteerTerminal` irrevocably closes activation. On
+`SteerTicketActivated`, call `prepareFoldInput.activate()` (which invokes
+`onTicketPrepared`) and then `retainSteeredBody`. Supersede an older unused same-CID
+ticket only at this event, never on `SteerWriteAttempted`, response alone,
+item alone or `submitted`. The new ticket's exact sequence becomes the reply
+coverage; the old ticket is retired atomically with activation. If activation
+fails, keep the old ticket while its owner remains live. A valid response
+arriving after `SteerTerminal` may still settle delivery evidence but cannot
+activate or replace a ticket.
+
 `prepareFoldInput` currently credits a fold only on ticket use, and the
 root default snapshot never inherits an uncredited fold. Carry the same
-bounded retained-body recovery rule to Codex steers: after a stale-basis
-rejection, re-hand the steered body with `folded_earlier: true` and a fresh
-ticket when it fits. Retire it on ticket use, a newer confirmed input from
-the same peer/CID, or session ledger reset; count capacity evictions. A
-same-CID second steer on the same active token supersedes the older unused
-ticket only after its own handoff, never at queue receipt. Root successors
-cannot borrow an earlier turn's ticket. `reply_authorization` remains absent
-for server turn-zero status notices.
+bounded retained-body recovery rule to Codex steers **only after**
+`SteerTicketActivated`: after a stale-basis rejection, re-hand that body with
+`folded_earlier: true` and a fresh ticket when it fits. Retire it on ticket
+use, a newer confirmed input from the same peer/CID, or session ledger reset;
+count capacity evictions. Inputs whose item or valid response is missing at
+reconciliation never enter this retained-body store because
+`onTicketPrepared` is not called for a provisional ticket. Their sender gets
+the sequence-specific timeout notice, and operator recovery uses the bounded
+server stage record and the
+sender's original body; there is no automatic body replay or fabricated reply
+authorization. After that record expires, only the aggregate uncertainty
+counter remains. Root successors cannot borrow an earlier turn's ticket.
+`reply_authorization` remains absent for server turn-zero status notices.
 
 The current server resolves out-of-order `submitted` sequences but **does not
-resolve `unknown`** (`DeliveryStates.report_stage` on this baseline). A
-possibly-written steer that loses its response would otherwise remain an
-unresolved sequence and could later be counted as a definite loss. Phase 3
-therefore requires a server-first change: a validated `unknown` stage for a
-possibly-delivered write closes delivery bookkeeping as *uncertain*, without
-claiming dispatch, incrementing `lost_count`, or changing the stage to
-`settled`; its history remains queryable. `acked_seq` already means a resolved
-prefix rather than proof of dispatch. A negative control must show that a
-never-written queued item cannot use this path. The server stage-kind update
-for `turn_steer_accepted` also lands before the wrapper; rolling the server
-back requires rolling the wrapper back.
+resolve `unknown`** (`DeliveryStates.report_stage` on this baseline). Phase 3
+adds one narrow, server-first resolution path for a possibly written steer
+without a valid response. The wrapper may emit the tuple
+`{stage:"unknown", mode:"early", handoff:"turn_steer_write_uncertain",
+reason}` only when the captured `RpcTicket.writeState()` was `writing` or
+`written` at a terminal/error boundary, no valid response was latched, and no
+matching completed item already proved intake. The closed reasons are
+`turn_steer_timeout`, `turn_steer_disconnected`, and
+`turn_steer_invalid_response` (including a wrong turn ID), plus
+`turn_steer_item_conflict` for contradictory item evidence. `unwritten` and
+`failed` are never eligible; a definite precondition rejection stays queued,
+while an item-only case uses `submitted(turn_steer_item_observed)` instead.
+The wrapper snapshots the write state at the transport boundary before
+classifying, so a later callback cannot turn a never-written input into an
+uncertain one. A contradictory completed item after a valid response may
+produce `unknown(turn_steer_item_conflict)` for diagnosis, but its sequence
+was already resolved by `submitted` and cannot use this resolution path.
+
+The server validates the current channel owner, ledger incarnation,
+generation and issued sequence as it does for other reports; additionally it
+requires the persisted sequence's granted mode `early`, last stage `accepted`
+or `queued`, no earlier `submitted`/`settled`/`lost`/qualifying `unknown`, the
+exact handoff and one of the four reasons above, and a valid timestamp.
+Only this exact report atomically records `unknown`, adds that sequence to the
+out-of-order resolved set, releases its metadata and early slot, and
+increments `uncertain_count` once. It does **not** increment `lost_count`,
+claim dispatch, or change the stage to `settled`; a duplicate exact report is
+idempotent and conflicting later reports are rejected. The server cannot
+independently prove the stdin write from these fields: it trusts the
+authenticated, owner-fenced wrapper's observation. The wrapper's
+`writing`/`written` guard, not server validation, is the evidence boundary.
+Legacy root/Claude `unknown` reports and any report lacking this exact
+handoff retain their existing history-only behavior; they do not resolve a
+gap or increment the new counter. A later skip or generation retirement can
+still count such a legacy gap as lost. `submitted` already resolved a sequence,
+so an accepted-but-unobserved steer can end with
+`unknown(turn_steer_not_observed)` without resolving it twice; record it in
+`uncertain_count` once when it becomes terminal. An item-observed steer whose
+response never validates similarly ends
+`unknown(turn_steer_no_valid_response)` after its earlier `submitted` and is
+counted once. A submitted input with contradictory item evidence uses
+`unknown(turn_steer_item_conflict)` and is likewise counted once. For these
+post-submission reasons, require the same
+owner/incarnation/generation/sequence checks, persisted mode `early`, an
+earlier `submitted` with the appropriate `turn_steer_accepted` or
+`turn_steer_item_observed` handoff, no prior terminal stage, and the exact
+reason. They cannot resolve an unsubmitted gap. Other reason/handoff
+combinations, including legacy free-string `unknown`, remain history-only.
+
+`acked_seq` remains a resolved prefix, never a dispatch certificate.
+`lost_count` remains the count of server-classified ledger retirements in its existing
+generation scope. Add durable `uncertain_count` and `last_uncertain` to the
+recipient ledger and `inter_agent_delivery` status. They aggregate phase-3
+uncertain outcomes for the ledger incarnation, persist across same-owner
+reconnect and process-generation changes, and reset only on ledger deletion;
+they contain no message body. `whoami`, `list_agents` and the operator delivery
+status expose the count and last `{at, delivery_seq, reason}`. A zero
+`lost_count` and no pending gap can therefore coexist with nonzero
+`uncertain_count`; neither proves delivery. Per-message stage history is
+queryable only within its existing one-hour terminal retention and 2,000
+record cap. After eviction, `message_status` returns `expired`; the durable
+aggregate is the remaining operational signal, not a per-message recovery
+record. The sender's original body and its own conversation record are needed
+for any later human recovery; the server never reconstructs or replays it.
+The server handoff enum and status schema must land before the wrapper; rolling
+that server back requires rolling the wrapper back.
 
 ## Permission, lifecycle and version review
 
@@ -188,11 +298,15 @@ back requires rolling the wrapper back.
   shape, command/item ordering, and steer-before-interrupt result are measured
   on the binary above. Review turns are schema-only. Re-run the L0–L5 native
   probes and the full default-composition path on the final implementation
-  pin. [Version-sensitive, 0.157.0+] Conditional turn interruption may change
-  whether a pending steer survives an interrupt. [Version-sensitive,
-  0.159.0+] Issue #462 identifies `instant_interrupt` and mailbox preemption
-  as opt-in upstream; verify the effective default and that kaoiro does not
-  enable them. The
+  pin. [Version-sensitive, 0.157.0+] Conditional interruption is a **review
+  trigger**, not evidence that kaoiro's hard-interrupt RPC became conditional:
+  issue #462's 0.159.2 source check found `turn_interrupt_inner` submits
+  `Op::Interrupt`; `Op::InterruptIfNoPendingInput` is a distinct operation.
+  Its reconstructed offline probes passed on both binaries, including an
+  accepted/unobserved steer followed by hard interrupt. Live comparison is
+  still pending. [Version-sensitive, 0.159.0+] Issue #462 found
+  `instant_interrupt` and `defer_mailbox_preemption` false by default in its
+  candidate source; verify the final effective configuration. The
   [issue #462](https://github.com/sakuraiyuta/kaoiro/issues/462) evaluation
   is not yet a pin change on this baseline. Its result is an input gate, not
   evidence to assume ahead of time.
@@ -223,6 +337,23 @@ stale updates cannot re-enable a newer opt-out. The dashboard launch setting
 seeds that state, and the live switch changes it without replacing the Codex
 thread. An old server without this update keeps the phase-3 launch-time mode;
 the UI must show live switching as unavailable, not pretend it succeeded.
+The later protocol's linearization point is the server's durable compare-and-
+swap of `(owner, generation, policy_revision, effective_mode)`, acknowledged
+by the wrapper with the applied revision. A dashboard toggle becomes
+confirmed only after that applied-revision receipt, not when its request is
+sent. Opt-out first installs a local no-new-write fence, so an in-flight steer
+whose synchronous commit preceded the fence remains owned by the old revision
+and cannot be retracted; all later commits queue. Already server-stamped
+`early` inputs still queued at the fence retain the original grant in their
+audit record but are downgraded to root with a visible `local_policy_disabled`
+reason. Opt-in keeps the local fence until the server revision is acknowledged
+and the wrapper applies that same revision; only later commits steer. If an
+ack is lost, the wrapper queries the authoritative revision and keeps the
+safer local fence until reconciliation. A delayed opt-in ack with an older
+revision cannot clear a newer opt-out fence. Rejoin binds the current owner
+and generation before adopting the latest revision; an old owner cannot
+publish or acknowledge a new policy. These races belong in #463's protocol
+tests, not in a UI-only toggle.
 This is the proposed alternative to treating the join-time `v1` echo as
 mutable. It belongs to #463, with a separate protocol/server/runner/dashboard
 review. The app-server to exec opt-out is a launch/resume backend choice, not
@@ -259,18 +390,41 @@ only that guard/wire once and confirm its corresponding test fails, then
 restore it. In particular: removing the steer `clientId` match must fail the
 ticket test; cutting the server uncertain-resolution branch must fail the
 ledger test; moving lease attachment to receipt must fail the same-CID test.
+For uncertainty, test queued/unwritten and write-callback failure remain
+unresolved, a `writing`/`written` no-response report resolves without loss,
+old-owner/generation and malformed reason/handoff reports fail, a legacy root
+`unknown` does not take the new path, exact duplicates do not recount,
+generation replacement preserves the incarnation-scoped uncertainty summary,
+and stage-history expiry returns `expired` while the aggregate persists.
+As the wrapper is the only observer of the write, also mutate the **wrapper
+write-state guard** to accept `unwritten`; the production-composition negative
+test must then fail by detecting an `unknown` report or premature resolution
+for a request that never crossed the write boundary. Restore the guard and
+repeat the positive path. A server-only invalid-report test cannot establish
+that property.
+
+For same-CID settlement, test A observed/B unobserved with and without an
+accepted reply to A; A and B observed with a reply covering only A; B item
+before terminal with a valid response or timeout after terminal; and a later
+same-CID root. Assert the exact notice classes and affected sequence lists,
+one release per captured token, and no notice or ticket transferred to the
+successor. Mutate the per-sequence reply-coverage check and the late-response
+reconciliation callback separately; each must turn its respective test red.
 The no-injection default composition must reach a real first IA handoff.
 Report every gate's exit code and warnings and bind native evidence to the
 final binary SHA and code commit. Repeat evidence after any pin or relevant
 implementation change.
 
 Update on implementation: [delivery](../reference/inter-agent/delivery.md),
+[messages](../reference/inter-agent/messages.md) for the affected-sequence
+notice field,
 [reply basis](../reference/inter-agent/reply-basis.md),
 [send and wait](../reference/inter-agent/send-and-wait.md),
 [channel capabilities](../reference/protocol/channels.md),
 [Codex app-server](../reference/engines/codex-app-server.md),
 [wrapper configuration](../reference/configuration/wrapper.md), and the
-version-bound evidence under `docs/evidence/codex-app-server/`. Update
+operator delivery-status display and version-bound evidence under
+`docs/evidence/codex-app-server/`. Update
 ADR-0058's Stage 2/IA status and issue #346 only when the code lands. #463
 owns its own dashboard and backend-default documentation.
 
