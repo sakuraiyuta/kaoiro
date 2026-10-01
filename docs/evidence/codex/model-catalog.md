@@ -208,6 +208,10 @@ service-tier measurements for either model on either backend remain unverified;
 the live portion of the issue remains open. No production Codex home or live
 peer model was used for these attempts.
 
+Probe record (2026-10-01, Asia/Tokyo): a temporary `runCodexCli` loopback
+harness was used and removed afterward. No raw log was retained; this section
+is the report-based record of the attempts.
+
 ## Migration links
 
 - [Catalog contract](../../reference/engines/codex-model-catalog.md)
