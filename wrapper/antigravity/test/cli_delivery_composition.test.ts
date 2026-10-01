@@ -287,8 +287,10 @@ describe("Antigravity CLI delivery composition", () => {
       cli.state.holdTurn = turn.held;
       await cli.deliver(inbound(3, 1));
 
+      // The new incarnation continues the sequence and still reports 3 as
+      // unacknowledged, so only the identity fence can withhold the ACK.
       cli.state.incarnation = "new";
-      cli.status(3);
+      cli.status(2);
       turn.release();
       await vi.waitFor(() => expect(cli.turnStarts).toHaveLength(1));
       expect(cli.acknowledgements).toEqual([]);
