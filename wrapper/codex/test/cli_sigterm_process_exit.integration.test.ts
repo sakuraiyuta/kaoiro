@@ -30,7 +30,14 @@ import { execFileSync, execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
+import {
+  OWNER_TAG_ENV,
+  newOwnerTag,
+  processHasTag,
+  waitForNoTagged,
+} from "./fixtures/owner_tag.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { forceKillIfTagged } from "./fixtures/tagged_kill.js";
 
 const isLinux = process.platform === "linux";
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -42,15 +49,6 @@ function isAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone -- fine.
   }
 }
 
@@ -85,7 +83,9 @@ function timeoutDiagnostics(stderr: string, home: string): string {
   return `\nchild stderr: ${stderr || "<empty>"}\ncodex --version: ${version}\nps snapshot:\n${processes}`;
 }
 
-function findDescendantByArgs(rootPid: number, needle: string): number | null {
+// Exact match: see findDescendantByExactArgs in
+// cli_sigterm_exec_real_process.integration.test.ts for why `includes` races.
+function findDescendantByExactArgs(rootPid: number, command: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
   for (const p of all) {
@@ -99,7 +99,7 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
     if (seen.has(cur)) continue;
     seen.add(cur);
     for (const child of byPpid.get(cur) ?? []) {
-      if (child.args.includes(needle)) return child.pid;
+      if (child.args === command) return child.pid;
       queue.push(child.pid);
     }
   }
@@ -206,7 +206,13 @@ enabled=false
 
     const runnerScript = await writeRunnerScript(home, wire.url);
 
-    const env = { ...process.env, HOME: home, CODEX_HOME: home } as Record<string, string>;
+    const ownerTag = newOwnerTag();
+    const env = {
+      ...process.env,
+      HOME: home,
+      CODEX_HOME: home,
+      [OWNER_TAG_ENV]: ownerTag,
+    } as Record<string, string>;
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) delete env[key];
 
     const child = spawn(process.execPath, [runnerScript], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -231,12 +237,15 @@ enabled=false
         return execChildPid !== null;
       }, 15_000, describeTimeout);
       await waitFor(() => {
-        sleepPid = findDescendantByArgs(execChildPid!, "sleep 77");
+        sleepPid = findDescendantByExactArgs(execChildPid!, "sleep 77");
         return sleepPid !== null;
       }, 15_000, describeTimeout);
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!), `stderr: ${stderr}`).toBe(true);
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
+      // Positive control: the tag reached the real command inside the
+      // sandbox, so a survivor count of 0 below is not vacuous.
+      expect(processHasTag(sleepPid!, ownerTag), `stderr: ${stderr}`).toBe(true);
 
       const t0 = performance.now();
       // A real OS signal to a real separate process -- not process.emit().
@@ -254,9 +263,10 @@ enabled=false
       expect(outcome.code, `stderr: ${stderr}`).toBe(0);
       expect(outcome.elapsedMs).toBeLessThan(5_000);
       await waitFor(() => !isAlive(execChildPid!) && !isAlive(sleepPid!), 2_000);
+      await waitForNoTagged(ownerTag);
     } finally {
-      forceKill(execChildPid ?? undefined);
-      forceKill(sleepPid ?? undefined);
+      forceKillIfTagged(execChildPid ?? undefined, ownerTag);
+      forceKillIfTagged(sleepPid ?? undefined, ownerTag);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       provider.closeAllConnections();
       await new Promise<void>((resolve) => provider.close(() => resolve()));

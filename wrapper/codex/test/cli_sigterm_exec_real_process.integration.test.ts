@@ -30,7 +30,14 @@ import { redactCredentials } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { runCodexCli } from "../src/cli.js";
 import { clipTail } from "../src/turn_diagnostics.js";
+import {
+  OWNER_TAG_ENV,
+  newOwnerTag,
+  processHasTag,
+  waitForNoTagged,
+} from "./fixtures/owner_tag.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
+import { forceKillIfTagged } from "./fixtures/tagged_kill.js";
 
 const isLinux = process.platform === "linux";
 const MAX_DIAGNOSTIC_BYTES = 8192;
@@ -42,15 +49,6 @@ function isAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone -- fine.
   }
 }
 
@@ -288,8 +286,13 @@ function findCodexExecPidOnce(parentPid: number): number | null {
   return direct[0]?.pid ?? null;
 }
 
-/** BFS descendants of rootPid whose args contain `needle`. */
-function findDescendantByArgs(rootPid: number, needle: string): number | null {
+/**
+ * BFS descendants of rootPid whose args equal `command`. Exact, not
+ * `includes`: the outer `codex-linux-sandbox` launcher carries the command
+ * in its own args (`-- /bin/bash -lc sleep 77`) ~90ms before the real
+ * command exists, and a SIGTERM sent then orphans the sandbox's inside.
+ */
+function findDescendantByExactArgs(rootPid: number, command: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
   for (const p of all) {
@@ -303,7 +306,7 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
     if (seen.has(cur)) continue;
     seen.add(cur);
     for (const child of byPpid.get(cur) ?? []) {
-      if (child.args.includes(needle)) return child.pid;
+      if (child.args === command) return child.pid;
       queue.push(child.pid);
     }
   }
@@ -364,6 +367,7 @@ it.skipIf(!isLinux)(
     const address = provider.address();
     if (!address || typeof address === "string") throw new Error("No provider port");
 
+    const ownerTag = newOwnerTag();
     let execChildPid: number | null = null;
     let sleepPid: number | null = null;
     let running: Promise<void> | undefined;
@@ -394,6 +398,7 @@ enabled=false
 `);
       vi.stubEnv("HOME", home);
       vi.stubEnv("CODEX_HOME", home);
+      vi.stubEnv(OWNER_TAG_ENV, ownerTag);
       vi.stubEnv("KAOIRO_CODEX_TURN_TRACE_DIR", join(home, "turn-traces"));
       for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
       stderrCapture = captureStderrTail();
@@ -413,10 +418,13 @@ enabled=false
       wire.push("permission_sync", { version: "0", control: null, next: null });
 
       await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, describeTimeout);
-      await waitFor(() => (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null, 15_000, describeTimeout);
+      await waitFor(() => (sleepPid = findDescendantByExactArgs(execChildPid!, "sleep 77")) !== null, 15_000, describeTimeout);
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!)).toBe(true);
       expect(isAlive(sleepPid!)).toBe(true);
+      // Positive control: the tag reached the real command inside the
+      // sandbox, so a survivor count of 0 below is not vacuous.
+      expect(processHasTag(sleepPid!, ownerTag)).toBe(true);
 
       // The SIGTERM handler this test exists to cover is registered on the
       // real `process` object by `runCodexCli` itself -- fire it the same
@@ -429,9 +437,10 @@ enabled=false
       // The CLI's own async lifecycle must complete on its own -- no
       // process.exit() needed.
       await running;
+      await waitForNoTagged(ownerTag);
     } finally {
-      forceKill(execChildPid ?? undefined);
-      forceKill(sleepPid ?? undefined);
+      forceKillIfTagged(execChildPid ?? undefined, ownerTag);
+      forceKillIfTagged(sleepPid ?? undefined, ownerTag);
       for (const listener of process.listeners("SIGTERM")) {
         if (!signals.includes(listener)) process.removeListener("SIGTERM", listener);
       }
