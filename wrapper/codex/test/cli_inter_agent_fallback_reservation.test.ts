@@ -241,6 +241,7 @@ it("retires a queued fallback once during watchdog fail-stop", async () => {
 
 it("retires a rejected fallback if its exact host slot cannot be replaced", async () => {
   const f = await compose();
+  const diagnostic = vi.spyOn(process.stderr, "write");
   const original = f.host.replaceInterAgentPlaceholder.bind(f.host);
   const replacement = vi.spyOn(f.host, "replaceInterAgentPlaceholder").mockImplementation((id, text, cids, token) =>
     text.includes("EARLY BODY") ? false : original(id, text, cids, token));
@@ -253,6 +254,7 @@ it("retires a rejected fallback if its exact host slot cannot be replaced", asyn
   await vi.waitFor(() => expect(f.retired.filter(e => e.payload.conversation_id === "cid")).toHaveLength(1));
   await vi.waitFor(() => { f.assertQuiescent(); });
   expect(replacement).toHaveBeenCalledOnce();
+  expect(diagnostic.mock.calls.some(([chunk]) => String(chunk).includes("inter-agent fallback slot replacement failed"))).toBe(true);
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
   expect(f.texts("turn/start")[1]).toContain("NEXT BODY");
   expect(f.texts("turn/start")[1]).not.toContain("EARLY BODY");
