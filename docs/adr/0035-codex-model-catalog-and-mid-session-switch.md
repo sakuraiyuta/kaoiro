@@ -57,7 +57,8 @@ Add optional Codex-specific configuration to `runner.config.json`:
 }
 ```
 
-`chatgpt_plan` is a closed enum: `free | go | plus | pro | business | enterprise`.
+`chatgpt_plan` is a closed enum: `free | go | plus | pro | prolite | promax |
+business | enterprise`.
 The runner combines this declaration with an explicit `codex.auth_mode` (added in
 Phase-24), or with stored auth-mode detection from `codex doctor --json` (fallback),
 to construct the catalog.
@@ -65,12 +66,18 @@ to construct the catalog.
 - auth mode `chatgpt` + plan undeclared: empty catalog, delegate to account default,
   stderr warning.
 - auth mode `chatgpt` + `free|go`: Terra only.
-- auth mode `chatgpt` + `plus|pro|business|enterprise`: Sol / Terra / Luna.
+- auth mode `chatgpt` + `plus|pro|prolite|promax|business|enterprise`: paid
+  catalog snapshot (GPT-6 and GPT-5.6 models).
 - auth mode `apikey`: curated catalog for API keys. Warn to stderr and ignore a
   leftover ChatGPT plan declaration. Do not break runner startup merely by switching
   auth.
 - auth-mode detection failure: fail closed to an empty catalog and warn to stderr.
   Do not guess.
+
+Upstream plan IDs `prolite` and `promax` are accepted as paid-plan declarations.
+Per-model `available_in_plans` metadata does not establish actual entitlement;
+the catalog applies one paid catalog to all paid plan IDs. The mapping from the
+marketed “Pro 500” plan to `promax` remains unknown.
 
 #### Auth-mode decision priority (Phase-24 addendum, 2026-07-16)
 

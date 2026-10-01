@@ -188,18 +188,25 @@ All seven rows support the reasoning levels `low`, `medium`, `high`,
 `gpt-5.6-luna`.
 
 The source's `available_in_plans` values include Free and Go for the GPT-6
-rows, including Sol 6.1. That upstream declaration does not establish actual
-account entitlement. kaoiro's catalog policy advertises the GPT-6 models only
-for Plus and above and advertises only Terra for Free/Go. The current source
-also contains `prolite` and `promax` IDs. It does not establish that the
+rows, including Sol 6.1. Those upstream declarations do not establish actual
+account entitlement. For `promax`, the source lists `gpt-6.1-sol`,
+`gpt-6-astra`, and the GPT-5.6 rows, but omits `gpt-6-sol` and `gpt-6-luna`.
+kaoiro currently applies one catalog to every paid plan ID, so this source
+metadata difference does not alter the advertised catalog. kaoiro advertises
+the GPT-6 models only for Plus and above and advertises only Terra for Free/Go.
+The source contains `prolite` and `promax` IDs but does not establish that the
 marketed “Pro 500” plan maps to `promax`; that correspondence remains unknown.
 
 The existing API-key `gpt-5.4-mini` catalog row was retained. This change
 confirms row inclusion only; it did not synchronize that model's metadata.
 
-Live service-tier and entitlement probes for `gpt-6-sol` and `gpt-6.1-sol`
-remain unmeasured pending authenticated scratch-home access. No production
-Codex home or live peer model was used to create this snapshot.
+The scratch home was confirmed logged in through Codex CLI 0.156.1. Two real
+`gpt-6-sol` exec-backend turn requests each timed out after 120 seconds without
+a result or rollout. No service tier was observed. Server acceptance, the
+unknown-slug 400/404 response, switch rollback, the next-turn model, and
+service-tier measurements for either model on either backend remain unverified;
+the live portion of the issue remains open. No production Codex home or live
+peer model was used for these attempts.
 
 ## Migration links
 
