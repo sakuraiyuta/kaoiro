@@ -72,26 +72,24 @@ describe("AppServerRpc server requests", () => {
   });
 });
 
-// Captured from the pinned 0.156.1 binary (issue #367 probe P2,
-// docs/evidence/codex-app-server/stage3-approval-probes-2026-09-30.md).
-// availableDecisions is not in the generated schema and omits "decline", yet
-// a "decline" reply was honoured. The wrapper maps an operator deny to
-// "decline" on that measurement, so a Codex pin bump must re-measure it.
+// Candidate-native capture; only the scratch prefix is normalized for privacy.
+// availableDecisions is experimental-schema-only; decline is a stable response.
+// A pin bump must remeasure the request, decline reply and terminal outcome.
 describe("the captured command approval shape on the pinned Codex", () => {
-  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.156.1.jsonl", import.meta.url), "utf8")
+  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.159.3.jsonl", import.meta.url), "utf8")
     .trim().split("\n").map(raw => JSON.parse(raw) as { dir: string; line: string })
     .map(({ dir, line }) => ({ dir, message: JSON.parse(line) as RpcObject }));
 
   it("is measured on the pinned version", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> };
-    expect(pkg.dependencies["@openai/codex"]).toBe("0.156.1");
+    expect(pkg.dependencies["@openai/codex"]).toBe("0.159.3");
   });
 
   it("offers no decline in availableDecisions, and a decline reply leaves the item declined", () => {
     const request = lines[0]!.message;
     const params = request.params as RpcObject;
     expect(params.availableDecisions).toEqual([
-      "accept", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["touch", "/tmp/kuroe367-probe.eaoBWE/outside/p2.txt"] } }, "cancel",
+      "accept", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["touch", "<scratch>/outside/target.txt"] } }, "cancel",
     ]);
     expect(params.availableDecisions).not.toContain("decline");
     expect(lines[1]).toEqual({ dir: "out", message: { id: 0, result: { decision: "decline" } } });

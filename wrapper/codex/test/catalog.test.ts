@@ -205,7 +205,7 @@ describe("resolveCodexCatalog", () => {
   });
 
   it("loads the bundled Codex CLI version through the SDK dependency", () => {
-    expect(BUNDLED_CODEX_VERSION).toBe("0.156.1");
+    expect(BUNDLED_CODEX_VERSION).toBe("0.159.3");
   });
 
   it("matches the SDK's exact Codex CLI dependency", () => {
