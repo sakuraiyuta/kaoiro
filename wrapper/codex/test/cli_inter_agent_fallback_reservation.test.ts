@@ -443,7 +443,7 @@ it("retires a rejected fallback if its exact host slot cannot be replaced", asyn
   expect(f.texts("turn/start")[1]).not.toContain("EARLY BODY");
 });
 
-it("the shared quiescence check detects an orphaned slot and reservation", async () => {
+it("the shared quiescence check detects orphaned slots, reservations, and frozen steers", async () => {
   skipAutomaticQuiescence = true;
   const f = await scenario(0);
   await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
@@ -457,5 +457,12 @@ it("the shared quiescence check detects an orphaned slot and reservation", async
   expect(coordinator.reserveSteer("orphan", orphan, "reply-owed", 1)).toBe(true);
   expect(() => f.assertQuiescent()).toThrow();
   coordinator.discardSteerReservation("orphan");
+  f.assertQuiescent();
+  expect(coordinator.reserveSteer("frozen-orphan", orphan, "reply-owed", 2)).toBe(true);
+  coordinator.freezeForWatchdogFailStop();
+  expect(coordinator.pendingSteerReservationCount).toBe(0);
+  expect(coordinator.pendingFrozenSteerCount).toBe(1);
+  expect(() => f.assertQuiescent()).toThrow();
+  coordinator.settleSteerReservation("frozen-orphan", false);
   f.assertQuiescent();
 });

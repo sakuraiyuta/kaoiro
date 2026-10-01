@@ -567,6 +567,9 @@ already in `fallback` has an unstarted root; freeze removes its slot and
 retires that envelope once. A queued or exceptional result discards the steer
 identity before ordinary requeue, so the late frozen-steer rule cannot retire
 the requeued input. A late settlement never recreates a host slot.
+At normal shutdown freeze, a `steering` identity with no later settlement
+remains unresolved until the next generation bind retires its surviving
+old-generation metadata as interrupted.
 
 | Reservation at freeze | Coordinator action | Delivery outcome |
 | --- | --- | --- |
