@@ -40,8 +40,9 @@ import type {
 import {
   agyEventToEvents,
   agyEventIsSuccessfulResult,
-  agyEventToQuotaExhaustion,
   agyEventToLogs,
+  agyEventToModel,
+  agyEventToQuotaExhaustion,
   agyEventToResult,
   agyEventToSessionId,
   parseAgyStreamLine,
@@ -49,6 +50,15 @@ import {
 } from "./adapter.js";
 import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
 import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableFailureReason, type AgyExecutableResolution } from "./cli-path.js";
+import {
+  DEFAULT_USAGE_PROBE_TIMEOUT_MS,
+  MAX_USAGE_PROBE_RETRIES,
+  USAGE_PROBE_INTERVAL_MS,
+  parseAgyUsageOutput,
+  runAgyUsageProbe,
+  type AgyUsageProbeSpawn,
+  type AgyUsageRateLimits,
+} from "./usage_probe.js";
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
 import { DEFAULT_EPOCH_IDLE_MS, epochSpecsEqual, type EpochEndReason, type EpochSpec } from "./epoch.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig, type GateServerOptions } from "./gate.js";
@@ -317,6 +327,9 @@ export interface AntigravityHostOptions {
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
   now?: () => string;
+  usageProbeSpawn?: AgyUsageProbeSpawn;
+  usageProbeTimeoutMs?: number;
+  usageProbeIntervalMs?: number;
 }
 
 function validToolName(value: unknown): value is string {
@@ -557,6 +570,12 @@ export class AntigravityHost implements EngineAdapter {
     string,
     { status?: string; utilization?: number; resets_at?: number }
   >();
+  #observedModel: string | null = null;
+  #lastUsageProbeSuccessMs: number | null = null;
+  #usageProbeFailureCount = 0;
+  #usageProbeInflight = false;
+  readonly #usageProbeTimeoutMs: number;
+  readonly #usageProbeIntervalMs: number;
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
     this.#config = config as AntigravityLaunchConfig;
@@ -595,8 +614,11 @@ export class AntigravityHost implements EngineAdapter {
     if (this.#permissionSyncSupported) {
       this.#permissionControl = this.#baselineControl();
     }
+    this.#usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
+    this.#usageProbeIntervalMs = options.usageProbeIntervalMs ?? USAGE_PROBE_INTERVAL_MS;
     sweepStaleCustomizationDirs();
     void this.#refreshCatalog();
+    void this.#triggerUsageProbe();
   }
 
   get state(): KaoiroState {
@@ -1233,6 +1255,7 @@ export class AntigravityHost implements EngineAdapter {
       } else if (!this.#watchdogFailStopped) {
         let error: InterAgentErrorClassifyInput | undefined;
         let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
+        let justUnblocked = false;
         if (outcome.kind === "interrupted") {
           this.#terminalError("interrupted", outcome.attemptedModel);
           error = { reason: "interrupted" };
@@ -1259,6 +1282,9 @@ export class AntigravityHost implements EngineAdapter {
               resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
             });
           } else if (agyEventIsSuccessfulResult(outcome.event)) {
+            if (this.#rateLimits.get("seven_day")?.status === "blocked") {
+              justUnblocked = true;
+            }
             this.#rateLimits.delete("seven_day");
           }
           const result = agyEventToResult(outcome.event);
@@ -1283,6 +1309,9 @@ export class AntigravityHost implements EngineAdapter {
           // field's own doc comment for why this is not "succeeded".
           terminal: outcome.kind === "result",
         });
+        if (outcome.kind === "result") {
+          void this.#triggerUsageProbe(justUnblocked);
+        }
       }
       void this.#drainTurns();
     }
@@ -1916,6 +1945,10 @@ export class AntigravityHost implements EngineAdapter {
   #handleEvent(event: AgyStreamEvent, gate: AntigravityGate, assistantText: Map<number, string>): void {
     if (event.event === "init") {
       gate.inspectToolInventory(Array.isArray(event.init.tools) ? event.init.tools : []);
+      const model = agyEventToModel(event);
+      if (model !== null) {
+        this.#observedModel = model;
+      }
       const sessionId = agyEventToSessionId(event);
       if (sessionId !== null) {
         this.#sessionId = sessionId;
@@ -2084,6 +2117,85 @@ export class AntigravityHost implements EngineAdapter {
     // operator-declared extra model that the pinned snapshot merge above
     // already exposed.
     this.#catalog = mergeExtraModels(catalog, this.#config.antigravity_extra_models);
+    this.#emitState(this.#machine.state);
+  }
+
+  #effectiveModel(): string | null {
+    return this.#observedModel ?? this.#pendingModel ?? this.#config.model ?? null;
+  }
+
+  #shouldTriggerUsageProbe(forceImmediate = false): boolean {
+    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped) return false;
+    if (!this.#agyExecutable.ok) return false;
+    if (this.#activeTurnToken !== null) return false;
+    if (this.#usageProbeInflight) return false;
+    if (this.#usageProbeFailureCount >= MAX_USAGE_PROBE_RETRIES) return false;
+
+    if (forceImmediate) return true;
+
+    // should 1: throttle interval check
+    if (this.#lastUsageProbeSuccessMs === null) return true;
+
+    const nowMs = Date.parse(this.#now());
+    const sevenDay = this.#rateLimits.get("seven_day");
+    const isPastBlockedReset =
+      sevenDay?.status === "blocked" &&
+      typeof sevenDay.resets_at === "number" &&
+      nowMs >= sevenDay.resets_at * 1_000 &&
+      this.#lastUsageProbeSuccessMs < sevenDay.resets_at * 1_000;
+
+    if (isPastBlockedReset) return true;
+
+    return nowMs - this.#lastUsageProbeSuccessMs >= this.#usageProbeIntervalMs;
+  }
+
+  async #triggerUsageProbe(forceImmediate = false): Promise<void> {
+    if (!this.#shouldTriggerUsageProbe(forceImmediate)) return;
+    this.#usageProbeInflight = true;
+    try {
+      if (!this.#agyExecutable.ok) return;
+      const stdout = await runAgyUsageProbe(this.#agyExecutable.path, {
+        cwd: this.#options.cwd,
+        env: this.#safeChildEnv(),
+        timeoutMs: this.#usageProbeTimeoutMs,
+        spawn: this.#options.usageProbeSpawn,
+      });
+      if (this.#closed) return;
+      this.#usageProbeFailureCount = 0;
+      this.#lastUsageProbeSuccessMs = Date.parse(this.#now());
+      this.#applyUsageProbe(stdout);
+    } catch (error) {
+      if (this.#closed) return;
+      this.#usageProbeFailureCount++;
+      const message = error instanceof Error ? error.message : String(error);
+      this.#warn(`antigravity usage probe failed: ${boundErrorDetail(message)}`);
+    } finally {
+      this.#usageProbeInflight = false;
+    }
+  }
+
+  #applyUsageProbe(stdout: string): void {
+    const effectiveModel = this.#effectiveModel();
+    const parsed = parseAgyUsageOutput(stdout, effectiveModel ?? undefined);
+    if (parsed === null) {
+      return;
+    }
+
+    for (const [window, snapshot] of parsed) {
+      if (window === "seven_day") {
+        const currentSevenDay = this.#rateLimits.get("seven_day");
+        if (currentSevenDay?.status === "blocked") {
+          const resetsAt = snapshot.resets_at ?? currentSevenDay.resets_at;
+          this.#rateLimits.set("seven_day", {
+            ...snapshot,
+            status: "blocked",
+            ...(resetsAt === undefined ? {} : { resets_at: resetsAt }),
+          });
+          continue;
+        }
+      }
+      this.#rateLimits.set(window, snapshot);
+    }
     this.#emitState(this.#machine.state);
   }
 

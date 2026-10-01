@@ -2,7 +2,7 @@
 title: Antigravity events
 description: Current event, state, session, model, usage, and host contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-21
+last_updated: 2026-10-01
 related: [protocol, antigravity-adapter]
 ---
 
@@ -190,20 +190,39 @@ Observed details:
 - `--model <slug>` echoes into `init.model` *(measured)*; `--effort
   low|medium|high` is accepted *(measured; effect not separately
   observable — gemini slugs already encode the tier)*.
-- Slash commands answered without a model turn or quota spend
-  *(measured)*: `agy -p /usage --output-format json` →
-  `command.data.groups[].buckets[]` with `window: "weekly"`,
-  `remaining_fraction`, `reset_time` (two groups: "Gemini Models" and
-  "Claude and GPT models"); `-p /model` → current model/effort;
-  `-p /permissions`, `-p /hooks`, `-p /help`.
+- **Rate limits and usage probe** *(measured 2026-10-01, issue #384)*:
+  `agy -p /usage --output-format json` returns `status: "SUCCESS"` with
+  `command.data.groups[].buckets[]` without consuming tokens (~6.0s duration,
+  [usage-rate-limits.md](../../evidence/antigravity/usage-rate-limits.md)).
+  - **Probe trigger**: Spawns asynchronously at startup and after each turn
+    result. New probes are inhibited while a turn is active
+    (`activeTurnToken !== null`), and suppressed after 3 consecutive failures.
+  - **Throttling**: 5-minute interval (`USAGE_PROBE_INTERVAL_MS = 5 * 60 * 1000`)
+    between successful runs to bound `~/.gemini/antigravity-cli/log/` file
+    accumulation (~22KB/file). The interval is bypassed immediately at startup,
+    when recovering past a known `seven_day: blocked` reset deadline, or upon
+    a successful turn clearing that block.
+  - **Bucket selection**: Filtered by active model prefix (`gemini-` ->
+    `gemini-*`, `claude-` / `gpt-` -> `3p-*`) resolved from `init.model` or
+    config. If the model is unclassified or unknown, `rate_limits` are omitted
+    rather than guessing.
+  - **Mapping semantics**:
+    - `window === "5h"` -> `five_hour`, `window === "weekly"` -> `seven_day`.
+    - `utilization`: `1 - remaining_fraction` clamped to `[0, 1]`.
+    - `resets_at`: Emitted as Unix seconds only when `remaining_fraction < 1.0`.
+      Unused buckets (`remaining_fraction >= 1.0`) omit `resets_at` because
+      their `reset_time` is a moving invocation-relative placeholder.
+    - `status`: Omitted during normal operation; set to `"blocked"` when
+      `remaining_fraction <= 0`.
+  - Other slash commands answered without a model turn: `-p /model` -> current
+    model/effort; `-p /permissions`, `-p /hooks`, `-p /help`.
 - **Wrapper quota projection:** a terminal `result.error` that contains a
   `RESOURCE_EXHAUSTED` / HTTP 429 marker and a compact `Resets in <NhNmNs>`
   duration is fail-soft mapped to `peer_error.code = "rate_limit"` and
   `rate_limits.seven_day = {status: "blocked", utilization: 1, resets_at}`.
-  The parser accepts only the observed compact duration grammar; an
-  unrecognised terminal error remains the ordinary API error. The actual CLI
-  `result.error` terminal shape has not yet been measured; this mapping is
-  inferred from the internal-log string shape.
+  A probe result never clears or overwrites this `blocked` status; clearing
+  happens strictly on a subsequent successful turn result
+  (`agyEventIsSuccessfulResult`).
 - Context window sizes are not exposed; `usage.input_tokens` of the last
   `agent_response` step approximates context in use.
 
