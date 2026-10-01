@@ -1265,6 +1265,44 @@ if (args[0] === "models") {
     resumedHost.close();
   });
 
+  it("omits session_id from statusExtSnapshot and state_change ext even after init and on resume (issue #418)", async () => {
+    // 1. Fresh host: after init event, statusSnapshot has session_id, but statusExtSnapshot and state_change ext do not
+    const { host, states, calls } = hostHarness();
+    expect(host.statusExtSnapshot()).not.toHaveProperty("session_id");
+
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const call = calls[0]!;
+    call.child.stdout.write('{"event":"init","conversation_id":"cid-state-ext","init":{"tools":[]}}\n');
+    call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    call.child.finish();
+
+    await waitFor(() => host.statusSnapshot().session_id === "cid-state-ext");
+    expect(host.statusSnapshot().session_id).toBe("cid-state-ext");
+    expect(host.statusExtSnapshot()).not.toHaveProperty("session_id");
+    expect(states.length).toBeGreaterThan(0);
+    for (const state of states) {
+      expect(state.ext).not.toHaveProperty("session_id");
+    }
+    host.close();
+
+    // 2. Resumed host: statusSnapshot has resumeSessionId, but statusExtSnapshot and state_change ext do not
+    const resumed = hostHarness({ resumeSessionId: "resumed-state-ext-123" });
+    expect(resumed.host.statusSnapshot().session_id).toBe("resumed-state-ext-123");
+    expect(resumed.host.statusExtSnapshot()).not.toHaveProperty("session_id");
+
+    await resumed.host.send("second");
+    await waitFor(() => resumed.calls.length === 1);
+    resumed.calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    resumed.calls[0]!.child.finish();
+
+    await waitFor(() => resumed.states.length > 0);
+    for (const state of resumed.states) {
+      expect(state.ext).not.toHaveProperty("session_id");
+    }
+    resumed.host.close();
+  });
+
   it("F4bの未観測tool完了はchildをSIGTERMしてsessionをerrorにする", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
