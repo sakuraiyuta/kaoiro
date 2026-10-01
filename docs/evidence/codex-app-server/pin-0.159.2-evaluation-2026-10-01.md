@@ -155,7 +155,7 @@ The existing real-binary integration tests were run unchanged on both pins:
 
 Both runs: **9 files, 11 tests, exit 0**. The baseline exit is recorded in
 `baseline-gates.json` (`baseline-stage1`); the candidate exit is recorded in
-`candidate-initial-gates.json` (`candidate-stage1`). The manifest now binds
+`candidate-initial-gates.json` (`candidate-stage1`). The manifest binds
 both records and their matching test logs. These exercise default production
 transport/session/host composition, sequential turns, restarted resume,
 paginated history, settings, permission rollout, bridge activity and
@@ -165,9 +165,11 @@ production database from 0.159.2 to 0.156.1.
 
 Negative control on each pin: temporarily omit `turn/completed` from
 `AppServerTransport.#deliver`'s stream, preserving stream completion. The
-unchanged transport integration test fails with exit 1. Restore the source;
-its test passes, and the candidate's full nine-file Stage 1 selection passes
-again after rebuild. No mutation remains in the branch.
+unchanged transport integration test fails with exit 1. The baseline exit
+is the evaluator's original execution report; its retained test log records
+the failure but not the shell exit status. Restore the source; its test
+passes, and the candidate's full nine-file Stage 1 selection passes again
+after rebuild. No mutation remains in the branch.
 
 The tests emitted the expected isolated-home warning that auth mode is
 unknown and the model catalog is empty. They did not report a Vitest
@@ -344,6 +346,16 @@ evaluation and remains part of gate 3 below.
 
 ## Remaining runtime gate procedure
 
+Production context, as confirmed by the director in the runner journal:
+the `[wrapper resolved]` entries at **2026-10-01 08:18:44 JST** report
+`sandbox=danger-full-access(source=config)`, `network_access=true`, and
+`approval=never(launch,switchable)` for fuji, kogane and momo. The evaluator
+has not independently inspected this journal. The restricted configurations
+below exercise selectable policies; they are not the reported production
+launch sandbox. Before executing the gate, record the then-current production
+sandbox, network and approval selections and any applicable writable roots,
+and distinguish that configuration from each restricted probe configuration.
+
 These are acceptance steps for a later authorized adoption evaluation, not
 results of this run. Use both pinned native binaries with separate, fresh
 scratch homes and the same rebuilt production wrapper/runner composition.
@@ -366,23 +378,31 @@ authentication and a new budget. The ten-turn budget above is exhausted.
    As the negative control, change only the intended blocked run's selection
    to true: its command must succeed and the blocked-case checker must fail.
    A checker failure must stop subsequent mutation steps in the same flow.
-2. **Linked-worktree Git.** Create a scratch repository plus a linked
-   worktree whose `.git` file points to metadata outside the worktree's
-   writable root. Disable signing/hooks through task-local Git configuration
-   and use a scratch identity. With the production `workspace-write`
-   selection and its actual approval path, change one tracked fixture,
-   `git add` it and `git commit`; verify the committed blob, parent and clean
-   index. Require the intended authorized Git workflow to complete on both
-   pins. Do not silently add writable roots or disable protection to force
-   success. On fresh fixtures, the read-only selection must reject the same
-   mutation and leave file/index/HEAD state unchanged. Separately attempt a
-   write to a sibling directory outside authorized roots and require denial
-   without a sentinel file; approving an ordinary in-scope command must not
-   grant that sibling write. A copied positive result with its committed
-   blob removed or a negative result with its sentinel present must fail the
-   corresponding checker, with no next-step mutation. If baseline already
-   rejects the intended Git workflow, retain the failure and keep this gate
-   open for an explicit policy decision rather than call the candidate safe.
+2. **Git writable-root layouts.** Measure both layouts on both pins under
+   the selectable `workspace-write` policy. First, create a scratch main
+   repository and linked worktree, selecting both as writable roots. The
+   linked worktree's `.git` file must point into the main repository's
+   gitdir, inside that other writable root (the layout for upstream 47974).
+   Second, commit from the main working tree with its `.git` directory
+   directly beneath that tree's writable root. Include the nested-root
+   case by also selecting its parent as writable, to exercise the metadata
+   protection beneath nested writable roots identified in upstream 47623.
+   Record the exact root lists and resolved gitdir for each layout.
+   Disable signing/hooks through task-local Git configuration and use a
+   scratch identity. Through the actual approval path, change one tracked
+   fixture, `git add` it and `git commit`; verify the committed blob, parent
+   and clean index. Require the intended authorized Git workflow to complete
+   on both pins in both layouts. Do not silently add writable roots or
+   disable protection to force success. On fresh fixtures, the read-only
+   selection must reject the same mutation and leave file/index/HEAD state
+   unchanged. Separately attempt a write to a sibling directory outside all
+   authorized roots and require denial without a sentinel file; approving
+   an ordinary in-scope command must not grant that sibling write. A copied
+   positive result with its committed blob removed or a negative result
+   with its sentinel present must fail the corresponding checker, with no
+   next-step mutation. If baseline already rejects the intended Git workflow,
+   retain the failure and keep this gate open for an explicit policy decision
+   rather than call the candidate safe.
 3. **Approval axis.** Enable the actual approval-axis composition in the
    isolated wrapper. Under both `on-request` and `untrusted`, elicit a native
    file-change approval and exercise allow/deny against fresh task-owned

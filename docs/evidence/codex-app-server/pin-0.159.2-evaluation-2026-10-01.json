@@ -791,8 +791,8 @@
     "hash_semantics": "Hashes identify original captured bytes; publication placeholders in this manifest do not rewrite those captures."
   },
   "cleanup": {
-    "authenticated_homes": "Both deleted with director authorization; no credential contents read, copied or compared.",
-    "evaluation_scratch": "Retained pending director clarification of review inconsistencies; evaluator owns cleanup."
+    "authenticated_homes": "The evaluator reports that both homes were deleted with director authorization and no credential contents were read, copied or compared; this is an evaluator report, not independently established by the captures.",
+    "evaluation_scratch": "Retained for final review and landing; the evaluator will delete it after final review and landing, on the director's instruction."
   },
   "stage1_runs": [
     {
