@@ -782,6 +782,10 @@ export class CodexHost implements EngineAdapter {
   /** Fail-stop cleanup is started synchronously with queue removal, then
    * awaited by recovery/tests without ever including the active turn. */
   #watchdogQueuedCleanup: Promise<void> = Promise.resolve();
+  /** Tail of the cleanups started by #dropQueuedTempTurns. close() does not
+   * await its drop, so a later drop awaits this to keep run() from resolving
+   * with image directories still being removed. */
+  #droppedTempCleanup: Promise<void> = Promise.resolve();
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
@@ -1150,8 +1154,11 @@ export class CodexHost implements EngineAdapter {
   async interrupt(): Promise<void> {
     // Before the first await: an operator interrupt in the same task as
     // an operator "allow" must already have invalidated that allow when the
-    // gated handler's continuation runs (issue #347 review R1).
+    // gated handler's continuation runs (issue #347 review R1). The SDK
+    // controller is captured here too: #abort is replaced per turn, and the
+    // run loop may start the next turn while the cleanup below is awaited.
     const appToken = this.#appTurnToken;
+    const abort = this.#abort;
     this.#abandonTurn("operator_interrupt");
     this.#lifecycleGeneration += 1;
     this.#permissionCloseWake?.();
@@ -1160,7 +1167,7 @@ export class CodexHost implements EngineAdapter {
     const interrupted = appToken === null ? undefined : this.#appRuntime?.interrupt(appToken);
     await this.#dropQueuedTempTurns();
     await interrupted;
-    this.#abort?.abort();
+    abort?.abort();
   }
 
   /** The single entry through which a live turn loses its deferred-reset
@@ -2462,18 +2469,23 @@ export class CodexHost implements EngineAdapter {
   }
 
   /** An interrupt drops not-yet-started image turns too: their local_image
-   * paths must never outlive the cancelled instruction (ADR-0025 F3/F11). */
+   * paths must never outlive the cancelled instruction (ADR-0025 F3/F11).
+   * Every queue edit happens before the first await: the run loop, a
+   * placeholder removal and send() all touch the queue while cleanup runs. */
   async #dropQueuedTempTurns(): Promise<void> {
-    const retained: QueuedTurn[] = [];
-    for (const turn of this.#queue) {
-      if (turn.tempDir === undefined) {
-        retained.push(turn);
-      } else {
-        await this.#cleanupTempDir(turn.tempDir);
-      }
+    const dirs: string[] = [];
+    for (let index = this.#queue.length - 1; index >= 0; index -= 1) {
+      const dir = this.#queue[index]!.tempDir;
+      if (dir === undefined) continue;
+      this.#queue.splice(index, 1);
+      dirs.push(dir);
     }
-    this.#queue.length = 0;
-    this.#queue.push(...retained);
+    const earlier = this.#droppedTempCleanup;
+    this.#droppedTempCleanup = (async () => {
+      await earlier;
+      for (const dir of dirs) await this.#cleanupTempDir(dir);
+    })();
+    await this.#droppedTempCleanup;
   }
 
   async #cleanupWatchdogQueuedTurns(

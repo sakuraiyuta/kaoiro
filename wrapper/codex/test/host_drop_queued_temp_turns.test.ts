@@ -213,6 +213,30 @@ describe("CodexHost.interrupt while a queued image turn's cleanup is pending", (
     }
   });
 
+  it("does not resolve run() while close()'s cleanup is pending", async () => {
+    const hold = deferred();
+    const { host, ran } = build([hold.promise]);
+    const running = host.run("first");
+    let settled = false;
+    void running.then(() => { settled = true; });
+    let release = () => {};
+    try {
+      await vi.waitFor(() => expect(ran).toEqual(["first"]), RUN_PROGRESS);
+      await sendImage(host, "a");
+      release = holdCleanup();
+      host.close();
+      hold.resolve();
+      // A negative: let run() reach the end of its loop, then check it waits.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(cleanup.dirs).toEqual([dirOf("a")]);
+      expect(settled).toBe(false);
+    } finally {
+      release();
+      hold.resolve();
+      await running;
+    }
+  });
+
   it("does not resurrect a placeholder removed during the cleanup", async () => {
     const { host, ran } = build();
     await sendImage(host, "a");
