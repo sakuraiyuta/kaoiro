@@ -337,6 +337,18 @@ in streaming-input mode. Boundaries settled by a headless live run:
   with probe source priority, surfacing `/` completions immediately. Live
   `system/init`, `supportedCommands()`, and mid-session `commands_changed`
   messages supersede probe readings with live Query authority (issue #424).
+  The probe projects each `SlashCommand` to its colon-qualified alias when it
+  has one (`anthropic-skills:built-in-browser`), else to `name`. This rule is
+  empirical: the SDK types do not define how init's `slash_commands` is
+  spelled. Measured on SDK 0.3.284 (2026-10-01): the projected
+  `initializationResult().commands` and live `system/init` `slash_commands`
+  were both 145 entries, equal in order, with no difference either way. 33
+  rows carried a colon alias, and 9 rows carried only colon-free aliases and
+  kept `name`. Re-measure this when the SDK is bumped. The probe runs in an
+  isolated temporary cwd with no MCP servers, so project-scoped commands and
+  MCP-provided commands are expected to be missing until the first live
+  turn. This is inferred, not measured. If the probe fails, the list stays
+  empty until the first turn's `system/init`, as before.
   Bare `/model` and `/effort` do not surface as
   SDK control and are only input text, so the dashboard constructs the
   selection UI from these lists.
