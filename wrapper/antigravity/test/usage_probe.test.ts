@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import {
+  killChildGroup,
   modelToBucketPrefix,
   parseAgyUsageOutput,
   runAgyUsageProbe,
@@ -150,4 +152,93 @@ describe("runAgyUsageProbe", () => {
     ).rejects.toThrow("usage_probe_timeout:20ms");
     expect(killSignal).toBe("SIGKILL");
   });
+
+  it("spawns with detached: true and stdio ignoring stderr", async () => {
+    let capturedOptions: unknown;
+    const fakeSpawn = ((_exec: string, _args: string[], opts: unknown) => {
+      capturedOptions = opts;
+      const child = new EventEmitter() as ChildProcess;
+      child.stdout = new PassThrough() as any;
+      setTimeout(() => {
+        child.emit("close", 0);
+      }, 5);
+      return child;
+    }) as any;
+
+    await runAgyUsageProbe("/fake/bin", { spawn: fakeSpawn });
+    expect(capturedOptions).toMatchObject({
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  });
+
+  it("aborts and kills child group when AbortSignal is triggered", async () => {
+    let killSignal: string | null = null;
+    const fakeSpawn = (() => {
+      const child = new EventEmitter() as ChildProcess;
+      child.kill = ((sig: string) => {
+        killSignal = sig;
+        return true;
+      }) as any;
+      return child;
+    }) as any;
+
+    const controller = new AbortController();
+    const probePromise = runAgyUsageProbe("/fake/bin", {
+      spawn: fakeSpawn,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await expect(probePromise).rejects.toThrow("usage_probe_aborted");
+    expect(killSignal).toBe("SIGKILL");
+  });
+
+  it("kills child group and rejects when stdout exceeds 1MB limit", async () => {
+    let killSignal: string | null = null;
+    const fakeSpawn = (() => {
+      const child = new EventEmitter() as ChildProcess;
+      child.stdout = new PassThrough() as any;
+      child.kill = ((sig: string) => {
+        killSignal = sig;
+        return true;
+      }) as any;
+      queueMicrotask(() => {
+        const largeChunk = Buffer.alloc(1024 * 1024 + 10, "x");
+        child.stdout.emit("data", largeChunk);
+      });
+      return child;
+    }) as any;
+
+    await expect(
+      runAgyUsageProbe("/fake/bin", { spawn: fakeSpawn }),
+    ).rejects.toThrow("usage_probe_stdout_overflow");
+    expect(killSignal).toBe("SIGKILL");
+  });
 });
+
+describe("killChildGroup", () => {
+  it("kills process group when pid is a positive number", () => {
+    const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
+    const child = { pid: 4321, kill: vi.fn() } as unknown as ChildProcess;
+
+    killChildGroup(child, "SIGKILL");
+
+    expect(processKillSpy).toHaveBeenCalledWith(-4321, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+    processKillSpy.mockRestore();
+  });
+
+  it("falls back to child.kill when pid is not present or non-positive", () => {
+    const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
+    const child = { kill: vi.fn() } as unknown as ChildProcess;
+
+    killChildGroup(child, "SIGTERM");
+
+    expect(processKillSpy).not.toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    processKillSpy.mockRestore();
+  });
+});
+
+

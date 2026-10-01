@@ -25,13 +25,16 @@ time agy -p /usage --output-format json
 - **Token consumption**: 0 tokens (`usage.input_tokens = 0`, `usage.output_tokens = 0`, `usage.total_tokens = 0`).
   *(Inference / observation)*: The command appears to query the quota/accounting service directly without running an LLM turn or consuming prompt/output tokens.
 - **Mid-turn execution procedure**:
-  - Tested from within an active Antigravity session while the runner was executing a turn.
-  - An independent child process was spawned running `agy -p /usage --output-format json`.
-  - The command completed cleanly with exit code 0 and emitted valid JSON, without blocking or terminating the parent session.
+  - Measured during Turn 1 of an active session while `agy` was executing an in-progress tool command (`run_command` compilation step).
+  - An independent child process was spawned running `agy -p /usage --output-format json` at `2026-10-01 13:33:30 UTC`.
+  - The command completed cleanly with exit code 0 and emitted valid JSON, without blocking or terminating the parent turn.
   - However, because each probe takes ~6 seconds and creates subprocess/network overhead, probes must only be initiated at turn boundaries (after `result`) and never mid-turn.
 
-## 2. CLI Log Accumulation and Retention Observations
+## 2. CLI Subprocesses, Log Accumulation, and Retention Observations
 
+- **Subprocesses spawned per `/usage` run**:
+  - Analysis of the CLI session logs (`~/.gemini/antigravity-cli/log/`) reveals that each invocation of `agy -p /usage` automatically initializes language server subsystems (`server.go:1586`) and spawns an auto-updater check (`auto_updater.go:334`).
+  - To prevent orphaned background processes on timeouts or host closure, probe executions must create a new process group (`detached: true`) and terminate the entire subtree via negative PID signal (`process.kill(-pid, "SIGKILL")`).
 - **Per-run log generation**: Each execution of `agy` writes a new timestamped log file `cli-YYYYMMDD_HHMMSS.log` under `~/.gemini/antigravity-cli/log/`. A single `/usage` run generated a 22,384-byte log file (~171 lines).
 - **Directory observation**: As of 2026-10-01, the directory contained 263 files; the oldest was `2026-09-24 23:36:00` (followed by `2026-09-25 00:41:40`). Whether the CLI prunes by day count or file count is indeterminate.
 - **Rate of accumulation**: A 5-minute throttling interval bounds probe log generation to at most 12 files per hour per peer, mitigating the risk of evicting historical debugging logs.
@@ -139,4 +142,4 @@ time agy -p /usage --output-format json
   - Value is `Math.floor(Date.parse(bucket.reset_time) / 1000)` (Unix seconds).
 - **Status**:
   - Omitted during normal operation. Only set to `"blocked"` when `remaining_fraction <= 0`.
-  - Quota exhaustion `status: "blocked"` originating from terminal `RESOURCE_EXHAUSTED` errors takes strict precedence and is never cleared by probe results.
+  - Quota exhaustion `status: "blocked"` originating from terminal `RESOURCE_EXHAUSTED` (429) errors takes strict precedence: when active, the entire `seven_day` snapshot from usage probes is discarded so `status: "blocked"`, `resets_at`, and `utilization: 1` are preserved without being overwritten by weekly probe values. It is cleared only upon an actual successful turn (`result`).

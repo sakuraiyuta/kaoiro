@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
@@ -54,6 +54,7 @@ import {
   DEFAULT_USAGE_PROBE_TIMEOUT_MS,
   MAX_USAGE_PROBE_RETRIES,
   USAGE_PROBE_INTERVAL_MS,
+  killChildGroup,
   parseAgyUsageOutput,
   runAgyUsageProbe,
   type AgyUsageProbeSpawn,
@@ -574,6 +575,9 @@ export class AntigravityHost implements EngineAdapter {
   #lastUsageProbeSuccessMs: number | null = null;
   #usageProbeFailureCount = 0;
   #usageProbeInflight = false;
+  #usageProbeAbortController: AbortController | null = null;
+  #usageProbeChild: ChildProcess | null = null;
+  #usageProbeInflightPromise: Promise<void> | null = null;
   readonly #usageProbeTimeoutMs: number;
   readonly #usageProbeIntervalMs: number;
 
@@ -629,12 +633,15 @@ export class AntigravityHost implements EngineAdapter {
     if (prompt !== undefined) await this.send(prompt);
     await new Promise<void>((resolve) => {
       const timer = setInterval(() => {
-        if (this.#closed) {
+        if (this.#closed && !this.#usageProbeInflight) {
           clearInterval(timer);
           resolve();
         }
       }, 50);
     });
+    if (this.#usageProbeInflightPromise !== null) {
+      await this.#usageProbeInflightPromise.catch(() => {});
+    }
   }
 
   async send(
@@ -823,7 +830,7 @@ export class AntigravityHost implements EngineAdapter {
     return this.#failStopForWatchdog("unattributed");
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.#closed = true;
     this.#lifecycleGeneration += 1;
     this.#turnQueue = [];
@@ -834,6 +841,12 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
+    if (this.#usageProbeAbortController !== null) {
+      this.#usageProbeAbortController.abort();
+    }
+    if (this.#usageProbeChild !== null) {
+      killChildGroup(this.#usageProbeChild, "SIGKILL");
+    }
     // issue #379 M2: closeGraceMs, not abortGraceMs -- an outer supervisor
     // (runner reset / systemd stop) can SIGKILL this wrapper process well
     // before a 60s abort grace would fire, so close() always shortens down
@@ -843,6 +856,9 @@ export class AntigravityHost implements EngineAdapter {
     void this.#endEpoch("close");
     this.#customization?.close();
     this.#customization = null;
+    if (this.#usageProbeInflightPromise !== null) {
+      await this.#usageProbeInflightPromise.catch(() => {});
+    }
   }
 
   async setModel(value: string): Promise<void> {
@@ -2152,25 +2168,46 @@ export class AntigravityHost implements EngineAdapter {
   async #triggerUsageProbe(forceImmediate = false): Promise<void> {
     if (!this.#shouldTriggerUsageProbe(forceImmediate)) return;
     this.#usageProbeInflight = true;
+    const abortController = new AbortController();
+    this.#usageProbeAbortController = abortController;
+
+    const probePromise = (async () => {
+      try {
+        if (!this.#agyExecutable.ok) return;
+        const stdout = await runAgyUsageProbe(this.#agyExecutable.path, {
+          cwd: this.#options.cwd,
+          env: this.#safeChildEnv(),
+          timeoutMs: this.#usageProbeTimeoutMs,
+          spawn: this.#options.usageProbeSpawn,
+          signal: abortController.signal,
+          onChildSpawned: (child) => {
+            this.#usageProbeChild = child;
+          },
+        });
+        if (this.#closed || abortController.signal.aborted) return;
+        this.#usageProbeFailureCount = 0;
+        this.#applyUsageProbe(stdout);
+      } catch (error) {
+        if (this.#closed || abortController.signal.aborted) return;
+        this.#usageProbeFailureCount++;
+        const message = error instanceof Error ? error.message : String(error);
+        this.#warn(`antigravity usage probe failed: ${boundErrorDetail(message)}`);
+      } finally {
+        this.#usageProbeInflight = false;
+        if (this.#usageProbeAbortController === abortController) {
+          this.#usageProbeAbortController = null;
+          this.#usageProbeChild = null;
+        }
+      }
+    })();
+
+    this.#usageProbeInflightPromise = probePromise;
     try {
-      if (!this.#agyExecutable.ok) return;
-      const stdout = await runAgyUsageProbe(this.#agyExecutable.path, {
-        cwd: this.#options.cwd,
-        env: this.#safeChildEnv(),
-        timeoutMs: this.#usageProbeTimeoutMs,
-        spawn: this.#options.usageProbeSpawn,
-      });
-      if (this.#closed) return;
-      this.#usageProbeFailureCount = 0;
-      this.#lastUsageProbeSuccessMs = Date.parse(this.#now());
-      this.#applyUsageProbe(stdout);
-    } catch (error) {
-      if (this.#closed) return;
-      this.#usageProbeFailureCount++;
-      const message = error instanceof Error ? error.message : String(error);
-      this.#warn(`antigravity usage probe failed: ${boundErrorDetail(message)}`);
+      await probePromise;
     } finally {
-      this.#usageProbeInflight = false;
+      if (this.#usageProbeInflightPromise === probePromise) {
+        this.#usageProbeInflightPromise = null;
+      }
     }
   }
 
@@ -2178,19 +2215,17 @@ export class AntigravityHost implements EngineAdapter {
     const effectiveModel = this.#effectiveModel();
     const parsed = parseAgyUsageOutput(stdout, effectiveModel ?? undefined);
     if (parsed === null) {
+      // nit 2: do not update #lastUsageProbeSuccessMs when output is skipped due to unknown model
       return;
     }
+
+    this.#lastUsageProbeSuccessMs = Date.parse(this.#now());
 
     for (const [window, snapshot] of parsed) {
       if (window === "seven_day") {
         const currentSevenDay = this.#rateLimits.get("seven_day");
         if (currentSevenDay?.status === "blocked") {
-          const resetsAt = snapshot.resets_at ?? currentSevenDay.resets_at;
-          this.#rateLimits.set("seven_day", {
-            ...snapshot,
-            status: "blocked",
-            ...(resetsAt === undefined ? {} : { resets_at: resetsAt }),
-          });
+          // should 1: discard probe seven_day entirely and retain the 429 quota exhaustion snapshot
           continue;
         }
       }

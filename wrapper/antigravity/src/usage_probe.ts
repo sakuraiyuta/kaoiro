@@ -116,21 +116,51 @@ export function parseAgyUsageOutput(
   return out.size > 0 ? out : null;
 }
 
+export const MAX_USAGE_PROBE_STDOUT_BYTES = 1024 * 1024; // 1MB
+
+/** Kills the process group of child if pid > 0, falling back to direct kill. */
+export function killChildGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL"): void {
+  if (typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Process or group might have already exited.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Process might have already exited.
+  }
+}
+
+export type AgyUsageProbeSpawnOptions = {
+  cwd?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
+  stdio: ("ignore" | "pipe")[];
+  detached?: boolean | undefined;
+};
+
 export type AgyUsageProbeSpawn = (
   executable: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; stdio: ("ignore" | "pipe")[] },
+  options: AgyUsageProbeSpawnOptions,
 ) => ChildProcess;
+
+export type RunAgyUsageProbeOptions = {
+  cwd?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
+  timeoutMs?: number | undefined;
+  spawn?: AgyUsageProbeSpawn | undefined;
+  signal?: AbortSignal | undefined;
+  onChildSpawned?: ((child: ChildProcess) => void) | undefined;
+};
 
 /** Spawns `agy -p /usage --output-format json` and returns stdout on exit 0. */
 export async function runAgyUsageProbe(
   executable: string,
-  options: {
-    cwd?: string | undefined;
-    env?: NodeJS.ProcessEnv | undefined;
-    timeoutMs?: number | undefined;
-    spawn?: AgyUsageProbeSpawn | undefined;
-  } = {},
+  options: RunAgyUsageProbeOptions = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
   const spawnFn = options.spawn ?? spawn;
@@ -146,55 +176,76 @@ export async function runAgyUsageProbe(
         clearTimeout(timer);
         timer = null;
       }
+      if (options.signal !== undefined) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const settleResolve = (data: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(data);
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      killChildGroup(child, "SIGKILL");
+      settleReject(new Error("usage_probe_aborted"));
     };
 
     try {
-      const spawnOpts: {
-        stdio: ("ignore" | "pipe")[];
-        cwd?: string;
-        env?: NodeJS.ProcessEnv;
-      } = {
-        stdio: ["ignore", "pipe", "pipe"],
+      const spawnOpts: AgyUsageProbeSpawnOptions = {
+        stdio: ["ignore", "pipe", "ignore"], // should 3: ignore stderr
+        detached: true, // should 2: separate process group for child tree
       };
       if (options.cwd !== undefined) spawnOpts.cwd = options.cwd;
       if (options.env !== undefined) spawnOpts.env = options.env;
       child = spawnFn(executable, ["-p", "/usage", "--output-format", "json"], spawnOpts);
+      options.onChildSpawned?.(child);
     } catch (err) {
       reject(err);
       return;
     }
 
+    if (options.signal?.aborted) {
+      killChildGroup(child, "SIGKILL");
+      settleReject(new Error("usage_probe_aborted"));
+      return;
+    }
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
     timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
-      cleanup();
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Child may have already exited.
-      }
-      reject(new Error(`usage_probe_timeout:${timeoutMs}ms`));
+      killChildGroup(child, "SIGKILL");
+      settleReject(new Error(`usage_probe_timeout:${timeoutMs}ms`));
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutBuffer += chunk.toString("utf8");
+      // nit 1: stdout buffer limit
+      if (stdoutBuffer.length > MAX_USAGE_PROBE_STDOUT_BYTES) {
+        killChildGroup(child, "SIGKILL");
+        settleReject(new Error("usage_probe_stdout_overflow"));
+      }
     });
 
     child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(err);
+      settleReject(err);
     });
 
     child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
       if (code === 0) {
-        resolve(stdoutBuffer);
+        settleResolve(stdoutBuffer);
       } else {
-        reject(new Error(`usage_probe_exit_${code ?? "signal"}`));
+        settleReject(new Error(`usage_probe_exit_${code ?? "signal"}`));
       }
     });
   });

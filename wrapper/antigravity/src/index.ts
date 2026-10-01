@@ -46,15 +46,19 @@ export type { AgyQuotaExhaustion } from "./adapter.js";
 export {
   DEFAULT_USAGE_PROBE_TIMEOUT_MS,
   MAX_USAGE_PROBE_RETRIES,
+  MAX_USAGE_PROBE_STDOUT_BYTES,
   USAGE_PROBE_INTERVAL_MS,
+  killChildGroup,
   modelToBucketPrefix,
   parseAgyUsageOutput,
   runAgyUsageProbe,
 } from "./usage_probe.js";
 export type {
   AgyUsageProbeSpawn,
+  AgyUsageProbeSpawnOptions,
   AgyUsageRateLimits,
   AgyUsageRateLimitSnapshot,
   AgyUsageWindow,
+  RunAgyUsageProbeOptions,
 } from "./usage_probe.js";
 
