@@ -97,3 +97,7 @@ authority protocol ([plan](../plans/issue-429-delivery-authority-protocol.md)).
 Claude Agent SDK 0.3.284 model-catalog rollout.
 
 - [2026-09-29-agent-sdk-0.3.284.md](claude/issue-427/2026-09-29-agent-sdk-0.3.284.md) — catalog, model-report, request-header, AGENTS-only input, and scripted state-projection observations.
+
+## issue-464/
+
+- [codex-home-isolation-nonlive-2026-10-01.md](issue-464/codex-home-isolation-nonlive-2026-10-01.md) — child-process audit, non-live package gates, and guard mutations; final-pin native resume gate pending.
