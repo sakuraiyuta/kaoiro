@@ -16,7 +16,7 @@ behavior or production authorization. Native migration results remain pending.
 
 The existing updater builds/installs before stopping the runner, then switches
 and starts without backing up Codex state. See
-`runner/deploy/kaoiro-runner-update.sh:293-317`. Its physical-path resolution
+`runner/deploy/kaoiro-runner-update.sh:302-339`. Its physical-path resolution
 pins the executing deploy tools across a `current` symlink change. Detached
 updates escape the runner's cgroup; removing that separation would kill the
 updater when it stops its parent runner.
@@ -64,9 +64,94 @@ the backup's recorded source release rather than whichever release is now
 The detailed flag names can change only at the design-review boundary.
 
 Affected tests: `runner/test/releaseUpdate.test.ts`, helper tests and release
-packaging checks. Documentation: runner update/rollback, runner artifact
+packaging checks. Release protection also changes
+`kaoiro-runner-install.sh`, `kaoiro-runner-switch.sh` and the shared deploy
+helpers. Extend `scripts/build-release-manifest.mjs` and
+`runner/deploy/verify-release.mjs` as specified below. Documentation includes
+`docs/operations/production.md`, runner update/rollback, runner artifact
 reference, the Codex-home distinction, and a dated issue-468 migration record.
 No server protocol, model policy or phase-3 delivery implementation changes.
+
+## Binding the requested home to the service
+
+On Linux, require the installed unit's actual ExecStart to be the supported
+release launch shim, with no unrecognized wrapper or ExecStartPre/Post that
+can change home selection. Before stopping a running service, get its MainPID
+and start-time identity, inspect `/proc/<pid>/environ` in memory and retain
+only `CODEX_HOME`; never print or log the environment or other variables.
+Recheck MainPID/start time after reading to reject a restart or PID reuse.
+Canonical path and device/inode must match the explicit `--codex-home`.
+An unset/empty value means the launch user's effective HOME plus `.codex`,
+not the updater's HOME. If that HOME cannot be established from the supported
+unit/environment configuration, refuse rather than guess.
+
+Also resolve what the *next* launch will use. Parse the installed unit's
+literal environment sources and the launch shim's config-directory rules,
+including `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV`, XDG configuration and HOME.
+Resolve the actual runner.env path; do not assume the default location. Use a
+non-executing, restricted assignment parser for runner.env: blank/comment
+lines and simple optional-export assignments with literal or quoted values;
+only explicitly supported HOME/XDG variable expansion for path resolution.
+Reject command substitutions, shell commands, conditional logic, ambiguous
+expansion and unsupported unit environment constructs. Discard unrelated
+values without logging them. This may reject an otherwise shell-valid config;
+normalizing it is an operator decision, not automatic execution by the helper.
+
+Require requested home, running effective home and the next-launch home to
+agree before stop. Record the selected unit/config identities and their private
+content hashes in transaction metadata; recheck immediately before switch and
+start so a runner.env change cannot select an unbacked home. The deployment
+precondition forbids changing unit configuration during maintenance. These
+checks establish a supported static configuration, not all possible shell
+semantics. A differently configured target release's launch shim is unsupported
+until its selection behavior is reviewed.
+
+Restore uses the same binding. If the runner is still running, require the
+same live check before stop. If already inactive after a failed update, do not
+start it just to inspect its environment: require the original transaction's
+recorded live binding and matching unchanged installed unit/config sources,
+plus matching current static resolution and snapshot binding. Missing/stale
+binding is a refusal requiring operator repair. The restore must not infer
+its target merely from an arbitrary backup's supplied home path.
+
+## Credential inventory and unclassified entries
+
+The source inventory below was read for both tags `rust-v0.156.1` and
+`rust-v0.159.3`, not inferred from names in a production home. Sources are
+under `codex-rs/` in [0.156.1][old-src] and [0.159.3][new-src].
+
+| Current-only path relative to CODEX_HOME | Source in both tags |
+| --- | --- |
+| `auth.json` | `login/src/auth/storage.rs:155,205-224`; direct file writer, no separate file lock/temp in that writer |
+| `.credentials.json` | `rmcp-client/src/oauth.rs`, `FALLBACK_FILENAME` at old line 815 / new line 819; fallback writer uses the same file |
+| `secrets/` (entire directory) | `secrets/src/local.rs:40-44`: `local.age`, `codex_auth.age`, `mcp_oauth.age`, `gateway_oauth.age`; old lines 299-327 / new 317-345 create `.<filename>.tmp-<pid>-<nonce>` beside them |
+| `secrets/gateway_oauth.lock` (covered by `secrets/`) | `login/src/gateway_auth_storage.rs:20-24` |
+| `mcp-oauth-locks/` (entire directory) | `rmcp-client/src/oauth/store_lock.rs:19,34-35,207` and `oauth/refresh_lock.rs:21,52-53`: store locks and hashed per-server refresh locks |
+
+[old-src]: https://github.com/openai/codex/tree/rust-v0.156.1/codex-rs
+[new-src]: https://github.com/openai/codex/tree/rust-v0.159.3/codex-rs
+
+Exclude these paths from snapshot payload and content hashes. At restore,
+move the current paths as whole entries from the stopped current home; do not
+read, duplicate, downgrade or selectively merge their content. Preserve the
+lock directories with them; no live lock may be held at that point. External
+keyring material is untouched. Credential-path symlinks, hard-linked credential
+files or unsupported platform credential layouts are refusals. The initial
+implementation scope is Linux; no Windows/macOS credential coverage is claimed.
+
+This is not a promise that arbitrary home content is free of secrets. User
+configuration, plugins, rollouts and logs may contain sensitive values, so
+all snapshots remain private. Before stop, construct an entry classification
+from a checked-in list derived from these two tags and native synthetic-home
+observations: current-only credentials, backed-up state/configuration, and
+explicitly excluded disposable content. Known session/DB subtrees include
+all their regular descendants/sidecars. Unknown top-level entries, unknown
+credential-like sidecars and unclassified extension paths cause refusal;
+there is no copy-all default or blanket allow-unknown flag. A new path requires
+a reviewed classification before retrying. Inventory metadata must not open
+credential contents. The director reports that production currently lacks
+`.credentials.json`; this evaluator has not inspected production, and absence
+is not used to weaken the rule.
 
 ## Snapshot contract
 
@@ -77,27 +162,77 @@ outside the home and release trees. Reject overlapping paths, special files
 and unusable permissions. Recheck source identity at the stopped boundary.
 A snapshot directory is mode 0700 and its manifest is mode 0600.
 
-Copy the stopped home as a tree, preserving regular files, directories, modes
-and symlinks without dereferencing symlinks. Exclude top-level `auth.json`
-from the snapshot and from the content manifest. Do not open it to hash or
-inspect credentials. Configuration may itself be sensitive: all snapshot
-contents stay private and no content is logged or published. Preserve all
-other state together, including databases and sidecars, sessions, history and
-configuration; do not guess that `state_5.sqlite` is the complete state.
-External symlink targets are not backed up and are recorded as such. A DB or
-session-storage path that resolves outside this tree makes this workflow
-unsupported; fail before activation rather than silently take a partial state.
+Copy the classified stopped-home state as a tree, preserving regular files,
+directories, modes and symlinks without dereferencing symlinks. Apply the
+credential exclusions above before opening or hashing content. Preserve the
+classified databases and sidecars, sessions, history and configuration as one
+snapshot; do not guess that `state_5.sqlite` is the complete state. External
+symlink targets are not backed up and are recorded as such. A DB or session
+storage path resolving outside the tree makes this workflow unsupported.
+
+Before stop, count classified files and logical bytes and query available
+space/inodes on the snapshot and restore-staging filesystems. Require the
+copy's estimated space plus a 20% reserve (at least 1 GiB) and one inode per
+entry. A sparse file is charged its logical size unless sparse copying is
+explicitly supported and measured. Record estimated downtime from a local
+scratch copy-plus-hash throughput sample and file count; it is an estimate,
+not a guarantee. Insufficient space rejects before stop. Recheck capacity
+and source inventory after stop; late exhaustion still follows fail-closed
+backup failure. Restore capacity includes a full staging copy while retaining
+the failed current tree and existing backup.
 
 The manifest records format version, source home identity, source release and
 its native version/hash, target release/version, timestamp, omitted credential
-path, and sorted relative entries with type, mode, content hash or symlink
+paths, and sorted relative entries with type, mode, content hash or symlink
 target. It binds only the local snapshot; do not publish private paths/hashes.
 Verify the copied entries and entry set against the stopped source and then
 publish the complete directory by rename from a unique staging sibling. A
 partial directory is never an accepted backup. Disk-full/copy/hash/rename or
 source-change failure makes the operation nonzero. Keep the pre-update state
-and source release until the operator retires this rollback point; update
-pruning must protect a source release referenced by the active backup record.
+and both required releases until the operator retires this rollback point,
+using the persistent record below.
+
+## Persistent records, release protection and cleanup
+
+Keep private records under `$root/codex-state/`: `backups/<uuid>.json` for
+retained backup references and `transactions/<uuid>.json` for update/restore
+progress. Directories are 0700, records 0600; write temporary siblings and
+rename atomically. Record schema version, UUID, canonical home, snapshot path
+and manifest hash, source/target/tool release IDs, config binding, phase and
+owned staging/quarantine paths. Store no credential contents. Phases include
+prepared, stopped, snapshot-verified, switch-intent, switched, start-attempted,
+completed, restore-intent and restored. Persist intent before mutation;
+recovery reconciles actual links/directories instead of trusting the phase
+alone. A record identifies rollback state; it is not proof of model success.
+
+Publish the retained backup reference before forward switch. Protect its
+source release **and** the release containing the restore tools. Under the
+existing links lock, both updater prune and install's release-replacement
+branch must read all retained records; malformed/unreadable records refuse
+those destructive operations. Current/previous protection remains. This
+covers the two release-deletion paths found in the deploy scripts; manual
+operator deletion is outside this protection and prohibited by the runbook.
+Keep all retained references, not just the newest. Retirement is an explicit
+operator procedure under update/links locking; no automatic backup pruning.
+
+New switch tooling rejects generic `--rollback` while a retained record marks
+unrestored migrated state. The state-aware updater may switch to the specific
+recorded source only after the verified restoration phase and home binding,
+passing a transaction reference checked against the held update lock and
+recorded target. No environment-only bypass. Unrelated no-backup behavior
+remains unchanged where no active migration record exists. A later update
+while such a record exists must use the state-aware path, not silently reset
+its protection. Legacy old scripts cannot acquire this new guard retroactively;
+the runbook explicitly forbids invoking them for pin rollback.
+
+Own snapshot staging names by transaction, e.g. `.staging.codex-<uuid>`,
+recorded before creation. Under the update lock, cleanup may remove only
+unpublished snapshot staging whose recorded writer is gone and which contains
+no moved credentials. Use the existing stale-staging ownership pattern;
+never glob-delete external directories. Retain restore staging and quarantine
+after any credential/state move, including SIGKILL, for explicit recovery.
+Failure traps release locks but never delete the sole current credential,
+committed backup or partially restored state and never start a service.
 
 ## Update ordering and failure behavior
 
@@ -109,20 +244,40 @@ pruning must protect a source release referenced by the active backup record.
    claim from a stale list or an injected fixture. The worker does not add a
    new server-drain protocol in this change.
 3. Stop the runner through the service manager. Require the configured
-   control-group stop behavior, service inactive, MainPID zero and no remaining
-   service descendants before treating its writers as stopped. The dedicated
-   home must not be used by an external CLI; if another holder of state files
-   is detected or writer ownership cannot be established, stop here. Do not
-   kill unrelated processes. The maintenance interval remains in effect.
-4. Create and verify the snapshot. Backup failure leaves current unchanged,
+   control-group stop behavior from the installed unit's effective
+   `systemctl --user show -p KillMode`, not the repository template. Require
+   inactive, MainPID zero and no remaining service descendants. Scan same-UID
+   `/proc/*/fd` and `/proc/*/cwd` for paths/inodes inside the home, including
+   deleted-but-open entries; skip only the scanner's own known handles. Do
+   not print unrelated paths or environments. A still-live process whose
+   ownership/links cannot be read is a refusal; a disappearing PID can be
+   discarded only after checking its start identity. Another holder means
+   stop and report, not kill it. This initial workflow requires a private
+   same-user home on Linux and no external spawning during maintenance.
+4. Create and verify the snapshot with an explicit
+   `if ! helper ...; then ...; fi` failure branch, not merely `set -e`.
+   Backup failure leaves current unchanged,
    exits nonzero, and never switches or starts the candidate. Leave the runner
    stopped with an actionable failure, preserving original state; an operator
    may restart the unchanged old release after resolving the failure.
-5. Switch only after snapshot success, then start and run the existing release
+   This uniform fail-stopped policy is intentional: backup failures include
+   loss of home binding, concurrent writers and source changes; classifying
+   an arbitrary failure as harmless disk exhaustion would weaken the gate.
+   By contrast, the existing switch-failure restart follows a completed,
+   verified snapshot and an atomic switch refusal with unchanged state.
+5. Immediately before switch, repeat inactive/MainPID/cgroup checks, the
+   external-holder scan, home/config binding and stopped-source verification.
+   Any new writer or changed source refuses switch. Recheck before start;
+   an unexpected external service start is not mistaken for candidate startup.
+   Switch only after these checks, then start and run the existing release
    identity checks. Preserve the backup reference in success/failure output.
    A switch failure can restart the unchanged old release as today. A failure
    after new startup must not automatically start old code on migrated state;
-   direct the operator to the state-aware rollback command.
+   direct the operator to the state-aware rollback command. Replace the
+   generic commands currently printed at update.sh:333-337 whenever a Codex
+   backup record applies. Update `docs/operations/production.md`'s runner
+   rollback example and the dedicated rollback runbook to forbid code-only
+   `switch.sh --rollback` after a pin migration.
 6. Release maintenance only after actual Codex start/history checks, not merely
    `runner --version`. Record gate 5 separately from rollout identity.
 
@@ -136,16 +291,18 @@ manual recovery first inspects current and process state instead of guessing.
 
 The old release must still exist and pass artifact verification. Verify the
 backup and requested home/release binding before stopping anything. Restore
-staging contains the verified snapshot without auth.json. The same-user
-operator-controlled backup is trusted input only after its manifest checks;
+staging contains the verified snapshot without any current-only credential
+entry. The same-user operator-controlled backup is trusted input only after
+its manifest checks;
 reject traversal and unexpected entry types rather than extracting an archive.
 
 Under the update lock and maintained no-dispatch interval, stop writers as in
 update. Retain the current home as a named failed-state sibling. Move its
-current auth.json, if present, into the prepared restored home without reading
-or duplicating its content. Do not restore an old refresh token from the
-snapshot. External keyring credentials are untouched. An unsupported credential
-layout or failed credential move stops recovery; it never falls back to a
+current credential entries from the inventory, if present, into the prepared
+restored home without reading or duplicating their content. Do not restore
+old tokens from the snapshot. External keyring credentials are untouched. An
+unsupported credential layout or failed credential move stops recovery; it
+never falls back to a
 historical token. A fresh operator login may be necessary if authentication
 cannot be retained across the binary change.
 
@@ -160,8 +317,16 @@ wrong home/release identity must fail before live-state replacement.
 
 Rollback restores the pre-update point. New threads and turns after the backup
 remain in the quarantined new state; lossless merging into the old schema is
-out of scope. Even if the old binary can read migrated scratch state, keep
-this backup-based rollback path as the documented safe baseline.
+out of scope. Server-side references to post-backup thread IDs are not deleted
+or silently redirected. Expected behavior is the runner's existing T3 resume
+existence check rejecting them, with a visible error and no substitute thread;
+this is an expectation to measure, not established evidence. The operator
+starts a new session explicitly. Gate 6 must submit such a retained server
+reference through the real runner resume path after restore, confirm refusal
+and zero wrapper spawn for the missing thread, and also confirm pre-backup
+thread resume plus a separately requested new session work. Even if the old
+binary can read migrated scratch state, keep this backup-based rollback path
+as the documented safe baseline.
 
 ## First deployment and verification
 
@@ -171,6 +336,19 @@ and invoke the new updater by that release's fixed physical path with
 `--detach`. Do not invoke an old `current` updater with unknown flags or update
 the live release in place. Preserve a verified copy/path of the reviewed tools
 for recovery; do not resolve rollback tooling through a moving/broken current.
+
+The existing release manifest covers first-party dist and selected Codex
+runtime files, not deploy tools. Extend the builder to enumerate all regular
+files under `deploy/` and include their hashes (including shell scripts,
+verifier and state helper). Extend the verifier with explicit required deploy
+entry points and traversal/containment checks, so removing a tool and its
+manifest entry together fails. Add a strict `--require-deploy-manifest` mode
+used for candidate/tool verification in this workflow. Legacy old releases
+remain verifiable by their recorded legacy identity/manifest for restoration;
+they must not be accepted as backup-capable tooling. Do not select strictness
+solely from a marker inside the potentially incomplete candidate tree.
+The manifest's trust limit remains accidental corruption, not malicious
+rewriting of the entire tree and verifier.
 
 Required evidence before implementation is called complete:
 
@@ -182,12 +360,19 @@ Required evidence before implementation is called complete:
 - Every added activation/restore guard gets a mutation control: remove only
   that guard or disconnect its wiring, see its corresponding test fail, then
   restore and rerun. Backup failure must produce a nonzero worker invocation,
-  zero new-release starts and no symlink switch. Restore failure must leave
+  zero new-release starts and no symlink switch. Include wrong but valid
+  requested homes, changed runner.env, unreadable/live external holders,
+  restart immediately before switch, insufficient space, unclassified paths
+  and all credential exclusions. Restore failure must leave
   the service stopped with no old-binary start on an unchecked state.
 - Exercise a built artifact through its actual installed symlink/physical
   deploy path with the real helper, no replacement backup implementation.
   The same path's missing/corrupt-backup control must fail and prevent the
-  next mutation. Release-manifest checks must cover the shipped helper.
+  next mutation. Release-manifest checks must cover the shipped helper and
+  pre-existing deploy siblings. Independently remove an existing deploy
+  script and the new helper (also remove each manifest entry); both must fail.
+  Disconnect the coverage check and require those self-tests to fail, while
+  a prose-only documentation change remains accepted.
 - Rehearse the service lifecycle in owned disposable user-systemd units, with
   owned fake runner/child state writers and then the native scratch state from
   gate 6. Verify the detached worker survives its caller's stop and no writer
