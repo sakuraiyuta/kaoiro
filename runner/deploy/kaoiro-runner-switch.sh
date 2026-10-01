@@ -50,6 +50,7 @@ id=
 root=
 rollback=no
 allow_dirty=no
+codex_transaction=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +58,11 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || kaoiro_die "--install-dir needs a value" 64
       kaoiro_reject_option_like --install-dir "$2"
       root=$2
+      shift 2
+      ;;
+    --codex-transaction)
+      [ $# -ge 2 ] || kaoiro_die "--codex-transaction needs a value" 64
+      codex_transaction=$2
       shift 2
       ;;
     --rollback)
@@ -148,6 +154,9 @@ switch_to() {
     _old=$(readlink "$root/current")
   fi
 
+  kaoiro_codex_state guard "$root" "$_id" "$codex_transaction" ||
+    kaoiro_die "Codex state activation refused" 78
+
   if [ "$_old" = "releases/$_id" ]; then
     printf '%s: current already points at %s\n' "$prog" "$_id" >&2
     printf '%s\n' "$_id"
@@ -195,6 +204,9 @@ if [ "$rollback" = yes ]; then
   if [ -L "$root/current" ]; then
     cur=$(readlink "$root/current")
   fi
+
+  kaoiro_codex_state guard "$root" "$prev_id" "" ||
+    kaoiro_die "Codex state rollback refused; use the state-aware updater" 78
 
   # The rollback itself goes first. A run that dies right after it leaves
   # `current` rolled back — the outcome that was asked for — with `previous`

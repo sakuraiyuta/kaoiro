@@ -243,18 +243,21 @@ node server/deploy/kaoiro-server-deploy.mjs rollback \
   --transaction <transaction-id> --confirm-restore
 ```
 
-Runner side (reverts `current` to whatever was activated before it, no
-transaction id needed). Set `install_root` for your OS (if
-`KAOIRO_RUNNER_INSTALL_DIR` is set, it takes precedence):
+Runner rollback across a Codex native pin change must restore the recorded
+state snapshot before starting the old binary. Use the fixed physical path of
+the verified backup-capable tool release; never invoke an older script through
+`previous`. Set these paths from the private update transaction record:
 
 ```sh
-# Linux:
-install_root="${KAOIRO_RUNNER_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro}"
-# macOS:
-# install_root="${KAOIRO_RUNNER_INSTALL_DIR:-$HOME/Library/Application Support/kaoiro}"
-
-"$install_root/previous/deploy/kaoiro-runner-switch.sh" --rollback
+"$tool_release/deploy/kaoiro-runner-update.sh" \
+  --install-dir "$install_root" --service kaoiro-runner \
+  --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
 ```
+
+This initial state-aware workflow requires Linux/systemd. New generic switch
+scripts also compare the actual native payloads on macOS; they refuse a pin
+change rather than skipping the check. See [runner update and rollback](runner-update-and-rollback.md#codex-state-backup)
+for maintenance, acceptance and recovery requirements.
 
 Stuck? → [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
 

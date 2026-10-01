@@ -13,6 +13,9 @@
 #                        pruned, whatever this is set to
 #   --allow-dirty        permit activating a `-dirty` / `unknown` release.
 #                        Development only — see kaoiro-runner-switch.sh
+#   --codex-home <path>  explicit private Codex home (Linux/systemd)
+#   --codex-backup-dir <path> new snapshot directory, paired with --codex-home
+#   --restore-codex-backup <path> restore a retained snapshot instead of updating
 #   --detach             queue this same command as a transient systemd user
 #                        unit and return immediately (see below)
 #
@@ -80,9 +83,24 @@ build_target=
 keep=3
 allow_dirty=no
 detach=no
+codex_home=
+codex_backup=
+codex_restore=
+codex_transaction=
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --codex-home|--codex-backup-dir|--restore-codex-backup)
+      [ $# -ge 2 ] || kaoiro_die "$1 needs a value" 64
+      kaoiro_reject_option_like "$1" "$2"
+      case "$2" in /*) ;; *) kaoiro_die "$1 requires an absolute path" 64 ;; esac
+      case "$1" in
+        --codex-home) codex_home=$2 ;;
+        --codex-backup-dir) codex_backup=$2 ;;
+        --restore-codex-backup) codex_restore=$2 ;;
+      esac
+      shift 2
+      ;;
     --tarball)
       [ $# -ge 2 ] || kaoiro_die "--tarball needs a value" 64
       kaoiro_reject_option_like --tarball "$2"
@@ -136,12 +154,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$tarball" ] || [ -n "$repo" ] ||
+[ -n "$tarball" ] || [ -n "$repo" ] || [ -n "$codex_restore" ] ||
   kaoiro_die "usage: $prog --tarball <path> | --from-repo <path>" 64
 [ -z "$tarball" ] || [ -z "$repo" ] ||
   kaoiro_die "--tarball and --from-repo are mutually exclusive" 64
 [ -z "$build_target" ] || [ -n "$repo" ] ||
   kaoiro_die "--target only applies with --from-repo" 64
+if [ -n "$codex_restore" ]; then
+  [ -n "$codex_home" ] && [ -z "$codex_backup$tarball$repo$build_target" ] ||
+    kaoiro_die "restore requires --codex-home and excludes forward inputs" 64
+elif [ -n "$codex_home$codex_backup" ]; then
+  [ -n "$codex_home" ] && [ -n "$codex_backup" ] ||
+    kaoiro_die "--codex-home and --codex-backup-dir must be paired" 64
+fi
 # The glob, not the grep, is what rejects a multi-line value here — same
 # line-anchoring trap as kaoiro_valid_release_id; see its comment.
 case $keep in
@@ -152,6 +177,7 @@ esac
 [ -n "$root" ] || root=$(kaoiro_install_root)
 
 systemctl_bin="${KAOIRO_SYSTEMCTL:-systemctl}"
+UPDATE_UNIT="${service%.service}-update"
 
 # ---------------------------------------------------------------- detach ---
 
@@ -165,6 +191,9 @@ if [ "$detach" = yes ]; then
   # argument list is where this kind of code goes wrong.
   set -- --install-dir "$root" --service "$service" --keep "$keep"
   [ "$allow_dirty" = no ] || set -- "$@" --allow-dirty
+  [ -z "$codex_home" ] || set -- "$@" --codex-home "$codex_home"
+  [ -z "$codex_backup" ] || set -- "$@" --codex-backup-dir "$codex_backup"
+  [ -z "$codex_restore" ] || set -- "$@" --restore-codex-backup "$codex_restore"
   [ -z "$tarball" ] || set -- "$@" --tarball "$tarball"
   if [ -n "$repo" ]; then
     set -- "$@" --from-repo "$repo"
@@ -234,6 +263,7 @@ build_dir=
 cleanup() {
   [ -z "$build_dir" ] || rm -rf "$build_dir"
   [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
+  rm -f "$lock/codex-owner.json"
   kaoiro_lock_release "$lock"
 }
 trap cleanup EXIT INT TERM
@@ -256,6 +286,7 @@ esac
 # --- prepare: nothing below the switch is touched, so a failure here is a
 # --- no-op for the running runner.
 
+if [ -z "$codex_restore" ]; then
 if [ -n "$repo" ]; then
   builder="$repo/scripts/build-runner-tarball.sh"
   [ -x "$builder" ] || kaoiro_die "not a kaoiro checkout: $builder is missing or not executable" 78
@@ -299,13 +330,44 @@ if [ "$allow_dirty" = no ] && ! kaoiro_clean_release_id "$id"; then
   kaoiro_die "refusing to activate $id: only a clean 40-hex revision may become current — build from a clean tree, or pass --allow-dirty for a development host" 78
 fi
 
+fi
+
+if [ -n "$codex_home" ]; then
+  tool_id=$(cat "$deploy_dir/../VERSION")
+  if [ -n "$codex_restore" ]; then
+    codex_transaction=$(kaoiro_codex_state prepare-restore "$root" "$codex_restore" "$codex_home" "$service" "$tool_id" "$$") ||
+      kaoiro_die "Codex restore preflight refused before stop" 78
+    id=$(kaoiro_codex_state target "$root" "$codex_transaction")
+  else
+    codex_transaction=$(kaoiro_codex_state prepare "$root" "$id" "$codex_home" "$codex_backup" "$service" "$tool_id" "$$") ||
+      kaoiro_die "Codex backup preflight refused before stop" 78
+  fi
+else
+  kaoiro_codex_state preflight "$root" "$id" "" ||
+    kaoiro_die "Codex pin transition requires an explicit state backup" 78
+fi
+install_args=""
+[ "$allow_dirty" = no ] || install_args="--allow-dirty"
+
 # --- commit: from here on the service is down.
 
 printf '%s: stopping %s\n' "$prog" "$service" >&2
 "$systemctl_bin" --user stop "$service"
 
+if [ -n "$codex_transaction" ]; then
+  state_action=snapshot
+  [ -z "$codex_restore" ] || state_action=restore
+  if ! kaoiro_codex_state "$state_action" "$root" "$codex_transaction"; then
+    kaoiro_codex_state inspect "$root" "$codex_transaction" >&2 || true
+    kaoiro_die "Codex state preparation failed; runner remains stopped; transaction $codex_transaction" 78
+  fi
+fi
+
 # shellcheck disable=SC2086 # same reasoning as the install call above.
-if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" $install_args >/dev/null; then
+if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" --codex-transaction "$codex_transaction" $install_args >/dev/null; then
+  if [ -n "$codex_transaction" ]; then
+    kaoiro_die "State-aware switch refused; runner remains stopped; recover transaction $codex_transaction" 78
+  fi
   # The switch is atomic, so a failure means `current` never moved. Undoing
   # our own stop restores the exact state we started from.
   printf '%s: switch failed; restarting the previous release\n' "$prog" >&2
@@ -313,7 +375,13 @@ if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" $install_
   kaoiro_die "switch to $id failed; $service was restarted on the release it was already using" 70
 fi
 
-printf '%s: starting %s\n' "$prog" "$service" >&2
+if [ -n "$codex_transaction" ]; then
+  if ! kaoiro_codex_state before-start "$root" "$codex_transaction"; then
+    kaoiro_die "Codex pre-start check failed; runner remains stopped; transaction $codex_transaction" 78
+  fi
+fi
+
+printf '%s: starting %s\n'  "$prog" "$service" >&2
 start_failed=no
 "$systemctl_bin" --user start "$service" || start_failed=yes
 
@@ -330,12 +398,25 @@ if [ "$start_failed" = yes ] ||
   printf '%s: update did NOT reach a good state\n' "$prog" >&2
   printf '%s:   requested release: %s\n' "$prog" "$id" >&2
   printf '%s:   current reports:   %s\n' "$prog" "${running:-<unreadable>}" >&2
-  printf '%s: roll back with:\n' "$prog" >&2
+  if [ -n "$codex_transaction" ]; then
+    printf '%s: runner needs state-aware recovery; transaction %s\n' "$prog" "$codex_transaction" >&2
+    printf '  %s --install-dir "%s" --service "%s" --restore-codex-backup "%s" --codex-home "%s" --detach\n' \
+      "$self" "$root" "$service" "${codex_restore:-$codex_backup}" "$codex_home" >&2
+    exit 70
+  fi
+  printf '%s: roll back with:\n'  "$prog" >&2
   printf '  %s --user stop %s\n' "$systemctl_bin" "$service" >&2
   printf '  %s --rollback --install-dir %s\n' \
     "$deploy_dir/kaoiro-runner-switch.sh" "$root" >&2
   printf '  %s --user start %s\n' "$systemctl_bin" "$service" >&2
   exit 70
+fi
+
+if [ -n "$codex_transaction" ]; then
+  kaoiro_codex_state started "$root" "$codex_transaction" ||
+    kaoiro_die "Cannot record startup; preserve transaction $codex_transaction" 78
+  printf '%s: awaiting actual Codex start/history acceptance: transaction %s\n' "$prog" "$codex_transaction" >&2
+  [ -z "$codex_restore" ] || exit 0
 fi
 
 # --- prune: only now, and never what current / previous point at. The runner
@@ -357,7 +438,12 @@ fi
 kaoiro_lock_acquire "$links_lock"
 links_held=yes
 
+codex_protected=$(kaoiro_codex_state protected "$root") ||
+  kaoiro_die "Cannot determine retained Codex releases" 78
 protected=
+for protected_id in $codex_protected; do
+  protected="$protected releases/$protected_id"
+done
 for link in current previous; do
   if [ -L "$root/$link" ]; then
     protected="$protected $(readlink "$root/$link")"

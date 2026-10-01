@@ -201,6 +201,11 @@ if [ -e "$target" ]; then
   # the lock, so it is released again immediately after.
   kaoiro_lock_acquire "$links_lock"
   links_held=yes
+  codex_protected=$(kaoiro_codex_state protected "$root") ||
+    kaoiro_die "Cannot determine retained Codex releases" 78
+  for protected_id in $codex_protected; do
+    [ "$protected_id" != "$id" ] || kaoiro_die "release is protected by a Codex backup" 78
+  done
   for link in current previous; do
     if [ -L "$root/$link" ] && [ "$(readlink "$root/$link")" = "releases/$id" ]; then
       kaoiro_die "refusing to replace release $id: $link points at it" 78

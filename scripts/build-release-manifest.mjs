@@ -126,7 +126,7 @@ function codexRuntimeFiles(root) {
   ];
 }
 
-function collect(root, dir, files) {
+function collect(root, dir, files, all = false) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     // withFileTypes reports link-ness, not the target's type, so a symlinked
@@ -134,8 +134,8 @@ function collect(root, dir, files) {
     // arbitrary links would record paths outside the release it describes —
     // the same confusion between "in the tree" and "reachable from the tree"
     // that let an archive install itself as a link out of the install root.
-    if (entry.isDirectory()) collect(root, path, files);
-    else if (entry.isFile() && CODE_FILE_RE.test(entry.name)) {
+    if (entry.isDirectory()) collect(root, path, files, all);
+    else if (entry.isFile() && (all || CODE_FILE_RE.test(entry.name))) {
       const rel = relative(root, path).split(sep).join("/");
       files[rel] = createHash("sha256").update(readFileSync(path)).digest("hex");
     }
@@ -212,6 +212,7 @@ function main(argv) {
   for (const file of codexRuntimeFiles(root)) {
     files[file.rel] = createHash("sha256").update(readFileSync(file.real)).digest("hex");
   }
+  collect(root, join(root, "deploy"), files, true);
   const count = Object.keys(files).length;
   if (count === 0) {
     process.stderr.write("build-release-manifest: manifest would be empty\n");

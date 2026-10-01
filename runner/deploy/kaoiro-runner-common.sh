@@ -309,3 +309,8 @@ try {
 }
 ' "$1" "$2"
 }
+
+kaoiro_codex_state() {
+  "$(kaoiro_node)" --experimental-vm-modules --disable-warning=ExperimentalWarning \
+    "$deploy_dir/kaoiro-runner-codex-state.mjs" "$@"
+}

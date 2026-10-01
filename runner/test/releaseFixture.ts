@@ -27,18 +27,7 @@ import { createHash } from "node:crypto";
 
 const deploySrc = fileURLToPath(new URL("../deploy", import.meta.url));
 
-/** The scripts a release carries. kaoiro-runner-setup.sh and the service
- *  definitions are irrelevant to these tests and left out deliberately — a
- *  release that lacks them is still startable, so including them would blur
- *  what the artifact checks actually require. */
-const DEPLOY_SCRIPTS = [
-  "verify-release.mjs",
-  "kaoiro-runner-common.sh",
-  "kaoiro-runner-launch.sh",
-  "kaoiro-runner-install.sh",
-  "kaoiro-runner-switch.sh",
-  "kaoiro-runner-update.sh",
-];
+const DEPLOY_SCRIPTS = readdirSync(deploySrc).filter((name) => statSync(join(deploySrc, name)).isFile());
 
 /** Mimics ONLY the `--version` contract cli.ts implements (read the sibling
  *  build-info.json, print the canonical project identity, exit 0). The
@@ -312,7 +301,28 @@ export function writeReleaseTree(
       exports: { ".": { import: "./dist/index.js" } },
     }),
   );
-  put("node_modules/@openai/codex-sdk/dist/index.js", "// stub SDK\n");
+  put("node_modules/@openai/codex-sdk/dist/index.js", `
+import { fileURLToPath } from "node:url";
+export class Codex {
+  constructor() { this.exec = { executablePath: fileURLToPath(new URL("../../codex/vendor/fixture/bin/codex", import.meta.url)) }; }
+}
+`);
+  put("node_modules/@kaoiro/codex/dist/app_server_rpc.js", `
+import { fileURLToPath } from "node:url";
+export function resolveAppServerBinary() {
+  return fileURLToPath(new URL("../../../@openai/codex/vendor/fixture/bin/codex", import.meta.url));
+}
+`);
+  const triples: Record<string, string> = {
+    "linux:x64": "x86_64-unknown-linux-musl", "linux:arm64": "aarch64-unknown-linux-musl",
+    "darwin:x64": "x86_64-apple-darwin", "darwin:arm64": "aarch64-apple-darwin",
+  };
+  const triple = triples[`${process.platform}:${process.arch}`];
+  if (!triple) throw new Error("Unsupported fixture native platform");
+  const native = `node_modules/@openai/codex/vendor/${triple}/bin/codex`;
+  put(native, "#!/bin/sh\nexit 0\n");
+  chmodSync(join(tree, native), 0o755);
+  symlinkSync(triple, join(tree, "node_modules/@openai/codex/vendor/fixture"));
 
   // LAST, so a test can override a standard-tree file and not merely add one.
   for (const [rel, content] of Object.entries(options.extraFiles ?? {})) {

@@ -1,6 +1,6 @@
 ---
 title: Codex state backup around runner pin updates
-status: proposed
+status: accepted
 last_updated: 2026-10-01
 ---
 
@@ -9,8 +9,9 @@ last_updated: 2026-10-01
 Tracking: [issue 468](https://github.com/sakuraiyuta/kaoiro/issues/468).
 Baseline: `3f35d77fc0218c60a9d54f08de54d11fe21efcef`; isolated dependency
 candidate: `0aa961238e8411e9b8161a11ba26ae1d3d950ea9` (CLI/SDK 0.159.3).
-Writer: kogane. Director: hisui. This is a design for review, not implemented
-behavior or production authorization. Native migration results remain pending.
+Writer: kogane. Director: hisui. The director approved this design after
+round 4. Implementation and its review remain pending; approval is not
+production authorization. Native migration results remain pending.
 
 ## Problem and evidence
 
@@ -41,7 +42,8 @@ migration or downgrade mechanism.
 With the new tooling, a differing current/target Codex native hash always
 requires this state-aware operation. Same-pin deployments can omit it when
 no retained-reference rule requires a backup. Old unmodified update invocations
-do not automatically acquire either the comparison guard or a backup. Production rollout is separately authorized after gates 1–7.
+do not automatically acquire either the comparison guard or a backup.
+Production rollout is separately authorized after gates 1–7.
 
 ## Interface and affected files
 
@@ -214,6 +216,8 @@ and source inventory after stop; late exhaustion still follows fail-closed
 backup failure. Restore capacity includes a full staging copy while retaining
 the failed current tree and existing backup.
 
+The manifest also records each SQLite database migration table
+(`_sqlx_migrations`, version/success only) for rollback diagnosis.
 The manifest records format version, source home identity, source release and
 its native version/hash, target release/version, timestamp, omitted credential
 paths, and sorted relative entries with type, mode, content hash or symlink
@@ -271,6 +275,11 @@ changing links. New `switch.sh --rollback` compares previous against current.
 A differing hash requires a validated state-aware transaction: a verified
 snapshot for forward activation, or verified restored state for rollback.
 Missing/unverifiable current or target native artifacts refuse the operation.
+Resolve the binary through both shipped backend resolvers, including the SDK
+constructor. Require the same canonical executable and exactly one native
+candidate. Apply the comparison on macOS too; state-aware migration itself
+remains Linux-only.
+
 This is the primary pin-change guard; deletion of any backup record or barrier
 cannot turn a differing-pin activation into a permitted code-only switch.
 Same-hash equality permits only omission of the pin-change backup requirement,
@@ -279,7 +288,8 @@ not bypassing retained-reference, home-binding or other activation checks.
 Keep an auxiliary per-home migration barrier at
 `$root/codex-state/barriers/<sha256-canonical-home-path>.json`, mode 0600 in a
 0700 directory. It contains a schema version, canonical home and device/inode,
-installed unit identity, config binding, accepted release/native hash, completing
+installed unit identity, config binding, accepted release/native hash,
+completing
 transaction UUID and timestamp; no credentials. The state-aware updater is its
 only writer under update/links locking, using a temporary sibling and atomic
 rename. Create it at the **first completed forward or restore transaction**,
@@ -466,7 +476,9 @@ remain verifiable by their recorded legacy identity/manifest for restoration;
 they must not be accepted as backup-capable tooling. Do not select strictness
 solely from a marker inside the potentially incomplete candidate tree.
 The manifest's trust limit remains accidental corruption, not malicious
-rewriting of the entire tree and verifier.
+rewriting of the entire tree and verifier. Native hash comparison likewise
+cannot prevent an unmanaged binary replacement between verification and
+startup. Maintenance forbids concurrent release mutation.
 
 Required evidence before implementation is called complete:
 

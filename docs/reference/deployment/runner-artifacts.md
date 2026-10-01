@@ -111,3 +111,15 @@ whose contents are not fixed.
 
 - [Runner update and rollback](../../operations/runner-update-and-rollback.md).
 - [Multi-host deployment architecture](../../architecture/deployment.md).
+
+## Codex state-aware deployment tools
+
+The manifest builder includes every regular file under `deploy/`. Candidate
+and recovery-tool verification additionally uses `--require-deploy-manifest`
+with `--require-manifest --hash`; it independently requires the existing deploy
+entry points and Codex state modules. Legacy releases remain verifiable without
+this stricter mode for restoration, but cannot serve as backup-capable tools.
+Native payload comparison uses both actual backend resolvers, requires their
+canonical paths to agree, rejects ambiguous payloads, and hashes that executable.
+Native payloads remain outside the general runtime manifest. See the
+[Codex state backup runbook](../../operations/runner-update-and-rollback.md#codex-state-backup).

@@ -199,21 +199,107 @@ breaks a spawn that has not happened yet.
 
 ### 4.6.3 Rollback
 
-If a problem appears after switching, return to the previous release.
+A rollback across Codex native hashes restores a retained snapshot before
+starting the recorded source release. Never use an old `previous` script for
+this operation. Prepare a verified physical tool-release path before updating:
 
 ```sh
-install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
-systemctl --user stop kaoiro-runner
-"$install_root/previous/deploy/kaoiro-runner-switch.sh" --rollback
-systemctl --user start kaoiro-runner
+"$tool_release/deploy/kaoiro-runner-update.sh" \
+  --install-dir "$install_root" --service kaoiro-runner \
+  --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
 ```
 
-**Run the script from `previous`.** The `current` release is being rolled back
-because it may be broken, so its scripts are not trusted.
+Same-native, code-only switching remains possible with the new guarded switch
+when there are no retained state references or incomplete transactions. A
+state-aware failure leaves the service stopped for diagnosis. Never restart
+old code against potentially migrated state as an automatic failure action.
 
-If switching itself fails during an update, `kaoiro-runner-update.sh` restarts the
-service without moving `current` and exits non-zero. No rollback is needed; it is
-already running the old release.
+## Codex state backup
+
+This workflow requires Linux/systemd, a private same-user Codex home and an
+operator-controlled maintenance interval with no dispatch, process spawning,
+unit/environment reload, or release modification. Same-native comparison is
+also enforced on macOS, where state-aware migration is currently unsupported.
+The hash comparison does not prevent unmanaged replacement between checking
+and execution. The script rejects unsupported unit/shell configuration rather
+than executing it to discover the home.
+
+Before scheduling maintenance, obtain explicit operator approval to run the
+metadata-only classification preflight against the production home:
+
+```sh
+node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" classify "$codex_home"
+```
+
+Keep the output private. It contains paths, modes and sizes, never credential
+contents. Unknown entries require reviewed classification; do not delete or
+rename files merely to make the check pass. A running same-user process whose
+file descriptors cannot be inspected also prevents the stopped-state check.
+Resolve the inspection/maintenance environment before stopping production.
+
+Build/install the candidate without activation, verify its deploy manifest,
+and invoke its fixed physical updater path. An existing updater does not gain
+these guards automatically. Both arguments must be explicit absolute paths;
+the updater never takes its target from inherited `CODEX_HOME`:
+
+```sh
+"$tool_release/deploy/kaoiro-runner-update.sh" \
+  --install-dir "$install_root" --service kaoiro-runner \
+  --tarball "$archive" --codex-home "$codex_home" \
+  --codex-backup-dir "$new_snapshot_dir" --detach
+```
+
+Forward backup requires the source runner to be active for live home binding.
+A snapshot failure means a nonzero worker exit, no switch and no start. Inspect
+the journal and private `codex-state/transactions/<uuid>.json`. A post-start
+failure requires state-aware recovery. Directory replacement and code switching
+are separate operations: retain staging/quarantine trees and transaction
+records after interruption, especially if credentials have moved. Do not use a
+recursive scratch cleanup on these paths. Use `inspect <install-root> <uuid>`
+with the fixed state helper to read the recorded recovery paths.
+
+The snapshot excludes `auth.json`, `.credentials.json`, `secrets/` and
+`mcp-oauth-locks/`. Restore moves their current entries without reading or
+copying contents. External keyring entries stay in place. Restore uses the
+original canonical home path because secrets keyring account names derive
+from that path. Backups are private anyway: rollouts/configuration may contain
+sensitive information. New threads after the snapshot stay in quarantine;
+there is no lossless merge or silent replacement of missing resume targets.
+
+Successful runner startup leaves the transaction `awaiting-acceptance`.
+Perform actual Codex startup and pre-existing history checks. Record their
+observed result in a private mode-0600 JSON file with `schema: 1`, the transaction
+`uuid`, its `nativeHash`, and boolean `codexStart` / `history`. Then run:
+
+```sh
+node --experimental-vm-modules \
+  "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
+  accept "$install_root" "$transaction_uuid" "$acceptance_file"
+```
+
+Acceptance publishes the auxiliary migration barrier. This manual evidence
+record is an operator attestation, not a model turn performed by the helper.
+The helper independently checks current release/hash and live/static home
+binding. Subsequent updates require both backup arguments while any reference
+is retained. Normal restore takes the newest applicable reference; older
+selections require a separate operator-approved recovery plan describing the
+intervening state loss. No force flag skips lineage.
+
+Do not remove a barrier to fix it. `repair-barrier <install-root> <uuid>` uses
+only a completed accepted transaction matching current release and original
+home, preserving the damaged record for diagnosis. Otherwise use independently
+verified snapshot recovery; absence of either proof requires an explicit
+operator recovery plan. Home relocation is a separate reviewed operation.
+
+Retirement requires accepted gate-6 results, actual production startup/history
+checks, and explicit abandonment of rollback. Supply a private JSON record
+with `schema: 1`, `uuid`, and true `gate6`, `productionCodexStart`,
+`productionHistory`, `abandonRollback` to
+`retire <install-root> <uuid> <evidence-file>`. The helper acquires update/link
+locks, marks the reference retired before deleting its named snapshot, and
+leaves the migration barrier. Releases needed by other references stay
+protected from prune/replacement. Manual deletion of protected releases is
+prohibited.
 
 ## See Also
 

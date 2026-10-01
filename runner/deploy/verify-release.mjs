@@ -1203,6 +1203,21 @@ export function verifyRelease(root, opts = {}) {
     }
   }
 
+  if (opts.requireDeployManifest === true) {
+    const required = [
+      "kaoiro-runner-common.sh", "kaoiro-runner-launch.sh",
+      "kaoiro-runner-install.sh", "kaoiro-runner-switch.sh",
+      "kaoiro-runner-update.sh", "kaoiro-runner-bootstrap.sh",
+      "kaoiro-runner-setup.sh", "verify-release.mjs",
+      "kaoiro-runner-codex-state.mjs", "codex-native.mjs",
+      "codex-snapshot.mjs", "codex-service.mjs",
+    ];
+    for (const name of required) {
+      const real = containedRealPath(root, realRoot, `deploy/${name}`);
+      if (!listed.has(real)) fail(`MANIFEST.json omits required deploy/${name}`);
+    }
+  }
+
   for (const runtimeFile of codexRuntimeFiles(root, realRoot)) {
     if (!listed.has(runtimeFile)) {
       fail(
@@ -1243,6 +1258,7 @@ function main(argv) {
   const opts = {};
   for (const arg of argv) {
     if (arg === "--require-manifest") opts.requireManifest = true;
+    else if (arg === "--require-deploy-manifest") { opts.requireDeployManifest = true; opts.requireManifest = true; }
     else if (arg === "--hash") opts.hash = true;
     else if (arg.startsWith("-")) {
       process.stderr.write(`verify-release: unknown option: ${arg}\n`);
