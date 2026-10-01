@@ -1141,7 +1141,9 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   statusSnapshot(): Record<string, unknown> {
-    return this.statusExtSnapshot();
+    const out = this.statusExtSnapshot();
+    if (this.#sessionId !== null) out.session_id = this.#sessionId;
+    return out;
   }
 
   statusExtSnapshot(): Record<string, unknown> {
@@ -2182,7 +2184,6 @@ export class AntigravityHost implements EngineAdapter {
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
     if (this.#rateLimits.size > 0) ext.rate_limits = Object.fromEntries(this.#rateLimits);
     ext.cwd = this.#options.cwd;
-    if (this.#sessionId !== null) ext.session_id = this.#sessionId;
     return ext;
   }
 
