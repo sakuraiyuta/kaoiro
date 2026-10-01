@@ -216,3 +216,104 @@ is the report-based record of the attempts.
 
 - [Catalog contract](../../reference/engines/codex-model-catalog.md)
 - [Model-change procedures](../../operations/codex-model-settings.md)
+
+## Recorded live probe (2026-10-01)
+
+This section records the follow-up probe using the scratch home
+`/home/yuta/.local/share/kaoiro-scratch/codex-461`. The older report above
+remains the history of the earlier unrecorded timeouts. The follow-up used the
+Codex CLI 0.156.1 binary whose SHA-256 is
+`0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f`.
+Every model call below used that binary and the scratch home for both `HOME`
+and `CODEX_HOME`; the guarded launcher rejected mismatched homes and binaries.
+The probe harness unset `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`,
+and `OPENAI_ORG_ID`. No authentication file contents were read or recorded.
+Logs listed below contain sanitized startup/backend metadata and no credentials.
+
+### Observations
+
+Times are UTC. Rollout paths are relative to the scratch `CODEX_HOME`.
+The app-server backend kept one child process alive across its four turns; that
+process exited 0 after the sequence with 0 stderr bytes.
+
+| Backend / model | Observed result | Rollout |
+|---|---|---|
+| Direct CLI exec / `gpt-6-sol` | Invocation submitted at 02:39:16.844; first event `thread.started` at 02:39:17.841 and `turn.started` at 02:39:17.918. Process exit 0, no signal, no timeout; stderr was `Reading additional input from stdin...` (39 bytes). No `service_tier` field appeared in the JSON events or rollout. | `sessions/2026/10/01/rollout-2026-10-01T11-39-17-01a0f554-9b39-7600-bb8f-cf93df5314db.jsonl` |
+| `runCodexCli` exec / `gpt-6-sol` | Instruction sent at 02:59:45.723; first event `thread.started` at 02:59:46.969 and `turn.started` at 02:59:47.043. Child exit 0; stderr was `Reading prompt from stdin...` (29 bytes). No `service_tier` field appeared in backend events or rollout. | `sessions/2026/10/01/rollout-2026-10-01T11-59-46-01a0f567-5b19-77d3-a0d6-f3ef02e10afc.jsonl` |
+| `runCodexCli` exec / `gpt-6.1-sol` | The CLI emitted `thread.started` at 02:59:50.520 and `turn.started` at 02:59:50.541. The request then failed with HTTP 400: the model is not supported with a ChatGPT account. Child exit 1. `switch_error.rolled_back_to` was `gpt-6-sol`; the following turn used `gpt-6-sol` and completed with child exit 0. The unknown slug `gpt-9-nova` also returned HTTP 400, rolled back to `gpt-6-sol`, and the next turn remained on `gpt-6-sol`. No `service_tier` field appeared in backend events or rollout. | Same exec rollout as above |
+| `runCodexCli` app-server / `gpt-6-sol` | `turn/start` was accepted at 03:02:55.102; `turn/started` arrived at 03:02:55.122 and the turn completed at 03:02:57.149. The shared app-server child exited 0 after the four-turn sequence with stderr 0 bytes. No `service_tier` field appeared in backend events or rollout. | `sessions/2026/10/01/rollout-2026-10-01T12-02-54-01a0f56a-380d-7791-8b3f-dca6234192bd.jsonl` |
+| `runCodexCli` app-server / `gpt-6.1-sol` | `turn/start` was accepted at 03:02:57.841 and `turn/started` arrived at 03:02:57.861. The request then failed with HTTP 400: the model is not supported with a ChatGPT account. `switch_error.rolled_back_to` was `gpt-6-sol`. The following `gpt-6-sol` turn was accepted at 03:03:00.138, started at 03:03:00.142, and completed at 03:03:03.666. No `service_tier` field appeared in backend events or rollout. | Same app-server rollout as above |
+| `runCodexCli` app-server / unknown slug `gpt-9-nova` | `turn/start` was accepted at 03:02:58.836 and `turn/started` arrived at 03:02:58.840. It failed with HTTP 400, rolled back to `gpt-6-sol`, and the next turn remained on `gpt-6-sol`. No `service_tier` field appeared in backend events or rollout. | Same app-server rollout as above |
+
+The successful `gpt-6-sol` cells show that the earlier 120-second timeout did
+not reproduce in the later direct CLI call or `runCodexCli` exec call. This does
+not identify the cause of the earlier timeout. On this scratch ChatGPT-auth
+account, `gpt-6.1-sol` was rejected by the upstream request on both backends
+after the local turn had started; this observation does not establish that the
+model is unavailable to other accounts. The backend accepted the app-server
+`turn/start` request, but the model request itself failed. `service_tier` was
+absent from the observed events and rollouts for all measured model cells, so
+no tier comparison was possible. The live behavior remains account-dependent
+and the issue remains open pending a suitable entitlement or upstream change.
+
+The first exec harness variant changed child output streams to strings; on
+failed turns this triggered a `Buffer.concat` type error in the observer's
+error-collection path. The recorded raw backend events still contained the HTTP
+400 and rollback, but error detail from that observer path is not treated as
+independent evidence. The app-server run used a corrected observer that kept
+stream chunks as buffers. An earlier local-harness attempt did not send the
+required permission-sync event, timed out before launching a Codex model child,
+and is retained in `attempt0-no-permission-sync/`; it is not counted as a
+backend model result.
+
+Turn accounting for the authorized 12-attempt budget: 12/12 counted
+conservatively (two earlier 120-second attempts, one direct CLI call, one
+pre-backend harness send, four exec-harness attempts, and four app-server
+attempts). No authentication error occurred. No additional model call was made
+after the budget was exhausted.
+
+Boundary note: before these guarded probe runs, `codex login status` was
+accidentally invoked once with the inherited production `CODEX_HOME`; it did
+not invoke a model. The operator reported that a separate inspection found no
+state migration (the migration count remained 55), no change to the
+`auth.json` timestamp, and only temporary `tmp/arg0` entries. I did not inspect
+the contents of `auth.json`. All model calls recorded in this section were
+pinned to the scratch home.
+
+### Recorded artifact hashes
+
+SHA-256 values bind the redacted logs, their rollout records, and the pinned
+probe executables used above. All paths are under
+`/home/yuta/.local/share/kaoiro-scratch/codex-461/probe-20261001/` unless
+noted otherwise.
+
+| Artifact | SHA-256 |
+|---|---|
+| `direct-exec-gpt-6-sol.summary.log` | `2fccd7bd904ed8a7f047ec9696d9c0812c7a1749543ff5c35c09573746cd6089` |
+| `direct-exec-gpt-6-sol.events.jsonl` | `106d293fea48cf9d19c25e4103a05c369edd68c243976ead010e33d773b72c6b` |
+| `direct-exec-gpt-6-sol.stderr.log` | `1aa26269eb1cc57f86b235a03cda53c004edb5b1e9fc99d4da4f00843293d721` |
+| `harness-exec-20261001.summary.log` | `8eb5fa1293cd2352fa3f26348bfd9fb9188002a00684bbeaef427ddf7a87b97e` |
+| `harness-exec-20261001.turns.jsonl` | `4af8ae70b133914b1390e9a4eec35cc3a1e6a0f5ddb07511e2f749dff3d7153a` |
+| `harness-exec-20261001.backend-events.jsonl` | `874e3baf7b9eb4d0920219c9ee8c15cba3dfb434594c6d0eed4beaded42fdb2d` |
+| `harness-exec-20261001.children.jsonl` | `01d0920450c5320d15490eebd0b0320ab9e98c0d5901cda8695cccbf9691be9b` |
+| `harness-exec-20261001.wrapper-stderr.log` | `10a60aa4e650563715e1cabc978e113d218ec3d16dcd2a71c7de29f50d57239a` |
+| `harness-exec-20261001.wrapper-stdout.log` | `8f5098d31a04a11c746b68c764f69aaa6eb70a5fcbd47efd68ca073389006f50` |
+| `harness-exec-20261001.child-2.stderr.log` through `child-5.stderr.log` (each) | `3e75d28a6681c31400a3f0fcb564c7613fd42796fb83294e4d53fea86bcbd401` |
+| `harness-app-server-20261001.summary.log` | `a1afff9cc2e437b1ece4e200377a18527d750b0b9f2263305c7019873b64af15` |
+| `harness-app-server-20261001.turns.jsonl` | `30d88c03ea6ecd1861ef9426c9d235a66b87d86f4ac0ef0652a21e398c04c943` |
+| `harness-app-server-20261001.backend-events.jsonl` | `4d89c5bcfebd17526f1aaee0fc70bf1d5ab33c524d9dddcf64e0fe27d3bd7ddc` |
+| `harness-app-server-20261001.children.jsonl` | `a5af64bcfe4c1db5fca5f261ae61ec45a9b08ea93b06e929434520bf4016eff7` |
+| `harness-app-server-20261001.wrapper-stderr.log` | `79c7e18f87d5de54c09a3c0362defb3ef892c646c3de61bf10c3848d29354a68` |
+| `harness-app-server-20261001.wrapper-stdout.log` | `7d31cf6f607be6f34f4e075178c468e6cd2764ed44852e3a60885f94accf516a` |
+| `attempt0-no-permission-sync/harness-exec-20261001.summary.log` | `9685bd5691b1001ed82d2d9f9fa6424694d99edfcc8651ec26f42181966dd665` |
+| `attempt0-no-permission-sync/harness-exec-20261001.turns.jsonl` | `25c48d706d73f00cadbe2eac52dcb76e81e38e4b16758d20ccee3f888b7ebbc8` |
+| `attempt0-no-permission-sync/harness-exec-20261001.backend-events.jsonl` | `751bf02bbcae3a0f7149368d239850ec2788a00739c763a9ef976a87930b9039` |
+| `direct-exec-probe.mjs` | `f75a47c7eccd4f392930f9ac20a8115dc5be2063fc773de0bdd7ac3aaf8f3755` |
+| `run-codex-cli-harness.mjs` | `5486ed6c6dc74b876437b5b4eb92d15ab303add1c9a38cacdc450bb1db50d862` |
+| `guarded-codex` | `dbef4d5b21512376b20445b1ae9d0c997262ab5348b530178a3d9e6e75e29786` |
+| Codex CLI 0.156.1 binary (worktree package path) | `0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f` |
+
+The three rollout JSONL files above have SHA-256 values, in direct/exec/app-server
+order: `b44b4479578887c0c497f370af7ecced64ea0374b1123c280606612e95bae871`,
+`47fb63012ddda5bf699f30d69924dbb64fd3756828d17a91b6812029897c4838`, and
+`6d65e0d77c9f421991029222c04a82b619ee8c599fadeb229c57c0626fe0d951`.
