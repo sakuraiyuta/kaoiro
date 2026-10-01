@@ -383,7 +383,7 @@ it("routes steered input items to onInputItem only, and steers only a dispatched
   f.session.startProjectedTurn = vi.fn(async request => {
     const turn = await original(request);
     return { ...turn, events: (async function* (): AsyncGenerator<AppServerProjection> {
-      yield { kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1" };
+      yield { kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1", phase: "started" };
       yield* turn.events;
     })() };
   });
@@ -399,7 +399,7 @@ it("routes steered input items to onInputItem only, and steers only a dispatched
   gate.resolve();
   await running;
   expect(f.hooks.onProjection).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "input_item" }));
-  expect(onInputItem).toHaveBeenCalledWith({ kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1" });
+  expect(onInputItem).toHaveBeenCalledWith({ kind: "input_item", itemId: "u1", clientId: "kaoiro-steer:1", phase: "started" });
   expect(f.runtime.steer(request)).toEqual({ kind: "refused", reason: "idle" });
   expect(steer).toHaveBeenCalledTimes(1);
 });

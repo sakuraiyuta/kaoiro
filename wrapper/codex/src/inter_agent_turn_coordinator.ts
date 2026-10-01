@@ -9,6 +9,7 @@ import {
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
+  ordinaryPeerInput,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -36,11 +37,14 @@ interface PendingBatch {
   bytes: number;
 }
 
+const MAX_STEER_RECOVERY_RECORDS = 256;
+
 export interface CodexInterAgentTurnCoordinatorOptions {
   /** Runs synchronously once a free peer receives its oldest queued batch. */
   onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
   reclassifyQueued?: (item: CodexInterAgentBatchItem) => InboundReplyMode;
   onTerminalQueued?: (item: CodexInterAgentBatchItem) => void;
+  canDispatchPeer?: (peer: string) => boolean;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
 }
@@ -56,12 +60,15 @@ export class CodexInterAgentTurnCoordinator {
   #nextReceiveOrder = 0;
   readonly #inputStarted = new Set<string>();
   readonly #recoveryLeases = new Set<readonly Envelope[]>();
+  readonly #steeredRecovery = new Map<string, Envelope>();
+  #steerRecoveryEvictions = 0;
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
   readonly #batchByTurnToken = new Map<string, DispatchedCodexInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
   readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
   readonly #reclassifyQueued: ((item: CodexInterAgentBatchItem) => InboundReplyMode) | undefined;
   readonly #onTerminalQueued: ((item: CodexInterAgentBatchItem) => void) | undefined;
+  readonly #canDispatchPeer: ((peer: string) => boolean) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
   #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
@@ -70,6 +77,7 @@ export class CodexInterAgentTurnCoordinator {
     this.#onDispatch = options.onDispatch;
     this.#reclassifyQueued = options.reclassifyQueued;
     this.#onTerminalQueued = options.onTerminalQueued;
+    this.#canDispatchPeer = options.canDispatchPeer;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
@@ -110,7 +118,14 @@ export class CodexInterAgentTurnCoordinator {
       + [...this.#recoveryLeases].reduce((n, items) => n + items.length, 0);
   }
 
-  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean): { envelopes: readonly Envelope[]; oversizedPending?: boolean; recoverySource?: "handoff_queue"; commit: () => void; rollback: () => void } | undefined {
+  claimRecovery(cid: string, peer: string, activeToken: string | null, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number): { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; recoverySource?: "handoff_queue" | "retained_fold"; commit: () => void; rollback: () => void } | undefined {
+    if (expectedTurn !== undefined) {
+      const retained = this.#steeredRecovery.get(JSON.stringify([cid, peer, expectedTurn]));
+      if (retained !== undefined) {
+        if (!fit([retained])) return { envelopes: [], oversizedPending: true, foldedEarlier: true, recoverySource: "retained_fold", commit: () => {}, rollback: () => {} };
+        return { envelopes: [retained], foldedEarlier: true, recoverySource: "retained_fold", commit: () => {}, rollback: () => {} };
+      }
+    }
     const selected: CodexInterAgentBatchItem[] = [];
     const candidates = [
       ...[...this.#batchByTurnToken.values()].filter(batch => batch.peer === peer && batch.turnToken !== activeToken && !this.#inputStarted.has(batch.turnToken)).flatMap(batch => batch.items),
@@ -165,6 +180,45 @@ export class CodexInterAgentTurnCoordinator {
       },
     };
   }
+
+  retainSteeredBody(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      const key = JSON.stringify([payload.conversation_id, envelope.agent_id, payload.turn_number]);
+      if (this.#steeredRecovery.has(key)) continue;
+      if (this.#steeredRecovery.size >= MAX_STEER_RECOVERY_RECORDS) {
+        const oldest = this.#steeredRecovery.keys().next().value;
+        if (oldest !== undefined) this.#steeredRecovery.delete(oldest);
+        this.#steerRecoveryEvictions++;
+      }
+      this.#steeredRecovery.set(key, envelope);
+    }
+  }
+
+  creditSteeredBody(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      this.#steeredRecovery.delete(JSON.stringify([payload.conversation_id, envelope.agent_id, payload.turn_number]));
+    }
+  }
+
+  retireSteeredBeforeConfirmed(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      if (!ordinaryPeerInput(envelope)) continue;
+      const payload = envelope.payload as unknown as InterAgentMessagePayload;
+      for (const [key, prior] of this.#steeredRecovery) {
+        const priorPayload = prior.payload as unknown as InterAgentMessagePayload;
+        if (prior.agent_id === envelope.agent_id && priorPayload.conversation_id === payload.conversation_id && priorPayload.turn_number < payload.turn_number) {
+          this.#steeredRecovery.delete(key);
+        }
+      }
+    }
+  }
+
+  resetSteeredRecovery(): void { this.#steeredRecovery.clear(); }
+  get steerRecoveryEvictions(): number { return this.#steerRecoveryEvictions; }
 
   receive(envelope: Envelope, mode: InboundReplyMode): void {
     if (this.#closed) { this.#retireDiscarded?.([envelope]); return; }
@@ -261,6 +315,17 @@ export class CodexInterAgentTurnCoordinator {
     this.#dispatchNext(peer);
   }
 
+  hasQueuedForPeer(peer: string): boolean {
+    return this.#activeTokenByPeer.has(peer) || (this.#pendingBatches.get(peer)?.length ?? 0) > 0;
+  }
+
+  hasRootConversation(conversationId: string): boolean {
+    const has = (items: readonly CodexInterAgentBatchItem[]) => items.some(item =>
+      (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id === conversationId);
+    return [...this.#batchByTurnToken.values()].some(batch => has(batch.items)) ||
+      [...this.#pendingBatches.values()].some(batches => batches.some(batch => has(batch.items)));
+  }
+
   /** Rechecks a host-queued batch synchronously at the SDK input boundary. */
   prepareInput(turnToken: string): { batch: DispatchedCodexInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
     const batch = this.#batchByTurnToken.get(turnToken);
@@ -287,6 +352,7 @@ export class CodexInterAgentTurnCoordinator {
   #dispatchNext(peer: string): void {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
+    if (this.#canDispatchPeer?.(peer) === false) return;
     let items: CodexInterAgentBatchItem[];
     while (true) {
       const queue = this.#pendingBatches.get(peer);

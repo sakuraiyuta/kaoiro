@@ -11,7 +11,7 @@
 import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerSession } from "./app_server_session.js";
-import { AppServerConnectionError } from "./app_server_rpc.js";
+import { AppServerConnectionError, type RpcWriteState } from "./app_server_rpc.js";
 import { AppServerTurnStartUnknownError, type AppServerApprovalOptions, type AppServerForeignTurn } from "./app_server_transport.js";
 import { APPROVAL_POLICIES, isApprovalPolicy } from "./app_server_approval.js";
 import { SteerRecord, type SteerOutcome, type SteerResponse } from "./app_server_steer.js";
@@ -367,9 +367,26 @@ interface ActiveSteer {
   text: string;
   arrival: number;
   placeholder?: QueuedTurn;
+  ia?: CodexInterAgentSteerHooks;
+  response?: SteerResponse;
+  writeState?: () => RpcWriteState;
+  itemConflict?: boolean;
+  observed?: boolean;
+  terminal?: "T" | "X";
 }
 
 const MAX_STEERS_PER_TURN = 8;
+const MAX_IA_STEERS_PER_TURN = 3;
+
+export interface CodexInterAgentSteerHooks {
+  admit: (turnToken: string) => string | null;
+  onAdmit: (turnToken: string, batchId: string) => void;
+  onResponse: (turnToken: string, batchId: string, response: SteerResponse) => void;
+  onItem: (turnToken: string, batchId: string) => void;
+  onTerminal: (turnToken: string, batchId: string) => void;
+  onSettle: (turnToken: string, batchId: string, response: SteerResponse, observed: boolean,
+    writeState: RpcWriteState, itemConflict: boolean, terminal: "T" | "X") => void;
+}
 
 export interface CodexHostOptions {
   /** Internal opt-in only; normal CLI/config/env launch always uses exec. */
@@ -445,6 +462,7 @@ export interface CodexHostOptions {
   /** Present only when operator steering is opted in for this persona;
    * `available` reads whether the current join echoed operator_input_modes. */
   operatorSteer?: { available: () => boolean };
+  interAgentSteer?: { available: () => boolean };
   /** Present only when the app-server approval axis is opted in for this
    * persona (ADR-0064); `decide` is the shared permission broker. */
   appServerApprovals?: AppServerApprovalOptions;
@@ -725,6 +743,10 @@ export class CodexHost implements EngineAdapter {
   readonly #queue: QueuedTurn[] = [];
   #arrivalSeq = 0;
   readonly #steers = new Map<string, ActiveSteer>();
+  readonly #steerWritesByToken = new Map<string, number>();
+  readonly #iaSteerWritesByToken = new Map<string, number>();
+  readonly #pendingIaPreconditions = new Set<string>();
+  readonly #iaPlaceholders = new Map<string, QueuedTurn>();
   readonly #pendingUploads = new Map<string, PendingUpload>();
   /** Includes dirs still being materialized, queued, or streaming. */
   readonly #activeTempDirs = new Set<string>();
@@ -1542,6 +1564,12 @@ export class CodexHost implements EngineAdapter {
           this.#wake = null;
           continue;
         }
+        if (turn.placeholder) {
+          this.#queue.unshift(turn);
+          await new Promise<void>(resolve => { this.#wake = resolve; });
+          this.#wake = null;
+          continue;
+        }
         if (this.#appRuntime !== null) {
           await this.#runAppServerTurn(turn.input, turn.tempDir, turn.conversationIds ?? [], turn.turnToken ?? randomUUID());
           continue;
@@ -1606,7 +1634,7 @@ export class CodexHost implements EngineAdapter {
         bridgeStderrPath: `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
         onDisconnect: error => this.#stopAppServer(error),
         onForeignTurn: turn => this.#onForeignTurn(turn),
-        enforceForeignTurn: this.#options.operatorSteer !== undefined,
+        enforceForeignTurn: this.#options.operatorSteer !== undefined || this.#options.interAgentSteer !== undefined,
         ...(this.#options.appServerApprovals === undefined ? {} : { approvals: this.#options.appServerApprovals }),
         transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS },
       },
@@ -1703,7 +1731,7 @@ export class CodexHost implements EngineAdapter {
           catch (error) { writeRedactedStderr(`codex input handoff report failed: ${String(error)}\n`); }
         },
         onTerminal: () => { this.#endSteers(turnToken, "T");endBoundary(); },
-        onInputItem: event => this.#observeSteer(turnToken, event.clientId),
+        onInputItem: event => this.#observeSteer(turnToken, event),
         onPermission: (assessment, attempt) => {
           if (!this.#watchdogFailStopped && attempt.permission) this.#applyPermissionAssessment(attempt.permission.submission, assessment);
         },
@@ -2624,12 +2652,53 @@ export class CodexHost implements EngineAdapter {
     }
   }
 
+  /** A separate priority lease may attach to the current app-server turn.
+   * The caller retains root-queue ownership until this returns `sent`. */
+  async steerInterAgentInput(text: string, hooks: CodexInterAgentSteerHooks, batchId: string): Promise<
+    { kind: "queued"; reason: string } | { kind: "sent"; turnToken: string; batchId: string }
+  > {
+    const arrival = ++this.#arrivalSeq;
+    for (let waited = false; ; waited = true) {
+      const runtime = this.#appRuntime, token = this.#appTurnToken;
+      if (runtime === null || token === null || this.#closed) return { kind: "queued", reason: "idle" };
+      const id = batchId;
+      const attempt = runtime.steer({ hostTurnToken: token, input: text, clientUserMessageId: id,
+        admit: turnId => this.#admitSteer(turnId, token, id, text, arrival, hooks) });
+      if (attempt.kind === "starting") {
+        if (waited) return { kind: "queued", reason: "turn_starting" };
+        await attempt.ready;
+        continue;
+      }
+      if (attempt.kind === "refused" || attempt.kind === "declined") return { kind: "queued", reason: attempt.reason };
+      const steer = this.#steers.get(id);
+      if (steer !== undefined) steer.writeState = attempt.writeState;
+      void attempt.response.then(response => this.#steers.get(id)?.record.respond(response));
+      return { kind: "sent", turnToken: token, batchId: id };
+    }
+  }
+
+  replaceInterAgentPlaceholder(batchId: string, text: string, conversationIds: readonly string[], turnToken: string): boolean {
+    const placeholder = this.#iaPlaceholders.get(batchId);
+    if (placeholder === undefined || this.#closed || !this.#queue.includes(placeholder)) return false;
+    this.#iaPlaceholders.delete(batchId);
+    placeholder.input = text;
+    placeholder.conversationIds = conversationIds;
+    placeholder.turnToken = turnToken;
+    delete placeholder.placeholder;
+    this.#apply({ kind: "user_send" });
+    this.#wake?.();
+    return true;
+  }
+
   /** The single commit point (design r3 §3): runs in the same synchronous
    * section as the `turn/steer` write, and is the only place the admission
    * guards decide. Creating the record here means it exists before the write. */
-  #admitSteer(turnId: string, token: string, id: string, text: string, arrival: number): string | null {
-    if (this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
-    if (this.#queue.some(turn => turn.source === "operator")) return "behind_earlier_input";
+  #admitSteer(turnId: string, token: string, id: string, text: string, arrival: number,
+    ia?: CodexInterAgentSteerHooks): string | null {
+    if (ia === undefined && this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
+    if (ia !== undefined && this.#options.interAgentSteer?.available() !== true) return "inter_agent_steer_unavailable";
+    if (this.#pendingIaPreconditions.size > 0) return "behind_earlier_input";
+    if (this.#queue.some(turn => ia !== undefined || turn.source === "operator")) return "behind_earlier_input";
     const permission = this.#permissionState;
     if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
         permission.blocked !== null || this.#options.permissionSyncPending?.() === true ||
@@ -2638,18 +2707,36 @@ export class CodexHost implements EngineAdapter {
     }
     if (this.#appTurnToken !== token || this.#turnAbandoned !== null || this.#turnScope?.signal.aborted !== false) return "turn_ending";
     if (this.#options.liveInputBlocked?.() === true || this.#queue.some(turn => turn.source === "reset_notice")) return "reset_pending";
-    if ([...this.#steers.values()].filter(steer => steer.turnId === turnId).length >= MAX_STEERS_PER_TURN) return "steer_cap";
+    if ((this.#steerWritesByToken.get(token) ?? 0) >= MAX_STEERS_PER_TURN) return "steer_cap";
+    if (ia !== undefined && (this.#iaSteerWritesByToken.get(token) ?? 0) >= MAX_IA_STEERS_PER_TURN) return "inter_agent_steer_cap";
+    const leaseReason = ia?.admit(token);
+    if (leaseReason !== undefined && leaseReason !== null) return leaseReason;
     const record = new SteerRecord(id, turnId, {
       onResponse: response => this.#onSteerResponse(id, response),
       onSettle: outcome => this.#onSteerSettled(id, outcome),
     });
-    this.#steers.set(id, { record, token, turnId, text, arrival });
+    this.#steers.set(id, { record, token, turnId, text, arrival, ...(ia === undefined ? {} : { ia }) });
+    this.#steerWritesByToken.set(token, (this.#steerWritesByToken.get(token) ?? 0) + 1);
+    if (ia !== undefined) this.#iaSteerWritesByToken.set(token, (this.#iaSteerWritesByToken.get(token) ?? 0) + 1);
+    ia?.onAdmit(token, id);
     return null;
   }
 
   #onSteerResponse(id: string, response: SteerResponse): void {
     const steer = this.#steers.get(id);
     if (steer === undefined) return;
+    steer.response = response;
+    if (steer.ia !== undefined) {
+      if (response.kind === "P") {
+        this.#pendingIaPreconditions.add(id);
+        const placeholder: QueuedTurn = { input: steer.text, arrival: steer.arrival, placeholder: true };
+        const index = this.#queue.findIndex(turn => (turn.arrival ?? 0) > steer.arrival);
+        this.#queue.splice(index === -1 ? this.#queue.length : index, 0, placeholder);
+        this.#iaPlaceholders.set(id, placeholder);
+      }
+      steer.ia.onResponse(steer.token, id, response);
+      return;
+    }
     if (response.kind === "A") this.#systemLog("Operator input accepted into the running turn.");
     if (response.kind !== "P") return;
     // The placeholder is created here, in the precondition rejection's
@@ -2663,6 +2750,21 @@ export class CodexHost implements EngineAdapter {
   #onSteerSettled(id: string, outcome: SteerOutcome): void {
     const steer = this.#steers.get(id);
     this.#steers.delete(id);
+    this.#pendingIaPreconditions.delete(id);
+    if (steer?.ia !== undefined) {
+      if (outcome.kind !== "requeued") {
+        const placeholder = this.#iaPlaceholders.get(id);
+        if (placeholder !== undefined) {
+          this.#iaPlaceholders.delete(id);
+          const index = this.#queue.indexOf(placeholder);
+          if (index !== -1) this.#queue.splice(index, 1);
+        }
+      }
+      steer.ia.onSettle(steer.token, id, steer.response ?? { kind: "C" }, steer.observed === true,
+        steer.writeState?.() ?? "unwritten", steer.itemConflict === true, steer.terminal ?? "X");
+      this.#wake?.();
+      return;
+    }
     const placeholder = steer?.placeholder;
     if (placeholder !== undefined) {
       delete placeholder.placeholder;
@@ -2692,16 +2794,34 @@ export class CodexHost implements EngineAdapter {
   }
 
   #endSteers(token: string, terminal: "T" | "X"): void {
-    for (const steer of [...this.#steers.values()]) if (steer.token === token) steer.record.end(terminal);
+    for (const steer of [...this.#steers.values()]) if (steer.token === token) {
+      if (steer.terminal !== undefined) continue;
+      steer.terminal = terminal;
+      steer.ia?.onTerminal(token, steer.record.clientUserMessageId);
+      steer.record.end(terminal);
+    }
+    this.#steerWritesByToken.delete(token);
+    this.#iaSteerWritesByToken.delete(token);
   }
 
-  #observeSteer(token: string, clientId: string): void {
-    const steer = this.#steers.get(clientId);
-    if (steer?.token === token) steer.record.observe();
+  #observeSteer(token: string, event: { clientId: string; phase: "started" | "completed"; text?: string }): void {
+    const steer = this.#steers.get(event.clientId);
+    if (steer?.token !== token) return;
+    if (steer.ia === undefined) {
+      if (event.phase === "started") steer.record.observe();
+      return;
+    }
+    if (event.phase !== "completed") return;
+    if (steer.itemConflict) return;
+    if (event.text !== steer.text) { steer.itemConflict = true; return; }
+    if (steer.record.observe()) {
+      steer.observed = true;
+      steer.ia.onItem(token, event.clientId);
+    }
   }
 
   #onForeignTurn(turn: AppServerForeignTurn): void {
-    const enforced = this.#options.operatorSteer !== undefined;
+    const enforced = this.#options.operatorSteer !== undefined || this.#options.interAgentSteer !== undefined;
     writeRedactedStderr(`${JSON.stringify({ event: "codex_foreign_turn", thread_id: turn.threadId, turn_id: turn.turnId, enforced })}\n`);
     if (enforced) this.#systemLog("The app-server ran a turn this wrapper did not start; steering and new turns are stopped pending operator recovery.");
   }
