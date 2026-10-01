@@ -135,8 +135,15 @@ alone cannot settle this path. A successful or possibly-delivered reply
 discharges **only** the input sequences named by its captured default basis
 or activated ticket; a rejected reply discharges none. Ticket preparation
 records its exact sequence coverage, not merely its CID. No reply basis
-implicitly covers a later steer. The existing root obligation joins the same
-token ledger, but an unhanded priority lease has no failure obligation.
+implicitly covers a later steer. Preserve the existing root
+`notePendingInjection`/`resolveTurnEnd` API through a tagged local-root
+adapter: a legacy or non-negotiated root without incarnation/generation/seq
+gets a token-local ID, not a fabricated server sequence or a shared missing-ID
+key. Its current one-obligation-per-CID, accepted-reply clearing and
+turn-error fan-out semantics remain. Hold a same-CID steer behind such a root
+until its token settles, so scoped and unscoped obligations do not merge.
+Only negotiated phase-3 steers use the sequenced ledger and
+`affected_deliveries`; an unhanded priority lease has no failure obligation.
 
 At captured-token reconciliation, reduce unresolved records by `(peer, CID,
 notice class)` in delivery-sequence order. Send at most one notice for each
@@ -161,6 +168,57 @@ successor root can acquire the CID.
 | A and B corroborated, reply covers A only, host error | One classified notice naming B; release both. |
 | B item before terminal, response after terminal | Keep B's captured-token record until the response or bounded timeout. A valid response plus the pre-terminal item corroborates B but cannot activate a post-terminal ticket; then apply the host's success/error rule. Invalid or missing response leaves B uncertain and gets a timeout notice. Release B immediately when that `SteerRecord` reconciles, without waiting for another turn-end callback. |
 | Later same-CID root while the earlier token awaits a response | Keep the root behind the CID owner fence. Reconcile and release the earlier token first; the root then takes a distinct token and can never inherit the earlier notice or ticket. |
+
+### Recipient notice contract
+
+The sequence list in the table is a wire contract, not merely a producer log.
+Extend `InterAgentErrorPayload` for `notice_type:"turn_failure"` with optional
+`affected_deliveries: [{delivery_seq, peer_turn_number, batch_id}]`. Here
+`peer_turn_number` is the original sender's outbound turn number, not the
+failure notice's own turn number; the sender already knows it when
+`wait_for_response` registers. `delivery_seq` is the recipient-local ledger
+sequence, and `batch_id` is the captured steer request ID. Every covered
+sequence appears in exactly one notice class. The server-first change to
+`InterAgentReplyBasis.valid_notice?` permits this field only on
+`turn_failure`, only with one to 16 entries, exact entry keys, positive safe
+integer sequence/turn numbers, a nonempty bounded batch ID, and strictly
+increasing sequence numbers. It retains the existing top-level/error-key
+allowlists and canonical `code`/`message`/`body` checks; malformed lists,
+unknown fields and coverage on `stale_delivery` are rejected. The producer
+chunks longer lists into consecutive non-overlapping notices. Ship this
+validator and protocol type before any wrapper emits the new field.
+
+The sender's waiter stores `(CID, expected peer, sent peer_turn_number)`. A
+scoped failure notice consumes that waiter **only** if its actual sender
+matches the expected peer and one `affected_deliveries` entry has the exact
+sent turn number; CID alone is insufficient. A notice covering A but not
+awaited B follows the ordinary asynchronous injection path, unchanged and
+visible to the model; it does not clear B's waiter or turn into a reply.
+Ordinary replies retain the existing CID waiter behavior. A matching notice
+returns `peer_error` with `affected_deliveries`, the awaited turn number and
+guidance explicitly scoped to those entries. The asynchronous
+`formatInboundMessage` prints each covered peer turn and sequence before
+`errorGuidance`, and says that guidance applies only to those inputs. A
+notice never grants reply authority or consumes a peer reply ticket.
+
+Use a negotiated `notice_attribution:"v1"` sender join capability and echo.
+The server stamps the sender's negotiated support onto each relayed ordinary
+peer input; a receiver must use that immutable stamp, not a possibly stale
+directory entry, when deciding its notice format. If the original sender did
+not negotiate support, the receiving wrapper sends **one** legacy CID-wide
+notice per `(token, CID)`: whenever any unresolved input of that CID is
+uncertain, its code is `timeout` and the model-visible guidance says wait and
+do not retry any
+input from that failed token; otherwise it uses the existing classified
+notice. It does not send two indistinguishable same-CID notices with
+conflicting retry advice. Conversely, a new sender treats an unscoped legacy
+`turn_failure` from an older receiving wrapper as unattributed: it does not
+consume a specific-turn waiter, injects it with conservative wait/no-retry
+guidance, and lets the waiter continue until a matching reply or timeout.
+The server strips any client-supplied capability stamp and issues its own;
+older servers do not echo the capability, so wrappers retain the legacy
+format and conservative receiving behavior. This rollout does not change
+ordinary replies or server turn-zero notices.
 
 The active turn's default reply snapshot remains fixed (ADR-0062 D7). Before
 writing a steer, use `InterAgentTool.prepareFoldInput(activeToken, envelopes)`
@@ -261,13 +319,22 @@ reason. They cannot resolve an unsubmitted gap. Other reason/handoff
 combinations, including legacy free-string `unknown`, remain history-only.
 
 `acked_seq` remains a resolved prefix, never a dispatch certificate.
-`lost_count` remains the count of server-classified ledger retirements in its existing
-generation scope. Add durable `uncertain_count` and `last_uncertain` to the
-recipient ledger and `inter_agent_delivery` status. They aggregate phase-3
-uncertain outcomes for the ledger incarnation, persist across same-owner
-reconnect and process-generation changes, and reset only on ledger deletion;
-they contain no message body. `whoami`, `list_agents` and the operator delivery
-status expose the count and last `{at, delivery_seq, reason}`. A zero
+`lost_count` remains the count of server-classified ledger retirements in its
+existing generation scope. Add durable `uncertain_count` and
+`last_uncertain` to the recipient ledger and `inter_agent_delivery` status.
+They aggregate phase-3 uncertain outcomes for the **recipient ledger
+lifetime**, persist across same-owner reconnect and process-generation or
+incarnation replacement, and reset only on ledger deletion. The report still
+must carry its current incarnation/generation fence; preserving the aggregate
+does not preserve an old recovery incarnation. On `bind_resync`, carry these
+two fields from the old entry into the new incarnation. When loading an older
+persisted entry without them, initialize to `0` and `nil`, not a fabricated
+history-derived value. Persist an increment atomically with that sequence's
+terminal outcome. Once history expires and the sequence is retired, a replay
+cannot recreate or recount it. `last_uncertain` contains
+`{at, incarnation, generation, delivery_seq, reason}`, with no message body,
+so its origin remains intelligible after replacement. `whoami`, `list_agents`
+and the operator delivery status expose the aggregate. A zero
 `lost_count` and no pending gap can therefore coexist with nonzero
 `uncertain_count`; neither proves delivery. Per-message stage history is
 queryable only within its existing one-hour terminal retention and 2,000
@@ -303,8 +370,15 @@ that server back requires rolling the wrapper back.
   issue #462's 0.159.2 source check found `turn_interrupt_inner` submits
   `Op::Interrupt`; `Op::InterruptIfNoPendingInput` is a distinct operation.
   Its reconstructed offline probes passed on both binaries, including an
-  accepted/unobserved steer followed by hard interrupt. Live comparison is
-  still pending. [Version-sensitive, 0.159.0+] Issue #462 found
+  accepted/unobserved steer followed by hard interrupt. Issue #462's
+  paired live evaluation in branch `issue-462-codex-pin-eval`, file
+  `docs/evidence/codex-app-server/pin-0.159.2-evaluation-2026-10-01.md`,
+  at commit `a3801e2235fd071203e7c51f81b16c5873b4a3b7` (record SHA-256
+  `2d768d0f3dc22b4b3c4079682b65765cd8022c35d000e8a80daa898bb727cff9`)
+  reports both pins passing its L1/L2/resume/L3/L3b and P2 samples with
+  negative controls. That evaluation is under independent review and does
+  not prove the new IA path or decide pin adoption. [Version-sensitive,
+  0.159.0+] Issue #462 found
   `instant_interrupt` and `defer_mailbox_preemption` false by default in its
   candidate source; verify the final effective configuration. The
   [issue #462](https://github.com/sakuraiyuta/kaoiro/issues/462) evaluation
@@ -317,7 +391,8 @@ The phase-1 protocol and server pieces from [issues #430](https://github.com/sak
 and [#431](https://github.com/sakuraiyuta/kaoiro/issues/431), plus shared
 wrapper issue #432, are present on this baseline. Phase 3 uses their intent,
 echo, sequence, stage and reply-basis contracts; the server-first uncertain
-resolution and steer handoff enum are new prerequisites. The Claude phase-2
+resolution, steer handoff enum, attributed-notice validator and negotiated
+sender capability are new prerequisites. The Claude phase-2
 implementation from [#434](https://github.com/sakuraiyuta/kaoiro/issues/434)
 is a design precedent for priority lease and ticket recovery, not a runtime
 dependency; Codex must pass its own native evidence and default composition.
@@ -379,6 +454,9 @@ provider correlation as *unmeasured*, not proof of inclusion. Run the same
 input with exec, opt-out and absent echo: each must queue and issue no steer.
 Run these schedules with approvals `never`, `on-request` and `untrusted`, and
 with a pending permission selection, live dialog, reset and watchdog.
+Run the wrapper test suites with `env -u CODEX_HOME` because the inherited
+runner environment may point at the production Codex home; give native
+probes their own explicit scratch `CODEX_HOME`.
 
 Deterministic tests cover item-before-response, terminal-before-response,
 precondition rejection and placeholder order, rejected compact/review, wrong
@@ -394,8 +472,10 @@ For uncertainty, test queued/unwritten and write-callback failure remain
 unresolved, a `writing`/`written` no-response report resolves without loss,
 old-owner/generation and malformed reason/handoff reports fail, a legacy root
 `unknown` does not take the new path, exact duplicates do not recount,
-generation replacement preserves the incarnation-scoped uncertainty summary,
-and stage-history expiry returns `expired` while the aggregate persists.
+generation/incarnation replacement preserves the ledger-lifetime uncertainty
+summary, server restart loads both old-format and new-format persisted entries,
+ledger deletion resets the summary, and stage-history expiry returns
+`expired` while the aggregate persists.
 As the wrapper is the only observer of the write, also mutate the **wrapper
 write-state guard** to accept `unwritten`; the production-composition negative
 test must then fail by detecting an `unknown` report or premature resolution
@@ -410,6 +490,32 @@ same-CID root. Assert the exact notice classes and affected sequence lists,
 one release per captured token, and no notice or ticket transferred to the
 successor. Mutate the per-sequence reply-coverage check and the late-response
 reconciliation callback separately; each must turn its respective test red.
+Drive the actual server `InterAgentReplyBasis.valid_notice?` path before any
+producer-only fixture: accept bounded sorted coverage, reject unknown keys,
+empty/oversized/duplicate or malformed entries, and reject coverage on
+`stale_delivery`. Test A observed/B unobserved with B's waiter active and
+both arrival orders. A-only classified notice must leave B's waiter alive
+and become an asynchronous A-attributed model message; B's timeout notice
+must return from the waiter with B's original peer turn and wait/no-retry
+guidance. Repeat for chunked coverage, the old-sender one-notice fallback,
+and a new sender receiving an unscoped old-wrapper notice. Remove the
+receiver's peer-turn coverage-match guard: this A-before-B test must fail
+because A incorrectly consumes B's waiter. Test both waited `peer_error`
+projection and asynchronous `formatInboundMessage` output; a producer
+assertion alone cannot establish recipient behavior.
+
+When changing the shared obligation API, retain the named baseline tests:
+`wrapper/codex/test/inter_agent_lifecycle_glue.test.ts` cases for queued
+same-peer batches, actual-turn acknowledgement, and the same-CID successor;
+`wrapper/codex/test/inter_agent_turn_coordinator.test.ts` cases for exact
+delivery sequence ownership and stale-token settlement;
+`wrapper/agent-common/test/inter_agent.test.ts` cases for legacy root
+`resolveTurnEnd`, accepted/rejected/unknown reply clearing and CID waiter
+behavior; `wrapper/claude-code/test/inter_agent_turn_coordinator.test.ts`
+cases for root/fold ordering and same-CID obligation; and
+`wrapper/antigravity/test/inter_agent_turn_coordinator.test.ts` cases for
+queued proposal recheck and stale-token isolation. These are compatibility
+controls, not evidence that Claude or Antigravity gains Codex steering.
 The no-injection default composition must reach a real first IA handoff.
 Report every gate's exit code and warnings and bind native evidence to the
 final binary SHA and code commit. Repeat evidence after any pin or relevant
@@ -417,8 +523,7 @@ implementation change.
 
 Update on implementation: [delivery](../reference/inter-agent/delivery.md),
 [messages](../reference/inter-agent/messages.md) for the affected-sequence
-notice field,
-[reply basis](../reference/inter-agent/reply-basis.md),
+notice field, [reply basis](../reference/inter-agent/reply-basis.md),
 [send and wait](../reference/inter-agent/send-and-wait.md),
 [channel capabilities](../reference/protocol/channels.md),
 [Codex app-server](../reference/engines/codex-app-server.md),
