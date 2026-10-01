@@ -16,7 +16,7 @@
   "live_total": 5,
   "live_maximum": 7,
   "live_retry_count": 0,
-  "status": "codex_native_gate_passed_other_engine_native_tools_pending_director_decision",
+  "status": "approved_prelanding_gate_passed",
   "source_head": "38bed7e0516d06e5e83263115b6cb62f4da32ea0",
   "branch": "issue-464-codex-home-isolation-pin",
   "live_turns": 3,
@@ -1393,7 +1393,7 @@
     "live_turns_used": 5
   },
   "limitations": [
-    "Claude Code evidence reaches real SDK child startup and the supplied SDK environment; Antigravity evidence reaches default OS child processes for discovery, hook registration, and a turn with a fixture executable. Actual native model-driven tool shells for these two engines remain unmeasured pending the director scope query.",
+    "Claude Code evidence reaches real SDK child startup and the supplied SDK environment; Antigravity evidence reaches default OS child processes for discovery, hook registration, and a turn with a fixture executable. Native model-driven tool execution is unmeasured and deferred to director-owned post-deployment confirmation under the accepted scope decision.",
     "All three authenticated Codex turns completed against the default ChatGPT provider using the scratch state home. No production credential was copied.",
     "Hook bodies use the real model-profile hook and resolver with a disposable gpt-6 profile. Hooks were discovered and trusted with native hooks/list."
   ],
@@ -1404,8 +1404,8 @@
   ],
   "markdown": {
     "path": "/home/yuta/git/kaoiro/worktrees/fuji-464-pin/docs/evidence/issue-464/codex-home-isolation-native-0.159.3-2026-10-01.md",
-    "sha256": "508b99409a33dcc3b8ba4759f7b964d78f9df6cdc16b2f64dce0b93b4e8df395",
-    "bytes": 8112
+    "sha256": "1f2f497f88cdc158a1ce57d519c48dbfb40c0c8fe2f06cf238fbf765f985f873",
+    "bytes": 8474
   },
   "execution_count_record": {
     "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/current-exits.json",
@@ -1441,5 +1441,12 @@
     "path": "/home/yuta/git/kaoiro/tmp/reviews/issue-464/fuji-native-pin/local-exec.log",
     "sha256": "cecfff9bfa7bf07ca23495c710c2bc37b9fda2ec8a1e32619613ddbe1cdbbac8",
     "bytes": 930
+  },
+  "director_scope_decision": {
+    "conversation_id": "13feee7b-e654-4f06-a5ed-3dcbe9dd194f",
+    "peer_turn": 3,
+    "decision": "Pre-landing Claude Code and Antigravity gates are limited to real child-process boundaries and mutation evidence. Native tool execution is unmeasured and deferred until production deployment. Authenticated turns on these engines remain outside authorization.",
+    "post_deployment_owner": "Hisui",
+    "remaining_confirmation": "After landing issue 464 and updating the runner, ask a Claude Code peer and an Antigravity peer to run printenv CODEX_HOME once in their tool shells, requiring an empty value. Require a Codex peer tool shell to report its private isolated home."
   }
 }

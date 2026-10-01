@@ -22,10 +22,11 @@ and actual native command output. The loopback project-server endpoint was a
 Phoenix protocol fixture. Native tool calls used a local provider first, then
 the authenticated default ChatGPT provider.
 
-**Codex native gates passed.** Actual Claude Code and Antigravity model-driven
-tool shells remain unmeasured. The director was asked before completion to
-choose between the measured child-boundary scope and additional native-tool
-execution. The records below retain that distinction.
+**Approved pre-landing gates passed.** The director limited Claude Code and
+Antigravity gates to real child-process boundaries and mutation evidence.
+Their native model-driven tool execution remains unmeasured and is assigned
+to post-deployment confirmation; authenticated turns on those engines are
+outside this authorization.
 
 All Codex processes explicitly used the authenticated scratch state home
 `~/.local/share/kaoiro-scratch/codex-468-v1593`; every probe had a disposable
@@ -90,8 +91,13 @@ fact also makes the observation checker fail.
 Claude Code measurements reach the real SDK child boundary; the environment
 assertion uses the supplied SDK options. Antigravity measurements reach real
 OS children with a fixture executable. Native model-driven tool shells for
-these engines are pending the director's decision. Their behavior is not
-inferred from the Codex measurements.
+these engines remain unmeasured and are deferred to post-deployment
+confirmation under the director's accepted scope decision.
+
+Remaining confirmation: after issue 464 lands and the runner is updated, the
+director will ask a Claude Code peer and an Antigravity peer to execute
+`printenv CODEX_HOME` once in their tool shells and require an empty value,
+then require a Codex peer's tool shell to report its isolated private home.
 
 An earlier disposable probe used a TMPDIR path too long for a Unix socket.
 It failed before model-provider execution, with zero authenticated turns;
