@@ -25,11 +25,18 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { execFileSync, execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { redactCredentials } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { runCodexCli } from "../src/cli.js";
 import { clipTail } from "../src/turn_diagnostics.js";
+import {
+  OWNER_ENV,
+  ownedPids,
+  ownedProcessSummary,
+  reapOwned,
+} from "./fixtures/owned_processes.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const isLinux = process.platform === "linux";
@@ -288,8 +295,11 @@ function findCodexExecPidOnce(parentPid: number): number | null {
   return direct[0]?.pid ?? null;
 }
 
-/** BFS descendants of rootPid whose args contain `needle`. */
-function findDescendantByArgs(rootPid: number, needle: string): number | null {
+// Exact match on purpose: the sandbox launcher's args end with
+// `-- /bin/bash -lc <command>`, so a substring match picks the launcher
+// ~90 ms before the real command exists (issue #439).
+/** BFS descendants of rootPid whose args equal `exactArgs`. */
+function findDescendantByArgs(rootPid: number, exactArgs: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
   for (const p of all) {
@@ -303,7 +313,7 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
     if (seen.has(cur)) continue;
     seen.add(cur);
     for (const child of byPpid.get(cur) ?? []) {
-      if (child.args.includes(needle)) return child.pid;
+      if (child.args === exactArgs) return child.pid;
       queue.push(child.pid);
     }
   }
@@ -376,6 +386,7 @@ it.skipIf(!isLinux)(
         stderrCapture?.tail() ?? "<capture unavailable>",
       );
     };
+    const ownerTag = randomUUID();
     const signals = process.listeners("SIGTERM");
     try {
       await writeFile(join(home, "config.toml"), `model="gpt-5.6-sol"
@@ -395,6 +406,7 @@ enabled=false
       vi.stubEnv("HOME", home);
       vi.stubEnv("CODEX_HOME", home);
       vi.stubEnv("KAOIRO_CODEX_TURN_TRACE_DIR", join(home, "turn-traces"));
+      vi.stubEnv(OWNER_ENV, ownerTag);
       for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
       stderrCapture = captureStderrTail();
 
@@ -417,6 +429,11 @@ enabled=false
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!)).toBe(true);
       expect(isAlive(sleepPid!)).toBe(true);
+      // Positive control for the survivor check below: the owner marker must
+      // reach the sandboxed command, or an empty scan would prove nothing.
+      expect(ownedPids(ownerTag)).toEqual(
+        expect.arrayContaining([execChildPid!, sleepPid!]),
+      );
 
       // The SIGTERM handler this test exists to cover is registered on the
       // real `process` object by `runCodexCli` itself -- fire it the same
@@ -429,7 +446,15 @@ enabled=false
       // The CLI's own async lifecycle must complete on its own -- no
       // process.exit() needed.
       await running;
+      // Nothing this test started may outlive close(), including the sandbox
+      // stages that are neither the exec child nor the command itself.
+      await waitFor(
+        () => ownedPids(ownerTag).length === 0,
+        10_000,
+        () => `\nowned survivors:\n${ownedProcessSummary(ownerTag)}`,
+      );
     } finally {
+      reapOwned(ownerTag);
       forceKill(execChildPid ?? undefined);
       forceKill(sleepPid ?? undefined);
       for (const listener of process.listeners("SIGTERM")) {

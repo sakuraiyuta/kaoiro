@@ -27,9 +27,16 @@ import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { execFileSync, execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
+import {
+  OWNER_ENV,
+  ownedPids,
+  ownedProcessSummary,
+  reapOwned,
+} from "./fixtures/owned_processes.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const isLinux = process.platform === "linux";
@@ -85,7 +92,10 @@ function timeoutDiagnostics(stderr: string, home: string): string {
   return `\nchild stderr: ${stderr || "<empty>"}\ncodex --version: ${version}\nps snapshot:\n${processes}`;
 }
 
-function findDescendantByArgs(rootPid: number, needle: string): number | null {
+// Exact match on purpose: the sandbox launcher's args end with
+// `-- /bin/bash -lc <command>`, so a substring match picks the launcher
+// ~90 ms before the real command exists (issue #439).
+function findDescendantByArgs(rootPid: number, exactArgs: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
   for (const p of all) {
@@ -99,7 +109,7 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
     if (seen.has(cur)) continue;
     seen.add(cur);
     for (const child of byPpid.get(cur) ?? []) {
-      if (child.args.includes(needle)) return child.pid;
+      if (child.args === exactArgs) return child.pid;
       queue.push(child.pid);
     }
   }
@@ -206,7 +216,8 @@ enabled=false
 
     const runnerScript = await writeRunnerScript(home, wire.url);
 
-    const env = { ...process.env, HOME: home, CODEX_HOME: home } as Record<string, string>;
+    const ownerTag = randomUUID();
+    const env = { ...process.env, HOME: home, CODEX_HOME: home, [OWNER_ENV]: ownerTag } as Record<string, string>;
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) delete env[key];
 
     const child = spawn(process.execPath, [runnerScript], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -237,6 +248,11 @@ enabled=false
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!), `stderr: ${stderr}`).toBe(true);
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
+      // Positive control for the survivor check below: the owner marker must
+      // reach the sandboxed command, or an empty scan would prove nothing.
+      expect(ownedPids(ownerTag)).toEqual(
+        expect.arrayContaining([child.pid!, execChildPid!, sleepPid!]),
+      );
 
       const t0 = performance.now();
       // A real OS signal to a real separate process -- not process.emit().
@@ -254,7 +270,15 @@ enabled=false
       expect(outcome.code, `stderr: ${stderr}`).toBe(0);
       expect(outcome.elapsedMs).toBeLessThan(5_000);
       await waitFor(() => !isAlive(execChildPid!) && !isAlive(sleepPid!), 2_000);
+      // Nothing this test started may outlive the wrapper, including the
+      // sandbox stages that are neither the exec child nor the command itself.
+      await waitFor(
+        () => ownedPids(ownerTag).length === 0,
+        10_000,
+        () => `\nowned survivors:\n${ownedProcessSummary(ownerTag)}`,
+      );
     } finally {
+      reapOwned(ownerTag);
       forceKill(execChildPid ?? undefined);
       forceKill(sleepPid ?? undefined);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
