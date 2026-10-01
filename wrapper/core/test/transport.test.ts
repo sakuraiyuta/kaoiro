@@ -3102,6 +3102,9 @@ describe("delivery ACK reconnect through production ServerLink", () => {
 
       disconnect();
       joinedWith("same", { issued_seq: 1, acked_seq: 0, pending_since: "T" });
+      // A replaced ledger would request seq 1, received but not yet
+      // dispatched, as missing.
+      expect(mock.pushes.filter(push => push.event === "delivery_resync")).toEqual([]);
       emit("envelope", withSeq(1));
       expect(delivered).toHaveLength(1);
     } finally {
@@ -3118,6 +3121,7 @@ describe("delivery ACK reconnect through production ServerLink", () => {
       joinedWith(null, { issued_seq: 1, acked_seq: 0, pending_since: "T" });
       disconnect();
       joinedWith("old", { issued_seq: 1, acked_seq: 0, pending_since: "T" });
+      expect(mock.pushes.filter(push => push.event === "delivery_resync")).toEqual([]);
       emit("envelope", withSeq(1));
       expect(delivered).toHaveLength(1);
     } finally {
