@@ -1,0 +1,191 @@
+{
+  "source_commit": "65b6bff269590e8acfe83ca73afcfa9abd2e2f37",
+  "built_code_commit": "0aa961238e8411e9b8161a11ba26ae1d3d950ea9",
+  "source_difference": "Only the backup design changed after the built code commit.",
+  "version": "0.159.3",
+  "binary_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "authenticated_home": "<scratch-home>/codex-468-v1593",
+  "ordinary_home": "<evaluation-scratch>/operator-home-v1593",
+  "budget": {
+    "authorized": 4,
+    "attempted": 4,
+    "completed": 4,
+    "remaining": 0
+  },
+  "probe_sha256": "e3e181921afaf18e809dbc8f20ed30857eccac60564fdd60c2f581e12c84ee1d",
+  "phoenix_fixture_sha256": "18e4a62d4626e08fc19311e980aa39c48f82a509e6ee07ee78489dd8dbac7fd5",
+  "preparation_manifest_sha256": "16ce8613873fac0f662ab4bf3d09a06eeef729ebfcf5cbef295944642a03e82d",
+  "build_artifacts": {
+    "wrapper/codex/dist/cli.js": "624f167c948884c44675bb008695ba1e5eb24f7325e42fdde0a2d86ee3cbc94f",
+    "wrapper/codex/dist/host.js": "44be58f962c491fb696addaba58a13e0f1d6af4951a805979bb53d1d48713624",
+    "wrapper/codex/dist/app_server_rpc.js": "a27af02f1decacffd411ef07b1fa1d62054ecffc7a1e737b8895c6e85d1ddddf",
+    "wrapper/codex/dist/app_server_transport.js": "fbf03c8b41023b0ad1a2450c8559f5f9234f3153801d4ef425f5209a6d644bda",
+    "wrapper/codex/dist/app_server_session.js": "a92b1ab5eeb3eea750a527fed75eb346cf20be9b3a5191bda0537da1aa4b8476"
+  },
+  "runs": [
+    {
+      "backend": "exec",
+      "model": "gpt-6-sol",
+      "effort": "low",
+      "accepted": true,
+      "exit_code": 0,
+      "terminal": "turn.completed",
+      "reply": "GATE5_OK",
+      "error": null,
+      "warnings": [
+        "codex: warn \u2014 auth mode is unknown; model catalog is empty"
+      ],
+      "session_id": "01a0f598-8c75-7b20-a114-d0b86b48fbbc",
+      "turn_started_observed_at": "2026-10-01T03:53:31.508Z",
+      "turn_started_event": {
+        "type": "turn.started"
+      },
+      "rollout": "sessions/2026/10/01/rollout-2026-10-01T12-53-31-01a0f598-8c75-7b20-a114-d0b86b48fbbc.jsonl",
+      "rollout_sha256": "1642cddebeb35b75254eb44684fa7821b7b812b77826a20002c7b21ed6cfa9bb",
+      "rollout_task_started_at": "2026-10-01T03:53:31.456Z",
+      "rollout_turn_context": {
+        "model": "gpt-6-sol",
+        "effort": "low",
+        "service_tier": null
+      },
+      "rollout_task_started_count": 1,
+      "tool_call_count": 0,
+      "logs": {
+        "logs/gate5-exec-gpt-6-sol.log": "96605e89b156bb66e364e9e8c439f3ee1e7df53d4617ecc064f1a6852bb3c675",
+        "gate5/exec-gpt-6-sol/attempt.json": "07a548ed05a1e2ba748ce332a868319ec2abf3eabdf11bf93700c0000d1b7bdb",
+        "gate5/exec-gpt-6-sol/events.jsonl": "9220428dbe589156a169ba8902e6c97191ab44e95598b3132fe43fd4f5b990ac",
+        "gate5/exec-gpt-6-sol/result.json": "c03daa2b42d6c27b9283a1c4560c01fe41cf2dd6eca5730ffc0ec3bc785f5fbc"
+      }
+    },
+    {
+      "backend": "exec",
+      "model": "gpt-6.1-sol",
+      "effort": "low",
+      "accepted": true,
+      "exit_code": 0,
+      "terminal": "turn.completed",
+      "reply": "GATE5_OK",
+      "error": null,
+      "warnings": [
+        "codex: warn \u2014 auth mode is unknown; model catalog is empty"
+      ],
+      "session_id": "01a0f598-d6d4-7403-995b-b91b5893007f",
+      "turn_started_observed_at": "2026-10-01T03:53:49.813Z",
+      "turn_started_event": {
+        "type": "turn.started"
+      },
+      "rollout": "sessions/2026/10/01/rollout-2026-10-01T12-53-49-01a0f598-d6d4-7403-995b-b91b5893007f.jsonl",
+      "rollout_sha256": "8393ff07e28490837e96e8d356fc9f8def3edf8f1f9ee192eeb843818f1b1fb9",
+      "rollout_task_started_at": "2026-10-01T03:53:49.795Z",
+      "rollout_turn_context": {
+        "model": "gpt-6.1-sol",
+        "effort": "low",
+        "service_tier": null
+      },
+      "rollout_task_started_count": 1,
+      "tool_call_count": 0,
+      "logs": {
+        "logs/gate5-exec-gpt-6.1-sol.log": "cba69215959b87cac469c3d27a038045e378e432952e1d41a8e086207a792977",
+        "gate5/exec-gpt-6.1-sol/attempt.json": "a8afbc0bbf022dea65dbcecacd8ac05dc2bdfa965db9333d38881a513fb50f2e",
+        "gate5/exec-gpt-6.1-sol/events.jsonl": "4be93fc48f654553dd1a6a60a89cc227d86ae9b30039b87b62de5fc23efd6ba2",
+        "gate5/exec-gpt-6.1-sol/result.json": "486096aaa37e7b135653d1262c68c5c94c6129c1bd10ef16cfcd9eba8f728680"
+      }
+    },
+    {
+      "backend": "app-server",
+      "model": "gpt-6-sol",
+      "effort": "low",
+      "accepted": true,
+      "exit_code": 0,
+      "terminal": "turn.completed",
+      "reply": "GATE5_OK",
+      "error": null,
+      "warnings": [
+        "codex: warn \u2014 auth mode is unknown; model catalog is empty"
+      ],
+      "session_id": "01a0f599-1f70-7ad2-9406-5caa9b5cdaf7",
+      "turn_started_observed_at": "2026-10-01T03:54:08.850Z",
+      "turn_started_event": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a0f599-1f70-7ad2-9406-5caa9b5cdaf7",
+          "turn": {
+            "id": "01a0f599-2232-7d52-bae9-9b32f0249928",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": 1790826848,
+            "completedAt": null,
+            "durationMs": null
+          }
+        },
+        "emittedAtMs": 1790826848849
+      },
+      "rollout": "sessions/2026/10/01/rollout-2026-10-01T12-54-08-01a0f599-1f70-7ad2-9406-5caa9b5cdaf7.jsonl",
+      "rollout_sha256": "877562b04f0b1bc65993d20f9bcb5cd377a4739f893bd502a0bb6e456a150c83",
+      "rollout_task_started_at": "2026-10-01T03:54:08.828Z",
+      "rollout_turn_context": {
+        "model": "gpt-6-sol",
+        "effort": "low",
+        "service_tier": null
+      },
+      "rollout_task_started_count": 1,
+      "tool_call_count": 0,
+      "logs": {
+        "logs/gate5-app-server-gpt-6-sol.log": "68a61b7a1d689003c78f1aec667cd7066f3551713148ccf792d31430badbed2e",
+        "gate5/app-server-gpt-6-sol/attempt.json": "a97f6db10d86fdec3b2b8c51d28f4395e45526983312636b8a394f43fb119b52",
+        "gate5/app-server-gpt-6-sol/events.jsonl": "0dcc491ec928f4df858728ea551d905461968696d3d3d0e8ea4982613ac1edc7",
+        "gate5/app-server-gpt-6-sol/result.json": "bf528784de8499b5dbee99379e7300a082f9c60e52dfabdd8513f299e21a2803"
+      }
+    },
+    {
+      "backend": "app-server",
+      "model": "gpt-6.1-sol",
+      "effort": "low",
+      "accepted": true,
+      "exit_code": 0,
+      "terminal": "turn.completed",
+      "reply": "GATE5_OK",
+      "error": null,
+      "warnings": [
+        "codex: warn \u2014 auth mode is unknown; model catalog is empty"
+      ],
+      "session_id": "01a0f599-5542-7112-b8da-2b3cbae299cd",
+      "turn_started_observed_at": "2026-10-01T03:54:22.801Z",
+      "turn_started_event": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "01a0f599-5542-7112-b8da-2b3cbae299cd",
+          "turn": {
+            "id": "01a0f599-58ae-7e12-a642-386823a7570a",
+            "items": [],
+            "itemsView": "notLoaded",
+            "status": "inProgress",
+            "error": null,
+            "startedAt": 1790826862,
+            "completedAt": null,
+            "durationMs": null
+          }
+        },
+        "emittedAtMs": 1790826862801
+      },
+      "rollout": "sessions/2026/10/01/rollout-2026-10-01T12-54-21-01a0f599-5542-7112-b8da-2b3cbae299cd.jsonl",
+      "rollout_sha256": "a25ef94c3207a6168dde2f9b381afc5634342579f476d081a5b22ba195525b53",
+      "rollout_task_started_at": "2026-10-01T03:54:22.783Z",
+      "rollout_turn_context": {
+        "model": "gpt-6.1-sol",
+        "effort": "low",
+        "service_tier": null
+      },
+      "rollout_task_started_count": 1,
+      "tool_call_count": 0,
+      "logs": {
+        "logs/gate5-app-server-gpt-6.1-sol.log": "0b4ccf272ef397357d56aeea895bd9e51916dd0b0969e4ccd29995f7f9da4f0b",
+        "gate5/app-server-gpt-6.1-sol/attempt.json": "4fd1704045a7b433fd4af558a12ed912864a33b07172ae94a7f4e77ba849c007",
+        "gate5/app-server-gpt-6.1-sol/events.jsonl": "4af2d8b744d697cb6c850c04bd4f8abe62ca12a918d9821a2f6fdc91d76ba63e",
+        "gate5/app-server-gpt-6.1-sol/result.json": "3e2249731f7711eaeed7e54891dd184a4a5a3c47dab726b885cc2848105482de"
+      }
+    }
+  ]
+}
