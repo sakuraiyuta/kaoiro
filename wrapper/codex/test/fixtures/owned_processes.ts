@@ -40,12 +40,14 @@ export function ownedPids(tag: string): number[] {
     .filter((pid) => isOwned(pid, tag));
 }
 
+export function commandLine(pid: number): string | null {
+  const cmdline = readProc(pid, "cmdline");
+  return cmdline === null ? null : cmdline.split("\0").join(" ").trim();
+}
+
 export function ownedProcessSummary(tag: string): string {
   return ownedPids(tag)
-    .map((pid) => {
-      const cmdline = readProc(pid, "cmdline")?.split("\0").join(" ").trim();
-      return `${pid} ${cmdline || "<unreadable>"}`;
-    })
+    .map((pid) => `${pid} ${commandLine(pid) || "<unreadable>"}`)
     .join("\n");
 }
 

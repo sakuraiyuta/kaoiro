@@ -33,6 +33,7 @@ import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   OWNER_ENV,
+  commandLine,
   isOwned,
   ownedPids,
   ownedProcessSummary,
@@ -249,6 +250,8 @@ enabled=false
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!), `stderr: ${stderr}`).toBe(true);
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
+      // The command itself, not the sandbox launcher that carries it in args.
+      expect(commandLine(sleepPid!)).toBe("sleep 77");
       // Positive control for the survivor check below: the owner marker must
       // reach the sandboxed command, or an empty scan would prove nothing.
       // Per-PID reads, not a /proc scan: a scan is slow enough to delay the
