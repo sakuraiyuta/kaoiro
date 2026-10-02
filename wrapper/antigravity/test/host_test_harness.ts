@@ -45,6 +45,7 @@ export interface HostHarnessObserver {
   onAgySpawn?: (child: HarnessAgy) => void;
   onGateProbeSpawn?: () => void;
   onModelsProbeSpawn?: () => void;
+  onUsageProbeSpawn?: () => void;
 }
 
 /** One place that prevents unit tests from starting or signalling real children. */
@@ -67,6 +68,10 @@ export function createHarnessHost(
     modelsProbeSpawn: options.modelsProbeSpawn ?? (() => {
       observer.onModelsProbeSpawn?.();
       return unavailableProbe();
+    }),
+    usageProbeSpawn: options.usageProbeSpawn ?? (() => {
+      observer.onUsageProbeSpawn?.();
+      return unavailableProbe() as unknown as any;
     }),
     signalTarget: options.signalTarget ?? fakeSignalTarget,
   });

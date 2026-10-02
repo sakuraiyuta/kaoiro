@@ -163,6 +163,13 @@ export function agyEventToSessionId(event: AgyStreamEvent): string | null {
   return event.event === "init" ? event.conversation_id : null;
 }
 
+/** Active model slug carried by init, if specified. */
+export function agyEventToModel(event: AgyStreamEvent): string | null {
+  return event.event === "init" && typeof event.init.model === "string" && event.init.model !== ""
+    ? event.init.model
+    : null;
+}
+
 /** Final result payload; `CANCELED` is a normal completed turn per the probe. */
 export function agyEventToResult(event: AgyStreamEvent): ResultPayload | null {
   if (event.event !== "result") return null;
