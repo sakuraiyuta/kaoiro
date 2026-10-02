@@ -65,7 +65,11 @@ import {
   requestSessionResetDescriptor,
 } from "@kaoiro/agent-common";
 import { PermissionBroker } from "@kaoiro/agent-common";
-import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
+import {
+  CLAUDE_SCHEDULER_SETTINGS,
+  PERMISSION_MODES,
+  loadConfig,
+} from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
 import {
   makeLog,
@@ -168,6 +172,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
+  // The scheduler values the host will read from `config`, printed from that
+  // same object so the line cannot report a value the host did not receive.
+  writeRedactedStderr(
+    `[claude scheduler] pid=${process.pid} ${CLAUDE_SCHEDULER_SETTINGS.map(
+      ({ field }) => `${field}=${config[field] ?? "default"}`,
+    ).join(" ")}\n`,
+  );
   const phase2Source = personaOptInSource(
     config.persona.id,
     process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY,
