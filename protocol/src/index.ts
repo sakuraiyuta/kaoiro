@@ -214,6 +214,12 @@ export interface WrapperConfig {
   /** Turn watchdog: wait for the interrupt before the fail-stop. Omitted =
    *  the engine's environment variable, then 60 seconds. */
   turn_watchdog_abort_grace_ms?: number;
+  /** Antigravity absolute bound on one tool step. Relayed to Antigravity
+   *  wrappers only; omitted = the environment variable, then 10 minutes. */
+  antigravity_tool_timeout_ms?: number;
+  /** Antigravity idle-epoch lifetime. Relayed to Antigravity wrappers only;
+   *  omitted = the environment variable, then 30 minutes. */
+  antigravity_epoch_idle_ms?: number;
   /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
   yield_claim_timeout_ms?: number;
   /** Claude phase-2 wait for the root hook after the old result. */

@@ -7,7 +7,10 @@
 // disagree about whether it is set.
 
 import { readTurnWatchdogSettings as readCodexWatchdog } from "@kaoiro/codex";
-import { readTurnWatchdogSettings as readAntigravityWatchdog } from "@kaoiro/antigravity";
+import {
+  readEpochIdleMs,
+  readTurnWatchdogSettings as readAntigravityWatchdog,
+} from "@kaoiro/antigravity";
 import {
   CLAUDE_SCHEDULER_SETTINGS,
   PERMISSION_TIMEOUT_ENV,
@@ -26,12 +29,24 @@ import { ConfigError } from "./config-error.js";
 import type { RunnerConfig } from "./config.js";
 
 export type BehaviourBlock = "claude_code" | "codex" | "antigravity";
-export type BehaviourValue = number;
+export type BehaviourValue = number | boolean | string;
+
+/** Environment variables of the runner's own settings. Defined here, not in
+ *  config.ts, because the registry below is built at module load and config.ts
+ *  imports this module. */
+export const SERVER_URL_ENV = "KAOIRO_RUNNER_SERVER_URL";
+export const PHOENIX_HEARTBEAT_LOGS_ENV = "KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS";
 
 /** Turn watchdog keys, present in every engine block. */
 export interface WatchdogConfig {
   turn_watchdog_inactivity_ms?: number;
   turn_watchdog_abort_grace_ms?: number;
+}
+
+/** Antigravity-only timing keys, next to its watchdog keys. */
+export interface AntigravityBehaviourConfig extends WatchdogConfig {
+  tool_timeout_ms?: number;
+  epoch_idle_ms?: number;
 }
 
 export interface ClaudeCodeConfig extends WatchdogConfig {
@@ -45,9 +60,13 @@ interface BehaviourRow {
   /** Engine block of runner.config.json; absent for a top-level key. */
   readonly block: BehaviourBlock | undefined;
   readonly key: string;
-  readonly wrapperField: keyof WrapperConfig;
-  /** The engine whose wrappers receive it; "all" for every engine. */
-  readonly engine: EngineKind | "all";
+  /** Absent for a setting of the runner itself, which is never relayed. */
+  readonly wrapperField: keyof WrapperConfig | undefined;
+  /** The engine whose wrappers receive it; "all" for every engine, "runner"
+   *  for a setting the runner itself acts on. */
+  readonly engine: EngineKind | "all" | "runner";
+  /** The file key is parsed by parseRunnerConfig itself, not by this table. */
+  readonly fileParsedElsewhere?: true;
   readonly env: string;
   readonly envIsSet: (raw: string | undefined) => boolean;
   /** Parses a runner.config.json value; throws ConfigError. */
@@ -200,10 +219,107 @@ const PERMISSION_TIMEOUT_ROW: BehaviourRow = {
   },
 };
 
+const ANTIGRAVITY_MIN_TIMING_MS = 1_000;
+
+/** Antigravity's two timing keys beside the watchdog. A set variable is parsed
+ *  by the wrapper's own readers. */
+const ANTIGRAVITY_TIMING_ROWS: readonly BehaviourRow[] = [
+  {
+    block: "antigravity",
+    key: "tool_timeout_ms",
+    wrapperField: "antigravity_tool_timeout_ms",
+    engine: "antigravity",
+    env: "KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS",
+    envIsSet: (raw) => raw !== undefined && raw !== "",
+    parseFile: (value) => {
+      if (!integerInRange(value, ANTIGRAVITY_MIN_TIMING_MS, TURN_WATCHDOG_MAX_DELAY_MS)) {
+        throw new ConfigError(
+          `antigravity.tool_timeout_ms must be an integer from ` +
+            `${ANTIGRAVITY_MIN_TIMING_MS} through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+        );
+      }
+      return value;
+    },
+    parseEnv: (raw) => {
+      try {
+        return readAntigravityWatchdog(
+          { KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS: raw },
+          () => {},
+        ).toolTimeoutMs;
+      } catch (error) {
+        throw new ConfigError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  },
+  {
+    block: "antigravity",
+    key: "epoch_idle_ms",
+    wrapperField: "antigravity_epoch_idle_ms",
+    engine: "antigravity",
+    env: "KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS",
+    envIsSet: (raw) => raw !== undefined && raw !== "",
+    parseFile: (value) => {
+      if (!integerInRange(value, ANTIGRAVITY_MIN_TIMING_MS, TURN_WATCHDOG_MAX_DELAY_MS)) {
+        throw new ConfigError(
+          `antigravity.epoch_idle_ms must be an integer from ` +
+            `${ANTIGRAVITY_MIN_TIMING_MS} through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+        );
+      }
+      return value;
+    },
+    parseEnv: (raw) => {
+      try {
+        return readEpochIdleMs({ KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS: raw });
+      } catch (error) {
+        throw new ConfigError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  },
+];
+
+/** Settings the runner acts on itself. Their variables are deprecated like the
+ *  others and still win; nothing is relayed to a wrapper. */
+const RUNNER_ROWS: readonly BehaviourRow[] = [
+  {
+    block: undefined,
+    key: "server_url",
+    wrapperField: undefined,
+    engine: "runner",
+    fileParsedElsewhere: true,
+    env: SERVER_URL_ENV,
+    envIsSet: (raw) => raw !== undefined && raw !== "",
+    parseFile: (value) => String(value),
+    parseEnv: (raw) => {
+      if (!raw.startsWith("ws://") && !raw.startsWith("wss://")) {
+        throw new ConfigError(`${SERVER_URL_ENV} must start with ws:// or wss://`);
+      }
+      return raw;
+    },
+  },
+  {
+    block: undefined,
+    key: "log_phoenix_heartbeats",
+    wrapperField: undefined,
+    engine: "runner",
+    env: PHOENIX_HEARTBEAT_LOGS_ENV,
+    envIsSet: (raw) => raw !== undefined && raw !== "",
+    parseFile: (value) => {
+      if (typeof value !== "boolean") {
+        throw new ConfigError("log_phoenix_heartbeats must be a boolean");
+      }
+      return value;
+    },
+    // Exactly "1" turns it on; anything else is off, as before.
+    parseEnv: (raw) => raw === "1",
+  },
+];
+
 export const BEHAVIOUR_ROWS: readonly BehaviourRow[] = [
   ...CLAUDE_SCHEDULER_ROWS,
   ...WATCHDOG_ROWS,
+  ...ANTIGRAVITY_TIMING_ROWS,
   PERMISSION_TIMEOUT_ROW,
+  ...RUNNER_ROWS,
 ];
 
 /** The "block.key" spelling used in warnings and in the reference table. */
@@ -216,27 +332,27 @@ export function behaviourConfigPath(row: BehaviourRow): string {
 export function parseBehaviourBlock(
   block: BehaviourBlock,
   raw: Record<string, unknown>,
-): ClaudeCodeConfig & WatchdogConfig {
+): ClaudeCodeConfig & AntigravityBehaviourConfig {
   const parsed: Record<string, BehaviourValue> = {};
   for (const row of BEHAVIOUR_ROWS) {
     if (row.block !== block) continue;
     const value = raw[row.key];
     if (value !== undefined) parsed[row.key] = row.parseFile(value);
   }
-  return parsed;
+  return parsed as ClaudeCodeConfig & AntigravityBehaviourConfig;
 }
 
 /** The top-level behaviour keys (no engine block) present in the file. */
 export function parseTopLevelBehaviour(
   raw: Record<string, unknown>,
-): { permission_timeout_ms?: number } {
+): { permission_timeout_ms?: number; log_phoenix_heartbeats?: boolean } {
   const parsed: Record<string, BehaviourValue> = {};
   for (const row of BEHAVIOUR_ROWS) {
-    if (row.block !== undefined) continue;
+    if (row.block !== undefined || row.fileParsedElsewhere) continue;
     const value = raw[row.key];
     if (value !== undefined) parsed[row.key] = row.parseFile(value);
   }
-  return parsed;
+  return parsed as { permission_timeout_ms?: number; log_phoenix_heartbeats?: boolean };
 }
 
 function fileValue(
@@ -249,10 +365,14 @@ function fileValue(
   return holder?.[row.key] as BehaviourValue | undefined;
 }
 
-function isEnabled(config: RunnerConfig, engine: EngineKind | "all"): boolean {
+function isEnabled(
+  config: RunnerConfig,
+  engine: EngineKind | "all" | "runner",
+): boolean {
   // Absent capabilities = every bundled engine (config.ts BUNDLED_ENGINES).
-  // A top-level row applies to every engine, so it is always read.
-  if (engine === "all") return true;
+  // A top-level row applies to every engine and a runner row to the runner
+  // itself, so both are always read.
+  if (engine === "all" || engine === "runner") return true;
   return config.capabilities?.includes(engine) ?? true;
 }
 
@@ -292,6 +412,7 @@ export function computeBehaviourRelay(
 ): BehaviourRelay {
   const relay: Record<string, Record<string, BehaviourValue>> = {};
   for (const row of BEHAVIOUR_ROWS) {
+    if (row.engine === "runner" || row.wrapperField === undefined) continue;
     if (row.envIsSet(env[row.env])) continue;
     const value = fileValue(config, row);
     if (value === undefined) continue;
@@ -343,4 +464,15 @@ export function describeBehaviourRelay(relay: BehaviourRelay): string {
     }
   }
   return parts.length === 0 ? "none" : parts.join(", ");
+}
+
+/** Whether Phoenix heartbeat lines are kept: a set variable wins (exactly
+ *  "1" is on), else the file value, else off. */
+export function resolveHeartbeatLogging(
+  config: RunnerConfig,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const raw = env[PHOENIX_HEARTBEAT_LOGS_ENV];
+  if (raw !== undefined && raw !== "") return raw === "1";
+  return config.log_phoenix_heartbeats === true;
 }

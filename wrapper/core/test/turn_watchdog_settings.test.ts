@@ -115,10 +115,12 @@ describe("permission timeout variable", () => {
   });
 });
 
-describe("parseConfig turn watchdog fields", () => {
+describe("parseConfig timing fields", () => {
   it.each([
     ["turn_watchdog_inactivity_ms", 60_000, 59_999],
     ["turn_watchdog_abort_grace_ms", 1, 0],
+    ["antigravity_tool_timeout_ms", 1_000, 999],
+    ["antigravity_epoch_idle_ms", 1_000, 999],
   ] as const)("%s: literal bounds, numbers only", (field, min, below) => {
     expect(parseConfig({ ...base, [field]: min })[field]).toBe(min);
     expect(parseConfig({ ...base, [field]: 2_147_483_647 })[field]).toBe(2_147_483_647);

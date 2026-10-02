@@ -604,6 +604,11 @@ export class AntigravityHost implements EngineAdapter {
     return this.#abortGraceMs;
   }
 
+  /** The idle-epoch lifetime this host arms its idle timer with. */
+  get epochIdleMs(): number {
+    return this.#epochIdleMs;
+  }
+
   get state(): KaoiroState {
     return this.#machine.state;
   }

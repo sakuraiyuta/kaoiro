@@ -67,12 +67,18 @@ export function formatTurnWatchdogLine(
     sources: { inactivityMs: SettingSource; abortGraceMs: SettingSource };
   },
   permissionTimeoutMs: number | undefined,
+  /** Engine-specific values with their sources, appended after the common ones. */
+  extra: ReadonlyArray<readonly [name: string, resolved: ResolvedMs]> = [],
 ): string {
   const { settings, sources } = resolved;
   return (
     `[kaoiro] ${engine} behaviour: pid=${pid} ` +
     `turn_watchdog_inactivity_ms=${settings.inactivityMs}(${sources.inactivityMs}) ` +
     `turn_watchdog_abort_grace_ms=${settings.abortGraceMs}(${sources.abortGraceMs}) ` +
-    `permission_timeout_ms=${permissionTimeoutMs ?? "none"}\n`
+    `permission_timeout_ms=${permissionTimeoutMs ?? "none"}` +
+    extra
+      .map(([name, { value, source }]) => ` ${name}=${value}(${source})`)
+      .join("") +
+    "\n"
   );
 }

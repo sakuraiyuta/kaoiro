@@ -11,6 +11,7 @@ export type {
 export { handleAntigravityInterAgentMessage } from "./inter_agent_message_handler.js";
 export type { AntigravityInterAgentMessageHandlerContext } from "./inter_agent_message_handler.js";
 export { TurnWatchdog, readTurnWatchdogSettings } from "./turn_watchdog.js";
+export { readEpochIdleMs } from "./epoch.js";
 export type {
   TurnWatchdogOptions,
   TurnWatchdogSettings,

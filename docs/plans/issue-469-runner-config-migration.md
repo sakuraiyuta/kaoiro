@@ -402,10 +402,24 @@ Progress (updated as each group lands):
 | --- | --- |
 | 1. Common path and Claude scheduler keys | implemented; implementation review round 1 (must 3, should 1) fixed forward in `42414ee4`, `dd8af081` and the plan update; awaiting round 2 |
 | 2. Turn watchdogs and `permission_timeout_ms` | implemented; the gate observation point was fixed together with group 1's round-1 finding; awaiting implementation review |
-| 3. Antigravity tool timeout and epoch idle; runner-own settings and `KAOIRO_RUNNER_SERVER_URL` | planned |
+| 3. Antigravity tool timeout and epoch idle; runner-own settings and `KAOIRO_RUNNER_SERVER_URL` | implemented (see the notes below); awaiting implementation review |
 | 4. The three flags | planned |
 | 5. Directories | planned |
 | 6. Default models | planned |
+
+Group 3 notes. Runner-own settings (`server_url`, `log_phoenix_heartbeats`) are
+rows of the same registry with engine `runner`: they are validated, warned
+about and diffed like the others and never relayed. The warnings read the file
+values, which the runner now keeps next to the effective config, because
+`applyServerUrlOverride` replaces `server_url` in the effective one. A reload in
+which only a hidden file value changed (the effective diff is empty) writes its
+shadow warning before returning, since nothing else is applied that could fail.
+`log_phoenix_heartbeats` reaches the running link through a getter
+(`RunnerLinkOptions.logHeartbeats`) that the Phoenix log filter asks on every
+line. `readEpochIdleMs(env, config?)` is now a thin wrapper over
+`resolveEpochIdleMs`, which returns the value with its source; the ceiling is
+2147483647. The Antigravity consumer line gains `tool_timeout_ms`, `epoch_idle_ms`
+and the host's abort grace; the resolver line gains both with their sources.
 
 ### 2.7 Production compatibility
 

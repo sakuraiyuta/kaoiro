@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import {
-  readDigitsMs,
   resolveDigitsMs,
   type SettingSource,
 } from "@kaoiro/wrapper-core";
@@ -31,11 +30,16 @@ export interface TurnWatchdogSettings {
 export interface TurnWatchdogConfigValues {
   turn_watchdog_inactivity_ms?: number;
   turn_watchdog_abort_grace_ms?: number;
+  antigravity_tool_timeout_ms?: number;
 }
 
 export interface ResolvedTurnWatchdog {
   settings: TurnWatchdogSettings;
-  sources: { inactivityMs: SettingSource; abortGraceMs: SettingSource };
+  sources: {
+    inactivityMs: SettingSource;
+    abortGraceMs: SettingSource;
+    toolTimeoutMs: SettingSource;
+  };
 }
 
 /** Resolves each value as config field, then the environment variable, then
@@ -62,6 +66,14 @@ export function resolveTurnWatchdogSettings(
     1,
     MAX_TURN_WATCHDOG_DELAY_MS,
   );
+  const toolTimeout = resolveDigitsMs(
+    env,
+    TOOL_TIMEOUT_ENV,
+    config?.antigravity_tool_timeout_ms,
+    DEFAULT_TOOL_TIMEOUT_MS,
+    MIN_TOOL_TIMEOUT_MS,
+    MAX_TURN_WATCHDOG_DELAY_MS,
+  );
   if (inactivity.value < DEFAULT_TURN_WATCHDOG_INACTIVITY_MS) {
     const name =
       inactivity.source === "config"
@@ -76,17 +88,12 @@ export function resolveTurnWatchdogSettings(
     settings: {
       inactivityMs: inactivity.value,
       abortGraceMs: abortGrace.value,
-  toolTimeoutMs: readDigitsMs(
-    env,
-    TOOL_TIMEOUT_ENV,
-    DEFAULT_TOOL_TIMEOUT_MS,
-    MIN_TOOL_TIMEOUT_MS,
-    MAX_TURN_WATCHDOG_DELAY_MS,
-  ),
+      toolTimeoutMs: toolTimeout.value,
     },
     sources: {
       inactivityMs: inactivity.source,
       abortGraceMs: abortGrace.source,
+      toolTimeoutMs: toolTimeout.source,
     },
   };
 }
