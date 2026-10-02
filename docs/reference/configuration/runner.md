@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-09-27
+last_updated: 2026-10-02
 ---
 
 # Runner configuration
@@ -75,6 +75,40 @@ omitted. Because this value is read from `process.env` at runner startup, restar
 the runner service after changing it. For temporary dogfood investigation,
 launching with `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` also
 emits the full log to `tmp/dogfood-logs/runner.log`.
+
+## Behaviour settings
+
+Behaviour settings of the runner and its wrappers live in `runner.config.json`
+(issue #469). A deprecated `KAOIRO_*` variable still overrides the key; it
+logs a deprecation warning and will be removed in a later release. Settings
+are per host; engine settings go in the engine's block (`claude_code` here).
+
+Precedence is variable, then `runner.config.json`, then the default. The
+runner does not copy a variable into the wrapper config: when a variable is
+set (not undefined and not the empty string), the runner relays nothing for
+that key and the wrapper reads the inherited variable through its own reader.
+A set variable is validated at runner start and on every reload with the
+wrapper's own grammar, so an invalid one (including a whitespace-only value)
+stops the runner at start, naming the variable, and a reload that would enable
+an engine with an invalid variable is skipped. Variables of an engine not in
+`capabilities` are neither read nor validated.
+
+A value in `runner.config.json` must be a JSON number; strings, booleans and
+`null` are rejected, and an invalid file value skips the reload (the last valid
+configuration stays). A change reaches wrappers launched after the reload
+(spawn, resume, restart, reset, crash relaunch); running wrappers keep their
+launch-time values. The runner logs `runner: behaviour settings for subsequent
+wrappers: ...` when the relayed values change, and warns when a file value is
+hidden by a variable.
+
+| Variable | Config key | Type | Range | Default | Reader | Precedence |
+| --- | --- | --- | --- | --- | --- | --- |
+| `KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS` | `claude_code.yield_claim_timeout_ms` | integer | 1..60000 | 2000 | Claude wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | `claude_code.pending_receipt_root_timeout_ms` | integer | 1..60000 | 2000 | Claude wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | `claude_code.urgent_overtake_limit` | integer | 1..64 | 2 | Claude wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CLAUDE_FOLDS_PER_TURN` | `claude_code.folds_per_turn` | integer | 1..64 | 3 | Claude wrapper (`parseConfig`) | variable > file > default |
+
+What each Claude key controls is in [Wrapper configuration](wrapper.md).
 
 ## Codex home
 

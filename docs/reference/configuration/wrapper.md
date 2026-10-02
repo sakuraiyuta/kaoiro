@@ -131,10 +131,12 @@ The existing normal stage reports remain available when phase 2 is off.
 
 The following optional `WrapperConfig` fields control the Claude input
 scheduler. They are read when that wrapper starts; changing them requires a
-new wrapper process. A directly launched wrapper may set them in its config
-JSON. Runner-generated wrapper configs do not relay these fields, so a
-runner-managed deployment sets them through the inherited environment.
-An explicit config value wins over its environment fallback.
+new wrapper process. A runner-managed deployment sets them in the
+`claude_code` block of `runner.config.json` (see
+[Runner configuration](runner.md#behaviour-settings): the runner relays the
+file value, and a set variable wins by the runner relaying nothing for that
+key). A directly launched wrapper may set them in its config JSON, where an
+explicit config value wins over its environment fallback.
 
 | Field | Default | Input | Effect |
 | --- | ---: | --- | --- |
