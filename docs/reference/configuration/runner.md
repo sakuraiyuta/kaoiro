@@ -35,8 +35,8 @@ one host with the other.
 
 Set `KAOIRO_RUNNER_TOKEN=<token issued in 1.1>` in `runner.env` (pair it with
 `<host_id>:<token>` in server-side `KAOIRO_RUNNER_TOKENS`) and run `chmod 600`.
-Override `server_url` with `KAOIRO_RUNNER_SERVER_URL` in `runner.env` as well
-(issue #135; env takes precedence over the config file).
+Set `server_url` in `runner.config.json`. The deprecated variable
+`KAOIRO_RUNNER_SERVER_URL` still overrides it (see below).
 
 For local launchers, `runner/runner.env` is a separate gitignored file that
 contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
@@ -44,16 +44,19 @@ contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
 to the server list for the configured host; a preset environment token wins
 after validation.
 
-The target `server_url` can be overridden by the environment variable
-`KAOIRO_RUNNER_SERVER_URL` (**env takes precedence over the config file**, issue
-#135). Use this when switching the connection destination without editing
-`runner.config.json` in distributed binary or service operations (systemd/launchd
-units, `env_file`, etc.). It must begin with `ws://` or `wss://`, and an invalid
-format fails fast at startup / config reload. Because hot reload
-(`watchRunnerConfig`) maintains the same precedence, rewriting `server_url` in
-`runner.config.json` while the env var is set does not change the actual
-destination (hot reload from changes to other fields like `host_id` continues to
-work as usual).
+`server_url` is a `runner.config.json` key and hot-reloads (the runner reconnects
+when it changes). The environment variable `KAOIRO_RUNNER_SERVER_URL`
+(**deprecated; it still takes precedence over the config file**, issue #135)
+replaces the file value when it is set and not empty. It must begin with `ws://`
+or `wss://`, and an invalid format fails fast at startup / config reload. The
+runner warns once per process that the variable is deprecated, and warns again
+whenever the file value changes while a different variable value hides it.
+Because hot reload keeps the same precedence, rewriting `server_url` in
+`runner.config.json` while the variable is set does not change the actual
+destination. Move the value into `server_url` and remove the variable from
+`runner.env` to silence the warnings (see
+[Runner install](../../operations/runner-install.md)). The variable is not
+relayed to wrappers; they get their URL from the runner's own `server_url`.
 
 ## Other `runner.config.json` and env fields
 
@@ -68,13 +71,14 @@ dashboard and wrapper context notifications (issue #254).
 
 The runner's Phoenix wire log omits periodic heartbeat pushes and corresponding
 replies by default. Other transport / reconnect / error / control messages
-continue to be emitted as before. Set `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1`
-in `runner.env` only when full logging is required for connection-level
-investigation. Any value other than `1` or an unset variable keeps heartbeats
-omitted. Because this value is read from `process.env` at runner startup, restart
-the runner service after changing it. For temporary dogfood investigation,
-launching with `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` also
-emits the full log to `tmp/dogfood-logs/runner.log`.
+continue to be emitted as before. Set `"log_phoenix_heartbeats": true` in
+`runner.config.json` only when full logging is required for connection-level
+investigation; the change applies to the next log line, with no restart. The
+deprecated variable `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` still overrides the
+key (exactly `1` keeps heartbeats; any other set value omits them). For
+temporary dogfood investigation, launching with
+`KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` also emits the full
+log to `tmp/dogfood-logs/runner.log`.
 
 ## Behaviour settings
 
@@ -94,8 +98,9 @@ stops the runner at start, naming the variable, and a reload that would enable
 an engine with an invalid variable is skipped. Variables of an engine not in
 `capabilities` are neither read nor validated.
 
-A value in `runner.config.json` must be a JSON number; strings, booleans and
-`null` are rejected, and an invalid file value skips the reload (the last valid
+A numeric value in `runner.config.json` must be a JSON number; strings, booleans and
+`null` are rejected (`log_phoenix_heartbeats` must be a JSON boolean, `server_url`
+a string), and an invalid file value skips the reload (the last valid
 configuration stays). A change reaches wrappers launched after the reload
 (spawn, resume, restart, reset, crash relaunch); running wrappers keep their
 launch-time values. The runner logs `runner: behaviour settings for subsequent
@@ -114,7 +119,11 @@ hidden by a variable.
 | `KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS` | `codex.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Codex wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` | `antigravity.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | at least 1 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
+| `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner (live, per log line) | variable > file > default |
 
 The turn watchdog interrupts a turn whose SDK stream has been silent for
 `turn_watchdog_inactivity_ms`, then stops the wrapper if the interrupt has not
@@ -123,6 +132,13 @@ with a digits-only grammar (`"1e3"` is rejected); the permission timeout
 variable and the scheduler variables use `Number()` (`"1e3"` is accepted).
 Whitespace-only values are invalid for every numeric variable. What each Claude
 scheduler key controls is in [Wrapper configuration](wrapper.md).
+
+`antigravity.tool_timeout_ms` is the absolute bound on one Antigravity tool
+step, and `antigravity.epoch_idle_ms` is how long an idle `agy` epoch lives
+before it is ended. Both variables use the digits-only grammar; the epoch idle
+variable is capped at 2147483647 (a larger value reached `setTimeout`,
+which clamps it to 1 ms). `server_url` and `log_phoenix_heartbeats` are acted on
+by the runner itself and are never relayed to a wrapper.
 
 ## Codex home
 

@@ -34,7 +34,7 @@ import { AntigravityInterAgentTurnCoordinator } from "./inter_agent_turn_coordin
 import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "./source_resolution.js";
 import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
-import { readEpochIdleMs } from "./epoch.js";
+import { resolveEpochIdleMs } from "./epoch.js";
 import { resolveTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
 import { antigravityTranscriptPath } from "./transcript_path.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
@@ -107,15 +107,29 @@ export async function runAntigravityCli(
     config,
   );
   const turnWatchdogSettings = resolvedWatchdog.settings;
+  const resolvedEpochIdle = resolveEpochIdleMs(
+    process.env,
+    config.antigravity_epoch_idle_ms,
+  );
   writeRedactedStderr(
     formatTurnWatchdogLine(
       "antigravity",
       process.pid,
       resolvedWatchdog,
       config.permission_timeout_ms,
+      [
+        [
+          "tool_timeout_ms",
+          {
+            value: turnWatchdogSettings.toolTimeoutMs,
+            source: resolvedWatchdog.sources.toolTimeoutMs,
+          },
+        ],
+        ["epoch_idle_ms", resolvedEpochIdle],
+      ],
     ),
   );
-  const epochIdleMs = readEpochIdleMs(process.env);
+  const epochIdleMs = resolvedEpochIdle.value;
   if (nonInteractiveToolEnv(process.env).preservedGitSshCommand) {
     writeRedactedStderr("[kaoiro] antigravity respects the operator's GIT_SSH_COMMAND; ssh BatchMode is not injected\n");
   }
@@ -668,7 +682,9 @@ export async function runAntigravityCli(
     formatConsumerSettingsLine("antigravity", process.pid, [
       ["turn_watchdog_inactivity_ms", turnWatchdog.settings.inactivityMs],
       ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
+      ["tool_timeout_ms", turnWatchdog.settings.toolTimeoutMs],
       ["host_abort_grace_ms", host.abortGraceMs],
+      ["epoch_idle_ms", host.epochIdleMs],
       ["permission_broker_timeout_ms", permissionBroker.timeoutMs],
     ]),
   );

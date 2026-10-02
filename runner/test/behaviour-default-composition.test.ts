@@ -268,6 +268,8 @@ describe("default composition (issue #469)", () => {
               cli_path: agy,
               turn_watchdog_inactivity_ms: 80_000,
               turn_watchdog_abort_grace_ms: 5000,
+              tool_timeout_ms: 2000,
+              epoch_idle_ms: 3000,
             },
           }),
         );
@@ -317,7 +319,8 @@ describe("default composition (issue #469)", () => {
         );
         expect(antigravity[2]).toBe(
           "turn_watchdog_inactivity_ms=80000 turn_watchdog_abort_grace_ms=5000 " +
-            "host_abort_grace_ms=5000 permission_broker_timeout_ms=7000",
+            "tool_timeout_ms=2000 host_abort_grace_ms=5000 epoch_idle_ms=3000 " +
+            "permission_broker_timeout_ms=7000",
         );
 
         const claudeBehaviour = await lineFor(
@@ -337,7 +340,7 @@ describe("default composition (issue #469)", () => {
         );
         expect(antigravityBehaviour[1]).toBe(
           "turn_watchdog_inactivity_ms=80000(config) turn_watchdog_abort_grace_ms=5000(config) " +
-            "permission_timeout_ms=7000",
+            "permission_timeout_ms=7000 tool_timeout_ms=2000(config) epoch_idle_ms=3000(config)",
         );
       } catch (error) {
         primary = error;

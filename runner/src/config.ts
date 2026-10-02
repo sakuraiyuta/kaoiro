@@ -17,8 +17,11 @@ import type { CodexAuthMode } from "./codex-auth.js";
 import { normalizeAgyCliVersion } from "./antigravity-version.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import {
+  PHOENIX_HEARTBEAT_LOGS_ENV,
+  SERVER_URL_ENV,
   parseBehaviourBlock,
   parseTopLevelBehaviour,
+  type AntigravityBehaviourConfig,
   type ClaudeCodeConfig,
   type WatchdogConfig,
 } from "./behaviour-settings.js";
@@ -74,6 +77,9 @@ export interface RunnerConfig {
   /** No-response window before a permission request is denied, for every
    *  engine's wrapper (issue #469). Omitted = wait for the operator. */
   permission_timeout_ms?: number;
+  /** Keep Phoenix's periodic heartbeat push/reply lines in the runner log
+   *  (issue #469). Applied live on reload. Omitted = off. */
+  log_phoenix_heartbeats?: boolean;
 }
 
 export type ChatGptPlan =
@@ -123,7 +129,7 @@ export interface CodexConfig extends WatchdogConfig {
   extra_models?: EngineModelInfo[];
 }
 
-export interface AntigravityConfig extends WatchdogConfig {
+export interface AntigravityConfig extends AntigravityBehaviourConfig {
   cli_path?: string;
   probe_timeout_ms?: number;
   /** Operator-declared models to add to the resolved catalog, on top of
@@ -749,13 +755,12 @@ export function wrapperUrlFrom(serverUrl: string): string {
 }
 
 /** env override name for `server_url` (issue #135). */
-export const SERVER_URL_ENV = "KAOIRO_RUNNER_SERVER_URL";
+export { SERVER_URL_ENV };
 
 /** Set to `1` to include Phoenix's periodic heartbeat wire logs. They are
  *  suppressed by default because the steady-state push/reply pair obscures
  *  operational messages in runner.log. */
-export const PHOENIX_HEARTBEAT_LOGS_ENV =
-  "KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS";
+export { PHOENIX_HEARTBEAT_LOGS_ENV };
 
 /** Whether the runner should retain the normally-suppressed periodic Phoenix
  *  heartbeat push/reply wire logs. Kept as an explicit `1` opt-in so a typo

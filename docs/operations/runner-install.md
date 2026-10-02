@@ -100,8 +100,10 @@ chmod 600 "$conf/runner.env"
 # and write KAOIRO_RUNNER_TOKEN in runner.env
 ```
 
-[Runner configuration](../reference/configuration/runner.md) is canonical for the
-`server_url` env override (`KAOIRO_RUNNER_SERVER_URL`).
+[Runner configuration](../reference/configuration/runner.md) is canonical for
+`server_url` in `runner.config.json` and for the deprecated `KAOIRO_RUNNER_SERVER_URL`
+override that still takes precedence over it. Put the connection target in
+`server_url` and keep `runner.env` for secrets such as `KAOIRO_RUNNER_TOKEN`.
 
 [Setup wizards](../reference/configuration/setup-wizards.md) is canonical for the
 items asked, destinations, and validation rules in `kaoiro-runner-setup.sh`.

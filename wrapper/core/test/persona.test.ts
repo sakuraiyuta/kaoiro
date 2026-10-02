@@ -31,6 +31,8 @@ const ROUND_TRIP_CASES: {
   permission_timeout_ms: { value: 5000 },
   turn_watchdog_inactivity_ms: { value: 90_000 },
   turn_watchdog_abort_grace_ms: { value: 45_000 },
+  antigravity_tool_timeout_ms: { value: 120_000 },
+  antigravity_epoch_idle_ms: { value: 900_000 },
   yield_claim_timeout_ms: { value: 2000 },
   pending_receipt_root_timeout_ms: { value: 2500 },
   urgent_overtake_limit: { value: 2 },

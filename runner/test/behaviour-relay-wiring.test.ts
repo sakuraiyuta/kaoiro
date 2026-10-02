@@ -222,6 +222,104 @@ describe("behaviour settings relay (issue #469)", () => {
       }
     }));
 
+  it("Antigravity tool_timeout_ms and epoch_idle_ms reach Antigravity wrappers from the next lifetime", () =>
+    withRoot(async (root, configPath) => {
+      const h = harness(root, configPath);
+      const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const capabilities = ["claude-code", "codex", "antigravity"];
+      const agy = join(root, "agy");
+      writeFileSync(agy, "#!/bin/sh\nexit 0\n");
+      chmodSync(agy, 0o755);
+      h.writeConfig(
+        { antigravity: { cli_path: agy, tool_timeout_ms: 2000, epoch_idle_ms: 3000 } },
+        capabilities,
+      );
+      const runtime = await runRunnerCli(h.dependencies, [configPath]);
+      try {
+        h.callbacks().onSpawn?.(h.spawn("a", "antigravity"));
+        h.callbacks().onSpawn?.(h.spawn("c"));
+        expect(h.configs[0]).toMatchObject({
+          antigravity_tool_timeout_ms: 2000,
+          antigravity_epoch_idle_ms: 3000,
+        });
+        expect(h.configs[1]).not.toHaveProperty("antigravity_tool_timeout_ms");
+        h.writeConfig(
+          { antigravity: { cli_path: agy, tool_timeout_ms: 2500 } },
+          capabilities,
+        );
+        await h.reload(runtime!);
+        h.callbacks().onSpawn?.(h.spawn("b", "antigravity"));
+        expect(h.configs[2]?.antigravity_tool_timeout_ms).toBe(2500);
+        expect(h.configs[2]).not.toHaveProperty("antigravity_epoch_idle_ms");
+      } finally {
+        runtime?.close();
+        diagnostic.mockRestore();
+      }
+    }));
+
+  it("log_phoenix_heartbeats applies live to the running link, and a set variable wins", () =>
+    withRoot(async (root, configPath) => {
+      const h = harness(root, configPath);
+      const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      h.writeConfig({});
+      const runtime = await runRunnerCli(h.dependencies, [configPath]);
+      try {
+        const logHeartbeats = h.callbacks().logHeartbeats!;
+        expect(logHeartbeats()).toBe(false);
+        h.writeConfig({ log_phoenix_heartbeats: true });
+        await h.reload(runtime!);
+        expect(logHeartbeats()).toBe(true);
+        h.writeConfig({ log_phoenix_heartbeats: false });
+        await h.reload(runtime!);
+        expect(logHeartbeats()).toBe(false);
+      } finally {
+        runtime?.close();
+        diagnostic.mockRestore();
+      }
+      vi.stubEnv("KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS", "0");
+      h.writeConfig({ log_phoenix_heartbeats: true });
+      const withVariable = await runRunnerCli(h.dependencies, [configPath]);
+      try {
+        expect(h.callbacks().logHeartbeats!()).toBe(false);
+      } finally {
+        withVariable?.close();
+      }
+    }));
+
+  it("KAOIRO_RUNNER_SERVER_URL warns like the others, including when only the hidden file value changes", () =>
+    withRoot(async (root, configPath) => {
+      vi.stubEnv("KAOIRO_RUNNER_SERVER_URL", "wss://prod.example/runner");
+      const h = harness(root, configPath);
+      const lines: string[] = [];
+      const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        lines.push(String(chunk));
+        return true;
+      });
+      h.writeConfig({ server_url: "ws://fixture/runner" });
+      const runtime = await runRunnerCli(h.dependencies, [configPath]);
+      try {
+        const deprecated = () =>
+          lines.filter((l) => l.includes("KAOIRO_RUNNER_SERVER_URL is deprecated"));
+        const shadowed = () =>
+          lines.filter((l) => l.includes('"server_url" in runner.config.json is shadowed'));
+        expect(deprecated()).toHaveLength(1);
+        expect(shadowed()).toHaveLength(1);
+        // The effective URL does not move, so nothing else is applied; the
+        // changed file value still gets its warning.
+        h.writeConfig({ server_url: "ws://other/runner" });
+        await h.reload(runtime!);
+        expect(shadowed()).toHaveLength(2);
+        expect(deprecated()).toHaveLength(1);
+        // The same file value again: no repeat.
+        h.writeConfig({ server_url: "ws://other/runner", permission_timeout_ms: 5000 });
+        await h.reload(runtime!);
+        expect(shadowed()).toHaveLength(2);
+      } finally {
+        runtime?.close();
+        diagnostic.mockRestore();
+      }
+    }));
+
   it("an invalid variable of an enabled engine stops the runner at start; a disabled engine's does not", () =>
     withRoot(async (root, configPath) => {
       const h = harness(root, configPath);

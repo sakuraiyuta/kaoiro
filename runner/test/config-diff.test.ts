@@ -83,6 +83,7 @@ describe("changedFields", () => {
       antigravity: { probe_timeout_ms: 2000 },
       claude_code: { folds_per_turn: 3 },
       permission_timeout_ms: 1000,
+      log_phoenix_heartbeats: false,
     };
     const changed: Required<RunnerConfig> = {
       host_id: "h2",
@@ -97,6 +98,7 @@ describe("changedFields", () => {
       antigravity: { probe_timeout_ms: 3000 },
       claude_code: { folds_per_turn: 4 },
       permission_timeout_ms: 2000,
+      log_phoenix_heartbeats: true,
     };
     for (const key of Object.keys(full) as (keyof RunnerConfig)[]) {
       expect(

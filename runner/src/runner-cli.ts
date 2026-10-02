@@ -26,6 +26,7 @@ import {
   computeBehaviourRelay,
   describeBehaviourRelay,
   readSetVariables,
+  resolveHeartbeatLogging,
 } from "./behaviour-settings.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
@@ -171,7 +172,8 @@ export async function runRunnerCli(
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #135) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
-  let config = applyOverride(loadConfig(configPath));
+  let fileConfig = loadConfig(configPath);
+  let config = applyOverride(fileConfig);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
   // issue #469: a deprecated behaviour variable that is invalid stops the
@@ -181,13 +183,15 @@ export async function runRunnerCli(
   const deprecationSeen = new Set<string>();
   for (const line of behaviourWarnings(
     undefined,
-    config,
+    fileConfig,
     readSetVariables(config, process.env),
     deprecationSeen,
   )) {
     process.stderr.write(line);
   }
   let behaviourRelay = computeBehaviourRelay(config, process.env);
+  // Read per Phoenix log line, so a reload changes it without a reconnect.
+  let heartbeatLogging = resolveHeartbeatLogging(config, process.env);
 
   // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
   // `resolveCodexAuthMode` never invokes doctor when the config declares
@@ -315,6 +319,7 @@ export async function runRunnerCli(
       antigravityCatalog,
     ),
     heartbeatMs: HEARTBEAT_MS,
+    logHeartbeats: () => heartbeatLogging,
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),
     onRestart: (payload) => supervisor.handleRestart(payload),
@@ -340,7 +345,10 @@ export async function runRunnerCli(
   // detectCodexAuthMode が同時進行するのを避け、"最後の書き" が最終状態に
   // 反映される順序性を保つ。
   let reloadQueue: Promise<void> = Promise.resolve();
-  const applyReload = async (next: RunnerConfig): Promise<void> => {
+  const applyReload = async (
+    next: RunnerConfig,
+    nextFile: RunnerConfig,
+  ): Promise<void> => {
     // Validate the variables first: an invalid one skips this reload (the
     // caller logs "config apply failed") and the last valid config stays.
     const setVariables = readSetVariables(next, process.env);
@@ -348,15 +356,22 @@ export async function runRunnerCli(
     // fails later is never reported as having taken effect.
     const seenAfterReload = new Set(deprecationSeen);
     const behaviourLines = behaviourWarnings(
-      config,
-      next,
+      fileConfig,
+      nextFile,
       setVariables,
       seenAfterReload,
     );
     const nextBehaviourRelay = computeBehaviourRelay(next, process.env);
     const diff = changedFields(config, next);
     const nextAntigravityEnabled = isAntigravityEnabled(next);
-    if (diff.length === 0 && !nextAntigravityEnabled) return;
+    if (diff.length === 0 && !nextAntigravityEnabled) {
+      // Nothing else is applied, so nothing can fail later: a file edit that a
+      // variable hides (server_url) still gets its shadow warning.
+      for (const line of behaviourLines) process.stderr.write(line);
+      for (const name of seenAfterReload) deprecationSeen.add(name);
+      fileConfig = nextFile;
+      return;
+    }
     if (diff.length > 0) {
       process.stderr.write(`runner: config reload — ${diff.join(", ")}\n`);
     }
@@ -443,6 +458,8 @@ export async function runRunnerCli(
       link.updateRegister(nextRegister);
     }
     config = next;
+    fileConfig = nextFile;
+    heartbeatLogging = resolveHeartbeatLogging(next, process.env);
     for (const line of behaviourLines) process.stderr.write(line);
     for (const name of seenAfterReload) deprecationSeen.add(name);
     if (
@@ -462,7 +479,7 @@ export async function runRunnerCli(
         // Re-apply the env override on every reload (issue #135): without
         // this, a file save would silently revert server_url to the file
         // value and reconnect the runner to the wrong host.
-        .then(() => applyReload(applyOverride(next)))
+        .then(() => applyReload(applyOverride(next), next))
         .catch((error) => {
           process.stderr.write(
             `runner: config apply failed: ${String(error)}\n`,

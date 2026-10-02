@@ -1,3 +1,9 @@
+import {
+  TURN_WATCHDOG_MAX_DELAY_MS,
+  resolveDigitsMs,
+  type ResolvedMs,
+} from "@kaoiro/wrapper-core";
+
 /** issue #377 Stage 2: the epoch lifetime model. An epoch is one `agy`
  *  process spanning several turns; a turn only ends the epoch when its own
  *  requirements (a spec change, an operator interrupt, a broken gate, ...)
@@ -46,23 +52,34 @@ export type EpochEndReason =
 
 export const DEFAULT_EPOCH_IDLE_MS = 30 * 60 * 1_000;
 export const MIN_EPOCH_IDLE_MS = 1_000;
+/** Node clamps a larger setTimeout delay to 1ms, which would end an idle epoch
+ *  immediately. */
+export const MAX_EPOCH_IDLE_MS = TURN_WATCHDOG_MAX_DELAY_MS;
 export const EPOCH_IDLE_MS_ENV = "KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS";
 
-/** Reads the idle-epoch lifetime bound (M7): an epoch that sits idle (no
+/** Resolves the idle-epoch lifetime bound (M7): an epoch that sits idle (no
  *  in-flight turn) for this long is ended with reason `idle_ttl`. Cleared at
  *  turn dequeue and re-armed only after that turn's result/error settles --
- *  see `AntigravityHost`'s `#clearIdleTtl` / `#armIdleTtl`. */
+ *  see `AntigravityHost`'s `#clearIdleTtl` / `#armIdleTtl`. The config field
+ *  (relayed from runner.config.json, already validated by parseConfig) wins,
+ *  then the variable, then the default (issue #469). */
+export function resolveEpochIdleMs(
+  env: Readonly<Record<string, string | undefined>>,
+  configValue?: number,
+): ResolvedMs {
+  return resolveDigitsMs(
+    env,
+    EPOCH_IDLE_MS_ENV,
+    configValue,
+    DEFAULT_EPOCH_IDLE_MS,
+    MIN_EPOCH_IDLE_MS,
+    MAX_EPOCH_IDLE_MS,
+  );
+}
+
 export function readEpochIdleMs(
   env: Readonly<Record<string, string | undefined>>,
+  configValue?: number,
 ): number {
-  const raw = env[EPOCH_IDLE_MS_ENV];
-  if (raw === undefined || raw === "") return DEFAULT_EPOCH_IDLE_MS;
-  if (!/^[0-9]+$/.test(raw)) {
-    throw new Error(`${EPOCH_IDLE_MS_ENV} must be an integer number of milliseconds`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < MIN_EPOCH_IDLE_MS) {
-    throw new Error(`${EPOCH_IDLE_MS_ENV} must be an integer >= ${MIN_EPOCH_IDLE_MS}`);
-  }
-  return value;
+  return resolveEpochIdleMs(env, configValue).value;
 }

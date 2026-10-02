@@ -28,6 +28,9 @@ export interface RunnerLinkOptions {
   register: RunnerRegister;
   /** Liveness ping interval in ms. */
   heartbeatMs: number;
+  /** Whether to keep Phoenix's periodic heartbeat lines, asked on every log
+   *  line. Omitted = the deprecated KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS. */
+  logHeartbeats?: () => boolean;
   /** Operator lifecycle control relayed by the server (ADR-0023). Payloads are
    *  opaque here — the supervisor validates them. */
   onSpawn?: (payload: unknown) => void;
@@ -196,16 +199,21 @@ function parseReplyLog(message: string):
  * runner.log. */
 export class PhoenixHeartbeatLogFilter {
   readonly #channelTopic: string;
-  readonly #includeHeartbeats: boolean;
+  readonly #includeHeartbeats: boolean | (() => boolean);
   readonly #heartbeatRefs = new Set<string>();
 
-  constructor(channelTopic: string, includeHeartbeats: boolean) {
+  constructor(
+    channelTopic: string,
+    includeHeartbeats: boolean | (() => boolean),
+  ) {
     this.#channelTopic = channelTopic;
     this.#includeHeartbeats = includeHeartbeats;
   }
 
   shouldWrite(kind: string, message: string, data: unknown): boolean {
-    if (this.#includeHeartbeats) return true;
+    // Evaluated per line so a reloaded runner.config.json takes effect live.
+    const include = this.#includeHeartbeats;
+    if (typeof include === "function" ? include() : include) return true;
 
     if (kind === "push") {
       const push = parsePushLog(message);
@@ -253,7 +261,7 @@ export class PhoenixHeartbeatLogFilter {
 export interface PhoenixWireLoggerOptions {
   /** Retain heartbeat push/reply lines. Default false for an operationally
    *  useful runner.log; KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 enables it. */
-  includeHeartbeats: boolean;
+  includeHeartbeats: boolean | (() => boolean);
   /** Injectable sink for focused unit tests; production writes stderr. */
   write?: (line: string) => void;
 }
@@ -282,6 +290,7 @@ export class RunnerLink {
   #hostId: string;
   #register: RunnerRegister;
   readonly #token: string | undefined;
+  readonly #logHeartbeats: () => boolean;
   readonly #callbacks: ChannelCallbacks;
   readonly #heartbeat: ReturnType<typeof setInterval>;
 
@@ -294,6 +303,8 @@ export class RunnerLink {
     this.#hostId = hostId;
     this.#register = options.register;
     this.#token = options.token;
+    this.#logHeartbeats =
+      options.logHeartbeats ?? (() => isPhoenixHeartbeatLoggingEnabled());
     this.#callbacks = {
       onSpawn: options.onSpawn,
       onStop: options.onStop,
@@ -342,7 +353,7 @@ export class RunnerLink {
       // KAOIRO_RUNNER_TOKEN into runner.log on every connect/reconnect —
       // redact any `token=<value>` before writing (security.md).
       logger: createPhoenixWireLogger(channelTopic, {
-        includeHeartbeats: isPhoenixHeartbeatLoggingEnabled(),
+        includeHeartbeats: this.#logHeartbeats,
       }),
     });
     socket.connect();

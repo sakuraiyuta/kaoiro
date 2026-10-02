@@ -296,11 +296,13 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
   }
 
-  // Runner-relayed turn watchdog values (issue #469). A directly launched
+  // Runner-relayed timing values (issue #469). A directly launched
   // wrapper may set them too; absent means the engine reads its variable.
   for (const [field, min] of [
     ["turn_watchdog_inactivity_ms", TURN_WATCHDOG_MIN_INACTIVITY_MS],
     ["turn_watchdog_abort_grace_ms", TURN_WATCHDOG_MIN_ABORT_GRACE_MS],
+    ["antigravity_tool_timeout_ms", 1_000],
+    ["antigravity_epoch_idle_ms", 1_000],
   ] as const) {
     const value = raw[field];
     if (value === undefined) continue;

@@ -25,6 +25,7 @@ const RELOAD_FIELDS: Record<keyof RunnerConfig, true> = {
   antigravity: true,
   claude_code: true,
   permission_timeout_ms: true,
+  log_phoenix_heartbeats: true,
 };
 
 export function changedFields(
