@@ -50,7 +50,7 @@ wrappers inject it as SDK input.
 
 | Config key | Unit | Default (Phase 1) | Use |
 |---|---|---|---|
-| `max_turns` | turns (= message count) | 20 | Total turns in one conversation |
+| `max_turns` | turns (= message count) | 50 | Total turns in one conversation |
 | `max_tokens` | tokens | 100_000 | Cumulative body tokens (coarsely estimated server-side as `floor(byte_size(body)/3) + 1` (UTF-8 bytes, including 1 for an empty body)) |
 | `max_concurrent_agents` | agents | 2 | Agents allowed in one conversation_id (fixed at 2 in Phase 1; 3+ considered in Phase 3) |
 
@@ -61,12 +61,19 @@ implemented.
 
 **The former `max_wallclock` was removed in issue #211.** Cutting off based on
 elapsed conversation time reached `max_turns` before a runaway fast ping-pong
-(as in #167, short exchanges reach 20 turns in seconds to minutes), while
+(as in #167, short exchanges reached the then-default 20 turns in seconds to
+minutes), while
 preferentially cutting off **slow but valid** conversations such as xhigh-effort
 reviews. This reversal of selectivity was measured on 2026-08-11. See issue #211
 for details and rationale.
 
 - MUST: Do not count server-synthesized error notices in turns or tokens.
+
+### Continuation after a closed conversation
+
+When a send is rejected with `conversation_closed`, the sender that still has
+content to deliver opens a new conversation. Its first message names the closed
+`conversation_id` it continues; the new conversation itself omits that closed ID.
 
 ### Memory-reclamation TTL (config, not a hard limit)
 

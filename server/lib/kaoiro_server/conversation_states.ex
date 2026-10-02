@@ -286,8 +286,8 @@ defmodule KaoiroServer.ConversationStates do
   Returns `%{sorted_participant_ids => %{turns: n, conversations: k}}`, the
   rally length of each agent group across conversations (issue #273).
 
-  A rally is not bounded by one `conversation_id`. `max_turns` closes a
-  conversation at 20 and the protocol then forces the peers onto a fresh id,
+  A rally is not bounded by one `conversation_id`. The configured `max_turns`
+  closes a conversation and the protocol then forces the peers onto a fresh id,
   so a review loop that recurses far enough necessarily spans several
   entries; counting within one of them measures the wrong unit. Every OPEN
   entry contributes its live `turns` (it IS the rally in progress) and every
@@ -401,7 +401,7 @@ defmodule KaoiroServer.ConversationStates do
     cfg = Application.get_env(:kaoiro_server, :inter_agent, [])
 
     %{
-      max_turns: Keyword.get(cfg, :max_turns, 20),
+      max_turns: Keyword.get(cfg, :max_turns, 50),
       max_tokens: Keyword.get(cfg, :max_tokens, 100_000),
       max_concurrent_agents: Keyword.get(cfg, :max_concurrent_agents, 2),
       # GC-only TTLs (issue #211) — NOT hard limits: neither one rejects a

@@ -752,8 +752,8 @@ defmodule KaoiroServer.ConversationStatesTest do
 
   describe "pair_rally/2 (issue #273)" do
     test "sums a pair's turns across several conversations inside the window" do
-      # The A1 discriminator. max_turns closes a conversation at 20 and the
-      # protocol then forces a fresh id, so a long rally necessarily spans
+      # The A1 discriminator. max_turns closes a conversation and the protocol
+      # then forces a fresh id, so a long rally necessarily spans
       # entries; a per-conversation count reports 2 here instead of 5.
       {name, clock} = start_tracker_with_clock(:cs_rally_multi, tombstone_ttl_ms: 100_000)
 

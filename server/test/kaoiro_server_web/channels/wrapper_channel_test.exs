@@ -5578,9 +5578,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
 
     test "ConversationStates が :exceeded を返したら side ごとに正しい payload.to で escalate を流す" do
-      # default max_turns=20 を待たずに、テスト専用の conversation_id を直接
-      # ConversationStates へ過去ターン分仕込んでおき、20 ターン状態の続きから
-      # 21 通目を送ることで :exceeded を再現する。
+      # default max_turns=50 を待たずに、テスト専用の conversation_id を直接
+      # ConversationStates へ過去ターン分仕込んでおき、50 ターン状態の続きから
+      # 51 通目を送ることで :exceeded を再現する。
       from_id = "test.iam-quota-from"
       to_id = "test.iam-quota-to"
       cid = "cnv-quota-#{System.unique_integer([:positive])}"
@@ -5590,8 +5590,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       @endpoint.subscribe("wrapper:" <> from_id)
       @endpoint.subscribe("wrapper:" <> to_id)
 
-      # 既定 max_turns=20 まで埋める (done=false で push)
-      for n <- 1..20 do
+      # 既定 max_turns=50 まで埋める (done=false で push)
+      for n <- 1..50 do
         :ok =
           KaoiroServer.ConversationStates.record_message(
             cid,
@@ -5604,8 +5604,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           )
       end
 
-      # 21 通目で max_turns 超過 → 合成 escalate が両側に届く。
-      env = inter_envelope(from_id, to_id, cid: cid, turn: 21)
+      # 51 通目で max_turns 超過 → 合成 escalate が両側に届く。
+      env = inter_envelope(from_id, to_id, cid: cid, turn: 51)
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :ok
 
