@@ -57,11 +57,11 @@ describe("claude_code block in runner.config.json", () => {
     expect(
       parseRunnerConfig({ ...base, claude_code: { whatever: 1 } }).claude_code,
     ).toEqual({});
-    for (const bad of [null, 1, "x", []]) {
-      if (Array.isArray(bad)) continue;
-      expect(() => parseRunnerConfig({ ...base, claude_code: bad })).toThrow(
-        ConfigError,
-      );
+    for (const bad of [null, 1, "x", [], [5]]) {
+      expect(
+        () => parseRunnerConfig({ ...base, claude_code: bad }),
+        JSON.stringify(bad),
+      ).toThrow("claude_code must be an object");
     }
   });
 

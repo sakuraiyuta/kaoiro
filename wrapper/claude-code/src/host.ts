@@ -1195,10 +1195,23 @@ export class AgentHost implements EngineAdapter {
     for (const check of [...this.#receiptWaiters]) check();
   }
 
+  /** The scheduler settings this host acts on, defaults applied. */
+  get foldsPerTurn(): number {
+    return this.#config.folds_per_turn ?? 3;
+  }
+
+  get urgentOvertakeLimit(): number {
+    return this.#config.urgent_overtake_limit ?? 2;
+  }
+
+  get pendingReceiptRootTimeoutMs(): number {
+    return this.#options.pendingReceiptRootTimeoutMs ?? 2_000;
+  }
+
   canFoldLiveInput(): boolean {
     const token = this.#activeTurn?.turnToken;
     return token !== undefined && this.canPushLiveInput() &&
-      (this.#foldsUsedByTurn.get(token) ?? 0) < (this.#config.folds_per_turn ?? 3);
+      (this.#foldsUsedByTurn.get(token) ?? 0) < this.foldsPerTurn;
   }
 
   removeQueuedInput(turnToken: string): boolean {
@@ -1224,7 +1237,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   canReserveYieldOvertake(): boolean {
-    return this.#urgentRootStreak < (this.#config.urgent_overtake_limit ?? 2) ||
+    return this.#urgentRootStreak < this.urgentOvertakeLimit ||
       !this.#queue.some(turn => turn.inputSource === "peer" && !turn.urgent);
   }
 
@@ -1242,7 +1255,7 @@ export class AgentHost implements EngineAdapter {
   }): boolean {
     if (!this.canPushLiveInput()) return false;
     const active = this.#activeTurn!;
-    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= (this.#config.folds_per_turn ?? 3)) return false;
+    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= this.foldsPerTurn) return false;
     const ownerPromptId = [...this.#promptOwners].find(([, owner]) =>
       owner.token === active.turnToken && owner.sessionId === this.#sessionId && !owner.tainted)?.[0];
     if (ownerPromptId === undefined) return false;
@@ -2395,7 +2408,7 @@ export class AgentHost implements EngineAdapter {
   #startPendingRootClock(): void {
     if (this.#pendingPushedReceipt === null || this.#admissionFailStopped) return;
     if (this.#pendingRootRemaining === null) {
-      this.#pendingRootRemaining = this.#options.pendingReceiptRootTimeoutMs ?? 2_000;
+      this.#pendingRootRemaining = this.pendingReceiptRootTimeoutMs;
     }
     this.#resumePendingRootClock();
   }
@@ -4667,7 +4680,7 @@ export class AgentHost implements EngineAdapter {
     const ordinaryIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && !turn.urgent);
     const urgentIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && turn.urgent);
     const selectedIndex = operatorIndex >= 0 ? operatorIndex
-      : ordinaryIndex >= 0 && this.#urgentRootStreak >= (this.#config.urgent_overtake_limit ?? 2) ? ordinaryIndex
+      : ordinaryIndex >= 0 && this.#urgentRootStreak >= this.urgentOvertakeLimit ? ordinaryIndex
       : urgentIndex >= 0 ? urgentIndex
       : ordinaryIndex >= 0 ? ordinaryIndex : 0;
     return this.#queue.splice(selectedIndex, 1)[0]!;

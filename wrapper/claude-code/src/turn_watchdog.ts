@@ -173,6 +173,11 @@ export class TurnWatchdog {
     this.#clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as never));
   }
 
+  /** The settings this watchdog arms its timers from. */
+  get settings(): TurnWatchdogSettings {
+    return this.#settings;
+  }
+
   /** Starts timing only after AgentHost has made this token SDK-active. */
   start(turnToken: string): void {
     const watched = this.#watched;

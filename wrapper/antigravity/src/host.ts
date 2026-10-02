@@ -599,6 +599,11 @@ export class AntigravityHost implements EngineAdapter {
     void this.#refreshCatalog();
   }
 
+  /** The grace this host gives an interrupted or gate-failed `agy` before SIGKILL. */
+  get abortGraceMs(): number {
+    return this.#abortGraceMs;
+  }
+
   get state(): KaoiroState {
     return this.#machine.state;
   }

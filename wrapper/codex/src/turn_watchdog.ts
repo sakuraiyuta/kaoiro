@@ -151,6 +151,11 @@ export class TurnWatchdog {
       options.clearTimer ?? ((timer) => clearTimeout(timer as never));
   }
 
+  /** The settings this watchdog arms its timers from. */
+  get settings(): TurnWatchdogSettings {
+    return this.#settings;
+  }
+
   start(turnToken: string): void {
     const watched = this.#watched;
     if (watched !== null) {
