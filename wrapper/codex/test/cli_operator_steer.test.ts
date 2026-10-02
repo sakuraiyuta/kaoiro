@@ -80,10 +80,11 @@ describe("operator steer opt-in", () => {
     expect(lines).toEqual(["Operator steering is unavailable: the server did not acknowledge operator_input_modes."]);
   });
 
-  it("keeps IA steering on app-server even when operator steering is opted out", async () => {
+  it("declares early none and keeps IA steering on app-server when operator steering is opted out", async () => {
     for (const [backend, optIn] of [["exec", true], ["app-server", false], ["exec", false]] as const) {
-      const off = await compose(backend, optIn);
-      expect(off.linkOptions, `${backend}/${optIn}`).not.toHaveProperty("operatorInputModes");
+      // The echo is present here: an acknowledged `none` must not wire steering.
+      const off = await compose(backend, optIn, { version: "v1", early: "none" });
+      expect(off.linkOptions.operatorInputModes, `${backend}/${optIn}`).toEqual({ version: "v1", early: "none" });
       expect(off.linkOptions).not.toHaveProperty("onOperatorInputModes");
       expect(off.hostOptions).not.toHaveProperty("operatorSteer");
       if (backend === "app-server") {
