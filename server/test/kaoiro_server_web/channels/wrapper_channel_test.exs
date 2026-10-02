@@ -6365,8 +6365,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         refute Map.has_key?(entry, "disconnect")
       end
 
-      dead_owner = spawn(fn -> :ok end)
-      monitor = Process.monitor(dead_owner)
+      {dead_owner, monitor} = spawn_monitor(fn -> :ok end)
       assert_receive {:DOWN, ^monitor, :process, ^dead_owner, :normal}
 
       preflight_id = "test.dir-disconnect-invalid-preflight"
