@@ -115,6 +115,22 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Socket connect / channel join params are logged at :info. Setting this
+# replaces Phoenix's own default (["password", "token"]), so both stay. The
+# match is a case-sensitive substring of the key, hence lower-case words.
+config :phoenix, :filter_parameters, [
+  "password",
+  "passwd",
+  "token",
+  "ticket",
+  "secret",
+  "authorization",
+  "cookie",
+  "apikey",
+  "api_key",
+  "credential"
+]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
