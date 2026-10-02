@@ -17,6 +17,16 @@ import {
   claudeSchedulerRangeMessage,
   parseClaudeSchedulerNumber,
 } from "./claude_scheduler.js";
+import {
+  PERMISSION_TIMEOUT_ENV,
+  isPermissionTimeoutEnvSet,
+  parsePermissionTimeoutEnv,
+} from "./permission_timeout.js";
+import {
+  TURN_WATCHDOG_MAX_DELAY_MS,
+  TURN_WATCHDOG_MIN_ABORT_GRACE_MS,
+  TURN_WATCHDOG_MIN_INACTIVITY_MS,
+} from "./turn_watchdog_settings.js";
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -274,16 +284,37 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
     config.permission_timeout_ms = timeout;
   } else {
-    const envValue = process.env.KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS;
-    if (envValue !== undefined && envValue !== "") {
-      const parsed = Number(envValue);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
+    const envValue = process.env[PERMISSION_TIMEOUT_ENV];
+    if (isPermissionTimeoutEnvSet(envValue)) {
+      const parsed = parsePermissionTimeoutEnv(envValue);
+      if (parsed === undefined) {
         throw new ConfigError(
-          "KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS must be a positive integer",
+          `${PERMISSION_TIMEOUT_ENV} must be a positive integer`,
         );
       }
       config.permission_timeout_ms = parsed;
     }
+  }
+
+  // Runner-relayed turn watchdog values (issue #469). A directly launched
+  // wrapper may set them too; absent means the engine reads its variable.
+  for (const [field, min] of [
+    ["turn_watchdog_inactivity_ms", TURN_WATCHDOG_MIN_INACTIVITY_MS],
+    ["turn_watchdog_abort_grace_ms", TURN_WATCHDOG_MIN_ABORT_GRACE_MS],
+  ] as const) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < min ||
+      value > TURN_WATCHDOG_MAX_DELAY_MS
+    ) {
+      throw new ConfigError(
+        `${field} must be an integer from ${min} through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+      );
+    }
+    config[field] = value;
   }
 
   for (const setting of CLAUDE_SCHEDULER_SETTINGS) {

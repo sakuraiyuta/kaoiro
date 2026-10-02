@@ -20,6 +20,7 @@ import {
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import {
+  formatTurnWatchdogLine,
   loadConfig,
   loadWrapperBuildInfo,
   parseCliArgs,
@@ -33,7 +34,7 @@ import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigr
 import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { readEpochIdleMs } from "./epoch.js";
-import { readTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
+import { resolveTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
 import { antigravityTranscriptPath } from "./transcript_path.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
 
@@ -99,9 +100,19 @@ export async function runAntigravityCli(
     dependencies.createHost ?? ((...args) => new AntigravityHost(...args));
   const { configPath, prompt, resume: resumeSessionId } = parseArgs(process.argv.slice(2));
   const config = loadCliConfig(configPath);
-  const turnWatchdogSettings = readTurnWatchdogSettings(
+  const resolvedWatchdog = resolveTurnWatchdogSettings(
     process.env,
     (message) => writeRedactedStderr(message),
+    config,
+  );
+  const turnWatchdogSettings = resolvedWatchdog.settings;
+  writeRedactedStderr(
+    formatTurnWatchdogLine(
+      "antigravity",
+      process.pid,
+      resolvedWatchdog,
+      config.permission_timeout_ms,
+    ),
   );
   const epochIdleMs = readEpochIdleMs(process.env);
   if (nonInteractiveToolEnv(process.env).preservedGitSshCommand) {

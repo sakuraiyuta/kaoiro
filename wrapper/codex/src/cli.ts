@@ -50,6 +50,7 @@ import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   loadConfig,
   loadWrapperBuildInfo,
+  formatTurnWatchdogLine,
   parseCliArgs,
   ServerLink,
 } from "@kaoiro/wrapper-core";
@@ -72,7 +73,7 @@ import {
 import { effectiveNetworkAccess } from "./network_access.js";
 import { prepareCodexStartup } from "./startup.js";
 import {
-  readTurnWatchdogSettings,
+  resolveTurnWatchdogSettings,
   TurnWatchdog,
 } from "./turn_watchdog.js";
 import type { TurnWatchdogOptions, TurnWatchdogWarning } from "./turn_watchdog.js";
@@ -192,9 +193,19 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
-  const turnWatchdogSettings = readTurnWatchdogSettings(
+  const resolvedWatchdog = resolveTurnWatchdogSettings(
     process.env,
     (message) => writeRedactedStderr(message),
+    config,
+  );
+  const turnWatchdogSettings = resolvedWatchdog.settings;
+  writeRedactedStderr(
+    formatTurnWatchdogLine(
+      "codex",
+      process.pid,
+      resolvedWatchdog,
+      config.permission_timeout_ms,
+    ),
   );
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):

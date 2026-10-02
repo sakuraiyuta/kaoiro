@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { Duplex } from "node:stream";
@@ -152,37 +152,55 @@ function isAlive(pid: number): boolean {
 
 describe("default composition (issue #469)", () => {
   it(
-    "a config-only runner relays claude_code keys that the real wrapper reports it will use",
+    "a config-only runner relays file settings that the real Claude, Codex and Antigravity wrappers report they will use",
     async () => {
       const root = mkdtempSync(join(tmpdir(), "ao-469-gate-"));
       const configPath = join(root, "runner.config.json");
       let output = "";
       let runner: ChildProcess | undefined;
-      let wrapperPid: number | undefined;
+      const wrapperPids = new Set<number>();
       const endpoint = await startEndpoint((send, topic) => {
-        send([
-          null,
-          null,
-          topic,
-          "spawn",
-          {
-            version: "0",
-            agent_id: "gate.agent",
-            persona: { id: "p", name: "P", sprite_set: "p" },
-            cwd: root,
-            engine: "claude-code",
-          },
-        ]);
+        for (const engine of ["claude-code", "codex", "antigravity"]) {
+          send([
+            null,
+            null,
+            topic,
+            "spawn",
+            {
+              version: "0",
+              agent_id: `gate.${engine}`,
+              persona: { id: "p", name: "P", sprite_set: "p" },
+              cwd: root,
+              engine,
+            },
+          ]);
+        }
       });
       try {
+        // A stand-in `agy` so the runner accepts an Antigravity launch; the
+        // wrapper reports its settings before it ever runs the executable.
+        const agy = join(root, "agy");
+        writeFileSync(agy, "#!/bin/sh\nexit 0\n");
+        chmodSync(agy, 0o755);
         writeFileSync(
           configPath,
           JSON.stringify({
             host_id: "gate-host",
             server_url: `ws://127.0.0.1:${endpoint.port}/runner`,
             cwd_allowlist: [root],
-            capabilities: ["claude-code"],
-            claude_code: { folds_per_turn: 5, urgent_overtake_limit: 3 },
+            capabilities: ["claude-code", "codex", "antigravity"],
+            permission_timeout_ms: 7000,
+            claude_code: {
+              folds_per_turn: 5,
+              urgent_overtake_limit: 3,
+              turn_watchdog_inactivity_ms: 120_000,
+            },
+            codex: {
+              auth_mode: "chatgpt",
+              chatgpt_plan: "pro",
+              turn_watchdog_inactivity_ms: 90_000,
+            },
+            antigravity: { cli_path: agy, turn_watchdog_abort_grace_ms: 5000 },
           }),
         );
         // Nothing but PATH and a private HOME: no KAOIRO_* variable at all.
@@ -198,16 +216,34 @@ describe("default composition (issue #469)", () => {
         runner.stdout?.on("data", (chunk) => (output += String(chunk)));
         runner.stderr?.on("data", (chunk) => (output += String(chunk)));
 
-        const line = await waitFor(
-          () => output,
-          /\[claude scheduler\] pid=(\d+) ([^\n]*)\n/,
-          runner,
-          60_000,
+        const lineFor = async (pattern: RegExp): Promise<RegExpExecArray> =>
+          waitFor(() => output, pattern, runner!, 60_000);
+        // Each line is printed by the wrapper from the object its consumer
+        // receives; the pids let the test confirm those processes end.
+        const scheduler = await lineFor(/\[claude scheduler\] pid=(\d+) ([^\n]*)\n/);
+        const claude = await lineFor(/\[kaoiro\] claude behaviour: pid=(\d+) ([^\n]*)\n/);
+        const codex = await lineFor(/\[kaoiro\] codex behaviour: pid=(\d+) ([^\n]*)\n/);
+        const antigravity = await lineFor(
+          /\[kaoiro\] antigravity behaviour: pid=(\d+) ([^\n]*)\n/,
         );
-        wrapperPid = Number(line[1]);
-        expect(line[2]).toBe(
+        for (const found of [scheduler, claude, codex, antigravity]) {
+          wrapperPids.add(Number(found[1]));
+        }
+        expect(scheduler[2]).toBe(
           "yield_claim_timeout_ms=default pending_receipt_root_timeout_ms=default " +
             "urgent_overtake_limit=3 folds_per_turn=5",
+        );
+        expect(claude[2]).toBe(
+          "turn_watchdog_inactivity_ms=120000(config) turn_watchdog_abort_grace_ms=60000(default) " +
+            "permission_timeout_ms=7000",
+        );
+        expect(codex[2]).toBe(
+          "turn_watchdog_inactivity_ms=90000(config) turn_watchdog_abort_grace_ms=60000(default) " +
+            "permission_timeout_ms=7000",
+        );
+        expect(antigravity[2]).toBe(
+          "turn_watchdog_inactivity_ms=1800000(default) turn_watchdog_abort_grace_ms=5000(config) " +
+            "permission_timeout_ms=7000",
         );
       } finally {
         // Controlled stop: SIGTERM to the runner this test started; its
@@ -224,16 +260,19 @@ describe("default composition (issue #469)", () => {
         await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
         rmSync(root, { recursive: true, force: true });
       }
-      // Wrapper must be gone shortly after the runner closes.
-      if (wrapperPid !== undefined) {
-        const deadline = Date.now() + 10_000;
-        while (isAlive(wrapperPid) && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-        const alive = isAlive(wrapperPid);
-        if (alive) process.kill(wrapperPid, "SIGKILL"); // our own descendant, by pid
-        expect(alive, `wrapper pid ${wrapperPid} outlived the runner`).toBe(false);
+      // Every wrapper that reported a pid must be gone shortly after the
+      // runner closes (a crashed wrapper may have been relaunched, so the
+      // pids seen in the output are collected up to the stop).
+      for (const match of output.matchAll(/ pid=(\d+) /g)) {
+        wrapperPids.add(Number(match[1]));
       }
+      const deadline = Date.now() + 10_000;
+      while ([...wrapperPids].some(isAlive) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const alive = [...wrapperPids].filter(isAlive);
+      for (const pid of alive) process.kill(pid, "SIGKILL"); // our own descendants, by pid
+      expect(alive, `wrapper pids outlived the runner: ${alive.join(",")}`).toEqual([]);
     },
     120_000,
   );

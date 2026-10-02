@@ -82,6 +82,7 @@ describe("changedFields", () => {
       codex: { backend: "exec" },
       antigravity: { probe_timeout_ms: 2000 },
       claude_code: { folds_per_turn: 3 },
+      permission_timeout_ms: 1000,
     };
     const changed: Required<RunnerConfig> = {
       host_id: "h2",
@@ -95,6 +96,7 @@ describe("changedFields", () => {
       codex: { backend: "app-server" },
       antigravity: { probe_timeout_ms: 3000 },
       claude_code: { folds_per_turn: 4 },
+      permission_timeout_ms: 2000,
     };
     for (const key of Object.keys(full) as (keyof RunnerConfig)[]) {
       expect(

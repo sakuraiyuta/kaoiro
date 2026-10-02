@@ -68,6 +68,7 @@ import { PermissionBroker } from "@kaoiro/agent-common";
 import {
   CLAUDE_SCHEDULER_SETTINGS,
   PERMISSION_MODES,
+  formatTurnWatchdogLine,
   loadConfig,
 } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
@@ -80,7 +81,7 @@ import { ServerLink } from "@kaoiro/wrapper-core";
 import { resolveClaudeSources } from "./source_resolution.js";
 import {
   TurnWatchdog,
-  readTurnWatchdogSettings,
+  resolveTurnWatchdogSettings,
   type TurnWatchdogWarning,
 } from "./turn_watchdog.js";
 import type {
@@ -193,9 +194,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   );
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #238).
-  const turnWatchdogSettings = readTurnWatchdogSettings(
+  const resolvedWatchdog = resolveTurnWatchdogSettings(
     process.env,
     (message) => writeRedactedStderr(message),
+    config,
+  );
+  const turnWatchdogSettings = resolvedWatchdog.settings;
+  writeRedactedStderr(
+    formatTurnWatchdogLine(
+      "claude",
+      process.pid,
+      resolvedWatchdog,
+      config.permission_timeout_ms,
+    ),
   );
 
   // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).

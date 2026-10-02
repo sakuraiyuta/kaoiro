@@ -81,7 +81,8 @@ emits the full log to `tmp/dogfood-logs/runner.log`.
 Behaviour settings of the runner and its wrappers live in `runner.config.json`
 (issue #469). A deprecated `KAOIRO_*` variable still overrides the key; it
 logs a deprecation warning and will be removed in a later release. Settings
-are per host; engine settings go in the engine's block (`claude_code` here).
+are per host; engine settings go in the engine's block (`claude_code`,
+`codex` or `antigravity`) and settings for every engine are top-level keys.
 
 Precedence is variable, then `runner.config.json`, then the default. The
 runner does not copy a variable into the wrapper config: when a variable is
@@ -107,8 +108,21 @@ hidden by a variable.
 | `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | `claude_code.pending_receipt_root_timeout_ms` | integer | 1..60000 | 2000 | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | `claude_code.urgent_overtake_limit` | integer | 1..64 | 2 | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CLAUDE_FOLDS_PER_TURN` | `claude_code.folds_per_turn` | integer | 1..64 | 3 | Claude wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CLAUDE_TURN_WATCHDOG_INACTIVITY_MS` | `claude_code.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Claude wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_CLAUDE_TURN_WATCHDOG_ABORT_GRACE_MS` | `claude_code.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Claude wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS` | `codex.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Codex wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS` | `codex.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Codex wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` | `antigravity.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | at least 1 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 
-What each Claude key controls is in [Wrapper configuration](wrapper.md).
+The turn watchdog interrupts a turn whose SDK stream has been silent for
+`turn_watchdog_inactivity_ms`, then stops the wrapper if the interrupt has not
+ended the turn within `turn_watchdog_abort_grace_ms`. A variable for it is read
+with a digits-only grammar (`"1e3"` is rejected); the permission timeout
+variable and the scheduler variables use `Number()` (`"1e3"` is accepted).
+Whitespace-only values are invalid for every numeric variable. What each Claude
+scheduler key controls is in [Wrapper configuration](wrapper.md).
 
 ## Codex home
 

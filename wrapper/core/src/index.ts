@@ -10,6 +10,20 @@ export {
   isClaudeSchedulerEnvSet,
   parseClaudeSchedulerNumber,
 } from "./claude_scheduler.js";
+export {
+  PERMISSION_TIMEOUT_ENV,
+  isPermissionTimeoutEnvSet,
+  parsePermissionTimeoutEnv,
+} from "./permission_timeout.js";
+export {
+  TURN_WATCHDOG_MAX_DELAY_MS,
+  TURN_WATCHDOG_MIN_ABORT_GRACE_MS,
+  TURN_WATCHDOG_MIN_INACTIVITY_MS,
+  formatTurnWatchdogLine,
+  readDigitsMs,
+  resolveDigitsMs,
+} from "./turn_watchdog_settings.js";
+export type { ResolvedMs, SettingSource } from "./turn_watchdog_settings.js";
 export type {
   ClaudeSchedulerField,
   ClaudeSchedulerSetting,
