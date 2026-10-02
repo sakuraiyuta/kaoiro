@@ -297,6 +297,25 @@ describe("AgentHost.refreshCatalogFor (#query !== null live SDK path)", () => {
     expect(models?.[0]?.effort_levels).toEqual(["low", "medium", "high"]);
   });
 
+  it("a manual refresh that changes the catalog emits exactly one state_change (issue #448)", async () => {
+    const states: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (env) => states.push(env),
+      queryFn: runningQueryFn(async () => richModelInfos),
+      now: () => "T",
+    });
+    await host.run();
+    const preRefresh = states.length;
+
+    await host.refreshCatalogFor();
+
+    const emitted = states.slice(preRefresh);
+    expect(emitted).toHaveLength(1);
+    expect(
+      (emitted[0]?.ext?.models as { value: string }[]).map((m) => m.value),
+    ).toEqual(["sonnet", "haiku"]);
+  });
+
   it("SDK.supportedModels() の resolvedModel を ext.models へ透過し、欠落行/空文字行は absent のまま", async () => {
     const states: Envelope[] = [];
     const host = new AgentHost(config, {

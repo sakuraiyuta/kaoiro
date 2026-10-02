@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-09-29
+last_updated: 2026-10-02
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -22,6 +22,12 @@ separately.
 |---|---|---|---|
 | (i) register | `runner/src/config.ts` → `LaunchDialog.svelte` | Not inside wrapper (SDK Query not created; chicken-and-egg). Substitute a short-lived runner probe ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md)) | Runner memory cache of the last successful live probe (retain stale last-known-good after TTL expiry or later probe failures). Only when no successful cache exists use the bootstrap default floor in `wrapper/claude-code/src/catalog.ts` |
 | (ii) `ext.models` | `wrapper/claude-code/src/host.ts` → `AgentDetail.svelte` | Yes (the idle startup probe, then live Query) | Highest successful source so far: live Query > manual pre-Query refresh > startup probe > launch/bootstrap seed |
+
+For (ii), a source that replaces the catalog re-emits `state_change` without
+waiting for the next transition: the startup probe and the manual refresh
+whenever they are accepted, and the live Query whenever the serialised
+`ext.models` differs from the one it replaced. An identical live result is
+not re-announced.
 
 (i)'s bootstrap was reduced to a minimal floor with one `default` entry (Phase 18-3,
 `display_name: "Default (recommended)"`, neutral description

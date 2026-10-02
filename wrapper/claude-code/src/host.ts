@@ -3619,8 +3619,9 @@ export class AgentHost implements EngineAdapter {
    *  the session; failures count toward MAX_MODEL_REFRESH_RETRIES trials, and
    *  once the cap is reached the host stays silent until Phase 18-5's manual
    *  retry resets it. #query being unavailable is not counted as a trial —
-   *  the SDK Query is racy at startup and a missing query is not a failure. */
-  async #refreshSupportedModels(): Promise<void> {
+   *  the SDK Query is racy at startup and a missing query is not a failure.
+   *  `announce: false` is for a caller that emits the state itself. */
+  async #refreshSupportedModels(announce = true): Promise<void> {
     if (this.#modelsSucceeded) return;
     if (this.#modelsInflight) return;
     if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) return;
@@ -3632,6 +3633,7 @@ export class AgentHost implements EngineAdapter {
       const models = await current.supportedModels();
       if (!models || models.length === 0) return;
       const viewBefore = this.#modelViewKey();
+      const catalogBefore = JSON.stringify(this.#models);
       this.#models = models.map((m) => ({
         value: m.value,
         display_name: m.displayName,
@@ -3652,9 +3654,13 @@ export class AgentHost implements EngineAdapter {
       // The account catalog can settle a report that was undecidable against
       // the bootstrap one (issue #363) or roll a stale persisted pick back;
       // either moves the model index, so announce it now rather than at the
-      // next transition. The catalog itself keeps riding the next transition
-      // as before when the index did not move.
-      if (this.#modelViewKey() !== viewBefore) {
+      // next transition. A catalog that serialises differently changes what
+      // ext.models shows under the same model, so it is announced too.
+      if (
+        announce &&
+        (this.#modelViewKey() !== viewBefore ||
+          JSON.stringify(this.#models) !== catalogBefore)
+      ) {
         this.#emitState(this.#machine.state);
       }
     } catch {
@@ -3882,7 +3888,7 @@ export class AgentHost implements EngineAdapter {
       // #modelsSucceeded on success. We inspect that flag rather than
       // duplicating the SDK call here.
       try {
-        await this.#refreshSupportedModels();
+        await this.#refreshSupportedModels(false);
       } catch {
         // Belt-and-braces: #refreshSupportedModels already catches internally,
         // but never-reject contract (藤 review turn-10 must-fix 2) means

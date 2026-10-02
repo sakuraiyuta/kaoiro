@@ -617,6 +617,29 @@ describe("host test synchronization helpers", () => {
 });
 
 /** queryFn that yields a fixed message list, ignoring the input prompt. */
+/** A two-row catalog as ext.models carries it; `levels` are sonnet's. */
+function sonnetCatalogRows(
+  levels: string[],
+): NonNullable<WrapperConfig["claude_engine_catalog"]> {
+  return [
+    { value: "default", display_name: "Default", description: "" },
+    { value: "sonnet", display_name: "Sonnet", description: "", effort_levels: levels },
+  ];
+}
+
+/** The same catalog as the SDK's supportedModels() reports it. */
+function sonnetModelInfos(levels: string[]): ModelInfo[] {
+  return [
+    { value: "default", displayName: "Default", description: "" } as ModelInfo,
+    {
+      value: "sonnet",
+      displayName: "Sonnet",
+      description: "",
+      supportedEffortLevels: levels,
+    } as ModelInfo,
+  ];
+}
+
 function scriptedQuery(messages: SDKMessage[]): QueryFn {
   return makeQueryFn(() => {
     async function* gen(): AsyncGenerator<SDKMessage, void> {
@@ -6017,6 +6040,77 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("startup");
   });
 
+  it("a live catalog that changes rows under the same model is announced without a transition (issue #448)", async () => {
+    const envs: Envelope[] = [];
+    const releaseQuery = deferred<void>();
+    const host = new AgentHost(
+      { ...config, claude_engine_catalog: sonnetCatalogRows(["low", "high"]) },
+      {
+        onState: (event) => envs.push(event),
+        modelSource: "config",
+        queryOptions: { model: "sonnet" },
+        queryFn: makeQueryFn(() =>
+          asQuery(
+            (async function* () {
+              yield msg({ type: "system", subtype: "init", model: "sonnet" });
+              await releaseQuery.promise;
+            })(),
+            async () => {},
+            undefined,
+            { supportedModels: async () => sonnetModelInfos(["low"]) },
+          ),
+        ),
+      },
+    );
+    const running = host.run();
+    await vi.waitFor(() =>
+      expect(envs.at(-1)?.ext.models).toEqual(sonnetCatalogRows(["low"])),
+    );
+    // Only the catalog changed: the model index and the state stayed put.
+    expect(new Set(envs.map((event) => event.ext.model))).toEqual(new Set(["sonnet"]));
+    expect(new Set(envs.map((event) => event.state)).size).toBe(1);
+    releaseQuery.resolve();
+    await running;
+  });
+
+  it("a live catalog identical to the current one is not re-announced (issue #448)", async () => {
+    const envs: Envelope[] = [];
+    const releaseQuery = deferred<void>();
+    const fetched = deferred<void>();
+    const host = new AgentHost(
+      { ...config, claude_engine_catalog: sonnetCatalogRows(["low"]) },
+      {
+        onState: (event) => envs.push(event),
+        modelSource: "config",
+        queryOptions: { model: "sonnet" },
+        queryFn: makeQueryFn(() =>
+          asQuery(
+            (async function* () {
+              yield msg({ type: "system", subtype: "init", model: "sonnet" });
+              await releaseQuery.promise;
+            })(),
+            async () => {},
+            undefined,
+            {
+              supportedModels: async () => {
+                fetched.resolve();
+                return sonnetModelInfos(["low"]);
+              },
+            },
+          ),
+        ),
+      },
+    );
+    const running = host.run();
+    await fetched.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(host.statusExtSnapshot().models).toEqual(sonnetCatalogRows(["low"]));
+    // The init transition's own envelope is the only one.
+    expect(envs).toHaveLength(1);
+    releaseQuery.resolve();
+    await running;
+  });
+
   it("a live Query catalog replaces manual and late startup catalogs", async () => {
     const startupStarted = deferred<void>();
     const releaseStartup = deferred<void>();
@@ -6038,8 +6132,9 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         supportedEffortLevels: ["low", "high"],
       } as ModelInfo,
     ];
+    const envs: Envelope[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: (event) => envs.push(event),
       probeFn: async (deps) => {
         if (deps?.includeUsage) {
           startupStarted.resolve();
@@ -6074,10 +6169,14 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await vi.waitFor(() =>
       expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live"),
     );
+    await vi.waitFor(() =>
+      expect((envs.at(-1)?.ext.models as { value: string }[]).map((model) => model.value)).toContain("live"),
+    );
     releaseStartup.resolve();
     await startup;
     expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live");
     expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).not.toContain("manual");
+    expect((envs.at(-1)?.ext.models as { value: string }[]).map((model) => model.value)).not.toContain("manual");
     releaseQuery.resolve();
     await running;
   });
@@ -6102,8 +6201,9 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         supportedEffortLevels: ["low", "high"],
       } as ModelInfo,
     ];
+    const envs: Envelope[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: (event) => envs.push(event),
       probeFn: async (deps) => {
         startupStarted.resolve();
         await releaseStartup.promise;
@@ -6136,10 +6236,14 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     await vi.waitFor(() =>
       expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live"),
     );
+    await vi.waitFor(() =>
+      expect((envs.at(-1)?.ext.models as { value: string }[]).map((model) => model.value)).toContain("live"),
+    );
     releaseStartup.resolve();
     await startup;
     expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).toContain("live");
     expect((host.statusExtSnapshot().models as { value: string }[]).map((model) => model.value)).not.toContain("startup");
+    expect((envs.at(-1)?.ext.models as { value: string }[]).map((model) => model.value)).not.toContain("startup");
     releaseQuery.resolve();
     await running;
   });
