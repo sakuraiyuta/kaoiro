@@ -277,7 +277,11 @@ no-op described above as a class, not a single instance.
   calling the wrapper package's existing reader on it (for example
   `readTurnWatchdogSettings` or `readEpochIdleMs` with a one-key record, and
   the Claude scheduler and permission parsers extracted from `parseConfig` into
-  exported helpers), so grammar and bounds come from one implementation. An
+  exported helpers), so grammar and bounds come from one implementation. The
+  readers are exposed through supported package entries (the Claude root index
+  and its closed `exports` map do not export its watchdog reader today), and a
+  direct dependency on wrapper-core or agent-common is declared if the runner
+  imports from them instead of re-exporting through an engine package. An
   invalid value throws `ConfigError` naming the variable, at startup (the
   runner exits non-zero) and on reload (reload skipped), the same contract
   `KAOIRO_RUNNER_SERVER_URL` has. The runner relays the file value only for
@@ -428,11 +432,16 @@ not the wrappers' `ManagedChild` handles (the runner keeps those). It ends the
 run with SIGTERM to that owned runner PID, which makes the runner call
 `Supervisor.stopAll` on its tracked wrappers and exit
 (`runner-cli.ts:434-447`, `supervisor.ts:1265-1276`); the wrappers inherit the
-runner's stdio, so the test waits for the runner's `close` event, which fires
-only after every holder of that stderr pipe has exited, and fails on timeout.
-Runner `exit` alone is not treated as proof of cleanup. No process-table
-discovery, host reaper or pattern kill is used, and no product shutdown change
-is part of this task.
+runner's stdio, so the test waits for the runner's `close` event with a timeout
+and fails on timeout. `close` confirms that the runner ended and that its
+observed stdio closed; it does not prove that every wrapper exited (a child can
+close its inherited stdio and stay alive; measured on Node 24.3.0 by the design
+reviewer). The gate therefore relies on the known wrapper lifecycle for child
+termination and measures it during implementation on both the success and the
+failure path: the wrapper's startup line carries its own pid, and after `close`
+the test checks that pid with signal 0 (an existence check, no signal sent) and
+fails if it is still alive. No process-table discovery, host reaper or pattern
+kill is used, and no product shutdown change is part of this task.
 
 Negative controls for the gate: rebuild the artifact after (a) dropping the
 relay (the spread in `resolveWrapperConfig`) and, separately, after (b) cutting
