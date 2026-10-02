@@ -2,6 +2,7 @@
 title: Make context-window usage display capability-driven without projecting estimated Codex usage
 status: accepted
 date: 2026-07-16
+last_updated: 2026-10-03
 opened: 2026-07-16
 supersedes: []
 superseded_by: null
@@ -190,3 +191,21 @@ best-effort and leave the UI stuck at “loading” (M-A, 藤 review turn-3).
 - Plugin routing: [extensions](../architecture/extensions.md)
 - Codex event contract: [codex-sdk-events](../reference/engines/codex-exec-events.md) L48, 84
 - Implementation plan: [phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)
+
+## Addendum 2026-10-02 — app-server meter adoption and design qualification
+
+The operator [chose Adopt](https://github.com/sakuraiyuta/kaoiro/issues/485#issuecomment-5954688714)
+for a native app-server context meter after the initial research. The decision
+required live qualification of compaction boundaries, immediate resume, model
+switching, automatic compaction and nonzero reasoning, followed by independent
+design review before implementation. The
+[2026-10-03 qualification evidence](../evidence/codex-app-server/context-usage-qualification-2026-10-03.md)
+records those measurements.
+
+The proposed app-server-only supersession of D3 is in the
+[draft addendum](../plans/issue-485-context-meter-addendum.md), pending design
+review. D3 rejected the input-only proxy, not every possible native snapshot;
+its future-telemetry clause permits this reconsideration. The operator's adoption
+does not yet enable capability or approve the detailed freshness/publication
+rules. The implemented behavior remains false until that reviewed change ships.
+Exec remains unsupported; the historical decisions above are preserved.
