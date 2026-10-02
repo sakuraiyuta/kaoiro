@@ -1,61 +1,138 @@
+import { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
-/** The minimal shape `signalSubtree` / `terminateWithGrace` need. Any
- *  `SpawnedAgy` satisfies this; `exitCode` / `signalCode` are optional so a
- *  test fake that never tracks exit state is treated as always-alive,
- *  matching a real `ChildProcess` before it has exited. */
+/** The minimal shape `planSignal` / `terminateWithGrace` need. */
 export interface TerminableProcess {
   readonly pid?: number | undefined;
-  // Not `readonly`: a real `ChildProcess`'s own typing does not mark these
-  // readonly either (Node writes them internally on exit); this module only
-  // ever reads them, but a test fake needs to be able to set them to
-  // simulate a target exiting.
   exitCode?: number | null | undefined;
   signalCode?: NodeJS.Signals | null | undefined;
   kill(signal: NodeJS.Signals): boolean;
 }
 
+export type SignalPlan =
+  | { kind: "none" }
+  | { kind: "group"; pgid: number; signal: NodeJS.Signals; fallbackTarget: TerminableProcess }
+  | { kind: "direct"; target: TerminableProcess; signal: NodeJS.Signals };
+
+export interface PlanSignalOptions {
+  /** When true, plans to signal the process group via pgid. */
+  group?: boolean | undefined;
+}
+
 /** True when `target` has not yet exited, per its own `exitCode` /
  *  `signalCode` (absent/undefined counts as alive, matching a real
- *  `ChildProcess` before `exit` and a test fake that never tracks exit
- *  state). */
-function isAlive(target: TerminableProcess): boolean {
+ *  `ChildProcess` before `exit`). */
+export function isAlive(target: TerminableProcess | null | undefined): boolean {
+  if (!target) return false;
   return (target.exitCode ?? null) === null && (target.signalCode ?? null) === null;
 }
 
-/** Sends `signal` to the process GROUP (`process.kill(-pid, signal)`) when
- *  `pid` is known, so a grandchild the target spawned (e.g. a `run_command`
- *  promoted background task, issue #377) is reached too -- the production
- *  default spawn creates its own group for exactly this (issue #379).
- *  Falls back to `target.kill(signal)` on any failure (pid undefined,
- *  ESRCH, or a platform where negative-pid group signalling is not
- *  meaningful) so a caller never needs its own try/catch. Linux is the
- *  only platform this is verified on; the fallback keeps other platforms
- *  best-effort rather than throwing.
- *
- *  Checks `isAlive(target)` FIRST, unconditionally (issue #379 M4): a
- *  `ChildProcess`'s own `.kill()` already no-ops after `exit` (measured:
- *  returns `false`, no syscall) because it tracks its own handle's
- *  liveness, but `process.kill(-pid, signal)` is a raw OS-level call with
- *  no such awareness -- once the process has actually exited, that pid (or
- *  a process group sharing its number) can be reused by something
- *  completely unrelated, and a signal sent to it then would hit that
- *  unrelated target instead. This is the single choke point for every
- *  caller (the initial SIGTERM, the SIGKILL escalation, and the
- *  watchdog's direct SIGTERM/SIGKILL calls all route through here), so
- *  fixing it once here closes the class rather than requiring every call
- *  site to remember its own check. */
-export function signalSubtree(target: TerminableProcess, signal: NodeJS.Signals): boolean {
-  if (!isAlive(target)) return false;
-  if (target.pid !== undefined) {
+/** Pure planning layer: derives a SignalPlan without issuing ANY OS syscalls.
+ *  Guard mutation testing is strictly confined to this pure function. */
+export function planSignal(
+  target: TerminableProcess | null | undefined,
+  signal: NodeJS.Signals,
+  options: PlanSignalOptions = {},
+): SignalPlan {
+  if (!target || !isAlive(target)) {
+    return { kind: "none" };
+  }
+
+  const pid = target.pid;
+  // Guard invariants:
+  // - pid must be an integer
+  // - M1: pid must be > 1 (rejects undefined, 0, negative numbers, and 1 to prevent kill(-1))
+  // - M1: pid must not be process.pid (prevents signaling self or caller process group)
+  if (
+    typeof pid !== "number" ||
+    !Number.isInteger(pid) ||
+    pid <= 1 ||
+    pid === process.pid
+  ) {
+    return { kind: "none" };
+  }
+
+  if (options.group) {
+    return {
+      kind: "group",
+      pgid: pid,
+      signal,
+      fallbackTarget: target,
+    };
+  }
+
+  return {
+    kind: "direct",
+    target,
+    signal,
+  };
+}
+
+export type ProcessKillFn = (pid: number, signal: NodeJS.Signals | number) => boolean | void;
+
+/** Executes a SignalPlan using an explicitly provided, mandatory killFn.
+ *  M1: killFn is mandatory to prevent accidental omitted calls falling back to system kill.
+ *  Enforces secondary defensive verification on pgid before calling killFn. */
+export function executeSignalPlanWith(
+  plan: SignalPlan,
+  killFn: ProcessKillFn,
+): boolean {
+  if (plan.kind === "none") {
+    return false;
+  }
+
+  if (plan.kind === "group") {
+    // Secondary defensive barrier: even hand-crafted plans cannot bypass PGID invariants
+    if (
+      typeof plan.pgid !== "number" ||
+      !Number.isInteger(plan.pgid) ||
+      plan.pgid <= 1 ||
+      plan.pgid === process.pid
+    ) {
+      return false;
+    }
     try {
-      process.kill(-target.pid, signal);
+      killFn(-plan.pgid, plan.signal);
       return true;
     } catch {
-      // Fall through to the single-process fallback below.
+      // Group kill failed (e.g. ESRCH or child not group leader); fall back to direct target.kill
+    }
+    try {
+      return plan.fallbackTarget.kill(plan.signal);
+    } catch {
+      return false;
     }
   }
-  return target.kill(signal);
+
+  try {
+    return plan.target.kill(plan.signal);
+  } catch {
+    return false;
+  }
+}
+
+/** Sends signal to an owned process, ensuring it is a verified live ChildProcess.
+ *  M2: Closes the entire class against fakes by enforcing `target instanceof ChildProcess`.
+ *  Returns false immediately for any non-ChildProcess, unverified PID, or dead process. */
+export function signalOwnedChild(
+  target: unknown,
+  signal: NodeJS.Signals,
+  options: PlanSignalOptions = {},
+): boolean {
+  if (!(target instanceof ChildProcess)) {
+    return false;
+  }
+  const plan = planSignal(target, signal, options);
+  return executeSignalPlanWith(plan, process.kill);
+}
+
+/** Sends `signal` to the process GROUP (`process.kill(-pid, signal)`) when
+ *  `target` is an owned ChildProcess, falling back to `target.kill(signal)`. */
+export function signalSubtree(
+  target: unknown,
+  signal: NodeJS.Signals,
+): boolean {
+  return signalOwnedChild(target, signal, { group: true });
 }
 
 export interface GraceTerminationOptions {
@@ -64,37 +141,19 @@ export interface GraceTerminationOptions {
   setTimer?: (callback: () => void, delayMs: number) => unknown;
   clearTimer?: (timer: unknown) => void;
   nowMs?: () => number;
+  signalSubtree?: (target: unknown, signal: NodeJS.Signals) => boolean;
 }
 
 export interface GraceTerminationHandle {
-  /** Clears the pending SIGKILL escalation without sending any signal.
-   *  Call this as soon as the target is known to have exited (its own
-   *  `close` or `exit` event) -- never on a value read only when the timer
-   *  fires, since the target's pid can be reused by an unrelated process
-   *  once it has actually exited (issue #379 M3). A no-op once the
-   *  escalation has already fired or been cancelled. */
+  /** Clears the pending SIGKILL escalation without sending any signal. */
   cancel(): void;
-  /** Re-arms the pending escalation to fire after
-   *  `min(currently remaining grace, newGraceMs)` from now, WITHOUT
-   *  re-sending SIGTERM (already sent once, at `terminateWithGrace()`
-   *  time). Used when a shorter deadline supersedes the original one (a
-   *  host `close()` arriving after an `interrupt()` already armed the
-   *  longer `abortGraceMs`, issue #379 M2) -- never lengthens the
-   *  deadline. A no-op once the escalation has already fired or been
-   *  cancelled. */
+  /** Re-arms the pending escalation to fire after min(remaining, newGraceMs). */
   shortenGraceTo(newGraceMs: number): void;
 }
 
 /** Sends SIGTERM to `target` now (via `signalSubtree`) and arms a SIGKILL
- *  escalation after `graceMs` unless cancelled first. `signalSubtree`
- *  itself re-checks liveness immediately before every signal it sends
- *  (issue #379 M4), so a `target` that is already dead when this is
- *  called -- or dies between the initial SIGTERM and the escalation --
- *  never gets a raw pid-based signal that could reach a reused pid; when
- *  it is already dead at call time, no timer is armed at all (nothing to
- *  escalate). Generic on purpose, not interrupt-specific -- issue #377
- *  Stage 2 (epoch termination) is expected to reuse this for the same
- *  "end this active child + its group, with a grace" operation. */
+ *  escalation after `graceMs` unless cancelled first.
+ *  Invariant: The plan is NOT cached; signalSubtree is called afresh at escalation time. */
 export function terminateWithGrace(
   target: TerminableProcess,
   options: GraceTerminationOptions,
@@ -102,8 +161,9 @@ export function terminateWithGrace(
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as never));
   const nowMs = options.nowMs ?? (() => performance.now());
+  const signal = options.signalSubtree ?? signalSubtree;
 
-  signalSubtree(target, "SIGTERM");
+  signal(target, "SIGTERM");
 
   let fired = !isAlive(target);
   let deadlineMs = nowMs() + options.graceMs;
@@ -111,7 +171,7 @@ export function terminateWithGrace(
 
   function onFire(): void {
     fired = true;
-    signalSubtree(target, "SIGKILL");
+    signal(target, "SIGKILL");
   }
 
   return {

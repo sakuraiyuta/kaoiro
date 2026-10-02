@@ -13,6 +13,7 @@ export interface CustomizationOptions {
   nodePath: string;
   hookPath: string;
   bridgePath: string;
+  baseDir?: string | undefined;
 }
 
 function digest(content: string): string {
@@ -70,7 +71,7 @@ export class CustomizationDir {
   }
 
   static create(options: CustomizationOptions): CustomizationDir {
-    const path = mkdtempSync(join(tmpdir(), "kaoiro-agy-"));
+    const path = mkdtempSync(join(options.baseDir ?? tmpdir(), "kaoiro-agy-"));
     chmodSync(path, 0o700);
     writeFileSync(join(path, ".kaoiro-owner.json"), JSON.stringify({
       namespace: CUSTOMIZATION_OWNER_NAMESPACE,
@@ -118,17 +119,20 @@ export class CustomizationDir {
 }
 
 export interface StaleSweepOptions {
-  baseDir?: string;
-  uid?: number;
-  isProcessAlive?: (pid: number) => boolean;
+  baseDir?: string | undefined;
+  uid?: number | undefined;
+  isProcessAlive?: ((pid: number) => boolean) | undefined;
 }
 
-function processIsAlive(pid: number): boolean {
+function processIsAlive(pid: number, killFn: (pid: number, signal: number) => void = process.kill): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 1) {
+    return true; // Fail closed for unverified PIDs (never delete unverified directories)
+  }
   try {
-    process.kill(pid, 0);
+    killFn(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 

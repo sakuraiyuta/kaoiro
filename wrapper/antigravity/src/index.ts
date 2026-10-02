@@ -61,4 +61,19 @@ export type {
   AgyUsageWindow,
   RunAgyUsageProbeOptions,
 } from "./usage_probe.js";
-
+export {
+  executeSignalPlanWith,
+  isAlive,
+  planSignal,
+  signalOwnedChild,
+  signalSubtree,
+  terminateWithGrace,
+} from "./subtree_termination.js";
+export type {
+  GraceTerminationHandle,
+  GraceTerminationOptions,
+  PlanSignalOptions,
+  ProcessKillFn,
+  SignalPlan,
+  TerminableProcess,
+} from "./subtree_termination.js";

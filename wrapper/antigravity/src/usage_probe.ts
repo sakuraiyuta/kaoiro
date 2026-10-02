@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { signalOwnedChild } from "./subtree_termination.js";
 
 export type AgyUsageWindow = "five_hour" | "seven_day";
 
@@ -118,21 +119,9 @@ export function parseAgyUsageOutput(
 
 export const MAX_USAGE_PROBE_STDOUT_BYTES = 1024 * 1024; // 1MB
 
-/** Kills the process group of child if pid > 0, falling back to direct kill. */
+/** Kills the process group of child using verified signalOwnedChild guard. */
 export function killChildGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL"): void {
-  if (typeof child.pid === "number" && child.pid > 0) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Process or group might have already exited.
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch {
-    // Process might have already exited.
-  }
+  signalOwnedChild(child, signal, { group: true });
 }
 
 export type AgyUsageProbeSpawnOptions = {

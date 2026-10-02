@@ -69,7 +69,7 @@ import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
 import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
-import { signalSubtree, terminateWithGrace, type GraceTerminationHandle } from "./subtree_termination.js";
+import { signalOwnedChild, signalSubtree, terminateWithGrace, type GraceTerminationHandle } from "./subtree_termination.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
@@ -331,6 +331,8 @@ export interface AntigravityHostOptions {
   usageProbeSpawn?: AgyUsageProbeSpawn;
   usageProbeTimeoutMs?: number;
   usageProbeIntervalMs?: number;
+  customizationBaseDir?: string | undefined;
+  signalSubtree?: ((target: unknown, signal: NodeJS.Signals) => boolean) | undefined;
 }
 
 function validToolName(value: unknown): value is string {
@@ -538,6 +540,7 @@ export class AntigravityHost implements EngineAdapter {
   readonly #probeTimeoutMs: number;
   readonly #abortGraceMs: number;
   readonly #closeGraceMs: number;
+  readonly #signalSubtree: (target: unknown, signal: NodeJS.Signals) => boolean;
   // issue #379: the single live SIGTERM->grace->SIGKILL escalation for
   // `#running`, if any. issue #377 Stage 2: a new epoch is only spawned
   // after the previous one's close is confirmed (`#endEpoch` awaits its
@@ -620,7 +623,8 @@ export class AntigravityHost implements EngineAdapter {
     }
     this.#usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
     this.#usageProbeIntervalMs = options.usageProbeIntervalMs ?? USAGE_PROBE_INTERVAL_MS;
-    sweepStaleCustomizationDirs();
+    this.#signalSubtree = options.signalSubtree ?? signalSubtree;
+    sweepStaleCustomizationDirs({ baseDir: options.customizationBaseDir });
     void this.#refreshCatalog();
     void this.#triggerUsageProbe();
   }
@@ -769,13 +773,20 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    this.#terminateGateProbe();
     // issue #377 Stage 2: ends the whole epoch, not just the active turn --
     // an idle interrupt (no `#currentTurnToken`) now has a live process to
     // stop, unlike Stage 1 where idle meant no process existed at all. The
     // next `send()` sees `#epoch === null` and spawns fresh with
     // `--conversation <this session's id>` (M6 keeps `#sessionId` current).
     void this.#endEpoch("interrupt");
+  }
+
+  #terminateGateProbe(): void {
+    if (!this.#gateProbe) return;
+    if (!signalOwnedChild(this.#gateProbe, "SIGTERM", { group: false })) {
+      this.#gateProbe.kill?.("SIGTERM");
+    }
   }
 
   /** issue #379: arms a SIGTERM->grace->SIGKILL escalation for `#running`
@@ -792,7 +803,10 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     if (this.#running === null) return;
-    this.#activeTermination = terminateWithGrace(this.#running, { graceMs });
+    this.#activeTermination = terminateWithGrace(this.#running, {
+      graceMs,
+      signalSubtree: this.#signalSubtree,
+    });
   }
 
   requestInterruptForTurn(turnToken: string, cause?: TurnWatchdogInterruptCause): boolean {
@@ -811,7 +825,7 @@ export class AntigravityHost implements EngineAdapter {
     // and `failStopTurnForWatchdog`); arming a second one here would double
     // the effective wait before an unresponsive watchdog-flagged turn dies.
     this.#markEpochEnding("watchdog");
-    return this.#running !== null && signalSubtree(this.#running, "SIGTERM");
+    return this.#running !== null && this.#signalSubtree(this.#running, "SIGTERM");
   }
 
   failStopTurnForWatchdog(turnToken: string): boolean {
@@ -840,7 +854,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    this.#terminateGateProbe();
     if (this.#usageProbeAbortController !== null) {
       this.#usageProbeAbortController.abort();
     }
@@ -1360,6 +1374,7 @@ export class AntigravityHost implements EngineAdapter {
       nodePath: this.#options.nodePath ?? process.execPath,
       hookPath: HOOK_SCRIPT,
       bridgePath: BRIDGE_SCRIPT,
+      baseDir: this.#options.customizationBaseDir,
     });
     const customization = this.#customization;
     if (!(this.#options.runtimeAssetsAvailable?.() ?? (existsSync(HOOK_SCRIPT) && existsSync(BRIDGE_SCRIPT)))) {
@@ -1542,12 +1557,12 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    this.#terminateGateProbe();
     // issue #379: no grace here either -- by the time TurnWatchdog calls
     // this, its OWN abortGraceMs has already elapsed since
     // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
     this.#markEpochEnding("watchdog");
-    if (this.#running !== null) signalSubtree(this.#running, "SIGKILL");
+    if (this.#running !== null) this.#signalSubtree(this.#running, "SIGKILL");
     const error = {
       detail: attribution === "exact"
         ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
