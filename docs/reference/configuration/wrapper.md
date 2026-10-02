@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-02
 related: [protocol]
 ---
 
@@ -72,7 +72,9 @@ listed `persona.id` values, with the same list rules as the Claude controls
 below; both wrappers use one parser, `personaOptInSource` in agent-common. Only the exact value `1` enables the global flag; any other value,
 including `true`, leaves it off and defers to the persona list. An enabled wrapper declares `operator_input_modes: {version: "v1",
 early: "steer"}` at join and steers only while the server echoes it; the exec
-backend ignores both variables. The wrapper logs `codex: operator_steer=on|off`
+backend ignores both variables. Every other Codex wrapper declares
+`early: "none"`, so the server stamps operator input `normal` instead of
+deriving the default from the inter-agent declaration. The wrapper logs `codex: operator_steer=on|off`
 at startup. See [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 
 ### Codex inter-agent early delivery

@@ -816,8 +816,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
     interAgentDeliveryModes: { version: "v1", early: phase3Enabled ? "steer" : "none", yield: "none", stage_reports: true },
+    // Declared even when off: without it the server derives the operator
+    // default from the inter-agent modes above and stamps input `early`.
+    operatorInputModes: { version: "v1", early: operatorSteer ? "steer" : "none" } as const,
     ...(operatorSteer ? {
-      operatorInputModes: { version: "v1", early: "steer" } as const,
       onOperatorInputModes: (supported: boolean) => {
         if (supported) return;
         onLog(makeLog(config, host?.state ?? "idle", new Date().toISOString(), {
