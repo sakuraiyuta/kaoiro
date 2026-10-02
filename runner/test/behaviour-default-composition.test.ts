@@ -377,7 +377,15 @@ describe("default composition (issue #469)", () => {
       failures.push(...(await verifyWrappersGone(wrapperPids)));
       for (const socket of endpoint.sockets) socket.destroy();
       await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
-      rmSync(root, { recursive: true, force: true });
+      // Something can still write into the private HOME while the tree is removed
+      // (seen once as ENOTEMPTY with `.claude.json` left behind; the writer was not
+      // identified), so retry. A failure that remains joins the cleanup report
+      // instead of replacing the primary error.
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch (error) {
+        failures.push(`fixture removal failed: ${String(error)}`);
+      }
       const report =
         failures.length === 0
           ? `[cleanup] runner closed; wrapper pids [${[...wrapperPids].join(",")}] gone`
