@@ -7,8 +7,14 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost } from "../src/host.js";
+import { parseAgyUsageOutput } from "../src/usage_probe.js";
 import type { SignalTargetOperation } from "../src/subtree_termination.js";
 import { createHarnessHost, type HarnessAgy } from "./host_test_harness.js";
+
+const measuredUsageOutput = readFileSync(
+  new URL("../../../docs/evidence/antigravity/usage-probe-raw-20261001.json", import.meta.url),
+  "utf8",
+);
 
 function config(overrides: Partial<WrapperConfig> = {}): WrapperConfig {
   return {
@@ -150,6 +156,40 @@ const thirdPartyLimits = {
 };
 
 describe("AntigravityHost usage probe state transitions", () => {
+  it("maps bucket ids and windows from the measured /usage output", () => {
+    const payload = JSON.parse(measuredUsageOutput) as {
+      command: {
+        data: {
+          groups: Array<{ buckets: Array<{ id: string; window: string }> }>;
+        };
+      };
+    };
+    expect(payload.command.data.groups.flatMap((group) => group.buckets.map(({ id, window }) => ({ id, window })))).toEqual([
+      { id: "gemini-weekly", window: "weekly" },
+      { id: "gemini-5h", window: "5h" },
+      { id: "3p-weekly", window: "weekly" },
+      { id: "3p-5h", window: "5h" },
+    ]);
+
+    expect(parseAgyUsageOutput(measuredUsageOutput, "gemini")).toEqual(new Map([
+      ["seven_day", {
+        utilization: 1 - 0.6695590615272522,
+        resets_at: Math.floor(Date.parse("2026-10-03T04:39:01Z") / 1_000),
+      }],
+      ["five_hour", {
+        utilization: 1 - 0.4947547912597656,
+        resets_at: Math.floor(Date.parse("2026-10-01T16:06:46Z") / 1_000),
+      }],
+    ]));
+    expect(parseAgyUsageOutput(measuredUsageOutput, "3p")).toEqual(new Map([
+      ["seven_day", {
+        utilization: 1 - 0.9866412281990051,
+        resets_at: Math.floor(Date.parse("2026-10-01T15:47:19Z") / 1_000),
+      }],
+      ["five_hour", { utilization: 0 }],
+    ]));
+  });
+
   it("uses the production usage spawner only at a turn boundary, never while idle or pending a model", async () => {
     const root = mkdtempSync(join(tmpdir(), "momo384-no-turn-"));
     const executable = join(root, "agy-fixture.mjs");
