@@ -211,9 +211,16 @@ Observed details:
   unclassified, so it publishes no `/usage` rate limits.
 - Usage probes start only after a terminal turn result when there is no active
   or queued turn. There is no idle refresh timer. Valid snapshots are throttled
-  for five minutes; three consecutive current-family failures suppress retries
-  until a successful turn permits one immediate attempt. The register-time
-  catalog probe is independent of this rule.
+  for five minutes from capture. After a failed `/usage` attempt, further
+  attempts wait five minutes from that attempt's start (including spawn throws,
+  timeouts, nonzero exits, and unusable output), including across successful
+  turns and model-family changes; a later successful probe clears this failure
+  floor. Three consecutive current-family failures independently
+  suppress retries until a successful turn clears the failure count, but that
+  turn does not clear an active floor. After the floor expires, retry only at
+  the next terminal turn boundary. A family change after a successful probe
+  can still trigger an immediate probe. The register-time catalog probe is
+  independent of these rules.
 - A timeout, interrupt, family change, or host close sends one checked PID
   `SIGKILL` and waits up to two seconds for the probe child's `close` event.
   If the wait expires, the child stays held in `stop_timed_out` and blocks new

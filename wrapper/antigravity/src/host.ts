@@ -576,7 +576,8 @@ export class AntigravityHost implements EngineAdapter {
   readonly #toolNames = new Map<string, string>();
   #usageSnapshot: { family: AgyUsageFamily; capturedAtMs: number; limits: AgyUsageRateLimits } | null = null;
   #rateLimitOverlay: AgyUsageRateLimit | null = null;
-  #usageProbeRun: { family: AgyUsageFamily; run: AgyUsageProbeRun } | null = null;
+  #usageProbeRun: { family: AgyUsageFamily; startedAtMs: number; run: AgyUsageProbeRun } | null = null;
+  #usageProbeLastFailureStartedAtMs: number | null = null;
   #usageProbeFailureFamily: AgyUsageFamily | null = null;
   #usageProbeFailureCount = 0;
   #usageProbeRequested = false;
@@ -2255,10 +2256,13 @@ export class AntigravityHost implements EngineAdapter {
 
   #recordUsageProbeFailure(
     family: AgyUsageFamily,
+    startedAtMs: number,
     reason: string,
     warningKind: "failed" | "stopped" = "failed",
   ): void {
-    if (this.#closed || this.#currentUsageFamily() !== family) return;
+    if (this.#closed) return;
+    this.#usageProbeLastFailureStartedAtMs = startedAtMs;
+    if (this.#currentUsageFamily() !== family) return;
     if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
     this.#usageProbeFailureCount += 1;
     this.#warn(`antigravity usage probe ${warningKind}: ${boundErrorDetail(reason)}`);
@@ -2284,6 +2288,10 @@ export class AntigravityHost implements EngineAdapter {
 
     const nowMs = Date.parse(this.#now());
     if (!Number.isFinite(nowMs)) return;
+    if (
+      this.#usageProbeLastFailureStartedAtMs !== null &&
+      nowMs - this.#usageProbeLastFailureStartedAtMs < this.#usageProbeIntervalMs
+    ) return;
     if (this.#rateLimitOverlay !== null) {
       const resetMs = this.#rateLimitOverlay.resets_at === undefined
         ? Number.POSITIVE_INFINITY
@@ -2301,6 +2309,7 @@ export class AntigravityHost implements EngineAdapter {
       nowMs - this.#usageSnapshot.capturedAtMs < this.#usageProbeIntervalMs
     ) return;
 
+    const startedAtMs = nowMs;
     let run: AgyUsageProbeRun;
     try {
       const probeOptions = {
@@ -2314,11 +2323,11 @@ export class AntigravityHost implements EngineAdapter {
       run = startAgyUsageProbe(this.#agyExecutable.path, probeOptions);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      this.#recordUsageProbeFailure(family, detail);
+      this.#recordUsageProbeFailure(family, startedAtMs, detail);
       return;
     }
 
-    const probe = { family, run };
+    const probe = { family, startedAtMs, run };
     this.#usageProbeRun = probe;
     this.#usageProbeRequested = false;
     void run.completion.then((completion) => {
@@ -2330,7 +2339,7 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #onUsageProbeClosed(
-    probe: { family: AgyUsageFamily; run: AgyUsageProbeRun },
+    probe: { family: AgyUsageFamily; startedAtMs: number; run: AgyUsageProbeRun },
     result: UsageProbeClosedResult,
   ): void {
     if (this.#usageProbeRun === probe) this.#usageProbeRun = null;
@@ -2338,8 +2347,11 @@ export class AntigravityHost implements EngineAdapter {
 
     const currentFamily = this.#currentUsageFamily();
     const sameFamily = currentFamily === probe.family;
-    if (!sameFamily || result.stopReason === "stale_family") {
+    const retryRequestedProbe = (): void => {
       if (this.#usageProbeRequested && currentFamily !== null) this.#maybeStartUsageProbe(true);
+    };
+    if (result.stopReason === "stale_family") {
+      retryRequestedProbe();
       return;
     }
     if (result.stopReason === "host_close") return;
@@ -2347,28 +2359,39 @@ export class AntigravityHost implements EngineAdapter {
       const interrupted = result.stopReason === "abort";
       this.#recordUsageProbeFailure(
         probe.family,
+        probe.startedAtMs,
         interrupted ? result.stopReason : `stopped:${result.stopReason}`,
         interrupted ? "stopped" : "failed",
       );
+      retryRequestedProbe();
       return;
     }
     if (result.spawnError !== null) {
-      this.#recordUsageProbeFailure(probe.family, result.spawnError.message);
+      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, result.spawnError.message);
+      retryRequestedProbe();
       return;
     }
     if (result.code !== 0) {
-      this.#recordUsageProbeFailure(probe.family, `exit_${result.code ?? result.signal ?? "unknown"}`);
+      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, `exit_${result.code ?? result.signal ?? "unknown"}`);
+      retryRequestedProbe();
       return;
     }
 
     const limits = parseAgyUsageOutput(result.stdout, probe.family);
     if (limits === null) {
-      this.#recordUsageProbeFailure(probe.family, "unrecognized_or_empty_bucket_set");
+      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "unrecognized_or_empty_bucket_set");
+      retryRequestedProbe();
       return;
     }
     const capturedAtMs = Date.parse(this.#now());
     if (!Number.isFinite(capturedAtMs)) {
-      this.#recordUsageProbeFailure(probe.family, "invalid_capture_time");
+      this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "invalid_capture_time");
+      retryRequestedProbe();
+      return;
+    }
+    this.#usageProbeLastFailureStartedAtMs = null;
+    if (!sameFamily) {
+      retryRequestedProbe();
       return;
     }
     this.#usageSnapshot = { family: probe.family, capturedAtMs, limits };

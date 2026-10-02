@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost } from "../src/host.js";
-import { parseAgyUsageOutput } from "../src/usage_probe.js";
+import { parseAgyUsageOutput, USAGE_PROBE_INTERVAL_MS } from "../src/usage_probe.js";
 import type { SignalTargetOperation } from "../src/subtree_termination.js";
 import { createHarnessHost, type HarnessAgy } from "./host_test_harness.js";
 
@@ -85,6 +85,7 @@ function makeHarness(options: {
   usageProbeStopTimeoutMs?: number;
   usageProbeIntervalMs?: number;
   closeProbeOnSignal?: boolean;
+  throwUsageProbeSpawn?: boolean;
 } = {}) {
   const states: Envelope[] = [];
   const turns: HarnessAgy[] = [];
@@ -125,6 +126,7 @@ function makeHarness(options: {
     ...(options.usageProbeStopTimeoutMs === undefined ? {} : { usageProbeStopTimeoutMs: options.usageProbeStopTimeoutMs }),
     ...(options.usageProbeIntervalMs === undefined ? {} : { usageProbeIntervalMs: options.usageProbeIntervalMs }),
     usageProbeSpawn: () => {
+      if (options.throwUsageProbeSpawn === true) throw new Error("fixture usage spawn throw");
       const child = new FakeUsageChild();
       probes.push(child);
       return child as unknown as ChildProcess;
@@ -153,6 +155,16 @@ const geminiLimits = {
 const thirdPartyLimits = {
   five_hour: { utilization: 0.25, resets_at: 1791028800 },
   seven_day: { utilization: 0.5, resets_at: 1791115200 },
+};
+const measuredGeminiLimits = {
+  five_hour: {
+    utilization: 1 - 0.4947547912597656,
+    resets_at: Math.floor(Date.parse("2026-10-01T16:06:46Z") / 1_000),
+  },
+  seven_day: {
+    utilization: 1 - 0.6695590615272522,
+    resets_at: Math.floor(Date.parse("2026-10-03T04:39:01Z") / 1_000),
+  },
 };
 
 describe("AntigravityHost usage probe state transitions", () => {
@@ -216,6 +228,71 @@ describe("AntigravityHost usage probe state transitions", () => {
     }
   });
 
+  it("uses default spawn and arguments to publish the fixture executable's /usage snapshot", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-usage-"));
+    const executable = join(root, "agy fixture.mjs");
+    const callsFile = join(root, "calls.jsonl");
+    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    writeFileSync(executable, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(args) + "\\n");
+if (args[0] === "models") {
+  process.stdout.write("gemini-2.5-pro\\tGemini 2.5 Pro\\n");
+} else if (args[0] === "-p" && args[1] === "/hooks") {
+  const customization = args[args.lastIndexOf("--add-dir") + 1];
+  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
+} else if (args[0] === "-p" && args[1] === "/usage") {
+  if (JSON.stringify(args) !== JSON.stringify(["-p", "/usage", "--output-format", "json"])) {
+    process.exitCode = 2;
+  } else {
+    process.stdout.write(${JSON.stringify(measuredUsageOutput)});
+  }
+} else if (args[0] === "--print") {
+  let input = "";
+  let replied = false;
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    const newline = input.indexOf("\\n");
+    if (newline === -1 || replied) return;
+    replied = true;
+    process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "default usage fixture" } }) + "\\n");
+  });
+} else {
+  process.exitCode = 2;
+}
+`);
+    chmodSync(executable, 0o755);
+    const cfg = config({ antigravity_cli_path: executable });
+    const logs: Envelope[] = [];
+    const states: Envelope[] = [];
+    const host = new AntigravityHost(cfg, {
+      cwd: root,
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: (envelope) => states.push(envelope),
+      onLog: (envelope) => logs.push(envelope),
+      runtimeAssetsAvailable: () => true,
+    });
+    try {
+      await host.send("run one fixture-backed turn");
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"), 8_000);
+      await waitFor(() => existsSync(callsFile) && readFileSync(callsFile, "utf8").includes("/usage"), 8_000);
+
+      const calls = readFileSync(callsFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      expect(calls.filter((args) => args[0] === "-p" && args[1] === "/usage")).toEqual([
+        ["-p", "/usage", "--output-format", "json"],
+      ]);
+      await waitFor(() => states.some((envelope) => envelope.ext?.rate_limits !== undefined), 8_000);
+      expect(states.at(-1)?.ext?.rate_limits).toEqual(measuredGeminiLimits);
+      expect(host.statusSnapshot().rate_limits).toEqual(measuredGeminiLimits);
+    } finally {
+      await host.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("publishes the complete current-family snapshot only after the probe closes", async () => {
     const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
     try {
@@ -252,6 +329,17 @@ describe("AntigravityHost usage probe state transitions", () => {
       harness.probes[1]!.finish(unknownBucketOutput());
       await waitFor(() => harness.warnings.some((warning) => warning.includes("unrecognized_or_empty_bucket_set")));
       expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
+
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(2);
+      now = "2026-10-03T10:10:59.999Z";
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(2);
+      now = "2026-10-03T10:11:00.000Z";
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(3);
+      harness.probes[2]!.finish(usageOutput("gemini"));
+      await waitFor(() => JSON.stringify(harness.host.statusSnapshot().rate_limits) === JSON.stringify(geminiLimits));
     } finally {
       await harness.host.close();
     }
@@ -374,8 +462,9 @@ describe("AntigravityHost usage probe state transitions", () => {
   });
 
   it("holds a stop timeout until late close, then allows the next successful boundary to retry", async () => {
+    let nowMs = Date.parse("2026-10-03T10:00:00.000Z");
     const harness = makeHarness({
-      now: () => "2026-10-03T10:00:00.000Z",
+      now: () => new Date(nowMs).toISOString(),
       usageProbeTimeoutMs: 20,
       usageProbeStopTimeoutMs: 20,
       closeProbeOnSignal: false,
@@ -391,6 +480,10 @@ describe("AntigravityHost usage probe state transitions", () => {
       harness.probes[0]!.finish("", null, "SIGKILL");
       await waitFor(() => harness.warnings.some((warning) => warning.includes("stopped:timeout")));
 
+      nowMs += 60_000;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+      nowMs = Date.parse("2026-10-03T10:00:00.000Z") + USAGE_PROBE_INTERVAL_MS;
       await completeTurn(harness, { status: "SUCCESS" });
       expect(harness.probes).toHaveLength(2);
       harness.probes[1]!.finish(usageOutput("gemini"));
@@ -402,8 +495,9 @@ describe("AntigravityHost usage probe state transitions", () => {
   });
 
   it("starts the new family's probe when an already-stopping old-family probe closes", async () => {
+    let nowMs = Date.parse("2026-10-03T10:00:00.000Z");
     const harness = makeHarness({
-      now: () => "2026-10-03T10:00:00.000Z",
+      now: () => new Date(nowMs).toISOString(),
       usageProbeTimeoutMs: 20,
       usageProbeStopTimeoutMs: 2_000,
       closeProbeOnSignal: false,
@@ -419,7 +513,11 @@ describe("AntigravityHost usage probe state transitions", () => {
       expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
 
       harness.probes[0]!.finish("", null, "SIGKILL");
-      await waitFor(() => harness.probes.length === 2);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(harness.probes).toHaveLength(1);
+      nowMs += USAGE_PROBE_INTERVAL_MS;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(2);
       expect(harness.warnings.some((warning) => warning.includes("stopped:timeout"))).toBe(false);
       harness.probes[1]!.finish(usageOutput("3p", 0.75, 0.5));
       await waitFor(() => harness.host.statusSnapshot().rate_limits !== undefined);
@@ -430,7 +528,8 @@ describe("AntigravityHost usage probe state transitions", () => {
   });
 
   it("aborts an in-flight usage probe on interrupt and retries after a successful turn", async () => {
-    const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
+    let nowMs = Date.parse("2026-10-03T10:00:00.000Z");
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString() });
     try {
       await completeTurn(harness, { status: "SUCCESS" });
       expect(harness.probes).toHaveLength(1);
@@ -440,6 +539,7 @@ describe("AntigravityHost usage probe state transitions", () => {
       await waitFor(() => harness.warnings.some((warning) => warning.includes("usage probe stopped: abort")));
       expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
 
+      nowMs += USAGE_PROBE_INTERVAL_MS;
       await completeTurn(harness, { status: "SUCCESS" });
       expect(harness.probes).toHaveLength(2);
       harness.probes[1]!.finish(usageOutput("gemini"));
@@ -476,9 +576,11 @@ describe("AntigravityHost usage probe state transitions", () => {
   });
 
   it("scopes failures to a family, suppresses after three, and lets success retry once", async () => {
-    const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
+    let nowMs = Date.parse("2026-10-03T10:00:00.000Z");
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString() });
     try {
       for (let index = 0; index < 3; index += 1) {
+        if (index > 0) nowMs += USAGE_PROBE_INTERVAL_MS;
         await completeTurn(harness, { status: "ERROR", error: "HTTP 500 backend unavailable" });
         expect(harness.probes).toHaveLength(index + 1);
         harness.probes[index]!.finish("", 1);
@@ -488,11 +590,66 @@ describe("AntigravityHost usage probe state transitions", () => {
       await completeTurn(harness, { status: "ERROR", error: "HTTP 500 still failing" });
       expect(harness.probes).toHaveLength(3);
 
+      nowMs += USAGE_PROBE_INTERVAL_MS;
       await completeTurn(harness, { status: "SUCCESS" });
       expect(harness.probes).toHaveLength(4);
       harness.probes[3]!.finish(usageOutput("gemini"));
       await waitFor(() => harness.host.statusSnapshot().rate_limits !== undefined);
       expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("keeps the failed-attempt floor across successful turns and family changes", async () => {
+    const startMs = Date.parse("2026-10-03T10:00:00.000Z");
+    let nowMs = startMs;
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString() });
+    try {
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 500 usage unavailable" });
+      expect(harness.probes).toHaveLength(1);
+      harness.probes[0]!.finish("", 1);
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("exit_1")));
+
+      await harness.host.setModel("gpt-5");
+      nowMs = startMs + 60_000;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+      expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS - 1;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS;
+      await completeTurn(harness, { status: "SUCCESS" });
+      await waitFor(() => harness.probes.length === 2);
+      harness.probes[1]!.finish(usageOutput("3p", 0.75, 0.5));
+      await waitFor(() => harness.host.statusSnapshot().rate_limits !== undefined);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(thirdPartyLimits);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("starts the retry floor at a synchronous usage spawn throw", async () => {
+    const startMs = Date.parse("2026-10-03T10:00:00.000Z");
+    let nowMs = startMs;
+    const harness = makeHarness({
+      now: () => new Date(nowMs).toISOString(),
+      throwUsageProbeSpawn: true,
+    });
+    try {
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.warnings.filter((warning) => warning.includes("fixture usage spawn throw"))).toHaveLength(1);
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS - 1;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.warnings.filter((warning) => warning.includes("fixture usage spawn throw"))).toHaveLength(1);
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS;
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.warnings.filter((warning) => warning.includes("fixture usage spawn throw"))).toHaveLength(2);
     } finally {
       await harness.host.close();
     }
