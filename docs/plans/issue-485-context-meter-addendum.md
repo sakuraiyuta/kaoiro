@@ -1,6 +1,6 @@
 ---
 title: "Draft ADR-0040 addendum: Codex app-server context snapshots"
-status: pending-design-review
+status: approved-implementation-in-progress
 last_updated: 2026-10-03
 ---
 
@@ -11,8 +11,8 @@ for [issue #485](https://github.com/sakuraiyuta/kaoiro/issues/485). The operator
 [chose Adopt](https://github.com/sakuraiyuta/kaoiro/issues/485#issuecomment-5954688714)
 on 2026-10-02. The five requested paths have now been
 [measured on pinned Codex 0.159.3](../evidence/codex-app-server/context-usage-qualification-2026-10-03.md).
-This draft requires independent design review before source changes. The
-current adapter still advertises false and emits no context payload.
+Independent design review approved this plan (must 0) on 2026-10-03. The
+director authorized implementation with the review follow-ups below.
 
 ## Proposed ADR addendum
 
@@ -140,6 +140,9 @@ native event; it makes no claim to independently detect an upstream-internal
 stale window or infer the provider's actual hard limit. Other releases/providers,
 images and tool-heavy turns remain outside the live qualification.
 
+Codex peers also acquire the existing dashboard fatigue sprite at 60% or more
+of the reported model window; engine-specific thresholds are outside this scope.
+
 No cost/rate-limit accounting, reasoning transcript, approval/permission,
 steering, signal/cleanup, runner allowlist, or server persistence behavior changes.
 No automatic interrupt or budget-threshold notice is added by this work.
@@ -181,6 +184,7 @@ notification sequences. They must not claim to validate native semantics.
 
 | Contract | Test and negative control |
 | --- | --- |
+| Backend capability | App-server advertises true; an explicit exec backend still advertises false and emits no context. Advertising true regardless of backend must fail the exec test. |
 | Atomic formula; no reconstruction or reasoning double-count | Measured reasoning/estimate samples, unequal native total, cached input and cumulative mismatch; replacing the native total with input/output or adding reasoning must fail. |
 | Positive/nullable window and finite raw ratio | Null/missing/invalid windows, zero counts, safe-integer limits and the real 272,534/258,400 sample; deleting the window guard or clamping the wire ratio must fail. |
 | Compaction invalidates before estimate; automatic recovery in same turn | Exact native item/usage order plus incomplete/failing boundaries and duplicate starts; cut invalidation or allow the estimate and assert the outward context is absent where required. |
@@ -220,6 +224,6 @@ protocol context comment if its semantics need clarification. Keep exec's
 reference/capability unchanged. Link the evidence rather than duplicate its
 event counts, and replace any claim that no peer-facing context is projected.
 
-The director owns approval and assignment of the independent design reviewer.
-This artifact author owns the draft; no source implementation is authorized by
-this handoff. The review baseline is the commit and file hashes in the report.
+The director owns assignment of the independent implementation reviewer.
+Implementation starts from develop `d68a0165` on a separate branch; the research
+branch and raw captures remain frozen until the issue closes.

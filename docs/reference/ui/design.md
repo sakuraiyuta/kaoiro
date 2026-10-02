@@ -425,6 +425,10 @@ edge-of-vision recognition takes priority over the subtlety of color-mix.
 Progress bar: track `var(--bg)`, fill `var(--c-waiting_input)`, border `1px solid
 var(--line)`, `rounded.sm`. Animate fill width over 0.15s ease-out.
 
+Context fields preserve the native token total and reported model window:
+`used_percentage` may exceed 100 before automatic compaction, while the bar
+clamps its visual extent; that window is not a provider admission limit.
+
 ### Slash Menu / Switch Menu
 
 Slash-command and option popovers: bg `var(--bg-card)`, border `var(--line)`, and
