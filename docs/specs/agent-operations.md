@@ -117,10 +117,15 @@ For persona-name resolution and existing-peer routing, follow
   28 MB repo copy under `/tmp` is still live without asking.
 - Before landing a branch that changes Antigravity signal, spawn, or test
   harness paths, run its full package suite through
-  `scripts/antigravity-kill-trace-gate.py`. Use the same gate before running
-  an unreviewed branch with those changes on a shared host. The gate checks
-  signal targets and trace coverage; if `unshare`, `setsid`, or `strace` is
-  unavailable, its exit 2 is not a passing verification result.
+  `scripts/run-antigravity-test-namespace.py`. The wrapper uses outer and
+  inner `setsid` around `unshare --user --map-root-user --pid --fork
+  --mount-proc`; both `setsid` calls are required because PID namespaces do
+  not isolate process groups, so `kill(0)` could otherwise reach the outer
+  process group. The `wrapper/antigravity` source policy test rejects
+  unapproved `.kill()` calls and pins the two allowed `process.kill` sites.
+  If `unshare` or `setsid` is unavailable, the wrapper exits 2 and
+  verification fails. Processes inside the user namespace see uid 0, which
+  can change privilege-sensitive test behavior.
 - Why: a `pgrep -f beam.smp | head -1` followed by `kill -9` during a review
   probe could not be confirmed to have hit the reviewer's own child
   (2026-09-06, issue #305 B round 2). Nothing in production was affected,
