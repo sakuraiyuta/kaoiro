@@ -122,6 +122,9 @@ hidden by a variable.
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | at least 1 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_CODEX_OPERATOR_STEER` | `codex.operator_steer` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
+| `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
+| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | `claude_code.phase2_delivery` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Claude wrapper (`flagArgument`) | variable > file > persona list |
 | `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
 | `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner (live, per log line) | variable > file > default |
 

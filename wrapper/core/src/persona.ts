@@ -319,6 +319,17 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config[field] = value;
   }
 
+  // Runner-relayed global opt-ins. `true` is the same as the variable being
+  // "1"; `false` is the same as absent (see flagArgument in agent-common).
+  for (const field of ["operator_steer", "approval_axis", "phase2_delivery"] as const) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") {
+      throw new ConfigError(`${field} must be a boolean`);
+    }
+    config[field] = value;
+  }
+
   for (const setting of CLAUDE_SCHEDULER_SETTINGS) {
     const value = raw[setting.field] ?? process.env[setting.env];
     if (value === undefined || value === "") continue;

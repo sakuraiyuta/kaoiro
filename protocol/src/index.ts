@@ -220,6 +220,13 @@ export interface WrapperConfig {
   /** Antigravity idle-epoch lifetime. Relayed to Antigravity wrappers only;
    *  omitted = the environment variable, then 30 minutes. */
   antigravity_epoch_idle_ms?: number;
+  /** Global opt-in for Codex operator steer (app-server backend). `true` means
+   *  the same as the variable being "1"; a set variable overrides it. */
+  operator_steer?: boolean;
+  /** Global opt-in for the Codex approval axis. Same rule as operator_steer. */
+  approval_axis?: boolean;
+  /** Global opt-in for Claude phase-2 delivery. Same rule as operator_steer. */
+  phase2_delivery?: boolean;
   /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
   yield_claim_timeout_ms?: number;
   /** Claude phase-2 wait for the root hook after the old result. */

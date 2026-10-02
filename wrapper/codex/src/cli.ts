@@ -36,6 +36,7 @@ import {
   makeStateChange,
   mergePendingDisplayNameSync,
   operatorApprovalGated,
+  flagArgument,
   personaOptInSource,
   requestSessionResetDescriptor,
   validateRequestSessionResetInput,
@@ -181,13 +182,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   writeRedactedStderr(`codex: home=${codexHome()}\n`);
   const operatorSteer = backend === "app-server" && personaOptInSource(
     config.persona.id,
-    process.env.KAOIRO_CODEX_OPERATOR_STEER,
+    flagArgument(process.env.KAOIRO_CODEX_OPERATOR_STEER, config.operator_steer),
     process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS,
   ) !== "off";
   writeRedactedStderr(`codex: operator_steer=${operatorSteer ? "on" : "off"}\n`);
   const approvalAxis = backend === "app-server" && personaOptInSource(
     config.persona.id,
-    process.env.KAOIRO_CODEX_APPROVAL_AXIS,
+    flagArgument(process.env.KAOIRO_CODEX_APPROVAL_AXIS, config.approval_axis),
     process.env.KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS,
   ) !== "off";
   writeRedactedStderr(`codex: approval_axis=${approvalAxis ? "on" : "off"}\n`);
@@ -1264,6 +1265,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       ["turn_watchdog_inactivity_ms", turnWatchdog.settings.inactivityMs],
       ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
       ["permission_broker_timeout_ms", permissionBroker.timeoutMs],
+      ["operator_steer", host.operatorSteerEnabled ? "on" : "off"],
+      ["approval_axis", host.approvalAxisSettings === null ? "off" : "on"],
+      ["approval_deadline_ms", host.approvalAxisSettings?.deadlineMs ?? null],
+      ["approval_inactivity_limit_ms", host.approvalAxisSettings?.inactivityLimitMs ?? null],
     ]),
   );
   for (const notice of pendingWorkNotices.splice(0)) {

@@ -8,7 +8,7 @@
 export function formatConsumerSettingsLine(
   engine: string,
   pid: number,
-  settings: ReadonlyArray<readonly [name: string, value: number | null]>,
+  settings: ReadonlyArray<readonly [name: string, value: number | string | null]>,
 ): string {
   return (
     `[kaoiro] ${engine} consumers: pid=${pid} ` +

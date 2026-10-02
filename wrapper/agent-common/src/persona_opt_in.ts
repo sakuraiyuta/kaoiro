@@ -20,3 +20,17 @@ export function personaOptInSource(
   if (!personas.every(id => /^[A-Za-z0-9._-]+$/.test(id))) return "off";
   return personas.includes(personaId) ? "persona_list" : "off";
 }
+
+/** The `flag` argument of `personaOptInSource` for a flag that may also be set
+ *  in runner.config.json (issue #469). The variable wins whenever it is set
+ *  and non-empty, passed through verbatim, so variable "0" beats config
+ *  `true`. Otherwise config `true` is the global opt-in ("1"). Config `false`
+ *  and absent are the same: no global opt-in, which never overrides a
+ *  persona-list opt-in. */
+export function flagArgument(
+  variable: string | undefined,
+  configValue: boolean | undefined,
+): string | undefined {
+  if (variable !== undefined && variable !== "") return variable;
+  return configValue === true ? "1" : undefined;
+}

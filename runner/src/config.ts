@@ -23,7 +23,7 @@ import {
   parseTopLevelBehaviour,
   type AntigravityBehaviourConfig,
   type ClaudeCodeConfig,
-  type WatchdogConfig,
+  type CodexBehaviourConfig,
 } from "./behaviour-settings.js";
 import { ConfigError } from "./config-error.js";
 import type {
@@ -92,7 +92,7 @@ export type ChatGptPlan =
   | "business"
   | "enterprise";
 
-export interface CodexConfig extends WatchdogConfig {
+export interface CodexConfig extends CodexBehaviourConfig {
   /** Applies to subsequent wrapper lifetimes, including resume. Omitted = exec. */
   backend?: "exec" | "app-server";
   /** Explicit auth mode declaration for the Codex adapter's catalog resolve
