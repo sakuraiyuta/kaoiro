@@ -63,11 +63,30 @@ describe("AgentCard stats (issue #183)", () => {
     expect(target.querySelector(".meta-line")).toBeNull();
   });
 
+  it("supports_context_usage 未宣言なら ext.context があっても meter を隠す", async () => {
+    const target = await render({
+      context: { used_percentage: 91 },
+      context_budget: {
+        work_budget_tokens: 100000,
+        work_budget_percentage: 120,
+      },
+    });
+
+    expect(statRow(target, "生窓")).toBeNull();
+    expect(statRow(target, "作業予算")).toBeNull();
+    expect(target.querySelector(".stats")).toBeNull();
+  });
+
   it("engine/model/effort/生窓/5h/7day が揃っていれば全て描画する", async () => {
     const target = await render({
       engine: "claude-code",
       model: "claude-opus-5",
       effective: { effort: "high" },
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: { used_percentage: 42 },
       rate_limits: {
         five_hour: {
@@ -108,6 +127,11 @@ describe("AgentCard stats (issue #183)", () => {
 
   it("context_budget があれば raw 生窓と作業予算を token 分母付きで並べる (#254)", async () => {
     const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: {
         used_tokens: 150000,
         max_tokens: 200000,
@@ -134,6 +158,11 @@ describe("AgentCard stats (issue #183)", () => {
 
   it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#254)", async () => {
     const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: {
         used_tokens: 0,
         max_tokens: 200000,
@@ -155,6 +184,11 @@ describe("AgentCard stats (issue #183)", () => {
 
   it("旧 wrapper の生窓だけを表示し、作業予算を推測しない (#254)", async () => {
     const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: {
         used_tokens: 5000,
         max_tokens: 200000,
@@ -167,6 +201,11 @@ describe("AgentCard stats (issue #183)", () => {
 
   it("不正な作業予算分母は card でも隠し、生窓を残す (#254)", async () => {
     const target = await render({
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: {
         used_tokens: 5000,
         max_tokens: 200000,
@@ -277,6 +316,11 @@ describe("AgentCard stats (issue #183)", () => {
       engine: "claude-code",
       model: "claude-opus-5",
       effective: { effort: "high" },
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_context_usage: true,
+      },
       context: { used_percentage: 42 },
     });
     expect(target.querySelector(".stats")).toBeNull();

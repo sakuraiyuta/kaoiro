@@ -1,6 +1,12 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { expressionFor, isFatigued, spriteStateFor, spriteUrlFor } from "./expression";
+  import {
+    contextUsageSupportFrom,
+    expressionFor,
+    isFatigued,
+    spriteStateFor,
+    spriteUrlFor,
+  } from "./expression";
   import PersonaFace from "./PersonaFace.svelte";
   import { StatusQueue } from "./statusDisplay.svelte";
   import TaskRing from "./TaskRing.svelte";
@@ -272,7 +278,10 @@
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
-  const ctxPct = $derived(pctClamp(ccContext?.used_percentage));
+  const contextUsageSupport = $derived(contextUsageSupportFrom(envelope));
+  const ctxPct = $derived(
+    contextUsageSupport === true ? pctClamp(ccContext?.used_percentage) : null,
+  );
   const ctxUsed = $derived(numOrNull(ccContext?.used_tokens));
   const ctxMax = $derived(numOrNull(ccContext?.max_tokens));
   const ccContextBudget = $derived(

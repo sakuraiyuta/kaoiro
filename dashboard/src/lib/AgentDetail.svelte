@@ -2,7 +2,13 @@
   import { tick, untrack } from "svelte";
   import BottomSheet from "./BottomSheet.svelte";
   import { conversationEntryKey } from "./conversationTimeline";
-  import { expressionFor, isFatigued, spriteStateFor, spriteUrlFor } from "./expression";
+  import {
+    contextUsageSupportFrom,
+    expressionFor,
+    isFatigued,
+    spriteStateFor,
+    spriteUrlFor,
+  } from "./expression";
   import { StatusQueue } from "./statusDisplay.svelte";
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import PersonaFace from "./PersonaFace.svelte";
@@ -503,6 +509,7 @@
   // unconditional true; the judge for user_input_dialog is future-proofing
   // for D5 (Free plan / user_input_modes) without another UI rewrite.
   const sessionCaps = $derived(sessionCapabilitiesFrom(envelope));
+  const contextUsageSupport = $derived(contextUsageSupportFrom(envelope));
   const permControl = $derived(permissionControlFrom(envelope));
   const permissionSwitchSupported = $derived(
     sessionCaps?.supports_permission_switch === true,
@@ -3492,7 +3499,7 @@
               <dd>{ccFastMode}</dd>
             </div>
           {/if}
-          {#if sessionCaps?.supports_context_usage === true}
+          {#if contextUsageSupport === true}
             <!-- capability=true: adapter が stamp する意思あり。値到着で
                  meter、未到着で「取得中」placeholder (ADR-0040 phase-21) -->
             <div class="cc-row">
@@ -3523,7 +3530,7 @@
                 {/if}
               </dd>
             </div>
-          {:else if sessionCaps?.supports_context_usage === false}
+          {:else if contextUsageSupport === false}
             <!-- capability=false: adapter が非対応を宣言 (現状 Codex)。
                  UI は engine 名を見ずこの capability だけで判定
                  (ADR-0034 F3、ADR-0040) -->

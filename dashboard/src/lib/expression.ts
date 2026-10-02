@@ -64,14 +64,19 @@ export function expressionFor(state: string): Expression {
  * live in separate hosts and serve separate decisions. */
 const FATIGUE_THRESHOLD_PERCENT = 60;
 
+/** Read the tri-state context-usage capability once for all context displays. */
+export function contextUsageSupportFrom(
+  envelope: Envelope,
+): boolean | undefined {
+  return sessionCapabilitiesFrom(envelope)?.supports_context_usage;
+}
+
 /** The sole fatigue predicate (issue #162 P1/P2). Keeping the envelope input
  * and its signal lookup here means a future switch to context_budget changes
  * this function and its tests only. Unknown capability or malformed context
  * fails closed: do not infer fatigue from an unsupported session. */
 export function isFatigued(envelope: Envelope): boolean {
-  if (sessionCapabilitiesFrom(envelope)?.supports_context_usage !== true) {
-    return false;
-  }
+  if (contextUsageSupportFrom(envelope) !== true) return false;
   const context = envelope.ext?.context as Record<string, unknown> | undefined;
   const percentage = context?.used_percentage;
   if (typeof percentage !== "number" || !Number.isFinite(percentage)) {
