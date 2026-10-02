@@ -1,0 +1,819 @@
+{
+  "passed": true,
+  "ordinary_turns": 15,
+  "compactions": 3,
+  "usage_notifications": 19,
+  "tui_context_comparisons": 4,
+  "compaction_ordering": {
+    "manual": {
+      "start_index": 21,
+      "estimate_index": 22,
+      "complete_index": 23,
+      "terminal_index": 25,
+      "turn_id": "01a0fd39-2037-7f90-ae29-d3d756aebfd1",
+      "snapshot": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 5699,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    "manual-direct": {
+      "start_index": 21,
+      "estimate_index": 22,
+      "complete_index": 23,
+      "terminal_index": 25,
+      "turn_id": "01a0fd3f-4f20-7f42-ac1d-a5719182ced7",
+      "snapshot": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 5667,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    "automatic": {
+      "start_index": 82,
+      "estimate_index": 83,
+      "complete_index": 84,
+      "terminal_index": 91,
+      "turn_id": "01a0fd3a-27ec-7780-8c5e-c3560f205442",
+      "snapshot": {
+        "total": {
+          "totalTokens": 1013484,
+          "inputTokens": 1013442,
+          "cachedInputTokens": 752256,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 42,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 69748,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    }
+  },
+  "reasoning_last": {
+    "totalTokens": 24218,
+    "inputTokens": 23955,
+    "cachedInputTokens": 12288,
+    "cacheWriteInputTokens": 0,
+    "outputTokens": 263,
+    "reasoningOutputTokens": 252
+  },
+  "automatic_recovery": {
+    "total": {
+      "totalTokens": 1149970,
+      "inputTokens": 1149921,
+      "cachedInputTokens": 764544,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 49,
+      "reasoningOutputTokens": 0
+    },
+    "last": {
+      "totalTokens": 136486,
+      "inputTokens": 136479,
+      "cachedInputTokens": 12288,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 7,
+      "reasoningOutputTokens": 0
+    },
+    "modelContextWindow": 258400
+  },
+  "out_of_window": {
+    "total": {
+      "totalTokens": 1013484,
+      "inputTokens": 1013442,
+      "cachedInputTokens": 752256,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 42,
+      "reasoningOutputTokens": 0
+    },
+    "last": {
+      "totalTokens": 272534,
+      "inputTokens": 272527,
+      "cachedInputTokens": 230912,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 7,
+      "reasoningOutputTokens": 0
+    },
+    "modelContextWindow": 258400
+  },
+  "measurements": [
+    {
+      "capture": "manual",
+      "event_index": 14,
+      "stage": "manual:warm",
+      "turn_id": "01a0fd39-13a2-7062-b891-97e8a52091af",
+      "usage": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "manual",
+      "event_index": 22,
+      "stage": "manual:compact",
+      "turn_id": "01a0fd39-2037-7f90-ae29-d3d756aebfd1",
+      "usage": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 5699,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "manual-direct",
+      "event_index": 14,
+      "stage": "manual:warm",
+      "turn_id": "01a0fd3f-4194-7141-8025-43e0525d5da4",
+      "usage": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "manual-direct",
+      "event_index": 22,
+      "stage": "manual:compact",
+      "turn_id": "01a0fd3f-4f20-7f42-ac1d-a5719182ced7",
+      "usage": {
+        "total": {
+          "totalTokens": 23881,
+          "inputTokens": 23872,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 5667,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "reasoning",
+      "event_index": 17,
+      "stage": "reasoning:solve",
+      "turn_id": "01a0fd39-a2ff-77c2-97b2-091f9aaef680",
+      "usage": {
+        "total": {
+          "totalTokens": 24218,
+          "inputTokens": 23955,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 263,
+          "reasoningOutputTokens": 252
+        },
+        "last": {
+          "totalTokens": 24218,
+          "inputTokens": 23955,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 263,
+          "reasoningOutputTokens": 252
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 14,
+      "stage": "automatic:turn-1",
+      "turn_id": "01a0fd39-cbf9-7bc2-af60-28c989b88231",
+      "usage": {
+        "total": {
+          "totalTokens": 65294,
+          "inputTokens": 65287,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 65294,
+          "inputTokens": 65287,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 26,
+      "stage": "automatic:turn-2",
+      "turn_id": "01a0fd39-d817-7691-8c3b-fc9b3b23ed20",
+      "usage": {
+        "total": {
+          "totalTokens": 172036,
+          "inputTokens": 172022,
+          "cachedInputTokens": 77440,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 14,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 106742,
+          "inputTokens": 106735,
+          "cachedInputTokens": 65152,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 38,
+      "stage": "automatic:turn-3",
+      "turn_id": "01a0fd39-e868-7be2-9f95-e92b9c1141be",
+      "usage": {
+        "total": {
+          "totalTokens": 320226,
+          "inputTokens": 320205,
+          "cachedInputTokens": 183936,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 21,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 148190,
+          "inputTokens": 148183,
+          "cachedInputTokens": 106496,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 50,
+      "stage": "automatic:turn-4",
+      "turn_id": "01a0fd39-f33b-7a51-ae53-7d7cbf075c0a",
+      "usage": {
+        "total": {
+          "totalTokens": 509864,
+          "inputTokens": 509836,
+          "cachedInputTokens": 331904,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 28,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 189638,
+          "inputTokens": 189631,
+          "cachedInputTokens": 147968,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 62,
+      "stage": "automatic:turn-5",
+      "turn_id": "01a0fd3a-0112-75b3-9f9a-178a8e56de16",
+      "usage": {
+        "total": {
+          "totalTokens": 740950,
+          "inputTokens": 740915,
+          "cachedInputTokens": 521344,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 35,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 231086,
+          "inputTokens": 231079,
+          "cachedInputTokens": 189440,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 74,
+      "stage": "automatic:turn-6",
+      "turn_id": "01a0fd3a-1353-7311-9b62-dae27ffb2dff",
+      "usage": {
+        "total": {
+          "totalTokens": 1013484,
+          "inputTokens": 1013442,
+          "cachedInputTokens": 752256,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 42,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 272534,
+          "inputTokens": 272527,
+          "cachedInputTokens": 230912,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 83,
+      "stage": "automatic:turn-7",
+      "turn_id": "01a0fd3a-27ec-7780-8c5e-c3560f205442",
+      "usage": {
+        "total": {
+          "totalTokens": 1013484,
+          "inputTokens": 1013442,
+          "cachedInputTokens": 752256,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 42,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 69748,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 0,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic",
+      "event_index": 89,
+      "stage": "automatic:turn-7",
+      "turn_id": "01a0fd3a-27ec-7780-8c5e-c3560f205442",
+      "usage": {
+        "total": {
+          "totalTokens": 1149970,
+          "inputTokens": 1149921,
+          "cachedInputTokens": 764544,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 49,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 136486,
+          "inputTokens": 136479,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "model-switch-retry",
+      "event_index": 5,
+      "stage": "model-switch:resume-history",
+      "turn_id": "01a0fd39-a2ff-77c2-97b2-091f9aaef680",
+      "usage": {
+        "total": {
+          "totalTokens": 24218,
+          "inputTokens": 23955,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 263,
+          "reasoningOutputTokens": 252
+        },
+        "last": {
+          "totalTokens": 24218,
+          "inputTokens": 23955,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 263,
+          "reasoningOutputTokens": 252
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "model-switch-retry",
+      "event_index": 19,
+      "stage": "model-switch:before",
+      "turn_id": "01a0fd3b-d013-7a72-ab54-7dcca59c3ef4",
+      "usage": {
+        "total": {
+          "totalTokens": 48458,
+          "inputTokens": 48189,
+          "cachedInputTokens": 24576,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 269,
+          "reasoningOutputTokens": 252
+        },
+        "last": {
+          "totalTokens": 24240,
+          "inputTokens": 24234,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 6,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "model-switch-retry",
+      "event_index": 31,
+      "stage": "model-switch:after",
+      "turn_id": "01a0fd3b-de38-7e61-bd99-5181d111cc08",
+      "usage": {
+        "total": {
+          "totalTokens": 76899,
+          "inputTokens": 76624,
+          "cachedInputTokens": 24576,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 275,
+          "reasoningOutputTokens": 252
+        },
+        "last": {
+          "totalTokens": 28441,
+          "inputTokens": 28435,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 6,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "post-boundary-retry",
+      "event_index": 18,
+      "stage": "post-boundary:ordinary",
+      "turn_id": "01a0fd40-2d2a-7310-a021-31c6ab76554a",
+      "usage": {
+        "total": {
+          "totalTokens": 47724,
+          "inputTokens": 47706,
+          "cachedInputTokens": 24576,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 18,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 23843,
+          "inputTokens": 23834,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "post-boundary-direct",
+      "event_index": 18,
+      "stage": "post-boundary:ordinary",
+      "turn_id": "01a0fd41-6859-7120-a7ea-34ffa5fea43a",
+      "usage": {
+        "total": {
+          "totalTokens": 47683,
+          "inputTokens": 47665,
+          "cachedInputTokens": 24576,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 18,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 23802,
+          "inputTokens": 23793,
+          "cachedInputTokens": 12288,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 9,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    },
+    {
+      "capture": "automatic-post",
+      "event_index": 18,
+      "stage": "post-boundary:ordinary",
+      "turn_id": "01a0fd41-5a2b-7822-8bb8-18e5a32a340d",
+      "usage": {
+        "total": {
+          "totalTokens": 1286481,
+          "inputTokens": 1286425,
+          "cachedInputTokens": 900864,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 56,
+          "reasoningOutputTokens": 0
+        },
+        "last": {
+          "totalTokens": 136511,
+          "inputTokens": 136504,
+          "cachedInputTokens": 136320,
+          "cacheWriteInputTokens": 0,
+          "outputTokens": 7,
+          "reasoningOutputTokens": 0
+        },
+        "modelContextWindow": 258400
+      }
+    }
+  ],
+  "status": "live qualification completed; proposed ADR addendum, no implementation",
+  "measurement_date_timezone": "2026-10-03 Asia/Tokyo (captures use UTC timestamps)",
+  "source_commit": "ea567492d43a12bc8f68d9c215db27ecc92984d5",
+  "binary": {
+    "version": "codex-cli 0.159.3",
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-485/node_modules/.pnpm/@openai+codex@0.159.3/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+  },
+  "operator_decision": {
+    "choice": "Adopt",
+    "url": "https://github.com/sakuraiyuta/kaoiro/issues/485#issuecomment-5954688714"
+  },
+  "composition": {
+    "entrypoint": "runCodexCli()",
+    "host": "default CodexHost",
+    "session": "default AppServerSession",
+    "account": "real authenticated ChatGPT; identifier excluded",
+    "default_factories": true,
+    "observer_arguments_and_protocol_chunks_forwarded_unchanged": true,
+    "local_phoenix": "supplies connection and persona only"
+  },
+  "capture_manifest": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-485/tmp/fuji-485-capture/qualification-2026-10-03/capture-manifest.json",
+    "sha256": "1701c30bec357261de06e3c65d7807fca3b13a0c1d72938f31cbcb32fee1954e"
+  },
+  "bound_capture_files": 75,
+  "bound_runtime_assets": 114,
+  "prior_capture_manifest": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-485/tmp/fuji-485-capture/capture-manifest.json",
+    "sha256": "0178a4c415f3bd8e4bf40772d3f472d4a44fa1d32d773ae8b655e6845d3e4e28"
+  },
+  "checker": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-485/tmp/fuji-485-capture/qualification-2026-10-03/check-qualification.py",
+    "sha256": "afbe6f14ea5b5e2525de9b969d744d05fc21ce80db0c0d87b9993faa18997f9e"
+  },
+  "checker_controls": {
+    "removed_native_compaction_starts": 1,
+    "negative_exit_code": 1,
+    "negative_assertion": "missing or duplicate native compaction start",
+    "subsequent_capture_mutations": 0,
+    "negative_copy_removed": true,
+    "unchanged_original_exit_code": 0,
+    "manifest_sha256": "1701c30bec357261de06e3c65d7807fca3b13a0c1d72938f31cbcb32fee1954e",
+    "checker_sha256": "afbe6f14ea5b5e2525de9b969d744d05fc21ce80db0c0d87b9993faa18997f9e",
+    "negative_log_sha256": "3d9ee5d4beacf98aa798792aa13bc5b600958890bc55fa6fa0e6b05a75130cd4"
+  },
+  "process_results": {
+    "captures": [
+      {
+        "mode": "manual",
+        "exit_code": 0
+      },
+      {
+        "mode": "manual-direct",
+        "exit_code": 0
+      },
+      {
+        "mode": "reasoning",
+        "exit_code": 0
+      },
+      {
+        "mode": "automatic",
+        "exit_code": 0
+      },
+      {
+        "mode": "model-switch-retry",
+        "exit_code": 0
+      },
+      {
+        "mode": "resume-boundary-retry",
+        "exit_code": 0
+      },
+      {
+        "mode": "resume-boundary-direct",
+        "exit_code": 0
+      },
+      {
+        "mode": "resume-boundary-direct-retry",
+        "exit_code": 0
+      },
+      {
+        "mode": "post-boundary-retry",
+        "exit_code": 0
+      },
+      {
+        "mode": "post-boundary-direct",
+        "exit_code": 0
+      },
+      {
+        "mode": "automatic-resume",
+        "exit_code": 0
+      },
+      {
+        "mode": "automatic-post",
+        "exit_code": 0
+      },
+      {
+        "mode": "resume-boundary",
+        "exit_code": 1,
+        "native_error": "already has an active writer"
+      },
+      {
+        "mode": "model-switch",
+        "exit_code": 1,
+        "native_error": "already has an active writer"
+      },
+      {
+        "mode": "post-boundary",
+        "exit_code": 1,
+        "native_error": "already has an active writer"
+      }
+    ]
+  },
+  "privacy_cleanup": {
+    "selected_events_checked": 369,
+    "forbidden_identity_fields_found": 0,
+    "email_identifiers_found": 0,
+    "public_ssh_git_remote_values": 16,
+    "recorded_owned_pids_checked": [
+      2348215,
+      2348305,
+      2349397,
+      2349479,
+      2350031,
+      2350113,
+      2350496,
+      2350497,
+      2352156,
+      2352361,
+      2353403,
+      2353404,
+      2354000,
+      2354001,
+      2355639,
+      2355657,
+      2357459,
+      2357541,
+      2358362,
+      2358685,
+      2358931,
+      2358932,
+      2359780,
+      2360047,
+      2360348,
+      2360557,
+      2360558
+    ],
+    "recorded_owned_pids_remaining": [],
+    "dedicated_tmux_socket_directories_remaining": [],
+    "unknown_TUI_PID_limitation": "The pre-existing helper does not print held PIDs when the context row is absent; those exits follow its held-PID cleanup, but no separate PID-absence claim is made for those panes."
+  },
+  "null_window_live_observed": false,
+  "qualifications": {
+    "compaction_boundary": "Two explicit and one automatic item lifecycle; start precedes zero-breakdown estimate, completion, terminal. Automatic ordinary snapshot arrives after item completion but before terminal.",
+    "immediate_resume": "Two consecutive default-wrapper resumes of a freshly compacted thread, with no intervening TUI writer or model turn, both emitted zero usage; next normal turn emitted 23802. First resume RPC began after prior wrapper closed; timestamps retained.",
+    "model_switch": "Public setModel(gpt-6-sol), next native turn/start explicitly names gpt-6-sol; successful turn usage 28441, same 258400 window. Notification contains no model name.",
+    "automatic_compaction": "Home and probe config contain no auto-compaction-limit/window override. Seven-turn run: prior response 272534, compaction estimate 69748, ordinary recovery 136486. Resume replays no usage; next normal response 136511.",
+    "reasoning": "High effort request, reasoning 252 is included in output 263; last total 24218 equals input 23955 plus output 263, not that sum plus reasoning. TUI raw used count agrees."
+  },
+  "tui_comparisons": [
+    {
+      "capture": "reasoning",
+      "label": "reasoning-after-close",
+      "thread_id": "01a0fd39-9d53-7721-a896-09d5acd9eb35",
+      "context_line": "Context window:      95% left (24.2K used / 258K)",
+      "owned_tmux_pid": 2350496,
+      "owned_tui_pid": 2350497,
+      "terminal": "tmux"
+    },
+    {
+      "capture": "model-switch-retry",
+      "label": "model-switch-retry-after-close",
+      "thread_id": "01a0fd39-9d53-7721-a896-09d5acd9eb35",
+      "context_line": "Context window:      93% left (28.4K used / 258K)",
+      "owned_tmux_pid": 2354000,
+      "owned_tui_pid": 2354001,
+      "terminal": "tmux"
+    },
+    {
+      "capture": "post-boundary-retry",
+      "label": "post-boundary-retry-after-close",
+      "thread_id": "01a0fd39-0e91-7a03-8919-225b9d4c45fc",
+      "context_line": "Context window:      95% left (23.8K used / 258K)",
+      "owned_tmux_pid": 2358931,
+      "owned_tui_pid": 2358932,
+      "terminal": "tmux"
+    },
+    {
+      "capture": "automatic-post",
+      "label": "automatic-post-after-close",
+      "thread_id": "01a0fd39-c80b-77d0-9d19-5c646c17cde2",
+      "context_line": "Context window:      49% left (137K used / 258K)",
+      "owned_tmux_pid": 2360557,
+      "owned_tui_pid": 2360558,
+      "terminal": "tmux"
+    }
+  ],
+  "limits": [
+    "One account and pinned binary; two models share one reported positive window. No live null/different-window transition observed.",
+    "Three initial resume attempts failed with already has an active writer after a TUI read; no forced takeover. Native ownership/lease cause unmeasured.",
+    "No images/tool-heavy turn or other release/provider coverage.",
+    "Unknown-row TUI helper exits follow held-PID cleanup but do not print PIDs; only recorded PIDs have a separate absence audit.",
+    "Capability remains false; proposed guards/wiring have not been implemented or verified."
+  ],
+  "response_item_order_inspection": {
+    "ordinary_snapshots_checked": 15,
+    "completed_agent_or_reasoning_item_before_same_turn_usage": 15,
+    "claim_scope": "inspection of retained native events; proposed consumer not implemented"
+  }
+}
