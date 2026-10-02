@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-10-03
 related: [deployment]
 ---
 
@@ -80,7 +80,10 @@ the bundled `docker-compose.yaml` and `scripts/dev.sh` were also removed when
 phase 30 closed. However, **`inter_agent_history.dets` created before removal
 may remain as debris in existing volumes** and is included in backups (about
 1.9 MB observed on 2026-08-12). It is harmless because runtime never reads it,
-but it appears in archive size and listings.
+but it appears in archive size and listings. Deleting it is safe: with the
+server container stopped, remove `inter_agent_history.dets` from the state
+volume, then start the container again. Cleanup is optional; backup and verify
+tooling should treat the file as an optional leftover, not a required object.
 
 `KAOIRO_PLAIN_HTTP` and `KAOIRO_PUBLISH_IP` (direct-VPN deployment only) are
 covered in the [Network and login runbook](../../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26),
