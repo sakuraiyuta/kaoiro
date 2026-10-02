@@ -376,6 +376,17 @@ the reload line is not mistaken for an application receipt (the same trap
 5. Directories (`turn_trace_dir`, `ia_pending_dir`).
 6. Default models.
 
+Progress (updated as each group lands):
+
+| Group | Status |
+| --- | --- |
+| 1. Common path and Claude scheduler keys | implemented, awaiting implementation review |
+| 2. Turn watchdogs and `permission_timeout_ms` | planned |
+| 3. Antigravity tool timeout and epoch idle; runner-own settings and `KAOIRO_RUNNER_SERVER_URL` | planned |
+| 4. The three flags | planned |
+| 5. Directories | planned |
+| 6. Default models | planned |
+
 ### 2.7 Production compatibility
 
 Existing `runner.env` keeps working unchanged. It currently sets
