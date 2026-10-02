@@ -2259,9 +2259,10 @@ export class AntigravityHost implements EngineAdapter {
     startedAtMs: number,
     reason: string,
     warningKind: "failed" | "stopped" = "failed",
+    applyRetryFloor = true,
   ): void {
     if (this.#closed) return;
-    this.#usageProbeLastFailureStartedAtMs = startedAtMs;
+    if (applyRetryFloor) this.#usageProbeLastFailureStartedAtMs = startedAtMs;
     if (this.#currentUsageFamily() !== family) return;
     if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
     this.#usageProbeFailureCount += 1;
@@ -2362,6 +2363,7 @@ export class AntigravityHost implements EngineAdapter {
         probe.startedAtMs,
         interrupted ? result.stopReason : `stopped:${result.stopReason}`,
         interrupted ? "stopped" : "failed",
+        !interrupted,
       );
       retryRequestedProbe();
       return;

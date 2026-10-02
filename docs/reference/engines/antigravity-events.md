@@ -215,7 +215,9 @@ Observed details:
   attempts wait five minutes from that attempt's start (including spawn throws,
   timeouts, nonzero exits, and unusable output), including across successful
   turns and model-family changes; a later successful probe clears this failure
-  floor. Three consecutive current-family failures independently
+  floor. An interrupt abort still counts as a stopped probe for warnings and
+  consecutive-failure suppression, but does not start the retry floor. Three
+  consecutive current-family failures independently
   suppress retries until a successful turn clears the failure count, but that
   turn does not clear an active floor. After the floor expires, retry only at
   the next terminal turn boundary. A family change after a successful probe

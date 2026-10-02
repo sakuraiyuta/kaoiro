@@ -550,6 +550,26 @@ if (args[0] === "models") {
     }
   });
 
+  it("retries at the next successful turn after an interrupt abort without a failure floor", async () => {
+    const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
+    try {
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+
+      await harness.host.interrupt();
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("usage probe stopped: abort")));
+      expect(harness.probeSignals).toEqual([{ destination: "pid", signal: "SIGKILL" }]);
+
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(2);
+      harness.probes[1]!.finish(usageOutput("gemini"));
+      await waitFor(() => harness.host.statusSnapshot().rate_limits !== undefined);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
   it("signals both children synchronously in close and awaits their bounded shutdown", async () => {
     const harness = makeHarness();
     await completeTurn(harness, { status: "SUCCESS" });
