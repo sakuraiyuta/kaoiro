@@ -178,8 +178,9 @@ For persona-name resolution and existing-peer routing, follow
   evidence. Giving only a declarative premise risks implementing it unchanged
   even when it is wrong.
 - Name a delegation's deliverable as a **unit of result** (“N items merged with
-  the checker green”), and state the review-round budget explicitly. Exceeding
-  the budget produces a reporting obligation, not another round.
+  the checker green”), and state the running round count and the last round's
+  must-fix count explicitly. A non-converging loop produces a fundamental
+  review, not another patch round (see the table below).
 - Observe the deliverable's progress, not the volume of activity. A rising
   message count while the unit of result stands still is the best available
   signal of a review quagmire.
@@ -226,17 +227,22 @@ allocated and how many round trips it may take, and every trigger is judged by
 
 | Trigger | Threshold | Obligation on firing |
 |---|---|---|
-| Cumulative must-fix rounds on one deliverable | more than 3 rounds | Both reviewer and implementer stop and report to the director |
+| Must-fix count not decreasing on one deliverable | from round 4 on, a round's must-fix count is equal to or higher than the previous round's | Stop patching before the next round. Reviewer and implementer report to the director, who runs a fundamental design / direction review (see below) |
 | Findings confined to failure modes of a tool built during the task | 2 consecutive rounds | Stop; the director rules on whether the tool should exist |
 | Change of the target or the verifier during a review round | 0 (freeze) | Change only at a round boundary. Evidence from a round that broke the freeze is void |
 | Cumulative conversation round trips on one deliverable | 20 round trips | Close the conversation and escalate the judgment to the director with a summary |
 
+- There is no fixed ceiling on must-fix rounds. The fundamental review
+  re-examines the problem statement, the approach, and whether the deliverable
+  or its direction should change; its outcome is recorded on the issue, and a
+  change of user-visible behaviour or scope goes to the operator. Rounds then
+  resume with the count carried forward.
 - The counter's population is the deliverable, and **the parties cannot reset
   it**. Swapping the artifact, moving the verifier, or reopening the
   conversation does not return it to 0 (a swap at a round boundary is a
   legitimate change, but the count carries over). The director holds the
-  running total and states its current value at dispatch and at the start of
-  each round. **The ledger holder (the director) dispatches the review rounds
+  running total and each round's must-fix count, and states them at dispatch
+  and at the start of each round. **The ledger holder (the director) dispatches the review rounds
   personally**—once the ledger and the dispatch sit in different hands, the
   accuracy of the total depends on reconciling conversations. Counted per
   artifact, the M18 quagmire, where the verifier moved three times, still read
