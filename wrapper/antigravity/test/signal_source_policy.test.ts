@@ -8,7 +8,7 @@ const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
 
 interface KillReference {
   file: string;
-  kind: "property" | "element" | "destructuring";
+  kind: "property" | "element" | "destructuring" | "assignment-destructuring";
   expression: string;
   call: string | null;
 }
@@ -26,6 +26,27 @@ function literalPropertyName(node: ts.Node | undefined): string | undefined {
   if (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) return node.text;
   if (ts.isComputedPropertyName(node)) return literalPropertyName(node.expression);
   return undefined;
+}
+
+function isDestructuringAssignment(object: ts.ObjectLiteralExpression): boolean {
+  let current: ts.Node = object;
+  while (true) {
+    const parent = current.parent;
+    if (ts.isParenthesizedExpression(parent) && parent.expression === current) {
+      current = parent;
+      continue;
+    }
+    if (ts.isBinaryExpression(parent)
+      && parent.left === current
+      && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) return true;
+    if (ts.isPropertyAssignment(parent)
+      && parent.initializer === current
+      && ts.isObjectLiteralExpression(parent.parent)) {
+      current = parent.parent;
+      continue;
+    }
+    return false;
+  }
 }
 
 function sourceKillReferences(): KillReference[] {
@@ -52,6 +73,16 @@ function sourceKillReferences(): KillReference[] {
         && node.dotDotDotToken === undefined
         && literalPropertyName(node.propertyName ?? node.name) === "kill") {
         addReference(node, "destructuring");
+      } else if (ts.isShorthandPropertyAssignment(node)
+        && node.name.text === "kill"
+        && ts.isObjectLiteralExpression(node.parent)
+        && isDestructuringAssignment(node.parent)) {
+        addReference(node, "assignment-destructuring");
+      } else if (ts.isPropertyAssignment(node)
+        && literalPropertyName(node.name) === "kill"
+        && ts.isObjectLiteralExpression(node.parent)
+        && isDestructuringAssignment(node.parent)) {
+        addReference(node, "assignment-destructuring");
       }
       ts.forEachChild(node, visit);
     }

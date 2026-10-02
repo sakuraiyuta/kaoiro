@@ -20,18 +20,24 @@ export function isSafeSignalTarget(target: unknown): target is ChildProcess & { 
     && pid !== process.pid;
 }
 
+export type SignalSender = (pid: number, signal: NodeJS.Signals) => void;
+
 /** Sends only to a checked child PID or its checked process group.
  *  The PID destination is the normal probe path, not a fallback from group failure. */
-export const signalTarget: SignalTargetOperation = (target, destination, signal) => {
-  if (!isSafeSignalTarget(target)) return false;
-  const pid = destination === "process_group" ? -target.pid : target.pid;
-  try {
-    process.kill(pid, signal);
-    return true;
-  } catch {
-    return false;
-  }
-};
+export function createSignalTarget(send: SignalSender): SignalTargetOperation {
+  return (target, destination, signal) => {
+    if (!isSafeSignalTarget(target)) return false;
+    const pid = destination === "process_group" ? -target.pid : target.pid;
+    try {
+      send(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
+export const signalTarget = createSignalTarget((pid, signal) => process.kill(pid, signal));
 
 /** The fields needed by the termination timer. Production signals still
  *  require the real ChildProcess checked by `signalTarget`. */
