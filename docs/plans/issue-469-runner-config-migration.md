@@ -1,6 +1,6 @@
 ---
 title: Move runner/wrapper behaviour settings from KAOIRO_* variables into runner.config.json
-status: proposed
+status: in_progress
 last_updated: 2026-10-02
 related: [issue-469, issue-438, issue-463, issue-470]
 ---
@@ -77,10 +77,10 @@ Today's column for every row is "no: needs a runner restart".
 | `KAOIRO_CODEX_TURN_TRACE_DIR` | wrapper (`codex/turn_diagnostics.ts:26`) | behaviour (directory) | `codex.turn_trace_dir` | next lifetime |
 | `KAOIRO_IA_PENDING_DIR` | wrapper (`agent-common/ia_sidecar.ts:111`) | behaviour (directory) | `ia_pending_dir` (top level) | next lifetime |
 | `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | runner (`config.ts:747`, `transport.ts:345`) | behaviour | `log_phoenix_heartbeats` (top level, boolean) | live (see 2.5) |
-| `KAOIRO_RUNNER_SERVER_URL` | runner (`config.ts:763`) | wiring, key already exists | `server_url` (existing) | already live; see Q4 |
-| `KAOIRO_CODEX_OPERATOR_STEER` | wrapper (`codex/cli.ts:182`) | behaviour flag (see Q1) | `codex.operator_steer` | next lifetime |
-| `KAOIRO_CODEX_APPROVAL_AXIS` | wrapper (`codex/cli.ts:188`) | behaviour flag (see Q1) | `codex.approval_axis` | next lifetime |
-| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | wrapper (`claude-code/cli.ts:173`) | behaviour flag (see Q1) | `claude_code.phase2_delivery` | next lifetime |
+| `KAOIRO_RUNNER_SERVER_URL` | runner (`config.ts:763`) | wiring, key already exists | `server_url` (existing) | already live; the variable is deprecated like the others |
+| `KAOIRO_CODEX_OPERATOR_STEER` | wrapper (`codex/cli.ts:182`) | behaviour flag (group 4) | `codex.operator_steer` | next lifetime |
+| `KAOIRO_CODEX_APPROVAL_AXIS` | wrapper (`codex/cli.ts:188`) | behaviour flag (group 4) | `codex.approval_axis` | next lifetime |
+| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | wrapper (`claude-code/cli.ts:173`) | behaviour flag (group 4) | `claude_code.phase2_delivery` | next lifetime |
 
 ### 1.2 Stay in the environment
 
@@ -180,7 +180,7 @@ Notes on the table:
   config; the runner writes JSON numbers, so the relay path never meets that
   coercion. The checked property is one-directional: every file value the
   runner accepts, the wrapper accepts identically.
-- **Intentional tightening of an existing contract** (Q7): (a) the
+- **Intentional tightening of an existing contract** (section 4): (a) the
   epoch-idle ceiling, in the runner and in `readEpochIdleMs`, so a direct
   launch and an existing environment value above the ceiling are affected;
   (b) an already-invalid environment value of an enabled engine now stops the
@@ -311,7 +311,13 @@ no-op described above as a class, not a single instance.
   new file value. The relay itself is unchanged in that case (still omitted for
   that key). A rejected reload warns about nothing and is not reported as
   applied.
-- **Flags** (Q1, if migrated). `personaOptInSource(personaId, flag, list)`
+- **`server_url`** keeps its existing mechanism: `KAOIRO_RUNNER_SERVER_URL`
+  (set when not empty, must start with `ws://` or `wss://`) replaces the file
+  value in the config the runner uses, because the connection target is needed
+  before any relay. It now emits the same warnings (a) and (b) as the other
+  variables, with no exemption, and is not relayed to a wrapper (the wrapper
+  gets its URL from the runner's own `server_url`).
+- **Flags** (group 4). `personaOptInSource(personaId, flag, list)`
   takes a string: only `"1"` enables globally and every other value defers to
   the persona list (the reviewer's probe: `"0"` and `"false"` both returned
   `persona_list` for a listed persona). A JSON boolean cannot carry that
@@ -338,7 +344,7 @@ no-op described above as a class, not a single instance.
 
   The one new case a reader may not expect is variable `"0"` with config
   `true`: the variable wins, so the config opt-in is ignored. That follows the
-  issue's "variable wins" rule and is part of Q1.
+  issue's "variable wins" rule and is an accepted decision (section 4).
 
 ### 2.5 Hot reload scope
 
@@ -361,10 +367,14 @@ the reload line is not mistaken for an application receipt (the same trap
    and omission of relayed keys whose variable is set, relay parameter, exhaustive
    diff) with the four Claude scheduler keys. Closes issue #438.
 2. Turn watchdogs (6) and `permission_timeout_ms`.
-3. Antigravity `tool_timeout_ms`, `epoch_idle_ms`; `log_phoenix_heartbeats`.
-4. The three flags (if Q1 says migrate).
+3. Antigravity `tool_timeout_ms`, `epoch_idle_ms`; the runner-own settings
+   `log_phoenix_heartbeats` and the `KAOIRO_RUNNER_SERVER_URL` deprecation
+   (section 2.4), with `scripts/dev.sh`, `scripts/dogfood.sh`,
+   `runner.env.example` and the docs that name the variable moved to the
+   `server_url` key.
+4. The three flags.
 5. Directories (`turn_trace_dir`, `ia_pending_dir`).
-6. Default models (Q5).
+6. Default models.
 
 ### 2.7 Production compatibility
 
@@ -372,7 +382,7 @@ Existing `runner.env` keeps working unchanged. It currently sets
 `KAOIRO_CODEX_APPROVAL_AXIS` and `KAOIRO_CODEX_OPERATOR_STEER`; once those
 migrate (group 4) the runner logs the deprecation warning at each start until
 the operator moves them. No file is rewritten by the runner. Behaviour
-changes are listed in section 2.1 (Q7); the start-up one is that an invalid
+changes are listed in section 2.1 (decided in section 4); the start-up one is that an invalid
 value for a migrated variable of an enabled engine now stops the runner at
 start instead of failing each later wrapper launch. No current production
 value is affected (the migrated names set there are `"1"` flags, valid under
@@ -452,70 +462,52 @@ paths. Neither the relay nor the consumer argument exists in the current
 baseline, so these are acceptance criteria for the implementation round, not
 measured results.
 
-## 4. Questions for the operator
+## 4. Operator decisions (2026-10-02)
 
-Recommendation first in each.
+Recorded on [issue #469](https://github.com/sakuraiyuta/kaoiro/issues/469#issuecomment-5946655395)
+against design commit `2214f655`.
 
-- **Q1 - the three flag variables** (`..._OPERATOR_STEER`, `..._APPROVAL_AXIS`,
-  `..._PHASE2_DELIVERY`). Recommend migrating them here (group 4): the
-  2026-10-01 restart incident was one of these flags, and the lists in issue
-  #463 are what a dashboard switch replaces, not the global flags. Alternative:
-  leave all six to #463, which keeps flag and list together but leaves the
-  incident's cause unfixed until then. If migrated, the operator also approves
-  the meaning in section 2.4: config `true` is a global opt-in, config `false`
-  is the same as absent and does not override a persona-list opt-in, and a
-  variable set to a non-`"1"` value such as `"0"` wins over config `true`
-  (the list then decides).
-- **Q2 - when the variable fallback is removed.** Recommend: not before the
-  release after the one that ships the keys, and only once a production
-  startup shows no deprecation warning. This follows the one-release-cycle
-  precedent for legacy `personas` and `capabilities: "claude"` in
-  `runner/src/config.ts`. Tracked as a separate follow-up issue.
-- **Q3 - key layout.** Recommend section 2.1 (per host, per engine block,
-  flat keys, no per-persona).
-- **Q4 - `KAOIRO_RUNNER_SERVER_URL`.** It already has a config key. Following
-  the decision literally, it would now warn on every start, and
-  `scripts/dev.sh`, `scripts/dogfood.sh` and service units set it on purpose
-  (issue #135). Recommend: no deprecation warning for this one variable, kept
-  as a documented deployment override; the other variables warn.
-- **Q5 - default models and `ext.model_source`.** `ModelSource` is
-  `launch | env | config | default` and the `env` tier means "engine-specific
-  environment". A runner-config default sits in that same tier. Recommend
-  keeping the `env` label for both (value = variable if set, else
-  `default_model`) and rewording the source-of-truth reference
-  (`docs/reference/protocol/model-effort.md`) to "operator default tier",
-  rather than adding a fifth source that the server and dashboard must learn.
-  This is a meaning change for `env` and needs the operator's agreement. The
-  default stays a fallback: launch picks and stored explicit resume pairs keep
-  their priority (section 2.2). Done last (group 6).
-- **Q6 - `ia_pending_dir`.** Settled by measurement; no operator choice is
-  needed unless they prefer to defer. The pending directory holds only unbound
-  journals. A new generation deletes the same agent's other-generation unbound
-  journals (`IaSidecar.#collectOrphanJournals`, `ia_sidecar.ts:435-458`), and
-  `bind` moves the current generation's records into the durable session
-  sidecar, whose path comes from `resolveSessionPath` and does not depend on
-  this directory. So no cross-generation pending recovery exists to lose (the
-  design reviewer's filesystem probe: generation 2 in the same directory
-  recovered zero records of generation 1; a bound session stayed readable after
-  the next generation used a different pending directory). Changing the
-  directory affects only where the current generation's unbound journal sits
-  until `bind`, and the previous directory's leftover journals are no longer
-  collected (small files the operator can delete). Recommend migrating it with
-  the other directories (group 5). This plan adds no cross-generation recovery.
-- **Q7 - tightening of an existing contract** (section 2.1). Two items change
-  something that is supported today, so they need the operator's decision
-  before implementation: (a) `epoch_idle_ms` gets the 2147483647 ceiling in
-  the runner and in `readEpochIdleMs`, so an existing variable or direct-launch
-  value above it is now rejected (it is clamped to 1 ms today); (b) an
-  already-invalid variable of an enabled engine, including a whitespace-only
-  numeric value, stops the runner at start instead of failing each later
-  wrapper launch. Recommend accepting both.
-
-  Two schema and diagnostic choices are explained here but are ordinary
-  implementation inside the authorized migration, so no operator answer is
-  required: JSON numbers are required for the new numeric runner keys (no
-  existing runner field changes type; a directly launched wrapper keeps its
-  legacy coercion), and a warning is logged when a file edit is hidden by a
-  variable. Everything else about environment values (relative directories,
-  empty or long model strings, `"1e3"` where `Number()` is the grammar) is
-  retained unchanged.
+- **Flags** (`KAOIRO_CODEX_OPERATOR_STEER`, `KAOIRO_CODEX_APPROVAL_AXIS`,
+  `KAOIRO_CLAUDE_PHASE2_DELIVERY`): migrated here (group 4) with the meaning
+  in section 2.4: config `true` is a global opt-in, config `false` is the same
+  as absent and does not override a persona-list opt-in, and a variable set to
+  a non-`"1"` value such as `"0"` wins over config `true`. Issue #463 consumes
+  these keys; the `_PERSONAS` lists stay with #463.
+- **Removal of the variable fallback**: no earlier than the release after the
+  one that ships the keys, and only once a production start shows no
+  deprecation warning. Tracked as a separate follow-up issue (the one-release
+  precedent is legacy `personas` and `capabilities: "claude"` in
+  `runner/src/config.ts`).
+- **Key layout**: section 2.1 (per host, per engine block, flat keys, no
+  per-persona).
+- **`KAOIRO_RUNNER_SERVER_URL`**: migrated fully, with the same deprecation
+  and shadow warnings as the other variables (no exemption). Updating
+  `scripts/dev.sh`, `scripts/dogfood.sh`, `runner/deploy/runner.env.example`
+  and the docs that name the variable (`docs/reference/configuration/runner.md`,
+  `docs/reference/configuration/setup-wizards.md`,
+  `docs/operations/runner-install.md`) to use the `server_url` key is part of
+  this issue (group 3).
+- **Default models and `ext.model_source`**: both sources keep the `env`
+  label; `docs/reference/protocol/model-effort.md` is reworded to "operator
+  default tier" (group 6). The default stays a fallback: launch picks and
+  stored explicit resume pairs keep their priority (section 2.2).
+- **`ia_pending_dir`**: migrated with the other directories (group 5). The
+  pending directory holds only unbound journals. A new generation deletes the
+  same agent's other-generation unbound journals
+  (`IaSidecar.#collectOrphanJournals`, `ia_sidecar.ts:435-458`), and `bind`
+  moves the current generation's records into the durable session sidecar,
+  whose path comes from `resolveSessionPath` and does not depend on this
+  directory. No cross-generation pending recovery exists to lose; changing the
+  directory only moves where the current generation's unbound journal sits
+  until `bind`, and leftover journals in the previous directory are no longer
+  collected (small files the operator can delete). No recovery mechanism is
+  added.
+- **Tightening of an existing contract** (section 2.1): accepted both
+  (a) the `epoch_idle_ms` ceiling 2147483647, in the runner and in
+  `readEpochIdleMs`, and (b) the runner stopping at start on an already-invalid
+  variable of an enabled engine, including a whitespace-only numeric value.
+  Ordinary choices inside the migration (JSON numbers for the new numeric
+  keys, the shadow warning) need no separate decision.
+- **Production rollout**: pending until the operator instructs it directly.
+  Neither `runner.env` nor the production `runner.config.json` is touched by
+  this work.
