@@ -9,24 +9,29 @@ import type { RunnerConfig } from "./config.js";
  *
  * Kept outside the CLI entry point so its complete reload allowlist can be
  * tested without starting a runner process. */
+/** Every top-level RunnerConfig key. A key added to RunnerConfig without an
+ *  entry here is a compile error, so a new setting cannot be silently left
+ *  out of the reload diff (an empty diff skips the whole reload). */
+const RELOAD_FIELDS: Record<keyof RunnerConfig, true> = {
+  host_id: true,
+  server_url: true,
+  cwd_allowlist: true,
+  context_work_budget_percent: true,
+  capabilities: true,
+  personas: true,
+  allowed_personas: true,
+  blocked_personas: true,
+  codex: true,
+  antigravity: true,
+  claude_code: true,
+};
+
 export function changedFields(
   prev: RunnerConfig,
   next: RunnerConfig,
 ): string[] {
-  const fields: (keyof RunnerConfig)[] = [
-    "host_id",
-    "server_url",
-    "cwd_allowlist",
-    "context_work_budget_percent",
-    "capabilities",
-    "personas",
-    "allowed_personas",
-    "blocked_personas",
-    "codex",
-    "antigravity",
-  ];
   const changed: string[] = [];
-  for (const field of fields) {
+  for (const field of Object.keys(RELOAD_FIELDS) as (keyof RunnerConfig)[]) {
     if (JSON.stringify(prev[field]) !== JSON.stringify(next[field])) {
       changed.push(field);
     }

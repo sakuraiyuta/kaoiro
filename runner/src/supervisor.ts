@@ -25,6 +25,7 @@ import type {
 } from "@kaoiro/protocol";
 import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
 import type { CodexAuthMode } from "./codex-auth.js";
+import type { BehaviourRelay } from "./behaviour-settings.js";
 import type { ChatGptPlan } from "./config.js";
 import {
   agyFailureDetail,
@@ -185,6 +186,8 @@ export interface SupervisorOptions {
    *  wrapper as `WrapperConfig.max_*`; a ceiling narrower than launch rejects
    *  the spawn fail-closed. */
   antigravityMax?: AntigravityMaxConfig | undefined;
+  /** Behaviour settings relayed to each engine's wrapper (issue #469). */
+  behaviourRelay?: BehaviourRelay | undefined;
   /** Global soft context-work budget from runner.config.json. The wrapper
    * derives a per-model token denominator at measurement time (issue #254). */
   contextWorkBudgetPercent?: number;
@@ -444,8 +447,13 @@ export function resolveWrapperConfig(
   // rationale as the params above.
   antigravityCeiling?: AntigravityCeiling,
   codexBackend?: WrapperConfig["codex_backend"],
+  // issue #469: the behaviour settings the runner relays from
+  // runner.config.json for this spawn's engine (behaviour-settings.ts).
+  // Applied first so every spawn-derived field below can only overwrite it.
+  behaviourRelay?: Partial<WrapperConfig>,
 ): WrapperConfig {
   const config: WrapperConfig = {
+    ...behaviourRelay,
     agent_id: agentId,
     persona: parsed.persona,
     // One-time migration fallback (issue #209 MF-1): a legacy server that
@@ -628,6 +636,7 @@ export interface SupervisorRuntimeUpdate {
   antigravityExecutable?: AgyExecutableResolution | undefined;
   antigravityProbeTimeoutMs?: number | undefined;
   antigravityMax?: AntigravityMaxConfig | undefined;
+  behaviourRelay?: BehaviourRelay | undefined;
   contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
@@ -667,6 +676,7 @@ export class Supervisor {
   #antigravityExecutable: AgyExecutableResolution | undefined;
   #antigravityProbeTimeoutMs: number | undefined;
   #antigravityMax: AntigravityMaxConfig | undefined;
+  #behaviourRelay: BehaviourRelay | undefined;
   #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
@@ -711,6 +721,7 @@ export class Supervisor {
     this.#antigravityExecutable = options.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = options.antigravityProbeTimeoutMs;
     this.#antigravityMax = options.antigravityMax;
+    this.#behaviourRelay = options.behaviourRelay;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
@@ -733,6 +744,7 @@ export class Supervisor {
     this.#antigravityExecutable = update.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = update.antigravityProbeTimeoutMs;
     this.#antigravityMax = update.antigravityMax;
+    this.#behaviourRelay = update.behaviourRelay;
     this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
@@ -1436,6 +1448,7 @@ export class Supervisor {
       this.#antigravityProbeTimeoutMs,
       antigravityCeiling,
       this.#codexBackend,
+      this.#behaviourRelay?.[parsed.engine],
     );
   }
 

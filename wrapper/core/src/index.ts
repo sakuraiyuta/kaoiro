@@ -5,6 +5,16 @@
 export { parseCliArgs } from "./args.js";
 export { ConfigError, PERMISSION_MODES, loadConfig, parseConfig } from "./persona.js";
 export {
+  CLAUDE_SCHEDULER_SETTINGS,
+  claudeSchedulerRangeMessage,
+  isClaudeSchedulerEnvSet,
+  parseClaudeSchedulerNumber,
+} from "./claude_scheduler.js";
+export type {
+  ClaudeSchedulerField,
+  ClaudeSchedulerSetting,
+} from "./claude_scheduler.js";
+export {
   isWrapperBuildInfoConsistent,
   loadWrapperBuildInfo,
   normalizeWrapperBuildInfo,

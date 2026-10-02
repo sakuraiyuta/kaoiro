@@ -56,4 +56,51 @@ describe("changedFields", () => {
     };
     expect(changedFields(prev, next)).toEqual(["antigravity"]);
   });
+
+  it("claude_code だけの変更を claude_code ブロックとして hot reload 対象にする", () => {
+    const next: RunnerConfig = { ...base, claude_code: { folds_per_turn: 5 } };
+    expect(changedFields(base, next)).toEqual(["claude_code"]);
+    expect(
+      changedFields(next, { ...base, claude_code: { folds_per_turn: 6 } }),
+    ).toEqual(["claude_code"]);
+    expect(changedFields(next, next)).toEqual([]);
+  });
+
+  // issue #469: a key missing from the diff makes applyReload return early and
+  // the change is never applied. The fixture below must list every key of
+  // RunnerConfig (typed Required<>), and each is mutated in turn.
+  it("RunnerConfig の全 top-level key の変更を差分に含める", () => {
+    const full: Required<RunnerConfig> = {
+      host_id: "h",
+      server_url: "ws://a/runner",
+      personas: [{ id: "p", name: "P", sprite_set: "p" }],
+      allowed_personas: ["p"],
+      blocked_personas: ["q"],
+      cwd_allowlist: ["/a"],
+      context_work_budget_percent: 60,
+      capabilities: ["codex"],
+      codex: { backend: "exec" },
+      antigravity: { probe_timeout_ms: 2000 },
+      claude_code: { folds_per_turn: 3 },
+    };
+    const changed: Required<RunnerConfig> = {
+      host_id: "h2",
+      server_url: "ws://b/runner",
+      personas: [{ id: "p2", name: "P", sprite_set: "p" }],
+      allowed_personas: ["p2"],
+      blocked_personas: ["q2"],
+      cwd_allowlist: ["/b"],
+      context_work_budget_percent: 70,
+      capabilities: ["claude-code"],
+      codex: { backend: "app-server" },
+      antigravity: { probe_timeout_ms: 3000 },
+      claude_code: { folds_per_turn: 4 },
+    };
+    for (const key of Object.keys(full) as (keyof RunnerConfig)[]) {
+      expect(
+        changedFields(full, { ...full, [key]: changed[key] }),
+        key,
+      ).toEqual([key]);
+    }
+  });
 });

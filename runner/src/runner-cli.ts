@@ -21,6 +21,12 @@ import {
   formatBuildRevision,
   loadBuildInfo,
 } from "./build_info.js";
+import {
+  behaviourWarnings,
+  computeBehaviourRelay,
+  describeBehaviourRelay,
+  readSetVariables,
+} from "./behaviour-settings.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
@@ -168,6 +174,21 @@ export async function runRunnerCli(
   let config = applyOverride(loadConfig(configPath));
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
+  // issue #469: a deprecated behaviour variable that is invalid stops the
+  // runner here instead of failing every later wrapper launch. A variable
+  // that is set is not relayed (the wrapper reads it itself), so the relay
+  // holds only the file values.
+  const deprecationSeen = new Set<string>();
+  for (const line of behaviourWarnings(
+    undefined,
+    config,
+    readSetVariables(config, process.env),
+    deprecationSeen,
+  )) {
+    process.stderr.write(line);
+  }
+  let behaviourRelay = computeBehaviourRelay(config, process.env);
+
   // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
   // `resolveCodexAuthMode` never invokes doctor when the config declares
   // an explicit value, so a runner environment whose PATH has no `codex`
@@ -246,6 +267,7 @@ export async function runRunnerCli(
     antigravityExecutable,
     antigravityProbeTimeoutMs,
     antigravityMax: antigravityMaxFrom(config),
+    behaviourRelay,
     ...(config.context_work_budget_percent === undefined
       ? {}
       : { contextWorkBudgetPercent: config.context_work_budget_percent }),
@@ -319,6 +341,19 @@ export async function runRunnerCli(
   // 反映される順序性を保つ。
   let reloadQueue: Promise<void> = Promise.resolve();
   const applyReload = async (next: RunnerConfig): Promise<void> => {
+    // Validate the variables first: an invalid one skips this reload (the
+    // caller logs "config apply failed") and the last valid config stays.
+    const setVariables = readSetVariables(next, process.env);
+    // Warnings are written only once the reload is applied, so a reload that
+    // fails later is never reported as having taken effect.
+    const seenAfterReload = new Set(deprecationSeen);
+    const behaviourLines = behaviourWarnings(
+      config,
+      next,
+      setVariables,
+      seenAfterReload,
+    );
+    const nextBehaviourRelay = computeBehaviourRelay(next, process.env);
     const diff = changedFields(config, next);
     const nextAntigravityEnabled = isAntigravityEnabled(next);
     if (diff.length === 0 && !nextAntigravityEnabled) return;
@@ -380,6 +415,7 @@ export async function runRunnerCli(
       antigravityExecutable,
       antigravityProbeTimeoutMs,
       antigravityMax: antigravityMaxFrom(next),
+      behaviourRelay: nextBehaviourRelay,
       contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),
@@ -407,6 +443,16 @@ export async function runRunnerCli(
       link.updateRegister(nextRegister);
     }
     config = next;
+    for (const line of behaviourLines) process.stderr.write(line);
+    for (const name of seenAfterReload) deprecationSeen.add(name);
+    if (
+      JSON.stringify(behaviourRelay) !== JSON.stringify(nextBehaviourRelay)
+    ) {
+      process.stderr.write(
+        `runner: behaviour settings for subsequent wrappers: ${describeBehaviourRelay(nextBehaviourRelay)}\n`,
+      );
+    }
+    behaviourRelay = nextBehaviourRelay;
     process.stderr.write(`runner: codex backend=${config.codex?.backend ?? "exec"} for subsequent wrappers\n`);
   };
   const watcher = watchConfig(
