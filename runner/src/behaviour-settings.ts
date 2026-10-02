@@ -215,15 +215,24 @@ const PERMISSION_TIMEOUT_ROW: BehaviourRow = {
   env: PERMISSION_TIMEOUT_ENV,
   envIsSet: isPermissionTimeoutEnvSet,
   parseFile: (value) => {
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-      throw new ConfigError("permission_timeout_ms must be an integer of at least 1");
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < 1 ||
+      value > TURN_WATCHDOG_MAX_DELAY_MS
+    ) {
+      throw new ConfigError(
+        `permission_timeout_ms must be an integer from 1 through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+      );
     }
     return value;
   },
   parseEnv: (raw) => {
     const parsed = parsePermissionTimeoutEnv(raw);
     if (parsed === undefined) {
-      throw new ConfigError(`${PERMISSION_TIMEOUT_ENV} must be a positive integer`);
+      throw new ConfigError(
+        `${PERMISSION_TIMEOUT_ENV} must be an integer from 1 through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+      );
     }
     return parsed;
   },

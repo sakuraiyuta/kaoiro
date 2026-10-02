@@ -121,7 +121,7 @@ hidden by a variable.
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
-| `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | at least 1 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
+| `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CODEX_OPERATOR_STEER` | `codex.operator_steer` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
 | `KAOIRO_CLAUDE_PHASE2_DELIVERY` | `claude_code.phase2_delivery` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Claude wrapper (`flagArgument`) | variable > file > persona list |

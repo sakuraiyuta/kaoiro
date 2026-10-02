@@ -279,8 +279,15 @@ export function parseConfig(raw: unknown): WrapperConfig {
   // letting the broker fall back to the SDK default (no timeout, ADR-0022 F6).
   if (raw.permission_timeout_ms !== undefined) {
     const timeout = raw.permission_timeout_ms;
-    if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0) {
-      throw new ConfigError("permission_timeout_ms must be a positive integer");
+    if (
+      typeof timeout !== "number" ||
+      !Number.isSafeInteger(timeout) ||
+      timeout < 1 ||
+      timeout > TURN_WATCHDOG_MAX_DELAY_MS
+    ) {
+      throw new ConfigError(
+        `permission_timeout_ms must be an integer from 1 through ${TURN_WATCHDOG_MAX_DELAY_MS}`,
+      );
     }
     config.permission_timeout_ms = timeout;
   } else {

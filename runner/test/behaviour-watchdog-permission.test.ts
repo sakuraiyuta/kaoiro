@@ -105,12 +105,13 @@ describe("permission_timeout_ms (top level, every engine)", () => {
   const parse = (value: unknown) =>
     parseRunnerConfig({ ...base, permission_timeout_ms: value }).permission_timeout_ms;
 
-  it("file: JSON integer of at least 1", () => {
+  it("file: JSON integer within the Node timer range", () => {
     expect(parse(1)).toBe(1);
     expect(parse(600_000)).toBe(600_000);
-    for (const bad of [0, -1, 1.5, "5", true, null, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(parse(2_147_483_647)).toBe(2_147_483_647);
+    for (const bad of [0, -1, 1.5, "5", true, null, NaN, Number.MAX_SAFE_INTEGER + 1, 2_147_483_648]) {
       expect(() => parse(bad), String(bad)).toThrow(
-        "permission_timeout_ms must be an integer of at least 1",
+        "permission_timeout_ms must be an integer from 1 through 2147483647",
       );
     }
   });
@@ -118,9 +119,12 @@ describe("permission_timeout_ms (top level, every engine)", () => {
   it("variable: the legacy Number() grammar, whitespace rejected, validated even when an engine is disabled", () => {
     expect(readSetVariables(base, { [VARIABLE]: "" })).toEqual([]);
     expect(readSetVariables(base, { [VARIABLE]: "1e3" }).map((s) => s.value)).toEqual([1000]);
-    for (const bad of [" ", "0", "-1", "1.5", "abc"]) {
+    expect(readSetVariables(base, { [VARIABLE]: "2147483647" }).map((s) => s.value)).toEqual([
+      2_147_483_647,
+    ]);
+    for (const bad of [" ", "0", "-1", "1.5", "abc", "2147483648"]) {
       expect(() => readSetVariables(base, { [VARIABLE]: bad }), bad).toThrow(
-        `${VARIABLE} must be a positive integer`,
+        `${VARIABLE} must be an integer from 1 through 2147483647`,
       );
     }
     expect(() =>

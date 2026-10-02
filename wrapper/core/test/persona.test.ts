@@ -547,8 +547,11 @@ describe("parseConfig", () => {
     expect(
       parseConfig({ ...valid, permission_timeout_ms: 1000 }),
     ).toMatchObject({ permission_timeout_ms: 1000 });
+    expect(
+      parseConfig({ ...valid, permission_timeout_ms: 2_147_483_647 }),
+    ).toMatchObject({ permission_timeout_ms: 2_147_483_647 });
 
-    for (const bad of [0, -1, 1.5, "1000", null]) {
+    for (const bad of [0, -1, 1.5, "1000", null, 2_147_483_648]) {
       expect(() =>
         parseConfig({ ...valid, permission_timeout_ms: bad }),
       ).toThrow(ConfigError);
@@ -570,6 +573,15 @@ describe("parseConfig", () => {
       expect(parseConfig({ ...valid })).toMatchObject({
         permission_timeout_ms: 5000,
       });
+    });
+
+    it("accepts the timer ceiling and rejects values above it", () => {
+      process.env[ENV_KEY] = "2147483647";
+      expect(parseConfig({ ...valid }).permission_timeout_ms).toBe(2_147_483_647);
+      process.env[ENV_KEY] = "2147483648";
+      expect(() => parseConfig({ ...valid })).toThrow(
+        "KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS must be a positive integer",
+      );
     });
 
     it("config が明示されていれば env より優先する", () => {
