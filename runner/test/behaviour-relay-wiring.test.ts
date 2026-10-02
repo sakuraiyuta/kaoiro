@@ -128,11 +128,18 @@ describe("behaviour settings relay (issue #469)", () => {
         h.callbacks().onSpawn?.(h.spawn("c"));
         expect(h.configs[3]).toMatchObject({ folds_per_turn: 6, urgent_overtake_limit: 3 });
 
+        // A wrongly typed block is rejected too: an array must not replace
+        // the last valid relay with an empty one.
+        h.writeConfig({ claude_code: [] });
+        await h.reload(runtime!);
+        h.callbacks().onSpawn?.(h.spawn("c2"));
+        expect(h.configs[4]).toMatchObject({ folds_per_turn: 6, urgent_overtake_limit: 3 });
+
         // Removing the key falls back to the wrapper default (nothing relayed).
         h.writeConfig({});
         await h.reload(runtime!);
         h.callbacks().onSpawn?.(h.spawn("d"));
-        expect(h.configs[4]).not.toHaveProperty("folds_per_turn");
+        expect(h.configs[5]).not.toHaveProperty("folds_per_turn");
       } finally {
         runtime?.close();
         diagnostic.mockRestore();

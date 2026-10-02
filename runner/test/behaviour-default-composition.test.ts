@@ -73,6 +73,10 @@ interface Endpoint {
   sockets: Set<Duplex>;
 }
 
+/** Serves both sockets: the runner's (`/runner`, joined on `runner:*`) and the
+ *  wrappers' (any other path, joined on `wrapper:*`). A wrapper join is
+ *  answered with the `persona_prompt` push the real server sends after join,
+ *  which is what lets each wrapper construct its host and watchdog. */
 async function startEndpoint(
   onRunnerJoined: (send: (frame: unknown[]) => void, topic: string) => void,
 ): Promise<Endpoint> {
@@ -88,7 +92,7 @@ async function startEndpoint(
         `Sec-WebSocket-Accept: ${createHash("sha1").update(key + WS_GUID).digest("base64")}\r\n\r\n`,
     );
     const path = String(request.url ?? "");
-    if (!path.startsWith("/runner")) return; // the wrapper side is not served
+    const isRunner = path.startsWith("/runner");
     const send = (frame: unknown[]) => socket.write(encodeText(JSON.stringify(frame)));
     const state = { buffer: Buffer.alloc(0) };
     socket.on("data", (chunk: Buffer) => {
@@ -108,8 +112,11 @@ async function startEndpoint(
         if (ref !== null) {
           send([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]);
         }
-        if (event === "phx_join" && topic.startsWith("runner:")) {
+        if (event === "phx_join" && isRunner && topic.startsWith("runner:")) {
           onRunnerJoined(send, topic);
+        }
+        if (event === "phx_join" && !isRunner && topic.startsWith("wrapper:")) {
+          send([joinRef, null, topic, "persona_prompt", { version: "0", prompt: "gate persona prompt" }]);
         }
       }
     });
@@ -150,14 +157,68 @@ function isAlive(pid: number): boolean {
   }
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const RUNNER_CLOSE_DEADLINE_MS = 15_000;
+
+async function waitUntil(done: () => boolean, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (!done() && Date.now() < deadline) await sleep(100);
+  return done();
+}
+
+/** Stops the runner this test started: SIGTERM to the held child, SIGKILL
+ *  only once the close deadline has passed. Returns every way the stop fell
+ *  short, so a slow or stuck shutdown fails the test instead of passing. */
+async function stopRunner(
+  runner: ChildProcess,
+  closed: Promise<void>,
+  hasClosed: () => boolean,
+): Promise<string[]> {
+  const failures: string[] = [];
+  if (hasClosed()) return failures;
+  runner.kill("SIGTERM");
+  await Promise.race([closed, sleep(RUNNER_CLOSE_DEADLINE_MS)]);
+  if (hasClosed()) return failures;
+  failures.push(`runner did not close within ${RUNNER_CLOSE_DEADLINE_MS}ms of SIGTERM`);
+  runner.kill("SIGKILL");
+  await Promise.race([closed, sleep(5_000)]);
+  if (!hasClosed()) failures.push("runner did not close after SIGKILL");
+  return failures;
+}
+
+/** Every wrapper pid the test saw must be gone once the runner has closed.
+ *  Survivors are SIGKILLed by pid (they are descendants of the runner this
+ *  test started, named by their own startup lines) and awaited. */
+async function verifyWrappersGone(pids: Set<number>): Promise<string[]> {
+  const failures: string[] = [];
+  await waitUntil(() => ![...pids].some(isAlive), 10_000);
+  const alive = [...pids].filter(isAlive);
+  if (alive.length === 0) return failures;
+  failures.push(`wrapper pids outlived the runner: ${alive.join(",")}`);
+  for (const pid of alive) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // gone between the check and the signal
+    }
+  }
+  if (!(await waitUntil(() => !alive.some(isAlive), 5_000))) {
+    failures.push(`wrapper pids survived SIGKILL: ${alive.filter(isAlive).join(",")}`);
+  }
+  return failures;
+}
+
 describe("default composition (issue #469)", () => {
   it(
-    "a config-only runner relays file settings that the real Claude, Codex and Antigravity wrappers report they will use",
+    "a config-only runner relays file settings that the real Claude, Codex and Antigravity wrappers' consumers report they received",
     async () => {
       const root = mkdtempSync(join(tmpdir(), "ao-469-gate-"));
       const configPath = join(root, "runner.config.json");
       let output = "";
       let runner: ChildProcess | undefined;
+      let runnerClosed = false;
+      let closed: Promise<void> = Promise.resolve();
+      let primary: unknown;
       const wrapperPids = new Set<number>();
       const endpoint = await startEndpoint((send, topic) => {
         for (const engine of ["claude-code", "codex", "antigravity"]) {
@@ -177,8 +238,7 @@ describe("default composition (issue #469)", () => {
         }
       });
       try {
-        // A stand-in `agy` so the runner accepts an Antigravity launch; the
-        // wrapper reports its settings before it ever runs the executable.
+        // A stand-in `agy` so the runner accepts an Antigravity launch.
         const agy = join(root, "agy");
         writeFileSync(agy, "#!/bin/sh\nexit 0\n");
         chmodSync(agy, 0o755);
@@ -204,7 +264,7 @@ describe("default composition (issue #469)", () => {
           }),
         );
         // Nothing but PATH and a private HOME: no KAOIRO_* variable at all.
-        runner = spawn(
+        const started = spawn(
           process.execPath,
           ["--import", "tsx", "src/cli.ts", configPath],
           {
@@ -213,67 +273,93 @@ describe("default composition (issue #469)", () => {
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
-        runner.stdout?.on("data", (chunk) => (output += String(chunk)));
-        runner.stderr?.on("data", (chunk) => (output += String(chunk)));
+        runner = started;
+        closed = new Promise<void>((resolve) =>
+          started.once("close", () => {
+            runnerClosed = true;
+            resolve();
+          }),
+        );
+        started.stdout?.on("data", (chunk) => (output += String(chunk)));
+        started.stderr?.on("data", (chunk) => (output += String(chunk)));
 
         const lineFor = async (pattern: RegExp): Promise<RegExpExecArray> =>
-          waitFor(() => output, pattern, runner!, 60_000);
-        // Each line is printed by the wrapper from the object its consumer
-        // receives; the pids let the test confirm those processes end.
-        const scheduler = await lineFor(/\[claude scheduler\] pid=(\d+) ([^\n]*)\n/);
-        const claude = await lineFor(/\[kaoiro\] claude behaviour: pid=(\d+) ([^\n]*)\n/);
-        const codex = await lineFor(/\[kaoiro\] codex behaviour: pid=(\d+) ([^\n]*)\n/);
+          waitFor(() => output, pattern, started, 60_000);
+        // "consumers" lines are printed by each wrapper after it has completed
+        // the join handshake and constructed its host, watchdog and permission
+        // broker, from the values those objects hold. "behaviour" lines are the
+        // resolver's own output and carry each value's source.
+        const claude = await lineFor(/\[kaoiro\] claude consumers: pid=(\d+) ([^\n]*)\n/);
+        const codex = await lineFor(/\[kaoiro\] codex consumers: pid=(\d+) ([^\n]*)\n/);
         const antigravity = await lineFor(
-          /\[kaoiro\] antigravity behaviour: pid=(\d+) ([^\n]*)\n/,
+          /\[kaoiro\] antigravity consumers: pid=(\d+) ([^\n]*)\n/,
         );
-        for (const found of [scheduler, claude, codex, antigravity]) {
+        for (const found of [claude, codex, antigravity]) {
           wrapperPids.add(Number(found[1]));
         }
-        expect(scheduler[2]).toBe(
-          "yield_claim_timeout_ms=default pending_receipt_root_timeout_ms=default " +
-            "urgent_overtake_limit=3 folds_per_turn=5",
-        );
         expect(claude[2]).toBe(
+          "yield_claim_timeout_ms=2000 pending_receipt_root_timeout_ms=2000 " +
+            "urgent_overtake_limit=3 folds_per_turn=5 " +
+            "turn_watchdog_inactivity_ms=120000 turn_watchdog_abort_grace_ms=60000 " +
+            "permission_broker_timeout_ms=7000",
+        );
+        expect(codex[2]).toBe(
+          "turn_watchdog_inactivity_ms=90000 turn_watchdog_abort_grace_ms=60000 " +
+            "permission_broker_timeout_ms=7000",
+        );
+        expect(antigravity[2]).toBe(
+          "turn_watchdog_inactivity_ms=1800000 turn_watchdog_abort_grace_ms=5000 " +
+            "host_abort_grace_ms=5000 permission_broker_timeout_ms=7000",
+        );
+
+        const claudeBehaviour = await lineFor(
+          /\[kaoiro\] claude behaviour: pid=\d+ ([^\n]*)\n/,
+        );
+        const codexBehaviour = await lineFor(/\[kaoiro\] codex behaviour: pid=\d+ ([^\n]*)\n/);
+        const antigravityBehaviour = await lineFor(
+          /\[kaoiro\] antigravity behaviour: pid=\d+ ([^\n]*)\n/,
+        );
+        expect(claudeBehaviour[1]).toBe(
           "turn_watchdog_inactivity_ms=120000(config) turn_watchdog_abort_grace_ms=60000(default) " +
             "permission_timeout_ms=7000",
         );
-        expect(codex[2]).toBe(
+        expect(codexBehaviour[1]).toBe(
           "turn_watchdog_inactivity_ms=90000(config) turn_watchdog_abort_grace_ms=60000(default) " +
             "permission_timeout_ms=7000",
         );
-        expect(antigravity[2]).toBe(
+        expect(antigravityBehaviour[1]).toBe(
           "turn_watchdog_inactivity_ms=1800000(default) turn_watchdog_abort_grace_ms=5000(config) " +
             "permission_timeout_ms=7000",
         );
-      } finally {
-        // Controlled stop: SIGTERM to the runner this test started; its
-        // shutdown stops its tracked wrappers. `close` means the runner ended
-        // and its stdio closed, so wrapper termination is checked by the pid
-        // the wrapper reported (existence check only), never by pattern.
-        if (runner !== undefined && runner.exitCode === null) {
-          const closed = new Promise<void>((resolve) => runner!.once("close", () => resolve()));
-          runner.kill("SIGTERM");
-          await Promise.race([closed, new Promise((r) => setTimeout(r, 15_000))]);
-          if (runner.exitCode === null) runner.kill("SIGKILL");
-        }
-        for (const socket of endpoint.sockets) socket.destroy();
-        await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
-        rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        primary = error;
       }
-      // Every wrapper that reported a pid must be gone shortly after the
-      // runner closes (a crashed wrapper may have been relaunched, so the
-      // pids seen in the output are collected up to the stop).
-      for (const match of output.matchAll(/ pid=(\d+) /g)) {
-        wrapperPids.add(Number(match[1]));
+      // Cleanup runs on success and on assertion failure alike. Wrapper pids
+      // come only from the wrappers' own startup lines.
+      const failures: string[] = [];
+      if (runner !== undefined) {
+        failures.push(...(await stopRunner(runner, closed, () => runnerClosed)));
       }
-      const deadline = Date.now() + 10_000;
-      while ([...wrapperPids].some(isAlive) && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 100));
+      for (const match of output.matchAll(
+        /\[kaoiro\] (?:claude|codex|antigravity) (?:behaviour|consumers): pid=(\d+) /g,
+      )) {
+        const pid = Number(match[1]);
+        if (Number.isInteger(pid) && pid > 1) wrapperPids.add(pid);
       }
-      const alive = [...wrapperPids].filter(isAlive);
-      for (const pid of alive) process.kill(pid, "SIGKILL"); // our own descendants, by pid
-      expect(alive, `wrapper pids outlived the runner: ${alive.join(",")}`).toEqual([]);
+      failures.push(...(await verifyWrappersGone(wrapperPids)));
+      for (const socket of endpoint.sockets) socket.destroy();
+      await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
+      rmSync(root, { recursive: true, force: true });
+      const report =
+        failures.length === 0
+          ? `[cleanup] runner closed; wrapper pids [${[...wrapperPids].join(",")}] gone`
+          : `[cleanup] ${failures.join("; ")}`;
+      if (primary !== undefined) {
+        if (primary instanceof Error) primary.message += `\n${report}`;
+        throw primary;
+      }
+      expect(failures, report).toEqual([]);
     },
-    120_000,
+    180_000,
   );
 });

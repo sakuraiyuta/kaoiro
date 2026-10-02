@@ -552,7 +552,7 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
   }
 
   if (raw.claude_code !== undefined) {
-    if (!isObject(raw.claude_code)) {
+    if (!isObject(raw.claude_code) || Array.isArray(raw.claude_code)) {
       throw new ConfigError("claude_code must be an object");
     }
     config.claude_code = parseBehaviourBlock("claude_code", raw.claude_code);

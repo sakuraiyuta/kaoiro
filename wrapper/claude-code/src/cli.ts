@@ -66,8 +66,8 @@ import {
 } from "@kaoiro/agent-common";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import {
-  CLAUDE_SCHEDULER_SETTINGS,
   PERMISSION_MODES,
+  formatConsumerSettingsLine,
   formatTurnWatchdogLine,
   loadConfig,
 } from "@kaoiro/wrapper-core";
@@ -173,13 +173,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
-  // The scheduler values the host will read from `config`, printed from that
-  // same object so the line cannot report a value the host did not receive.
-  writeRedactedStderr(
-    `[claude scheduler] pid=${process.pid} ${CLAUDE_SCHEDULER_SETTINGS.map(
-      ({ field }) => `${field}=${config[field] ?? "default"}`,
-    ).join(" ")}\n`,
-  );
+  // Read once here for the claim path below; the consumer line after
+  // construction prints this same constant.
+  const yieldClaimTimeoutMs = config.yield_claim_timeout_ms ?? 2_000;
   const phase2Source = personaOptInSource(
     config.persona.id,
     process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY,
@@ -878,7 +874,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             authority_epoch: authority.authority_epoch!,
           }),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("claim_timeout")), config.yield_claim_timeout_ms ?? 2_000);
+            timer = setTimeout(() => reject(new Error("claim_timeout")), yieldClaimTimeoutMs);
           }),
         ]);
         granted = result.granted;
@@ -899,7 +895,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         attemptYieldCandidates();
         return;
       }
-      const receiptDeadline = performance.now() + (config.pending_receipt_root_timeout_ms ?? 2_000);
+      const receiptDeadline = performance.now() + host.pendingReceiptRootTimeoutMs;
       while (true) {
         if (!yieldCandidates.has(batchToken)) {
           yieldClaimInFlight = false;
@@ -1577,6 +1573,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
+  writeRedactedStderr(
+    formatConsumerSettingsLine("claude", process.pid, [
+      ["yield_claim_timeout_ms", yieldClaimTimeoutMs],
+      ["pending_receipt_root_timeout_ms", host.pendingReceiptRootTimeoutMs],
+      ["urgent_overtake_limit", host.urgentOvertakeLimit],
+      ["folds_per_turn", host.foldsPerTurn],
+      ["turn_watchdog_inactivity_ms", turnWatchdog.settings.inactivityMs],
+      ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
+      ["permission_broker_timeout_ms", broker.timeoutMs],
+    ]),
+  );
   for (const notice of pendingWorkNotices.splice(0)) {
     instructionChain = instructionChain.then(() => host.send(notice)).catch(() => {});
   }

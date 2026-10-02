@@ -50,6 +50,7 @@ import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   loadConfig,
   loadWrapperBuildInfo,
+  formatConsumerSettingsLine,
   formatTurnWatchdogLine,
   parseCliArgs,
   ServerLink,
@@ -1260,6 +1261,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
+  writeRedactedStderr(
+    formatConsumerSettingsLine("codex", process.pid, [
+      ["turn_watchdog_inactivity_ms", turnWatchdog.settings.inactivityMs],
+      ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
+      ["permission_broker_timeout_ms", permissionBroker.timeoutMs],
+    ]),
+  );
   for (const notice of pendingWorkNotices.splice(0)) {
     instructionChain = instructionChain.then(() => host.send(notice)).catch(() => {});
   }

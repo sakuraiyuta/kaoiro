@@ -104,6 +104,11 @@ export class PermissionBroker {
     this.#registry = new PendingRegistry<SettledPermissionDecision>(this.#timeoutMs);
   }
 
+  /** The no-response window in effect; null means no timeout. */
+  get timeoutMs(): number | null {
+    return this.#timeoutMs;
+  }
+
   /** Compatible with AgentHostOptions#decidePermission.
    *
    *  `signal` binds the request to the lifetime of the tool call that asked

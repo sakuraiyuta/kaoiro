@@ -20,6 +20,7 @@ import {
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import {
+  formatConsumerSettingsLine,
   formatTurnWatchdogLine,
   loadConfig,
   loadWrapperBuildInfo,
@@ -663,6 +664,14 @@ export async function runAntigravityCli(
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
   }));
+  writeRedactedStderr(
+    formatConsumerSettingsLine("antigravity", process.pid, [
+      ["turn_watchdog_inactivity_ms", turnWatchdog.settings.inactivityMs],
+      ["turn_watchdog_abort_grace_ms", turnWatchdog.settings.abortGraceMs],
+      ["host_abort_grace_ms", host.abortGraceMs],
+      ["permission_broker_timeout_ms", permissionBroker.timeoutMs],
+    ]),
+  );
   for (const notice of pendingWorkNotices.splice(0)) {
     instructionChain = instructionChain.then(() => host!.send(notice)).catch(() => {});
   }
