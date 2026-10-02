@@ -251,16 +251,24 @@ describe("default composition (issue #469)", () => {
             capabilities: ["claude-code", "codex", "antigravity"],
             permission_timeout_ms: 7000,
             claude_code: {
-              folds_per_turn: 5,
+              yield_claim_timeout_ms: 1500,
+              pending_receipt_root_timeout_ms: 2500,
               urgent_overtake_limit: 3,
+              folds_per_turn: 5,
               turn_watchdog_inactivity_ms: 120_000,
+              turn_watchdog_abort_grace_ms: 4000,
             },
             codex: {
               auth_mode: "chatgpt",
               chatgpt_plan: "pro",
               turn_watchdog_inactivity_ms: 90_000,
+              turn_watchdog_abort_grace_ms: 3000,
             },
-            antigravity: { cli_path: agy, turn_watchdog_abort_grace_ms: 5000 },
+            antigravity: {
+              cli_path: agy,
+              turn_watchdog_inactivity_ms: 80_000,
+              turn_watchdog_abort_grace_ms: 5000,
+            },
           }),
         );
         // Nothing but PATH and a private HOME: no KAOIRO_* variable at all.
@@ -298,17 +306,17 @@ describe("default composition (issue #469)", () => {
           wrapperPids.add(Number(found[1]));
         }
         expect(claude[2]).toBe(
-          "yield_claim_timeout_ms=2000 pending_receipt_root_timeout_ms=2000 " +
+          "yield_claim_timeout_ms=1500 pending_receipt_root_timeout_ms=2500 " +
             "urgent_overtake_limit=3 folds_per_turn=5 " +
-            "turn_watchdog_inactivity_ms=120000 turn_watchdog_abort_grace_ms=60000 " +
+            "turn_watchdog_inactivity_ms=120000 turn_watchdog_abort_grace_ms=4000 " +
             "permission_broker_timeout_ms=7000",
         );
         expect(codex[2]).toBe(
-          "turn_watchdog_inactivity_ms=90000 turn_watchdog_abort_grace_ms=60000 " +
+          "turn_watchdog_inactivity_ms=90000 turn_watchdog_abort_grace_ms=3000 " +
             "permission_broker_timeout_ms=7000",
         );
         expect(antigravity[2]).toBe(
-          "turn_watchdog_inactivity_ms=1800000 turn_watchdog_abort_grace_ms=5000 " +
+          "turn_watchdog_inactivity_ms=80000 turn_watchdog_abort_grace_ms=5000 " +
             "host_abort_grace_ms=5000 permission_broker_timeout_ms=7000",
         );
 
@@ -320,15 +328,15 @@ describe("default composition (issue #469)", () => {
           /\[kaoiro\] antigravity behaviour: pid=\d+ ([^\n]*)\n/,
         );
         expect(claudeBehaviour[1]).toBe(
-          "turn_watchdog_inactivity_ms=120000(config) turn_watchdog_abort_grace_ms=60000(default) " +
+          "turn_watchdog_inactivity_ms=120000(config) turn_watchdog_abort_grace_ms=4000(config) " +
             "permission_timeout_ms=7000",
         );
         expect(codexBehaviour[1]).toBe(
-          "turn_watchdog_inactivity_ms=90000(config) turn_watchdog_abort_grace_ms=60000(default) " +
+          "turn_watchdog_inactivity_ms=90000(config) turn_watchdog_abort_grace_ms=3000(config) " +
             "permission_timeout_ms=7000",
         );
         expect(antigravityBehaviour[1]).toBe(
-          "turn_watchdog_inactivity_ms=1800000(default) turn_watchdog_abort_grace_ms=5000(config) " +
+          "turn_watchdog_inactivity_ms=80000(config) turn_watchdog_abort_grace_ms=5000(config) " +
             "permission_timeout_ms=7000",
         );
       } catch (error) {
