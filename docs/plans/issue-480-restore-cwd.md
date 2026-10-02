@@ -1,6 +1,6 @@
 ---
 title: Preserve the launch cwd for session restore
-status: proposed
+status: approved
 last_updated: 2026-10-02
 related: [ADR-0014, issue-480]
 ---
@@ -203,7 +203,9 @@ Deletion followed by a delayed session envelope can recreate a pointer through
 bootstrap with the reported cwd. This pre-existing race is recorded as out of
 scope; this change adds no deletion fencing.
 
-Hold source implementation until independent design review approves this plan.
+Independent design review approved the plan. Implementation follows this
+contract; recovery commands are maintained in the
+[operations runbook](../operations/session-pointer-recovery.md).
 
 ## Verification and negative controls
 
@@ -258,3 +260,18 @@ Review artifact: `tmp/reviews/issue-480/design-r1-kuroe.md`, SHA-256
 | S4 | Adopted: add seed-route and bootstrap mutations; audit has valid-row negative control and its exclusion mutation was measured red. |
 | N1 | Recorded: delayed post-delete envelope recreation remains an existing out-of-scope race. |
 | N2 | Adopted: production release RPC maintenance call with nil session ID and synchronous full-row readback, plus verified-host and concurrent-update handling. |
+
+## Design-review round 2 disposition
+
+Review artifact: `tmp/reviews/issue-480/design-r2-kuroe.md`, SHA-256
+`f10bccad18d6edfba602f66c841f4f9883e28c332ad9d7a2b9bb0aefc8e49f29`.
+Verdict: approved, must 0 / should 1 / nit 2.
+
+| ID | Disposition |
+| --- | --- |
+| S1 | Adopted: the recovery runbook identifies explicit-cwd runner enumeration and the actual built, engine-specific `sessionExists` query on the owning host. It distinguishes candidate listing from the T3 existence check. |
+| N1 | Adopted: the runbook audit reports `no_cwd` separately from exact allowlist mismatches. |
+| N2 | Adopted as a follow-up: the director will track dashboard display of reported cwd and restore cwd; this branch documents the distinction. |
+
+The raw native `/clear` fail-stop is not a separate production defect: the
+server rejects that instruction, and supported reset cycles the wrapper.

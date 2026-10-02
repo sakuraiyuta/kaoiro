@@ -33,11 +33,21 @@ defmodule KaoiroServer.SessionPointers do
   end
 
   @doc """
-  Records `session_id` (and optional `cwd`) as the agent's latest pointer.
-  Fire-and-forget so persistence never slows envelope ingest.
+  Records an explicit launch seed or maintenance update. Non-nil fields replace
+  their stored values; nil fields retain them. Envelope ingestion uses
+  `record_session/5` to preserve the launch cwd.
   """
   def record(agent_id, session_id, cwd \\ nil, engine \\ nil, server \\ __MODULE__) do
     GenServer.cast(server, {:record, agent_id, session_id, cwd, engine, nil})
+  end
+
+  @doc """
+  Records an envelope's latest session and engine while preserving the launch
+  cwd. The first reported cwd fills an unseeded pointer; explicit launch seeds
+  and maintenance writes use `record/5` instead.
+  """
+  def record_session(agent_id, session_id, cwd \\ nil, engine \\ nil, server \\ __MODULE__) do
+    GenServer.cast(server, {:record_session, agent_id, session_id, cwd, engine})
   end
 
   @doc """
@@ -258,37 +268,12 @@ defmodule KaoiroServer.SessionPointers do
 
   @impl true
   def handle_cast({:record, agent_id, session_id, cwd, engine, snapshot}, state) do
-    existing = Map.get(state.pointers, agent_id, %{})
-    # Keep a previously-recorded field when this record carries none (#22):
-    # a session_id-bearing envelope without a statusline cwd (e.g. result /
-    # log) must not clobber the cwd that restore needs, and a spawn-time cwd
-    # seed (session_id nil) must not erase a known session_id. A non-nil value
-    # always wins, so a real session_id / cwd / engine / snapshot still
-    # updates. The snapshot (ADR-0014 F1 追補, phase-15 D8) is agent-scoped
-    # and survives session boundaries — nil here means "keep whatever is
-    # already stored", not "clear".
-    session_id = session_id || Map.get(existing, :session_id)
-    cwd = cwd || Map.get(existing, :cwd)
-    engine = engine || Map.get(existing, :engine)
-    snapshot = snapshot || Map.get(existing, :snapshot)
-    effort_revision = Map.get(existing, :effort_revision)
+    persist_pointer(state, agent_id, session_id, cwd, engine, snapshot)
+  end
 
-    pointer = %{
-      session_id: session_id,
-      cwd: cwd,
-      engine: engine,
-      snapshot: snapshot,
-      effort_revision: effort_revision
-    }
-
-    if existing == pointer do
-      {:noreply, state}
-    else
-      :ok =
-        :dets.insert(state.table, {agent_id, session_id, cwd, engine, snapshot, effort_revision})
-
-      {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, pointer)}}
-    end
+  def handle_cast({:record_session, agent_id, session_id, cwd, engine}, state) do
+    launch_cwd = get_in(state.pointers, [agent_id, :cwd]) || cwd
+    persist_pointer(state, agent_id, session_id, launch_cwd, engine, nil)
   end
 
   def handle_cast({:record_snapshot, agent_id, snapshot}, state) do
@@ -305,7 +290,7 @@ defmodule KaoiroServer.SessionPointers do
 
       sanitized ->
         # Snapshot-only update: no-op unless the agent already has a pointer
-        # (the initial pointer is seeded by an envelope-driven `record` call).
+        # (the initial pointer is seeded by an envelope-driven `record_session` call).
         case Map.get(state.pointers, agent_id) do
           nil ->
             {:noreply, state}
@@ -340,6 +325,32 @@ defmodule KaoiroServer.SessionPointers do
                }}
             end
         end
+    end
+  end
+
+  defp persist_pointer(state, agent_id, session_id, cwd, engine, snapshot) do
+    existing = Map.get(state.pointers, agent_id, %{})
+    session_id = session_id || Map.get(existing, :session_id)
+    cwd = cwd || Map.get(existing, :cwd)
+    engine = engine || Map.get(existing, :engine)
+    snapshot = snapshot || Map.get(existing, :snapshot)
+    effort_revision = Map.get(existing, :effort_revision)
+
+    pointer = %{
+      session_id: session_id,
+      cwd: cwd,
+      engine: engine,
+      snapshot: snapshot,
+      effort_revision: effort_revision
+    }
+
+    if existing == pointer do
+      {:noreply, state}
+    else
+      :ok =
+        :dets.insert(state.table, {agent_id, session_id, cwd, engine, snapshot, effort_revision})
+
+      {:noreply, %{state | pointers: Map.put(state.pointers, agent_id, pointer)}}
     end
   end
 

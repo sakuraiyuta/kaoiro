@@ -2074,7 +2074,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           nil
       end
 
-    SessionPointers.record(agent_id, sid, cwd, engine)
+    SessionPointers.record_session(agent_id, sid, cwd, engine)
     record_snapshot_from_ext(agent_id, envelope)
     record_permission_observation(agent_id, envelope)
   end

@@ -43,6 +43,95 @@ defmodule KaoiroServer.SessionPointersTest do
     %{server: name, path: path}
   end
 
+  test "session reports retain cwd and snapshots across session changes and restart", %{
+    server: server,
+    path: path
+  } do
+    SessionPointers.record("launch.retained", "first", "/launch", :claude_code, server)
+
+    SessionPointers.record_snapshot(
+      "launch.retained",
+      %{model: "haiku", effort: "high", effort_source: "launch"},
+      server
+    )
+
+    before = SessionPointers.get("launch.retained", server)
+
+    SessionPointers.record_session(
+      "launch.retained",
+      "second",
+      "/launch/worktrees/moved",
+      :codex,
+      server
+    )
+
+    assert SessionPointers.get("launch.retained", server) == %{
+             before
+             | session_id: "second",
+               engine: :codex
+           }
+
+    SessionPointers.record_session("launch.retained", "third", nil, nil, server)
+    expected = %{before | session_id: "third", engine: :codex}
+    assert SessionPointers.get("launch.retained", server) == expected
+    GenServer.stop(server)
+    reopened = :"sp_retained_#{System.unique_integer([:positive])}"
+    start_supervised!({SessionPointers, name: reopened, path: path})
+    assert SessionPointers.get("launch.retained", reopened) == expected
+  end
+
+  test "bootstrap fills an absent cwd and an explicit seed wins in both orders", %{server: server} do
+    SessionPointers.record_session("bootstrap.absent", "first", nil, nil, server)
+    assert SessionPointers.get("bootstrap.absent", server).cwd == nil
+    SessionPointers.record_session("bootstrap.absent", "second", "/direct", :claude_code, server)
+    assert SessionPointers.get("bootstrap.absent", server).cwd == "/direct"
+    SessionPointers.record_session("bootstrap.new", "first", "/direct", nil, server)
+    assert SessionPointers.get("bootstrap.new", server).cwd == "/direct"
+
+    for order <- [:seed_first, :envelope_first] do
+      id = "seed.#{order}"
+      steps = if order == :seed_first, do: [:seed, :envelope], else: [:envelope, :seed]
+
+      for step <- steps do
+        case step do
+          :seed -> SessionPointers.record(id, nil, "/launch", :claude_code, server)
+          :envelope -> SessionPointers.record_session(id, "live", "/moved", :claude_code, server)
+        end
+
+        SessionPointers.get(id, server)
+      end
+
+      assert %{cwd: "/launch", session_id: "live"} = SessionPointers.get(id, server)
+      SessionPointers.record_session(id, "next", "/other", nil, server)
+      assert %{cwd: "/launch", session_id: "next"} = SessionPointers.get(id, server)
+    end
+  end
+
+  test "explicit maintenance repairs a dirty live pointer while session ingestion preserves it",
+       %{server: server} do
+    SessionPointers.record("repair.live", "live", "/dirty", :claude_code, server)
+
+    SessionPointers.record_snapshot(
+      "repair.live",
+      %{model: "haiku", effort: "high", effort_source: "launch"},
+      server
+    )
+
+    before = SessionPointers.get("repair.live", server)
+    SessionPointers.record_session("repair.live", "live", "/launch", nil, server)
+    assert SessionPointers.get("repair.live", server) == before
+    SessionPointers.record("repair.live", nil, "/launch", nil, server)
+    assert SessionPointers.get("repair.live", server) == %{before | cwd: "/launch"}
+    SessionPointers.detach_session("repair.live", server)
+    SessionPointers.record_session("repair.live", "fresh", "/moved", nil, server)
+
+    assert SessionPointers.get("repair.live", server) == %{
+             before
+             | cwd: "/launch",
+               session_id: "fresh"
+           }
+  end
+
   test "record してから get するとポインタが返る", %{server: server} do
     SessionPointers.record("a.1", "sess-1", "/home/x", nil, server)
 

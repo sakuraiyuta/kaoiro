@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-02
 related: [protocol, architecture]
 ---
 
@@ -108,6 +108,20 @@ version inventory below is normative for all routes.
 injected by the server at spawn; pre-registering per-agent tokens is unnecessary
 ([ADR-0024](../../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Token issuance
 and lifetime are defined by ADR-0024. Full runner-less direct `node wrapper` support is [#71](https://github.com/sakuraiyuta/kaoiro/issues/71).
+
+## Launch cwd and execution cwd
+
+`SessionPointers.cwd` is the seeded launch directory. Session-bearing envelope
+reports retain it while updating the latest session ID and engine; an unseeded
+pointer takes its first reported cwd. Restore, disconnected `resume_session`,
+and `enumerate_sessions` without an explicit cwd use this launch directory.
+An explicit enumeration cwd takes precedence. Runner authorization still uses
+exact `cwd_allowlist` membership and engine-specific session-existence checks.
+
+The dashboard cwd comes from the latest reported `ext.cwd` and can differ after
+an agent enters a worktree. It does not select the restore directory. Existing
+contaminated pointers require [operator audit and explicit repair](../../operations/session-pointer-recovery.md).
+The pointer format and wire fields are unchanged.
 
 ## Related protocol topics
 
