@@ -113,9 +113,6 @@ defmodule KaoiroServerWeb.RestoreCwdTest do
     assert restored["cwd"] == root
     assert restored["resume_session_id"] == "latest-session"
 
-    if output = System.get_env("FUJI480_RESTORE_PAYLOAD_FILE"),
-      do: File.write!(output, Jason.encode!(restored))
-
     SessionPointers.detach_session(id)
     assert_reply push(client, "restore", %{"version" => "0", "agent_id" => id}), :ok
     assert_broadcast "spawn", fresh
