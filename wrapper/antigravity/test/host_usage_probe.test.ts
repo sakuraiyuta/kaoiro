@@ -167,7 +167,7 @@ describe("AntigravityHost usage probe state transitions", () => {
     try {
       await waitFor(() => existsSync(callLog) && readFileSync(callLog, "utf8").includes("models"));
       await host.setModel("gpt-5");
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const calls = readFileSync(callLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
       expect(calls).toEqual([["models"]]);
     } finally {
@@ -361,6 +361,34 @@ describe("AntigravityHost usage probe state transitions", () => {
     }
   });
 
+  it("starts the new family's probe when an already-stopping old-family probe closes", async () => {
+    const harness = makeHarness({
+      now: () => "2026-10-03T10:00:00.000Z",
+      usageProbeTimeoutMs: 20,
+      usageProbeStopTimeoutMs: 2_000,
+      closeProbeOnSignal: false,
+    });
+    try {
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+      await waitFor(() => harness.probeSignals.length === 1);
+
+      await harness.host.setModel("gpt-5");
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.probes).toHaveLength(1);
+      expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
+
+      harness.probes[0]!.finish("", null, "SIGKILL");
+      await waitFor(() => harness.probes.length === 2);
+      expect(harness.warnings.some((warning) => warning.includes("stopped:timeout"))).toBe(false);
+      harness.probes[1]!.finish(usageOutput("3p", 0.75, 0.5));
+      await waitFor(() => harness.host.statusSnapshot().rate_limits !== undefined);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(thirdPartyLimits);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
   it("aborts an in-flight usage probe on interrupt and retries after a successful turn", async () => {
     const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
     try {
@@ -369,7 +397,7 @@ describe("AntigravityHost usage probe state transitions", () => {
 
       await harness.host.interrupt();
       expect(harness.probeSignals).toEqual([{ destination: "pid", signal: "SIGKILL" }]);
-      await waitFor(() => harness.warnings.some((warning) => warning.includes("stopped:abort")));
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("usage probe stopped: abort")));
       expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
 
       await completeTurn(harness, { status: "SUCCESS" });

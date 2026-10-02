@@ -207,6 +207,8 @@ Observed details:
   unclassified committed model invalidates it. A pending `setModel` does not
   change the family. Cache and 429 overlay are composed on every state publish;
   for an unclassified model, only the independent overlay can appear.
+- An agent with no configured model uses agy's default model but remains
+  unclassified, so it publishes no `/usage` rate limits.
 - Usage probes start only after a terminal turn result when there is no active
   or queued turn. There is no idle refresh timer. Valid snapshots are throttled
   for five minutes; three consecutive current-family failures suppress retries

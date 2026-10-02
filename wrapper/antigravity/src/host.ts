@@ -2253,11 +2253,15 @@ export class AntigravityHost implements EngineAdapter {
     this.#usageProbeFailureCount = 0;
   }
 
-  #recordUsageProbeFailure(family: AgyUsageFamily, reason: string): void {
+  #recordUsageProbeFailure(
+    family: AgyUsageFamily,
+    reason: string,
+    warningKind: "failed" | "stopped" = "failed",
+  ): void {
     if (this.#closed || this.#currentUsageFamily() !== family) return;
     if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
     this.#usageProbeFailureCount += 1;
-    this.#warn(`antigravity usage probe failed: ${boundErrorDetail(reason)}`);
+    this.#warn(`antigravity usage probe ${warningKind}: ${boundErrorDetail(reason)}`);
   }
 
   #stopUsageProbe(reason: "abort" | "host_close" | "stale_family"): void {
@@ -2340,7 +2344,12 @@ export class AntigravityHost implements EngineAdapter {
     }
     if (result.stopReason === "host_close") return;
     if (result.stopReason !== null) {
-      this.#recordUsageProbeFailure(probe.family, `stopped:${result.stopReason}`);
+      const interrupted = result.stopReason === "abort";
+      this.#recordUsageProbeFailure(
+        probe.family,
+        interrupted ? result.stopReason : `stopped:${result.stopReason}`,
+        interrupted ? "stopped" : "failed",
+      );
       return;
     }
     if (result.spawnError !== null) {
@@ -2370,7 +2379,7 @@ export class AntigravityHost implements EngineAdapter {
   #composedRateLimits(): Record<string, AgyUsageRateLimit> | null {
     const family = this.#currentUsageFamily();
     const limits: Record<string, AgyUsageRateLimit> = {};
-    if (family !== null && this.#usageSnapshot?.family === family) {
+    if (family !== null && this.#usageSnapshot !== null) {
       for (const [window, value] of this.#usageSnapshot.limits) limits[window] = { ...value };
     }
     if (this.#rateLimitOverlay !== null) limits.seven_day = { ...this.#rateLimitOverlay };

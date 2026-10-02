@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { WrapperConfig } from "@kaoiro/agent-common";
@@ -31,6 +32,16 @@ function unavailableProbe(): GateProbe {
   return child as unknown as GateProbe;
 }
 
+function unavailableUsageProbe(): ChildProcess {
+  const child = new HarnessChild();
+  queueMicrotask(() => {
+    const error = Object.assign(new Error("test harness usage probe is disabled"), { code: "ENOENT" });
+    child.emit("error", error);
+    child.finish();
+  });
+  return child as unknown as ChildProcess;
+}
+
 function fakeSignalTarget(target: unknown, _destination: "pid" | "process_group", signal: NodeJS.Signals): boolean {
   if (typeof target !== "object" || target === null) return false;
   const kill = (target as { kill?: (value: NodeJS.Signals) => boolean }).kill;
@@ -45,6 +56,7 @@ export interface HostHarnessObserver {
   onAgySpawn?: (child: HarnessAgy) => void;
   onGateProbeSpawn?: () => void;
   onModelsProbeSpawn?: () => void;
+  onUsageProbeSpawn?: () => void;
 }
 
 /** One place that prevents unit tests from starting or signalling real children. */
@@ -67,6 +79,10 @@ export function createHarnessHost(
     modelsProbeSpawn: options.modelsProbeSpawn ?? (() => {
       observer.onModelsProbeSpawn?.();
       return unavailableProbe();
+    }),
+    usageProbeSpawn: options.usageProbeSpawn ?? (() => {
+      observer.onUsageProbeSpawn?.();
+      return unavailableUsageProbe();
     }),
     signalTarget: options.signalTarget ?? fakeSignalTarget,
   });

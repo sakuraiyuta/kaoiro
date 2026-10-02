@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { createHarnessHost, type HarnessAgy } from "./host_test_harness.js";
@@ -100,6 +101,57 @@ process.exit(0);
       await send;
     } finally {
       host.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps a completed harness turn on the injected fake usage probe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-harness-usage-"));
+    const executable = join(root, "agy-marker.mjs");
+    const usageMarker = join(root, "usage-was-spawned");
+    writeFileSync(executable, `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(usageMarker)}, process.argv.slice(2).join(" "));
+process.exit(0);
+`);
+    chmodSync(executable, 0o755);
+    const config: WrapperConfig = {
+      agent_id: "harness.usage.test",
+      persona: { id: "p", name: "P", sprite_set: "p" },
+      display_name: "P",
+      server_url: "ws://localhost:4000/wrapper",
+      antigravity_cli_path: executable,
+      model: "gemini-2.5-pro",
+    };
+    let child: HarnessAgy | undefined;
+    let terminalTurnEnded = false;
+    let usageProbeSpawns = 0;
+    const host = createHarnessHost(config, {
+      cwd: root,
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config, send: () => {} }),
+      onState: () => {},
+      onTurnEnd: ({ terminal }) => { terminalTurnEnded ||= terminal; },
+      runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
+      agyPath: executable,
+      warn: () => {},
+    }, {
+      onAgySpawn: (value) => { child = value; },
+      onUsageProbeSpawn: () => { usageProbeSpawns += 1; },
+    });
+    try {
+      const send = host.send("complete a harness turn");
+      await waitFor(() => child !== undefined);
+      (child!.stdout as PassThrough).write(`${JSON.stringify({ event: "result", result: { response: "ok" } })}\n`);
+      child!.finish();
+      await send;
+      await waitFor(() => terminalTurnEnded);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(existsSync(usageMarker)).toBe(false);
+      expect(usageProbeSpawns).toBe(1);
+    } finally {
+      await host.close();
       rmSync(root, { force: true, recursive: true });
     }
   });

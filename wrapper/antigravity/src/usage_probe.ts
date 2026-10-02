@@ -204,6 +204,7 @@ export function startAgyUsageProbe(
     },
   };
 
+  child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: Buffer | string) => {
     if (state !== "running") return;
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
