@@ -82,8 +82,10 @@ This design adopts that route.
 In-flight delivery happens for an agent only when both hold:
 
 1. the wrapper declared a mechanism other than `none`, and
-2. the agent's stored policy is `on` **and** the current wrapper incarnation
-   has acknowledged that revision.
+2. the agent's stored policy is `on`, and, when the current wrapper
+   incarnation declared `delivery_policy: "v1"` at join, that incarnation has
+   acknowledged the stored revision. A wrapper that did not declare it is
+   not asked for an acknowledgement (see "Old and new combinations").
 
 ### Host settings: a ceiling and a default, as two keys
 
@@ -91,13 +93,23 @@ In-flight delivery happens for an agent only when both hold:
 
 | Key | Meaning | Path | Takes effect |
 |---|---|---|---|
-| `in_flight_delivery.<engine>.enabled` (bool, default `true`) | **Ceiling** and host kill switch. When `false`, nobody on this host gets in-flight delivery for this engine | runner relays it in the per-agent wrapper config at spawn (the path `codex_backend` already uses, `supervisor.ts:447-519`); the wrapper then declares mechanism `none`, and the server downgrades as for any `none` recipient | next spawn after hot reload (issue #469 contract) |
+| `in_flight_delivery.<engine>.enabled` (bool, default `true`) | **Ceiling** and host kill switch. When `false`, nobody on this host gets in-flight delivery for this engine | runner relays it in the per-agent wrapper config at spawn (the path `codex_backend` already uses, `supervisor.ts:447-519`); the wrapper then declares mechanism `none` (per engine below), and the server downgrades as for any `none` recipient. It does not depend on the server version | next spawn after hot reload (issue #469 contract) |
 | `in_flight_delivery.<engine>.default` (bool) | **Default** policy. It seeds a new agent's policy when the launch request has no explicit value, and it is the LaunchDialog's initial checkbox value | runner adds `in_flight_defaults` to its register; `updateRegister` re-sends it on hot reload; the server keeps it with the host record and serves it to the dashboard | new spawns after the re-register; never rewrites stored rows |
 
 So per-agent `on` works on a host whose default is `off` (the canary use that
 the `_PERSONAS` lists serve today) while the ceiling is `true`. The kill
 switch stops every agent of that engine at its next spawn; to stop running
 agents at once, the operator turns them off individually (live).
+
+What "mechanism `none`" means on the wire when `enabled` is `false`:
+
+- Codex: inter-agent modes `early: "none"`, and `operator_input_modes` also
+  declared with `early: "none"`. This builds on the issue #489 fix (always
+  declare operator modes); it never goes back to omitting the declaration.
+- Claude: inter-agent modes `early: "none"`, `yield: "none"`. Claude declares
+  no operator modes, so the server's fallback reads the inter-agent `none`
+  and stamps operator input `normal`.
+- Antigravity: no declaration, as today.
 
 ### Per-agent policy store
 
@@ -133,9 +145,14 @@ Wire names and store names below are proposals for review.
 - **Unavailable or unreadable.** If the store cannot be opened or a row
   cannot be decoded, the agent's policy is `unknown`. `unknown` grants no
   early or yield and clamps operator intent to `normal` (fail closed), and
-  the dashboard shows it. An **absent** row is not an error. It takes the
-  host default for a new spawn, and `on` for agents that existed before
-  stage 1 (see the stage 1 note).
+  the dashboard shows it. An **absent** row is not an error, and it is not
+  left absent. A spawn writes the row before its broadcast (launch value or
+  host default). Any agent that joins without a row gets one written at that
+  join. Until stage 4 the written value is `on`, which keeps today's
+  behaviour. From stage 4 it is the host default if the host has registered
+  one, and `on` otherwise. Absence therefore lasts only from the stage 1
+  deploy to each existing agent's first join, and "absent means on" is not a
+  standing rule.
 - Rows survive server restart and are deleted with the agent. Restore keeps
   the stored policy; a fresh spawn takes the launch value or the host default.
 
@@ -154,19 +171,35 @@ The `_PERSONAS` lists are retired, not migrated (stage 5).
    after every join and after every accepted change.
 3. Wrapper → server `delivery_policy_applied {revision}`.
 
+**Support is declared at join.** A wrapper that implements this protocol
+adds `delivery_policy: "v1"` to its join parameters, and a server that
+implements it echoes the same. Neither side sends policy messages to a peer
+that did not declare support.
+
 **Confirmation is bound to the wrapper incarnation.** The server keeps the
 applied revision in memory, keyed by the channel owner (the pid that
 `WorkStore.register_modes` already records). It is never persisted. Every join
-starts unconfirmed, and the server sends the current revision. The server
-grants early or yield to the agent only while the stored policy is `on` and
-the current owner has acknowledged that same revision. Opt-out needs no
-acknowledgement: the server stops granting as soon as the row says `off`.
+of a supporting wrapper starts unconfirmed, and the server sends the current
+revision. The server grants early or yield to it only while the stored policy
+is `on` and the current owner has acknowledged that same revision. Opt-out
+needs no acknowledgement: the server stops granting as soon as the row says
+`off`. A wrapper that did not declare support is never asked for an
+acknowledgement: `on` grants, `off` refuses.
 
-**Wrapper start state.** A new wrapper process starts fenced: no fold, steer
-or cut until it applies a `delivery_policy` whose policy is `on`. If the
-server's join echo does not include `delivery_policy: "v1"` (an old server),
-the wrapper keeps today's launch-time behaviour instead. A fenced wrapper
-behind an old server would otherwise never deliver early again.
+**Wrapper start state.** A new supporting wrapper process starts fenced: no
+fold, steer or cut until it applies a `delivery_policy` whose policy is
+`on`.
+
+**Old server under a new wrapper.** This happens after a server rollback, or
+when a wrapper rejoins a server that was rolled back. If the join echo lacks
+`delivery_policy: "v1"`, the wrapper decides from its own history:
+
+- it has never received a policy, or the last one it received was `on`:
+  launch-time behaviour (the mechanism it declared, no fence);
+- it has received `off` at least once and no later `on`: it keeps the fence.
+
+A wrapper that has seen an opt-out therefore never lifts it because the
+server lost the protocol.
 
 **Server restart.** The wrapper process survives and rejoins. The rejoin is
 a new incarnation for the server (unconfirmed again). The wrapper keeps its
@@ -175,10 +208,23 @@ least as new as the newest it has seen. Until the new acknowledgement, the
 server grants nothing early. That costs only the short window between the
 rejoin and the acknowledgement.
 
+**Old and new combinations.**
+
+| Server | Wrapper | Policy `on` | Policy `off` |
+|---|---|---|---|
+| new | new | granted after the incarnation's ack | server refuses; wrapper fence |
+| new | old | granted (no ack asked) | server refuses; only items granted before the change can still arrive early |
+| old | new | launch-time behaviour, unless this process has received `off` (then fenced) | not enforced by the server; a wrapper that received `off` keeps its fence; a wrapper spawned under the old server knows no policy |
+| old | old | today's behaviour | not available |
+
+The last two rows mean that a **server rollback after stage 2 loses the
+opt-out** for agents spawned under the old server. The stop that does not
+depend on the server is the host ceiling `enabled: false` (next spawn).
+
 **Operator intent (explicit or default).** The `instruction` handler clamps
 the intent to `normal` whenever early delivery is not allowed. Early delivery
 is not allowed when the policy is `off` or `unknown`, or when it is `on` but
-not yet confirmed. The clamp also applies when the client sent an explicit
+not yet confirmed by a wrapper that declared support. The clamp also applies when the client sent an explicit
 `early` or `yield`. The reply then carries
 `{delivery_intent: "normal", downgrade_reason: "recipient_policy_off" | "policy_unconfirmed" | "policy_unknown"}`,
 so an API client learns of the downgrade. The bundled dashboard sends no
@@ -208,11 +254,11 @@ decided exactly once, at a single commit point per engine:
 - The sender learns of a downgrade through the existing stage report
   (`local_policy_disabled`).
 
-**Old wrapper** (does not declare support for `delivery_policy`): the server
-marks the live switch unavailable for that agent, and the dashboard says so.
-The server-side clamp and downgrade above still apply. Opt-out therefore holds
-for new input, and only items granted before the change can still be
-delivered early.
+**Old wrapper** (did not declare `delivery_policy: "v1"`): the server marks
+the live switch unavailable for that agent, and the dashboard says so. It
+asks for no acknowledgement (combinations table). The server-side clamp and
+downgrade still apply to `off`. Opt-out therefore holds for new input, and
+only items granted before the change can still be delivered early.
 
 This is the alternative to re-negotiating capabilities after join that the
 issue anticipates: there is no rejoin and no change to the join echo.
@@ -296,8 +342,8 @@ the flip is setting the ceiling to `true` and choosing its default.
 | Stage | Content | Behaviour change | Rollback |
 |---|---|---|---|
 | 0 | Gate audits (Claude criteria, Codex steer and backend); phase-4 issue; `delivery.md` drift fix; issue #489 fixed | none | n/a |
-| 1 | Server store, clamp and admission check, `set_delivery_policy` / `delivery_policy` / `delivery_policy_applied`; Claude and Codex wrapper support | none intended (see below) | revert the deploy; the old image ignores the new DETS file |
-| 2 | Dashboard launch checkbox and detail toggle | the operator can turn agents off; turning on works only where a mechanism is declared | hide the UI; stored rows keep their values |
+| 1 | Server store, clamp and admission check, `set_delivery_policy` / `delivery_policy` / `delivery_policy_applied`; Claude and Codex wrapper support | one: for a new wrapper, nothing is delivered early (operator input included, stamped `normal` with `policy_unconfirmed`) between join and its first ack. Otherwise none (see below) | revert the deploy; the old image ignores the new DETS file |
+| 2 | Dashboard launch checkbox and detail toggle | the operator can turn agents off; turning on works only where a mechanism is declared | hide the UI; stored rows keep their values. A **server** rollback from here on loses the opt-out for agents spawned under the old server; stop with `enabled: false` (next spawn) |
 | 3 | `runner.config.json` `enabled` / `default` per engine, relayed and registered; environment flags become deprecated overrides (env wins, warns) | none while `enabled` is `true` and the environment still gates | remove the keys; the env path still works |
 | 4a | Codex operator steer: mechanism declared without the environment; default on | yes | per-agent off (live); `enabled: false` (next spawn); revert |
 | 4b | Codex backend default app-server | yes | `codex.backend: "exec"` (next spawn); revert |
@@ -307,10 +353,11 @@ the flip is setting the ceiling to `true` and choosing its default.
 
 **Why stage 1 changes nothing.** Until stage 4, the environment opt-ins still
 gate the mechanism each wrapper declares, exactly as today. Agents that exist
-before stage 1 have no row, and an absent row reads as `on` for them.
-Agents spawned during stages 1 to 3 get `on` from a launch default that stays
-`true` until stage 4. So effective delivery equals the declared mechanism,
-which is today's behaviour. Today's mix is preserved because the mechanism
+before stage 1 get an `on` row at their first join. Agents spawned during
+stages 1 to 3 get `on` from a launch default that stays `true` until stage 4.
+Wrappers not yet updated declare no support and are granted on `on` without
+an acknowledgement. So effective delivery equals the declared mechanism,
+which is today's behaviour, during the mixed-version window too. Today's mix is preserved because the mechanism
 already encodes it: Codex app-server declares inter-agent steer always and
 operator steer only under its environment opt-in, and Claude declares fold
 only for `ao`. The one visible difference is the fence: right after a join,
@@ -325,9 +372,17 @@ other Claude peers still advertise `none`.
 - Protocol and server: CAS on revision (a stale `expected_revision` is
   rejected); opt-out refuses grants before any ack; opt-in grants only after
   the current owner's ack; a re-join of a confirmed agent grants nothing early
-  until the new ack (M3 case); a stale ack cannot clear a newer opt-out; an
-  old wrapper is shown as live switch unavailable; deleting the agent removes
-  the row but not the counter.
+  until the new ack; a stale ack cannot clear a newer opt-out; an old wrapper
+  is shown as live switch unavailable; deleting the agent removes the row but
+  not the counter.
+- Old and new combinations: new server, old wrapper, policy `on` → early is
+  granted with no ack (mutation: drop the "no ack asked" rule; the test must
+  go red); new server, old wrapper, policy `off` → refused. Old server, new
+  wrapper: a process with no policy history uses launch-time behaviour; a
+  process that received `off` keeps the fence after rejoining a server that
+  does not echo `delivery_policy`.
+- Rows: an existing agent without a row gets an `on` row at its first join;
+  a spawn writes its row before the broadcast.
 - Operator intent: with the policy `off`, `unknown` or unconfirmed, an
   explicit `early` and an explicit `yield` are both stamped `normal`, and the
   reply carries `downgrade_reason`; with `on` and confirmed, the explicit
@@ -349,9 +404,10 @@ other Claude peers still advertise `none`.
 - Negative controls: policy off → zero folds or steers in a native run per
   engine; exec and Antigravity → zero in-turn submissions with the policy on.
 - Mutations, run one at a time, each turning its own test red: the server
-  clamp, the admission check, the incarnation binding of the ack, the wrapper
-  fence, the revision comparison, the re-push after join, and the store's
-  `unknown` fallback.
+  clamp, the admission check, the incarnation binding of the ack, the
+  no-ack rule for wrappers without support, the wrapper fence and its
+  survival across a rejoin, the revision comparison, the re-push after join,
+  and the store's `unknown` fallback.
 - Gates per touched layer: server `mix test` / `mix format`; wrapper, runner
   and dashboard typecheck/test/check.
 
@@ -370,12 +426,25 @@ Decided by the director (2026-10-02, on the reviewer's classification):
 - Codex backend opt-out: host-wide `codex.backend` only, as today. There is
   no per-agent backend choice.
 
+A constraint to know before deciding (not a decision): after stage 2, rolling
+the **server** back loses the per-agent opt-out for agents spawned under the
+old server. The stop that survives a server rollback is the host ceiling
+`enabled: false`, effective at each agent's next spawn.
+
 Open for the operator (recommendation first):
 
-1. **Claude flip criteria.** Recommended: the four unexercised items above,
-   plus one `opus[1m]` canary peer and a `lost_count` 0 window. Alternative:
-   flip on the E1–E4 evidence alone and treat the rest as production
-   observation after the flip.
+1. **Claude flip criteria.** The canary (persona `ao`, probes E1–E4,
+   2026-09-29) showed early fold at the next tool boundary, including the
+   boundary of a tool already running. Not yet exercised:
+   - a production yield (`tool_boundary` cut) with its disposition recorded;
+   - the per-turn fold and overtake limits being reached;
+   - an oversized input taking the downgrade path;
+   - the receipt-root timeout path.
+
+   Recommended: require those four (natively unmeasurable is an acceptable,
+   stated result), plus one `opus[1m]` canary peer and a `lost_count` 0
+   window. Alternative: flip on the E1–E4 evidence alone and treat the rest
+   as production observation after the flip.
 2. **Meaning of the host settings.** Recommended: two keys, an `enabled`
    ceiling (the kill switch, next spawn) and a `default` seed (new spawns and
    the LaunchDialog). Alternative A: one key used only as a default. Then
