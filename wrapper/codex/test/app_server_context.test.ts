@@ -25,6 +25,17 @@ describe("host context publication", () => {
     expect(f.meter.snapshot?.used_percentage).toBe(100 * (272534 / 258400));
     expect(f.meter.snapshot?.used_percentage).toBeGreaterThan(100);
   });
+  it.each([[Number.MAX_SAFE_INTEGER, 1], [1, Number.MAX_SAFE_INTEGER]])("publishes finite percentages at accepted numeric extremes (%s/%s)", (tokens, window) => {
+    const f = fixture();f.response();
+    f.sample(usage({ inputTokens: tokens, cachedInputTokens: 0, cacheWriteInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0, totalTokens: tokens }, window));f.finish();
+    expect(f.meter.snapshot).toEqual({ used_tokens: tokens, max_tokens: window, used_percentage: 100 * (tokens / window) });
+    expect(Number.isFinite(f.meter.snapshot!.used_percentage)).toBe(true);
+  });
+  it.each([Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])("rejects an unbounded native total %s before calculating its percentage", totalTokens => {
+    const f = fixture();f.response();f.sample(usage({ ...counts, totalTokens }));f.finish();
+    expect(f.meter.snapshot).toBeUndefined();
+  });
   it.each([null, undefined, 0, -1, "258400", Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])("withdraws a known value for an unavailable/invalid window %s", window => {
     const f = fixture();f.response();f.sample();f.finish();
     f.meter.begin("thread", "host", "model");f.response(3);
@@ -56,6 +67,14 @@ describe("host context publication", () => {
   it("does not let a pre-start buffered response cross a later boundary", () => {
     const f = fixture();f.compact("started", 4);f.compact("completed", 5);
     f.response(1);f.sample(usage(), 2);f.finish();expect(f.meter.snapshot).toBeUndefined();
+  });
+  it.each([4, 5])("rejects a response at or before the latest boundary (sequence %s)", sequence => {
+    const f = fixture();f.compact("started", 4);f.compact("completed", 5);
+    f.response(sequence);f.sample(usage(), 6);f.finish();expect(f.meter.snapshot).toBeUndefined();
+  });
+  it.each([4, 5])("requires usage strictly after the recorded response (sequence %s)", sequence => {
+    const f = fixture();f.compact("started", 1);f.compact("completed", 2);
+    f.response(5);f.sample(usage(), sequence);f.finish();expect(f.meter.snapshot).toBeUndefined();
   });
   it("requires a response after completion and rejects an unfinished compaction", () => {
     for (const complete of [false, true]) {

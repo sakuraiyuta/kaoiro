@@ -77,13 +77,11 @@ export class AppServerContextMeter {
       if (this.#open.size === 0 && event.sequence > this.#boundarySequence) owner.response = event.sequence;
       return false;
     }
-    if (event.sequence <= this.#boundarySequence) return false;
     delete owner.candidate;
     const usage = appServerUsage(event.value);
     if (usage === null || usage.modelContextWindow === null) return this.#withdraw();
     if (usage.last.inputTokens === 0 || owner.response === undefined || event.sequence <= owner.response || this.#open.size > 0) return false;
     const used_percentage = 100 * (usage.last.totalTokens / usage.modelContextWindow);
-    if (!Number.isFinite(used_percentage)) return this.#withdraw();
     owner.candidate = { used_tokens: usage.last.totalTokens, max_tokens: usage.modelContextWindow, used_percentage };
     return false;
   }

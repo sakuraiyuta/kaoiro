@@ -588,7 +588,7 @@ export class AppServerTransport {
         this.#approvals.resolved(`${generation}:${serverRequestKey(requestId)}`);
       }
     }
-    if (!this.#closing && !this.#failure && rpc === this.#rpc && generation === this.#generation) {
+    if (!this.#failure && rpc === this.#rpc && generation === this.#generation) {
       this.#contextSequences.set(event, ++this.#contextSequence);
       this.#contextBoundary(event, rpc, generation);
     }
@@ -653,7 +653,7 @@ export class AppServerTransport {
   }
 
   #contextBoundary(event: AppServerNotification, rpc: AppServerRpc, generation: number): void {
-    if (this.#closing || this.#failure || rpc !== this.#rpc || generation !== this.#generation ||
+    if (this.#failure || rpc !== this.#rpc || generation !== this.#generation ||
         event.params.threadId !== this.#boundThreadId) return;
     const item = event.params.item, turnId = notificationTurnId(event);
     if ((event.method !== "item/started" && event.method !== "item/completed") ||
@@ -668,7 +668,7 @@ export class AppServerTransport {
     const turnId = event.params.turnId ?? (rpcObject(nested) ? nested.id : undefined);
     if (turnId !== active.turnId) return;
     const sequence = this.#contextSequences.get(event);
-    if (sequence !== undefined && !this.#closing && !this.#failure && active.threadId === this.#boundThreadId) {
+    if (sequence !== undefined && !this.#failure && active.threadId === this.#boundThreadId) {
       const identity = { threadId: active.threadId, turnId: active.turnId!, hostTurnToken: active.hostTurnToken };
       const item = event.params.item;
       if (event.method === "thread/tokenUsage/updated") {
