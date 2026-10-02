@@ -77,7 +77,9 @@ import {
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const STALE_TERMINAL_429_DETAIL =
-  "terminal result contained RESOURCE_EXHAUSTED, but /usage showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
+  "antigravity_terminal_429_unconfirmed: terminal result contained RESOURCE_EXHAUSTED, but /usage showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
+const STALE_TERMINAL_429_THRESHOLD_DETAIL =
+  "antigravity_terminal_429_unconfirmed: the last two same-family confirmations showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 // issue #379 M2: must stay below the tightest outer bound that can SIGKILL
 // this wrapper PROCESS itself while `close()`'s own escalation is pending --
@@ -121,7 +123,6 @@ interface RateLimitOverlay {
   origin: "positive_reset_delay" | "ambiguous_terminal_429" | "unconfirmed_terminal_429";
   family: AgyUsageFamily | null;
   createdAtMs: number;
-  counted: boolean;
 }
 
 interface PendingTerminal429Confirmation {
@@ -1359,8 +1360,6 @@ export class AntigravityHost implements EngineAdapter {
           const familyChanged = previousFamily !== currentFamily;
           if (familyChanged) {
             this.#resetStaleTerminal429Count(currentFamily);
-            this.#pendingTerminal429Confirmation = null;
-            this.#clearUsageProbeFloorTimer();
             this.#usageSnapshot = null;
             this.#usageProbeFailureFamily = currentFamily;
             this.#usageProbeFailureCount = 0;
@@ -1377,7 +1376,6 @@ export class AntigravityHost implements EngineAdapter {
           const attemptedFamily = modelToUsageFamily(outcome.attemptedModel ?? this.#config.model);
           const eligibleStale429 =
             terminal429 &&
-            !positiveResetDelay &&
             currentFamily !== null &&
             attemptedFamily === currentFamily;
           const nowMs = Date.parse(this.#now());
@@ -1395,7 +1393,6 @@ export class AntigravityHost implements EngineAdapter {
               origin: "positive_reset_delay",
               family: currentFamily,
               createdAtMs: overlayCreatedAtMs,
-              counted: false,
             };
             terminalError = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
           } else if (terminal429 && eligibleStale429 && this.#staleTerminal429Count >= 2) {
@@ -1403,7 +1400,7 @@ export class AntigravityHost implements EngineAdapter {
             this.#clearUsageProbeFloorTimer();
             this.#rateLimitOverlay = null;
             terminalError = { reason: "api_error" };
-            this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_DETAIL });
+            this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_THRESHOLD_DETAIL });
           } else if (terminal429) {
             this.#rateLimitOverlay = {
               value: {
@@ -1416,7 +1413,6 @@ export class AntigravityHost implements EngineAdapter {
               origin: eligibleStale429 ? "ambiguous_terminal_429" : "unconfirmed_terminal_429",
               family: currentFamily,
               createdAtMs: overlayCreatedAtMs,
-              counted: false,
             };
             if (eligibleStale429) {
               this.#pendingTerminal429Confirmation = {
@@ -2599,12 +2595,10 @@ export class AntigravityHost implements EngineAdapter {
       overlay.family === probe.family &&
       probe.startedAtMs >= overlay.createdAtMs;
     if (postOverlayAmbiguousProbe && hasOnlyPositiveUsageBuckets(limits)) {
-      if (!overlay.counted) {
-        if (this.#staleTerminal429Family !== probe.family) {
-          this.#resetStaleTerminal429Count(probe.family);
-        }
-        this.#staleTerminal429Count += 1;
+      if (this.#staleTerminal429Family !== probe.family) {
+        this.#resetStaleTerminal429Count(probe.family);
       }
+      this.#staleTerminal429Count += 1;
       this.#rateLimitOverlay = null;
       this.#pendingTerminal429Confirmation = null;
       this.#clearUsageProbeFloorTimer();

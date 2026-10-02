@@ -213,13 +213,17 @@ Observed details:
   [issue-393-terminal-stream.json](../../evidence/antigravity/issue-393-terminal-stream.json)
   and [issue-393-usage-output.json](../../evidence/antigravity/issue-393-usage-output.json).
   The one-turn production-composition check is recorded in
-  [issue-393-live-acceptance-2026-10-03.md](../../evidence/antigravity/issue-393-live-acceptance-2026-10-03.md).
+  [issue-393-live-acceptance-2026-10-03.md](../../evidence/antigravity/issue-393-live-acceptance-2026-10-03.md);
+  the follow-up live envelope record is in
+  [issue-393-live-acceptance-r2-2026-10-03.md](../../evidence/antigravity/issue-393-live-acceptance-r2-2026-10-03.md).
 - The host counts confirmed stale terminal 429s per committed family. After
   two positive same-family confirmations, another zero-delay or unreadable
   terminal 429 for that family is reported as `api_error`, without an overlay
   or another confirmation probe. The wrapper emits one operator-visible
-  `system` log explaining that the conversation may be repeating an old error
-  and suggesting a session reset. A successful terminal turn, a complete
+  `system` log prefixed `antigravity_terminal_429_unconfirmed:` explaining
+  that the conversation may be repeating an old error and suggesting a
+  session reset. The threshold log states that the last two same-family
+  confirmations showed quota remaining. A successful terminal turn, a complete
   same-family usage snapshot with any expected bucket at zero, a committed
   family change, or a changed session id resets the count. The count is held
   in memory, so a wrapper restart can allow up to two additional conservative
