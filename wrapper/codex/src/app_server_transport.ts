@@ -588,7 +588,8 @@ export class AppServerTransport {
         this.#approvals.resolved(`${generation}:${serverRequestKey(requestId)}`);
       }
     }
-    if (!this.#failure && rpc === this.#rpc && generation === this.#generation) {
+    if (!this.#failure && rpc === this.#rpc && generation === this.#generation &&
+        typeof this.#boundThreadId === "string" && event.params.threadId === this.#boundThreadId) {
       this.#contextSequences.set(event, ++this.#contextSequence);
       this.#contextBoundary(event, rpc, generation);
     }
