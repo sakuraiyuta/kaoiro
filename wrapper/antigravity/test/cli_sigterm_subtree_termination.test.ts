@@ -36,7 +36,11 @@ const config: WrapperConfig = {
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
+    // The namespace init may not reap an orphaned grandchild immediately;
+    // kill(pid, 0) still succeeds for that zombie even though it has exited.
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const stateStart = stat.lastIndexOf(") ") + 2;
+    return stateStart >= 2 && stat[stateStart] !== "Z" && stat[stateStart] !== "X";
   } catch {
     return false;
   }
