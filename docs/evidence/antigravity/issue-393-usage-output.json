@@ -1,0 +1,42 @@
+{
+  "status": "SUCCESS",
+  "command": {
+    "name": "usage",
+    "data": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.461282342672348,
+              "reset_time": "2026-10-03T04:39:01Z"
+            },
+            {
+              "id": "gemini-5h",
+              "window": "5h",
+              "remaining_fraction": 0.9920380711555481,
+              "reset_time": "2026-10-03T00:03:33Z"
+            }
+          ]
+        },
+        {
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "window": "weekly",
+              "remaining_fraction": 1,
+              "reset_time": "2026-10-09T19:17:31Z"
+            },
+            {
+              "id": "3p-5h",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "reset_time": "2026-10-03T00:17:31Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

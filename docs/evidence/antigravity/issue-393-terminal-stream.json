@@ -1,0 +1,19 @@
+{
+  "agy_version": "1.2.15",
+  "source": "Sanitized excerpt captured from a live stream-json run; conversation identifiers and unrelated event payloads are omitted.",
+  "observed_event_counts": {
+    "init": 1,
+    "step_update": 24,
+    "result": 1
+  },
+  "nonterminal_429": false,
+  "events": [
+    {
+      "event": "result",
+      "result": {
+        "status": "ERROR",
+        "error": "API error (attempt 8): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 0s."
+      }
+    }
+  ]
+}

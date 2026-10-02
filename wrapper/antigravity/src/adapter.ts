@@ -182,6 +182,11 @@ export function agyEventToErrorDetail(event: AgyStreamEvent): string | null {
     : null;
 }
 
+export function agyEventHasQuotaExhaustionMarker(event: AgyStreamEvent): boolean {
+  const detail = agyEventToErrorDetail(event);
+  return detail !== null && /(?:\bRESOURCE_EXHAUSTED\b|\bHTTP\s*429\b|\bcode\s*429\b)/i.test(detail);
+}
+
 export function agyEventIsSuccessfulResult(event: AgyStreamEvent): boolean {
   return event.event === "result" && event.result.status === "SUCCESS";
 }
@@ -194,12 +199,7 @@ export function agyEventToQuotaExhaustion(
   event: AgyStreamEvent,
 ): AgyQuotaExhaustion | null {
   const detail = agyEventToErrorDetail(event);
-  if (
-    detail === null ||
-    !/(?:\bRESOURCE_EXHAUSTED\b|\bHTTP\s*429\b|\bcode\s*429\b)/i.test(detail)
-  ) {
-    return null;
-  }
+  if (detail === null || !agyEventHasQuotaExhaustionMarker(event)) return null;
   const tokenMatch = /\bResets in\s+(\S+)([\s\S]*)$/i.exec(detail);
   if (tokenMatch === null) {
     return null;

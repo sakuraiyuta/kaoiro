@@ -40,6 +40,7 @@ import type {
 import {
   agyEventToEvents,
   agyEventIsSuccessfulResult,
+  agyEventHasQuotaExhaustionMarker,
   agyEventToQuotaExhaustion,
   agyEventToLogs,
   agyEventToResult,
@@ -75,6 +76,8 @@ import {
 } from "./usage_probe.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
+const STALE_TERMINAL_429_DETAIL =
+  "terminal result contained RESOURCE_EXHAUSTED, but /usage showed quota remaining; the conversation may be repeating an old error. Consider resetting the session.";
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 // issue #379 M2: must stay below the tightest outer bound that can SIGKILL
 // this wrapper PROCESS itself while `close()`'s own escalation is pending --
@@ -112,6 +115,19 @@ type TurnOutcome =
       exit: { code: number | null; signal: NodeJS.Signals | null } | null;
       requestedAt: string | undefined;
     };
+
+interface RateLimitOverlay {
+  value: AgyUsageRateLimit;
+  origin: "positive_reset_delay" | "ambiguous_terminal_429" | "unconfirmed_terminal_429";
+  family: AgyUsageFamily | null;
+  createdAtMs: number;
+  counted: boolean;
+}
+
+interface PendingTerminal429Confirmation {
+  family: AgyUsageFamily;
+  overlayCreatedAtMs: number;
+}
 
 /** issue #377 Stage 2: the live state of one epoch (one `agy` process
  *  spanning several turns). `endingReason` is set BEFORE the process is
@@ -337,6 +353,8 @@ export interface AntigravityHostOptions {
   usageProbeTimeoutMs?: number;
   usageProbeStopTimeoutMs?: number;
   usageProbeIntervalMs?: number;
+  usageProbeFloorSetTimer?: (callback: () => void, delayMs: number) => unknown;
+  usageProbeFloorClearTimer?: (timer: unknown) => void;
 }
 
 function validToolName(value: unknown): value is string {
@@ -353,6 +371,20 @@ function correlatedToolName(topLevelName: unknown, nestedName: unknown): unknown
       : validToolName(topLevelName) && validToolName(nestedName) && topLevelName === nestedName
         ? topLevelName
         : null;
+}
+
+function hasCompleteUsageBuckets(limits: AgyUsageRateLimits): boolean {
+  return limits.has("five_hour") && limits.has("seven_day");
+}
+
+function hasEmptyUsageBucket(limits: AgyUsageRateLimits): boolean {
+  return [...limits.values()].some((limit) => limit.status === "blocked" || limit.utilization >= 1);
+}
+
+function hasOnlyPositiveUsageBuckets(limits: AgyUsageRateLimits): boolean {
+  return hasCompleteUsageBuckets(limits) && [...limits.values()].every(
+    (limit) => limit.status !== "blocked" && limit.utilization < 1,
+  );
 }
 
 function readableLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
@@ -575,7 +607,10 @@ export class AntigravityHost implements EngineAdapter {
   #permissionSyncSupported = false;
   readonly #toolNames = new Map<string, string>();
   #usageSnapshot: { family: AgyUsageFamily; capturedAtMs: number; limits: AgyUsageRateLimits } | null = null;
-  #rateLimitOverlay: AgyUsageRateLimit | null = null;
+  #rateLimitOverlay: RateLimitOverlay | null = null;
+  #staleTerminal429Family: AgyUsageFamily | null = null;
+  #staleTerminal429Count = 0;
+  #pendingTerminal429Confirmation: PendingTerminal429Confirmation | null = null;
   #usageProbeRun: { family: AgyUsageFamily; startedAtMs: number; run: AgyUsageProbeRun } | null = null;
   #usageProbeLastFailureStartedAtMs: number | null = null;
   #usageProbeFailureFamily: AgyUsageFamily | null = null;
@@ -584,6 +619,11 @@ export class AntigravityHost implements EngineAdapter {
   readonly #usageProbeTimeoutMs: number;
   readonly #usageProbeStopTimeoutMs: number;
   readonly #usageProbeIntervalMs: number;
+  readonly #setUsageProbeFloorTimer: (callback: () => void, delayMs: number) => unknown;
+  readonly #clearFloorTimerFn: (timer: unknown) => void;
+  #usageProbeFloorTimer: unknown | null = null;
+  #usageProbeFloorTimerFamily: AgyUsageFamily | null = null;
+  #usageProbeFloorTimerDeadlineMs: number | null = null;
   #closePromise: Promise<void> | null = null;
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
@@ -618,6 +658,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
     this.#usageProbeStopTimeoutMs = options.usageProbeStopTimeoutMs ?? USAGE_PROBE_STOP_TIMEOUT_MS;
     this.#usageProbeIntervalMs = options.usageProbeIntervalMs ?? USAGE_PROBE_INTERVAL_MS;
+    this.#setUsageProbeFloorTimer = options.usageProbeFloorSetTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.#clearFloorTimerFn = options.usageProbeFloorClearTimer ?? ((timer) => clearTimeout(timer as never));
     // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
     // (Codex parity) so the first status snapshot carries ext.permission_control
     // and the server can allocate switch revisions against it. Without it the
@@ -684,6 +726,7 @@ export class AntigravityHost implements EngineAdapter {
       });
       return;
     }
+    this.#clearUsageProbeFloorTimer();
     this.#apply({ kind: "user_send" });
     this.#turnQueue.push({
       text,
@@ -848,6 +891,8 @@ export class AntigravityHost implements EngineAdapter {
   close(): Promise<void> {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
+    this.#clearUsageProbeFloorTimer();
+    this.#pendingTerminal429Confirmation = null;
     this.#lifecycleGeneration += 1;
     this.#turnQueue = [];
     this.#options.permissionBroker.close();
@@ -1313,6 +1358,9 @@ export class AntigravityHost implements EngineAdapter {
           const currentFamily = this.#currentUsageFamily();
           const familyChanged = previousFamily !== currentFamily;
           if (familyChanged) {
+            this.#resetStaleTerminal429Count(currentFamily);
+            this.#pendingTerminal429Confirmation = null;
+            this.#clearUsageProbeFloorTimer();
             this.#usageSnapshot = null;
             this.#usageProbeFailureFamily = currentFamily;
             this.#usageProbeFailureCount = 0;
@@ -1324,22 +1372,78 @@ export class AntigravityHost implements EngineAdapter {
           const successful = agyEventIsSuccessfulResult(outcome.event);
           const hadOverlay = this.#rateLimitOverlay !== null;
           const hadFailures = this.#usageProbeFailureCount > 0;
-          if (quota !== null) {
+          const terminal429 = agyEventHasQuotaExhaustionMarker(outcome.event);
+          const positiveResetDelay = terminal429 && quota !== null && quota.resetDelaySeconds > 0;
+          const attemptedFamily = modelToUsageFamily(outcome.attemptedModel ?? this.#config.model);
+          const eligibleStale429 =
+            terminal429 &&
+            !positiveResetDelay &&
+            currentFamily !== null &&
+            attemptedFamily === currentFamily;
+          const nowMs = Date.parse(this.#now());
+          const overlayCreatedAtMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+          let terminalError: InterAgentErrorClassifyInput | undefined;
+          if (terminal429 && positiveResetDelay) {
+            this.#pendingTerminal429Confirmation = null;
+            this.#clearUsageProbeFloorTimer();
             this.#rateLimitOverlay = {
-              status: "blocked",
-              utilization: 1,
-              resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
+              value: {
+                status: "blocked",
+                utilization: 1,
+                resets_at: Math.floor(overlayCreatedAtMs / 1_000) + quota.resetDelaySeconds,
+              },
+              origin: "positive_reset_delay",
+              family: currentFamily,
+              createdAtMs: overlayCreatedAtMs,
+              counted: false,
+            };
+            terminalError = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
+          } else if (terminal429 && eligibleStale429 && this.#staleTerminal429Count >= 2) {
+            this.#pendingTerminal429Confirmation = null;
+            this.#clearUsageProbeFloorTimer();
+            this.#rateLimitOverlay = null;
+            terminalError = { reason: "api_error" };
+            this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_DETAIL });
+          } else if (terminal429) {
+            this.#rateLimitOverlay = {
+              value: {
+                status: "blocked",
+                utilization: 1,
+                ...(quota?.resetDelaySeconds === 0
+                  ? { resets_at: Math.floor(overlayCreatedAtMs / 1_000) }
+                  : {}),
+              },
+              origin: eligibleStale429 ? "ambiguous_terminal_429" : "unconfirmed_terminal_429",
+              family: currentFamily,
+              createdAtMs: overlayCreatedAtMs,
+              counted: false,
+            };
+            if (eligibleStale429) {
+              this.#pendingTerminal429Confirmation = {
+                family: currentFamily,
+                overlayCreatedAtMs,
+              };
+            } else {
+              this.#pendingTerminal429Confirmation = null;
+              this.#clearUsageProbeFloorTimer();
+            }
+            terminalError = {
+              reason: "blocking_limit",
+              ...(quota === null ? {} : { rateLimitResetSeconds: quota.resetDelaySeconds }),
             };
           } else if (successful) {
             this.#rateLimitOverlay = null;
+            this.#pendingTerminal429Confirmation = null;
+            this.#clearUsageProbeFloorTimer();
+            this.#resetStaleTerminal429Count(currentFamily);
             this.#resetUsageProbeFailures(currentFamily);
           }
           this.#publishTerminalResult(outcome.event);
           this.#maybeStartUsageProbe(
             familyChanged || (successful && (hadOverlay || hadFailures || this.#usageSnapshot === null)),
           );
-          if (quota !== null) {
-            error = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
+          if (terminalError !== undefined) {
+            error = terminalError;
           } else if (result?.is_error === true) {
             error = { detail: "antigravity turn failed" };
           }
@@ -1357,6 +1461,7 @@ export class AntigravityHost implements EngineAdapter {
           terminal: outcome.kind === "result",
         });
       }
+      this.#servicePendingTerminal429Confirmation();
       void this.#drainTurns();
     }
   }
@@ -1562,6 +1667,8 @@ export class AntigravityHost implements EngineAdapter {
   #failStopForWatchdog(attribution: "exact" | "unattributed"): boolean {
     this.#watchdogFailStopped = true;
     this.#closed = true;
+    this.#clearUsageProbeFloorTimer();
+    this.#pendingTerminal429Confirmation = null;
     this.#lifecycleGeneration += 1;
     const queued = this.#turnQueue.splice(0);
     this.#options.permissionBroker.close();
@@ -1993,6 +2100,11 @@ export class AntigravityHost implements EngineAdapter {
       gate.inspectToolInventory(Array.isArray(event.init.tools) ? event.init.tools : []);
       const sessionId = agyEventToSessionId(event);
       if (sessionId !== null) {
+        if (this.#sessionId !== null && this.#sessionId !== sessionId) {
+          this.#resetStaleTerminal429Count(this.#currentUsageFamily());
+          this.#pendingTerminal429Confirmation = null;
+          this.#clearUsageProbeFloorTimer();
+        }
         this.#sessionId = sessionId;
         this.#options.onSessionId?.(sessionId);
         // issue #377 Stage 2 M6: the epoch adopts its OWN conversation id
@@ -2254,6 +2366,60 @@ export class AntigravityHost implements EngineAdapter {
     this.#usageProbeFailureCount = 0;
   }
 
+  #resetStaleTerminal429Count(family: AgyUsageFamily | null): void {
+    this.#staleTerminal429Family = family;
+    this.#staleTerminal429Count = 0;
+  }
+
+  #clearUsageProbeFloorTimer(): void {
+    if (this.#usageProbeFloorTimer !== null) {
+      this.#clearFloorTimerFn(this.#usageProbeFloorTimer);
+    }
+    this.#usageProbeFloorTimer = null;
+    this.#usageProbeFloorTimerFamily = null;
+    this.#usageProbeFloorTimerDeadlineMs = null;
+  }
+
+  #schedulePendingConfirmationAfterFloor(family: AgyUsageFamily, deadlineMs: number, nowMs: number): void {
+    if (
+      this.#usageProbeFloorTimer !== null &&
+      this.#usageProbeFloorTimerFamily === family &&
+      this.#usageProbeFloorTimerDeadlineMs === deadlineMs
+    ) return;
+    this.#clearUsageProbeFloorTimer();
+    let timer: unknown;
+    timer = this.#setUsageProbeFloorTimer(() => {
+      if (this.#usageProbeFloorTimer !== timer) return;
+      this.#usageProbeFloorTimer = null;
+      this.#usageProbeFloorTimerFamily = null;
+      this.#usageProbeFloorTimerDeadlineMs = null;
+      this.#maybeStartUsageProbe(true);
+    }, Math.max(0, deadlineMs - nowMs));
+    this.#usageProbeFloorTimer = timer;
+    this.#usageProbeFloorTimerFamily = family;
+    this.#usageProbeFloorTimerDeadlineMs = deadlineMs;
+    if (typeof timer === "object" && timer !== null && "unref" in timer) {
+      const unref = (timer as { unref?: () => unknown }).unref;
+      if (typeof unref === "function") unref.call(timer);
+    }
+  }
+
+  #servicePendingTerminal429Confirmation(): void {
+    const pending = this.#pendingTerminal429Confirmation;
+    if (pending === null) return;
+    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped || !this.#agyExecutable.ok) {
+      this.#pendingTerminal429Confirmation = null;
+      this.#clearUsageProbeFloorTimer();
+      return;
+    }
+    if (this.#currentUsageFamily() !== pending.family) {
+      this.#pendingTerminal429Confirmation = null;
+      this.#clearUsageProbeFloorTimer();
+      return;
+    }
+    this.#maybeStartUsageProbe(true);
+  }
+
   #recordUsageProbeFailure(
     family: AgyUsageFamily,
     startedAtMs: number,
@@ -2277,6 +2443,12 @@ export class AntigravityHost implements EngineAdapter {
     if (this.#closed || this.#gateBroken || this.#watchdogFailStopped || !this.#agyExecutable.ok) return;
     const family = this.#currentUsageFamily();
     if (family === null) return;
+    const pendingConfirmation = this.#pendingTerminal429Confirmation;
+    if (pendingConfirmation !== null && pendingConfirmation.family !== family) {
+      this.#pendingTerminal429Confirmation = null;
+      this.#clearUsageProbeFloorTimer();
+    }
+    const isPendingConfirmation = this.#pendingTerminal429Confirmation !== null;
     if (
       this.#turnActive ||
       this.#turnQueue.length > 0 ||
@@ -2292,11 +2464,21 @@ export class AntigravityHost implements EngineAdapter {
     if (
       this.#usageProbeLastFailureStartedAtMs !== null &&
       nowMs - this.#usageProbeLastFailureStartedAtMs < this.#usageProbeIntervalMs
-    ) return;
-    if (this.#rateLimitOverlay !== null) {
-      const resetMs = this.#rateLimitOverlay.resets_at === undefined
+    ) {
+      if (isPendingConfirmation) {
+        this.#schedulePendingConfirmationAfterFloor(
+          family,
+          this.#usageProbeLastFailureStartedAtMs + this.#usageProbeIntervalMs,
+          nowMs,
+        );
+      }
+      return;
+    }
+    this.#clearUsageProbeFloorTimer();
+    if (this.#rateLimitOverlay?.origin === "positive_reset_delay") {
+      const resetMs = this.#rateLimitOverlay.value.resets_at === undefined
         ? Number.POSITIVE_INFINITY
-        : this.#rateLimitOverlay.resets_at * 1_000;
+        : this.#rateLimitOverlay.value.resets_at * 1_000;
       if (nowMs < resetMs) return;
       forceImmediate = true;
     }
@@ -2305,6 +2487,7 @@ export class AntigravityHost implements EngineAdapter {
     if (!hasCurrentSnapshot) forceImmediate = true;
     if (this.#usageProbeRequested) forceImmediate = true;
     if (
+      !isPendingConfirmation &&
       !forceImmediate &&
       this.#usageSnapshot !== null &&
       nowMs - this.#usageSnapshot.capturedAtMs < this.#usageProbeIntervalMs
@@ -2331,6 +2514,7 @@ export class AntigravityHost implements EngineAdapter {
     const probe = { family, startedAtMs, run };
     this.#usageProbeRun = probe;
     this.#usageProbeRequested = false;
+    if (isPendingConfirmation) this.#pendingTerminal429Confirmation = null;
     void run.completion.then((completion) => {
       if (completion.kind === "stop_timed_out" && this.#usageProbeRun === probe) {
         this.#warn("antigravity usage probe did not close within the stop bound");
@@ -2348,11 +2532,15 @@ export class AntigravityHost implements EngineAdapter {
 
     const currentFamily = this.#currentUsageFamily();
     const sameFamily = currentFamily === probe.family;
-    const retryRequestedProbe = (): void => {
-      if (this.#usageProbeRequested && currentFamily !== null) this.#maybeStartUsageProbe(true);
+    const serviceNextProbe = (): void => {
+      if (this.#pendingTerminal429Confirmation !== null) {
+        this.#servicePendingTerminal429Confirmation();
+      } else if (this.#usageProbeRequested && this.#currentUsageFamily() !== null) {
+        this.#maybeStartUsageProbe(true);
+      }
     };
     if (result.stopReason === "stale_family") {
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     if (result.stopReason === "host_close") return;
@@ -2365,40 +2553,65 @@ export class AntigravityHost implements EngineAdapter {
         interrupted ? "stopped" : "failed",
         !interrupted,
       );
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     if (result.spawnError !== null) {
       this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, result.spawnError.message);
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     if (result.code !== 0) {
       this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, `exit_${result.code ?? result.signal ?? "unknown"}`);
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
 
     const limits = parseAgyUsageOutput(result.stdout, probe.family);
     if (limits === null) {
       this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "unrecognized_or_empty_bucket_set");
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     const capturedAtMs = Date.parse(this.#now());
     if (!Number.isFinite(capturedAtMs)) {
       this.#recordUsageProbeFailure(probe.family, probe.startedAtMs, "invalid_capture_time");
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     this.#usageProbeLastFailureStartedAtMs = null;
     if (!sameFamily) {
-      retryRequestedProbe();
+      serviceNextProbe();
       return;
     }
     this.#usageSnapshot = { family: probe.family, capturedAtMs, limits };
     this.#resetUsageProbeFailures(probe.family);
+    const complete = hasCompleteUsageBuckets(limits);
+    if (sameFamily && complete && hasEmptyUsageBucket(limits)) {
+      this.#resetStaleTerminal429Count(probe.family);
+    }
+    const overlay = this.#rateLimitOverlay;
+    const postOverlayAmbiguousProbe =
+      sameFamily &&
+      complete &&
+      overlay !== null &&
+      overlay.origin === "ambiguous_terminal_429" &&
+      overlay.family === probe.family &&
+      probe.startedAtMs >= overlay.createdAtMs;
+    if (postOverlayAmbiguousProbe && hasOnlyPositiveUsageBuckets(limits)) {
+      if (!overlay.counted) {
+        if (this.#staleTerminal429Family !== probe.family) {
+          this.#resetStaleTerminal429Count(probe.family);
+        }
+        this.#staleTerminal429Count += 1;
+      }
+      this.#rateLimitOverlay = null;
+      this.#pendingTerminal429Confirmation = null;
+      this.#clearUsageProbeFloorTimer();
+      this.#emitLog({ kind: "system", text: STALE_TERMINAL_429_DETAIL });
+    }
     this.#emitState(this.#machine.state);
+    serviceNextProbe();
   }
 
   #composedRateLimits(): Record<string, AgyUsageRateLimit> | null {
@@ -2407,7 +2620,7 @@ export class AntigravityHost implements EngineAdapter {
     if (family !== null && this.#usageSnapshot !== null) {
       for (const [window, value] of this.#usageSnapshot.limits) limits[window] = { ...value };
     }
-    if (this.#rateLimitOverlay !== null) limits.seven_day = { ...this.#rateLimitOverlay };
+    if (this.#rateLimitOverlay !== null) limits.seven_day = { ...this.#rateLimitOverlay.value };
     return Object.keys(limits).length === 0 ? null : limits;
   }
 

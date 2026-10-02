@@ -15,6 +15,15 @@ const measuredUsageOutput = readFileSync(
   new URL("../../../docs/evidence/antigravity/usage-probe-raw-20261001.json", import.meta.url),
   "utf8",
 );
+const issue393TerminalCapture = JSON.parse(readFileSync(
+  new URL("../../../docs/evidence/antigravity/issue-393-terminal-stream.json", import.meta.url),
+  "utf8",
+)) as { events: unknown[] };
+const issue393Terminal429 = issue393TerminalCapture.events[0];
+const issue393UsageOutput = readFileSync(
+  new URL("../../../docs/evidence/antigravity/issue-393-usage-output.json", import.meta.url),
+  "utf8",
+);
 
 function config(overrides: Partial<WrapperConfig> = {}): WrapperConfig {
   return {
@@ -86,12 +95,18 @@ function makeHarness(options: {
   usageProbeIntervalMs?: number;
   closeProbeOnSignal?: boolean;
   throwUsageProbeSpawn?: boolean;
+  floorTimers?: {
+    set(callback: () => void, delayMs: number): unknown;
+    clear(timer: unknown): void;
+  };
 } = {}) {
   const states: Envelope[] = [];
+  const logs: Envelope[] = [];
   const turns: HarnessAgy[] = [];
   const probes: FakeUsageChild[] = [];
   const turnStarts: string[] = [];
   const turnEnds: string[] = [];
+  const turnEndErrors: Array<unknown> = [];
   const warnings: string[] = [];
   const signals: Array<{ target: unknown; destination: string; signal: string }> = [];
   const probeSignals: Array<{ destination: string; signal: string }> = [];
@@ -114,8 +129,12 @@ function makeHarness(options: {
     appendSystemPrompt: "persona",
     permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
     onState: (envelope) => states.push(envelope),
+    onLog: (envelope) => logs.push(envelope),
     onTurnStart: ({ turnToken }) => turnStarts.push(turnToken),
-    onTurnEnd: ({ turnToken }) => turnEnds.push(turnToken),
+    onTurnEnd: ({ turnToken, error }) => {
+      turnEnds.push(turnToken);
+      turnEndErrors.push(error);
+    },
     runtimeAssetsAvailable: () => true,
     verifyGate: async () => true,
     agyPath: "/test/agy",
@@ -125,6 +144,10 @@ function makeHarness(options: {
     ...(options.usageProbeTimeoutMs === undefined ? {} : { usageProbeTimeoutMs: options.usageProbeTimeoutMs }),
     ...(options.usageProbeStopTimeoutMs === undefined ? {} : { usageProbeStopTimeoutMs: options.usageProbeStopTimeoutMs }),
     ...(options.usageProbeIntervalMs === undefined ? {} : { usageProbeIntervalMs: options.usageProbeIntervalMs }),
+    ...(options.floorTimers === undefined ? {} : {
+      usageProbeFloorSetTimer: (callback: () => void, delayMs: number) => options.floorTimers!.set(callback, delayMs),
+      usageProbeFloorClearTimer: (timer: unknown) => options.floorTimers!.clear(timer),
+    }),
     usageProbeSpawn: () => {
       if (options.throwUsageProbeSpawn === true) throw new Error("fixture usage spawn throw");
       const child = new FakeUsageChild();
@@ -132,20 +155,70 @@ function makeHarness(options: {
       return child as unknown as ChildProcess;
     },
   }, { onAgySpawn: (child) => turns.push(child) });
-  return { host, states, turns, probes, turnStarts, turnEnds, warnings, signals, probeSignals };
+  return { host, states, logs, turns, probes, turnStarts, turnEnds, turnEndErrors, warnings, signals, probeSignals };
 }
 
 async function completeTurn(
   harness: ReturnType<typeof makeHarness>,
   result: { status: "SUCCESS" | "ERROR" | "CANCELED"; response?: string; error?: string },
 ): Promise<void> {
+  await completeEvent(harness, { event: "result", result: { response: "ok", ...result } });
+}
+
+async function completeEvent(harness: ReturnType<typeof makeHarness>, event: unknown): Promise<void> {
   const startCount = harness.turnStarts.length;
   const endCount = harness.turnEnds.length;
   await harness.host.send("test turn");
   await waitFor(() => harness.turnStarts.length > startCount);
   const child = harness.turns.at(-1)!;
-  (child.stdout as PassThrough).write(`${JSON.stringify({ event: "result", result: { response: "ok", ...result } })}\n`);
+  (child.stdout as PassThrough).write(`${JSON.stringify(event)}\n`);
   await waitFor(() => harness.turnEnds.length > endCount);
+}
+
+function statusRateLimits(harness: ReturnType<typeof makeHarness>):
+  | Record<string, { utilization: number; status?: string; resets_at?: number }>
+  | undefined {
+  const value = harness.host.statusSnapshot().rate_limits;
+  return typeof value === "object" && value !== null
+    ? value as Record<string, { utilization: number; status?: string; resets_at?: number }>
+    : undefined;
+}
+
+async function confirmStaleTerminal429(harness: ReturnType<typeof makeHarness>): Promise<void> {
+  const previousProbeCount = harness.probes.length;
+  const previousLogCount = harness.logs.length;
+  await completeTurn(harness, {
+    status: "ERROR",
+    error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+  });
+  await waitFor(() => harness.probes.length === previousProbeCount + 1);
+  harness.probes.at(-1)!.finish(usageOutput("gemini"));
+  await waitFor(() => harness.logs.slice(previousLogCount).some((entry) => JSON.stringify(entry).includes("Consider resetting the session")));
+}
+
+class FakeFloorTimers {
+  #nextId = 1;
+  #timers = new Map<number, { callback: () => void; deadlineMs: number }>();
+  constructor(private readonly nowMs: () => number) {}
+  set(callback: () => void, delayMs: number): unknown {
+    const id = this.#nextId++;
+    this.#timers.set(id, { callback, deadlineMs: this.nowMs() + delayMs });
+    return id;
+  }
+  clear(timer: unknown): void {
+    if (typeof timer === "number") this.#timers.delete(timer);
+  }
+  advance(): void {
+    const now = this.nowMs();
+    const due = [...this.#timers.entries()].filter(([, timer]) => timer.deadlineMs <= now);
+    for (const [id, timer] of due) {
+      this.#timers.delete(id);
+      timer.callback();
+    }
+  }
+  get size(): number {
+    return this.#timers.size;
+  }
 }
 
 const geminiLimits = {
@@ -168,6 +241,93 @@ const measuredGeminiLimits = {
 };
 
 describe("AntigravityHost usage probe state transitions", () => {
+  it("runs the captured terminal 429 and usage output through the default host with a fixture CLI", async () => {
+    expect(issue393Terminal429).toMatchObject({
+      event: "result",
+      result: { status: "ERROR", error: expect.stringContaining("RESOURCE_EXHAUSTED") },
+    });
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-issue393-fixture-"));
+    const executable = join(root, "agy issue393 fixture.mjs");
+    const callsFile = join(root, "calls.jsonl");
+    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    writeFileSync(executable, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(args) + "\\n");
+if (args[0] === "models") {
+  process.stdout.write("gemini-2.5-pro\\tGemini 2.5 Pro\\n");
+} else if (args[0] === "-p" && args[1] === "/hooks") {
+  const customization = args[args.lastIndexOf("--add-dir") + 1];
+  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
+} else if (args[0] === "-p" && args[1] === "/usage") {
+  process.stdout.write(${JSON.stringify(issue393UsageOutput)});
+} else if (args[0] === "--print") {
+  let input = "";
+  let replied = false;
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    if (!input.includes("\\n") || replied) return;
+    replied = true;
+    process.stdout.write(JSON.stringify(${JSON.stringify(issue393Terminal429)}) + "\\n");
+  });
+} else {
+  process.exitCode = 2;
+}
+`);
+    chmodSync(executable, 0o755);
+    const now = "2026-10-03T10:00:00.000Z";
+    const cfg = config({ antigravity_cli_path: executable });
+    const logs: Envelope[] = [];
+    const states: Envelope[] = [];
+    const turnErrors: unknown[] = [];
+    const host = new AntigravityHost(cfg, {
+      cwd: root,
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: (envelope) => states.push(envelope),
+      onLog: (envelope) => logs.push(envelope),
+      onTurnEnd: ({ error }) => turnErrors.push(error),
+      now: () => now,
+      runtimeAssetsAvailable: () => true,
+    });
+    try {
+      await host.send("run one captured 429 fixture turn");
+      await waitFor(() => logs.some((entry) => entry.type === "result"), 8_000);
+      await waitFor(() => turnErrors.length === 1, 8_000);
+      await waitFor(() => existsSync(callsFile) && readFileSync(callsFile, "utf8").includes("/usage"), 8_000);
+      expect(turnErrors[0]).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 0 });
+      expect(states.some((envelope) => {
+        const limits = envelope.ext?.rate_limits as Record<string, { status?: string }> | undefined;
+        return limits?.seven_day?.status === "blocked";
+      })).toBe(true);
+
+      const calls = readFileSync(callsFile, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+      expect(calls.filter((args) => args[0] === "-p" && args[1] === "/usage")).toEqual([
+        ["-p", "/usage", "--output-format", "json"],
+      ]);
+      await waitFor(() => {
+        const limits = host.statusSnapshot().rate_limits as Record<string, { utilization?: number }> | undefined;
+        return limits?.seven_day?.utilization === 1 - 0.461282342672348;
+      }, 8_000);
+      expect(states.at(-1)?.ext?.rate_limits).toEqual({
+        five_hour: {
+          utilization: 1 - 0.9920380711555481,
+          resets_at: Math.floor(Date.parse("2026-10-03T00:03:33Z") / 1_000),
+        },
+        seven_day: {
+          utilization: 1 - 0.461282342672348,
+          resets_at: Math.floor(Date.parse("2026-10-03T04:39:01Z") / 1_000),
+        },
+      });
+      expect(host.statusSnapshot().rate_limits).toEqual(states.at(-1)?.ext?.rate_limits);
+      expect(logs.some((entry) => JSON.stringify(entry).includes("Consider resetting the session"))).toBe(true);
+    } finally {
+      await host.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("maps bucket ids and windows from the measured /usage output", () => {
     const payload = JSON.parse(measuredUsageOutput) as {
       command: {
@@ -670,6 +830,203 @@ if (args[0] === "models") {
       nowMs = startMs + USAGE_PROBE_INTERVAL_MS;
       await completeTurn(harness, { status: "SUCCESS" });
       expect(harness.warnings.filter((warning) => warning.includes("fixture usage spawn throw"))).toHaveLength(2);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("keeps positive-delay 429s blocked without consuming stale confirmations", async () => {
+    const now = "2026-10-03T10:00:00.000Z";
+    const harness = makeHarness({ now: () => now });
+    try {
+      await confirmStaleTerminal429(harness);
+      await confirmStaleTerminal429(harness);
+      const probeCount = harness.probes.length;
+
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 1m44s",
+      });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 104 });
+      expect(harness.probes).toHaveLength(probeCount);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual({
+        ...geminiLimits,
+        seven_day: {
+          status: "blocked",
+          utilization: 1,
+          resets_at: Math.floor(Date.parse(now) / 1_000) + 104,
+        },
+      });
+
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "api_error" });
+      expect(harness.probes).toHaveLength(probeCount);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("classifies the third confirmed-stale terminal 429 as api_error", async () => {
+    const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
+    try {
+      await confirmStaleTerminal429(harness);
+      await confirmStaleTerminal429(harness);
+      const probeCount = harness.probes.length;
+
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "api_error" });
+      expect(harness.probes).toHaveLength(probeCount);
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
+      expect(harness.logs.some((entry) => JSON.stringify(entry).includes("Consider resetting the session"))).toBe(true);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("resets the stale-confirmation streak when a successful turn intervenes", async () => {
+    const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
+    try {
+      await confirmStaleTerminal429(harness);
+      await completeTurn(harness, { status: "SUCCESS" });
+      await confirmStaleTerminal429(harness);
+
+      const previousProbeCount = harness.probes.length;
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 0 });
+      expect(harness.probes).toHaveLength(previousProbeCount + 1);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("resets the stale-confirmation streak when an ordinary complete snapshot has an empty bucket", async () => {
+    let nowMs = Date.parse("2026-10-03T10:00:00.000Z");
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString() });
+    try {
+      await confirmStaleTerminal429(harness);
+      await confirmStaleTerminal429(harness);
+
+      nowMs += USAGE_PROBE_INTERVAL_MS;
+      const probeCount = harness.probes.length;
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 500 backend unavailable" });
+      await waitFor(() => harness.probes.length === probeCount + 1);
+      harness.probes.at(-1)!.finish(usageOutput("gemini", 0, 0.25));
+      await waitFor(() => statusRateLimits(harness)?.five_hour?.status === "blocked");
+
+      const afterEmptySnapshot = harness.probes.length;
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 0 });
+      expect(harness.probes).toHaveLength(afterEmptySnapshot + 1);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("retries one pending confirmation when the failed-attempt floor expires", async () => {
+    const startMs = Date.parse("2026-10-03T10:00:00.000Z");
+    let nowMs = startMs;
+    const floorTimers = new FakeFloorTimers(() => nowMs);
+    const harness = makeHarness({
+      now: () => new Date(nowMs).toISOString(),
+      floorTimers,
+    });
+    try {
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 500 backend unavailable" });
+      harness.probes[0]!.finish("", 1);
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("exit_1")));
+
+      nowMs += 1;
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(harness.probes).toHaveLength(1);
+      expect(floorTimers.size).toBe(1);
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS - 1;
+      floorTimers.advance();
+      expect(harness.probes).toHaveLength(1);
+
+      nowMs += 1;
+      floorTimers.advance();
+      await waitFor(() => harness.probes.length === 2);
+      expect(floorTimers.size).toBe(0);
+      harness.probes[1]!.finish(usageOutput("gemini"));
+      await waitFor(() => statusRateLimits(harness)?.seven_day?.utilization === 0.75);
+    } finally {
+      await harness.host.close();
+    }
+  });
+
+  it("cancels the pending-confirmation floor timer when a new turn is admitted or the host closes", async () => {
+    async function withPendingTimer() {
+      const startMs = Date.parse("2026-10-03T10:00:00.000Z");
+      let nowMs = startMs;
+      const floorTimers = new FakeFloorTimers(() => nowMs);
+      const harness = makeHarness({ now: () => new Date(nowMs).toISOString(), floorTimers });
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 500 backend unavailable" });
+      harness.probes[0]!.finish("", 1);
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("exit_1")));
+      nowMs += 1;
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(floorTimers.size).toBe(1);
+      return { harness, floorTimers };
+    }
+
+    const admitted = await withPendingTimer();
+    const starts = admitted.harness.turnStarts.length;
+    await admitted.harness.host.send("new turn");
+    await waitFor(() => admitted.harness.turnStarts.length === starts + 1);
+    expect(admitted.floorTimers.size).toBe(0);
+    await admitted.harness.host.close();
+    expect(admitted.floorTimers.size).toBe(0);
+
+    const closing = await withPendingTimer();
+    await closing.harness.host.close();
+    expect(closing.floorTimers.size).toBe(0);
+  });
+
+  it("cancels the pending-confirmation floor timer when the committed family changes", async () => {
+    const startMs = Date.parse("2026-10-03T10:00:00.000Z");
+    let nowMs = startMs;
+    const floorTimers = new FakeFloorTimers(() => nowMs);
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString(), floorTimers });
+    try {
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 500 backend unavailable" });
+      harness.probes[0]!.finish("", 1);
+      await waitFor(() => harness.warnings.some((warning) => warning.includes("exit_1")));
+
+      nowMs += 1;
+      await completeTurn(harness, {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): quota reached. Resets in 0s",
+      });
+      expect(floorTimers.size).toBe(1);
+
+      await harness.host.setModel("gpt-5");
+      await completeTurn(harness, { status: "SUCCESS" });
+      expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
+      expect(floorTimers.size).toBe(0);
+
+      nowMs = startMs + USAGE_PROBE_INTERVAL_MS;
+      floorTimers.advance();
+      expect(harness.probes).toHaveLength(1);
     } finally {
       await harness.host.close();
     }
