@@ -76,7 +76,7 @@ if that fails or its resulting home is unusable, operator-led fresh setup.
 Never automatically discard the failed home or reset credentials. No new
 old-version authentication or old-opening-migrated-DB measurement is required.
 Candidate-only live checks use the already approved 0.159.3 home and remain
-within the existing maximum 20-turn budget.
+within the then-current maximum 20-turn budget.
 
 ## Interface and affected files
 

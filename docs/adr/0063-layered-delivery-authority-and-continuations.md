@@ -170,9 +170,9 @@ Approved by the operator on 2026-09-28 after the issue #429 design review
   landing are checked cooperatively through a wrapper tool immediately
   before the operation; conditional updates on the Git host are later work.
 
-Reason: a conversation is cut off at 20 turns, holds at most two agents,
-is reclaimed 24 hours after it started and lives only in server memory, so
-one piece of work necessarily spans several conversations.
+Reason: a conversation has a finite configured turn limit, holds at most two
+agents, is reclaimed 24 hours after it started and lives only in server memory,
+so one piece of work necessarily spans several conversations.
 
 ## Amendment (2026-10-01, default-on in-flight delivery)
 

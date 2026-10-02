@@ -29,7 +29,7 @@ config :kaoiro_server,
   # open_conversation_ttl_ms / tombstone_ttl_ms below are GC-only TTLs, NOT
   # hard limits: neither rejects a message or triggers escalate-to-user.
   inter_agent: [
-    max_turns: 20,
+    max_turns: 50,
     max_tokens: 100_000,
     max_concurrent_agents: 2,
     # OPEN entry memory-DoS reclaim (started_at basis) — see

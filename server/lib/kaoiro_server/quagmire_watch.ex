@@ -9,8 +9,8 @@ defmodule KaoiroServer.QuagmireWatch do
     * **rally** — one agent group has exchanged `rally_turns` or more
       messages within `rally_window_ms`, counted ACROSS conversations by
       `ConversationStates.pair_rally/2`. A per-conversation count cannot see
-      this: `max_turns` closes a conversation at 20 and the protocol then
-      forces the peers onto a fresh id, so a long review loop necessarily
+      this: the configured `max_turns` closes a conversation and the protocol
+      then forces the peers onto a fresh id, so a long review loop necessarily
       spans several entries. `rally_turns` is read from `QuagmireSettings`
       on every sweep (issue #307), so an operator retunes it without a
       restart; the remaining settings stay boot-time.

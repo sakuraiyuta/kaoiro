@@ -20,7 +20,7 @@ director に確認するか、operator へ escalate すること。director が
 
 `conversation_closed` を受けた conversation_id は二度と使わない。
 conversation_id を省略して新規スレッドで送り直すこと。`stale_turn` を
-受けたときも同じ。
+受けたときも同じ。その最初の便には、閉じた会話の conversation_id を記すこと。
 
 メッセージの行頭に `#` を置かない (markdown 見出しに化ける)。issue 参照は
 `issue #NNN` のように語を前置すること。レビュー便の `##` など、意図的な

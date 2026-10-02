@@ -52,7 +52,7 @@ unit. The server's conversation lifetime cannot carry that role:
 
 | Fact | Source |
 | --- | --- |
-| A conversation is cut off at 20 turns (hard limit) | `server/config/config.exs:32`, `conversations.md` Hard limits |
+| A conversation is cut off at 50 turns by default (hard limit) | `server/config/config.exs:32`, `conversations.md` Hard limits |
 | At most two agents per conversation | `server/config/config.exs:34` |
 | An open conversation is reclaimed 24 h after `started_at`, active or not | `config.exs:37`, `conversation_states.ex:712` |
 | Conversation state is GenServer memory; a server restart drops it | `conversation-admission.md` ("The server has no persistence") |
