@@ -206,9 +206,16 @@ describe("behaviourWarnings", () => {
 });
 
 describe("registry", () => {
-  it("has one row per documented variable, each on the claude-code engine in this group", () => {
-    expect(BEHAVIOUR_ROWS.map((r) => [r.env, r.engine, r.block, r.key])).toEqual(
-      FILE_KEYS.map(([key, env]) => [env, "claude-code", "claude_code", key]),
-    );
+  it("lists the documented variables in table order, each tied to its engine and key", () => {
+    expect(BEHAVIOUR_ROWS.map((r) => [r.env, r.engine, r.block ?? null, r.key])).toEqual([
+      ...FILE_KEYS.map(([key, env]) => [env, "claude-code", "claude_code", key]),
+      ["KAOIRO_CLAUDE_TURN_WATCHDOG_INACTIVITY_MS", "claude-code", "claude_code", "turn_watchdog_inactivity_ms"],
+      ["KAOIRO_CLAUDE_TURN_WATCHDOG_ABORT_GRACE_MS", "claude-code", "claude_code", "turn_watchdog_abort_grace_ms"],
+      ["KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "codex", "codex", "turn_watchdog_inactivity_ms"],
+      ["KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS", "codex", "codex", "turn_watchdog_abort_grace_ms"],
+      ["KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS", "antigravity", "antigravity", "turn_watchdog_inactivity_ms"],
+      ["KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS", "antigravity", "antigravity", "turn_watchdog_abort_grace_ms"],
+      ["KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS", "all", null, "permission_timeout_ms"],
+    ]);
   });
 });

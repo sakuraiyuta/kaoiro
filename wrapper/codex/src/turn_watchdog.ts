@@ -5,6 +5,11 @@
 // wedged Codex process alive.
 
 import { performance } from "node:perf_hooks";
+import {
+  readDigitsMs,
+  resolveDigitsMs,
+  type SettingSource,
+} from "@kaoiro/wrapper-core";
 
 export const DEFAULT_TURN_WATCHDOG_INACTIVITY_MS = 30 * 60 * 1_000;
 export const DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS = 60 * 1_000;
@@ -21,52 +26,69 @@ export interface TurnWatchdogSettings {
   abortGraceMs: number;
 }
 
-function readMilliseconds(
+/** The runner-relayed values (WrapperConfig fields), when present. */
+export interface TurnWatchdogConfigValues {
+  turn_watchdog_inactivity_ms?: number;
+  turn_watchdog_abort_grace_ms?: number;
+}
+
+export interface ResolvedTurnWatchdog {
+  settings: TurnWatchdogSettings;
+  sources: { inactivityMs: SettingSource; abortGraceMs: SettingSource };
+}
+
+/** Resolves each value as config field, then the environment variable, then
+ *  the default (issue #469). Returning the sources with the settings lets the
+ *  startup line report exactly what the watchdog is given. */
+export function resolveTurnWatchdogSettings(
   env: Readonly<Record<string, string | undefined>>,
-  name: string,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-): number {
-  const raw = env[name];
-  if (raw === undefined || raw === "") return fallback;
-  if (!/^[0-9]+$/.test(raw)) {
-    throw new Error(`${name} must be an integer number of milliseconds`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
-    throw new Error(
-      `${name} must be an integer >= ${minimum} and <= ${maximum}`,
+  warn: (message: string) => void,
+  config?: TurnWatchdogConfigValues,
+): ResolvedTurnWatchdog {
+  const inactivity = resolveDigitsMs(
+    env,
+    TURN_WATCHDOG_INACTIVITY_ENV,
+    config?.turn_watchdog_inactivity_ms,
+    DEFAULT_TURN_WATCHDOG_INACTIVITY_MS,
+    MIN_TURN_WATCHDOG_INACTIVITY_MS,
+    MAX_TURN_WATCHDOG_DELAY_MS,
+  );
+  const abortGrace = resolveDigitsMs(
+    env,
+    TURN_WATCHDOG_ABORT_GRACE_ENV,
+    config?.turn_watchdog_abort_grace_ms,
+    DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS,
+    1,
+    MAX_TURN_WATCHDOG_DELAY_MS,
+  );
+  if (inactivity.value < DEFAULT_TURN_WATCHDOG_INACTIVITY_MS) {
+    const name =
+      inactivity.source === "config"
+        ? "turn_watchdog_inactivity_ms"
+        : TURN_WATCHDOG_INACTIVITY_ENV;
+    warn(
+      `[kaoiro] ${name}=${inactivity.value}ms is below ` +
+        `the 30-minute default; choose the shorter inactivity value deliberately.\n`,
     );
   }
-  return value;
+  return {
+    settings: {
+      inactivityMs: inactivity.value,
+      abortGraceMs: abortGrace.value,
+    },
+    sources: {
+      inactivityMs: inactivity.source,
+      abortGraceMs: abortGrace.source,
+    },
+  };
 }
 
 export function readTurnWatchdogSettings(
   env: Readonly<Record<string, string | undefined>>,
   warn: (message: string) => void,
+  config?: TurnWatchdogConfigValues,
 ): TurnWatchdogSettings {
-  const inactivityMs = readMilliseconds(
-    env,
-    TURN_WATCHDOG_INACTIVITY_ENV,
-    DEFAULT_TURN_WATCHDOG_INACTIVITY_MS,
-    MIN_TURN_WATCHDOG_INACTIVITY_MS,
-    MAX_TURN_WATCHDOG_DELAY_MS,
-  );
-  const abortGraceMs = readMilliseconds(
-    env,
-    TURN_WATCHDOG_ABORT_GRACE_ENV,
-    DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS,
-    1,
-    MAX_TURN_WATCHDOG_DELAY_MS,
-  );
-  if (inactivityMs < DEFAULT_TURN_WATCHDOG_INACTIVITY_MS) {
-    warn(
-      `[kaoiro] ${TURN_WATCHDOG_INACTIVITY_ENV}=${inactivityMs}ms is below ` +
-        `the 30-minute default; choose the shorter inactivity value deliberately.\n`,
-    );
-  }
-  return { inactivityMs, abortGraceMs };
+  return resolveTurnWatchdogSettings(env, warn, config).settings;
 }
 
 export type TurnWatchdogWarning =

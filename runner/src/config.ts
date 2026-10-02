@@ -18,7 +18,9 @@ import { normalizeAgyCliVersion } from "./antigravity-version.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import {
   parseBehaviourBlock,
+  parseTopLevelBehaviour,
   type ClaudeCodeConfig,
+  type WatchdogConfig,
 } from "./behaviour-settings.js";
 import { ConfigError } from "./config-error.js";
 import type {
@@ -69,6 +71,9 @@ export interface RunnerConfig {
   codex?: CodexConfig;
   antigravity?: AntigravityConfig;
   claude_code?: ClaudeCodeConfig;
+  /** No-response window before a permission request is denied, for every
+   *  engine's wrapper (issue #469). Omitted = wait for the operator. */
+  permission_timeout_ms?: number;
 }
 
 export type ChatGptPlan =
@@ -81,7 +86,7 @@ export type ChatGptPlan =
   | "business"
   | "enterprise";
 
-export interface CodexConfig {
+export interface CodexConfig extends WatchdogConfig {
   /** Applies to subsequent wrapper lifetimes, including resume. Omitted = exec. */
   backend?: "exec" | "app-server";
   /** Explicit auth mode declaration for the Codex adapter's catalog resolve
@@ -118,7 +123,7 @@ export interface CodexConfig {
   extra_models?: EngineModelInfo[];
 }
 
-export interface AntigravityConfig {
+export interface AntigravityConfig extends WatchdogConfig {
   cli_path?: string;
   probe_timeout_ms?: number;
   /** Operator-declared models to add to the resolved catalog, on top of
@@ -477,6 +482,7 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
         "codex.extra_models",
       );
     }
+    Object.assign(codex, parseBehaviourBlock("codex", raw.codex));
     config.codex = codex;
   }
 
@@ -541,6 +547,7 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       }
       antigravity.max_network_access = raw.antigravity.max_network_access;
     }
+    Object.assign(antigravity, parseBehaviourBlock("antigravity", raw.antigravity));
     config.antigravity = antigravity;
   }
 
@@ -550,6 +557,8 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     }
     config.claude_code = parseBehaviourBlock("claude_code", raw.claude_code);
   }
+
+  Object.assign(config, parseTopLevelBehaviour(raw));
 
   return config;
 }

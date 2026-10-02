@@ -8,6 +8,7 @@ import {
   TURN_WATCHDOG_INACTIVITY_ENV,
   TurnWatchdog,
   readTurnWatchdogSettings,
+  resolveTurnWatchdogSettings,
   type TurnWatchdogWarning,
 } from "../src/turn_watchdog.js";
 
@@ -332,5 +333,62 @@ describe("TurnWatchdog (issue #248)", () => {
       turnToken: "turn-c",
     });
     expect(unattributedStops).toEqual(["fallback", "second-fallback"]);
+  });
+});
+
+describe("resolveTurnWatchdogSettings (issue #469)", () => {
+  const inactivityEnv = TURN_WATCHDOG_INACTIVITY_ENV;
+  const graceEnv = TURN_WATCHDOG_ABORT_GRACE_ENV;
+
+  it("selects the config field, then the variable, then the default, with sources", () => {
+    const quiet = () => {};
+    expect(resolveTurnWatchdogSettings({}, quiet)).toMatchObject({
+      settings: { inactivityMs: 1_800_000, abortGraceMs: 60_000 },
+      sources: { inactivityMs: "default", abortGraceMs: "default" },
+    });
+    expect(
+      resolveTurnWatchdogSettings(
+        { [inactivityEnv]: "3600000", [graceEnv]: "5000" },
+        quiet,
+      ),
+    ).toMatchObject({
+      settings: { inactivityMs: 3_600_000, abortGraceMs: 5000 },
+      sources: { inactivityMs: "env", abortGraceMs: "env" },
+    });
+    expect(
+      resolveTurnWatchdogSettings(
+        { [inactivityEnv]: "3600000", [graceEnv]: "5000" },
+        quiet,
+        { turn_watchdog_inactivity_ms: 7_200_000 },
+      ),
+    ).toMatchObject({
+      settings: { inactivityMs: 7_200_000, abortGraceMs: 5000 },
+      sources: { inactivityMs: "config", abortGraceMs: "env" },
+    });
+  });
+
+  it("names the config key when a config value is below the default", () => {
+    const warnings: string[] = [];
+    resolveTurnWatchdogSettings({}, (m) => warnings.push(m), {
+      turn_watchdog_inactivity_ms: 90_000,
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("turn_watchdog_inactivity_ms=90000ms is below");
+    expect(warnings[0]).not.toContain("KAOIRO_");
+  });
+
+  it("readTurnWatchdogSettings keeps its settings-only result", () => {
+    expect(
+      readTurnWatchdogSettings({}, () => {}, { turn_watchdog_abort_grace_ms: 9000 }),
+    ).toMatchObject({ inactivityMs: 1_800_000, abortGraceMs: 9000 });
+  });
+
+  it("rejects whitespace and exponent forms of the variable, as before", () => {
+    expect(() => resolveTurnWatchdogSettings({ [inactivityEnv]: " " }, () => {})).toThrow(
+      inactivityEnv,
+    );
+    expect(() => resolveTurnWatchdogSettings({ [graceEnv]: "1e3" }, () => {})).toThrow(
+      graceEnv,
+    );
   });
 });

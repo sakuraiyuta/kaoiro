@@ -6,20 +6,35 @@
 // inherited variable through its own reader and the two sides cannot
 // disagree about whether it is set.
 
+import { readTurnWatchdogSettings as readCodexWatchdog } from "@kaoiro/codex";
+import { readTurnWatchdogSettings as readAntigravityWatchdog } from "@kaoiro/antigravity";
 import {
   CLAUDE_SCHEDULER_SETTINGS,
+  PERMISSION_TIMEOUT_ENV,
+  TURN_WATCHDOG_MAX_DELAY_MS,
+  TURN_WATCHDOG_MIN_ABORT_GRACE_MS,
+  TURN_WATCHDOG_MIN_INACTIVITY_MS,
   claudeSchedulerRangeMessage,
   isClaudeSchedulerEnvSet,
+  isPermissionTimeoutEnvSet,
   parseClaudeSchedulerNumber,
+  parsePermissionTimeoutEnv,
+  readTurnWatchdogSettings as readClaudeWatchdog,
 } from "@kaoiro/claude-code/settings";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError } from "./config-error.js";
 import type { RunnerConfig } from "./config.js";
 
-export type BehaviourBlock = "claude_code";
+export type BehaviourBlock = "claude_code" | "codex" | "antigravity";
 export type BehaviourValue = number;
 
-export interface ClaudeCodeConfig {
+/** Turn watchdog keys, present in every engine block. */
+export interface WatchdogConfig {
+  turn_watchdog_inactivity_ms?: number;
+  turn_watchdog_abort_grace_ms?: number;
+}
+
+export interface ClaudeCodeConfig extends WatchdogConfig {
   yield_claim_timeout_ms?: number;
   pending_receipt_root_timeout_ms?: number;
   urgent_overtake_limit?: number;
@@ -27,10 +42,12 @@ export interface ClaudeCodeConfig {
 }
 
 interface BehaviourRow {
-  readonly block: BehaviourBlock;
+  /** Engine block of runner.config.json; absent for a top-level key. */
+  readonly block: BehaviourBlock | undefined;
   readonly key: string;
   readonly wrapperField: keyof WrapperConfig;
-  readonly engine: EngineKind;
+  /** The engine whose wrappers receive it; "all" for every engine. */
+  readonly engine: EngineKind | "all";
   readonly env: string;
   readonly envIsSet: (raw: string | undefined) => boolean;
   /** Parses a runner.config.json value; throws ConfigError. */
@@ -70,24 +87,152 @@ const CLAUDE_SCHEDULER_ROWS: readonly BehaviourRow[] =
     },
   }));
 
+const WATCHDOG_RANGES = {
+  turn_watchdog_inactivity_ms: [
+    TURN_WATCHDOG_MIN_INACTIVITY_MS,
+    TURN_WATCHDOG_MAX_DELAY_MS,
+  ],
+  turn_watchdog_abort_grace_ms: [
+    TURN_WATCHDOG_MIN_ABORT_GRACE_MS,
+    TURN_WATCHDOG_MAX_DELAY_MS,
+  ],
+} as const;
+
+type WatchdogKey = keyof typeof WATCHDOG_RANGES;
+
+/** Each engine keeps its own variable names; the grammar and bounds of a set
+ *  variable come from that engine's own reader. */
+const WATCHDOG_ENGINES = [
+  {
+    block: "claude_code",
+    engine: "claude-code",
+    read: readClaudeWatchdog,
+    inactivity: "KAOIRO_CLAUDE_TURN_WATCHDOG_INACTIVITY_MS",
+    abortGrace: "KAOIRO_CLAUDE_TURN_WATCHDOG_ABORT_GRACE_MS",
+  },
+  {
+    block: "codex",
+    engine: "codex",
+    read: readCodexWatchdog,
+    inactivity: "KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS",
+    abortGrace: "KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS",
+  },
+  {
+    block: "antigravity",
+    engine: "antigravity",
+    read: readAntigravityWatchdog,
+    inactivity: "KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS",
+    abortGrace: "KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS",
+  },
+] as const;
+
+function integerInRange(
+  value: unknown,
+  min: number,
+  max: number,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= min &&
+    value <= max
+  );
+}
+
+const WATCHDOG_ROWS: readonly BehaviourRow[] = WATCHDOG_ENGINES.flatMap(
+  (spec) =>
+    (Object.keys(WATCHDOG_RANGES) as WatchdogKey[]).map((key): BehaviourRow => {
+      const [min, max] = WATCHDOG_RANGES[key];
+      const env =
+        key === "turn_watchdog_inactivity_ms" ? spec.inactivity : spec.abortGrace;
+      return {
+        block: spec.block,
+        key,
+        wrapperField: key,
+        engine: spec.engine,
+        env,
+        // Same test as the readers: undefined or exactly "" is unset.
+        envIsSet: (raw) => raw !== undefined && raw !== "",
+        parseFile: (value) => {
+          if (!integerInRange(value, min, max)) {
+            throw new ConfigError(
+              `${spec.block}.${key} must be an integer from ${min} through ${max}`,
+            );
+          }
+          return value;
+        },
+        parseEnv: (raw) => {
+          let settings;
+          try {
+            settings = spec.read({ [env]: raw }, () => {});
+          } catch (error) {
+            throw new ConfigError(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+          return key === "turn_watchdog_inactivity_ms"
+            ? settings.inactivityMs
+            : settings.abortGraceMs;
+        },
+      };
+    }),
+);
+
+const PERMISSION_TIMEOUT_ROW: BehaviourRow = {
+  block: undefined,
+  key: "permission_timeout_ms",
+  wrapperField: "permission_timeout_ms",
+  engine: "all",
+  env: PERMISSION_TIMEOUT_ENV,
+  envIsSet: isPermissionTimeoutEnvSet,
+  parseFile: (value) => {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+      throw new ConfigError("permission_timeout_ms must be an integer of at least 1");
+    }
+    return value;
+  },
+  parseEnv: (raw) => {
+    const parsed = parsePermissionTimeoutEnv(raw);
+    if (parsed === undefined) {
+      throw new ConfigError(`${PERMISSION_TIMEOUT_ENV} must be a positive integer`);
+    }
+    return parsed;
+  },
+};
+
 export const BEHAVIOUR_ROWS: readonly BehaviourRow[] = [
   ...CLAUDE_SCHEDULER_ROWS,
+  ...WATCHDOG_ROWS,
+  PERMISSION_TIMEOUT_ROW,
 ];
 
 /** The "block.key" spelling used in warnings and in the reference table. */
 export function behaviourConfigPath(row: BehaviourRow): string {
-  return `${row.block}.${row.key}`;
+  return row.block === undefined ? row.key : `${row.block}.${row.key}`;
 }
 
 /** Parses one engine block of runner.config.json. Unknown keys are ignored,
  *  as in the other blocks. */
 export function parseBehaviourBlock(
-  block: "claude_code",
+  block: BehaviourBlock,
   raw: Record<string, unknown>,
-): ClaudeCodeConfig {
+): ClaudeCodeConfig & WatchdogConfig {
   const parsed: Record<string, BehaviourValue> = {};
   for (const row of BEHAVIOUR_ROWS) {
     if (row.block !== block) continue;
+    const value = raw[row.key];
+    if (value !== undefined) parsed[row.key] = row.parseFile(value);
+  }
+  return parsed;
+}
+
+/** The top-level behaviour keys (no engine block) present in the file. */
+export function parseTopLevelBehaviour(
+  raw: Record<string, unknown>,
+): { permission_timeout_ms?: number } {
+  const parsed: Record<string, BehaviourValue> = {};
+  for (const row of BEHAVIOUR_ROWS) {
+    if (row.block !== undefined) continue;
     const value = raw[row.key];
     if (value !== undefined) parsed[row.key] = row.parseFile(value);
   }
@@ -98,14 +243,20 @@ function fileValue(
   config: RunnerConfig | undefined,
   row: BehaviourRow,
 ): BehaviourValue | undefined {
-  const block = config?.[row.block] as Record<string, unknown> | undefined;
-  return block?.[row.key] as BehaviourValue | undefined;
+  const holder = (
+    row.block === undefined ? config : config?.[row.block]
+  ) as Record<string, unknown> | undefined;
+  return holder?.[row.key] as BehaviourValue | undefined;
 }
 
-function isEnabled(config: RunnerConfig, engine: EngineKind): boolean {
+function isEnabled(config: RunnerConfig, engine: EngineKind | "all"): boolean {
   // Absent capabilities = every bundled engine (config.ts BUNDLED_ENGINES).
+  // A top-level row applies to every engine, so it is always read.
+  if (engine === "all") return true;
   return config.capabilities?.includes(engine) ?? true;
 }
+
+const ALL_ENGINES: readonly EngineKind[] = ["claude-code", "codex", "antigravity"];
 
 interface SetVariable {
   row: BehaviourRow;
@@ -144,7 +295,9 @@ export function computeBehaviourRelay(
     if (row.envIsSet(env[row.env])) continue;
     const value = fileValue(config, row);
     if (value === undefined) continue;
-    (relay[row.engine] ??= {})[row.wrapperField] = value;
+    for (const engine of row.engine === "all" ? ALL_ENGINES : [row.engine]) {
+      (relay[engine] ??= {})[row.wrapperField] = value;
+    }
   }
   return relay as BehaviourRelay;
 }

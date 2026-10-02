@@ -207,6 +207,13 @@ export interface WrapperConfig {
    *  operator decides, matching the SDK's canUseTool behaviour). A
    *  finite value opts into fail-closed deny after that many ms. */
   permission_timeout_ms?: number;
+  /** Turn watchdog: SDK silence tolerated before the turn is interrupted.
+   *  Relayed from runner.config.json (issue #469); omitted = the engine's
+   *  environment variable, then 30 minutes. */
+  turn_watchdog_inactivity_ms?: number;
+  /** Turn watchdog: wait for the interrupt before the fail-stop. Omitted =
+   *  the engine's environment variable, then 60 seconds. */
+  turn_watchdog_abort_grace_ms?: number;
   /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
   yield_claim_timeout_ms?: number;
   /** Claude phase-2 wait for the root hook after the old result. */
