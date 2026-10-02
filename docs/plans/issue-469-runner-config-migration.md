@@ -137,45 +137,65 @@ into "skip the reload, keep the last valid configuration".
 
 #### Input contract
 
-Ranges are the current wrapper-side ranges, with one exception (epoch ceiling,
-below). Representations are stricter than the wrapper's legacy parser, and
-that is deliberate:
+Two separate things are specified per setting: the **file value** (new keys,
+so new constraints are a schema choice, not a change to anything supported
+today) and the **environment value** (an existing contract that this
+migration keeps exactly). The environment value is never re-interpreted by
+the runner: its meaning is whatever the wrapper's current reader does
+(verified against the readers; see the whitespace row below). "Env counts as
+set" mirrors each reader's own test.
 
-| Setting | Range | JSON file value | Environment value (grammar kept from today) |
+| Setting | File value (new constraints) | Env counts as set when | Env grammar and constraints (retained, as the wrapper reader applies them) |
 | --- | --- | --- | --- |
-| `claude_code.yield_claim_timeout_ms`, `pending_receipt_root_timeout_ms` | 1..60000 | JSON number, safe integer | `Number(value)` must be a safe integer in range (today's `persona.ts` rule; accepts `"1e3"`) |
-| `claude_code.urgent_overtake_limit`, `folds_per_turn` | 1..64 | same | same |
-| `permission_timeout_ms` | integer >= 1 | same | `Number(value)` integer >= 1 (today's rule) |
-| `*.turn_watchdog_inactivity_ms` | 60000..2147483647 | same | digits only (`^[0-9]+$`), then range (today's rule; `"1e3"` rejected) |
-| `*.turn_watchdog_abort_grace_ms` | 1..2147483647 | same | digits only, then range |
-| `antigravity.tool_timeout_ms` | 1000..2147483647 | same | digits only, then range |
-| `antigravity.epoch_idle_ms` | 1000..2147483647 (**new ceiling**) | same | digits only, then range |
-| `*.default_model` | non-empty string, at most 256 characters | string | same string |
-| `codex.turn_trace_dir`, `ia_pending_dir` | absolute path, no NUL | string | same string |
-| `log_phoenix_heartbeats` | boolean | `true` / `false` | exactly `"1"` is on; any other value is off (today's rule) |
+| `claude_code.yield_claim_timeout_ms`, `pending_receipt_root_timeout_ms` | JSON number, safe integer, 1..60000 | not undefined and not `""` | `Number(value)` safe integer in 1..60000 (`persona.ts`); `"1e3"` accepted, whitespace-only rejected |
+| `claude_code.urgent_overtake_limit`, `folds_per_turn` | JSON number, safe integer, 1..64 | same | same with 1..64 |
+| `permission_timeout_ms` | JSON number, integer >= 1 | same | `Number(value)` integer >= 1; whitespace-only rejected |
+| `*.turn_watchdog_inactivity_ms` | JSON number, 60000..2147483647 | same | digits only, then range; whitespace-only rejected |
+| `*.turn_watchdog_abort_grace_ms` | JSON number, 1..2147483647 | same | digits only, then range; whitespace-only rejected |
+| `antigravity.tool_timeout_ms` | JSON number, 1000..2147483647 | same | digits only, then range; whitespace-only rejected |
+| `antigravity.epoch_idle_ms` | JSON number, 1000..2147483647 | same | digits only, minimum 1000 as today; **new ceiling 2147483647** (the only tightening of an existing environment contract) |
+| `*.default_model` | non-empty string, at most 256 characters | not undefined (an empty value is "set", as today) | any string, no validation (a 257-character value passes today and still does) |
+| `codex.turn_trace_dir` | absolute path, no NUL | not undefined | any string, relative paths accepted (today's `defaultCodexTurnTraceDir`) |
+| `ia_pending_dir` | absolute path, no NUL | not undefined | any string, relative paths accepted (today's `defaultPendingDir`) |
+| `log_phoenix_heartbeats` | boolean | not undefined and not `""` | exactly `"1"` is on, anything else off (today's rule) |
+| the three flags | boolean | not undefined and not `""` | exactly `"1"` is the global opt-in, anything else defers to the persona list (today's rule) |
 
-- In `runner.config.json` a numeric setting must be a JSON number. Strings,
-  booleans, `null`, arrays and objects are rejected, as are `NaN`/infinite
-  and unsafe integers. This is stricter than `parseConfig` in the wrapper,
-  which today coerces `"3"` and `true` for the four Claude fields. The runner
-  always writes a JSON number into the wrapper config, so the relay path never
-  meets that coercion. A directly launched wrapper keeps its current
-  acceptance (compatibility). The checked property is one-directional: every
-  value the runner accepts, the wrapper accepts identically.
-- An empty or all-whitespace environment value counts as unset, as today.
-  A set value that fails its grammar is invalid and never silently falls back
-  to the file value.
-- **Intentional behaviour changes** (director/operator judgment, Q7): the
-  epoch-idle ceiling, applied in the runner parser and in `readEpochIdleMs`
-  (so a direct launch is tightened too); strict JSON types in the runner file;
-  an invalid override for an enabled engine now stops the runner at start
-  (section 2.7).
-- **Disabled engines**: environment overrides are read, validated and warned
+Notes on the table:
+
+- The three numeric families reject a whitespace-only value today (`" "` is
+  not an empty string, fails the digits grammar or `Number(" ") = 0`), so that
+  rejection is retained, not softened. Only an undefined or exactly empty
+  value is "unset".
+- The runner does not copy an environment value into the wrapper config. When
+  a variable is set (per the column above) the runner relays nothing for that
+  key and the wrapper consumes the inherited variable through its existing
+  reader, so the runner's notion of "set" and the wrapper's cannot diverge.
+  A whitespace-only numeric variable is therefore rejected by the runner at
+  start (it runs the same reader, section 2.4) instead of being treated as
+  absent while the wrapper later throws on the inherited copy.
+- File values: a numeric setting in `runner.config.json` must be a JSON number.
+  Strings, booleans, `null`, arrays, objects, `NaN`/infinite values and unsafe
+  integers are rejected. `parseConfig` in the wrapper still coerces `"3"` and
+  `true` for the four Claude fields when read from a directly launched wrapper
+  config; the runner writes JSON numbers, so the relay path never meets that
+  coercion. The checked property is one-directional: every file value the
+  runner accepts, the wrapper accepts identically.
+- **Intentional tightening of an existing contract** (Q7): (a) the
+  epoch-idle ceiling, in the runner and in `readEpochIdleMs`, so a direct
+  launch and an existing environment value above the ceiling are affected;
+  (b) an already-invalid environment value of an enabled engine now stops the
+  runner at start (section 2.7) rather than failing each later wrapper launch.
+  Nothing else tightens an existing contract: relative directories, empty or
+  long model strings and `"1e3"` remain accepted wherever they are accepted
+  today. Known quirks left as they are, not part of this issue: an empty
+  `KAOIRO_*_DEFAULT_MODEL` sets an empty model, and an empty directory
+  variable yields an empty path.
+- **Disabled engines**: environment variables are read, validated and warned
   about only for engines in the effective `capabilities` (top-level rows
   always). A bad `KAOIRO_CODEX_*` value on a host with Codex disabled cannot
   affect anything and does not stop the runner. File values are validated
   regardless, as the `codex` / `antigravity` blocks are today. Enabling an
-  engine by reload whose override is invalid skips that reload.
+  engine by reload whose variable is invalid skips that reload.
 
 ### 2.2 One relay path: a declarative registry
 
@@ -213,10 +233,16 @@ Codex spawns).
 Relaying a field is inert until the code that uses the value reads it. Every
 wrapper-side consumer is changed to the same selection rule,
 `config field ?? environment ?? default` (the wrapper's existing rule, so a
-direct launch behaves as before). For a runner-launched wrapper the runner has
-already put the winning value (variable over file) into the config field, so
-that wrapper never reaches its own environment fallback for a key either
-source set.
+direct launch behaves as before), with one exception: the three flags select
+the variable first (section 2.4). For a runner-launched wrapper, "variable
+wins" is achieved by omission: when a variable is set, the runner leaves the
+config field out, so the wrapper falls through to the inherited variable and
+its existing reader; when it is not set, the runner relays the file value.
+
+Each consumer obtains its value from one resolved-settings object per wrapper,
+built once in `cli.ts` from `(config, process.env)` (value plus source per
+setting). The same object is passed to the consumer and printed by the startup
+line below, so the line cannot report a value the consumer did not receive.
 
 | Setting | Final consumer (changed) | Change |
 | --- | --- | --- |
@@ -229,11 +255,10 @@ source set.
 | the three flags | `personaOptInSource` arguments in `claude-code/cli.ts:173`, `codex/cli.ts:180` and `:186` | flag argument built as in section 2.4; `personaOptInSource` itself is unchanged |
 | Claude scheduler keys, `permission_timeout_ms` | `parseConfig` and its existing consumers | none (already config-aware) |
 
-Each wrapper also logs one startup line listing the behaviour settings it
-resolved, each with its source (`config`, `env`, `default`), next to the
-existing summary lines. It is operator-visible and is what the
-default-composition gate in section 3 observes. It never prints a secret;
-no setting here is one.
+Each wrapper logs one startup line from that resolved-settings object, each
+value with its source (`config`, `env`, `default`), next to the existing
+summary lines. It is operator-visible and is what the default-composition gate
+in section 3 observes. It never prints a secret; no setting here is one.
 
 ### 2.3 `changedFields` cannot lag the schema
 
@@ -247,17 +272,22 @@ no-op described above as a class, not a single instance.
 
 ### 2.4 Precedence and the wrapper's existing `config ?? env`
 
-- **Runner**: `effective = env if set and non-empty, else file value`. One
-  function, `applyEnvOverrides(config, env, warn)`, generalises
-  `applyServerUrlOverride` and runs at startup and on every reload, so the
-  effective config (file merged with environment) is what `changedFields`,
-  `buildRegister` and the relay see. An invalid environment value throws
-  `ConfigError` naming the variable, at startup (the runner exits non-zero) and
-  on reload (reload skipped), the same contract `KAOIRO_RUNNER_SERVER_URL` has.
-- **Runner-launched wrapper**: receives one concrete resolved value in its
-  config file. The wrapper's existing `config ?? env` is then never reached
-  for a key either source set, so "variable wins" holds without changing the
-  wrapper's parser, and a wrapper never warns on its own.
+- **Runner**: for each registry row of an enabled engine, the variable is "set"
+  by the row's own test (section 2.1 table). A set variable is validated by
+  calling the wrapper package's existing reader on it (for example
+  `readTurnWatchdogSettings` or `readEpochIdleMs` with a one-key record, and
+  the Claude scheduler and permission parsers extracted from `parseConfig` into
+  exported helpers), so grammar and bounds come from one implementation. An
+  invalid value throws `ConfigError` naming the variable, at startup (the
+  runner exits non-zero) and on reload (reload skipped), the same contract
+  `KAOIRO_RUNNER_SERVER_URL` has. The runner relays the file value only for
+  rows whose variable is not set. `RunnerConfig` keeps holding file values, so
+  `changedFields` compares file values and the relay is computed from the file
+  plus the (fixed) environment.
+- **Runner-launched wrapper**: the config field is present only when the
+  variable is not set, so the wrapper's `config ?? env` selects the file value
+  or the inherited variable exactly as a direct launch would, and a wrapper
+  never warns on its own.
 - **Directly launched wrapper** (no runner; `wrapper/README.md`): keeps the
   existing `config field ?? env` contract and remains the documented escape
   hatch (issue #438). It has no runner config file, so it emits no
@@ -271,13 +301,12 @@ no-op described above as a class, not a single instance.
   `runner: warn - "block.key" in runner.config.json is shadowed by KAOIRO_X`.
   Warning (b) is the part that matters for operations: an edit that silently
   has no effect is the failure this issue exists to remove.
-  Warning (b) is decided from the raw file value, before the effective-config
-  diff. The runner keeps the previous accepted raw file values, separate from
-  the effective config, and compares against them at the top of the reload
-  handler. So file=A with env=B followed by file=C with the same env=B has an
-  empty effective diff (`changedFields` returns early) and still warns. The
-  stored raw values advance only on an accepted reload; a rejected reload
-  warns about nothing and is not reported as applied.
+  Because `RunnerConfig` holds file values, file=A with variable=B followed by
+  file=C with the same variable=B is a non-empty `changedFields` result, so the
+  reload handler does not return early and the warning is emitted from the
+  new file value. The relay itself is unchanged in that case (still omitted for
+  that key). A rejected reload warns about nothing and is not reported as
+  applied.
 - **Flags** (Q1, if migrated). `personaOptInSource(personaId, flag, list)`
   takes a string: only `"1"` enables globally and every other value defers to
   the persona list (the reviewer's probe: `"0"` and `"false"` both returned
@@ -287,7 +316,10 @@ no-op described above as a class, not a single instance.
   "no global opt-in", and never override a persona-list opt-in. The wrapper
   builds the `flag` argument as: the variable if set and non-empty (passed
   through verbatim), else `"1"` when the config field is `true`, else
-  undefined. The Codex backend gate (`backend === "app-server"`) is evaluated
+  undefined. This is a deliberate exception to the common
+  `config ?? environment` rule of section 2.2, for runner-launched and directly
+  launched wrappers alike, so that variable `"0"` beats config `true`
+  everywhere. The Codex backend gate (`backend === "app-server"`) is evaluated
   first and unchanged; the exec backend ignores both.
 
   | Variable | Config | Persona in list | Result |
@@ -321,7 +353,8 @@ the reload line is not mistaken for an application receipt (the same trap
 
 ### 2.6 Rollout order (one reviewed delivery per group)
 
-1. Common path (registry, `applyEnvOverrides`, relay parameter, exhaustive
+1. Common path (registry, environment validation through the wrapper readers
+   and omission of relayed keys whose variable is set, relay parameter, exhaustive
    diff) with the four Claude scheduler keys. Closes issue #438.
 2. Turn watchdogs (6) and `permission_timeout_ms`.
 3. Antigravity `tool_timeout_ms`, `epoch_idle_ms`; `log_phoenix_heartbeats`.
@@ -366,8 +399,8 @@ exported constant.
 | Each key reaches the wrapper from the next launch after a reload | supervisor test: set via `updateRuntimeConfig`, spawn, read the `WrapperConfig` handed to the launcher; a running child's config is unchanged | remove the row from the registry; the test fails |
 | An invalid value rejects the reload and the last valid config stays | `watchRunnerConfig` tests per setting: min, max, min-1, max+1, string, boolean, `null`, empty and whitespace string, unsafe and overflow numbers | none beyond the cases |
 | Runner acceptance implies identical wrapper acceptance | contract test over the same literal cases against the runner parser and the wrapper's `parseConfig` / `readTurnWatchdogSettings` / `readEpochIdleMs` (the property is one-directional, section 2.1) | change the minimum inside a real reader (`value < minimum`); the test fails |
-| Environment grammar per setting | table-driven: `"1e3"`, `"0x10"`, `" 5 "`, empty, overflow, negative against each grammar in the 2.1 table, including an invalid override beside a valid file value (fails, never falls back) | swap two grammars; the test fails |
-| Environment wins, warns once, shadow warning fires | per key: env set and file set differently; assert effective value, one deprecation line, one shadow line, no repeat on a second reload. Sequence file=A/env=B then file=C/env=B: effective diff empty, shadow warning still emitted. A rejected reload emits neither a warning nor an "applied" line | unset the variable: file value applies, no warning |
+| Environment contract retained per setting | table-driven against the real wrapper readers and the runner's call of them: `"1e3"` accepted where `Number()` is the grammar and rejected where digits-only is; whitespace-only rejected by every numeric family; empty string unset for numerics and flags but "set" for models and directories; a relative directory and a 257-character model passing through unchanged; no-file plus whitespace variable fails at runner start and is never relayed as absent | swap two grammars, or make the runner treat whitespace as unset: the test fails |
+| Environment wins, warns once, shadow warning fires | per key: variable set and file set differently; assert the wrapper receives no config field for that key (the variable is consumed), one deprecation line, one shadow line, no repeat on a second reload. Sequence file=A/variable=B then file=C/variable=B: `changedFields` non-empty, shadow warning emitted, relay still omitted. A rejected reload emits neither a warning nor an "applied" line | unset the variable: file value is relayed, no warning |
 | Disabled-engine policy | invalid `KAOIRO_CODEX_*` with Codex absent from `capabilities` starts; the same value with Codex enabled exits non-zero naming the variable | enable Codex by reload with the bad value: reload skipped |
 | Flag truth table | the table in section 2.4, run through the real `personaOptInSource` call sites in the Claude and Codex CLIs and read from their startup lines (`operator_steer=`, `approval_axis=`, `[claude phase2 delivery] source=`) | variable `"0"` with config `true`: result is the list outcome |
 | Default-model provenance (group 6) | for each of the three engines: no default; file-only default; variable over file; explicit launch pick; stored explicit resume pair; each asserts value and `model_source` | drop the `config.default_model` term: file-only case fails |
@@ -376,26 +409,39 @@ exported constant.
 | Live heartbeat toggle | transport test flipping the getter mid-connection | none |
 | Config-only setup works with the default composition (gate) | one test that injects nothing, below | below |
 
-Default-composition gate. It starts the real runner entrypoint
-(`runner-cli`, no substituted constructors, launcher or consumer) as a child
-process with a config file that sets one relay key per engine and `KAOIRO_*`
-scrubbed from its environment. `server_url` points at a test-owned local
-endpoint that speaks just enough of the Phoenix v2 frame protocol to accept the
-runner join and push a `spawn`. The runner then launches the built wrapper
-entrypoint through the real `makeLauncher`. No model turn is requested. The
-assertion is on consumption by the child: the wrapper's startup settings line
-(section 2.2) must show each value with `source=config`, read from the runner's
-inherited stderr. Cleanup stops each child through the `ManagedChild` or
-`child_process` handle the test itself holds, never by pattern
-(`rules/command-line.md`); the design reviewer measured that this works with
-`makeLauncher` and a built Claude entrypoint.
+Default-composition gate. It is a bounded integration smoke test of the
+assembly, not a second copy of the input matrix: one non-default setting per
+engine, no model turn, and the deterministic tests above keep the full cases.
+It starts the real runner entrypoint (`runner-cli`, no substituted
+constructors, launcher or consumer) as a child process with a config file that
+sets one relay key per engine and `KAOIRO_*` scrubbed from its environment.
+`server_url` points at a test-owned local endpoint that speaks just enough of
+the Phoenix v2 frame protocol to accept the runner join and push a `spawn`. The
+runner launches the built wrapper entrypoint through the real `makeLauncher`.
+The assertion is on consumption by the child: the wrapper's startup settings
+line (section 2.2, printed from the same resolved-settings object the consumer
+receives) must show each value with `source=config`, read from the runner's
+inherited stderr.
 
-Negative controls for the gate, each run through the same invocation and
-required to fail it with the child process still started and cleaned up:
-(a) break the relay (drop the spread in `resolveWrapperConfig`); (b) break one
-consumer (stop `cli.ts` passing the config argument). Separately, deterministic
-injected tests keep covering the semantics above; they are not a substitute
-for the gate.
+Child ownership. The test holds the `ChildProcess` of the runner it started,
+not the wrappers' `ManagedChild` handles (the runner keeps those). It ends the
+run with SIGTERM to that owned runner PID, which makes the runner call
+`Supervisor.stopAll` on its tracked wrappers and exit
+(`runner-cli.ts:434-447`, `supervisor.ts:1265-1276`); the wrappers inherit the
+runner's stdio, so the test waits for the runner's `close` event, which fires
+only after every holder of that stderr pipe has exited, and fails on timeout.
+Runner `exit` alone is not treated as proof of cleanup. No process-table
+discovery, host reaper or pattern kill is used, and no product shutdown change
+is part of this task.
+
+Negative controls for the gate: rebuild the artifact after (a) dropping the
+relay (the spread in `resolveWrapperConfig`) and, separately, after (b) cutting
+the chosen consumer's config argument. Each rebuilt artifact, run through the
+same test invocation, must exit non-zero because the observed consumed
+value/source no longer matches, and cleanup must complete on both failure
+paths. Neither the relay nor the consumer argument exists in the current
+baseline, so these are acceptance criteria for the implementation round, not
+measured results.
 
 ## 4. Questions for the operator
 
@@ -447,11 +493,20 @@ Recommendation first in each.
   until `bind`, and the previous directory's leftover journals are no longer
   collected (small files the operator can delete). Recommend migrating it with
   the other directories (group 5). This plan adds no cross-generation recovery.
-- **Q7 - intentional behaviour changes** (section 2.1), for the operator's
-  judgment before implementation: (a) `epoch_idle_ms` gets the 2147483647
-  ceiling, in the runner and in the wrapper reader (a direct launch is
-  tightened too); (b) numeric settings in `runner.config.json` must be JSON
-  numbers (strict), where the wrapper's own parser still coerces strings and
-  booleans for direct launches; (c) an invalid override for an enabled engine
-  stops the runner at start; (d) a shadow warning is logged when a file edit is
-  hidden by a variable. Recommend accepting all four.
+- **Q7 - tightening of an existing contract** (section 2.1). Two items change
+  something that is supported today, so they need the operator's decision
+  before implementation: (a) `epoch_idle_ms` gets the 2147483647 ceiling in
+  the runner and in `readEpochIdleMs`, so an existing variable or direct-launch
+  value above it is now rejected (it is clamped to 1 ms today); (b) an
+  already-invalid variable of an enabled engine, including a whitespace-only
+  numeric value, stops the runner at start instead of failing each later
+  wrapper launch. Recommend accepting both.
+
+  Two schema and diagnostic choices are explained here but are ordinary
+  implementation inside the authorized migration, so no operator answer is
+  required: JSON numbers are required for the new numeric runner keys (no
+  existing runner field changes type; a directly launched wrapper keeps its
+  legacy coercion), and a warning is logged when a file edit is hidden by a
+  variable. Everything else about environment values (relative directories,
+  empty or long model strings, `"1e3"` where `Number()` is the grammar) is
+  retained unchanged.
