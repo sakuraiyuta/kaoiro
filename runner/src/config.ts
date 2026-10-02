@@ -16,6 +16,11 @@ import {
 import type { CodexAuthMode } from "./codex-auth.js";
 import { normalizeAgyCliVersion } from "./antigravity-version.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
+import {
+  parseBehaviourBlock,
+  type ClaudeCodeConfig,
+} from "./behaviour-settings.js";
+import { ConfigError } from "./config-error.js";
 import type {
   EngineCatalogEntry,
   EngineKind,
@@ -43,9 +48,6 @@ const CORE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/;
  *  restricted exactly like agent_id (the server enforces the same guard). */
 const HOST_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
-class ConfigError extends Error {
-  override name = "ConfigError";
-}
 
 /** Runner config (file shape). Persona trust is expressed by exactly one of
  *  `allowed_personas` (allowlist by id) or `blocked_personas` (blocklist
@@ -66,6 +68,7 @@ export interface RunnerConfig {
   capabilities?: string[];
   codex?: CodexConfig;
   antigravity?: AntigravityConfig;
+  claude_code?: ClaudeCodeConfig;
 }
 
 export type ChatGptPlan =
@@ -539,6 +542,13 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       antigravity.max_network_access = raw.antigravity.max_network_access;
     }
     config.antigravity = antigravity;
+  }
+
+  if (raw.claude_code !== undefined) {
+    if (!isObject(raw.claude_code)) {
+      throw new ConfigError("claude_code must be an object");
+    }
+    config.claude_code = parseBehaviourBlock("claude_code", raw.claude_code);
   }
 
   return config;

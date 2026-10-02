@@ -12,6 +12,11 @@ import type {
   PermissionMode,
   WrapperConfig,
 } from "@kaoiro/protocol";
+import {
+  CLAUDE_SCHEDULER_SETTINGS,
+  claudeSchedulerRangeMessage,
+  parseClaudeSchedulerNumber,
+} from "./claude_scheduler.js";
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -281,30 +286,14 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
   }
 
-  for (const [key, envName] of [
-    ["yield_claim_timeout_ms", "KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS"],
-    ["pending_receipt_root_timeout_ms", "KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS"],
-  ] as const) {
-    const value = raw[key] ?? process.env[envName];
+  for (const setting of CLAUDE_SCHEDULER_SETTINGS) {
+    const value = raw[setting.field] ?? process.env[setting.env];
     if (value === undefined || value === "") continue;
-    const parsed = typeof value === "number" ? value : Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 60_000) {
-      throw new ConfigError(`${key} must be an integer from 1 through 60000`);
+    const parsed = parseClaudeSchedulerNumber(value, setting.max);
+    if (parsed === undefined) {
+      throw new ConfigError(claudeSchedulerRangeMessage(setting));
     }
-    config[key] = parsed;
-  }
-
-  for (const [key, envName, max] of [
-    ["urgent_overtake_limit", "KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT", 64],
-    ["folds_per_turn", "KAOIRO_CLAUDE_FOLDS_PER_TURN", 64],
-  ] as const) {
-    const value = raw[key] ?? process.env[envName];
-    if (value === undefined || value === "") continue;
-    const parsed = typeof value === "number" ? value : Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > max) {
-      throw new ConfigError(`${key} must be an integer from 1 through ${max}`);
-    }
-    config[key] = parsed;
+    config[setting.field] = parsed;
   }
 
   // issue #254: a soft work budget is a positive share of the SDK-reported
