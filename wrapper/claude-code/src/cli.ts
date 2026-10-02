@@ -173,9 +173,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
-  // Read once here for the claim path below; the consumer line after
-  // construction prints this same constant.
+  // Read once here for the claim path below. The consumer line prints
+  // yieldClaimTimeoutMs from this constant (cli.ts is its only consumer) and
+  // the pending-receipt value from the host that receives it.
   const yieldClaimTimeoutMs = config.yield_claim_timeout_ms ?? 2_000;
+  const pendingReceiptRootTimeoutMs = config.pending_receipt_root_timeout_ms ?? 2_000;
   const phase2Source = personaOptInSource(
     config.persona.id,
     process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY,
@@ -895,7 +897,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         attemptYieldCandidates();
         return;
       }
-      const receiptDeadline = performance.now() + host.pendingReceiptRootTimeoutMs;
+      const receiptDeadline = performance.now() + pendingReceiptRootTimeoutMs;
       while (true) {
         if (!yieldCandidates.has(batchToken)) {
           yieldClaimInFlight = false;
@@ -1267,7 +1269,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<AgentHostOptions, "onTurnStart">
   >({
     onState,
-    pendingReceiptRootTimeoutMs: config.pending_receipt_root_timeout_ms ?? 2_000,
+    pendingReceiptRootTimeoutMs,
     phase2RootScheduling: () => earlyNegotiated() || yieldNegotiated(),
     onLog,
     onTask,

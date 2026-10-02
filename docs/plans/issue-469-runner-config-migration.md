@@ -242,8 +242,9 @@ its existing reader; when it is not set, the runner relays the file value.
 
 Each consumer obtains its value from one resolved-settings object per wrapper,
 built once in `cli.ts` from `(config, process.env)` (value plus source per
-setting). The same object is passed to the consumer and printed by the startup
-line below, so the line cannot report a value the consumer did not receive.
+setting). A line printed from that object alone cannot show a value lost
+between the object and the consumer, so the observable claim is made by a
+second line printed from the consumers themselves (see below).
 
 | Setting | Final consumer (changed) | Change |
 | --- | --- | --- |
@@ -256,10 +257,28 @@ line below, so the line cannot report a value the consumer did not receive.
 | the three flags | `personaOptInSource` arguments in `claude-code/cli.ts:173`, `codex/cli.ts:180` and `:186` | flag argument built as in section 2.4; `personaOptInSource` itself is unchanged |
 | Claude scheduler keys, `permission_timeout_ms` | `parseConfig` and its existing consumers | none (already config-aware) |
 
-Each wrapper logs one startup line from that resolved-settings object, each
-value with its source (`config`, `env`, `default`), next to the existing
-summary lines. It is operator-visible and is what the default-composition gate
-in section 3 observes. It never prints a secret; no setting here is one.
+Each wrapper logs two startup lines next to the existing summary lines. Neither
+prints a secret; no setting here is one.
+
+- The resolver line (`[kaoiro] <engine> behaviour: pid=... key=value(source)`)
+  is printed from the resolved-settings object and carries each watchdog value
+  with its source (`config`, `env`, `default`). It reports what the resolver
+  decided, before any consumer exists. The Claude scheduler keys and
+  `permission_timeout_ms` have no source: `parseConfig` merges
+  `config ?? env` into one value before the wrapper sees it, so the
+  provenance is gone by then (accepted reduction of the original contract).
+- The consumer line (`[kaoiro] <engine> consumers: pid=... key=value`) is
+  printed after the wrapper has completed the join handshake and constructed
+  its host, turn watchdog and permission broker, from getters on those
+  objects. It carries the effective values the consumers hold, defaults
+  applied (so an unset scheduler key prints its numeric default, never a
+  placeholder), and `none` where a consumer applies no limit. Claude's
+  `yield_claim_timeout_ms` is read by `cli.ts` itself and printed from that
+  same constant; every other value is read back from the consumer object.
+  This line, not the resolver line, is what the default-composition gate in
+  section 3 asserts for consumption. Codex's `appServerApprovals`
+  (`deadlineMs`, `inactivityLimitMs`) exists only when the approval-axis flag
+  is on and is covered when group 4 wires the flags.
 
 ### 2.3 `changedFields` cannot lag the schema
 
@@ -381,8 +400,8 @@ Progress (updated as each group lands):
 
 | Group | Status |
 | --- | --- |
-| 1. Common path and Claude scheduler keys | implemented, awaiting implementation review |
-| 2. Turn watchdogs and `permission_timeout_ms` | implemented, awaiting implementation review |
+| 1. Common path and Claude scheduler keys | implemented; implementation review round 1 (must 3, should 1) fixed forward in `42414ee4`, `dd8af081` and the plan update; awaiting round 2 |
+| 2. Turn watchdogs and `permission_timeout_ms` | implemented; the gate observation point was fixed together with group 1's round-1 finding; awaiting implementation review |
 | 3. Antigravity tool timeout and epoch idle; runner-own settings and `KAOIRO_RUNNER_SERVER_URL` | planned |
 | 4. The three flags | planned |
 | 5. Directories | planned |
@@ -444,14 +463,17 @@ assembly, not a second copy of the input matrix: one non-default setting per
 engine, no model turn, and the deterministic tests above keep the full cases.
 It starts the real runner entrypoint (`runner-cli`, no substituted
 constructors, launcher or consumer) as a child process with a config file that
-sets one relay key per engine and `KAOIRO_*` scrubbed from its environment.
-`server_url` points at a test-owned local endpoint that speaks just enough of
-the Phoenix v2 frame protocol to accept the runner join and push a `spawn`. The
-runner launches the built wrapper entrypoint through the real `makeLauncher`.
-The assertion is on consumption by the child: the wrapper's startup settings
-line (section 2.2, printed from the same resolved-settings object the consumer
-receives) must show each value with `source=config`, read from the runner's
-inherited stderr.
+sets every relay key of every engine to a non-default value (a cut on a key left
+at its default would be invisible) and `KAOIRO_*` scrubbed from its
+environment. `server_url` points at a test-owned local endpoint that speaks
+just enough of the Phoenix v2 frame protocol to accept the runner join and push
+a `spawn`, and to accept each wrapper's join and answer it with the
+`persona_prompt` push, so the wrapper completes its handshake and constructs
+its consumers. The runner launches the built wrapper entrypoint through the real
+`makeLauncher`. The assertion is on consumption by the child: the wrapper's
+consumer line (section 2.2, printed after construction from the consumer
+objects) must show each configured value, read from the runner's inherited
+stderr; the resolver line is asserted for its `config` sources.
 
 Child ownership. The test holds the `ChildProcess` of the runner it started,
 not the wrappers' `ManagedChild` handles (the runner keeps those). It ends the
@@ -466,17 +488,25 @@ reviewer). The gate therefore relies on the known wrapper lifecycle for child
 termination and measures it during implementation on both the success and the
 failure path: the wrapper's startup line carries its own pid, and after `close`
 the test checks that pid with signal 0 (an existence check, no signal sent) and
-fails if it is still alive. No process-table discovery, host reaper or pattern
-kill is used, and no product shutdown change is part of this task.
+fails if it is still alive. The check runs in the test body after the
+assertions, inside neither a `finally` that an assertion failure would skip nor
+a path that a close timeout would bypass: the primary failure is held, cleanup
+always runs, and its outcome is appended to the primary error (a runner that
+does not close by its deadline, or a wrapper that outlives it, fails the test;
+the test's own SIGKILL fallback, sent only to the held runner child and to pids
+the wrappers reported, is awaited). No process-table discovery, host reaper or
+pattern kill is used, and no product shutdown change is part of this task.
 
 Negative controls for the gate: rebuild the artifact after (a) dropping the
 relay (the spread in `resolveWrapperConfig`) and, separately, after (b) cutting
-the chosen consumer's config argument. Each rebuilt artifact, run through the
-same test invocation, must exit non-zero because the observed consumed
-value/source no longer matches, and cleanup must complete on both failure
-paths. Neither the relay nor the consumer argument exists in the current
-baseline, so these are acceptance criteria for the implementation round, not
-measured results.
+each consumer's argument (the host's scheduler fields, the watchdog's settings,
+the permission broker's config, each engine). Each rebuilt artifact, run
+through the same test invocation, must exit non-zero because the observed
+consumed value no longer matches, and cleanup must complete on those failure
+paths. The cleanup itself is pinned separately: a mutation that SIGKILLs the
+runner instead of SIGTERM (wrappers survive), and one that never signals it,
+must each fail with the survivors named, on the success path and on the
+assertion-failure path.
 
 ## 4. Operator decisions (2026-10-02)
 
