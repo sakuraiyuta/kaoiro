@@ -2,7 +2,7 @@
 title: Antigravity events
 description: Current event, state, session, model, usage, and host contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-21
+last_updated: 2026-10-03
 related: [protocol, antigravity-adapter]
 ---
 
@@ -196,12 +196,39 @@ Observed details:
   `command.data.groups[].buckets[]` with bucket ids in `gemini-*` and `3p-*`
   families and `window` values `5h` / `weekly`; `-p /model` → current model/effort;
   `-p /permissions`, `-p /hooks`, `-p /help`.
-- **Wrapper rate-limit state:** a terminal `result.error` that contains a
-  `RESOURCE_EXHAUSTED` / HTTP 429 marker and a compact `Resets in <NhNmNs>`
-  duration creates a forced `seven_day` blocked overlay. The checked-in weekly
-  probe value cannot overwrite it; only a successful terminal turn clears it.
-  An expired `resets_at` remains published until that success, while it makes
-  a probe eligible at a later terminal turn boundary.
+- **Wrapper rate-limit state:** a terminal `result.error` containing a
+  `RESOURCE_EXHAUSTED` / HTTP 429 marker with a positive parsed reset delay
+  creates the usual blocked `seven_day` overlay with that future `resets_at`.
+  It remains a peer-facing `rate_limit`; it does not start a stale-error
+  confirmation or change the stale-confirmation count. An expired reset remains
+  published until a successful terminal turn, while it makes an ordinary
+  probe eligible at a later turn boundary.
+- A terminal 429 whose reset delay is zero or unreadable creates a blocked
+  overlay and immediately settles the peer turn as `rate_limit`. If the
+  attempted and committed model both have the same classified family, one
+  same-family `/usage` confirmation may later clear only this terminal-derived
+  overlay when both expected buckets are present and positive. That state
+  update does not rewrite the completed peer error. The measured sanitized
+  stream and `/usage` response used by the host test are in
+  [issue-393-terminal-stream.json](../../evidence/antigravity/issue-393-terminal-stream.json)
+  and [issue-393-usage-output.json](../../evidence/antigravity/issue-393-usage-output.json).
+  The one-turn production-composition check is recorded in
+  [issue-393-live-acceptance-2026-10-03.md](../../evidence/antigravity/issue-393-live-acceptance-2026-10-03.md).
+- The host counts confirmed stale terminal 429s per committed family. After
+  two positive same-family confirmations, another zero-delay or unreadable
+  terminal 429 for that family is reported as `api_error`, without an overlay
+  or another confirmation probe. The wrapper emits one operator-visible
+  `system` log explaining that the conversation may be repeating an old error
+  and suggesting a session reset. A successful terminal turn, a complete
+  same-family usage snapshot with any expected bucket at zero, a committed
+  family change, or a changed session id resets the count. The count is held
+  in memory, so a wrapper restart can allow up to two additional conservative
+  `rate_limit` responses.
+- The stale-error path is terminal-only. Non-terminal 429 event shapes are not
+  interpreted until a real runtime-shaped event is captured. Positive usage
+  from an ordinary same-family probe started after an ambiguous terminal
+  overlay can also clear it and count once; a pre-existing probe, a partial
+  snapshot, an empty bucket, another family, or a positive-delay overlay cannot.
 - `/usage` snapshots are tied to the committed model family. A model change
   within the same family retains the snapshot; a family change or an
   unclassified committed model invalidates it. A pending `setModel` does not
@@ -209,8 +236,12 @@ Observed details:
   for an unclassified model, only the independent overlay can appear.
 - An agent with no configured model uses agy's default model but remains
   unclassified, so it publishes no `/usage` rate limits.
-- Usage probes start only after a terminal turn result when there is no active
-  or queued turn. There is no idle refresh timer. Valid snapshots are throttled
+- Usage probes start only at an idle turn boundary. There is no general idle
+  refresh timer. A pending stale-terminal confirmation that is blocked only by
+  the #496 retry floor schedules one unref'd timer for the floor deadline; it
+  rechecks the ordinary gates once when it fires. The timer is cancelled by
+  host close, admission of a new turn, a committed family change, successful
+  terminal reset, or when the confirmation starts. Valid snapshots are throttled
   for five minutes from capture. After a failed `/usage` attempt, further
   attempts wait five minutes from that attempt's start (including spawn throws,
   timeouts, nonzero exits, and unusable output), including across successful
@@ -219,8 +250,9 @@ Observed details:
   consecutive-failure suppression, but does not start the retry floor. Three
   consecutive current-family failures independently
   suppress retries until a successful turn clears the failure count, but that
-  turn does not clear an active floor. After the floor expires, retry only at
-  the next terminal turn boundary. A family change after a successful probe
+  turn does not clear an active floor. An ordinary retry waits for a later
+  terminal boundary after the floor; only the retained stale-terminal
+  confirmation uses its single timer. A family change after a successful probe
   can still trigger an immediate probe. The register-time catalog probe is
   independent of these rules.
 - A timeout, interrupt, family change, or host close sends one checked PID
