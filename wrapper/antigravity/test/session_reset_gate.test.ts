@@ -11,6 +11,7 @@ import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-comm
 import type { DirectoryEntry } from "@kaoiro/protocol";
 import { runAntigravityCli } from "../src/cli.js";
 import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
+import { createHarnessHost } from "./host_test_harness.js";
 
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.antigravity-gate",
@@ -94,7 +95,7 @@ async function makeRig(
     },
     createHost: (cfg, options) => {
       hostOptions = options as unknown as Record<string, any>;
-      host = new AntigravityHost(cfg, {
+      host = createHarnessHost(cfg, {
         ...options,
         runtimeAssetsAvailable: () => true,
         verifyGate: async () => true,

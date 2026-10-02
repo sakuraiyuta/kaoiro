@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
+import { createHarnessHost } from "./host_test_harness.js";
 
 // issue #379: wiring-level tests for the Host's use of subtree_termination.ts.
 // The escalation timing itself (SIGTERM now, SIGKILL after graceMs, cancel,
@@ -54,7 +55,7 @@ function hostHarness(options: {
   const calls: { child: FakeAgy }[] = [];
   const turnStarts: string[] = [];
   const cfg = config();
-  const host = new AntigravityHost(cfg, {
+  const host = createHarnessHost(cfg, {
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
     permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
@@ -143,7 +144,7 @@ describe("AntigravityHost subtree termination wiring (issue #379)", () => {
     const modelsProbeCalls: unknown[] = [];
     const cfg = config();
     const calls: { child: FakeAgy }[] = [];
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(),
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),

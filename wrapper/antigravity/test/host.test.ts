@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
+import { createHarnessHost } from "./host_test_harness.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
 import { ToolHost } from "../src/toolhost.js";
 import type { PermissionSyncMessage } from "@kaoiro/protocol";
@@ -91,7 +92,7 @@ function hostHarness(options: {
   const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
   const cfg = options.config ?? config();
   const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
-  const host = new AntigravityHost(cfg, {
+  const host = createHarnessHost(cfg, {
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
     permissionBroker: broker,
@@ -395,7 +396,7 @@ describe("AntigravityHost", () => {
     const starts: string[] = [];
     const ends: Array<{ token: string; conversationIds: readonly string[] }> = [];
     let host!: AntigravityHost;
-    host = new AntigravityHost(cfg, {
+    host = createHarnessHost(cfg, {
       cwd: process.cwd(),
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
@@ -783,7 +784,7 @@ describe("AntigravityHost", () => {
   it("on-failure approvalはspawn前に拒否する", () => {
     const cfg: AntigravityLaunchConfig = { ...config(), approval: "on-failure" };
     const broker = new PermissionBroker({ config: cfg, send: () => {} });
-    expect(() => new AntigravityHost(cfg, {
+    expect(() => createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: broker,
       onState: () => {}, runtimeAssetsAvailable: () => true,
     })).toThrow("antigravity approval=on-failure is unsupported");
@@ -877,7 +878,7 @@ describe("AntigravityHost", () => {
   it("verifier control-flowは明示したtest executableでprobeをspawnする", async () => {
     const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
     const cfg = config();
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, runtimeAssetsAvailable: () => true,
       probeSpawn: (_command, args) => {
@@ -905,7 +906,7 @@ describe("AntigravityHost", () => {
     const probe = new FakeAgy();
     const calls: FakeAgy[] = [];
     let hookSource = "";
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, runtimeAssetsAvailable: () => true, agyPath: "/test/agy",
@@ -943,7 +944,7 @@ describe("AntigravityHost", () => {
     const cfg = config({ antigravity_cli_path: executable, antigravity_probe_timeout_ms: 45_000 });
     const commands: string[] = [];
     try {
-      const host = new AntigravityHost(cfg, {
+      const host = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, runtimeAssetsAvailable: () => true,
@@ -1055,7 +1056,7 @@ if (args[0] === "models") {
     const cfg = config({ antigravity_cli_path: "/definitely/not/agy" });
     const logs: Envelope[] = [];
     let turnSpawns = 0;
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
@@ -1074,7 +1075,7 @@ if (args[0] === "models") {
   it("F2のspawn引数、stdin NDJSON経由のprompt、init session idとresultを結ぶ", async () => {
     const { host, states, logs, calls } = hostHarness();
     const sessionIds: string[] = [];
-    const onSessionHost = new AntigravityHost(config(), {
+    const onSessionHost = createHarnessHost(config(), {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
       onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope), onSessionId: (id) => sessionIds.push(id),
       verifyGate: async () => true, runtimeAssetsAvailable: () => true,
@@ -1249,7 +1250,7 @@ if (args[0] === "models") {
   });
 
   it("statusSnapshot includes session_id from resumeSessionId option (issue #418)", () => {
-    const resumedHost = new AntigravityHost(config(), {
+    const resumedHost = createHarnessHost(config(), {
       cwd: process.cwd(),
       appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
@@ -1565,7 +1566,7 @@ if (args[0] === "models") {
     const states: Envelope[] = [];
     const cfg = config();
     const calls: string[][] = [];
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
       agyPath: "/test/agy",
@@ -1595,7 +1596,7 @@ if (args[0] === "models") {
         { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
       ],
     };
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
       agyPath: "/test/agy",
@@ -1620,7 +1621,7 @@ if (args[0] === "models") {
     const cfg = config();
     let host: AntigravityHost | undefined;
     const questionBroker = new QuestionBroker({ config: cfg, send: () => {}, onPendingChange: (pending) => host?.setPendingQuestion(pending) });
-    host = new AntigravityHost(cfg, {
+    host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }), questionBroker,
       onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
     });
@@ -1648,7 +1649,7 @@ if (args[0] === "models") {
     const logs: Envelope[] = [];
     const calls: FakeAgy[] = [];
     const cfg = config();
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
       agyPath: "/test/agy", verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
@@ -1680,7 +1681,7 @@ if (args[0] === "models") {
     const cfg = config();
     const logs: Envelope[] = [];
     let turnSpawns = 0;
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
@@ -1707,7 +1708,7 @@ if (args[0] === "models") {
     const logs: Envelope[] = [];
     const probe = new FakeAgy();
     let turnSpawns = 0;
-    const host = new AntigravityHost(cfg, {
+    const host = createHarnessHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona",
       permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
@@ -2501,7 +2502,7 @@ if (args[0] === "models") {
       const states: Envelope[] = [];
       const logs: Envelope[] = [];
       const calls: FakeAgy[] = [];
-      const host = new AntigravityHost(cfg, {
+      const host = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope),
@@ -2567,7 +2568,7 @@ if (args[0] === "models") {
       const cfg = config();
       const calls: FakeAgy[] = [];
       let host!: AntigravityHost;
-      host = new AntigravityHost(cfg, {
+      host = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, runtimeAssetsAvailable: () => true, verifyGate: async () => true, agyPath: "/test/agy",
@@ -2664,7 +2665,7 @@ if (args[0] === "models") {
       const logs: Envelope[] = [];
       const rawCalls: RacyStdinAgy[] = [];
       const cfg = config();
-      const failingHost = new AntigravityHost(cfg, {
+      const failingHost = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: (envelope) => logs.push(envelope),
@@ -2699,7 +2700,7 @@ if (args[0] === "models") {
       const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
       const rawCalls: RacyStdinAgy[] = [];
       const cfg = config();
-      const racyHost = new AntigravityHost(cfg, {
+      const racyHost = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
@@ -2743,7 +2744,7 @@ if (args[0] === "models") {
       const interruptSettlements: unknown[] = [];
       let pendingWriteCallback: ((error?: Error | null) => void) | null = null;
       const cfg = config();
-      const racyHost = new AntigravityHost(cfg, {
+      const racyHost = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
@@ -2789,7 +2790,7 @@ if (args[0] === "models") {
       const rawCalls: RacyStdinAgy[] = [];
       let turn1WriteCallback: ((error?: Error | null) => void) | null = null;
       const cfg = config();
-      const h = new AntigravityHost(cfg, {
+      const h = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
@@ -2836,7 +2837,7 @@ if (args[0] === "models") {
       let rawChild!: RacyStdinAgy;
       let writeCallback: ((error?: Error | null) => void) | null = null;
       const cfg = config();
-      const h = new AntigravityHost(cfg, {
+      const h = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: () => {}, onLog: () => {},
@@ -2883,7 +2884,7 @@ if (args[0] === "models") {
       const states: string[] = [];
       let rawChild!: RacyStdinAgy;
       const cfg = config();
-      const h = new AntigravityHost(cfg, {
+      const h = createHarnessHost(cfg, {
         cwd: process.cwd(), appendSystemPrompt: "persona",
         permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
         onState: (envelope) => states.push(envelope.state), onLog: () => {},
@@ -3222,7 +3223,7 @@ if (args[0] === "models") {
         const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
         const calls: FakeAgy[] = [];
         const cfg = config();
-        const host = new AntigravityHost(cfg, {
+        const host = createHarnessHost(cfg, {
           cwd: process.cwd(), appendSystemPrompt: "persona",
           permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
           onState: () => {}, onLog: () => {},
@@ -3257,7 +3258,7 @@ if (args[0] === "models") {
         const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
         const calls: FakeAgy[] = [];
         const cfg = config();
-        const host = new AntigravityHost(cfg, {
+        const host = createHarnessHost(cfg, {
           cwd: process.cwd(), appendSystemPrompt: "persona",
           permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
           onState: () => {}, onLog: () => {},

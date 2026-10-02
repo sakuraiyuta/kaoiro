@@ -201,6 +201,25 @@ reached the `[antigravity-lifecycle]` stream.
   other epoch-end reason (`tamper`, `spec_change`, `close`, `idle_ttl`,
   `watchdog`) via the same generic `terminateWithGrace` helper.
 
+Every wrapper signal target must be a live `ChildProcess` with an integer PID
+of at least 2 that is not the wrapper's own PID. The detached `agy` child is
+signalled only through its process group; a failed group signal has no PID
+fallback. The non-detached hook-registration and model probes are signalled by
+their checked child PID.
+
+Antigravity tests that use fakes construct hosts through
+`test/host_test_harness.ts`, which supplies fake turn/probe spawns and signal
+operations by default. Process-backed tests stay outside that harness:
+the configured-executable case in `host.test.ts` exercises the default CLI,
+model probe, and hook probe composition;
+`host_signal_guard_real_process.test.ts` exercises the default model and hook
+probe timeout/cancellation paths; `subtree_termination_real_process.test.ts`
+exercises a real detached epoch group but overrides the gate verifier and
+runtime-asset check; `cli_sigterm_subtree_termination.test.ts` exercises the
+production CLI close path with a real fixture subtree; and
+`tool_prompt_fail_fast.test.ts` exercises a real fixture CLI and tool child.
+`live_agy_stream_input.test.ts` is an opt-in account-backed probe.
+
 ### Tool definition (CLI bridge over the wrapper tool host)
 
 The Antigravity wrapper starts its own `ToolHost` (NDJSON over a socket in a

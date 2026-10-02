@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
+import { createHarnessHost } from "./host_test_harness.js";
 import { runAntigravityCli } from "../src/cli.js";
 import { ToolHost } from "../src/toolhost.js";
 
@@ -87,7 +88,7 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
       },
       createHost: (cfg, options) => {
         hostOptions = options;
-        actualHost = new AntigravityHost(cfg, {
+        actualHost = createHarnessHost(cfg, {
           ...options,
           verifyGate: async () => true,
           runtimeAssetsAvailable: () => true,

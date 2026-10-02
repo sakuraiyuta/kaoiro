@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { signalSubtree, terminateWithGrace, type TerminableProcess } from "../src/subtree_termination.js";
+import { ChildProcess } from "node:child_process";
+import { isSafeSignalTarget, signalSubtree, signalTarget, terminateWithGrace, type SignalTargetOperation, type TerminableProcess } from "../src/subtree_termination.js";
 
 // Mirrors turn_watchdog.test.ts's FakeTimers: `terminateWithGrace`'s default
 // `nowMs` is `performance.now()`, which `vi.useFakeTimers()` does not mock in
@@ -51,67 +52,83 @@ function fakeProcess(overrides: Partial<TerminableProcess> = {}): TerminableProc
   };
 }
 
+function childProcess(pid: number | undefined, exitCode: number | null = null, signalCode: NodeJS.Signals | null = null): ChildProcess {
+  const child = new ChildProcess();
+  Object.defineProperty(child, "pid", { configurable: true, writable: true, value: pid });
+  Object.defineProperty(child, "exitCode", { configurable: true, writable: true, value: exitCode });
+  Object.defineProperty(child, "signalCode", { configurable: true, writable: true, value: signalCode });
+  return child;
+}
+
+const fakeSignalTarget: SignalTargetOperation = (target, destination, signal) => {
+  const child = target as TerminableProcess;
+  if ((child.exitCode ?? null) !== null || (child.signalCode ?? null) !== null) return false;
+  if (child.pid === undefined) return child.kill(signal);
+  process.kill(destination === "process_group" ? -child.pid : child.pid, signal);
+  return true;
+};
+
+const terminateWithGraceDefault = terminateWithGrace;
+
+function terminateWithGraceUsingFakeSignals(
+  target: TerminableProcess,
+  options: Parameters<typeof terminateWithGrace>[1],
+) {
+  return terminateWithGraceDefault(target, { ...options, signalTarget: fakeSignalTarget });
+}
+
 describe("signalSubtree", () => {
-  it("sends process.kill(-pid, signal) when pid is known", () => {
+  it("sends only to the detached child's process group", () => {
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const target = fakeProcess({ pid: 999 });
+    const target = childProcess(999);
     const ok = signalSubtree(target, "SIGTERM");
     expect(ok).toBe(true);
     expect(spy).toHaveBeenCalledWith(-999, "SIGTERM");
-    expect(target.killCalls).toEqual([]);
+    expect(target.killed).toBe(false);
     spy.mockRestore();
   });
 
-  it("falls back to target.kill when pid is undefined", () => {
-    const spy = vi.spyOn(process, "kill");
-    const target = fakeProcess({ pid: undefined });
-    const ok = signalSubtree(target, "SIGTERM");
-    expect(ok).toBe(true);
-    expect(spy).not.toHaveBeenCalled();
-    expect(target.killCalls).toEqual(["SIGTERM"]);
+  it("sends a probe signal to its checked PID", () => {
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const target = childProcess(999);
+    expect(signalTarget(target, "pid", "SIGTERM")).toBe(true);
+    expect(spy).toHaveBeenCalledWith(999, "SIGTERM");
     spy.mockRestore();
   });
 
-  it("falls back to target.kill when process.kill(-pid) throws (e.g. ESRCH)", () => {
+  it("does not fall back to the child PID when process-group signaling fails", () => {
     const spy = vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("ESRCH");
     });
-    const target = fakeProcess();
-    const ok = signalSubtree(target, "SIGKILL");
-    expect(ok).toBe(true);
-    expect(target.killCalls).toEqual(["SIGKILL"]);
-    spy.mockRestore();
-  });
-
-  it("propagates a false return from the fallback kill", () => {
-    const spy = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw new Error("ESRCH");
-    });
-    const target = fakeProcess({ kill: () => false });
-    expect(signalSubtree(target, "SIGTERM")).toBe(false);
-    spy.mockRestore();
-  });
-
-  // issue #379 M4: a real ChildProcess.kill() already no-ops after exit
-  // (measured: returns false, no syscall), but process.kill(-pid, signal)
-  // has no such awareness -- a dead pid can be reused by an unrelated
-  // process/group. signalSubtree must refuse BEFORE attempting either path.
-  it("refuses to signal (either path) when the target already exited (exitCode set) (M4)", () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const target = fakeProcess({ exitCode: 0 });
-    expect(signalSubtree(target, "SIGTERM")).toBe(false);
-    expect(killSpy).not.toHaveBeenCalled();
-    expect(target.killCalls).toEqual([]);
-    killSpy.mockRestore();
-  });
-
-  it("refuses to signal (either path) when the target already exited (signalCode set) (M4)", () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const target = fakeProcess({ signalCode: "SIGTERM" });
+    const target = childProcess(999);
+    const childKill = vi.spyOn(target, "kill").mockReturnValue(false);
     expect(signalSubtree(target, "SIGKILL")).toBe(false);
-    expect(killSpy).not.toHaveBeenCalled();
-    expect(target.killCalls).toEqual([]);
-    killSpy.mockRestore();
+    expect(spy).toHaveBeenCalledWith(-999, "SIGKILL");
+    expect(childKill).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it.each([
+    ["structural fake", fakeProcess() as unknown],
+    ["missing pid", childProcess(undefined)],
+    ["PID zero", childProcess(0)],
+    ["PID one", childProcess(1)],
+    ["self PID", childProcess(process.pid)],
+    ["fractional PID", childProcess(2.5)],
+    ["NaN PID", childProcess(Number.NaN)],
+    ["exited child", childProcess(999, 0)],
+    ["signaled child", childProcess(999, null, "SIGTERM")],
+  ])("rejects an unsafe signal target (%s)", (_name, target) => {
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    expect(isSafeSignalTarget(target)).toBe(false);
+    expect(signalTarget(target, "pid", "SIGTERM")).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("accepts a live real ChildProcess with a checked non-self PID", () => {
+    const target = childProcess(999);
+    expect(isSafeSignalTarget(target)).toBe(true);
   });
 });
 
@@ -120,7 +137,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess();
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    terminateWithGrace(target, {
+    terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -144,7 +161,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess({ exitCode: 0 });
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const handle = terminateWithGrace(target, {
+    const handle = terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -163,7 +180,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess();
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const handle = terminateWithGrace(target, {
+    const handle = terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -180,7 +197,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess();
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const handle = terminateWithGrace(target, {
+    const handle = terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -199,7 +216,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess();
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    terminateWithGrace(target, {
+    terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -215,7 +232,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess();
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    terminateWithGrace(target, {
+    terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -231,7 +248,7 @@ describe("terminateWithGrace", () => {
     const timers = new FakeTimers();
     const target = fakeProcess({ exitCode: undefined, signalCode: undefined });
     const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    terminateWithGrace(target, {
+    terminateWithGraceUsingFakeSignals(target, {
       graceMs: 1_000,
       nowMs: () => timers.now,
       setTimer: timers.set,
@@ -247,7 +264,7 @@ describe("terminateWithGrace", () => {
       const timers = new FakeTimers();
       const target = fakeProcess();
       const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      const handle = terminateWithGrace(target, {
+      const handle = terminateWithGraceUsingFakeSignals(target, {
         graceMs: 60_000,
         nowMs: () => timers.now,
         setTimer: timers.set,
@@ -267,7 +284,7 @@ describe("terminateWithGrace", () => {
       const timers = new FakeTimers();
       const target = fakeProcess();
       const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      const handle = terminateWithGrace(target, {
+      const handle = terminateWithGraceUsingFakeSignals(target, {
         graceMs: 1_000,
         nowMs: () => timers.now,
         setTimer: timers.set,
@@ -286,7 +303,7 @@ describe("terminateWithGrace", () => {
       const timers = new FakeTimers();
       const target = fakeProcess();
       const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      const handle = terminateWithGrace(target, {
+      const handle = terminateWithGraceUsingFakeSignals(target, {
         graceMs: 1_000,
         nowMs: () => timers.now,
         setTimer: timers.set,
@@ -305,7 +322,7 @@ describe("terminateWithGrace", () => {
       const timers = new FakeTimers();
       const target = fakeProcess();
       const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      const handle = terminateWithGrace(target, {
+      const handle = terminateWithGraceUsingFakeSignals(target, {
         graceMs: 1_000,
         nowMs: () => timers.now,
         setTimer: timers.set,

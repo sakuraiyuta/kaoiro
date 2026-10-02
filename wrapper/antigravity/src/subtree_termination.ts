@@ -1,9 +1,39 @@
 import { performance } from "node:perf_hooks";
+import { ChildProcess } from "node:child_process";
 
-/** The minimal shape `signalSubtree` / `terminateWithGrace` need. Any
- *  `SpawnedAgy` satisfies this; `exitCode` / `signalCode` are optional so a
- *  test fake that never tracks exit state is treated as always-alive,
- *  matching a real `ChildProcess` before it has exited. */
+export type SignalDestination = "pid" | "process_group";
+export type SignalTargetOperation = (
+  target: unknown,
+  destination: SignalDestination,
+  signal: NodeJS.Signals,
+) => boolean;
+
+/** A single production gate for every OS signal sent to a spawned child. */
+export function isSafeSignalTarget(target: unknown): target is ChildProcess & { pid: number } {
+  if (!(target instanceof ChildProcess)) return false;
+  const pid = target.pid;
+  return target.exitCode === null
+    && target.signalCode === null
+    && typeof pid === "number"
+    && Number.isInteger(pid)
+    && pid >= 2
+    && pid !== process.pid;
+}
+
+/** Sends only to a checked child PID or its checked process group. */
+export const signalTarget: SignalTargetOperation = (target, destination, signal) => {
+  if (!isSafeSignalTarget(target)) return false;
+  const pid = destination === "process_group" ? -target.pid : target.pid;
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** The fields needed by the termination timer. Production signals still
+ *  require the real ChildProcess checked by `signalTarget`. */
 export interface TerminableProcess {
   readonly pid?: number | undefined;
   // Not `readonly`: a real `ChildProcess`'s own typing does not mark these
@@ -16,46 +46,20 @@ export interface TerminableProcess {
 }
 
 /** True when `target` has not yet exited, per its own `exitCode` /
- *  `signalCode` (absent/undefined counts as alive, matching a real
- *  `ChildProcess` before `exit` and a test fake that never tracks exit
- *  state). */
+ *  `signalCode`. */
 function isAlive(target: TerminableProcess): boolean {
   return (target.exitCode ?? null) === null && (target.signalCode ?? null) === null;
 }
 
-/** Sends `signal` to the process GROUP (`process.kill(-pid, signal)`) when
- *  `pid` is known, so a grandchild the target spawned (e.g. a `run_command`
- *  promoted background task, issue #377) is reached too -- the production
- *  default spawn creates its own group for exactly this (issue #379).
- *  Falls back to `target.kill(signal)` on any failure (pid undefined,
- *  ESRCH, or a platform where negative-pid group signalling is not
- *  meaningful) so a caller never needs its own try/catch. Linux is the
- *  only platform this is verified on; the fallback keeps other platforms
- *  best-effort rather than throwing.
- *
- *  Checks `isAlive(target)` FIRST, unconditionally (issue #379 M4): a
- *  `ChildProcess`'s own `.kill()` already no-ops after `exit` (measured:
- *  returns `false`, no syscall) because it tracks its own handle's
- *  liveness, but `process.kill(-pid, signal)` is a raw OS-level call with
- *  no such awareness -- once the process has actually exited, that pid (or
- *  a process group sharing its number) can be reused by something
- *  completely unrelated, and a signal sent to it then would hit that
- *  unrelated target instead. This is the single choke point for every
- *  caller (the initial SIGTERM, the SIGKILL escalation, and the
- *  watchdog's direct SIGTERM/SIGKILL calls all route through here), so
- *  fixing it once here closes the class rather than requiring every call
- *  site to remember its own check. */
-export function signalSubtree(target: TerminableProcess, signal: NodeJS.Signals): boolean {
-  if (!isAlive(target)) return false;
-  if (target.pid !== undefined) {
-    try {
-      process.kill(-target.pid, signal);
-      return true;
-    } catch {
-      // Fall through to the single-process fallback below.
-    }
-  }
-  return target.kill(signal);
+/** Ends a detached agy subtree using only its process-group destination.
+ *  A failed group signal is final; changing to the PID path could send to a
+ *  different set of processes and must never be an implicit fallback. */
+export function signalSubtree(
+  target: TerminableProcess,
+  signal: NodeJS.Signals,
+  send: SignalTargetOperation = signalTarget,
+): boolean {
+  return send(target, "process_group", signal);
 }
 
 export interface GraceTerminationOptions {
@@ -64,6 +68,7 @@ export interface GraceTerminationOptions {
   setTimer?: (callback: () => void, delayMs: number) => unknown;
   clearTimer?: (timer: unknown) => void;
   nowMs?: () => number;
+  signalTarget?: SignalTargetOperation;
 }
 
 export interface GraceTerminationHandle {
@@ -102,8 +107,9 @@ export function terminateWithGrace(
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as never));
   const nowMs = options.nowMs ?? (() => performance.now());
+  const send = options.signalTarget ?? signalTarget;
 
-  signalSubtree(target, "SIGTERM");
+  signalSubtree(target, "SIGTERM", send);
 
   let fired = !isAlive(target);
   let deadlineMs = nowMs() + options.graceMs;
@@ -111,7 +117,7 @@ export function terminateWithGrace(
 
   function onFire(): void {
     fired = true;
-    signalSubtree(target, "SIGKILL");
+    signalSubtree(target, "SIGKILL", send);
   }
 
   return {

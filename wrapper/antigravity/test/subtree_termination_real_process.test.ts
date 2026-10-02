@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type AntigravityHostOptions } from "../src/host.js";
+import { signalTarget } from "../src/subtree_termination.js";
 
 const isLinux = process.platform === "linux";
 
@@ -123,7 +124,11 @@ if (args[0] === "models") {
 
 function hostHarness(
   agyPath: string,
-  options: { abortGraceMs?: number; spawn?: AntigravityHostOptions["spawn"] } = {},
+  options: {
+    abortGraceMs?: number;
+    spawn?: AntigravityHostOptions["spawn"];
+    signalTarget?: AntigravityHostOptions["signalTarget"];
+  } = {},
 ) {
   const cfg = config();
   const host = new AntigravityHost(cfg, {
@@ -136,6 +141,7 @@ function hostHarness(
     agyPath,
     ...(options.abortGraceMs === undefined ? {} : { abortGraceMs: options.abortGraceMs }),
     ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
+    ...(options.signalTarget === undefined ? {} : { signalTarget: options.signalTarget }),
   } satisfies AntigravityHostOptions);
   return { host };
 }
@@ -177,15 +183,13 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-subtree-negctl-"));
     const { executable, selfPidFile, grandchildPidFile, grandchildReadyFile } =
       writeFixture(root, { ignoreOwnSigterm: false });
-    // Pre-#379 behavior: no `detached`, so the fixture shares THIS worker
-    // process's group, and `signalSubtree`'s pid-based group path is never
-    // reachable through this spawn -- it exercises the single-process
-    // fallback instead, which is the actual old behavior this negative
-    // control targets.
+    // Direct PID delivery models the single-process path. Without detached
+    // spawn, the grandchild is outside that target and must survive.
     const { host } = hostHarness(executable, {
       abortGraceMs: 300,
       spawn: (command, args, opts) =>
         spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"] }) as never,
+      signalTarget: (target, _destination, signal) => signalTarget(target, "pid", signal),
     });
     let selfPid: number | undefined;
     let grandchildPid: number | undefined;
