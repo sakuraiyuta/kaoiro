@@ -20,7 +20,8 @@ export function isSafeSignalTarget(target: unknown): target is ChildProcess & { 
     && pid !== process.pid;
 }
 
-/** Sends only to a checked child PID or its checked process group. */
+/** Sends only to a checked child PID or its checked process group.
+ *  The PID destination is the normal probe path, not a fallback from group failure. */
 export const signalTarget: SignalTargetOperation = (target, destination, signal) => {
   if (!isSafeSignalTarget(target)) return false;
   const pid = destination === "process_group" ? -target.pid : target.pid;
@@ -42,7 +43,6 @@ export interface TerminableProcess {
   // simulate a target exiting.
   exitCode?: number | null | undefined;
   signalCode?: NodeJS.Signals | null | undefined;
-  kill(signal: NodeJS.Signals): boolean;
 }
 
 /** True when `target` has not yet exited, per its own `exitCode` /

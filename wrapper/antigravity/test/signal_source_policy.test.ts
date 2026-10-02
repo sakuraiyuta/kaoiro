@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
 
-interface KillCall {
+interface KillReference {
   file: string;
-  receiver: string;
-  access: "element" | "property";
-  call: string;
+  kind: "property" | "element" | "destructuring";
+  expression: string;
+  call: string | null;
 }
 
 function sourceFiles(directory: string): string[] {
@@ -21,49 +21,55 @@ function sourceFiles(directory: string): string[] {
   });
 }
 
-function sourceKillCalls(): KillCall[] {
-  const calls: KillCall[] = [];
+function literalPropertyName(node: ts.Node | undefined): string | undefined {
+  if (node === undefined) return undefined;
+  if (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isComputedPropertyName(node)) return literalPropertyName(node.expression);
+  return undefined;
+}
+
+function sourceKillReferences(): KillReference[] {
+  const references: KillReference[] = [];
   for (const file of sourceFiles(sourceRoot)) {
     const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const relativeFile = relative(sourceRoot, file).replaceAll("\\", "/");
+    function addReference(node: ts.Node, kind: KillReference["kind"]): void {
+      const parent = node.parent;
+      const call = ts.isCallExpression(parent) && parent.expression === node ? parent.getText(source) : null;
+      references.push({
+        file: relativeFile,
+        kind,
+        expression: node.getText(source),
+        call,
+      });
+    }
     function visit(node: ts.Node): void {
-      if (ts.isCallExpression(node)) {
-        const expression = node.expression;
-        if (ts.isPropertyAccessExpression(expression) && expression.name.text === "kill") {
-          calls.push({
-            file: relative(sourceRoot, file).replaceAll("\\", "/"),
-            receiver: expression.expression.getText(source),
-            access: "property",
-            call: node.getText(source),
-          });
-        } else if (ts.isElementAccessExpression(expression)
-          && expression.argumentExpression !== undefined
-          && ts.isStringLiteralLike(expression.argumentExpression)
-          && expression.argumentExpression.text === "kill") {
-          calls.push({
-            file: relative(sourceRoot, file).replaceAll("\\", "/"),
-            receiver: expression.expression.getText(source),
-            access: "element",
-            call: node.getText(source),
-          });
-        }
+      if (ts.isPropertyAccessExpression(node) && node.name.text === "kill") {
+        addReference(node, "property");
+      } else if (ts.isElementAccessExpression(node) && literalPropertyName(node.argumentExpression) === "kill") {
+        addReference(node, "element");
+      } else if (ts.isBindingElement(node)
+        && node.dotDotDotToken === undefined
+        && literalPropertyName(node.propertyName ?? node.name) === "kill") {
+        addReference(node, "destructuring");
       }
       ts.forEachChild(node, visit);
     }
     visit(source);
   }
-  return calls;
+  return references;
 }
 
 describe("Antigravity signal source policy", () => {
-  it("allows only the checked sender and the customization liveness probe", () => {
-    const calls = sourceKillCalls();
-    const approved = calls.filter((call) => call.receiver === "process" && call.access === "property");
-    const unapproved = calls.filter((call) => !approved.includes(call));
+  it("counts every kill property reference and destructuring, allowing only the checked senders", () => {
+    const references = sourceKillReferences().sort((left, right) =>
+      `${left.file}:${left.kind}:${left.expression}:${left.call}`.localeCompare(
+        `${right.file}:${right.kind}:${right.expression}:${right.call}`,
+      ));
 
-    expect(unapproved).toEqual([]);
-    expect(approved.map(({ file, call }) => ({ file, call })).sort((a, b) => a.file.localeCompare(b.file))).toEqual([
-      { file: "customization.ts", call: "process.kill(pid, 0)" },
-      { file: "subtree_termination.ts", call: "process.kill(pid, signal)" },
+    expect(references).toEqual([
+      { file: "customization.ts", kind: "property", expression: "process.kill", call: "process.kill(pid, 0)" },
+      { file: "subtree_termination.ts", kind: "property", expression: "process.kill", call: "process.kill(pid, signal)" },
     ]);
   });
 });

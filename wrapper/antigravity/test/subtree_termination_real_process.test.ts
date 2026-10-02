@@ -152,7 +152,7 @@ function hostHarness(
 
 describe.skipIf(!isLinux)("Antigravity subtree termination against real processes (issue #379, Linux-only)", () => {
   it("interrupt() terminates a real parent + grandchild that both ignore SIGTERM, as a group, after grace, during a promoted run_command background task (pins 1 + 5)", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-subtree-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-subtree-"));
     const { executable, selfPidFile, grandchildPidFile, grandchildReadyFile } =
       writeFixture(root, { ignoreOwnSigterm: true });
     const { host } = hostHarness(executable, { abortGraceMs: 300 });
@@ -184,7 +184,7 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
   }, 10_000);
 
   it("negative control: WITHOUT a detached spawn, the grandchild survives the leader's death (proves the assertion depends on the process group)", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-subtree-negctl-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-subtree-negctl-"));
     const { executable, selfPidFile, grandchildPidFile, grandchildReadyFile } =
       writeFixture(root, { ignoreOwnSigterm: false });
     // Direct PID delivery models the single-process path. Without detached
@@ -221,7 +221,7 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
   }, 10_000);
 
   it("a child that exits on SIGTERM never receives a SIGKILL (pin 2)", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-subtree-clean-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-subtree-clean-"));
     const executable = join(root, "agy-fixture-clean.mjs");
     const readyFile = join(root, "ready");
     writeFileSync(executable, `#!${process.execPath}
