@@ -90,5 +90,18 @@
   },
   "null_window_live_observed": false,
   "post_compaction_resume_usage_notifications_before_turn": 0,
-  "recommendation": "Keep supports_context_usage=false under ADR-0040. A native snapshot meter requires an explicit policy change allowing upstream estimates."
+  "recommendation": "Retain supports_context_usage=false while five qualification gaps remain unresolved, pending the operator decision. ADR-0040 D3 rejects the input_tokens proxy and leaves room to reconsider upstream telemetry; it does not rule out reconsidering this native snapshot meter.",
+  "operator_options": {
+    "adopt": "Qualify the missing paths, agree the boundary and unknown-state contract in an ADR addendum, and review the design before implementation.",
+    "do_not_adopt": "Keep capability false and omit ext.context; close the research without additional qualification probes or implementation."
+  },
+  "unestablished_prerequisites": [
+    "Compaction boundary identification, event ordering and freshness policy.",
+    "Availability and stale-generation rejection on resume immediately after compaction.",
+    "Model-switch invalidation and association of counts with the current window.",
+    "Automatic compaction notification shape and recovery; no additional probe performed.",
+    "Nonzero reasoning-output inclusion and TUI parity; no additional probe performed."
+  ],
+  "compaction_boundary_candidate": "Unknown at an identified boundary, suppress its estimated checkpoint, restore only with a qualifying ordinary-response snapshot of the current thread/model/generation. Claude boundary invalidation is a precedent; its bounded-reading settling rule is not a proven Codex freshness criterion.",
+  "estimate_scope": "The single 16444-token explicit-compaction checkpoint in this capture; the following ordinary response returns to a provider-backed snapshot."
 }

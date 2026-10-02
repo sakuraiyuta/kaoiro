@@ -7,11 +7,14 @@ last_updated: 2026-10-02
 # Codex app-server context-usage research
 
 Research for [issue #485](https://github.com/sakuraiyuta/kaoiro/issues/485).
-The recommendation is to retain `supports_context_usage: false` under
-[ADR-0040 D3](../../adr/0040-context-usage-capability.md#d3-codex-adapter-sets-capabilityfalse-and-does-not-project-estimates).
-A native snapshot meter is technically feasible, but its values include an
-upstream estimate after compaction. Adopting that meaning requires an explicit
-policy decision; this research changes neither the adapter nor the accepted ADR.
+The recommendation is to retain `supports_context_usage: false` while the five
+qualification gaps below remain unresolved, pending the operator's adoption
+decision. [ADR-0040 D3](../../adr/0040-context-usage-capability.md#d3-codex-adapter-sets-capabilityfalse-and-does-not-project-estimates)
+rejects an `input_tokens` proxy and explicitly leaves room to reconsider settled
+upstream telemetry; it does not rule out reconsidering this native snapshot meter.
+In this capture, the upstream estimate is the single 16,444-token compaction
+checkpoint; the next ordinary response returns to a provider-backed snapshot.
+This research changes neither the adapter nor the accepted ADR.
 
 ## Target and composition
 
@@ -116,17 +119,31 @@ omitted windows. These are controlled input checks, not evidence that this
 account/provider emitted null. The current host continued to advertise false
 and omitted `ext.context` throughout the captured default composition.
 
-## Specification recommendation
+## Specification recommendation and operator decision
 
-Retain false for this research outcome. The available field identifies the
-native context snapshot, but does not establish the exact current occupancy
-required to remove ADR-0040's prohibition on estimates without a policy change.
-In particular, importing an upstream estimate is still choosing to display an
-estimate. This recommendation is about that accepted policy, not an inability
-to consume the notification.
+Retain false until the unestablished paths below are qualified and the operator
+decides whether to adopt the meter. This is a recommendation based on incomplete
+coverage, not a restriction imposed by D3. Its rejected proposal substituted
+`turn.completed.usage.input_tokens` for context; the new evidence identifies
+`last.totalTokens` and a native window, matching the upstream-telemetry direction
+D3 expressly leaves open. A compaction decrease is expected for context occupancy
+and should not itself be used to reject this snapshot.
 
-If the operator approves a **native snapshot estimate** as the meter's meaning,
-the candidate formula is:
+The operator's question is: **adopt the app-server native context meter, or do
+not adopt it?**
+
+| Choice | Result and follow-up |
+| --- | --- |
+| Adopt | Proceed to qualify the five gaps below and design the app-server meter. It would make native context snapshots available when qualified, with explicitly unavailable intervals. Record the contract in an ADR addendum and review the design before implementation; this choice does not immediately enable the capability. |
+| Do not adopt | Keep `supports_context_usage: false` and omit `ext.context`. Close this research without implementing the meter or running the additional qualification probes. No ADR addendum is needed to preserve the current behavior. |
+
+D3 leaves room for this adoption question, while its current capability remains
+false. The recommendation favors retaining false while qualification is
+incomplete; it does not decide the operator's choice or rule out later adoption.
+Automatic-compaction and reasoning probes remain deferred until that choice is
+made.
+
+If adopted, the candidate snapshot formula is:
 
 ```text
 used_tokens     = tokenUsage.last.totalTokens
@@ -143,13 +160,51 @@ the TUI's baseline-adjusted percentage. Out-of-window snapshots and display
 clamping would need an explicit contract in the subsequent design; this sample
 did not exercise them.
 
-No ADR-0040 addendum is required to retain the accepted false behavior. Adopting
-the candidate requires an addendum that narrows or supersedes D3 for app-server,
-authorizes native estimates, defines the percentage and unknown/resume behavior,
-and leaves the exec backend's false behavior intact. A fall after compaction is
-expected for current context occupancy; the historical Context §2(b) argument
-should not be reused as a reason to reject this native snapshot. Record that
-clarification in the addendum rather than rewriting the historical decision.
+### Compaction-boundary candidate and Claude precedent
+
+One candidate is to invalidate the previous reading when a compaction boundary
+is identified, display unknown through that boundary, and restore the meter only
+when a qualifying ordinary-response snapshot for the current thread, model and
+generation arrives. Under this candidate the estimated 16,444-token checkpoint
+is not displayed. A missing post-compaction resume snapshot also leaves the
+meter unknown. The boundary detector and freshness criteria are not established
+by this single explicit-compaction capture; a zero input/output breakdown alone
+has not been qualified as a general boundary detector.
+
+The inspected Claude implementation at `ea567492d43a12bc8f68d9c215db27ecc92984d5`
+provides a precedent for this invalidation pattern:
+
+- [`#contextEpochGate`](https://github.com/sakuraiyuta/kaoiro/blob/ea567492d43a12bc8f68d9c215db27ecc92984d5/wrapper/claude-code/src/host.ts#L968)
+  records that a reading immediately after a boundary can still describe the
+  previous epoch.
+- [`#invalidateContextEpoch`](https://github.com/sakuraiyuta/kaoiro/blob/ea567492d43a12bc8f68d9c215db27ecc92984d5/wrapper/claude-code/src/host.ts#L4036)
+  increments the generation, sets the cached context to null, and emits the
+  current state when a reading had existed before requesting another refresh.
+- [`#settleContextEpoch`](https://github.com/sakuraiyuta/kaoiro/blob/ea567492d43a12bc8f68d9c215db27ecc92984d5/wrapper/claude-code/src/host.ts#L4233)
+  uses boundary metadata or a bounded three-reading allowance. That allowance
+  is a liveness rule, not proof that every accepted reading is fresh. These
+  SDK-specific criteria are not validated for Codex and must not be copied as
+  a Codex freshness guarantee. This comparison is code inspection, not a new
+  Claude SDK or dashboard measurement.
+
+### Unestablished adoption prerequisites
+
+| Prerequisite | Established by this capture | Still unestablished |
+| --- | --- | --- |
+| Compaction boundary handling | One completed explicit compaction produced a nonzero estimated last total with a zero input/output breakdown. | Which notifications identify and order each boundary; invalidation, suppression of its estimate, and qualification of the later reading. The unknown-until-qualified policy above is a candidate. |
+| Resume immediately after compaction | One wrapper history read emitted no usage before the next turn; the TUI context row was not observed within 35 seconds. | How availability is restored consistently, including repeated resumes and rejection of earlier-generation replays. No carry-over of another model's or generation's window is justified. |
+| Model switching | All ten usage notifications used the same 258,400-token window. | Invalidation of counts and window on a switch, model/generation association of subsequent events, and rejection of stale or in-flight snapshots. No model switch was measured. |
+| Automatic compaction | The measured operation was one explicit `thread/compact/start`. | Automatic compaction's notification shape, ordering, checkpoint values and recovery behavior. No additional automatic-compaction measurement has been run. |
+| Reasoning output | The captured turns had zero reasoning-output usage. | Whether native last totals include nonzero reasoning usage as needed by the meter, and parity with the TUI on that path. No additional reasoning measurement has been run. |
+
+No ADR-0040 addendum is needed to retain false. Adoption would require an
+addendum replacing the app-server portion of D3's current unsupported decision,
+defining native snapshot semantics, the raw percentage, boundary and unknown
+states, and resume/model-generation behavior. The exec backend stays false.
+Whether to publish or suppress an estimated checkpoint is part of that contract,
+not a blanket prohibition already present in D3. Record the new telemetry and the
+context-occupancy meaning of compaction decreases in the addendum rather than
+rewriting the historical decision.
 
 The subsequent implementation design would also need thread-scoped telemetry
 for resume and explicit compaction outside an active turn. Adding a consumer
@@ -172,7 +227,7 @@ The committed JSON preserves the numeric observations even after scratch cleanup
   notifications, five TUI context comparisons, and nine controlled input cases.
 - Negative control: removing the native compaction usage lines from a temporary
   copy made the same checker exit 1. The original remained unchanged and passed
-  again with exit 0. No subsequent mutation was performed.
+  again with exit 0. No subsequent capture mutation was performed.
 - Recorded owned app-server and successful TUI/tmux PIDs were absent at cleanup
   audit; no dedicated tmux socket directory remained. Signals targeted only
   the held PIDs of processes created by the probe.
