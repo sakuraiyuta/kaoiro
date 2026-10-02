@@ -88,11 +88,12 @@ export class AppServerAccountTelemetry {
     return structuredClone({ readStatus: this.#readStatus, buckets: [...this.#buckets.values()] });
   }
 
-  update(value: unknown): void {
+  update(value: unknown): boolean {
     const parsed = bucket(value);
-    if (parsed === null) return;
+    if (parsed === null) return false;
     this.#notification += 1;
     this.#buckets.set(parsed.limitId, parsed);
+    return true;
   }
 
   beginRead(): ReadToken { return { request: ++this.#request, notification: this.#notification }; }

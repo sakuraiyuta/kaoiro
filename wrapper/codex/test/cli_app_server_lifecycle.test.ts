@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { cliAppFixture } from "./fixtures/cli_app_server.js";
 
+const rateLimitStates = (f: Awaited<ReturnType<typeof cliAppFixture>>) => f.envelopes("state_change")
+  .map(envelope => (envelope as { ext?: { rate_limits?: unknown } }).ext?.rate_limits)
+  .filter((value): value is Record<string, unknown> => value !== undefined);
+const rateNotification = (usedPercent: number, windowDurationMins = 10080, limitId = "codex") => ({
+  method: "account/rateLimits/updated",
+  params: { rateLimits: {
+    limitId,
+    primary: { windowDurationMins, usedPercent, resetsAt: 1791431221 },
+    secondary: null,
+  } },
+});
+
 it("starts the real watchdog only at dispatch, extends on matching progress, and stops at terminal", async () => {
   const f = await cliAppFixture(true);
   try {
@@ -27,6 +39,89 @@ it("starts the real watchdog only at dispatch, extends on matching progress, and
     // Queued work is now waiting on the observation gate, with no watchdog timer.
     expect(f.clock.size).toBe(0);f.clock.advance(120000);expect(f.interrupts()).toHaveLength(1);
   } finally { await f.close(); }
+});
+
+it("forwards a post-open Codex rate notification through runCodexCli while fencing the older read", async () => {
+  const f = await cliAppFixture(false, "app-server", "legacy", { holdRateLimitRead: true });
+  const rates = () => rateLimitStates(f);
+  try {
+    await f.inbound(1, "rate-refresh");
+    await vi.waitFor(() => expect(f.rateLimitReadPending).toBe(true));
+
+    f.send({ method: "account/rateLimits/updated", params: { rateLimits: {
+      limitId: "codex",
+      primary: { windowDurationMins: 300, usedPercent: 35, resetsAt: 1791431221 },
+      secondary: { windowDurationMins: 10080, usedPercent: 47, resetsAt: 1791431221 },
+    } } });
+    await vi.waitFor(() => expect(rates().at(-1)).toEqual({
+      five_hour: { utilization: 0.35, resets_at: 1791431221 },
+      seven_day: { utilization: 0.47, resets_at: 1791431221 },
+    }));
+
+    f.send(rateNotification(48));
+    await vi.waitFor(() => expect(rates().at(-1)).toEqual({
+      seven_day: { utilization: 0.48, resets_at: 1791431221 },
+    }));
+
+    f.completeRateLimitRead({ rateLimitsByLimitId: { codex: {
+      limitId: "codex",
+      primary: { windowDurationMins: 300, usedPercent: 1, resetsAt: 1234 },
+      secondary: { windowDurationMins: 10080, usedPercent: 2, resetsAt: 5678 },
+    } } });
+    await vi.waitFor(() => expect(f.rateLimits?.buckets[0]?.windows).toEqual({
+      seven_day: { utilization: 0.48, resets_at: 1791431221 },
+    }));
+    await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    f.terminal();await vi.waitFor(() => expect(f.envelopes("result")).toHaveLength(1));
+    expect(rates().at(-1)).toEqual({ seven_day: { utilization: 0.48, resets_at: 1791431221 } });
+  } finally { await f.close(); }
+});
+
+it("does not project another limitId into the Codex meter", async () => {
+  const f = await cliAppFixture();
+  try {
+    await f.inbound(1, "non-codex-rate");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    f.send(rateNotification(99, 300, "images"));
+    f.send(rateNotification(47));
+    await vi.waitFor(() => expect(rateLimitStates(f)).toEqual([
+      { seven_day: { utilization: 0.47, resets_at: 1791431221 } },
+    ]));
+  } finally { await f.close(); }
+});
+
+it("suppresses a duplicate Codex rate snapshot", async () => {
+  const f = await cliAppFixture();
+  try {
+    await f.inbound(1, "duplicate-rate");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    f.send(rateNotification(47));
+    f.send(rateNotification(47));
+    f.send(rateNotification(48));
+    await vi.waitFor(() => expect(rateLimitStates(f).at(-1)).toEqual({
+      seven_day: { utilization: 0.48, resets_at: 1791431221 },
+    }));
+    expect(rateLimitStates(f)).toEqual([
+      { seven_day: { utilization: 0.47, resets_at: 1791431221 } },
+      { seven_day: { utilization: 0.48, resets_at: 1791431221 } },
+    ]);
+  } finally { await f.close(); }
+});
+
+it("does not project a rate notification after the runtime is closed", async () => {
+  const f = await cliAppFixture(false, "app-server", "legacy", { holdChildExitOnClose: true, shutdownTimeoutMs: 5000 });
+  try {
+    await f.inbound(1, "closed-rate");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    f.send(rateNotification(47));
+    await vi.waitFor(() => expect(rateLimitStates(f)).toEqual([
+      { seven_day: { utilization: 0.47, resets_at: 1791431221 } },
+    ]));
+    f.host.close();
+    f.send(rateNotification(48));
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(rateLimitStates(f)).toEqual([
+      { seven_day: { utilization: 0.47, resets_at: 1791431221 } },
+    ]);
+    f.releaseChildClose();await f.running;
+  } finally { f.releaseChildClose();await f.close(); }
 });
 
 it("fences interrupt by Host token, keeps the queue until interrupted terminal, then resumes it", async () => {

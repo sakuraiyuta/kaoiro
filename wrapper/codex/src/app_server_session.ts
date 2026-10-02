@@ -21,6 +21,7 @@ export interface AppServerSessionOptions {
   turnSignal: () => AbortSignal | null;
   bridgeStderrPath?: string;
   onDisconnect?: (error: Error) => void;
+  onRateLimits?: (snapshot: AppServerRateLimits) => void;
   onForeignTurn?: (turn: AppServerForeignTurn) => void;
   /** Stop steering and new turns once a foreign turn is seen. */
   enforceForeignTurn?: boolean;
@@ -108,6 +109,7 @@ export class AppServerSession {
       ...(options.onForeignTurn === undefined ? {} : { onForeignTurn: options.onForeignTurn }),
       ...(options.enforceForeignTurn === undefined ? {} : { enforceForeignTurn: options.enforceForeignTurn }),
       ...(options.approvals === undefined ? {} : { approvals: options.approvals }),
+      onRateLimits: snapshot => options.onRateLimits?.(snapshot),
       ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
     });
   }

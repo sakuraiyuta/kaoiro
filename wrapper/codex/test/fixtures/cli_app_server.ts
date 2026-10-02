@@ -37,12 +37,20 @@ export function watchdogClock() {
 // Only the external app-server child and time are simulated. CLI callbacks,
 // Host/Session, Unix ToolHost, ServerLink, brokers, IA and reset coordinator run.
 export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy",
-  options: { stages?: boolean; turnStart?: () => "reply" | "exit" | "reject" } = {}) {
+  fixtureOptions: {
+    stages?: boolean;
+    turnStart?: () => "reply" | "exit" | "reject";
+    rateLimitRead?: unknown;
+    holdRateLimitRead?: boolean;
+    holdChildExitOnClose?: boolean;
+    shutdownTimeoutMs?: number;
+  } = {}) {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-cli-fixture-")), agentId = `fixture-${randomUUID()}`;
   const clock = watchdogClock(), sent: RpcObject[] = [];
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough();
   let turn = 0, socketPath = "", spawned = 0;
+  let pendingRateLimitRead: RpcObject | undefined;
   let releaseExec!: () => void;
   const execTerminal = new Promise<void>(resolve => { releaseExec = resolve; });
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
@@ -55,9 +63,13 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
       socketPath = ((request.params as any).config.mcp_servers.kaoiro.env.KAOIRO_BRIDGE_SOCKET as string);
       reply(request, { thread: { id: "thread" }, model: "gpt-5.6-sol", reasoningEffort: "medium" });
     }
-    if (request.method === "account/rateLimits/read") send({ id: request.id, error: { code: -32600, message: "no account" } });
+    if (request.method === "account/rateLimits/read") {
+      if (fixtureOptions.holdRateLimitRead) pendingRateLimitRead = request;
+      else if (Object.hasOwn(fixtureOptions, "rateLimitRead")) reply(request, fixtureOptions.rateLimitRead);
+      else send({ id: request.id, error: { code: -32600, message: "no account" } });
+    }
     if (request.method === "config/read") reply(request, { config: { model_reasoning_effort: "medium" } });
-    const turnStart = request.method === "turn/start" ? (options.turnStart?.() ?? "reply") : "reply";
+    const turnStart = request.method === "turn/start" ? (fixtureOptions.turnStart?.() ?? "reply") : "reply";
     if (request.method === "turn/start" && turnStart === "exit") exit();
     else if (request.method === "turn/start" && turnStart === "reject") send({ id: request.id, error: { code: -32600, message: "rejected" } });
     else if (request.method === "turn/start") {
@@ -70,10 +82,10 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   } });
   Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
   const exit = () => { if (child.exitCode !== null) return;Object.assign(child, { exitCode: 0 });child.emit("exit", 0, null);stdout.end();stderr.end();queueMicrotask(() => child.emit("close", 0, null)); };
-  stdin.on("finish", exit);child.kill = () => { exit();return true; };
+  stdin.on("finish", () => { if (!fixtureOptions.holdChildExitOnClose) exit(); });child.kill = () => { exit();return true; };
   let rejection: Record<string, unknown> | undefined;
   const wire = await phoenixLoopback(() => ({ ...(replyBasis === "v1" ? { inter_agent_reply_basis: "v1" } : {}),
-    ...(options.stages === true ? { inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-451" } : {}), permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
+    ...(fixtureOptions.stages === true ? { inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-451" } : {}), permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
     event === "delivery_resync" ? { request_id: payload.request_id, skipped_ranges: payload.missing_ranges, delivery: { issued_seq: payload.cutoff, acked_seq: 1, pending_since: new Date().toISOString() } } :
     event === "session_reset_request" ? { request_id: "reset" } : { ingress_stamp: [1, 1] }, (event, payload) => {
       if (event !== "envelope" || payload.type !== "inter_agent_message") return undefined;
@@ -110,7 +122,9 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
         yield { type: "thread.started" as const, thread_id: "thread" };await execTerminal;
         yield { type: "turn.completed" as const, usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 } };
       })() }; } };return { startThread: () => thread, resumeThread: () => thread }; },
-      appServerSessionFactory: async options => (session = await AppServerSession.create({ ...options, transport: { spawnChild: () => { spawned += 1;return child; }, shutdownTimeoutMs: 20 } })),
+      appServerSessionFactory: async options => (session = await AppServerSession.create({ ...options, transport: {
+        spawnChild: () => { spawned += 1;return child; }, shutdownTimeoutMs: fixtureOptions.shutdownTimeoutMs ?? 20,
+      } })),
     });
       const send = host.send.bind(host);
       host.send = async (...args) => { await send(...args);queued.push(args[0]); };
@@ -122,8 +136,13 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   const envelopes = (type: string) => wire.received.filter(e => e.event === "envelope" && e.payload.type === type).map(e => e.payload);
   return {
     rejectNextSend: (error: Record<string, unknown>) => { rejection = error; },
-    clock, wire, host, callbacks, sent, send, terminal, exit, running, envelopes, releaseExec, finalized, queued,
+    clock, wire, host, callbacks, sent, send, terminal, exit, releaseChildClose: exit, running, envelopes, releaseExec, finalized, queued,
     get spawned() { return spawned; }, get permissionWaits() { return permissionWaits; }, get rateLimits() { return session?.rateLimits; },
+    get rateLimitReadPending() { return pendingRateLimitRead !== undefined; },
+    completeRateLimitRead(value: unknown) {
+      if (!pendingRateLimitRead) throw new Error("No rate-limit read is pending");
+      const request = pendingRateLimitRead;pendingRateLimitRead = undefined;reply(request, value);
+    },
     // After the application callback finishes, a round trip drains earlier
     // writes on this same WebSocket; JSONL child writes cannot do that.
     drain: () => link.requestDirectory(),
