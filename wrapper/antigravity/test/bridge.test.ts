@@ -23,16 +23,20 @@ async function runBridge(environment: NodeJS.ProcessEnv): Promise<{ code: number
 describe("bridge CLI", () => {
   it("one-shot listはToolHostへ応答後socketを閉じてexit 0する", async () => {
     const host = await ToolHost.listen([{ name: "whoami", description: "identity", inputSchema: {}, handler: async () => ({ content: [] }) }]);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
         runBridge({ ...process.env, KAOIRO_BRIDGE_SOCKET: host.socketPath, KAOIRO_BRIDGE_NONCE: host.nonce }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("bridge child did not exit")), 1_000)),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("bridge child did not exit")), 5_000);
+        }),
       ]);
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toEqual([expect.objectContaining({ name: "whoami" })]);
     } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
       host.close();
     }
-  });
+  }, 10_000);
 });

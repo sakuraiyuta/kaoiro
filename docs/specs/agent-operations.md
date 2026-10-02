@@ -115,6 +115,12 @@ For persona-name resolution and existing-peer routing, follow
   sessions share a persona name, put the display name (`kuroe-sub`, not
   `kuroe`) in the scratch name; a reviewer must be able to tell whose
   28 MB repo copy under `/tmp` is still live without asking.
+- Before landing a branch that changes Antigravity signal, spawn, or test
+  harness paths, run its full package suite through
+  `scripts/antigravity-kill-trace-gate.py`. Use the same gate before running
+  an unreviewed branch with those changes on a shared host. The gate checks
+  signal targets and trace coverage; if `unshare`, `setsid`, or `strace` is
+  unavailable, its exit 2 is not a passing verification result.
 - Why: a `pgrep -f beam.smp | head -1` followed by `kill -9` during a review
   probe could not be confirmed to have hit the reviewer's own child
   (2026-09-06, issue #305 B round 2). Nothing in production was affected,

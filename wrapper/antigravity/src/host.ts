@@ -58,7 +58,7 @@ import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
 import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
-import { signalSubtree, terminateWithGrace, type GraceTerminationHandle } from "./subtree_termination.js";
+import { signalSubtree, signalTarget, terminateWithGrace, type GraceTerminationHandle, type SignalTargetOperation } from "./subtree_termination.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
@@ -279,6 +279,8 @@ export interface AntigravityHostOptions {
   nodePath?: string;
   agyPath?: string;
   spawn?: (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => SpawnedAgy;
+  /** Test-only seam. Production uses the checked PID/process-group signal gate. */
+  signalTarget?: SignalTargetOperation;
   /** Injectable for tests (issue #371): controls the timing of the
    *  pre-spawn `ToolHost.listen` await so a test can interrupt while it is
    *  still pending. Defaults to the real static method. */
@@ -457,6 +459,7 @@ export function initialStatusExt(
 export class AntigravityHost implements EngineAdapter {
   readonly #config: AntigravityLaunchConfig;
   readonly #options: AntigravityHostOptions;
+  readonly #signalTarget: SignalTargetOperation;
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #closed = false;
@@ -573,6 +576,7 @@ export class AntigravityHost implements EngineAdapter {
       this.#config.antigravity_extra_models,
     );
     this.#options = options;
+    this.#signalTarget = options.signalTarget ?? signalTarget;
     this.#agyExecutable = options.agyPath === undefined
       ? resolveAgyExecutable(this.#config.antigravity_cli_path)
       : { ok: true, path: options.agyPath };
@@ -740,7 +744,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
     // issue #377 Stage 2: ends the whole epoch, not just the active turn --
     // an idle interrupt (no `#currentTurnToken`) now has a live process to
     // stop, unlike Stage 1 where idle meant no process existed at all. The
@@ -763,7 +767,7 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     if (this.#running === null) return;
-    this.#activeTermination = terminateWithGrace(this.#running, { graceMs });
+    this.#activeTermination = terminateWithGrace(this.#running, { graceMs, signalTarget: this.#signalTarget });
   }
 
   requestInterruptForTurn(turnToken: string, cause?: TurnWatchdogInterruptCause): boolean {
@@ -782,7 +786,7 @@ export class AntigravityHost implements EngineAdapter {
     // and `failStopTurnForWatchdog`); arming a second one here would double
     // the effective wait before an unresponsive watchdog-flagged turn dies.
     this.#markEpochEnding("watchdog");
-    return this.#running !== null && signalSubtree(this.#running, "SIGTERM");
+    return this.#running !== null && signalSubtree(this.#running, "SIGTERM", this.#signalTarget);
   }
 
   failStopTurnForWatchdog(turnToken: string): boolean {
@@ -811,7 +815,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
     // issue #379 M2: closeGraceMs, not abortGraceMs -- an outer supervisor
     // (runner reset / systemd stop) can SIGKILL this wrapper process well
     // before a 60s abort grace would fire, so close() always shortens down
@@ -1497,12 +1501,12 @@ export class AntigravityHost implements EngineAdapter {
     this.#gateServer?.close();
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
-    this.#gateProbe?.kill?.("SIGTERM");
+    if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
     // issue #379: no grace here either -- by the time TurnWatchdog calls
     // this, its OWN abortGraceMs has already elapsed since
     // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
     this.#markEpochEnding("watchdog");
-    if (this.#running !== null) signalSubtree(this.#running, "SIGKILL");
+    if (this.#running !== null) signalSubtree(this.#running, "SIGKILL", this.#signalTarget);
     const error = {
       detail: attribution === "exact"
         ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
@@ -2011,7 +2015,7 @@ export class AntigravityHost implements EngineAdapter {
         resolveProbe(value);
       };
       const cancel = (): void => {
-        child?.kill?.("SIGTERM");
+        if (child !== null) this.#signalTarget(child, "pid", "SIGTERM");
         settle({ ok: false, reason: "timeout" });
       };
       timeout = setTimeout(cancel, this.#probeTimeoutMs);
@@ -2105,7 +2109,7 @@ export class AntigravityHost implements EngineAdapter {
         return;
       }
       const timeout = setTimeout(() => {
-        child.kill?.("SIGTERM");
+        this.#signalTarget(child, "pid", "SIGTERM");
         resolveProbe(null);
       }, this.#probeTimeoutMs);
       child.stdout.setEncoding("utf8");
