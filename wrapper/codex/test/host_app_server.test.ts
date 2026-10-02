@@ -522,3 +522,103 @@ it("does not mark the outcome unknown when turn/start is rejected, skipped or su
   await vi.waitFor(() => expect(ok.ends).toHaveBeenCalledTimes(1));
   expect(ok.ends.mock.calls[0]![0]).not.toHaveProperty("handoff");
 });
+
+const contextCounts = { inputTokens: 23955, cachedInputTokens: 100, outputTokens: 263, reasoningOutputTokens: 252, totalTokens: 24218 };
+const contextUsage = (window: number | null = 258400) => ({ last: contextCounts, total: { ...contextCounts, totalTokens: 900000 }, modelContextWindow: window });
+const contextOf = (f: ReturnType<typeof fixture>) => f.states.at(-1)?.ext?.context;
+function contextFact(f: ReturnType<typeof fixture>, method: string, extra: Record<string, unknown>, turnId = "turn-1", threadId = "thread") {
+  f.send({ method, params: { threadId, turnId, ...extra } });
+}
+function contextResponse(f: ReturnType<typeof fixture>, turn = "turn-1", window: number | null = 258400) {
+  contextFact(f, "item/completed", { item: { id: "reply", type: "agentMessage", text: "DONE" } }, turn);
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage(window) }, turn);
+}
+it("publishes committed context through transport, session and runtime, then retracts an idle boundary immediately", async () => {
+  const f = fixture();await f.host.send("ordinary");await f.until(1);
+  expect(f.states[0]?.ext?.session_capabilities).toMatchObject({ supports_context_usage: true });
+  contextResponse(f);await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeUndefined();
+  f.terminal();await vi.waitFor(() => expect(contextOf(f)).toEqual({ used_tokens: 24218, max_tokens: 258400, used_percentage: 100 * (24218 / 258400) }));
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage(null) }, "old");
+  contextFact(f, "item/started", { item: { id: "other", type: "contextCompaction" } }, "manual", "other-thread");
+  await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeDefined();
+  contextFact(f, "item/started", { item: { id: "compact", type: "contextCompaction" } }, "manual");
+  await vi.waitFor(() => expect(contextOf(f)).toBeUndefined());
+  contextFact(f, "item/completed", { item: { id: "compact", type: "contextCompaction" } }, "manual");
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage() }, "turn-1");
+  await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeUndefined();
+});
+it("does not publish buffered usage across a compaction before its start reply", async () => {
+  const f = fixture();f.startReply = "held";await f.host.send("buffered");await f.until(1);
+  contextResponse(f);
+  contextFact(f, "item/started", { item: { id: "compact", type: "contextCompaction" } });
+  contextFact(f, "item/completed", { item: { id: "compact", type: "contextCompaction" } });
+  f.terminal();f.releaseReply();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(contextOf(f)).toBeUndefined();
+});
+it("publishes buffered ordinary response only after the validated start and settings commit", async () => {
+  const f = fixture();f.startReply = "held";await f.host.send("buffered");await f.until(1);contextResponse(f);f.terminal();
+  await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeUndefined();
+  f.releaseReply();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+});
+it("keeps a concurrent model request from publishing the old in-flight model, then recovers after the new model commits", async () => {
+  const f = fixture();await f.host.send("old");await f.until(1);contextResponse(f);
+  await f.host.setModel("gpt-6-sol");f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));expect(contextOf(f)).toBeUndefined();
+  await f.host.send("new");await f.until(2);contextResponse(f, "turn-2");f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.setModel("gpt-5.6-sol");expect(contextOf(f)).toBeUndefined();
+});
+it("retracts null windows and does not recover after failure or close", async () => {
+  const f = fixture();await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.send("null");await f.until(2);contextResponse(f, "turn-2", null);await vi.waitFor(() => expect(contextOf(f)).toBeUndefined());f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));await f.host.send("failure");await f.until(3);contextResponse(f, "turn-3");f.terminal("failed");
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(3));expect(contextOf(f)).toBeUndefined();
+  await f.host.send("closing");await f.until(4);contextResponse(f, "turn-4");const beforeClose = f.states.length;f.host.close();await f.running;
+  expect(f.states.slice(beforeClose).every(e => e.ext?.context === undefined)).toBe(true);
+});
+it("ignores old-turn and foreign-thread usage while an owned turn is active", async () => {
+  const f = fixture();await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.send("owned");await f.until(2);
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage(null) }, "turn-1");
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage(null) }, "turn-2", "foreign");
+  await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeDefined();
+  contextResponse(f, "turn-2");f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));expect(contextOf(f)).toBeDefined();
+});
+it("keeps unknown across a failed model switch and recovers only on the rollback turn's response", async () => {
+  const f = fixture();await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.setModel("gpt-6-sol");expect(contextOf(f)).toBeUndefined();await f.host.send("switch");await f.until(2);contextResponse(f, "turn-2");f.terminal("failed");
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));expect(contextOf(f)).toBeUndefined();
+  await f.host.send("rollback");await f.until(3);expect(contextOf(f)).toBeUndefined();contextResponse(f, "turn-3");f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+});
+it("does not qualify usage after a malformed response item", async () => {
+  const f = fixture();await f.host.send("ordinary");await f.until(1);
+  contextFact(f, "item/completed", { item: { type: "agentMessage", text: "no native identity" } });
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: contextUsage() });f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));expect(contextOf(f)).toBeUndefined();
+});
+it("withdraws at automatic compaction and publishes the post-boundary response in that same owned turn", async () => {
+  const f = fixture();await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.send("automatic");await f.until(2);
+  contextFact(f, "item/started", { item: { id: "automatic", type: "contextCompaction" } }, "turn-2");
+  await vi.waitFor(() => expect(contextOf(f)).toBeUndefined());
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: { ...contextUsage(), last: { ...contextCounts, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 69748 } } }, "turn-2");
+  contextFact(f, "item/completed", { item: { id: "automatic", type: "contextCompaction" } }, "turn-2");
+  contextFact(f, "item/completed", { item: { id: "reply", type: "agentMessage", text: "POST" } }, "turn-2");
+  contextFact(f, "thread/tokenUsage/updated", { tokenUsage: { ...contextUsage(), last: { ...contextCounts, inputTokens: 136479, outputTokens: 7, reasoningOutputTokens: 0, totalTokens: 136486 } } }, "turn-2");
+  await new Promise(resolve => setImmediate(resolve));expect(contextOf(f)).toBeUndefined();
+  f.terminal();await vi.waitFor(() => expect(contextOf(f)).toMatchObject({ used_tokens: 136486, max_tokens: 258400 }));
+});
+it("withdraws a known context when close lands at the terminal before settings commit", async () => {
+  let f!: ReturnType<typeof fixture>;
+  f = fixture({ onTurnBoundary: event => { if (event.turnToken === "closing") f.host.close(); } });
+  await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.send("closing", undefined, [], "closing");await f.until(2);contextResponse(f, "turn-2");const beforeClose = f.states.length;f.terminal();await f.running;
+  expect(f.states.slice(beforeClose).every(e => e.ext?.context === undefined)).toBe(true);
+});
+it("withdraws context from the watchdog error state", async () => {
+  const f = fixture();await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  f.host.failStopForWatchdogAttributionUnknown();expect(f.states.at(-1)?.state).toBe("error");expect(contextOf(f)).toBeUndefined();
+});
+it("preserves the context when compatibility rejects a model request before acceptance", async () => {
+  const launch = { ...config };delete launch.model;
+  const f = fixture({ codexClientVersion: "0.144.1" }, launch);await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
+  await f.host.setModel("gpt-6-astra");expect(contextOf(f)).toBeDefined();expect(f.states.at(-1)?.ext?.switch_error).toMatchObject({ reason: "client_version_too_old" });
+});

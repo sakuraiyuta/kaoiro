@@ -11,6 +11,7 @@ import {
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
 import type { SteerResponse } from "./app_server_steer.js";
+import type { AppServerContextEvent } from "./app_server_context.js";
 import { AppServerAccountTelemetry, type AppServerRateLimits } from "./app_server_telemetry.js";
 
 import { appServerTurnSettings, type AppServerTurnSettings, type AppServerPreparedSettings, type AppServerSettingsSnapshot } from "./app_server_settings.js";
@@ -170,10 +171,13 @@ export class AppServerTransport {
   #attempt: InitializeAttempt = { promoted: false };
   #wakeRetry: (() => void) | undefined;
   readonly #options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & { onDisconnect?: (error: Error) => void };
+  readonly #onContext: ((event: AppServerContextEvent) => void) | undefined;
   readonly #onRateLimits: ((snapshot: AppServerRateLimits) => void) | undefined;
   readonly #approvals: ApprovalRouter;
   readonly #maxBeforeResponse: number;
   #generation = 0;
+  #contextSequence = 0;
+  readonly #contextSequences = new WeakMap<AppServerNotification, number>();
   readonly #threadOpenTimeoutMs: number | undefined;
   #initializing: Promise<void> | undefined;
   #active: ActiveTurn | undefined;
@@ -194,15 +198,17 @@ export class AppServerTransport {
   constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & {
     threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void;
     onRateLimits?: (snapshot: AppServerRateLimits) => void;
+    onContext?: (event: AppServerContextEvent) => void;
     onForeignTurn?: (turn: AppServerForeignTurn) => void; enforceForeignTurn?: boolean;
     approvals?: AppServerApprovalOptions; maxBeforeResponse?: number;
   } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
     this.#onRateLimits = options.onRateLimits;
+    this.#onContext = options.onContext;
     this.#enforceForeignTurn = options.enforceForeignTurn ?? false;
     this.#onForeignTurn = options.onForeignTurn;
     this.#maxBeforeResponse = options.maxBeforeResponse ?? MAX_BEFORE_RESPONSE;
-    const { approvals, maxBeforeResponse: _max, onRateLimits: _onRateLimits, ...rest } = options;
+    const { approvals, maxBeforeResponse: _max, onRateLimits: _onRateLimits, onContext: _onContext, ...rest } = options;
     this.#options = rest;
     // Installed with or without the opt-in: the gate, not the hook, keeps a
     // non-opted-in persona at today's -32601.
@@ -559,6 +565,7 @@ export class AppServerTransport {
         throw this.#failure;
       }
       this.#boundThreadId = result.thread.id;
+      this.#onContext?.({ kind: "bound", threadId: result.thread.id });
       this.#initialSettings = typeof result.model === "string" &&
         (result.reasoningEffort === null || typeof result.reasoningEffort === "string")
         ? { model: result.model, effort: result.reasoningEffort } : null;
@@ -580,6 +587,10 @@ export class AppServerTransport {
       if (typeof requestId === "string" || typeof requestId === "number") {
         this.#approvals.resolved(`${generation}:${serverRequestKey(requestId)}`);
       }
+    }
+    if (!this.#closing && !this.#failure && rpc === this.#rpc && generation === this.#generation) {
+      this.#contextSequences.set(event, ++this.#contextSequence);
+      this.#contextBoundary(event, rpc, generation);
     }
     const active = this.#active;
     const turnId = notificationTurnId(event);
@@ -641,10 +652,32 @@ export class AppServerTransport {
     this.#onForeignTurn?.({ ...this.#foreign });
   }
 
+  #contextBoundary(event: AppServerNotification, rpc: AppServerRpc, generation: number): void {
+    if (this.#closing || this.#failure || rpc !== this.#rpc || generation !== this.#generation ||
+        event.params.threadId !== this.#boundThreadId) return;
+    const item = event.params.item, turnId = notificationTurnId(event);
+    if ((event.method !== "item/started" && event.method !== "item/completed") ||
+        !rpcObject(item) || item.type !== "contextCompaction" || typeof item.id !== "string" ||
+        turnId === undefined || (this.#ownTurnIds.has(turnId) && this.#active?.turnId !== turnId)) return;
+    this.#onContext?.({ kind: "compaction", threadId: this.#boundThreadId!, turnId, itemId: item.id,
+      phase: event.method === "item/started" ? "started" : "completed", sequence: this.#contextSequences.get(event)! });
+  }
+
   #deliver(active: ActiveTurn, event: AppServerNotification): void {
     const nested = event.params.turn;
     const turnId = event.params.turnId ?? (rpcObject(nested) ? nested.id : undefined);
     if (turnId !== active.turnId) return;
+    const sequence = this.#contextSequences.get(event);
+    if (sequence !== undefined && !this.#closing && !this.#failure && active.threadId === this.#boundThreadId) {
+      const identity = { threadId: active.threadId, turnId: active.turnId!, hostTurnToken: active.hostTurnToken };
+      const item = event.params.item;
+      if (event.method === "thread/tokenUsage/updated") {
+        this.#onContext?.({ kind: "usage", ...identity, value: event.params.tokenUsage, sequence });
+      } else if (event.method === "item/completed" && rpcObject(item) && typeof item.id === "string" &&
+                 (item.type === "agentMessage" || item.type === "reasoning")) {
+        this.#onContext?.({ kind: "response", ...identity, sequence });
+      }
+    }
     active.stream.push(event);
     if (event.method === "turn/completed") {
       // Settle the owner's records before the owner can be retired.

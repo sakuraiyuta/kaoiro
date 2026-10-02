@@ -11,6 +11,7 @@ import {
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
 import { projectAppServerTurn, type AppServerProjectedTurn } from "./app_server_projection.js";
 import type { AppServerHistory } from "./app_server_history.js";
+import type { AppServerContextEvent } from "./app_server_context.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 
 export interface AppServerSessionOptions {
@@ -21,6 +22,7 @@ export interface AppServerSessionOptions {
   turnSignal: () => AbortSignal | null;
   bridgeStderrPath?: string;
   onDisconnect?: (error: Error) => void;
+  onContext?: (event: AppServerContextEvent) => void;
   onRateLimits?: (snapshot: AppServerRateLimits) => void;
   onForeignTurn?: (turn: AppServerForeignTurn) => void;
   /** Stop steering and new turns once a foreign turn is seen. */
@@ -109,6 +111,7 @@ export class AppServerSession {
       ...(options.onForeignTurn === undefined ? {} : { onForeignTurn: options.onForeignTurn }),
       ...(options.enforceForeignTurn === undefined ? {} : { enforceForeignTurn: options.enforceForeignTurn }),
       ...(options.approvals === undefined ? {} : { approvals: options.approvals }),
+      onContext: event => options.onContext?.(event),
       onRateLimits: snapshot => options.onRateLimits?.(snapshot),
       ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
     });

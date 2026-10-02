@@ -403,3 +403,11 @@ it("routes steered input items to onInputItem only, and steers only a dispatched
   expect(f.runtime.steer(request)).toEqual({ kind: "refused", reason: "idle" });
   expect(steer).toHaveBeenCalledTimes(1);
 });
+
+it("forwards typed context facts once while open and drops callbacks after close", async () => {
+  const f = fixture(), onContext = vi.fn();let sessionOptions!: import("../src/app_server_session.js").AppServerSessionOptions;
+  const runtime = new AppServerHostRuntime({ session: { turnSignal: () => null }, effortIntent: "default", onContext,
+    createSession: async options => { sessionOptions = options;return f.session; } });runtimes.push(runtime);
+  await runtime.open();sessionOptions.onContext?.({ kind: "bound", threadId: "thread" });expect(onContext).toHaveBeenCalledTimes(1);
+  await runtime.close();sessionOptions.onContext?.({ kind: "bound", threadId: "late" });expect(onContext).toHaveBeenCalledTimes(1);
+});

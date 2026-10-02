@@ -4,6 +4,8 @@
 // 検証する。engine 名分岐禁止 (ADR-0034 F3) — capability だけで判定する。
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeReactiveAgentDetailProps } from "./reactiveProps.svelte";
+import { isFatigued } from "../src/lib/expression";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
 import type { Envelope, KaoiroConnection } from "../src/lib/protocol";
 
@@ -190,7 +192,19 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.textContent).not.toContain("作業予算");
   });
 
-  it("supports_context_usage=false → 「未対応」を出す (Codex 相当)", async () => {
+  it("renders Codex native over-window usage, then retracts the meter and fatigue on the same mounted detail", async () => {
+    const props = makeReactiveAgentDetailProps({ envelope: envelope({ engine: "codex", session_capabilities: { supports_context_usage: true, supports_attachments: true, supports_user_input_dialog: true },
+      context: { used_tokens: 272534, max_tokens: 258400, used_percentage: 100 * (272534 / 258400) } }), connection: connection(), onClose: vi.fn() });
+    const target = document.createElement("div");document.body.append(target);
+    mounted.push(mount(AgentDetail, { target, props }));await tick();
+    expect(ctxRow(target)?.querySelector<HTMLElement>(".meter-fill")?.style.width).toBe("100%");
+    expect(ctxRow(target)?.textContent).toContain("生窓 100%");expect(isFatigued(props.envelope)).toBe(true);
+    props.envelope = envelope({ engine: "codex", session_capabilities: { supports_context_usage: true, supports_attachments: true, supports_user_input_dialog: true } });await tick();
+    expect(ctxRow(target)?.querySelector(".meter")).toBeNull();
+    expect(ctxRow(target)?.textContent).toContain("取得中");expect(isFatigued(props.envelope)).toBe(false);
+  });
+
+  it("supports_context_usage=false → 「未対応」を出す (Codex exec)", async () => {
     const target = await render({
       session_capabilities: {
         supports_attachments: false,

@@ -427,7 +427,7 @@ var(--line)`, `rounded.sm`. Animate fill width over 0.15s ease-out.
 
 Context fields preserve the native token total and reported model window:
 `used_percentage` may exceed 100 before automatic compaction, while the bar
-clamps its visual extent; that window is not a provider admission limit.
+and its rounded label clamp to 100; that window is not a provider admission limit.
 
 ### Slash Menu / Switch Menu
 

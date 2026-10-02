@@ -38,8 +38,20 @@ The internal Host backend consumes this projection; normal launch defaults to ex
 Turn projection retains native `last` and `total` token counts plus the nullable
 model context window. Usage notifications yield detached snapshots, and the
 projected turn's `usage` getter retains the latest valid snapshot after terminal
-completion. No percentage or peer-facing context payload is inferred from those
-counts. Unsupported/malformed usage does not replace the last known value.
+completion. Unsupported/malformed usage does not replace that internal getter.
+
+Peer-facing context has a separate Host-owned publication rule: a valid native
+`last.totalTokens` and positive `modelContextWindow` become `used_tokens` and
+`max_tokens`, with `used_percentage = 100 * (used_tokens / max_tokens)`. A native
+value above the reported window is retained without wire clamping. Publication
+requires a completed response item after the last compaction boundary, a named
+owned turn, positive input breakdown, and successful settings commit. Replays,
+estimates and unrelated/late events cannot publish. Missing/invalid windows and
+malformed current-owned readings retract context; windows are never inferred or
+reused from an earlier event. Compaction start, accepted model changes and
+session close invalidate immediately. Unknown omits `ext.context` while retaining
+`supports_context_usage: true`. Exec remains unsupported. The complete contract
+is in [ADR-0040](../../adr/0040-context-usage-capability.md#addendum-2026-10-03--app-server-context-snapshots).
 
 `AppServerTransport` receives `account/rateLimits/updated` independently of any
 active turn. `AppServerSession` reads account limits once after opening or

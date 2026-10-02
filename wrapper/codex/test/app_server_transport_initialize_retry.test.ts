@@ -3,6 +3,9 @@ import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppServerConnectionError, AppServerRpcError, type AppServerNotification, type RpcObject } from "../src/app_server_rpc.js";
+import * as rpcModule from "../src/app_server_rpc.js";
+import type { AppServerRpcOptions } from "../src/app_server_rpc.js";
+import type { AppServerContextEvent } from "../src/app_server_context.js";
 import { AppServerTransport } from "../src/app_server_transport.js";
 
 const SIGNATURE = "Error: failed to initialize sqlite state runtime under /scratch/codex-home: failed to initialize state runtime at /scratch/codex-home";
@@ -305,4 +308,21 @@ describe("initialize retry on an sqlite state initialization failure", () => {
     expect(transport.steer({ hostTurnToken: "host", input: "x", clientUserMessageId: "u", admit: () => null }))
       .toEqual({ kind: "refused", reason: "closed" });
   });
+});
+
+it("rejects context callbacks from a replaced RPC child and from the closed transport", async () => {
+  const callbacks: NonNullable<AppServerRpcOptions["onNotification"]>[] = [];
+  const ActualRpc = rpcModule.AppServerRpc;
+  vi.spyOn(rpcModule, "AppServerRpc").mockImplementation(function (options?: AppServerRpcOptions) {
+    callbacks.push(options!.onNotification!);return new ActualRpc(options);
+  });
+  let spawned = 0;const events: AppServerContextEvent[] = [];
+  const transport = new AppServerTransport({ spawnChild: () => fakeChild(spawned++ === 0 ? failsWithSignature : okScript).child,
+    shutdownTimeoutMs: 50, onContext: event => events.push(event) });closers.push(() => transport.close());
+  await transport.startThread();expect(callbacks).toHaveLength(2);
+  const compaction = (itemId: string): AppServerNotification => ({ method: "item/started", params: {
+    threadId: "thread-1", turnId: "manual", item: { id: itemId, type: "contextCompaction" } } });
+  callbacks[0]!(compaction("stale"));expect(events).toHaveLength(1);
+  callbacks[1]!(compaction("current"));expect(events).toHaveLength(2);expect(events[1]).toMatchObject({ kind: "compaction", itemId: "current" });
+  await transport.close();callbacks[1]!(compaction("closed"));expect(events).toHaveLength(2);
 });

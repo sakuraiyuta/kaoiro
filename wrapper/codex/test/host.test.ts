@@ -1740,13 +1740,14 @@ describe("CodexHost", () => {
     });
   });
 
-  it("Codex は ext.context を絶対に stamp しない (ADR-0040)", async () => {
+  it("exec backend keeps context unsupported after a successful SDK turn (ADR-0040)", async () => {
     // capability=false と一貫: turn.completed.usage.input_tokens は
     // per-turn 入力のみで context 使用率にならないため、estimated 投影も
     // 行わない。全 envelope で ext.context が存在しないことを検査。
     const states: Envelope[] = [];
     const { client } = makeClient([[usageEvent()]]);
     const host = new CodexHost(CONFIG, {
+      backend: "exec",
       onState: (e) => states.push(e),
       appendSystemPrompt: "persona",
       codexFactory: () => client,
@@ -1755,6 +1756,7 @@ describe("CodexHost", () => {
     await runOneTurn(host, "hi", client);
     for (const env of states) {
       expect(env.ext).not.toHaveProperty("context");
+      expect(env.ext?.session_capabilities).toMatchObject({ supports_context_usage: false });
     }
   });
 

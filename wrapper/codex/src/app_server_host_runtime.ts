@@ -1,5 +1,6 @@
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import type { AppServerHistory } from "./app_server_history.js";
+import type { AppServerContextEvent } from "./app_server_context.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { AppServerSession, type AppServerSessionOptions } from "./app_server_session.js";
 import { AppServerConnectionError, AppServerRpcError } from "./app_server_rpc.js";
@@ -34,6 +35,7 @@ export interface AppServerHostRuntimeOptions {
    * approval is not submitted and the turn keeps `never`. */
   approvalAxis?: boolean;
   createSession?: (options: AppServerSessionOptions) => Promise<AppServerHostSession>;
+  onContext?: (event: AppServerContextEvent) => void;
   onRateLimits?: (snapshot: AppServerRateLimits) => void;
 }
 export interface AppServerRuntimeAttempt {
@@ -118,6 +120,7 @@ export class AppServerHostRuntime {
           if (this.#closed) return;
           void this.close();this.#options.session.onDisconnect?.(error);
         }, onRateLimits: snapshot => this.#forwardRateLimits(snapshot),
+        onContext: event => { if (!this.#closed) this.#options.onContext?.(event); },
       });
       this.#session = await this.#creating;
       if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");

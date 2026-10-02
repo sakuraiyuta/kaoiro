@@ -202,10 +202,57 @@ design review before implementation. The
 [2026-10-03 qualification evidence](../evidence/codex-app-server/context-usage-qualification-2026-10-03.md)
 records those measurements.
 
-The proposed app-server-only supersession of D3 is in the
-[draft addendum](../plans/issue-485-context-meter-addendum.md), pending design
-review. D3 rejected the input-only proxy, not every possible native snapshot;
-its future-telemetry clause permits this reconsideration. The operator's adoption
-does not yet enable capability or approve the detailed freshness/publication
-rules. The implemented behavior remains false until that reviewed change ships.
-Exec remains unsupported; the historical decisions above are preserved.
+The app-server-only replacement is recorded below following independent design
+approval. Exec remains unsupported; the historical decisions above are preserved.
+
+## Addendum 2026-10-03 — app-server context snapshots
+
+D3 is superseded **only for app-server**. D1's capability-driven display and D4's
+three-field wire shape remain intact. The [approved implementation plan](../plans/issue-485-context-meter-addendum.md)
+contains the detailed transitions and verification requirements; the
+[qualification evidence](../evidence/codex-app-server/context-usage-qualification-2026-10-03.md)
+records the pinned native observations.
+
+App-server advertises true even while unknown. For a qualified atomic event:
+
+```text
+used_tokens     = tokenUsage.last.totalTokens
+max_tokens      = tokenUsage.modelContextWindow
+used_percentage = 100 * (used_tokens / max_tokens)
+```
+
+Use the native total, without reconstruction, reasoning double-count, cached
+input subtraction or cumulative accounting. Counts are nonnegative safe
+integers, the window a positive safe integer, and the ratio finite. Never infer
+a model window or reuse a preceding event's window. Preserve finite ratios above
+100%; the reported window is neither an admission limit nor the compaction
+trigger, and existing UI bars clamp only their visual extent.
+
+The Host alone owns publication. Dispatch binds the actual prepared model and
+runtime baseline, host token and session/model generation; native turn identity
+is accepted only from a validated start response. A candidate must have positive
+input, belong to that owned turn, and follow a completed `agentMessage` or
+`reasoning` item after the latest compaction boundary. Publish only after its
+successful terminal and settings commit, before the resulting state stamp.
+
+Compaction start immediately withdraws the old reading and clears candidates;
+completion alone cannot restore it. Automatic compaction can recover on a new
+qualified response in the same owned turn. Explicit compaction while idle stays
+unknown. Accepted model changes revoke the old turn's eligibility immediately,
+including a failed switch and rollback; rejected setters do not invalidate.
+Session reset, disconnect, close, failed/uncommitted terminal, and malformed or
+null-window current-owned usage also withdraw. Resume replay, boundary estimates,
+old/foreign turns and old RPC children cannot restore a reading. Unknown means
+omitting context, with no fabricated zero or window. A normal in-progress turn
+may retain the preceding qualified snapshot until an invalidating event occurs.
+
+The transport forwards typed facts separately from account telemetry and turn
+projection, and preserves their notification order across its bounded pre-start
+buffer. Whole-envelope state replacement retracts context downstream. No refresh
+turn, timer, threshold notice, interrupt policy or provider budget is added.
+Codex peers acquire the existing dashboard fatigue sprite at 60% or more of the
+reported window; engine-specific thresholds are outside this change.
+
+Exec retains D3 unchanged. Different/null windows are covered deterministically,
+not claimed as live observations; native replays do not identify their model,
+so restoring their value immediately on resume is deliberately unsupported.
