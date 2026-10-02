@@ -147,7 +147,7 @@ describe.skipIf(!isLinux)("Antigravity CLI SIGTERM subtree termination (issue #3
     // grace (issue #379 wiring); shorten it so this test does not wait out
     // the 60s production default.
     vi.stubEnv("KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS", "300");
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-cli-sigterm-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-cli-sigterm-"));
     const { executable, selfPidFile, grandchildPidFile, grandchildReadyFile } = writeFixture(root);
     const configPath = join(root, "wrapper.config.json");
     writeFileSync(configPath, JSON.stringify({

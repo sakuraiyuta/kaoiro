@@ -76,7 +76,7 @@ function stopOwnChild(path: string): void {
 
 describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
   it("terminates the real models probe on timeout with no process or signal injection", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-signal-models-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-models-"));
     const fixture = writeProbeExecutable(root, true);
     const cfg = config(fixture.executable, 1_000);
     const host = new AntigravityHost(cfg, {
@@ -97,7 +97,7 @@ describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
   });
 
   it("terminates the real gate-registration probe on timeout with no process or signal injection", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-signal-gate-timeout-"));
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-signal-test-gate-timeout-"));
     const fixture = writeProbeExecutable(root, false);
     const cfg = config(fixture.executable, 1_000);
     const host = new AntigravityHost(cfg, {
@@ -121,7 +121,7 @@ describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
   });
 
   it.each(["close", "interrupt"] as const)("cancels and terminates a real gate probe when the host receives %s", async (reason) => {
-    const root = mkdtempSync(join(tmpdir(), `kaoiro-agy-signal-gate-${reason}-`));
+    const root = mkdtempSync(join(tmpdir(), `kaoiro-signal-test-gate-${reason}-`));
     const fixture = writeProbeExecutable(root, false);
     const cfg = config(fixture.executable, 15_000);
     const host = new AntigravityHost(cfg, {
