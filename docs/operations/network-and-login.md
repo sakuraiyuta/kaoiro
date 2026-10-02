@@ -202,3 +202,28 @@ into the allowlist can be read from the log.
 - [Server install runbook](server-install.md).
 - [Server configuration](../reference/configuration/server.md).
 - [Production deployment manual](production.md).
+
+
+## Persona HTTP authentication and cache migration
+
+Serve the dashboard, `/session`, `/api` and `/personas` on the same public
+origin. Normal `<img>` requests carry the httpOnly cookie without JavaScript
+reading it. The existing Vite HTTP proxies forward it too; the WS ticket
+workaround concerns the WebSocket upgrade, not those HTTP routes. URL-token
+login must finish its cookie exchange before opening the dashboard session.
+
+A separate asset origin has its own cookie scope and SameSite/Secure/CORS
+constraints; changing only the WebSocket URL does not authenticate asset
+requests there. Use a same-origin reverse proxy. Do not put credentials in
+image URLs or enable permissive credentialed CORS as a workaround.
+
+Persona responses are private/no-store. `auth=1` in emitted image URLs is a
+fixed, nonsecret migration marker, preventing reuse of legacy public immutable
+URLs in the updated dashboard. Old tabs and already downloaded images remain
+outside revocation; the server cannot erase those bytes. No-store can repeat
+image transfers when expressions change or the session reconnects. Viewer
+manifests omit inactive and ambiguous packs, and image errors use CSS faces.
+See [persona delivery](../reference/protocol/persona-delivery.md) for the full
+policy and retry behavior. Login-less screenshot fixtures use CSS faces; tests
+requiring real sprites must create a session through `/session/new` and use
+eligible, unambiguous pack references for viewers.

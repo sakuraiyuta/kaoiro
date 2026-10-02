@@ -22,6 +22,11 @@ personas".
 
 The following remains as historical background.
 
+The historical public/immutable caching decision below is superseded by the
+[ADR-0029 HTTP disclosure addendum](0029-persona-server-sot-and-pack-distribution.md#http-disclosure-addendum-2026-10-03).
+Current authentication, viewer scope and cache behavior are specified in
+[persona delivery](../reference/protocol/persona-delivery.md).
+
 ## Context
 
 `persona.sprite_set` is a string, and the means for the external clients made

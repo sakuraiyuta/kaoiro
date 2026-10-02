@@ -2,9 +2,8 @@ defmodule KaoiroServerWeb.SessionCredential do
   @moduledoc """
   Resolves the dashboard session cookie's credential with LIVE
   revalidation (ADR-0013/0042) — shared by `SessionController` (cookie
-  refresh/ticket) and `RequireOperatorPlug` (issue #232, HTTP operator
-  gate) so "what counts as a still-valid credential" lives in exactly one
-  place. Neither caller keeps its own copy of this check: a revoked
+  refresh/ticket) and `RequireOperatorPlug` / `RequireAuthenticatedPlug` (HTTP gates) so "what counts as a still-valid credential" lives in exactly one
+  place. No caller keeps its own copy of this check: a revoked
   token or an identity dropped from the OAuth allow-list must stop
   authenticating everywhere at the same request, not just at whichever
   endpoint happens to re-check it.

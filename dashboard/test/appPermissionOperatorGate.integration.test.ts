@@ -36,7 +36,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         setPermission: async () => null,
       };
     },
-    fetchPersonaManifest: async () => null,
+    fetchPersonaManifest: async () => ({ kind: "unavailable" }),
     fetchAuthMethods: async () => ({ token: true, oauth: [] }),
   };
 });

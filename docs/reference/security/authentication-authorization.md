@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-10-03
 ---
 
 # Authentication and authorization
@@ -103,6 +103,25 @@ Call `require_operator(socket)` first, both directly and inside
 The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a
 snapshot (OAuth section, #148, below).
+
+### Authenticated persona HTTP delivery
+
+`GET /api/personas` and `GET /personas/:sprite_set/:file` use
+`RequireAuthenticatedPlug` after session decoding and before content negotiation.
+It live-resolves the cookie credential and accepts viewer/operator/admin only.
+Anonymous, invalid and revoked credentials receive 401 before lookup; no token
+in a URL or WS ticket substitutes for the HTTP cookie. Responses use
+`Cache-Control: private, no-store`.
+
+Operator/admin receive all packs. Viewer access uses the shared channel viewer
+projection over non-disconnected `AgentStates` entries, canonical persona
+identity, and exactly one accepted pack ID claiming the sprite set across the
+complete asset snapshot. Waiting/error/done count; directory-only records do
+not. Ambiguous or unused sets are omitted from the manifest and direct images
+return generic 404. Both endpoints share this policy, including HEAD and
+conditional requests. Filtered versions exclude hidden content. Details and
+request-snapshot race semantics are in [persona delivery](../protocol/persona-delivery.md).
+The detail endpoint below remains operator/admin-only.
 
 ### Operator-only HTTP endpoint (issue #232)
 

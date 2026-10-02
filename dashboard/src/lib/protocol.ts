@@ -2195,20 +2195,36 @@ export interface PersonaManifest {
   personas: Record<string, { states: Record<string, SpriteEntry> }>;
 }
 
-/**
- * Fetches the persona manifest; null on any failure so callers can
- * fall back to sprite-less rendering.
- */
+export type PersonaManifestResult =
+  | { kind: "ok"; manifest: PersonaManifest }
+  | { kind: "unauthorized" }
+  | { kind: "unavailable" };
+
 export async function fetchPersonaManifest(
   base = "",
-): Promise<PersonaManifest | null> {
+  signal?: AbortSignal,
+): Promise<PersonaManifestResult> {
   try {
-    const res = await fetch(`${base}/api/personas`);
-    if (!res.ok) return null;
-    return (await res.json()) as PersonaManifest;
+    const res = await fetch(`${base}/api/personas`, {
+      credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}),
+    });
+    if (res.status === 401) return { kind: "unauthorized" };
+    if (!res.ok) return { kind: "unavailable" };
+    const value: unknown = await res.json();
+    if (!isPersonaManifest(value)) return { kind: "unavailable" };
+    return { kind: "ok", manifest: value };
   } catch {
-    return null;
+    return { kind: "unavailable" };
   }
+}
+
+function isPersonaManifest(value: unknown): value is PersonaManifest {
+  const record = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!record(value) || typeof value.version !== "string" || !record(value.personas)) return false;
+  return Object.values(value.personas).every(entry =>
+    record(entry) && record(entry.states) && Object.values(entry.states).every(sprite =>
+      record(sprite) && typeof sprite.url === "string" && typeof sprite.hash === "string"));
 }
 
 /** Full persona pack detail served at GET /api/personas/:id (issue #232):

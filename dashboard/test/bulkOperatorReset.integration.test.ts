@@ -36,7 +36,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
       captured.handlers = handlers;
       return captured.api as unknown as KaoiroConnection;
     },
-    fetchPersonaManifest: async () => null,
+    fetchPersonaManifest: async () => ({ kind: "unavailable" }),
     fetchAuthMethods: async () => ({ token: true, oauth: [] }),
   };
 });

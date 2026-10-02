@@ -23,7 +23,7 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
     end
 
     test "router 経由のレスポンスにも付く", %{conn: conn} do
-      conn = get(conn, "/api/personas")
+      conn = get(conn, "/api/health")
 
       assert conn.status == 200
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]

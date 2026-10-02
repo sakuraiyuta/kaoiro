@@ -23,10 +23,18 @@ defmodule KaoiroServerWeb.Router do
     plug KaoiroServerWeb.RequireOperatorPlug
   end
 
+  pipeline :authenticated do
+    plug :fetch_session
+    plug KaoiroServerWeb.RequireAuthenticatedPlug
+  end
+
+  scope "/api", KaoiroServerWeb do
+    pipe_through [:authenticated, :api]
+    get "/personas", PersonaController, :manifest
+  end
+
   scope "/api", KaoiroServerWeb do
     pipe_through :api
-
-    get "/personas", PersonaController, :manifest
     get "/health", HealthController, :status
   end
 
@@ -40,6 +48,7 @@ defmodule KaoiroServerWeb.Router do
   # /api) so the manifest URLs stay plain static-file paths; no :api
   # pipeline — content negotiation does not apply to image responses.
   scope "/personas", KaoiroServerWeb do
+    pipe_through :authenticated
     get "/:sprite_set/:file", PersonaController, :file
   end
 

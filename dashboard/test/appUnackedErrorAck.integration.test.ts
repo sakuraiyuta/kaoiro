@@ -33,7 +33,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         renameAgent: async () => {},
       };
     },
-    fetchPersonaManifest: async () => null,
+    fetchPersonaManifest: async () => ({ kind: "unavailable" }),
     fetchAuthMethods: async () => ({ token: true, oauth: [] }),
   };
 });

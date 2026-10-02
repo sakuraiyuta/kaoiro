@@ -90,6 +90,9 @@ defmodule KaoiroServer.PersonaAssets do
   @doc "Manifest map as served by `GET /api/personas` (string keys)."
   def manifest, do: cache().manifest
 
+  @doc "One immutable asset generation for authenticated delivery; never serialize this view."
+  def delivery_snapshot, do: Map.take(cache(), [:manifest, :files, :personas_by_id])
+
   @doc """
   Resolved file entry (`%{path: abs_path, hash: hex}`) for a scanned
   sprite file, or `:error`. Serving only manifest-known files keeps

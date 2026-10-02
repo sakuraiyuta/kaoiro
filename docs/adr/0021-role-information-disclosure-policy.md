@@ -129,6 +129,24 @@ The implementation is `KaoiroServerWeb.RequireOperatorPlug` (reuse `ClientSocket
 
 The procedure for adding a new HTTP endpoint is the same as F5: explicitly decide whether viewers should see it, operator-only is the default, explicitly choose not to pass through `RequireOperatorPlug` if viewers should see it, and cover anonymous/viewer/operator/admin visibility in tests.
 
+### F7 addendum: persona list and image disclosure (2026-10-03)
+
+[Issue 289](https://github.com/sakuraiyuta/kaoiro/issues/289) explicitly permits
+viewer delivery of manifest entries and images only for packs used by the
+logical viewer running-agent list (shared viewer projection, excluding
+`disconnected`; waiting/error/done still qualify). Operator/admin receive the
+full catalog. Both HTTP entry points require a live session cookie; anonymous
+requests always receive 401. Detail remains operator/admin-only.
+
+Canonical `(id, sprite_set)` matching is necessary but insufficient: multiple
+accepted IDs can contribute metadata and files to the same set. Count claimants
+from the complete asset snapshot and deny the entire ambiguous set to viewers,
+even if only one claimant is active. Manifest omission and generic image 404
+share that decision. Versions derive only from visible entries. Import and
+operator/admin collision semantics are separately tracked in
+[issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499).
+The endpoint, cache and concurrency contract is [persona delivery](../reference/protocol/persona-delivery.md).
+
 ## Consequences
 
 ### Positive

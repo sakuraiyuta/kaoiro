@@ -8,8 +8,9 @@
 // type, see PersonaFace.svelte's Props interface with no optional
 // fields); this test pins the component's own render contract per
 // `size` preset so a future edit here cannot silently break a caller.
-import { mount, unmount } from "svelte";
+import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
+import { reactiveProps } from "./reactiveProps.svelte";
 import PersonaFace from "../src/lib/PersonaFace.svelte";
 
 const mounted: object[] = [];
@@ -165,4 +166,37 @@ describe("PersonaFace", () => {
       );
     },
   );
+});
+
+
+it("image error falls back, new URL and null-to-same URL recover, detached error is ignored", async () => {
+  const props = reactiveProps({ sprite: "/personas/p/idle.png" as string | null,
+    variant: "idle", label: "idle", size: "card" as const, imgAltLabelled: true, faceLabelled: true });
+  const target = render(props); await tick();
+  const old = target.querySelector("img")!;
+  old.dispatchEvent(new Event("error")); await tick();
+  expect(target.querySelector("img")).toBeNull();
+  expect(target.querySelector(".face")).not.toBeNull();
+  props.sprite = "/personas/p/thinking.png"; await tick();
+  expect(target.querySelector("img")?.getAttribute("src")).toBe(props.sprite);
+  old.dispatchEvent(new Event("error")); await tick();
+  expect(target.querySelector("img")).not.toBeNull();
+  const failed = target.querySelector("img")!;
+  failed.dispatchEvent(new Event("error")); await tick();
+  props.sprite = null; await tick();
+  props.sprite = "/personas/p/thinking.png"; await tick();
+  expect(target.querySelector("img")).not.toBeNull();
+  failed.dispatchEvent(new Event("error")); await tick();
+  expect(target.querySelector("img")).not.toBeNull();
+});
+
+it("null-to-same URL clears a previous image failure after a new session", async () => {
+  const props = reactiveProps({ sprite: "/personas/p/idle.png" as string | null,
+    variant: "idle", label: "idle", size: "card" as const, imgAltLabelled: true, faceLabelled: true });
+  const target = render(props); await tick();
+  target.querySelector("img")!.dispatchEvent(new Event("error")); await tick();
+  expect(target.querySelector(".face")).not.toBeNull();
+  props.sprite = null; await tick();
+  props.sprite = "/personas/p/idle.png"; await tick();
+  expect(target.querySelector("img")).not.toBeNull();
 });

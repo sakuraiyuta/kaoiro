@@ -151,24 +151,35 @@ describe("fetchPersonaManifest", () => {
       vi.fn(async () => ({ ok: true, json: async () => manifest })),
     );
 
-    expect(await fetchPersonaManifest()).toEqual(manifest);
-    expect(fetch).toHaveBeenCalledWith("/api/personas");
+    expect(await fetchPersonaManifest()).toEqual({ kind: "ok", manifest });
+    expect(fetch).toHaveBeenCalledWith("/api/personas", { credentials: "same-origin", cache: "no-store" });
   });
 
-  it("非 2xx は null(スプライトなし描画へフォールバック)", async () => {
+  it("non-2xx uses unavailable fallback", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false })));
-    expect(await fetchPersonaManifest()).toBeNull();
+    expect(await fetchPersonaManifest()).toEqual({ kind: "unavailable" });
   });
 
-  it("ネットワークエラーは null", async () => {
+  it("network failures use unavailable fallback", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         throw new Error("offline");
       }),
     );
-    expect(await fetchPersonaManifest()).toBeNull();
+    expect(await fetchPersonaManifest()).toEqual({ kind: "unavailable" });
   });
+  it("distinguishes 401 and forwards cancellation", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal("fetch", vi.fn(async () => ({ status: 401, ok: false })));
+    expect(await fetchPersonaManifest("", controller.signal)).toEqual({ kind: "unauthorized" });
+    expect(fetch).toHaveBeenCalledWith("/api/personas", { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+  });
+  it.each([null, {}, {version: "v", personas: null}, {version: "v", personas: {p: {states: {idle: {url: 1}}}}}])("rejects malformed manifests: %j", async value => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => value })));
+    expect(await fetchPersonaManifest()).toEqual({ kind: "unavailable" });
+  });
+
 });
 
 describe("fetchPersonaPackDetail (issue #232)", () => {

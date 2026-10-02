@@ -102,8 +102,7 @@ export default defineConfig({
     // routes and connects with that (ADR-0013).
     proxy: {
       "/client": { target: "ws://localhost:4000", ws: true },
-      // Public persona manifest/assets (unauthenticated) so a standalone
-      // Vite dev server renders sprites instead of CSS-face fallbacks.
+      // Persona HTTP requests carry the session cookie through these proxies.
       "/api": { target: "http://localhost:4000" },
       "/personas": { target: "http://localhost:4000" },
       // Token->cookie exchange, WS ticket, and cookie refresh (ADR-0013).

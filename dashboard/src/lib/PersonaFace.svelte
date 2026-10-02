@@ -35,15 +35,23 @@
 
   const { sprite, variant, label, size, imgAltLabelled, faceLabelled, fatigued = false }:
     Props = $props();
+  let failed = $state(false);
+  $effect(() => {
+    sprite;
+    failed = false;
+  });
 </script>
 
-{#if sprite}
+{#if sprite && !failed}
   <img
     class="portrait-sprite"
     data-size={size}
     data-state={variant}
     src={sprite}
     alt={imgAltLabelled ? label : ""}
+    onerror={(event) => {
+      if (event.currentTarget.isConnected && event.currentTarget.getAttribute("src") === sprite) failed = true;
+    }}
   />
 {:else if faceLabelled}
   <div

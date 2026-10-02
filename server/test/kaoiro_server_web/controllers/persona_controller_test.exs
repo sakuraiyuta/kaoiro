@@ -5,6 +5,19 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
   use KaoiroServerWeb.ConnCase, async: false
 
   describe "GET /api/personas" do
+    setup %{conn: conn} do
+      previous = Application.get_env(:kaoiro_server, :client_tokens)
+      Application.put_env(:kaoiro_server, :client_tokens, "persona-test:operator")
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:kaoiro_server, :client_tokens, previous),
+          else: Application.delete_env(:kaoiro_server, :client_tokens)
+      end)
+
+      {:ok, conn: init_test_session(conn, %{"client_token" => "persona-test"})}
+    end
+
     test "マニフェスト JSON を返す", %{conn: conn} do
       conn = get(conn, "/api/personas")
 
@@ -169,12 +182,25 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
   end
 
   describe "GET /personas/:sprite_set/:file" do
+    setup %{conn: conn} do
+      previous = Application.get_env(:kaoiro_server, :client_tokens)
+      Application.put_env(:kaoiro_server, :client_tokens, "persona-test:operator")
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:kaoiro_server, :client_tokens, previous),
+          else: Application.delete_env(:kaoiro_server, :client_tokens)
+      end)
+
+      {:ok, conn: init_test_session(conn, %{"client_token" => "persona-test"})}
+    end
+
     test "マニフェスト掲載のスプライトを PNG で返す", %{conn: conn} do
       conn = get(conn, "/personas/ao/idle.png")
 
       assert response(conn, 200)
       assert response_content_type(conn, :png) =~ "image/png"
-      assert get_resp_header(conn, "cache-control") == ["no-cache"]
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
       # Compare against the served bytes via PersonaAssets so the check
       # follows the pack extraction cache rather than a filesystem path
       # that the ingest model no longer exposes directly.
@@ -184,7 +210,7 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert conn.resp_body == File.read!(path)
     end
 
-    test "マニフェスト発行の v は不変キャッシュを許可する", %{conn: conn} do
+    test "manifest URLs remain private and non-storable", %{conn: conn} do
       %{"personas" => personas} =
         get(conn, "/api/personas") |> json_response(200)
 
@@ -194,14 +220,14 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert response(conn, 200)
 
       assert get_resp_header(conn, "cache-control") ==
-               ["public, max-age=31536000, immutable"]
+               ["private, no-store"]
     end
 
-    test "不正な v は no-cache に落ちる", %{conn: conn} do
+    test "unrecognized versions remain private and non-storable", %{conn: conn} do
       conn = get(conn, "/personas/ao/idle.png?v=wronghash000")
 
       assert response(conn, 200)
-      assert get_resp_header(conn, "cache-control") == ["no-cache"]
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
     end
 
     test "未知のファイルは 404", %{conn: conn} do

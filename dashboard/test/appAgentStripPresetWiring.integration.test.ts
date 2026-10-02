@@ -51,7 +51,7 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         renameAgent: async () => {},
       };
     },
-    fetchPersonaManifest: async () => captured.manifest,
+    fetchPersonaManifest: async () => (captured.manifest ? { kind: "ok", manifest: captured.manifest } : { kind: "unavailable" }),
     fetchAuthMethods: async () => ({ token: true, oauth: [] }),
   };
 });

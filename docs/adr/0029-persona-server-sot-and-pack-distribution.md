@@ -225,3 +225,17 @@ Adopt and fix in this ADR the provisional policy from the old open question `per
 - Related specs: [personas](../specs/personas.md), [persona-pack-format](../reference/personas/pack-format.md), [personality-prompt injection](../architecture/personality-injection.md), [setup-wizards](../reference/configuration/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../architecture/security-threat-model.md)
 - ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md) (WS path), [ADR-0003](0003-persona-identity-persistence.md) (persona identity), [ADR-0008](0008-persona-asset-distribution.md) (superseded), [ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) (spawn authentication), and [ADR-0026](0026-persona-personality-injection.md) (superseded)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
+
+
+## HTTP disclosure addendum (2026-10-03)
+
+[Issue 289](https://github.com/sakuraiyuta/kaoiro/issues/289) replaces public
+sprite caching with authenticated, private/no-store manifest and image delivery.
+Viewer access is limited to canonical, unambiguous packs used by the logical
+viewer running-agent list; operator/admin retain the full catalog. Both entry
+points enforce the same snapshot-based policy. All accepted pack IDs contribute
+to ambiguity, including inactive ones; ambiguous sets are omitted/404 for
+viewers. Import and operator mixed-file behavior are unchanged and tracked in
+[issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499).
+See [persona delivery](../reference/protocol/persona-delivery.md) for the current
+wire contract, version scope, URL cache migration and dashboard refresh rules.

@@ -262,6 +262,49 @@
   let origin = $state<{ x: number; y: number } | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
+  let personaGeneration = 0;
+  let personaRequest: AbortController | undefined;
+  let personaRefreshQueued = false;
+  let personaSessionActive = false;
+  let personaMembership: string | null = null;
+
+  function invalidatePersonas(): void {
+    personaGeneration += 1;
+    personaRequest?.abort();
+    personaRequest = undefined;
+    manifest = null;
+  }
+
+  function refreshPersonasForAgents(): void {
+    if (!personaSessionActive || awaitingSnapshot || destroyed) return;
+    const references = Object.values(agents)
+      .filter(e => e.state !== "disconnected" &&
+        ["state_change", "permission_request", "question_request", "session_boundary"].includes(e.type) &&
+        typeof e.persona?.id === "string" && typeof e.persona?.sprite_set === "string" &&
+        e.persona.id !== "default" && e.persona.sprite_set !== "default")
+      .map(e => JSON.stringify([e.persona!.id, e.persona!.sprite_set]));
+    const key = JSON.stringify([...new Set(references)].sort());
+    if (key === personaMembership) return;
+    personaMembership = key;
+    invalidatePersonas();
+    if (personaRefreshQueued) return;
+    personaRefreshQueued = true;
+    queueMicrotask(() => {
+      personaRefreshQueued = false;
+      if (!personaSessionActive || awaitingSnapshot || destroyed) return;
+      const generation = personaGeneration;
+      personaRequest = new AbortController();
+      void fetchPersonaManifest("", personaRequest.signal).then(result => {
+        if (destroyed || !personaSessionActive || generation !== personaGeneration) return;
+        if (result.kind === "ok") manifest = result.manifest;
+        else if (result.kind === "unauthorized") {
+          endSession();
+          needLogin = true;
+        }
+      });
+    });
+  }
+
   // issue #218: server's own build identity, so LaunchDialog can warn on a
   // mismatch against a connected runner's build_revision (from the `hosts`
   // push). null on a pre-#218 server / fetch failure — LaunchDialog still
@@ -746,14 +789,13 @@
   }
 
   // Opens the client socket with the given auth and starts the cookie-slide
-  // timer (ADR-0013). `slideNow` does an immediate refresh because a cookie
-  // already exists (reload / login paths); the first `?token=` load skips it
-  // since its cookie-setting POST may still be in flight.
+  // timer after the HTTP session cookie has been established.
   function startSession(
     connectOpts: { token?: string; ticket?: string },
     slideNow: boolean,
   ): void {
     status = "connecting";
+    personaSessionActive = true;
     // A WebSocket ticket lives for only 30 seconds. Keep its minting here,
     // next to the cookie-owned session lifecycle, while protocol.ts gates
     // every reconnect (including Phoenix's native retry) on this callback.
@@ -789,6 +831,8 @@
       {
         onStatus: (next) => (status = next),
         onJoined: () => {
+          invalidatePersonas();
+          personaMembership = null;
           // A fresh connection: everything the previous one buffered belongs
           // to a projection this connection has not been told about yet, and
           // its replay markers can never be completed (the wrapper restarts
@@ -837,6 +881,7 @@
         onSnapshot: (next) => {
           agents = next;
           awaitingSnapshot = false;
+          refreshPersonasForAgents();
         },
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
@@ -975,6 +1020,7 @@
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };
+            refreshPersonasForAgents();
             // M3/クロエ M1 fix-round (2026-08-09, issue #170): the parent's
             // own `disconnected` state_change is the client-side purge
             // trigger for its tasks — no new wire event was invented for
@@ -1214,6 +1260,7 @@
           agents = Object.fromEntries(
             Object.entries(agents).filter(([id]) => id !== agentId),
           );
+          refreshPersonasForAgents();
           if (agentId in directory) {
             directory = Object.fromEntries(
               Object.entries(directory).filter(([id]) => id !== agentId),
@@ -1427,6 +1474,9 @@
   // Tears down the live socket and its slide timer without touching the
   // cookie; the caller decides what to show next.
   function endSession(): void {
+    personaSessionActive = false;
+    personaMembership = null;
+    invalidatePersonas();
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
       refreshTimer = undefined;
@@ -1643,9 +1693,6 @@
   }
 
   onMount(() => {
-    // Cards render the CSS face until the manifest arrives (or on
-    // fetch failure), then swap to persona sprites.
-    fetchPersonaManifest().then((next) => (manifest = next));
     refreshServerHealth();
 
     // Ask once so wait-state hand-offs can raise a desktop notification (#7).
@@ -1653,8 +1700,8 @@
 
     void (async () => {
       // Auth (ADR-0011/0013). A `?token=` in the URL is the first load (dev
-      // Vite, or a direct link): set the httpOnly cookie so reloads can mint
-      // a ticket, authenticate this load with the token, then scrub the URL.
+      // Vite, or a direct link): establish the cookie before minting a ticket.
+      // Remove the reusable token from the browser URL immediately.
       const params = new URLSearchParams(location.search);
       const urlToken = params.get("token");
 
@@ -1677,25 +1724,27 @@
       });
 
       if (urlToken !== null) {
-        // Token in the POST body, not the query string, so it does not land
-        // in proxy/server access logs (the request-line URL is logged even
-        // though Phoenix filters the token param).
-        void fetch("/session/new", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: urlToken }),
-        }).then(
-          (r) => {
-            if (!r.ok) {
-              console.warn("kaoiro: session cookie set failed", r.status);
-            }
-          },
-          () => console.warn("kaoiro: session cookie request failed"),
-        );
         const scrubbed = new URL(location.href);
         scrubbed.searchParams.delete("token");
         history.replaceState(null, "", scrubbed);
-        if (!destroyed) startSession({ token: urlToken }, false);
+        try {
+          const result = await fetch("/session/new", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token: urlToken }),
+          });
+          if (!result.ok) {
+            if (!destroyed) {
+              needLogin = true;
+              loginError = "トークンが無効です。";
+            }
+          } else if (!destroyed) await connectFromCookie();
+        } catch {
+          if (!destroyed) {
+            needLogin = true;
+            loginError = "サーバに接続できませんでした。";
+          }
+        }
       } else {
         // Reload path: the token lives only in the httpOnly cookie, which
         // cannot ride the WS upgrade (Vite proxy / cross-origin) — mint a

@@ -13,7 +13,7 @@ related: [protocol, personas]
 HTTP API resolving `persona.sprite_set` to images. [ADR-0008](../../adr/0008-persona-asset-distribution.md)
 initially covered sprites only; [ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md)
 expanded it on 2026-07-05 to persona-pack zip distribution, a server aggregate SoT, and
-auto-watch. It is independent of Channels and not gated by `:serve_dashboard` (public API).
+auto-watch. It is independent of Channels and not gated by `:serve_dashboard`; the HTTP API requires a live session cookie.
 Asset layout and format are defined by [personas](../../specs/personas.md); the pack schema is
 [persona-pack-format](../personas/pack-format.md).
 
@@ -29,7 +29,7 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
       "description": "<optional 1-line>",
       "states": {
         "<state>": {
-          "url": "/personas/<sprite_set>/<state>.png?v=<12hex>",
+          "url": "/personas/<sprite_set>/<state>.png?v=<12hex>&auth=1",
           "hash": "sha256:<64hex>"
         }
       }
@@ -43,9 +43,48 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
 - `name` / `pack_version` / `description` come from the persona pack `manifest.json`
   ([persona-pack-format](../personas/pack-format.md)). `personality.md` is not exposed by this API;
   it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
-- Hashed `url` forms are immutable with `cache-control: public, max-age=31536000, immutable`;
-  URLs without `?v=` are `no-cache`.
-- Only files listed in the manifest are served; unknown paths return 404.
+- Manifest and image responses, including errors and HEAD, use
+  `Cache-Control: private, no-store`. Both bare and versioned image requests
+  revalidate the cookie and role before any asset lookup. Anonymous, invalid,
+  and revoked sessions receive 401, even for nonexistent packs.
+- Operator/admin receive all packs. Viewers receive only packs used by the
+  logical running-agent list: one `AgentStates` snapshot, projected through the
+  same viewer envelope allowlist as the channel, excluding `disconnected`.
+  Waiting, error and done agents qualify; directory-only records do not.
+  The list is evaluated before transport frame truncation, independently of
+  browser viewport, focus, or whether a particular tab has received an update.
+- A viewer reference must match the canonical `(persona.id, sprite_set)` in one
+  asset snapshot. The set must have exactly one distinct accepted pack ID in
+  that snapshot's **complete** catalog. An inactive colliding pack still makes
+  it ambiguous. Ambiguous and unused sets are omitted from the manifest and
+  every direct image request returns the same generic 404 as a missing file.
+  This applies to HEAD, conditional requests and old URL forms too. Import
+  precedence and operator/admin mixed-asset behavior are unchanged
+  ([issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499)).
+- HTTP `version` is 16 lowercase hex characters derived from only the returned
+  entries and a fixed delivery-policy marker. Hidden pack edits do not affect
+  it while the visible result remains unchanged. The nonsecret `auth=1` URL
+  marker avoids reusing URLs previously served with public immutable caching;
+  it is not an authorization token. Previously downloaded/decoded bytes cannot
+  be revoked, nor can an old cache entry be erased by a server response it
+  never requests.
+- Each request captures one asset generation, then the viewer state snapshot.
+  Removal before that state read denies access; already authorized transfers
+  may finish. Separate manifest/image requests can therefore disagree during
+  changes. Unavailable state authority returns generic no-store 503. A selected
+  file disappearing returns 404 without retrying against a newer generation.
+- Dashboard fetches begin after cookie authentication, channel join and its
+  first snapshot. Rejoins and changes to distinct eligible `(id, sprite_set)`
+  membership invalidate old requests and refresh once per update turn. Ordinary
+  state transitions and duplicate references do not refetch the manifest.
+  Only the latest response may apply; current 401 returns to login, while
+  other failures keep the grid usable with CSS faces. Images also fall back to
+  CSS on load errors and retry when their URL changes or a later session
+  reapplies it. Retry triggers are a new join, membership change or reload;
+  pack-only rebuilds do not push a dashboard refresh.
+- Only indexed files from accepted packs can be served; unknown paths return 404
+  after authentication. Colliding packs can leave indexed files absent from the
+  overwritten manifest; viewers receive none of that set.
 - A missing sprite falls back to the `idle` image. `disconnected` has no image (MUST NOT in
   personas.md) and is shown as grayscale idle. Missing manifests or unlisted sprite sets fall
   back to sprite-less rendering (CSS face in the reference implementation).

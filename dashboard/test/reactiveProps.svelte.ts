@@ -112,3 +112,8 @@ export function makeReactivePermissionDetailProps(
   const state = $state(initial);
   return state;
 }
+
+export function reactiveProps<T extends object>(initial: T): T {
+  const props = $state(initial);
+  return props;
+}

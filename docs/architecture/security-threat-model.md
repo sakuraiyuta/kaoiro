@@ -1,7 +1,7 @@
 ---
 title: Security threat model
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 ---
 
 # Security threat model
@@ -49,6 +49,18 @@ records threats and mitigations before full operation or external release
    candidates (such as an initial-prompt summary) exposes conversation
    fragments, and a resume request for an arbitrary session_id / cwd can become
    a path to read/continue another party's conversation.
+
+6. **Custom persona catalog and image disclosure**: names and artwork can reveal
+   private operator material even when personality prompts are protected. Both
+   manifest and image delivery require live cookie authentication; viewer
+   access is limited to unambiguous packs in the logical running-agent list.
+   An unused claimant can make a set ambiguous, so filtering only manifest
+   entries or checking only active pack IDs is insufficient. Denied direct
+   images use generic 404, filtered versions exclude hidden content, and all
+   protected responses are private/no-store. Already downloaded data and
+   already authorized in-flight responses cannot be retracted. See
+   [persona delivery](../reference/protocol/persona-delivery.md) for snapshot,
+   cache-migration and collision limitations.
 
 ### Mitigations
 
