@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +145,36 @@ describe("behaviour settings relay (issue #469)", () => {
         diagnostic.mockRestore();
       }
     }));
+
+  it.each(["codex", "antigravity"] as const)(
+    "%s: an array block does not replace the last valid relay",
+    (block) =>
+      withRoot(async (root, configPath) => {
+        const h = harness(root, configPath);
+        const diagnostic = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        const capabilities = ["claude-code", "codex", "antigravity"];
+        const agy = join(root, "agy");
+        writeFileSync(agy, "#!/bin/sh\nexit 0\n");
+        chmodSync(agy, 0o755);
+        const identity = block === "codex" ? { auth_mode: "chatgpt" } : { cli_path: agy };
+        h.writeConfig(
+          { [block]: { ...identity, turn_watchdog_inactivity_ms: 90_000 } },
+          capabilities,
+        );
+        const runtime = await runRunnerCli(h.dependencies, [configPath]);
+        try {
+          h.callbacks().onSpawn?.(h.spawn("a", block));
+          expect(h.configs[0]?.turn_watchdog_inactivity_ms).toBe(90_000);
+          h.writeConfig({ [block]: [] }, capabilities);
+          await h.reload(runtime!);
+          h.callbacks().onSpawn?.(h.spawn("b", block));
+          expect(h.configs[1]?.turn_watchdog_inactivity_ms).toBe(90_000);
+        } finally {
+          runtime?.close();
+          diagnostic.mockRestore();
+        }
+      }),
+  );
 
   it("a set variable wins: nothing is relayed for that key, with deprecation and shadow warnings", () =>
     withRoot(async (root, configPath) => {

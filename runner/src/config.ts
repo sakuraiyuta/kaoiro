@@ -437,7 +437,7 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
   }
 
   if (raw.codex !== undefined) {
-    if (!isObject(raw.codex)) {
+    if (!isObject(raw.codex) || Array.isArray(raw.codex)) {
       throw new ConfigError("codex must be an object");
     }
     const codex: CodexConfig = {};
@@ -487,7 +487,7 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
   }
 
   if (raw.antigravity !== undefined) {
-    if (!isObject(raw.antigravity)) {
+    if (!isObject(raw.antigravity) || Array.isArray(raw.antigravity)) {
       throw new ConfigError("antigravity must be an object");
     }
     const antigravity: AntigravityConfig = {};
