@@ -117,13 +117,13 @@ export class AppServerHostRuntime {
         ...this.#options.session, onDisconnect: error => {
           if (this.#closed) return;
           void this.close();this.#options.session.onDisconnect?.(error);
-        },
+        }, onRateLimits: snapshot => this.#forwardRateLimits(snapshot),
       });
       this.#session = await this.#creating;
       if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
       const threadId = this.#options.resumeThreadId === undefined
         ? await this.#session.startThread() : await this.#session.resumeThread(this.#options.resumeThreadId);
-      if (this.#session.rateLimits !== undefined) this.#options.onRateLimits?.(this.#session.rateLimits);
+      if (this.#session.rateLimits !== undefined) this.#forwardRateLimits(this.#session.rateLimits);
       const initial = this.#session.initialSettings;
       this.#baseline = initial && { ...initial, effortIntent: this.#options.effortIntent };
       return threadId;
@@ -267,5 +267,9 @@ export class AppServerHostRuntime {
     this.#closing ??= this.#session ? this.#session.close()
       : this.#creating?.then(session => session.close(), () => {}) ?? Promise.resolve();
     return this.#closing;
+  }
+
+  #forwardRateLimits(snapshot: AppServerRateLimits): void {
+    if (!this.#closed) this.#options.onRateLimits?.(snapshot);
   }
 }

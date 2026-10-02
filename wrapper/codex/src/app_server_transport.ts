@@ -170,6 +170,7 @@ export class AppServerTransport {
   #attempt: InitializeAttempt = { promoted: false };
   #wakeRetry: (() => void) | undefined;
   readonly #options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & { onDisconnect?: (error: Error) => void };
+  readonly #onRateLimits: ((snapshot: AppServerRateLimits) => void) | undefined;
   readonly #approvals: ApprovalRouter;
   readonly #maxBeforeResponse: number;
   #generation = 0;
@@ -192,14 +193,16 @@ export class AppServerTransport {
 
   constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure" | "onServerRequest"> & {
     threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void;
+    onRateLimits?: (snapshot: AppServerRateLimits) => void;
     onForeignTurn?: (turn: AppServerForeignTurn) => void; enforceForeignTurn?: boolean;
     approvals?: AppServerApprovalOptions; maxBeforeResponse?: number;
   } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
+    this.#onRateLimits = options.onRateLimits;
     this.#enforceForeignTurn = options.enforceForeignTurn ?? false;
     this.#onForeignTurn = options.onForeignTurn;
     this.#maxBeforeResponse = options.maxBeforeResponse ?? MAX_BEFORE_RESPONSE;
-    const { approvals, maxBeforeResponse: _max, ...rest } = options;
+    const { approvals, maxBeforeResponse: _max, onRateLimits: _onRateLimits, ...rest } = options;
     this.#options = rest;
     // Installed with or without the opt-in: the gate, not the hook, keeps a
     // non-opted-in persona at today's -32601.
@@ -567,7 +570,9 @@ export class AppServerTransport {
 
   #notification(event: AppServerNotification, rpc: AppServerRpc, generation: number): void {
     if (event.method === "account/rateLimits/updated") {
-      this.#account.update(event.params.rateLimits);
+      if (this.#account.update(event.params.rateLimits)) {
+        this.#onRateLimits?.(this.#account.snapshot);
+      }
       return;
     }
     if (event.method === "serverRequest/resolved") {

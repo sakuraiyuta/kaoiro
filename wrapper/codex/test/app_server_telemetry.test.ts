@@ -27,6 +27,13 @@ describe("app-server native usage", () => {
 });
 
 describe("account telemetry meters", () => {
+  it("reports whether an update was accepted", () => {
+    const account = new AppServerAccountTelemetry();
+    expect(account.update(bucket("codex"))).toBe(true);
+    expect(account.update({ limitId: 7, primary: window(20) })).toBe(false);
+    expect(account.update(null)).toBe(false);
+  });
+
   it("separates buckets and windows, drops private metadata, and returns detached snapshots", () => {
     const account = new AppServerAccountTelemetry();
     expect(account.snapshot).toEqual({ readStatus: "not-read", buckets: [] });

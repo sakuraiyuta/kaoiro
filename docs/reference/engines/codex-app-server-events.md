@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server events and telemetry"
 status: implemented
-last_updated: 2026-09-30
+last_updated: 2026-10-02
 ---
 
 # Codex app-server events and telemetry
@@ -9,7 +9,8 @@ last_updated: 2026-09-30
 Current implementation contracts, extracted from the package README. The
 [backend architecture](../../architecture/codex-backends.md) links the neighboring contracts;
 [ADR-0058](../../adr/0058-codex-app-server-turn-steer.md) retains the decisions and staged authorization.
-Measured coverage and limits are in the [evidence record](../../evidence/codex-app-server/projection-and-history.md).
+Measured coverage and limits are in the [projection evidence](../../evidence/codex-app-server/projection-and-history.md)
+and [rate-limit refresh evidence](../../evidence/codex-app-server/rate-limit-refresh-2026-10-02.md).
 
 `startProjectedTurn` returns the same independent identities and one projection
 iterator owning the raw notification stream. Known items reuse the exec adapter
@@ -53,6 +54,18 @@ null id, and each supported window; the keyed multi-bucket read is authoritative
 when present. Credits, plan, account identity, and opaque backend data are not
 retained. Numeric window conversion is shared with the exec rollout reader,
 whose finite-value conversion and existing routing remain unchanged.
+
+Accepted `account/rateLimits/updated` notifications also forward the detached
+telemetry snapshot from `AppServerTransport` through `AppServerSession` and
+`AppServerHostRuntime` to `CodexHost`, independently of an active turn. The
+host projects only the `limitId=codex` bucket and suppresses unchanged values.
+Each accepted notification replaces its complete bucket; supported windows are
+not merged with older values. The runtime drops notification callbacks after
+close.
+
+Rate limits are the last values reported by the app-server. No idle refresh is
+scheduled, so an expired window can remain visible until a later notification,
+thread open, or resume supplies a newer snapshot.
 
 Compaction projection emits `started` for a `contextCompaction` item and
 `completed` only after the matching item completion and successful turn terminal.
