@@ -6430,6 +6430,42 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "session_capabilities")
     end
 
+    test "Codex native context survives over-window values and retracts from store and directory" do
+      peer_id = "test.dir-codex-context-withdraw"
+      peer_socket = join_wrapper(peer_id)
+      capabilities = %{"supports_context_usage" => true}
+
+      context = %{
+        "used_tokens" => 272_534,
+        "max_tokens" => 258_400,
+        "used_percentage" => 100 * (272_534 / 258_400)
+      }
+
+      ext = %{"engine" => "codex", "session_capabilities" => capabilities, "context" => context}
+
+      ref =
+        push(peer_socket, "envelope", envelope(peer_id, "waiting_input") |> Map.put("ext", ext))
+
+      assert_reply ref, :ok
+      self_socket = join_wrapper("test.dir-codex-context-reader")
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+      assert Enum.find(agents, &(&1["agent_id"] == peer_id))["context"] == context
+
+      ref =
+        push(
+          peer_socket,
+          "envelope",
+          envelope(peer_id, "waiting_input") |> Map.put("ext", Map.delete(ext, "context"))
+        )
+
+      assert_reply ref, :ok
+      refute Map.has_key?(AgentStates.snapshot()[peer_id]["ext"], "context")
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+      refute Map.has_key?(Enum.find(agents, &(&1["agent_id"] == peer_id)), "context")
+    end
+
     test "context capability は absent・false を閉じ、true だけを通す" do
       context = %{"used_tokens" => 1, "max_tokens" => 2, "used_percentage" => 0.5}
 

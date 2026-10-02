@@ -1,3 +1,4 @@
+import { AppServerContextMeter } from "./app_server_context.js";
 // CodexHost — owns the real Codex SDK session for one agent: spawns one
 // `codex exec` per turn via @openai/codex-sdk (resume for turns 2+), derives
 // kaoiro states from the ThreadEvent stream (adapter.ts + the shared state
@@ -291,6 +292,7 @@ function initialStatusExtFromCatalog(
   model: string | null,
   permissionSyncSupported = false,
   approvalAxis = false,
+  backend: "exec" | "app-server" = "exec",
 ): Record<string, unknown> {
   return {
     engine: "codex",
@@ -309,13 +311,7 @@ function initialStatusExtFromCatalog(
         effortLevelsForModel(catalog, model).length > 0,
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
-      // ADR-0040 phase-21: Codex は explicit false を stamp。
-      // turn.completed.usage.input_tokens は per-turn 入力のみで compaction
-      // で縮み reasoning/output も含まないため context 使用率とは semantics
-      // が異なる。max window 取得経路もない (catalog に context_window field
-      // なし)。UI は「未対応」表示。upstream で compaction telemetry が
-      // 確定するまで estimated 投影も行わない (docs/reference/engines/codex-exec-events.md)。
-      supports_context_usage: false,
+      supports_context_usage: backend === "app-server",
       supports_permission_switch: permissionSyncSupported,
       ...(permissionSyncSupported && approvalAxis
         ? { permission_switch_axes: CODEX_APPROVAL_SWITCH_AXES }
@@ -338,7 +334,7 @@ export function initialStatusExt(
     config.codex_chatgpt_plan,
     config.codex_extra_models,
   );
-  return initialStatusExtFromCatalog(catalog, config.model ?? null);
+  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false, config.codex_backend ?? "exec");
 }
 
 /** Who produced a `send()`; only operator input may be steered. */
@@ -682,6 +678,7 @@ export class CodexHost implements EngineAdapter {
    *  engines. */
   #displayNameRevision = 0;
   readonly #options: CodexHostOptions;
+  readonly #contextMeter = new AppServerContextMeter();
   #appRuntime: AppServerHostRuntime | null = null;
   #appTurnToken: string | null = null;
   #appFirstDispatch = true;
@@ -1231,6 +1228,7 @@ export class CodexHost implements EngineAdapter {
     attribution: "exact" | "unattributed",
   ): boolean {
     this.#watchdogFailStopped = true;
+    this.#contextMeter.close();
     this.#closed = true;
     this.#startupRateLimitAbort.abort();
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
@@ -1286,6 +1284,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   close(): void {
+    this.#contextMeter.close();
     this.#closed = true;
     this.#startupRateLimitAbort.abort();
     this.#lifecycleGeneration += 1;
@@ -1379,6 +1378,7 @@ export class CodexHost implements EngineAdapter {
       }
       throw error;
     }
+    this.#contextMeter.modelChanged();
     this.#modelPending = value;
     this.#effortResetPending = false;
     const model = this.#catalog.find((entry) => entry.value === value);
@@ -1676,6 +1676,9 @@ export class CodexHost implements EngineAdapter {
         return (this.#options.appServerSessionFactory ?? AppServerSession.create)(options);
       },
       onRateLimits: (account) => this.#applyAppServerRateLimits(account),
+      onContext: event => {
+        if (!this.#closed && this.#contextMeter.observe(event)) this.#emitState(this.#machine.state);
+      },
     });
   }
 
@@ -1741,6 +1744,7 @@ export class CodexHost implements EngineAdapter {
           if (reason !== null) throw new AppServerAdmissionError(reason);
         },
         onDispatch: (attempt, identity) => {
+          this.#contextMeter.begin(identity.threadId, turnToken, attempt.prepared.model ?? runtime.baseline?.model ?? null);
           this.#appFirstDispatch = false;started = true;
           this.#activeTurnToken = turnToken;this.#activeTurnConversationIds = conversationIds;
           this.#turnScope = new AbortController();this.#turnAbandoned = null;
@@ -1754,7 +1758,8 @@ export class CodexHost implements EngineAdapter {
         // Reported even after a watchdog fail-stop: the acceptance already
         // happened. Must not throw; the runtime closes the session on an
         // unexpected error.
-        onHandoff: () => {
+        onHandoff: identity => {
+          this.#contextMeter.handoff(identity);
           try { this.#options.onInputHandedOff?.({ turnToken, handoff: "turn_start_accepted" }); }
           catch (error) { writeRedactedStderr(`codex input handoff report failed: ${String(error)}\n`); }
         },
@@ -1781,6 +1786,7 @@ export class CodexHost implements EngineAdapter {
         this.#effort = this.#effortLastGood = baseline.effort;
         this.#effortSource = this.#effortLastGoodSource = baseline.effortIntent === "default" ? "default" : (this.#effortSource ?? "config");
       }
+      this.#contextMeter.finish(completion.identity, settingsCommitted, this.#model);
       const terminalType = terminal.status === "interrupted" ? undefined : terminal.status === "completed" ? "turn.completed" : "turn.failed";
       if (terminalType) this.#options.onLifecycle?.({ kind: "terminal", turnToken, type: terminalType, authoritative: true });
       settle(terminal.payload, { turnToken, conversationIds,
@@ -1789,6 +1795,7 @@ export class CodexHost implements EngineAdapter {
         ...(this.#turnAbandoned === null ? {} : { abandoned: this.#turnAbandoned }),
       });
     } catch (error) {
+      this.#contextMeter.fail(turnToken);
       endBoundary();
       if (this.#watchdogFailStopped || settled) return;
       if (!started && error instanceof AppServerAdmissionError && error.reason === "input_skipped") {
@@ -3073,6 +3080,7 @@ export class CodexHost implements EngineAdapter {
         this.#model,
         this.#permissionState.syncSupported,
         this.#approvalAxis,
+        this.historyBackend,
       ),
       ...effectiveStatusEnvelopeFields(effectiveStatus),
     };
@@ -3117,6 +3125,8 @@ export class CodexHost implements EngineAdapter {
       ext.switch_error = this.#switchErrorOnce;
       if (consumeOneShot) this.#switchErrorOnce = null;
     }
+    const context = this.#contextMeter.snapshot;
+    if (this.historyBackend === "app-server" && context !== undefined) ext.context = context;
     ext.cwd = this.#cwd;
     // Only publish a model catalog when one exists (currently empty for
     // codex — the account default is used, see catalog.ts).

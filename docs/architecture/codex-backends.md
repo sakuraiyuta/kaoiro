@@ -1,7 +1,7 @@
 ---
 title: "Codex backends and ownership"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-10-03
 ---
 
 # Codex backends and ownership
@@ -54,3 +54,20 @@ Host admission failure never creates another app-server child or selects exec.
 The runner Supervisor has a separate existing policy: unexpected wrapper exit
 can restart a **new wrapper lifetime**, within its restart budget, without
 replaying the initial prompt. Deliberate stop does not restart.
+
+## Context snapshot publication
+
+App-server advertises `supports_context_usage: true`; exec remains false. The
+Host owns `AppServerContextMeter`, and transport/session/runtime forward typed
+bound-thread facts separately from turn projection. Compaction invalidates even
+when idle. The transport's existing bounded start buffer supplies validated
+turn ownership; notification sequence numbers prevent earlier buffered facts
+from crossing a compaction boundary already observed by the Host.
+
+The Host records the actual dispatched model and commits a qualified candidate
+only after a successful terminal and committed runtime settings. The snapshot
+uses native `last.totalTokens` and the same event's `modelContextWindow`, with
+unknown intervals across boundaries, model changes, resume and missing windows.
+See [ADR-0040](../adr/0040-context-usage-capability.md#addendum-2026-10-03--app-server-context-snapshots)
+for the publication rule and limits. Account telemetry, steering admission and
+turn projection remain separate owners.

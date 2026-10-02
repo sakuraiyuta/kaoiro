@@ -844,12 +844,10 @@ export interface SessionCapabilitiesExt {
    *  non-zero snapshot — but this remains best-effort until confirmed by
    *  dogfood; failures are swallowed and the UI stays in "取得中".
    *
-   *  Codex sets `false`: `turn.completed.usage.input_tokens` reports the
-   *  per-turn prompt tokens only — it shrinks after compaction, excludes
-   *  reasoning / output, and has no `max_tokens` companion, so it does not
-   *  represent context accumulation. A reliable exact source in Codex
-   *  requires upstream compaction telemetry that does not exist yet
-   *  (ADR-0040). */
+   *  Codex app-server sets `true` and publishes a qualified native response
+   *  snapshot after settings commit; unknown intervals omit `ext.context`.
+   *  Exec remains `false`: input-only usage has no native window companion
+   *  (ADR-0040 app-server addendum). */
   supports_context_usage?: boolean;
 }
 
@@ -1266,7 +1264,9 @@ export type OutboundInterAgentMessagePayload = Omit<
 /** Context usage as it reaches a peer through `directory_request`. The server
  * only projects this when the reporting wrapper advertised
  * `supports_context_usage: true`; an engine without the capability omits the
- * field entirely rather than sending a null or an estimate (ADR-0040). */
+ * field entirely rather than sending a null or an estimate (ADR-0040).
+ * App-server native snapshots may exceed their reported window; preserve the
+ * finite ratio without treating the window as a provider admission limit. */
 export interface DirectoryContext {
   used_tokens: number;
   max_tokens: number;
