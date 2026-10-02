@@ -111,6 +111,23 @@ flowchart LR
   error-body relay (the equivalent of #2). See
   [runner control and launch](../reference/protocol/runner-control.md) for details.
 
+#### F3 Addendum — Preserve the launch cwd on session reports
+
+The pointer cwd was bound to the launch directory. Operator spawn was kept as
+an explicit seed through `SessionPointers.record/5`; envelope ingestion was assigned
+`record_session/5` to update the latest session ID and engine while retaining
+an existing cwd. An unseeded pointer bootstraps from the first reported cwd.
+An explicit seed wins in either seed/envelope arrival order. Session reset and
+session-ID changes retain the launch cwd and existing snapshot.
+
+`AgentStates` continues projecting the latest reported `ext.cwd`, which may
+change after entering a worktree. Restore, disconnected resume, and implicit
+session enumeration use the pointer instead. Runner exact allowlist and T3
+checks remain unchanged. The DETS schema stays compatible; already contaminated
+rows require [explicit operator recovery](../operations/session-pointer-recovery.md),
+including a read-only audit and confirmation of the exact session at the chosen
+cwd. No automatic cwd inference or allowed-project scan is performed.
+
 #### F3 Addendum — Explicit detach at session reset (ADR-0036)
 
 The /new and /clear operations in [ADR-0036](0036-session-lifecycle-commands.md)
@@ -571,8 +588,8 @@ From phase-1 onward, the #22/#23 runner implementation is assumed.
     distributes the envelope session_id.
   - **Implementation status (#49, 2026-06-20)**: Lightweight F1 pointer
     persistence is implemented (`KaoiroServer.SessionPointers`, backed by DETS).
-    Envelope ingestion updates `agent_id => {session_id, cwd}` and remembers it
-    across restarts. `host` is not retained on the server because it is
+    Envelope ingestion updates the latest session ID while retaining the launch
+    cwd, bootstrapping it when absent, and remembers the pointer across restarts. `host` is not retained on the server because it is
     contained in agent_id (F3). The file path can be overridden with
     `KAOIRO_SESSION_POINTERS_PATH`.
   - **Implementation status (Q-A4 live verification, 2026-06-23)**: SDK resume
