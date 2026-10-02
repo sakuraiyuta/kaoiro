@@ -65,6 +65,18 @@ describe("claude_code block in runner.config.json", () => {
     }
   });
 
+  it.each(["codex", "antigravity"] as const)(
+    "rejects a non-object %s block, arrays included",
+    (block) => {
+      for (const bad of [null, 1, "x", [], [5]]) {
+        expect(
+          () => parseRunnerConfig({ ...base, [block]: bad }),
+          JSON.stringify(bad),
+        ).toThrow(`${block} must be an object`);
+      }
+    },
+  );
+
   it("parseBehaviourBlock keeps only the keys it parsed", () => {
     expect(
       parseBehaviourBlock("claude_code", { folds_per_turn: 4, other: 9 }),
