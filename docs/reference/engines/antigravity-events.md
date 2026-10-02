@@ -191,19 +191,34 @@ Observed details:
   low|medium|high` is accepted *(measured; effect not separately
   observable — gemini slugs already encode the tier)*.
 - Slash commands answered without a model turn or quota spend
-  *(measured)*: `agy -p /usage --output-format json` →
-  `command.data.groups[].buckets[]` with `window: "weekly"`,
-  `remaining_fraction`, `reset_time` (two groups: "Gemini Models" and
-  "Claude and GPT models"); `-p /model` → current model/effort;
+  *(measured; see [usage-rate-limits evidence](../../evidence/antigravity/usage-rate-limits.md))*:
+  `agy -p /usage --output-format json` →
+  `command.data.groups[].buckets[]` with bucket ids in `gemini-*` and `3p-*`
+  families and `window` values `5h` / `weekly`; `-p /model` → current model/effort;
   `-p /permissions`, `-p /hooks`, `-p /help`.
-- **Wrapper quota projection:** a terminal `result.error` that contains a
+- **Wrapper rate-limit state:** a terminal `result.error` that contains a
   `RESOURCE_EXHAUSTED` / HTTP 429 marker and a compact `Resets in <NhNmNs>`
-  duration is fail-soft mapped to `peer_error.code = "rate_limit"` and
-  `rate_limits.seven_day = {status: "blocked", utilization: 1, resets_at}`.
-  The parser accepts only the observed compact duration grammar; an
-  unrecognised terminal error remains the ordinary API error. The actual CLI
-  `result.error` terminal shape has not yet been measured; this mapping is
-  inferred from the internal-log string shape.
+  duration creates a forced `seven_day` blocked overlay. The checked-in weekly
+  probe value cannot overwrite it; only a successful terminal turn clears it.
+  An expired `resets_at` remains published until that success, while it makes
+  a probe eligible at a later terminal turn boundary.
+- `/usage` snapshots are tied to the committed model family. A model change
+  within the same family retains the snapshot; a family change or an
+  unclassified committed model invalidates it. A pending `setModel` does not
+  change the family. Cache and 429 overlay are composed on every state publish;
+  for an unclassified model, only the independent overlay can appear.
+- Usage probes start only after a terminal turn result when there is no active
+  or queued turn. There is no idle refresh timer. Valid snapshots are throttled
+  for five minutes; three consecutive current-family failures suppress retries
+  until a successful turn permits one immediate attempt. The register-time
+  catalog probe is independent of this rule.
+- A timeout, interrupt, family change, or host close sends one checked PID
+  `SIGKILL` and waits up to two seconds for the probe child's `close` event.
+  If the wait expires, the child stays held in `stop_timed_out` and blocks new
+  probes until a late `close`; a late close while open releases it and counts
+  one failed attempt. On host close, probe stop and epoch shutdown run in
+  parallel within the runner's five-second outer bound. See the
+  [stop measurement](../../evidence/antigravity/issue-384-probe-stop-2026-10-03.md).
 - Context window sizes are not exposed; `usage.input_tokens` of the last
   `agent_response` step approximates context in use.
 

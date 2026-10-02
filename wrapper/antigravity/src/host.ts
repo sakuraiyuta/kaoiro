@@ -59,6 +59,20 @@ import { ToolHost } from "./toolhost.js";
 import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
 import { signalSubtree, signalTarget, terminateWithGrace, type GraceTerminationHandle, type SignalTargetOperation } from "./subtree_termination.js";
+import {
+  DEFAULT_USAGE_PROBE_TIMEOUT_MS,
+  USAGE_PROBE_INTERVAL_MS,
+  USAGE_PROBE_STOP_TIMEOUT_MS,
+  modelToUsageFamily,
+  parseAgyUsageOutput,
+  startAgyUsageProbe,
+  type AgyUsageFamily,
+  type AgyUsageRateLimit,
+  type AgyUsageRateLimits,
+  type AgyUsageProbeRun,
+  type AgyUsageProbeSpawn,
+  type UsageProbeClosedResult,
+} from "./usage_probe.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
@@ -319,6 +333,10 @@ export interface AntigravityHostOptions {
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
   now?: () => string;
+  usageProbeSpawn?: AgyUsageProbeSpawn;
+  usageProbeTimeoutMs?: number;
+  usageProbeStopTimeoutMs?: number;
+  usageProbeIntervalMs?: number;
 }
 
 function validToolName(value: unknown): value is string {
@@ -556,10 +574,16 @@ export class AntigravityHost implements EngineAdapter {
   // the revision-0 baseline; updated on every join reply (setPermissionSyncSupported).
   #permissionSyncSupported = false;
   readonly #toolNames = new Map<string, string>();
-  readonly #rateLimits = new Map<
-    string,
-    { status?: string; utilization?: number; resets_at?: number }
-  >();
+  #usageSnapshot: { family: AgyUsageFamily; capturedAtMs: number; limits: AgyUsageRateLimits } | null = null;
+  #rateLimitOverlay: AgyUsageRateLimit | null = null;
+  #usageProbeRun: { family: AgyUsageFamily; run: AgyUsageProbeRun } | null = null;
+  #usageProbeFailureFamily: AgyUsageFamily | null = null;
+  #usageProbeFailureCount = 0;
+  #usageProbeRequested = false;
+  readonly #usageProbeTimeoutMs: number;
+  readonly #usageProbeStopTimeoutMs: number;
+  readonly #usageProbeIntervalMs: number;
+  #closePromise: Promise<void> | null = null;
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
     this.#config = config as AntigravityLaunchConfig;
@@ -590,6 +614,9 @@ export class AntigravityHost implements EngineAdapter {
     this.#clearEpochIdleTimer = options.epochIdleClearTimer ?? ((timer) => clearTimeout(timer as never));
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? DEFAULT_USAGE_PROBE_TIMEOUT_MS;
+    this.#usageProbeStopTimeoutMs = options.usageProbeStopTimeoutMs ?? USAGE_PROBE_STOP_TIMEOUT_MS;
+    this.#usageProbeIntervalMs = options.usageProbeIntervalMs ?? USAGE_PROBE_INTERVAL_MS;
     // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
     // (Codex parity) so the first status snapshot carries ext.permission_control
     // and the server can allocate switch revisions against it. Without it the
@@ -755,6 +782,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
+    this.#usageProbeRequested = false;
+    this.#stopUsageProbe("abort");
     // issue #377 Stage 2: ends the whole epoch, not just the active turn --
     // an idle interrupt (no `#currentTurnToken`) now has a live process to
     // stop, unlike Stage 1 where idle meant no process existed at all. The
@@ -815,7 +844,8 @@ export class AntigravityHost implements EngineAdapter {
     return this.#failStopForWatchdog("unattributed");
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
     this.#lifecycleGeneration += 1;
     this.#turnQueue = [];
@@ -826,15 +856,24 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
+    this.#usageProbeRequested = false;
+    const probeRun = this.#usageProbeRun?.run ?? null;
+    if (probeRun !== null) this.#stopUsageProbe("host_close");
     // issue #379 M2: closeGraceMs, not abortGraceMs -- an outer supervisor
     // (runner reset / systemd stop) can SIGKILL this wrapper process well
     // before a 60s abort grace would fire, so close() always shortens down
     // to its own short bound rather than trusting whatever was already
     // armed (including a longer grace an `interrupt()` call just started,
     // e.g. the SIGINT handler's `interrupt().finally(() => close())`).
-    void this.#endEpoch("close");
+    const epochClose = this.#endEpoch("close");
     this.#customization?.close();
     this.#customization = null;
+    const probeClose = probeRun?.completion.then(() => undefined) ?? Promise.resolve();
+    this.#closePromise = Promise.all([
+      epochClose.catch(() => {}),
+      probeClose.catch(() => {}),
+    ]).then(() => undefined);
+    return this.#closePromise;
   }
 
   async setModel(value: string): Promise<void> {
@@ -1266,19 +1305,38 @@ export class AntigravityHost implements EngineAdapter {
           // issue #371 Design v2 revision 1a: two independent axes, exactly
           // reproducing the pre-#371 `#runTurn` success-path branches.
           const quota = agyEventToQuotaExhaustion(outcome.event);
+          const result = agyEventToResult(outcome.event);
+          const previousFamily = this.#currentUsageFamily();
+          if (result?.is_error === true) this.#rollbackPendingModel(outcome.attemptedModel);
+          else this.#promotePendingModel(outcome.attemptedModel);
+          const currentFamily = this.#currentUsageFamily();
+          const familyChanged = previousFamily !== currentFamily;
+          if (familyChanged) {
+            this.#usageSnapshot = null;
+            this.#usageProbeFailureFamily = currentFamily;
+            this.#usageProbeFailureCount = 0;
+            if (this.#usageProbeRun !== null && this.#usageProbeRun.family !== currentFamily) {
+              this.#usageProbeRequested = currentFamily !== null;
+              this.#stopUsageProbe("stale_family");
+            }
+          }
+          const successful = agyEventIsSuccessfulResult(outcome.event);
+          const hadOverlay = this.#rateLimitOverlay !== null;
+          const hadFailures = this.#usageProbeFailureCount > 0;
           if (quota !== null) {
-            this.#rateLimits.set("seven_day", {
+            this.#rateLimitOverlay = {
               status: "blocked",
               utilization: 1,
               resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
-            });
-          } else if (agyEventIsSuccessfulResult(outcome.event)) {
-            this.#rateLimits.delete("seven_day");
+            };
+          } else if (successful) {
+            this.#rateLimitOverlay = null;
+            this.#resetUsageProbeFailures(currentFamily);
           }
-          const result = agyEventToResult(outcome.event);
-          if (result?.is_error === true) this.#rollbackPendingModel(outcome.attemptedModel);
-          else this.#promotePendingModel(outcome.attemptedModel);
           this.#publishTerminalResult(outcome.event);
+          this.#maybeStartUsageProbe(
+            familyChanged || (successful && (hadOverlay || hadFailures || this.#usageSnapshot === null)),
+          );
           if (quota !== null) {
             error = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
           } else if (result?.is_error === true) {
@@ -1512,6 +1570,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     if (this.#gateProbe !== null) this.#signalTarget(this.#gateProbe, "pid", "SIGTERM");
+    this.#usageProbeRequested = false;
+    this.#stopUsageProbe("host_close");
     // issue #379: no grace here either -- by the time TurnWatchdog calls
     // this, its OWN abortGraceMs has already elapsed since
     // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
@@ -2184,6 +2244,139 @@ export class AntigravityHost implements EngineAdapter {
     };
   }
 
+  #currentUsageFamily(): AgyUsageFamily | null {
+    return modelToUsageFamily(this.#config.model);
+  }
+
+  #resetUsageProbeFailures(family: AgyUsageFamily | null): void {
+    this.#usageProbeFailureFamily = family;
+    this.#usageProbeFailureCount = 0;
+  }
+
+  #recordUsageProbeFailure(family: AgyUsageFamily, reason: string): void {
+    if (this.#closed || this.#currentUsageFamily() !== family) return;
+    if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
+    this.#usageProbeFailureCount += 1;
+    this.#warn(`antigravity usage probe failed: ${boundErrorDetail(reason)}`);
+  }
+
+  #stopUsageProbe(reason: "abort" | "host_close" | "stale_family"): void {
+    this.#usageProbeRun?.run.requestStop(reason);
+  }
+
+  #maybeStartUsageProbe(forceImmediate = false): void {
+    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped || !this.#agyExecutable.ok) return;
+    const family = this.#currentUsageFamily();
+    if (family === null) return;
+    if (
+      this.#turnActive ||
+      this.#turnQueue.length > 0 ||
+      this.#inFlightTurn !== null ||
+      this.#currentTurnToken !== null
+    ) return;
+    if (this.#usageProbeRun !== null) return;
+    if (this.#usageProbeFailureFamily !== family) this.#resetUsageProbeFailures(family);
+    if (this.#usageProbeFailureCount >= 3) return;
+
+    const nowMs = Date.parse(this.#now());
+    if (!Number.isFinite(nowMs)) return;
+    if (this.#rateLimitOverlay !== null) {
+      const resetMs = this.#rateLimitOverlay.resets_at === undefined
+        ? Number.POSITIVE_INFINITY
+        : this.#rateLimitOverlay.resets_at * 1_000;
+      if (nowMs < resetMs) return;
+      forceImmediate = true;
+    }
+
+    const hasCurrentSnapshot = this.#usageSnapshot?.family === family;
+    if (!hasCurrentSnapshot) forceImmediate = true;
+    if (this.#usageProbeRequested) forceImmediate = true;
+    if (
+      !forceImmediate &&
+      this.#usageSnapshot !== null &&
+      nowMs - this.#usageSnapshot.capturedAtMs < this.#usageProbeIntervalMs
+    ) return;
+
+    let run: AgyUsageProbeRun;
+    try {
+      const probeOptions = {
+        cwd: this.#options.cwd,
+        env: this.#safeChildEnv(),
+        timeoutMs: this.#usageProbeTimeoutMs,
+        stopTimeoutMs: this.#usageProbeStopTimeoutMs,
+        signalTarget: this.#signalTarget,
+        ...(this.#options.usageProbeSpawn === undefined ? {} : { spawn: this.#options.usageProbeSpawn }),
+      };
+      run = startAgyUsageProbe(this.#agyExecutable.path, probeOptions);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.#recordUsageProbeFailure(family, detail);
+      return;
+    }
+
+    const probe = { family, run };
+    this.#usageProbeRun = probe;
+    this.#usageProbeRequested = false;
+    void run.completion.then((completion) => {
+      if (completion.kind === "stop_timed_out" && this.#usageProbeRun === probe) {
+        this.#warn("antigravity usage probe did not close within the stop bound");
+      }
+    });
+    void run.closed.then((result) => this.#onUsageProbeClosed(probe, result));
+  }
+
+  #onUsageProbeClosed(
+    probe: { family: AgyUsageFamily; run: AgyUsageProbeRun },
+    result: UsageProbeClosedResult,
+  ): void {
+    if (this.#usageProbeRun === probe) this.#usageProbeRun = null;
+    if (this.#closed) return;
+
+    const currentFamily = this.#currentUsageFamily();
+    const sameFamily = currentFamily === probe.family;
+    if (!sameFamily || result.stopReason === "stale_family") {
+      if (this.#usageProbeRequested && currentFamily !== null) this.#maybeStartUsageProbe(true);
+      return;
+    }
+    if (result.stopReason === "host_close") return;
+    if (result.stopReason !== null) {
+      this.#recordUsageProbeFailure(probe.family, `stopped:${result.stopReason}`);
+      return;
+    }
+    if (result.spawnError !== null) {
+      this.#recordUsageProbeFailure(probe.family, result.spawnError.message);
+      return;
+    }
+    if (result.code !== 0) {
+      this.#recordUsageProbeFailure(probe.family, `exit_${result.code ?? result.signal ?? "unknown"}`);
+      return;
+    }
+
+    const limits = parseAgyUsageOutput(result.stdout, probe.family);
+    if (limits === null) {
+      this.#recordUsageProbeFailure(probe.family, "unrecognized_or_empty_bucket_set");
+      return;
+    }
+    const capturedAtMs = Date.parse(this.#now());
+    if (!Number.isFinite(capturedAtMs)) {
+      this.#recordUsageProbeFailure(probe.family, "invalid_capture_time");
+      return;
+    }
+    this.#usageSnapshot = { family: probe.family, capturedAtMs, limits };
+    this.#resetUsageProbeFailures(probe.family);
+    this.#emitState(this.#machine.state);
+  }
+
+  #composedRateLimits(): Record<string, AgyUsageRateLimit> | null {
+    const family = this.#currentUsageFamily();
+    const limits: Record<string, AgyUsageRateLimit> = {};
+    if (family !== null && this.#usageSnapshot?.family === family) {
+      for (const [window, value] of this.#usageSnapshot.limits) limits[window] = { ...value };
+    }
+    if (this.#rateLimitOverlay !== null) limits.seven_day = { ...this.#rateLimitOverlay };
+    return Object.keys(limits).length === 0 ? null : limits;
+  }
+
   #statusExt(consumeOneShot = false): Record<string, unknown> {
     const ext = initialStatusExt(this.#config, this.#catalog, this.#permissionSyncSupported);
     if (this.#pendingModel !== null) ext.pending_model = this.#pendingModel;
@@ -2196,7 +2389,8 @@ export class AntigravityHost implements EngineAdapter {
     // the server advances pending -> applied / failed (record_observation).
     if (this.#permissionControl !== null) ext.permission_control = this.#permissionControl;
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
-    if (this.#rateLimits.size > 0) ext.rate_limits = Object.fromEntries(this.#rateLimits);
+    const rateLimits = this.#composedRateLimits();
+    if (rateLimits !== null) ext.rate_limits = rateLimits;
     ext.cwd = this.#options.cwd;
     return ext;
   }

@@ -11,6 +11,8 @@ Antigravity (`agy` CLI) adapter measurements.
 - [cli-contract.md](antigravity/cli-contract.md) — customization and headless-MCP observations for the Antigravity CLI adapter
 - [conversation-summaries-schema.md](antigravity/conversation-summaries-schema.md) — `agy` 1.2.11 session-metadata schema and synthetic SQLite read behavior
 - [gate-tool-observations.md](antigravity/gate-tool-observations.md) — gate tool-step correlation observations
+- [usage-rate-limits.md](antigravity/usage-rate-limits.md) — `/usage` response fields and current family mapping contract
+- [issue-384-probe-stop-2026-10-03.md](antigravity/issue-384-probe-stop-2026-10-03.md) — PID-directed stop behavior of the live `/usage` probe
 - [print-mode-background-tasks.md](antigravity/print-mode-background-tasks.md) — `agy --print` background-task promotion/loss behavior (issue #377)
 
 ## claude/

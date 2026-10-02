@@ -4,7 +4,7 @@ description: Implement ADR-0057 — wrapper/antigravity package driving the agy 
 status: in_progress
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 ---
 
 # Phase 34 — Antigravity adapter (third engine, agy CLI headless)
@@ -81,7 +81,7 @@ through the CLI bridge. Measured substrate:
 | # | Task |
 |---|---|
 | B0 | two-axis mid-session control message + dashboard controls (ADR-0057 F4c) — **done in #359** |
-| B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` — issue #384 |
+| B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` — issue #384; family-bound cache, independent 429 overlay, and close-confirmed probe lifecycle are in implementation review |
 | B2 | history replay from `transcript_full.jsonl` (format measurement first) — issue #385 |
 | B3 | session enumeration metadata from `conversation_summaries.db` — **done in #386** |
 | B4 | setup wizard: `agy` presence check; runner reports `agy --version` at register/reload and warns on a change (gate re-verification is already covered by the per-epoch-spawn smoke test, ADR-0057 F6 addendum) — **done in #387** |
