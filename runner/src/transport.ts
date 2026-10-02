@@ -258,8 +258,30 @@ export interface PhoenixWireLoggerOptions {
   write?: (line: string) => void;
 }
 
-/** Builds the Phoenix Socket logger without changing the established token
- * redaction. The filter owns ref correlation for this one Socket instance. */
+const SENSITIVE_WIRE_KEY =
+  /(token|secret|password|passwd|authorization|cookie|apikey|credentials?)$/;
+
+/** JSON.stringify replacer: a key whose name ends in a credential word has
+ * its whole value replaced when that value is a string, object, or array.
+ * Numbers, booleans and null stay readable (`used_tokens: 123`). */
+function redactSensitiveWireValue(key: string, value: unknown): unknown {
+  const redactable =
+    typeof value === "string" || (typeof value === "object" && value !== null);
+  if (!redactable) return value;
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return SENSITIVE_WIRE_KEY.test(normalized) ? "<REDACTED>" : value;
+}
+
+/** Builds the Phoenix Socket logger. The filter owns ref correlation for
+ * this one Socket instance.
+ *
+ * Redaction is a denylist over key names plus two value shapes: the
+ * `token=` query form (connect URL) and Phoenix.Token signatures
+ * (`SFMyNTY.…`) anywhere in the line. Not covered: credentials under other
+ * names (`private_key`, `ticket`, `bearer`, `jwt`, `signature`,
+ * `passphrase`), names with a suffix after the credential word
+ * (`token_hash`, `tokenValue`), and key/value pairs carried as data
+ * (`[{name: "token", value}]`, header tuples). */
 export function createPhoenixWireLogger(
   channelTopic: string,
   options: PhoenixWireLoggerOptions,
@@ -271,8 +293,13 @@ export function createPhoenixWireLogger(
   const write = options.write ?? ((line: string) => process.stderr.write(line));
   return (kind, message, data) => {
     if (!filter.shouldWrite(kind, message, data)) return;
-    const raw = `runner: phoenix ${kind}: ${message} ${JSON.stringify(data)}\n`;
-    write(raw.replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>"));
+    const payload = JSON.stringify(data, redactSensitiveWireValue);
+    const raw = `runner: phoenix ${kind}: ${message} ${payload}\n`;
+    write(
+      raw
+        .replace(/(token=)[^&\s"]+/gi, "$1<REDACTED>")
+        .replace(/SFMyNTY\.[A-Za-z0-9._-]+/g, "<REDACTED>"),
+    );
   };
 }
 

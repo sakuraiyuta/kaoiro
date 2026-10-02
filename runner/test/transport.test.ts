@@ -378,4 +378,90 @@ describe("createPhoenixWireLogger", () => {
       "runner: phoenix transport: WebSocket connected to ws://host/runner/websocket?token=<REDACTED>&vsn=2.0.0 {}\n",
     ]);
   });
+
+  describe("credential redaction in payloads (issue #420)", () => {
+    const logOnce = (kind: string, message: string, data: unknown) => {
+      const lines: string[] = [];
+      const logger = createPhoenixWireLogger(CHANNEL_TOPIC, {
+        includeHeartbeats: false,
+        write: (line) => lines.push(line),
+      });
+      logger(kind, message, data);
+      expect(lines).toHaveLength(1);
+      return lines[0];
+    };
+
+    it("redacts the spawn token and keeps the rest of the payload", () => {
+      const line = logOnce("receive", "runner:dev-host spawn", {
+        version: "0",
+        agent_id: "dev-host.abc",
+        cwd: "/home/dev/repo",
+        token: "opaque-agent-token-value",
+      });
+
+      expect(line).not.toContain("opaque-agent-token-value");
+      expect(line).toBe(
+        'runner: phoenix receive: runner:dev-host spawn {"version":"0","agent_id":"dev-host.abc","cwd":"/home/dev/repo","token":"<REDACTED>"}\n',
+      );
+    });
+
+    it("normalises key case and separators in nested push payloads", () => {
+      const line = logOnce("push", "runner:dev-host status (1, 2)", {
+        headers: { Authorization: "Bearer hdr-secret" },
+        config: { api_key: "key-secret", serverToken: "camel-secret" },
+      });
+
+      expect(line).not.toMatch(/hdr-secret|key-secret|camel-secret/);
+      expect(line).toContain(
+        '{"headers":{"Authorization":"<REDACTED>"},"config":{"api_key":"<REDACTED>","serverToken":"<REDACTED>"}}',
+      );
+    });
+
+    it("redacts object and array values under a credential key", () => {
+      const line = logOnce("receive", "runner:dev-host spawn", {
+        wrapped: { token: { value: "wrapped-secret", type: "bearer" } },
+        credential: ["array-secret"],
+      });
+
+      expect(line).not.toMatch(/wrapped-secret|array-secret/);
+      expect(line).toContain(
+        '{"wrapped":{"token":"<REDACTED>"},"credential":"<REDACTED>"}',
+      );
+    });
+
+    it("keeps numbers, booleans and null under a credential key", () => {
+      const line = logOnce("receive", "runner:dev-host spawn", {
+        token: null,
+        require_password: false,
+        max_token: 4096,
+      });
+
+      expect(line).toContain(
+        '{"token":null,"require_password":false,"max_token":4096}',
+      );
+    });
+
+    it("matches the credential word only at the end of the key", () => {
+      const line = logOnce("push", "runner:dev-host heartbeat_meta (1, 3)", {
+        max_tokens: "456",
+        tokens_str: "x",
+        used_tokens: 123,
+      });
+
+      expect(line).toContain(
+        '{"max_tokens":"456","tokens_str":"x","used_tokens":123}',
+      );
+    });
+
+    it("redacts a Phoenix.Token signature under any key", () => {
+      const line = logOnce("receive", "runner:dev-host spawn", {
+        initial_prompt: "join with SFMyNTY.g2gDbQ.sig-Part_9 then report",
+      });
+
+      expect(line).not.toContain("g2gDbQ");
+      expect(line).toContain(
+        '{"initial_prompt":"join with <REDACTED> then report"}',
+      );
+    });
+  });
 });
