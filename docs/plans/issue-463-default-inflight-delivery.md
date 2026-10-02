@@ -1,7 +1,7 @@
 ---
 title: Default-on in-flight delivery with a per-agent opt-out
 description: Design for making in-flight delivery the default on every engine, with a revisioned per-agent opt-out stored on the server and switchable from the dashboard at launch and live.
-status: proposed
+status: approved
 last_updated: 2026-10-02
 ---
 
@@ -74,7 +74,9 @@ This design adopts that route.
 
 - **Supported mechanism** (per wrapper process, fixed for its lifetime): what
   the engine and backend can do, limited by the host ceiling (below) and,
-  until stage 4, by the environment opt-ins. It is declared at join as today.
+  until stage 4, by the global opt-ins (the variables today, issue #469's
+  config keys once it lands) and the `_PERSONAS` lists. It is declared at
+  join as today.
 - **Effective policy** (per agent, operator-owned, mutable): `on` or `off`.
   It is stored on the server, revisioned, and confirmed by the current wrapper
   process.
@@ -160,7 +162,8 @@ Agreement with issue #469: #469 moves host-wide behaviour settings into
 `runner.config.json` and explicitly leaves the `_PERSONAS` lists to this
 issue. The two host keys above follow #469's contract. The per-agent value
 lives on the server, because it must change live and survive the wrapper.
-The `_PERSONAS` lists are retired, not migrated (stage 5).
+The two in-flight `_PERSONAS` lists are retired, not migrated (stage 5). The
+global flags become #469's config keys; see "Dependency on issue #469".
 
 ### Live switch protocol
 
@@ -300,7 +303,7 @@ issue anticipates: there is no rejoin and no change to the join echo.
 
 Each flip is its own commit, review and evidence record.
 
-**Claude (stage 4c: the environment stops gating the mechanism, and
+**Claude (stage 4c: the global opt-in and persona list stop gating the mechanism, and
 `in_flight_delivery.claude-code.default` becomes true).** The canary showed
 early fold at tool boundaries (E1–E4). It did not show the following, which
 issue #441 lists as not yet exercised:
@@ -344,14 +347,14 @@ the flip is setting the ceiling to `true` and choosing its default.
 | 0 | Gate audits (Claude criteria, Codex steer and backend); phase-4 issue; `delivery.md` drift fix; issue #489 fixed | none | n/a |
 | 1 | Server store, clamp and admission check, `set_delivery_policy` / `delivery_policy` / `delivery_policy_applied`; Claude and Codex wrapper support | one: for a new wrapper, nothing is delivered early (operator input included, stamped `normal` with `policy_unconfirmed`) between join and its first ack. Otherwise none (see below) | revert the deploy; the old image ignores the new DETS file |
 | 2 | Dashboard launch checkbox and detail toggle | the operator can turn agents off; turning on works only where a mechanism is declared | hide the UI; stored rows keep their values. A **server** rollback from here on loses the opt-out for agents spawned under the old server; stop with `enabled: false` (next spawn) |
-| 3 | `runner.config.json` `enabled` / `default` per engine, relayed and registered; environment flags become deprecated overrides (env wins, warns) | none while `enabled` is `true` and the environment still gates | remove the keys; the env path still works |
-| 4a | Codex operator steer: mechanism declared without the environment; default on | yes | per-agent off (live); `enabled: false` (next spawn); revert |
+| 3 | `runner.config.json` `enabled` / `default` per engine, relayed through issue #469's registry and registered (requires #469's flag keys to have landed) | none while `enabled` is `true` and the global opt-ins still gate | remove the two keys |
+| 4a | Codex operator steer: mechanism declared without `codex.operator_steer` or its persona list; default on | yes | per-agent off (live); `enabled: false` (next spawn); revert |
 | 4b | Codex backend default app-server | yes | `codex.backend: "exec"` (next spawn); revert |
-| 4c | Claude: mechanism declared without the environment; default on | yes | per-agent off (live); `enabled: false` (next spawn); revert |
+| 4c | Claude: mechanism declared without `claude_code.phase2_delivery` or its persona list; default on | yes | per-agent off (live); `enabled: false` (next spawn); revert |
 | 4d | Antigravity, after phase 4: ceiling true | yes | `enabled: false` (next spawn) |
 | 5 | Remove the `_PERSONAS` variables after one released version with deprecation warnings | none | re-add the reader |
 
-**Why stage 1 changes nothing.** Until stage 4, the environment opt-ins still
+**Why stage 1 changes nothing.** Until stage 4, the global opt-ins and persona lists still
 gate the mechanism each wrapper declares, exactly as today. Agents that exist
 before stage 1 get an `on` row at their first join. Agents spawned during
 stages 1 to 3 get `on` from a launch default that stays `true` until stage 4.
@@ -359,7 +362,7 @@ Wrappers not yet updated declare no support and are granted on `on` without
 an acknowledgement. So effective delivery equals the declared mechanism,
 which is today's behaviour, during the mixed-version window too. Today's mix is preserved because the mechanism
 already encodes it: Codex app-server declares inter-agent steer always and
-operator steer only under its environment opt-in, and Claude declares fold
+operator steer only under its global or persona opt-in, and Claude declares fold
 only for `ao`. The one visible difference is the fence: right after a join,
 nothing is delivered early until the first `delivery_policy` is
 acknowledged. Stage 1's default-composition contract test injects nothing
@@ -417,53 +420,70 @@ backend status, `docs/reference/configuration/{runner,wrapper}.md`,
 `docs/reference/protocol/channels.md`,
 `docs/operations/server-update-and-rollback.md` (the new store).
 
-## Operator decisions
+## Operator decisions (decided 2026-10-02)
 
-Decided by the director (2026-10-02, on the reviewer's classification):
+Recorded on [issue #463](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-5946655166),
+on design commit `24d61f06`. Production rollout timing stays pending until the
+operator instructs it directly.
+
+Decided by the director (on the reviewer's classification):
 
 - Host kill switch: in `runner.config.json`, following the current config
   contract. It is the `enabled` ceiling above.
 - Codex backend opt-out: host-wide `codex.backend` only, as today. There is
   no per-agent backend choice.
 
-A constraint to know before deciding (not a decision): after stage 2, rolling
-the **server** back loses the per-agent opt-out for agents spawned under the
-old server. The stop that survives a server rollback is the host ceiling
+Decided by the operator (all as recommended, except where noted for 6):
+
+1. **Claude flip criteria.** Stage 4c requires the four paths the canary has
+   not exercised: a production yield (`tool_boundary` cut) with its
+   disposition recorded, the per-turn fold and overtake limits being reached,
+   an oversized input taking the downgrade path, and the receipt-root timeout
+   path. "Natively unmeasurable" is an acceptable, stated result. It also
+   requires one `opus[1m]` canary peer and a `lost_count` 0 window.
+2. **Host settings.** Two keys: an `enabled` ceiling (the kill switch, next
+   spawn) and a `default` seed (new spawns and the LaunchDialog).
+3. **"Just before this work merges into develop".** The backend default flip
+   (4b) lands immediately before the Claude default flip (4c), the last stage
+   of the series.
+4. **Antigravity.** Queue fallback, with its ceiling shipped `false`, the
+   toggle shown as unsupported, and a phase-4 measurement issue opened.
+   Activation after phase 4 is a separate flip (4d).
+5. **Codex yield.** Yield is downgraded to early, and the UI shows it.
+6. **Environment flag variables.** Issue #469 moves the three global flags
+   to runner config keys (`claude_code.phase2_delivery`,
+   `codex.operator_steer`, `codex.approval_axis`), with the precedence in its
+   section 2.4: a set variable wins over the file. This issue consumes the
+   first two (see "Dependency on issue #469"). The `_PERSONAS` lists stay
+   with this issue and are replaced by the dashboard switch.
+
+A constraint that holds regardless: after stage 2, rolling the **server**
+back loses the per-agent opt-out for agents spawned under the old server.
+The stop that survives a server rollback is the host ceiling
 `enabled: false`, effective at each agent's next spawn.
 
-Open for the operator (recommendation first):
+## Dependency on issue #469
 
-1. **Claude flip criteria.** The canary (persona `ao`, probes E1–E4,
-   2026-09-29) showed early fold at the next tool boundary, including the
-   boundary of a tool already running. Not yet exercised:
-   - a production yield (`tool_boundary` cut) with its disposition recorded;
-   - the per-turn fold and overtake limits being reached;
-   - an oversized input taking the downgrade path;
-   - the receipt-root timeout path.
-
-   Recommended: require those four (natively unmeasurable is an acceptable,
-   stated result), plus one `opus[1m]` canary peer and a `lost_count` 0
-   window. Alternative: flip on the E1–E4 evidence alone and treat the rest
-   as production observation after the flip.
-2. **Meaning of the host settings.** Recommended: two keys, an `enabled`
-   ceiling (the kill switch, next spawn) and a `default` seed (new spawns and
-   the LaunchDialog). Alternative A: one key used only as a default. Then
-   there is no host-wide stop; stopping means turning agents off one by one.
-   Alternative B: one key used only as a ceiling. Then per-agent `on` is
-   impossible on a host whose value is `false`, so a canary needs the
-   ceiling `true` and every other agent turned off by hand.
-3. **"Just before this work merges into develop".** The work lands in stages.
-   Recommended reading: the backend default flip (4b) lands immediately before
-   the Claude default flip (4c), the last stage of the series. Alternative:
-   before stage 1.
-4. **Antigravity.** Recommended: accept the queue fallback, with its ceiling
-   shipped `false`, the toggle shown as unsupported, and a phase-4
-   measurement issue opened. Activation after phase 4 is then a deliberate
-   flip (4d), not a side effect. Alternative: hold the whole #463 merge until
-   phase 4.
-5. **Codex yield.** Recommended: accept the downgrade of yield to early, shown
-   in the UI. Alternative: hold the Codex default until a native cut is measured
-   and designed.
-6. **Environment flag variables.** Recommended: the three flags without
-   `_PERSONAS` are handled here (stage 3: deprecated overrides) because they
-   are the same switch. This answers the open question in issue #469.
+- **Before stage 3.** Issue #469's group carrying the flag keys must have
+  landed. Until stage 4, `claude_code.phase2_delivery` and
+  `codex.operator_steer` (or their variables, which win) and the `_PERSONAS`
+  lists keep gating the mechanism each wrapper declares, exactly as the
+  variables do today. This design does not re-implement that precedence.
+- **Stage 3** adds only `in_flight_delivery.<engine>.enabled` and
+  `in_flight_delivery.<engine>.default`. They go through #469's single relay
+  registry (its section 2.2) rather than a separate path. The `default`
+  key also rides the runner register.
+- **Stages 4a and 4c** stop gating the mechanism on those flag keys and lists:
+  the mechanism is then declared whenever the engine supports it and
+  `enabled` is `true`. From that point `codex.operator_steer` and
+  `claude_code.phase2_delivery` have no effect. Their deprecation and removal
+  are coordinated with #469 in the stage 4 review. They are not deleted
+  silently.
+- **Stage 5** removes `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` and
+  `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS` after one released version with
+  deprecation warnings.
+- **Not covered here:** `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS`, and the
+  `codex.approval_axis` key, control approval requests (ADR-0064), not
+  in-flight delivery. Issue #469 lists that `_PERSONAS` list under this
+  issue, but a per-agent approval switch is a different feature. Its routing is
+  left to the director; this design neither migrates nor removes it.
