@@ -88,7 +88,8 @@ Today's column for every row is "no: needs a runner restart".
 | --- | --- | --- | --- |
 | `KAOIRO_RUNNER_TOKEN` | runner (`runner-cli.ts:169`, `transport.ts`) | secret | out of scope (issue #469) |
 | `KAOIRO_RUNNER_TOKENS`, `KAOIRO_WRAPPER_TOKENS`, `KAOIRO_CLIENT_TOKENS`, `KAOIRO_LAUNCHER_RUNNER_TOKENS` | server / scripts | secret | out of scope |
-| `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS`, `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS`, `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS` | wrapper cli (`personaOptInSource`) | behaviour | issue #463 owns them |
+| `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS`, `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS` | wrapper cli (`personaOptInSource`) | behaviour | issue #463 owns them |
+| `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS` | wrapper cli (`personaOptInSource`) | behaviour | issue #492 owns it (approval requests, not interrupting delivery); neither migrated nor warned about here |
 | `KAOIRO_NODE`, `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV`, `KAOIRO_RUNNER_CONFIG`, `KAOIRO_RUNNER_INSTALL_DIR` | `runner/deploy/*.sh`, `setup.ts` | startup wiring | read before the config file exists (they locate it) |
 | `KAOIRO_WRAPPER_DEV` | runner (`spawn.ts:65`) | startup wiring | dev launcher toggle, read once per engine at first launch and cached |
 | `KAOIRO_SYSTEMCTL`, `KAOIRO_SYSTEMD_RUN`, `KAOIRO_LAUNCHCTL`, `KAOIRO_UNAME`, `KAOIRO_VERIFIED_IDENTITY` | deploy scripts | launch/test plumbing | test seams for the scripts |
@@ -406,7 +407,11 @@ criteria require (variable, config key, type, range, default, reader,
 precedence), pinned to the registry. `wrapper.md` replaces "Runner-generated
 wrapper configs do not relay these fields" and the "no per-peer env override
 or config relay" paragraph. `runner.env.example` marks migrated variables as
-deprecated. `docs/reference/protocol/model-effort.md` (the `ext.model_source`
+deprecated. An operations page gives the procedure for a host whose
+`runner.env` already sets migrated variables: move each line to its
+`runner.config.json` key (the reference table names the key), then update the
+runner, and expect the deprecation warnings to disappear. It is written in the
+last group; applying it to production waits for the operator's instruction. `docs/reference/protocol/model-effort.md` (the `ext.model_source`
 section, lines 38-50) is the source of truth for the `env` tier and is updated
 in group 6. Closing issue #438 follows group 1.
 
@@ -483,7 +488,10 @@ against design commit `2214f655`.
   in section 2.4: config `true` is a global opt-in, config `false` is the same
   as absent and does not override a persona-list opt-in, and a variable set to
   a non-`"1"` value such as `"0"` wins over config `true`. Issue #463 consumes
-  these keys; the `_PERSONAS` lists stay with #463.
+  the steer and phase-2 keys and keeps their `_PERSONAS` lists; the
+  `KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS` list is issue #492's, and this issue
+  neither migrates it nor warns about it (the global
+  `KAOIRO_CODEX_APPROVAL_AXIS` flag does migrate).
 - **Removal of the variable fallback**: no earlier than the release after the
   one that ships the keys, and only once a production start shows no
   deprecation warning. Tracked as a separate follow-up issue (the one-release
