@@ -15,7 +15,7 @@ function documentedRows(): Array<[string, string]> {
   for (const line of readFileSync(RUNNER_DOC, "utf8").split("\n")) {
     const cells = line.split("|").map((cell) => cell.trim());
     const variable = /^`(KAOIRO_[A-Z0-9_]+)`$/.exec(cells[1] ?? "");
-    const key = /^`([a-z_.]+)`$/.exec(cells[2] ?? "");
+    const key = /^`([a-z0-9_.]+)`$/.exec(cells[2] ?? "");
     if (variable !== null && key !== null) {
       rows.push([variable[1]!, key[1]!]);
     }

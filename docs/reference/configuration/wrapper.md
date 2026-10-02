@@ -70,7 +70,10 @@ enables operator steering for every Codex peer on the app-server backend.
 `KAOIRO_CODEX_OPERATOR_STEER_PERSONAS=momo,other` instead enables only the
 listed `persona.id` values, with the same list rules as the Claude controls
 below; both wrappers use one parser, `personaOptInSource` in agent-common. Only the exact value `1` enables the global flag; any other value,
-including `true`, leaves it off and defers to the persona list. An enabled wrapper declares `operator_input_modes: {version: "v1",
+including `true`, leaves it off and defers to the persona list. `codex.operator_steer: true` in
+`runner.config.json` is the same global opt-in (`false` is the same as absent); a set
+`KAOIRO_CODEX_OPERATOR_STEER` wins over it, so `0` turns that opt-in off (see
+[Runner configuration](runner.md#behaviour-settings)). An enabled wrapper declares `operator_input_modes: {version: "v1",
 early: "steer"}` at join and steers only while the server echoes it; the exec
 backend ignores both variables. Every other Codex wrapper declares
 `early: "none"`, so the server stamps operator input `normal` instead of
@@ -100,7 +103,9 @@ advertises `permission_switch_axes.approval` with `values: ["untrusted",
 sync is negotiated, writes the operator's selected approval into each
 `turn/start`, and routes command and file-change approval requests to the
 operator. Approvals have no deadline unless `permission_timeout_ms` is set.
-The exec backend ignores both variables. The wrapper logs
+`codex.approval_axis: true` in `runner.config.json` is the same global opt-in as the
+variable `1`, and a set `KAOIRO_CODEX_APPROVAL_AXIS` wins over it (same rule as
+above). The exec backend ignores both variables. The wrapper logs
 `codex: approval_axis=on|off` at startup. See
 [Codex app-server transport](../engines/codex-app-server.md#approval-requests-adr-0064)
 and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).
@@ -119,8 +124,10 @@ themselves. With neither condition met, both modes remain unadvertised.
 The wrapper logs one startup line with `source=flag`, `source=persona_list`,
 or `source=off`, without printing the list or unrelated environment values.
 
-The runner passes these delivery-control variables to Claude wrappers, without
-a per-peer env override or config relay for them. It removes `CODEX_HOME` from
+The runner passes these delivery-control variables to Claude wrappers, and
+relays `claude_code.phase2_delivery: true` from `runner.config.json` as the global
+opt-in (a set `KAOIRO_CLAUDE_PHASE2_DELIVERY` wins over it, so `0` turns it off;
+`false` is the same as absent). There is no per-peer env override. It removes `CODEX_HOME` from
 Claude and Antigravity wrapper environments. A runner-managed single-peer
 canary therefore sets only the persona list in `runner.env` and restarts the
 runner; setting the global flag to `1` enables every Claude peer. The server

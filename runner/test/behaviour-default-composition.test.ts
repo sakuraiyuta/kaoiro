@@ -71,6 +71,8 @@ interface Endpoint {
   server: Server;
   port: number;
   sockets: Set<Duplex>;
+  /** Join params of every wrapper channel, by topic. */
+  wrapperJoins: Map<string, Record<string, unknown>>;
 }
 
 /** Serves both sockets: the runner's (`/runner`, joined on `runner:*`) and the
@@ -81,6 +83,7 @@ async function startEndpoint(
   onRunnerJoined: (send: (frame: unknown[]) => void, topic: string) => void,
 ): Promise<Endpoint> {
   const sockets = new Set<Duplex>();
+  const wrapperJoins = new Map<string, Record<string, unknown>>();
   const server = createServer();
   server.on("upgrade", (request, socket) => {
     sockets.add(socket);
@@ -103,11 +106,12 @@ async function startEndpoint(
           return;
         }
         if (opcode !== 1) continue;
-        const [joinRef, ref, topic, event] = JSON.parse(text) as [
+        const [joinRef, ref, topic, event, payload] = JSON.parse(text) as [
           string | null,
           string | null,
           string,
           string,
+          Record<string, unknown>,
         ];
         if (ref !== null) {
           send([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]);
@@ -116,6 +120,7 @@ async function startEndpoint(
           onRunnerJoined(send, topic);
         }
         if (event === "phx_join" && !isRunner && topic.startsWith("wrapper:")) {
+          wrapperJoins.set(topic, payload);
           send([joinRef, null, topic, "persona_prompt", { version: "0", prompt: "gate persona prompt" }]);
         }
       }
@@ -124,7 +129,7 @@ async function startEndpoint(
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no port");
-  return { server, port: address.port, sockets };
+  return { server, port: address.port, sockets, wrapperJoins };
 }
 
 function waitFor(
@@ -257,10 +262,14 @@ describe("default composition (issue #469)", () => {
               folds_per_turn: 5,
               turn_watchdog_inactivity_ms: 120_000,
               turn_watchdog_abort_grace_ms: 4000,
+              phase2_delivery: true,
             },
             codex: {
               auth_mode: "chatgpt",
               chatgpt_plan: "pro",
+              backend: "app-server",
+              operator_steer: true,
+              approval_axis: true,
               turn_watchdog_inactivity_ms: 90_000,
               turn_watchdog_abort_grace_ms: 3000,
             },
@@ -315,13 +324,21 @@ describe("default composition (issue #469)", () => {
         );
         expect(codex[2]).toBe(
           "turn_watchdog_inactivity_ms=90000 turn_watchdog_abort_grace_ms=3000 " +
-            "permission_broker_timeout_ms=7000",
+            "permission_broker_timeout_ms=7000 operator_steer=on approval_axis=on " +
+            "approval_deadline_ms=7000 approval_inactivity_limit_ms=90000",
         );
         expect(antigravity[2]).toBe(
           "turn_watchdog_inactivity_ms=80000 turn_watchdog_abort_grace_ms=5000 " +
             "tool_timeout_ms=2000 host_abort_grace_ms=5000 epoch_idle_ms=3000 " +
             "permission_broker_timeout_ms=7000",
         );
+
+        // The flags are consumed by what each wrapper advertises at join: the
+        // echo that the real server acts on.
+        expect(endpoint.wrapperJoins.get("wrapper:gate.claude-code")?.inter_agent_delivery_modes)
+          .toEqual({ version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true });
+        expect(endpoint.wrapperJoins.get("wrapper:gate.codex")?.operator_input_modes)
+          .toEqual({ version: "v1", early: "steer" });
 
         const claudeBehaviour = await lineFor(
           /\[kaoiro\] claude behaviour: pid=\d+ ([^\n]*)\n/,

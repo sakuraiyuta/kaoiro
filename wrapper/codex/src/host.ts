@@ -1493,6 +1493,19 @@ export class CodexHost implements EngineAdapter {
 
   get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? "exec"; }
 
+  /** Whether this host was built with the operator-steer opt-in. */
+  get operatorSteerEnabled(): boolean { return this.#options.operatorSteer !== undefined; }
+
+  /** What the approval axis acts on, or null when it is off. */
+  get approvalAxisSettings(): { deadlineMs: number | null; inactivityLimitMs: number | null } | null {
+    const approvals = this.#options.appServerApprovals;
+    if (!this.#approvalAxis || approvals === undefined) return null;
+    return {
+      deadlineMs: approvals.deadlineMs ?? null,
+      inactivityLimitMs: approvals.inactivityLimitMs ?? null,
+    };
+  }
+
   get #approvalAxis(): boolean {
     return this.#options.backend === "app-server" && this.#options.appServerApprovals !== undefined;
   }

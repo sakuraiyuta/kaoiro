@@ -403,9 +403,20 @@ Progress (updated as each group lands):
 | 1. Common path and Claude scheduler keys | implemented; implementation review round 1 (must 3, should 1) fixed forward in `42414ee4`, `dd8af081` and the plan update; awaiting round 2 |
 | 2. Turn watchdogs and `permission_timeout_ms` | implemented; the gate observation point was fixed together with group 1's round-1 finding; awaiting implementation review |
 | 3. Antigravity tool timeout and epoch idle; runner-own settings and `KAOIRO_RUNNER_SERVER_URL` | implemented (see the notes below); awaiting implementation review |
-| 4. The three flags | planned |
+| 4. The three flags | implemented (see the notes below); awaiting implementation review |
 | 5. Directories | planned |
 | 6. Default models | planned |
+
+Group 4 notes. A flag is a registry row whose `false` file value counts as absent
+(`falseIsAbsent`): it is not relayed and cannot be reported as shadowed. A set
+variable is not relayed either; the wrapper's `flagArgument(variable, config)`
+takes the variable verbatim first, so omission and "variable first" agree for
+runner-launched and direct launches. The consumer observation is made on the
+wire and on the host: the gate reads the join params each wrapper sends
+(`inter_agent_delivery_modes` for Claude phase 2, `operator_input_modes` for
+Codex operator steer), and the Codex consumer line prints the host's own
+`operator_steer`, `approval_axis`, and approval deadline and inactivity limit
+(the `appServerApprovals` consumer).
 
 Group 3 notes. Runner-own settings (`server_url`, `log_phoenix_heartbeats`) are
 rows of the same registry with engine `runner`: they are validated, warned

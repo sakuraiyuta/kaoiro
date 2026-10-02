@@ -230,6 +230,9 @@ describe("registry", () => {
       ["KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS", "antigravity", "antigravity", "tool_timeout_ms"],
       ["KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS", "antigravity", "antigravity", "epoch_idle_ms"],
       ["KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS", "all", null, "permission_timeout_ms"],
+      ["KAOIRO_CODEX_OPERATOR_STEER", "codex", "codex", "operator_steer"],
+      ["KAOIRO_CODEX_APPROVAL_AXIS", "codex", "codex", "approval_axis"],
+      ["KAOIRO_CLAUDE_PHASE2_DELIVERY", "claude-code", "claude_code", "phase2_delivery"],
       ["KAOIRO_RUNNER_SERVER_URL", "runner", null, "server_url"],
       ["KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS", "runner", null, "log_phoenix_heartbeats"],
     ]);

@@ -132,3 +132,19 @@ describe("parseConfig timing fields", () => {
     expect(parseConfig({ ...base })[field]).toBeUndefined();
   });
 });
+
+describe("parseConfig global opt-in flags", () => {
+  it.each(["operator_steer", "approval_axis", "phase2_delivery"] as const)(
+    "%s: a JSON boolean only",
+    (field) => {
+      expect(parseConfig({ ...base, [field]: true })[field]).toBe(true);
+      expect(parseConfig({ ...base, [field]: false })[field]).toBe(false);
+      for (const bad of [1, 0, "true", "1", null, [], {}]) {
+        expect(() => parseConfig({ ...base, [field]: bad }), JSON.stringify(bad)).toThrow(
+          `${field} must be a boolean`,
+        );
+      }
+      expect(parseConfig({ ...base })[field]).toBeUndefined();
+    },
+  );
+});

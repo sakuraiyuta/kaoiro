@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { personaOptInSource } from "../src/persona_opt_in.js";
+import { flagArgument, personaOptInSource } from "../src/persona_opt_in.js";
 
 it.each([
   { name: "global flag", flag: "1", personas: undefined, source: "flag" },
@@ -33,4 +33,30 @@ it.each([
 ] as const)("resolves $name to $source", ({ flag, personas, source, ...rest }) => {
   const id = "id" in rest ? rest.id : "ao";
   expect(personaOptInSource(id, flag, personas)).toBe(source);
+});
+
+// The flag argument that combines the variable and the runner.config.json
+// value (issue #469); each row is a row of the design's truth table.
+it.each([
+  { name: "variable unset, config absent, id not listed", variable: undefined, config: undefined, list: undefined, source: "off" },
+  { name: "variable empty, config false, id listed", variable: "", config: false, list: "ao", source: "persona_list" },
+  { name: "variable unset, config true, id not listed", variable: undefined, config: true, list: undefined, source: "flag" },
+  { name: "variable empty, config true, id listed", variable: "", config: true, list: "ao", source: "flag" },
+  { name: "variable 1, config false", variable: "1", config: false, list: undefined, source: "flag" },
+  { name: "variable 1, config absent", variable: "1", config: undefined, list: undefined, source: "flag" },
+  { name: "variable 0 beats config true", variable: "0", config: true, list: undefined, source: "off" },
+  { name: "variable true is not 1 and beats config true", variable: "true", config: true, list: undefined, source: "off" },
+  { name: "variable 0, config true, id listed defers to the list", variable: "0", config: true, list: "ao", source: "persona_list" },
+  { name: "variable 0, config false, id listed", variable: "0", config: false, list: "ao", source: "persona_list" },
+] as const)("flagArgument: $name -> $source", ({ variable, config, list, source }) => {
+  expect(personaOptInSource("ao", flagArgument(variable, config), list)).toBe(source);
+});
+
+it("flagArgument passes a set variable through verbatim and maps only config true to 1", () => {
+  expect(flagArgument("0", true)).toBe("0");
+  expect(flagArgument(" 1", undefined)).toBe(" 1");
+  expect(flagArgument("", true)).toBe("1");
+  expect(flagArgument(undefined, true)).toBe("1");
+  expect(flagArgument(undefined, false)).toBeUndefined();
+  expect(flagArgument(undefined, undefined)).toBeUndefined();
 });

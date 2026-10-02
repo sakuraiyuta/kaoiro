@@ -50,6 +50,7 @@ import {
   classifyInterAgentError,
   isIngressStamp,
   mergePendingDisplayNameSync,
+  flagArgument,
   personaOptInSource,
 } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
@@ -180,7 +181,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const pendingReceiptRootTimeoutMs = config.pending_receipt_root_timeout_ms ?? 2_000;
   const phase2Source = personaOptInSource(
     config.persona.id,
-    process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY,
+    flagArgument(process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY, config.phase2_delivery),
     process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS,
   );
   const phase2Delivery = phase2Source !== "off";
