@@ -1,6 +1,6 @@
 ---
 title: "Draft ADR-0040 addendum: Codex app-server context snapshots"
-status: approved-implementation-in-progress
+status: implemented-pending-review
 last_updated: 2026-10-03
 ---
 
@@ -227,3 +227,6 @@ event counts, and replace any claim that no peer-facing context is projected.
 The director owns assignment of the independent implementation reviewer.
 Implementation starts from develop `d68a0165` on a separate branch; the research
 branch and raw captures remain frozen until the issue closes.
+
+Implementation checks and artifact bindings are in the
+[2026-10-03 verification record](../evidence/codex-app-server/context-meter-implementation-2026-10-03.md).

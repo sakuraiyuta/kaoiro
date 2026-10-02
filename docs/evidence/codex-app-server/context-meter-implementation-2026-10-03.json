@@ -1,0 +1,1262 @@
+{
+  "date": "2026-10-03",
+  "base_commit": "d68a0165c713996ecbe94285ce1d66e82f1bb0c7",
+  "implementation_commit": "ed421f40b3845d4ef426290dca7a17cd6dd8484d",
+  "branch": "issue-485-context-meter-implementation",
+  "sources": [
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/dashboard/test/contextUsageDisplay.integration.test.ts",
+      "sha256": "1bb4e7e5a40f16048bcee98d28ab06849065cd794bc9a25084f78a460f5e91ee"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/protocol/src/index.ts",
+      "sha256": "9d6e38ad675d4632960c07779e8a755381647165181c0c59b981cfbf8fd7f9d1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/scripts/check-codex-context-meter.mts",
+      "sha256": "4359cccbe7faa11bdc7065b1b162d66737afd8383c1c6ef65b605e9b3124787d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/server/test/kaoiro_server_web/channels/wrapper_channel_test.exs",
+      "sha256": "e322879ae5f088b1a02d792b9c1d8d3655d5a4f6e64557ef9c9b769a2fcff8b4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/src/app_server_context.ts",
+      "sha256": "80e0d651d7fe5148b15bbf0421ecb50c3dcee22b6db6372ca55a09ce7a3fc700"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/src/app_server_host_runtime.ts",
+      "sha256": "9b2b982f4c1f1f2bdc8aaafe553c08ca65cddbd9f64d7e6a1ce43fcff6ceff48"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/src/app_server_session.ts",
+      "sha256": "aad64c768d54684580fe631781f457a5093771458dbe302313eb5c3e08fbfd82"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/src/app_server_transport.ts",
+      "sha256": "e839c2512ba95c766739d917aaafd266aa01a2e3d6b4cd18f8c53cfa9ea2f613"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/src/host.ts",
+      "sha256": "64c018c09c905e8e7f861e54fe5d0136750804624e9ae49e8bafb6acb1b490a8"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/test/app_server_context.test.ts",
+      "sha256": "a3e0d71c107a7241c85d6ccb0f6d848d675c090f94be2ae630692b79479e7030"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/test/app_server_host_runtime.test.ts",
+      "sha256": "1fb98354226e003537669ab80ecb65982634de8a78d936d2c9a728dd057b7cbf"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/test/app_server_transport_initialize_retry.test.ts",
+      "sha256": "27ee853e49d744cba95f07cb9b940599bb881506a7e83500d3da60cd40421bb1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/test/host.test.ts",
+      "sha256": "36b003504e965052b329fddb26eb46367a3d25cca8d97c8ec0895ea9cc806cee"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/test/host_app_server.test.ts",
+      "sha256": "7c3532b81c555e777e628e4d8064f1816fe5fe5900619f0b570791b8020a15be"
+    }
+  ],
+  "runtime_assets": [
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/args.js",
+      "sha256": "a1300c4678fde79ceb3d6379d0a5eb5554e41106b923be0df049cbe069d62e45"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/build-info.json",
+      "sha256": "518e98cdfd70089df7aea2b662813d02ee979f2fb8d23340da84c16fb9258360"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/build_info.js",
+      "sha256": "99cb0a4baf04c9a2007e4f8aab2b8be67858739103482c06dcc1a02870d79b33"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/claude_scheduler.js",
+      "sha256": "785924dabd2b865cfc85d40cf87750fa8b7a7ce37d49775af85b39347c81c856"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/consumer_settings.js",
+      "sha256": "eeb3b90d136c4cd524ce15dc0efed603ef77fd9570d72f6068ab1d656267cb75"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/delivery_recovery.js",
+      "sha256": "45c7ca862c9a23e8fb2e5e131f0b0436885650b9a04e3369ad81b89d98c3ea59"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/index.js",
+      "sha256": "8cfcb27fef88a6f7269d2dcccf6021bc068e6945ec5dcae14344c52fd7a6b588"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/permission_timeout.js",
+      "sha256": "e18f6816f4cc7cb02cae5023e86b821acb6ad6726be3c56afa6ee234e418114a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/persona.js",
+      "sha256": "1f0c848b716ee71ff0ad5812d0765fe95b538f20281b4ca89fd95363165e756d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/redact.js",
+      "sha256": "8f497371c7b25e449c00a0991526c7787b79e1e6501b99ff7ce360a887fd8c3c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/transport.js",
+      "sha256": "52d253513b82400bff309bb301057284d8d3d478594505c40d5759ac784add09"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/core/dist/turn_watchdog_settings.js",
+      "sha256": "bf2b85bd0fa0847101de3d1ea013904ced21be0d2d0751f9a6d3f2f750e61b7e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/approval_gate.js",
+      "sha256": "5b28698a6bd18ddc104a9bb1872fea1a9212abaed321982517dfea63782e2bbd"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/ask_user_question.js",
+      "sha256": "e542d6cb568991c069df6afe75ac5bb54c4c8b6afed6375ba15c741ef7437a2c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/catalog.js",
+      "sha256": "fc6dacd19052960239e683aa225d4a4f2d3c9a85a21dda25518d4fd1b8e274ef"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/delivery_ack.js",
+      "sha256": "774aa6235563572246439ada983284ef1f400b5e5862b67f63924380f64c0ab7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/delivery_stages.js",
+      "sha256": "dd6cf6bb3658ac7b4f638a0e948af0133b1fe307e677a024e17c1b6ec41c4ff7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/engine.js",
+      "sha256": "09620bd1232209b039ab93f7a5dd6e259c4264f35115a8d6d28b130f942cf7b8"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/history_replay.js",
+      "sha256": "d42b9c64b4c808f8fa492b43e873e4450bc83e45b38beeb0b9dc135b051cd6f8"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/ia_sidecar.js",
+      "sha256": "daa51a07ce6096ed5b98580b1b82c469cc717a907b3573b5cc59c7564461ed7c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/index.js",
+      "sha256": "5a0aa6932c1ac36e47d550720547aec9cda164f582de2334dec0253d75281bd5"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/inter_agent.js",
+      "sha256": "61e13ea163139a717a2455724bf940adddabb987abf6681d508a470dca9b8725"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/logpayload.js",
+      "sha256": "0d1dac2d12ee38f02ec5fdfb9a08142b091fb47b5b655a01d22c899c8fe20583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/pending.js",
+      "sha256": "d534cda1f59c132829a4ac72e6cc5d7b8cc604a74547b242b318648131a4c194"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/permission.js",
+      "sha256": "051168bf72d943340dcc958c5d166083adab91398591f366090d383accb819a3"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/persona_opt_in.js",
+      "sha256": "a4ac75888ec526a6a2571b098ade4c54cec0c3ef6ac878090611ed30f10e35f1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/question.js",
+      "sha256": "74497fb197689d42ab5fe072c06261462f30a1ed544b288d5516110c9ebe02eb"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/redact.js",
+      "sha256": "d4088296d085a07f2af635cb2418cc652d6b589546a6a56d916e4d1de6e9d093"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/reply_basis.js",
+      "sha256": "d4aa965f95c07ba55a52e03516f62046ffd67530617bfc5a26bd91426a913fc8"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/request_session_reset.js",
+      "sha256": "768a4065a0a75078649e1f6cfd9707ab54643a3b8c1649b854aa91f50892f4ec"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/snapshot.js",
+      "sha256": "99840bdb0543b684ae4c6d8abd68e30c55577e65ea4a92e72e1d9df9fdcf6382"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/state.js",
+      "sha256": "8694a51bea59a8dee47acf09077fce2f9aa4467c53fe146976cb1362ac63021c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/tasklist.js",
+      "sha256": "67bbe684d4f34d9979146957d2836ab41f63e41736a40a93e93518ad41a53609"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/tool_origins.js",
+      "sha256": "1803709154121cfe10c0b71c371443c5fd0f941e02f2b1f941d3c90fdaf30bac"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/tooling.js",
+      "sha256": "9ef74711266a21b134866f1cb7158f369acd17c5c0ec4a55fea56943fa2a07a4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/types.js",
+      "sha256": "47b7180d696b8f2b63a5ce3158bff0afd07974dce8d1cd2454ea095cd8128d71"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/agent-common/dist/work_tools.js",
+      "sha256": "2421bbd2096bdb13a67ba88eab84badea334828076269769d2066ba59152a127"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/adapter.js",
+      "sha256": "c05c34f8da93da617836ae0dede6f528c332a493475106020aef9f185ae1ce27"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_approval.js",
+      "sha256": "91a80b228018acc510647982e7d503430c73ee11228724af0cca1a20b8270589"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_context.js",
+      "sha256": "c2e0cb4f7cc2e5d96e1d0c30d802bbb93a5f01b0945b98970e0a5863a7ef5762"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_history.js",
+      "sha256": "f6ed14e11ed7b96c03f601f7d2c63cd7d036b5f404c563ae2a8b66d3a170af1c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_host_runtime.js",
+      "sha256": "63fb4cc72c4278570fece4a90337d55c7ea4f5652a55dd4a7c2d9936bdac550e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_input.js",
+      "sha256": "9e216198aee21170d9374f4ffb4b2486049f03adc85533f2ae196c7cf6969ece"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_permission.js",
+      "sha256": "9a4c5bc9ad17420939a32b6b3946855d3cd51495d50c9d1cdfb27b7ae26eea7e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_projection.js",
+      "sha256": "8c535346b682262a96bb94695416d5ef25e5e2e021ed8946d30bc363b5457108"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_replay.js",
+      "sha256": "22c3e9ae9e4a61a171d0f5d28dda10959e909f41bd590d74277c30daea87b2b2"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_rpc.js",
+      "sha256": "a27af02f1decacffd411ef07b1fa1d62054ecffc7a1e737b8895c6e85d1ddddf"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_session.js",
+      "sha256": "ed6e8284c0bd3a91046a5853dc7ef29b2a9c955f6064cf3f8c762974729bd253"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_settings.js",
+      "sha256": "d3584fbf4c03d7a7a3b8cbde0576f7d3ccde91635b6b729870aee1b0bd1f4769"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_steer.js",
+      "sha256": "0401a974407651085548c378b82915feaf8077f19d0728a2d2fc58cb1742a419"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_stream.js",
+      "sha256": "da151f72a987f27991fa5f71b68fe382581d28471a1cf9fc056815d9d63cf03a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_telemetry.js",
+      "sha256": "724839267b2b6d4a8b660dede1f6ea57d4f3d2a7d1413ac5c5a25858137305be"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/app_server_transport.js",
+      "sha256": "4b4f41a1b1744dd4f15471ab05c1fd894b36948f5dfad9709699133a736dbc79"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/bridge.js",
+      "sha256": "2fcf440e2c0413b089e3ff519e8fb6a21342e97da4629a7f6f9eacf98b16633b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/bridge_policy.js",
+      "sha256": "7429396454cbdf14a0399d621ab46c7753f78b8d1b98cb6a454a2e6be45dba52"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/build-info.json",
+      "sha256": "a2e6449638212c6510cc34daf2ee5c08aff60d4bb31095fb0dc003c27c957999"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/catalog.js",
+      "sha256": "7e323d09492f36104f4a3e858b5ca1581677ee0a9ea4a41f4f02459151300bb4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/cli.js",
+      "sha256": "a3db0037b2e3a821c1608a6f101e36402fe861c0c1b0cebdba21fe6c757284e3"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/codex_home.js",
+      "sha256": "8b959564b0407c69218b6fcd0520d067707e7cb8abe290eeb9beaa4ccb9939d6"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/history.js",
+      "sha256": "652a3903fea375197efd1795d40c0bb7429fc82baa043122d5f6f0b17c58d61f"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/host.js",
+      "sha256": "95f3531a5cdeee36bbb0574a16bee57ae5cd323719db5b325a69a25be8d58b61"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/index.js",
+      "sha256": "e28f92cc92126d98ef949f64887980e8fe3221103f5fab6ea722c62b369e6bb0"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/inter_agent_message_handler.js",
+      "sha256": "44ba404625a80a828feee5820aa478d86f558af0565bfa2b686033e009ad822a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/inter_agent_turn_coordinator.js",
+      "sha256": "c62b458b4700b006c40a8f482ce41fef0cd94324cf21363f9d4c126d6cb1fff4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/network_access.js",
+      "sha256": "e58d3affd6a14c04e6824a29b69d62f22c235fd090e36f3070b567d5916dd5dd"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/permission_state.js",
+      "sha256": "7216f4b16e612bd3cc6e671c27682ed484587a14d12549374905f698a2f6987d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/rollout.js",
+      "sha256": "9d92aeae3e02fb2a4772da59be66d0238a8645927682536a655c0e5d099cdbc0"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/source_resolution.js",
+      "sha256": "0d1d105ce653caa7c5f9d37dc056d21dbd74ca276d2e0beaa46f4050cc7b876b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/startup.js",
+      "sha256": "1eee642c0bcaca7817c16a26e5e3b2eb17539f4c9ae99b6e879523035a438333"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/startup_rate_limits.js",
+      "sha256": "d98f74e5c31c41d6e8ccf149acb860d0f75b307d5f85cf71774bc19fe874dcf7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/tool_home.js",
+      "sha256": "6c8487c69bda94dff8a03aa776a402ed0bcf78b5bb1220a70649d58917c61dad"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/toolhost.js",
+      "sha256": "717d35b0997c7c4105066d645cfeccf3364afb2480f2c042e6c98b7e1186c5c4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/turn_diagnostics.js",
+      "sha256": "20f1a8cdc22a54c534bcefcaeb1049260a2c3537a9cb355f2648ee02942df570"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/turn_watchdog.js",
+      "sha256": "f02cf8b34d9a7b300eddd0285ae11d51619a9e0095e8090855b484d82a13977d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/wrapper/codex/dist/upload.js",
+      "sha256": "25feab40e004463b8668c7389ecf1e19c892f65c2c0884a83c096363c123ddda"
+    }
+  ],
+  "evidence_files": [
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/boundary-emission.log",
+      "sha256": "c31d34da8626706615c55e9069d3b1f87df0cdcf3033990115d26f25b4af0d9f"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/boundary-withdrawal.log",
+      "sha256": "3d82d6bb6446755f43ed88a1a57c9a0e949a0c7a19b5480051db415206519789"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/buffer-boundary-order.log",
+      "sha256": "df6a51d73e66566d7ba09a2f8114f08b09d2614fafcfa46876dc42226172cb02"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-antigravity.log",
+      "sha256": "f909fbc2db12bc21ea5476e71f97575ec417b6de9b92e19a6cfff70b2e0c4e59"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-claude.log",
+      "sha256": "407da21a37a433457dea98dff8e5f22c996a3186809cbee0019adbb3cccd77f8"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-codex-final.log",
+      "sha256": "be96f1b0542d7520548c1b68371fa5c4d7f3044dba5b5b973775052c67d59583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-codex-first.log",
+      "sha256": "be96f1b0542d7520548c1b68371fa5c4d7f3044dba5b5b973775052c67d59583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-codex-prelive.log",
+      "sha256": "be96f1b0542d7520548c1b68371fa5c4d7f3044dba5b5b973775052c67d59583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-common-final.log",
+      "sha256": "1f991e5253df6e0ee2eb5137fed9844de5607a5b972f8b3563c7c7bfcddef98d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-common.log",
+      "sha256": "1f991e5253df6e0ee2eb5137fed9844de5607a5b972f8b3563c7c7bfcddef98d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-core-final.log",
+      "sha256": "2c473ae2d07fe4038b847590d0632de49fb409757232e446fffe4364cc65e7c7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-core.log",
+      "sha256": "2c473ae2d07fe4038b847590d0632de49fb409757232e446fffe4364cc65e7c7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-live-cut.log",
+      "sha256": "be96f1b0542d7520548c1b68371fa5c4d7f3044dba5b5b973775052c67d59583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-live-restored.log",
+      "sha256": "be96f1b0542d7520548c1b68371fa5c4d7f3044dba5b5b973775052c67d59583"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-protocol.log",
+      "sha256": "08a80014742912e5ea8c3ef8a1f959987ea27c11a830479bb0a0c101e878c887"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/build-runner.log",
+      "sha256": "c247c7b07e5b6cd22484baf1dbeb4d175478bb82028aa267b33fdc4e2c220437"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/check-response-order.py",
+      "sha256": "0d90e7deac67619d87b8bf6797665cbd9a951b7e912593221bca0b9b67903aa0"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/clamp-ratio.log",
+      "sha256": "94b8c8b47555e6463be7a988e80c0441d6e664e6d1fdaa1e8a838c308f1e8172"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-test-complete.log",
+      "sha256": "cf569431e00d11771c3b7feaf96db07b18de4859bb48b2aafb97b9c76abbded3"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-test-final.log",
+      "sha256": "0516eedde24cb105bf4a475b0d4c1ab9c5a1d79a8d73964df675c57abf65cc65"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-test-frozen.log",
+      "sha256": "de4d8d7651ce49ce8c8ab819ea1ec333459d00662581b5dd7ce79d5fa3124048"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-test.log",
+      "sha256": "95a59de33cca0424f0ccd9793fba71b0d394ad596c6f595965badbd9b0c271d9"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-typecheck-complete.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-typecheck-final.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-typecheck-frozen.log",
+      "sha256": "593396164518c384ced8c6b4c69e6e1dcb7a394eff7d29f6606d60e4e8f6d752"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-typecheck.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/commit-gate.log",
+      "sha256": "b2add3a04c8a7dca9f2807e0eeddc16c3cb35501cd358ced4a4a489f9d562d87"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/common-test.log",
+      "sha256": "2cbf2440ae4dbf93878e047c9ea273479d00280f364af9248c48e94192cb6de2"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/common-typecheck.log",
+      "sha256": "68582063861b3da78a324dfc879422dc7730a40a83a764355224bbc217692628"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-final-targeted.log",
+      "sha256": "fa6f14462e14d8cddba0d6b933996007fc7c589a5b550cfd3c1d63e035016569"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-first.log",
+      "sha256": "ca8819ea56b8900937c63dfbcf57527af5738f395e11526e04ce1b1af52d8623"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-lifecycle-positive.log",
+      "sha256": "38178c7d76c31b37050a4713ba65cf38a92e8d83dcdefddcf6943f6abbe69047"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-owner-positive.log",
+      "sha256": "d482a97762fb3560d92be5a92e3e8cb93e0002318a5168c866689c6ea30f9085"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-second.log",
+      "sha256": "4d5c85a8d99d1093e0633e998c6e146c5b8e0587cb270c3c217344b575b492aa"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/context-third.log",
+      "sha256": "16b84853ede227c72d394602f3eedc8607831e82ff5c5c79ec1d6914a992bb24"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/core-test.log",
+      "sha256": "ce4913aa530ecccf320c91d410032a5f6f61752e866db5383eb14e4591d83816"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/core-typecheck.log",
+      "sha256": "96ce26a6cf3175b31f672d2d644742411fe3ccd9e4f91d1f9da67e569b112524"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-check.log",
+      "sha256": "570bef767583f53d2313b11936508276afd4ab29ffc6de8018cb73d27cb73bd1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-context-final.log",
+      "sha256": "9e730f7e8283be155d35b309d7f1f8b738367c946ac1e73be39d3ac8bad8471d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-context-positive.log",
+      "sha256": "98b83b3895d669e2504bfc3541cffe2f1533c859bf8eef57eeb69d3732368335"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-context.log",
+      "sha256": "c2c79bdfaa43daed9bb90f5667fff4ab7fb31f0c08e2273f5db1e5800df63885"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-test.log",
+      "sha256": "9d965f36453c2e569bc0f519e1d16bcf24efe1b6a440bd65eb0dbf07d4140ec4"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/double-reasoning.log",
+      "sha256": "e008d27d8b867feafd5b62f03e192f3c2b08fdd34916cb591b8c7c4877e0f708"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/duplicate-boundary.log",
+      "sha256": "00d13fd150050f806cde8844c35d44e166f30dceab879f06b98a4a4e9af974ba"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/estimate-admission.log",
+      "sha256": "5e08ea8db98b8b873f2bc44c4f69289a2566205ab89069833e78f0c26aecb233"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/exec-capability.log",
+      "sha256": "50bfb48a1fa52ebc9b5685e0ddf4302cb335d3bdb2b3d0d53379d0468eeea5f0"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/host-auto-positive.log",
+      "sha256": "fea9191a54e6e3e45509b2605676034b3e22b0408960acea1944ffa68aa15c78"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/install-dashboard.log",
+      "sha256": "0bd686898e75251e85159e1e4ae32c26f7904e040c0633472e66c834631d4b5c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/late-runtime.log",
+      "sha256": "da6b7e190286bbfbc2bef8d90d54e23203c943e8b7f53f04df7c3029e9fa7ce7"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/lifecycle-mutations.json",
+      "sha256": "adef1baa51c95b1015c62365a78d3841b096e9a85c82c38b5ced73bb5ed28ee6"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/lifecycle-mutations.log",
+      "sha256": "77b9564b8dcfff2c564dc27330be5f240845cb212dea87a77300953104328b9e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/lifecycle-mutations.py",
+      "sha256": "d1ef78eabf821b191ee3214421c3719975f09afa39661f886f2a9a843b3c21f3"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-cycle-final.log",
+      "sha256": "1eff148e2a38dfab9327db6c39daa189fba034c863011494d2d82d82443aeef6"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-cycle.json",
+      "sha256": "e107fe69b58d7f2543d324c01b82c4ce009c9d6d3c092237836aa64ee111c210"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-cycle.log",
+      "sha256": "1eff148e2a38dfab9327db6c39daa189fba034c863011494d2d82d82443aeef6"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-cycle.py",
+      "sha256": "5c70c9b120ae81b93b5d7e95f566e5540af7e440afc1476ad945b4b69bc3b8b6"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-negative-publication-cut/cleanup.json",
+      "sha256": "dfef239ee18e2d54127d540cd646d0c1d2ad5b138764598d65e850e34b3fa721"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-negative-publication-cut/config.json",
+      "sha256": "dbe4d35ba695e885e9b9e9587b87fca238aa18012bd89a534b01f57321afa899"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-negative-publication-cut/native.json",
+      "sha256": "4a8035bfffd4d7c50df11a159a90099341a1170105737c4d3880131e2074ed2c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-negative-publication-cut.log",
+      "sha256": "d994f742dc95095d552bdbe3ed92890e7c2acfdd25e4215e497db91853bd7dd9"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-before-cut/cleanup.json",
+      "sha256": "b67cc970513218503ae15f7ad7e6ce14f90ce2aaa46ecac258f4de92debd7eb2"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-before-cut/config.json",
+      "sha256": "7647cad5b947941b6f6412b32b97f9342190c9f1f14b76cc27f4aa4e97f80e44"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-before-cut/native.json",
+      "sha256": "829b56981ef740616583f1678258d5a1542f6f2cdad14e4d3f39134663a00dc1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-before-cut/result.json",
+      "sha256": "a0f53b5e38c10eb19b36f8e6265504f70ad1821b9dee2766f3d084a11f68503b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-before-cut.log",
+      "sha256": "c23d487d8ddf5445d8de3eb988ce3a56d8a99877669e91ed6f5b6a4b024e5aad"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-final/cleanup.json",
+      "sha256": "131a5548054c3850c549b3c1c2e063b41d95f4a8b59ebe88a611030fd0fd5e15"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-final/config.json",
+      "sha256": "b3a48b398d9a43ee6fa865fb49e6283b8cf3bda55c0bdcbe9854e223220544ce"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-final/native.json",
+      "sha256": "792fe75bb6453356e1b91d8b8e654bdeb4573ab78591d2170cbaa8f58a8b341e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-final/result.json",
+      "sha256": "a0f53b5e38c10eb19b36f8e6265504f70ad1821b9dee2766f3d084a11f68503b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/live-positive-final.log",
+      "sha256": "20c077d130347a45707643f501a25c158332176718233841f7be6bb667651b3e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/missing-window-withdrawal.log",
+      "sha256": "9d56f0f78483aefbc751e4542c3d135c8731d766ef569823b7039818581eb5ef"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mix-deps.log",
+      "sha256": "d7e0016e1a695b62a88e734aacccc21d58b8d2056e082c0f51cda900d16c87b2"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/model-setter.log",
+      "sha256": "05aa23b907905235fa31ae441f1517fbbc6f247c7279b6d4c219d6ce431b699d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations-current.log",
+      "sha256": "6341ba78ea87283bc50c42d97e628db94852d63e9568c3c7eed10c65d645f942"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations-frozen.log",
+      "sha256": "6341ba78ea87283bc50c42d97e628db94852d63e9568c3c7eed10c65d645f942"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations-run-final.log",
+      "sha256": "6341ba78ea87283bc50c42d97e628db94852d63e9568c3c7eed10c65d645f942"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations-run.log",
+      "sha256": "9653015ac80ce3f2d3488ce2e24f9aa31e9d4ded92b4e7c69250e63072c6b320"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations.json",
+      "sha256": "a20608eab8139004735abac763ec8bd6747049489d7146c12430ea1958755d0a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/mutations.py",
+      "sha256": "c328a5b1ab6c65420bf2f4e414e363881db68104413409c176ee41845aa7c37c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/named-turn-owner.log",
+      "sha256": "8e89a473f8d9c085ad33dcdd8da92e3ecfff5d7b8623ab0c81bfc236f57d069c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/native-total.log",
+      "sha256": "ee9228604aaa8d25ab55545c3664e7faa5cd38369601f1c1469f8d2e0513667f"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/package-checks-run.log",
+      "sha256": "5d2faa4a6770ff86656e9583a61df219da69f4ac4d638fd86e432a3dcec15860"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/package-checks.json",
+      "sha256": "5d7784360e3b60927ef3942b352059c50a7b8348893c1a9add1be796ec09814a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/package-checks.py",
+      "sha256": "c3dffcf61910c921a408dc2ac3970ad7e47c526a78612c606f11de25a997a0be"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/pnpm-install.log",
+      "sha256": "407ae376ec0be049d6d168f7361f46f9d9930f54ce7fe5902fe67bcfd710011c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/protocol-typecheck.log",
+      "sha256": "c1235f9f43144ef1adc3d7993307f6275d55c360d805e3b0089fb25842f8c921"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/rejected-model-invalidation.log",
+      "sha256": "0be8f3663e9759411529df7b5a05f14273c7337c2218f3161e7b69790bcbed03"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-admission.log",
+      "sha256": "5091b01e2006ff7c943af7facfabb8bea89f17534df2fd27b816610fb362d063"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-item-identity.log",
+      "sha256": "16cfd374030f0903b8c07757a929763566f81996ed18767c2f425dcc1358d58d"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-order-negative.log",
+      "sha256": "7bbc0145c16e672bef4a257c4a1ca941109616d61e48d74cd11ceac64a6bd49b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-order.json",
+      "sha256": "47d6379607e31fc6a6b2df538406a26e568811a5c9a1db9bc57cbb1367dacf03"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/rpc-generation.log",
+      "sha256": "1820245bc2c360aed754746face897f69181199fb1acb4f88b0e6680b5d7531a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-final.json",
+      "sha256": "a121df304b06495215c008adc7d0132935ed9b52aa2d5a2b5c26d7d30e3a095f"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-test-final.log",
+      "sha256": "ef281878c093c9c30ca17a064e888e1d4b6264f987248e46b8b28703ade46555"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-test.log",
+      "sha256": "3d1934f90592f51c51ed5b45920ed2e68d7bf0965976141b79903f6b2ab97dcf"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-typecheck-final.log",
+      "sha256": "75e9604223d50964cd46ed2792ee258f5a32260dffe645782d1fd297e8c9814c"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-typecheck.log",
+      "sha256": "9fb666757f22b0b8bf38bc8f4d73e0de20151e3d246029ebe27a0ae919446e4a"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/server-precommit.log",
+      "sha256": "daff7906e55531606b8ec27d7f80a5b344fabd8690196cbcd9525282c5c67ad1"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/session-callback.log",
+      "sha256": "59f21d9021eff5e1d02e44e76a2f5a66f9517863bf9f60079f2408e6dfc57b60"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/thread-owner.log",
+      "sha256": "5933e769a7629fbf8455c055ec090a8ab9cda05e1f9e2c2d13eb7d8109344259"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/token-owner.log",
+      "sha256": "b6024bfea58ddf34fc8d410890219a6e0fa7a12a2a3d1971017d84cc7bf28b24"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-close.log",
+      "sha256": "18841a6ac73d5036356e3a9837aa2ce289f78ab3ea572c264dc07ef5fba0b66b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-generation-positive.log",
+      "sha256": "0aa42ef1d2ec861688e460c7383fe92aa2e9edad01a5b441fa401ec237f1069e"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-mutations-final.log",
+      "sha256": "2c1dcf092dfed2a0aa08c1e630f85c3c778e9dbf494f0dc8b740acc0a2d6dbdf"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-mutations-frozen.log",
+      "sha256": "2c1dcf092dfed2a0aa08c1e630f85c3c778e9dbf494f0dc8b740acc0a2d6dbdf"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-mutations.json",
+      "sha256": "5ca5e34728a3cd6c02244e211077b5cae13d3bb125547bb01f409323501fda70"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-mutations.log",
+      "sha256": "ede6184f5e75a5cc9cea4cf1628aae91b9fc0c8c9954b373eab2794e47a4b277"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-mutations.py",
+      "sha256": "93b881c69e87c011251d26ef48978553805e7bb07e5c7c6fb4074e5addd84e40"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-owner.log",
+      "sha256": "b87159ad40b196dfc42443f37dcd4089c76acc2753dd27cdfbf8f16198ee7c14"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-retired.log",
+      "sha256": "f8d00905a539b16d7dc688f0e4e29d3703b48bf8da2e4bf21889011986bc467b"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/typecheck-codex.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/typecheck-first.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/typecheck-second.log",
+      "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/unknown-model.log",
+      "sha256": "8cfabd2e2f1ad4f57229495bbe548e1d96943b052de58a17706d260021d72714"
+    },
+    {
+      "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/watchdog-context-close.log",
+      "sha256": "f2e05001f1122c3ee038766ca608319c438b64cd408d2eb01ce26b5bd1b5c0e5"
+    }
+  ],
+  "checks": [
+    {
+      "package": "core",
+      "exit": 0,
+      "passed": 366,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/core-test.log",
+        "sha256": "ce4913aa530ecccf320c91d410032a5f6f61752e866db5383eb14e4591d83816"
+      }
+    },
+    {
+      "package": "agent-common",
+      "exit": 0,
+      "passed": 516,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/common-test.log",
+        "sha256": "2cbf2440ae4dbf93878e047c9ea273479d00280f364af9248c48e94192cb6de2"
+      }
+    },
+    {
+      "package": "codex",
+      "exit": 0,
+      "passed": 1336,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-test-complete.log",
+        "sha256": "cf569431e00d11771c3b7feaf96db07b18de4859bb48b2aafb97b9c76abbded3"
+      }
+    },
+    {
+      "package": "runner",
+      "exit": 0,
+      "passed": 947,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-test-final.log",
+        "sha256": "ef281878c093c9c30ca17a064e888e1d4b6264f987248e46b8b28703ade46555"
+      }
+    },
+    {
+      "package": "dashboard",
+      "exit": 0,
+      "passed": 1078,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-test.log",
+        "sha256": "9d965f36453c2e569bc0f519e1d16bcf24efe1b6a440bd65eb0dbf07d4140ec4"
+      }
+    },
+    {
+      "package": "server",
+      "exit": 0,
+      "passed": 1826,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/server-precommit.log",
+        "sha256": "daff7906e55531606b8ec27d7f80a5b344fabd8690196cbcd9525282c5c67ad1"
+      }
+    },
+    {
+      "package": "protocol-typecheck",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/protocol-typecheck.log",
+        "sha256": "c1235f9f43144ef1adc3d7993307f6275d55c360d805e3b0089fb25842f8c921"
+      }
+    },
+    {
+      "package": "core-typecheck",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/core-typecheck.log",
+        "sha256": "96ce26a6cf3175b31f672d2d644742411fe3ccd9e4f91d1f9da67e569b112524"
+      }
+    },
+    {
+      "package": "common-typecheck",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/common-typecheck.log",
+        "sha256": "68582063861b3da78a324dfc879422dc7730a40a83a764355224bbc217692628"
+      }
+    },
+    {
+      "package": "codex-typecheck-complete",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/codex-typecheck-complete.log",
+        "sha256": "990c7a19c96c076420a4836034865045a2875fa21e9d15bc0fab27ff08120651"
+      }
+    },
+    {
+      "package": "runner-typecheck-final",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/runner-typecheck-final.log",
+        "sha256": "75e9604223d50964cd46ed2792ee258f5a32260dffe645782d1fd297e8c9814c"
+      }
+    },
+    {
+      "package": "dashboard-check",
+      "exit": 0,
+      "log": {
+        "path": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/dashboard-check.log",
+        "sha256": "570bef767583f53d2313b11936508276afd4ab29ffc6de8018cb73d27cb73bd1"
+      }
+    }
+  ],
+  "unit_mutations": [
+    {
+      "mutation": "native-total",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/native-total.log"
+    },
+    {
+      "mutation": "double-reasoning",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/double-reasoning.log"
+    },
+    {
+      "mutation": "clamp-ratio",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/clamp-ratio.log"
+    },
+    {
+      "mutation": "missing-window-withdrawal",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/missing-window-withdrawal.log"
+    },
+    {
+      "mutation": "boundary-withdrawal",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/boundary-withdrawal.log"
+    },
+    {
+      "mutation": "estimate-admission",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/estimate-admission.log"
+    },
+    {
+      "mutation": "response-admission",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-admission.log"
+    },
+    {
+      "mutation": "commit-gate",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/commit-gate.log"
+    },
+    {
+      "mutation": "token-owner",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/token-owner.log"
+    },
+    {
+      "mutation": "thread-owner",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/thread-owner.log"
+    },
+    {
+      "mutation": "named-turn-owner",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/named-turn-owner.log"
+    },
+    {
+      "mutation": "model-setter",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/model-setter.log"
+    },
+    {
+      "mutation": "exec-capability",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/exec-capability.log"
+    },
+    {
+      "mutation": "late-runtime",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/late-runtime.log"
+    },
+    {
+      "mutation": "transport-owner",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/transport-owner.log"
+    },
+    {
+      "mutation": "session-callback",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/session-callback.log"
+    },
+    {
+      "mutation": "boundary-emission",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/boundary-emission.log"
+    },
+    {
+      "mutation": "watchdog-context-close",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/watchdog-context-close.log"
+    },
+    {
+      "mutation": "rejected-model-invalidation",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/rejected-model-invalidation.log"
+    },
+    {
+      "mutation": "buffer-boundary-order",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/buffer-boundary-order.log"
+    },
+    {
+      "mutation": "duplicate-boundary",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/duplicate-boundary.log"
+    },
+    {
+      "mutation": "unknown-model",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/unknown-model.log"
+    },
+    {
+      "mutation": "response-item-identity",
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/worktrees/fuji-485-impl/tmp/fuji-485-implementation/response-item-identity.log"
+    },
+    {
+      "mutation": "rpc-generation",
+      "exit": 1,
+      "log": "tmp/fuji-485-implementation/rpc-generation.log"
+    },
+    {
+      "mutation": "transport-retired",
+      "exit": 1,
+      "log": "tmp/fuji-485-implementation/transport-retired.log"
+    }
+  ],
+  "live_default_composition": [
+    {
+      "gate": "live-positive-before-cut",
+      "exit": 0,
+      "cleanup": {
+        "held_pids": [
+          2590354,
+          2590437
+        ],
+        "exited": true
+      },
+      "invocation": [
+        "timeout",
+        "900",
+        "pnpm",
+        "-C",
+        "runner",
+        "exec",
+        "tsx",
+        "../scripts/check-codex-context-meter.mts",
+        "../tmp/fuji-485-implementation/live-current"
+      ]
+    },
+    {
+      "gate": "live-negative-publication-cut",
+      "exit": 1,
+      "cleanup": {
+        "held_pids": [
+          2590978,
+          2591059
+        ],
+        "exited": true
+      },
+      "invocation": [
+        "timeout",
+        "900",
+        "pnpm",
+        "-C",
+        "runner",
+        "exec",
+        "tsx",
+        "../scripts/check-codex-context-meter.mts",
+        "../tmp/fuji-485-implementation/live-current"
+      ]
+    },
+    {
+      "gate": "live-positive-final",
+      "exit": 0,
+      "cleanup": {
+        "held_pids": [
+          2591452,
+          2591534
+        ],
+        "exited": true
+      },
+      "invocation": [
+        "timeout",
+        "900",
+        "pnpm",
+        "-C",
+        "runner",
+        "exec",
+        "tsx",
+        "../scripts/check-codex-context-meter.mts",
+        "../tmp/fuji-485-implementation/live-current"
+      ]
+    }
+  ],
+  "final_live_result": {
+    "known": {
+      "used_tokens": 23888,
+      "max_tokens": 258400,
+      "used_percentage": 9.244582043343653
+    },
+    "boundary_unknown": true,
+    "capability": true,
+    "binary_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+    "default_cli_host_session": true
+  },
+  "research_response_order": {
+    "ordinary_snapshots_checked": 15,
+    "completed_response_after_latest_boundary_before_usage": 15,
+    "rows": [
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-cbf9-7bc2-af60-28c989b88231",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-d817-7691-8c3b-fc9b3b23ed20",
+        "last_boundary_index": -1,
+        "response_item_index": 25,
+        "usage_index": 26
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-e868-7be2-9f95-e92b9c1141be",
+        "last_boundary_index": -1,
+        "response_item_index": 37,
+        "usage_index": 38
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-f33b-7a51-ae53-7d7cbf075c0a",
+        "last_boundary_index": -1,
+        "response_item_index": 49,
+        "usage_index": 50
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-0112-75b3-9f9a-178a8e56de16",
+        "last_boundary_index": -1,
+        "response_item_index": 61,
+        "usage_index": 62
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-1353-7311-9b62-dae27ffb2dff",
+        "last_boundary_index": -1,
+        "response_item_index": 73,
+        "usage_index": 74
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-27ec-7780-8c5e-c3560f205442",
+        "last_boundary_index": 84,
+        "response_item_index": 88,
+        "usage_index": 89
+      },
+      {
+        "capture": "automatic-post-events.jsonl",
+        "turn_id": "01a0fd41-5a2b-7822-8bb8-18e5a32a340d",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "manual-direct-events.jsonl",
+        "turn_id": "01a0fd3f-4194-7141-8025-43e0525d5da4",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "manual-events.jsonl",
+        "turn_id": "01a0fd39-13a2-7062-b891-97e8a52091af",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "model-switch-retry-events.jsonl",
+        "turn_id": "01a0fd3b-d013-7a72-ab54-7dcca59c3ef4",
+        "last_boundary_index": -1,
+        "response_item_index": 18,
+        "usage_index": 19
+      },
+      {
+        "capture": "model-switch-retry-events.jsonl",
+        "turn_id": "01a0fd3b-de38-7e61-bd99-5181d111cc08",
+        "last_boundary_index": -1,
+        "response_item_index": 30,
+        "usage_index": 31
+      },
+      {
+        "capture": "post-boundary-direct-events.jsonl",
+        "turn_id": "01a0fd41-6859-7120-a7ea-34ffa5fea43a",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "post-boundary-retry-events.jsonl",
+        "turn_id": "01a0fd40-2d2a-7310-a021-31c6ab76554a",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "reasoning-events.jsonl",
+        "turn_id": "01a0fd39-a2ff-77c2-97b2-091f9aaef680",
+        "last_boundary_index": -1,
+        "response_item_index": 16,
+        "usage_index": 17
+      }
+    ]
+  },
+  "limitations": [
+    "Credentialed live gate covers ordinary response and explicit compaction; other measured native paths are the frozen research captures plus deterministic publication tests.",
+    "Null/different windows are deterministic coverage; no live null window was observed.",
+    "Finite-ratio defense is redundant with safe integer counts and a positive safe integer window; retirement/RPC defenses were cut together across both transport entrypoints."
+  ],
+  "setup_failures": [
+    "Initial runner test/typecheck ran before Claude and Antigravity artifacts were built; after building dependencies and runner, both exited 0.",
+    "Initial dashboard invocation inherited CODEX_HOME and was rejected by the guard; the final run unset it."
+  ],
+  "early_negative_controls": [
+    "An early thread-owner cut stayed green until the candidate commit mismatch test was added; the final control exits 1.",
+    "A closing-only cut stayed green because failure already retired the transport; cutting the complete retirement predicate exits 1."
+  ]
+}
