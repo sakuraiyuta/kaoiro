@@ -191,3 +191,7 @@ Remaining coverage limits are other releases/providers/accounts, images and
 tool-heavy responses, live null windows and live changes between different
 window sizes. The measurements qualify the five requested paths on this pinned
 composition; they do not establish an exact count of the next provider request.
+
+The revised order check confirms all 15 ordinary snapshots follow a completed
+`agentMessage` or `reasoning` item after the last compaction boundary in the same
+turn; replacing the automatic turn completion with a start makes that check fail.

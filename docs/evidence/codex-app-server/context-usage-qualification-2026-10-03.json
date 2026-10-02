@@ -813,7 +813,114 @@
   ],
   "response_item_order_inspection": {
     "ordinary_snapshots_checked": 15,
-    "completed_agent_or_reasoning_item_before_same_turn_usage": 15,
-    "claim_scope": "inspection of retained native events; proposed consumer not implemented"
+    "completed_response_after_latest_boundary_before_usage": 15,
+    "rows": [
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-cbf9-7bc2-af60-28c989b88231",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-d817-7691-8c3b-fc9b3b23ed20",
+        "last_boundary_index": -1,
+        "response_item_index": 25,
+        "usage_index": 26
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-e868-7be2-9f95-e92b9c1141be",
+        "last_boundary_index": -1,
+        "response_item_index": 37,
+        "usage_index": 38
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd39-f33b-7a51-ae53-7d7cbf075c0a",
+        "last_boundary_index": -1,
+        "response_item_index": 49,
+        "usage_index": 50
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-0112-75b3-9f9a-178a8e56de16",
+        "last_boundary_index": -1,
+        "response_item_index": 61,
+        "usage_index": 62
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-1353-7311-9b62-dae27ffb2dff",
+        "last_boundary_index": -1,
+        "response_item_index": 73,
+        "usage_index": 74
+      },
+      {
+        "capture": "automatic-events.jsonl",
+        "turn_id": "01a0fd3a-27ec-7780-8c5e-c3560f205442",
+        "last_boundary_index": 84,
+        "response_item_index": 88,
+        "usage_index": 89
+      },
+      {
+        "capture": "automatic-post-events.jsonl",
+        "turn_id": "01a0fd41-5a2b-7822-8bb8-18e5a32a340d",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "manual-direct-events.jsonl",
+        "turn_id": "01a0fd3f-4194-7141-8025-43e0525d5da4",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "manual-events.jsonl",
+        "turn_id": "01a0fd39-13a2-7062-b891-97e8a52091af",
+        "last_boundary_index": -1,
+        "response_item_index": 13,
+        "usage_index": 14
+      },
+      {
+        "capture": "model-switch-retry-events.jsonl",
+        "turn_id": "01a0fd3b-d013-7a72-ab54-7dcca59c3ef4",
+        "last_boundary_index": -1,
+        "response_item_index": 18,
+        "usage_index": 19
+      },
+      {
+        "capture": "model-switch-retry-events.jsonl",
+        "turn_id": "01a0fd3b-de38-7e61-bd99-5181d111cc08",
+        "last_boundary_index": -1,
+        "response_item_index": 30,
+        "usage_index": 31
+      },
+      {
+        "capture": "post-boundary-direct-events.jsonl",
+        "turn_id": "01a0fd41-6859-7120-a7ea-34ffa5fea43a",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "post-boundary-retry-events.jsonl",
+        "turn_id": "01a0fd40-2d2a-7310-a021-31c6ab76554a",
+        "last_boundary_index": -1,
+        "response_item_index": 17,
+        "usage_index": 18
+      },
+      {
+        "capture": "reasoning-events.jsonl",
+        "turn_id": "01a0fd39-a2ff-77c2-97b2-091f9aaef680",
+        "last_boundary_index": -1,
+        "response_item_index": 16,
+        "usage_index": 17
+      }
+    ],
+    "negative_control": "Changing the automatic turn response completion at index 88 to item/started fails the same checker (exit 1); original captures remain unchanged."
   }
 }
