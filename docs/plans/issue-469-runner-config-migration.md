@@ -278,7 +278,18 @@ prints a secret; no setting here is one.
   This line, not the resolver line, is what the default-composition gate in
   section 3 asserts for consumption. Codex's `appServerApprovals`
   (`deadlineMs`, `inactivityLimitMs`) exists only when the approval-axis flag
-  is on and is covered when group 4 wires the flags.
+  is on; the gate turns it on and the consumer line prints the host's own
+  values (group 4).
+
+  Coverage limit for `pending_receipt_root_timeout_ms`. The line observes the
+  Host's receipt option only. `cli.ts` also uses the same value for its own
+  absolute receipt deadline, and the gate does not observe that use: replacing
+  just that expression with a fixed `2_000` leaves the gate green. That use is
+  pinned by the semantic tests `cli_claim_chain.test.ts` and
+  `cli_delivery_composition.test.ts`, which fail 3 of 42 with the same
+  replacement (measured: two "keeps the absolute deadline" cases and the
+  "receipt chain expires" case). The consumer line is therefore not evidence
+  of the CLI deadline; the two semantic suites are.
 
 ### 2.3 `changedFields` cannot lag the schema
 
@@ -498,7 +509,10 @@ its consumers. The runner launches the built wrapper entrypoint through the real
 `makeLauncher`. The assertion is on consumption by the child: the wrapper's
 consumer line (section 2.2, printed after construction from the consumer
 objects) must show each configured value, read from the runner's inherited
-stderr; the resolver line is asserted for its `config` sources.
+stderr; the resolver line is asserted for its `config` sources. For the
+Claude pending-receipt value the gate pins the Host option only; the CLI
+deadline that uses the same value is covered by the semantic tests named in
+section 2.2, which is the accepted narrower contract.
 
 Child ownership. The test holds the `ChildProcess` of the runner it started,
 not the wrappers' `ManagedChild` handles (the runner keeps those). It ends the
