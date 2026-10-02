@@ -1,0 +1,94 @@
+{
+  "passed": true,
+  "ordinary_turns": 5,
+  "compactions": 1,
+  "usage_notifications": 10,
+  "tui_context_comparisons": 5,
+  "controlled_null_cases": 9,
+  "thread_id": "01a0fb34-472d-7eb3-a25c-2f940ecdcb03",
+  "measurements": [
+    {
+      "checkpoint": "initial",
+      "native_turn_id": "01a0fb34-4a5c-77a3-b9cf-41b4c21836d8",
+      "input": 28060,
+      "output": 1203,
+      "used": 29263,
+      "cumulative": 29263,
+      "window": 258400,
+      "raw_percentage": 11.32469040247678,
+      "tui_context_line": "Context window:      93% left (29.3K used / 258K)"
+    },
+    {
+      "checkpoint": "continuation",
+      "native_turn_id": "01a0fb51-b595-7683-a785-6d6c5f96906f",
+      "input": 33446,
+      "output": 9,
+      "used": 33455,
+      "cumulative": 62718,
+      "window": 258400,
+      "raw_percentage": 12.946981424148607,
+      "tui_context_line": "Context window:      91% left (33.5K used / 258K)"
+    },
+    {
+      "checkpoint": "turn-3",
+      "native_turn_id": "01a0fb54-71f7-72f0-8683-34ba64e0db24",
+      "input": 33481,
+      "output": 17,
+      "used": 33498,
+      "cumulative": 96216,
+      "window": 258400,
+      "raw_percentage": 12.963622291021672,
+      "tui_context_line": "Context window:      91% left (33.5K used / 258K)"
+    },
+    {
+      "checkpoint": "compact-retry",
+      "native_turn_id": "01a0fb57-7d07-7801-a9d8-aff01bf855b7",
+      "input": 0,
+      "output": 0,
+      "used": 16444,
+      "cumulative": 96216,
+      "window": 258400,
+      "raw_percentage": 6.363777089783282,
+      "tui_context_line": null
+    },
+    {
+      "checkpoint": "post-compaction-retry",
+      "native_turn_id": "01a0fb5a-6560-78c0-ac3f-cf67101a698b",
+      "input": 32342,
+      "output": 9,
+      "used": 32351,
+      "cumulative": 128567,
+      "window": 258400,
+      "raw_percentage": 12.519736842105264,
+      "tui_context_line": "Context window:      92% left (32.4K used / 258K)"
+    },
+    {
+      "checkpoint": "resume",
+      "native_turn_id": "01a0fb5c-aeda-7083-90da-ef0e80ff873a",
+      "input": 32370,
+      "output": 9,
+      "used": 32379,
+      "cumulative": 160946,
+      "window": 258400,
+      "raw_percentage": 12.530572755417957,
+      "tui_context_line": "Context window:      92% left (32.4K used / 258K)"
+    }
+  ],
+  "status": "measured; research recommendation only, no implementation",
+  "source_commit": "ea567492d43a12bc8f68d9c215db27ecc92984d5",
+  "binary_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+  "upstream_release_commit": "01fc69f4026735edfdf6789820549727a4867b11",
+  "capture_manifest": {
+    "path": "/home/yuta/git/kaoiro/worktrees/fuji-485/tmp/fuji-485-capture/capture-manifest.json",
+    "sha256": "0178a4c415f3bd8e4bf40772d3f472d4a44fa1d32d773ae8b655e6845d3e4e28"
+  },
+  "checker_controls": {
+    "control": "remove original native compaction usage lines from a disposable linked capture",
+    "negative_exit_code": 1,
+    "unchanged_original_exit_code": 0,
+    "subsequent_mutations": 0
+  },
+  "null_window_live_observed": false,
+  "post_compaction_resume_usage_notifications_before_turn": 0,
+  "recommendation": "Keep supports_context_usage=false under ADR-0040. A native snapshot meter requires an explicit policy change allowing upstream estimates."
+}
