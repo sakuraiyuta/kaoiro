@@ -40,19 +40,17 @@ export function planSignal(
 
   const pid = target.pid;
   // Guard invariants:
-  // - pid must be an integer
-  // - M1: pid must be > 1 (rejects undefined, 0, negative numbers, and 1 to prevent kill(-1))
-  // - M1: pid must not be process.pid (prevents signaling self or caller process group)
+  // - pid must not be <= 1 (rejects 0, negative numbers, and 1 to prevent kill(-1) and kill(0))
+  // - pid must not be process.pid (prevents signaling self or caller process group)
+  // - pid must be an integer if provided as a number
   if (
-    typeof pid !== "number" ||
-    !Number.isInteger(pid) ||
-    pid <= 1 ||
-    pid === process.pid
+    typeof pid === "number" &&
+    (pid <= 1 || pid === process.pid || !Number.isInteger(pid))
   ) {
     return { kind: "none" };
   }
 
-  if (options.group) {
+  if (options.group && typeof pid === "number" && pid > 1) {
     return {
       kind: "group",
       pgid: pid,
@@ -127,12 +125,15 @@ export function signalOwnedChild(
 }
 
 /** Sends `signal` to the process GROUP (`process.kill(-pid, signal)`) when
- *  `target` is an owned ChildProcess, falling back to `target.kill(signal)`. */
+ *  `pid` is a valid positive integer > 1, falling back to `target.kill(signal)`
+ *  (e.g. when pid is undefined or ESRCH). */
 export function signalSubtree(
-  target: unknown,
+  target: TerminableProcess | null | undefined,
   signal: NodeJS.Signals,
 ): boolean {
-  return signalOwnedChild(target, signal, { group: true });
+  if (!target || !isAlive(target)) return false;
+  const plan = planSignal(target, signal, { group: true });
+  return executeSignalPlanWith(plan, process.kill);
 }
 
 export interface GraceTerminationOptions {
@@ -141,7 +142,7 @@ export interface GraceTerminationOptions {
   setTimer?: (callback: () => void, delayMs: number) => unknown;
   clearTimer?: (timer: unknown) => void;
   nowMs?: () => number;
-  signalSubtree?: (target: unknown, signal: NodeJS.Signals) => boolean;
+  signalSubtree?: (target: TerminableProcess | null | undefined, signal: NodeJS.Signals) => boolean;
 }
 
 export interface GraceTerminationHandle {

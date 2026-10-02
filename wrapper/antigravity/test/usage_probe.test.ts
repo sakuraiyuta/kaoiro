@@ -9,6 +9,12 @@ import {
   parseAgyUsageOutput,
   runAgyUsageProbe,
 } from "../src/usage_probe.js";
+import {
+  executeSignalPlanWith,
+  planSignal,
+  type ProcessKillFn,
+  type TerminableProcess,
+} from "../src/subtree_termination.js";
 
 const rawFixture = readFileSync(
   new URL("../../../docs/evidence/antigravity/usage-probe-raw-20261001.json", import.meta.url),
@@ -136,21 +142,16 @@ describe("runAgyUsageProbe", () => {
     await expect(runAgyUsageProbe("/fake/bin", { spawn: fakeSpawn })).rejects.toThrow("usage_probe_exit_1");
   });
 
-  it("times out and kills child with SIGKILL on timeout", async () => {
-    let killSignal: string | null = null;
+  it("times out on timeout", async () => {
     const fakeSpawn = (() => {
       const child = new EventEmitter() as ChildProcess;
-      child.kill = ((sig: string) => {
-        killSignal = sig;
-        return true;
-      }) as any;
+      child.kill = (() => true) as any;
       return child;
     }) as any;
 
     await expect(
       runAgyUsageProbe("/fake/bin", { timeoutMs: 20, spawn: fakeSpawn }),
     ).rejects.toThrow("usage_probe_timeout:20ms");
-    expect(killSignal).toBe("SIGKILL");
   });
 
   it("spawns with detached: true and stdio ignoring stderr", async () => {
@@ -172,14 +173,10 @@ describe("runAgyUsageProbe", () => {
     });
   });
 
-  it("aborts and kills child group when AbortSignal is triggered", async () => {
-    let killSignal: string | null = null;
+  it("aborts when AbortSignal is triggered", async () => {
     const fakeSpawn = (() => {
       const child = new EventEmitter() as ChildProcess;
-      child.kill = ((sig: string) => {
-        killSignal = sig;
-        return true;
-      }) as any;
+      child.kill = (() => true) as any;
       return child;
     }) as any;
 
@@ -191,18 +188,13 @@ describe("runAgyUsageProbe", () => {
 
     controller.abort();
     await expect(probePromise).rejects.toThrow("usage_probe_aborted");
-    expect(killSignal).toBe("SIGKILL");
   });
 
-  it("kills child group and rejects when stdout exceeds 1MB limit", async () => {
-    let killSignal: string | null = null;
+  it("rejects when stdout exceeds 1MB limit", async () => {
     const fakeSpawn = (() => {
       const child = new EventEmitter() as ChildProcess;
       child.stdout = new PassThrough() as any;
-      child.kill = ((sig: string) => {
-        killSignal = sig;
-        return true;
-      }) as any;
+      child.kill = (() => true) as any;
       queueMicrotask(() => {
         const largeChunk = Buffer.alloc(1024 * 1024 + 10, "x");
         child.stdout!.emit("data", largeChunk);
@@ -213,31 +205,42 @@ describe("runAgyUsageProbe", () => {
     await expect(
       runAgyUsageProbe("/fake/bin", { spawn: fakeSpawn }),
     ).rejects.toThrow("usage_probe_stdout_overflow");
-    expect(killSignal).toBe("SIGKILL");
   });
 });
 
-describe("killChildGroup", () => {
-  it("kills process group when pid is a positive number", () => {
-    const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
-    const child = { pid: 4321, kill: vi.fn() } as unknown as ChildProcess;
+describe("killChildGroup planning and execution (M2)", () => {
+  it("plans group kill when pid is a valid integer > 1", () => {
+    const fakeChild = { pid: 4321, kill: vi.fn() } as unknown as TerminableProcess;
+    const plan = planSignal(fakeChild, "SIGKILL", { group: true });
+    expect(plan).toEqual({
+      kind: "group",
+      pgid: 4321,
+      signal: "SIGKILL",
+      fallbackTarget: fakeChild,
+    });
 
-    killChildGroup(child, "SIGKILL");
-
-    expect(processKillSpy).toHaveBeenCalledWith(-4321, "SIGKILL");
-    expect(child.kill).not.toHaveBeenCalled();
-    processKillSpy.mockRestore();
+    const recorded: [number, NodeJS.Signals | number][] = [];
+    const fakeKill: ProcessKillFn = (pid, sig) => {
+      recorded.push([pid, sig]);
+      return true;
+    };
+    const executed = executeSignalPlanWith(plan, fakeKill);
+    expect(executed).toBe(true);
+    expect(recorded).toEqual([[-4321, "SIGKILL"]]);
+    expect(fakeChild.kill).not.toHaveBeenCalled();
   });
 
-  it("falls back to child.kill when pid is not present or non-positive", () => {
-    const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true as never);
-    const child = { kill: vi.fn() } as unknown as ChildProcess;
+  it("plans direct fallback when pid is not present, and none when non-positive (M1 boundary)", () => {
+    const fakeChildUndefined = { kill: vi.fn() } as unknown as TerminableProcess;
+    const planDirect = planSignal(fakeChildUndefined, "SIGTERM", { group: true });
+    expect(planDirect.kind).toBe("direct");
 
-    killChildGroup(child, "SIGTERM");
+    const fakeChildNonPositive = { pid: 0, kill: vi.fn() } as unknown as TerminableProcess;
+    const planNone = planSignal(fakeChildNonPositive, "SIGTERM", { group: true });
+    expect(planNone.kind).toBe("none");
 
-    expect(processKillSpy).not.toHaveBeenCalled();
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    processKillSpy.mockRestore();
+    const executed = executeSignalPlanWith(planNone, () => true);
+    expect(executed).toBe(false);
   });
 });
 

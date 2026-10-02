@@ -124,7 +124,7 @@ export interface StaleSweepOptions {
   isProcessAlive?: ((pid: number) => boolean) | undefined;
 }
 
-function processIsAlive(pid: number, killFn: (pid: number, signal: number) => void = process.kill): boolean {
+export function processIsAlive(pid: number, killFn: (pid: number, signal: number) => void = process.kill): boolean {
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 1) {
     return true; // Fail closed for unverified PIDs (never delete unverified directories)
   }

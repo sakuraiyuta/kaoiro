@@ -69,7 +69,7 @@ import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
 import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
-import { signalOwnedChild, signalSubtree, terminateWithGrace, type GraceTerminationHandle } from "./subtree_termination.js";
+import { signalOwnedChild, signalSubtree, terminateWithGrace, type GraceTerminationHandle, type TerminableProcess } from "./subtree_termination.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
@@ -332,7 +332,7 @@ export interface AntigravityHostOptions {
   usageProbeTimeoutMs?: number;
   usageProbeIntervalMs?: number;
   customizationBaseDir?: string | undefined;
-  signalSubtree?: ((target: unknown, signal: NodeJS.Signals) => boolean) | undefined;
+  signalSubtree?: ((target: TerminableProcess | null | undefined, signal: NodeJS.Signals) => boolean) | undefined;
 }
 
 function validToolName(value: unknown): value is string {
@@ -540,7 +540,7 @@ export class AntigravityHost implements EngineAdapter {
   readonly #probeTimeoutMs: number;
   readonly #abortGraceMs: number;
   readonly #closeGraceMs: number;
-  readonly #signalSubtree: (target: unknown, signal: NodeJS.Signals) => boolean;
+  readonly #signalSubtree: (target: TerminableProcess | null | undefined, signal: NodeJS.Signals) => boolean;
   // issue #379: the single live SIGTERM->grace->SIGKILL escalation for
   // `#running`, if any. issue #377 Stage 2: a new epoch is only spawned
   // after the previous one's close is confirmed (`#endEpoch` awaits its

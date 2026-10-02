@@ -119,9 +119,16 @@ export function parseAgyUsageOutput(
 
 export const MAX_USAGE_PROBE_STDOUT_BYTES = 1024 * 1024; // 1MB
 
-/** Kills the process group of child using verified signalOwnedChild guard. */
+/** Kills the process group of child using verified signalOwnedChild guard,
+ *  falling back to child.kill on fakes or non-ChildProcess instances. */
 export function killChildGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGKILL"): void {
-  signalOwnedChild(child, signal, { group: true });
+  if (!signalOwnedChild(child, signal, { group: true })) {
+    try {
+      child.kill(signal);
+    } catch {
+      // Process might have already exited.
+    }
+  }
 }
 
 export type AgyUsageProbeSpawnOptions = {

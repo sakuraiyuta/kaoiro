@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type AntigravityHostOptions } from "../src/host.js";
+import { signalSubtree } from "../src/subtree_termination.js";
 
 const isLinux = process.platform === "linux";
 
@@ -123,7 +124,11 @@ if (args[0] === "models") {
 
 function hostHarness(
   agyPath: string,
-  options: { abortGraceMs?: number; spawn?: AntigravityHostOptions["spawn"] } = {},
+  options: {
+    abortGraceMs?: number;
+    spawn?: AntigravityHostOptions["spawn"];
+    signalSubtree?: AntigravityHostOptions["signalSubtree"];
+  } = {},
 ) {
   const cfg = config();
   const host = new AntigravityHost(cfg, {
@@ -136,6 +141,7 @@ function hostHarness(
     agyPath,
     ...(options.abortGraceMs === undefined ? {} : { abortGraceMs: options.abortGraceMs }),
     ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
+    ...(options.signalSubtree === undefined ? {} : { signalSubtree: options.signalSubtree }),
   } satisfies AntigravityHostOptions);
   return { host };
 }
@@ -157,6 +163,14 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
       grandchildPid = readPidFile(grandchildPidFile);
       expect(isAlive(selfPid)).toBe(true);
       expect(isAlive(grandchildPid)).toBe(true);
+
+      // Pre-signal PGID assertion (M2): child is group leader and distinct from current process group
+      const stat = readFileSync(`/proc/${selfPid}/stat`, "utf8");
+      const childPgid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+      const selfStat = readFileSync("/proc/self/stat", "utf8");
+      const selfPgid = Number(selfStat.slice(selfStat.lastIndexOf(")") + 2).split(" ")[2]);
+      expect(childPgid).toBe(selfPid);
+      expect(childPgid).not.toBe(selfPgid);
 
       await host.interrupt();
       // Both ignore SIGTERM, so nothing should die before the grace elapses.
@@ -232,14 +246,14 @@ if (args[0] === "models") {
 }
 `);
     chmodSync(executable, 0o755);
-    const { host } = hostHarness(executable, { abortGraceMs: 300 });
-    // SIGKILL is uncatchable, so the fixture cannot self-report receiving
-    // one; a passthrough spy on the real `process.kill` is the only vantage
-    // point that can observe whether host.ts's `exit`/`close` cancellation
-    // wiring actually suppressed the escalation against a REAL child's real
-    // exit timing (the timer math itself is already unit-tested against
-    // fake timers in subtree_termination.test.ts).
-    const killSpy = vi.spyOn(process, "kill");
+    const recordedSignals: NodeJS.Signals[] = [];
+    const { host } = hostHarness(executable, {
+      abortGraceMs: 300,
+      signalSubtree: (target, signal) => {
+        recordedSignals.push(signal);
+        return signalSubtree(target, signal);
+      },
+    });
     try {
       const sent = host.send("run the fixture");
       await waitForFile(readyFile);
@@ -248,10 +262,9 @@ if (args[0] === "models") {
       // Give the (should-not-fire) escalation timer a chance to prove it
       // stayed silent -- well past the 300ms grace.
       await new Promise((resolve) => setTimeout(resolve, 500));
-      const sigkillCalls = killSpy.mock.calls.filter((call) => call[1] === "SIGKILL");
+      const sigkillCalls = recordedSignals.filter((sig) => sig === "SIGKILL");
       expect(sigkillCalls).toEqual([]);
     } finally {
-      killSpy.mockRestore();
       host.close();
       rmSync(root, { force: true, recursive: true });
     }
