@@ -47,6 +47,56 @@ class TraceGateParserTests(unittest.TestCase):
         self.assertEqual(trace.signals[-1].targets, (101,))
         self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
 
+    def test_trace_selector_covers_pidfd_descriptor_lifetime(self) -> None:
+        self.assertTrue({"close", "dup", "dup2", "dup3", "fcntl"}.issubset(gate.TRACE_SYSCALLS))
+
+    def test_tracks_pidfd_through_duplicate_and_close(self) -> None:
+        trace = self.parse(
+            """100 pidfd_open(101, 0) = 7
+100 dup(7) = 8
+100 close(7) = 0
+100 fcntl(8, F_DUPFD_CLOEXEC, 10) = 10
+100 dup2(10, 8) = 8
+100 pidfd_send_signal(8, SIGTERM, NULL, 0) = 0
+101 exit_group(0) = ?
+"""
+        )
+        self.assertEqual(trace.signals[0].targets, (101,))
+        self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
+
+    def test_failed_close_invalidates_pidfd_mapping_conservatively(self) -> None:
+        trace = self.parse(
+            """100 pidfd_open(101, 0) = 7
+100 close(7) = -1 EINTR (Interrupted system call)
+100 pidfd_send_signal(7, SIGTERM, NULL, 0) = 0
+"""
+        )
+        self.assertIsNone(trace.signals[0].targets)
+        self.assertIn("unresolved pidfd_send_signal target", gate.unsafe_targets(trace.traced_pids, trace.signals)[0])
+
+    def test_resolves_pidfd_returned_by_clone3(self) -> None:
+        trace = self.parse(
+            """4 clone3({flags=CLONE_PIDFD, pidfd=0x7ffc7492b86c, exit_signal=SIGCHLD, stack=NULL, stack_size=0} => {pidfd=[3]}, 88) = 5
+4 pidfd_send_signal(3, SIGTERM, NULL, 0) = 0
+5 exit_group(0) = ?
+"""
+        )
+        self.assertEqual(trace.created_pids, frozenset({5}))
+        self.assertEqual(trace.signals[0].targets, (5,))
+        self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
+
+    def test_resolves_pidfd_returned_by_unfinished_clone3(self) -> None:
+        trace = self.parse(
+            """4 clone3({flags=CLONE_PIDFD, pidfd=0x7ffc7492b86c, exit_signal=SIGCHLD, stack=NULL, stack_size=0}, 88 <unfinished ...>
+4 <... clone3 resumed> => {pidfd=[3]}, 88) = 5
+4 pidfd_send_signal(3, SIGTERM, NULL, 0) = 0
+5 exit_group(0) = ?
+"""
+        )
+        self.assertEqual(trace.created_pids, frozenset({5}))
+        self.assertEqual(trace.signals[0].targets, (5,))
+        self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
+
     def test_unmapped_pidfd_fails_closed(self) -> None:
         trace = self.parse("100 pidfd_send_signal(7, SIGTERM, NULL, 0) = 0\n")
         self.assertEqual(trace.signals[0].targets, None)
@@ -85,6 +135,38 @@ class TraceGateParserTests(unittest.TestCase):
         self.assertEqual(trace.created_pids, frozenset({101}))
         self.assertEqual(trace.signals[0].targets, (100, 101))
         self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
+
+    def test_completed_restarted_clone_is_not_left_pending(self) -> None:
+        trace = self.parse(
+            """1451 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x709e3da44a10 <unfinished ...>
+1451 <... clone resumed>, child_tidptr=0x709e3da44a10) = ? ERESTARTNOINTR (To be restarted)
+1451 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x709e3da44a10) = 1458
+1458 exit_group(0) = ?
+"""
+        )
+        self.assertEqual(trace.created_pids, frozenset({1458}))
+        self.assertEqual(gate.unsafe_targets(trace.traced_pids, trace.signals), [])
+
+    def test_completed_failed_fork_resume_does_not_create_a_pid(self) -> None:
+        trace = self.parse(
+            """100 fork( <unfinished ...>
+100 <... fork resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+100 fork() = 101
+101 exit_group(0) = ?
+"""
+        )
+        self.assertEqual(trace.created_pids, frozenset({101}))
+
+    def test_failed_process_creation_resumes_cover_all_creation_syscalls(self) -> None:
+        for name in ("clone", "clone3", "fork", "vfork"):
+            with self.subTest(syscall=name):
+                trace = self.parse(
+                    f"""100 {name}(<unfinished ...>
+100 <... {name} resumed>) = -1 EINTR (Interrupted system call)
+"""
+                )
+                self.assertEqual(trace.created_pids, frozenset())
+                self.assertEqual(trace.traced_pids, frozenset({100}))
 
     def test_rejects_each_forbidden_kill_target(self) -> None:
         cases = [

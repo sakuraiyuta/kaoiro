@@ -24,15 +24,28 @@ from pathlib import Path
 PID_PREFIX = re.compile(r"^(?:\[pid\s+(\d+)\]\s+|(\d+)\s+)(.*)$")
 PROCESS_CREATE = re.compile(r"^(clone3?|fork|vfork)\(.*\)\s+=\s+(\d+)(?:<[^>]*>)?(?:\s|$)")
 PROCESS_CREATE_START = re.compile(r"^(clone3?|fork|vfork)\(")
-PROCESS_CREATE_RESUME = re.compile(r"^<\.\.\.\s+(clone3?|fork|vfork)\s+resumed>(.*)\s+=\s+(\d+)(?:<[^>]*>)?\s*$")
-PIDFD_CLONE_RESULT = re.compile(r"\bparent_tid=\[(\d+)\]")
+PROCESS_CREATE_RESUME = re.compile(r"^<\.\.\.\s+(clone3?|fork|vfork)\s+resumed>(.*)\s+=\s+(.+?)\s*$")
+PROCESS_CREATE_RESULT = re.compile(r"^(\d+)(?:<[^>]*>)?(?:\s|$)")
+PROCESS_CREATE_FAILURE = re.compile(r"^(?:\?\s+ERESTART[A-Z0-9_]*|-1\s+[A-Z][A-Z0-9_]*)\b")
+PIDFD_CLONE_RESULT = re.compile(r"\b(?:parent_tid|pidfd)=\[(\d+)\]")
 PIDFD_OPEN = re.compile(r"^pidfd_open\(\s*(\d+)\s*,.*\)\s+=\s+(\d+)(?:<[^>]*>)?(?:\s|$)")
-FD_CLOSE = re.compile(r"^close\(\s*(\d+)\s*\)\s+=\s+0(?:\s|$)")
+FD_CLOSE = re.compile(r"^close\(\s*(\d+)")
 FD_DUP = re.compile(r"^dup\(\s*(\d+)\s*\)\s+=\s+(\d+)(?:<[^>]*>)?(?:\s|$)")
 FD_DUP2 = re.compile(r"^dup2\(\s*(\d+)\s*,\s*(\d+)\s*\)\s+=\s+\d+(?:<[^>]*>)?(?:\s|$)")
 FD_DUP3 = re.compile(r"^dup3\(\s*(\d+)\s*,\s*(\d+)\s*,.*\)\s+=\s+\d+(?:\s|$)")
 FD_FCNTL_DUP = re.compile(r"^fcntl\(\s*(\d+)\s*,\s*F_DUPFD(?:_CLOEXEC)?\s*,.*\)\s+=\s+(\d+)(?:<[^>]*>)?(?:\s|$)")
 SIGNAL_NAMES = ("kill", "tkill", "tgkill", "pidfd_send_signal", "rt_sigqueueinfo", "rt_tgsigqueueinfo")
+# A stale fd-to-PID entry could bless a later signal after descriptor reuse.
+TRACE_SYSCALLS = (
+    *SIGNAL_NAMES,
+    "pidfd_open",
+    "close",
+    "dup",
+    "dup2",
+    "dup3",
+    "fcntl",
+    "process",
+)
 SIGNAL_MENTION = re.compile(r"^\s*(?:" + "|".join(SIGNAL_NAMES) + r")\s*\(")
 SIGNAL_RESUME = re.compile(r"^\s*<\.\.\.\s+(" + "|".join(SIGNAL_NAMES) + r")\s+resumed>")
 KILL_TARGET = re.compile(r"^kill\(\s*(-?\d+)\s*,")
@@ -92,15 +105,24 @@ def parse_trace(path: Path) -> TraceData:
         process_resume = PROCESS_CREATE_RESUME.match(body)
         if process_resume is not None:
             name = process_resume.group(1)
-            if (caller_pid, name) not in pending_creations:
+            key = (caller_pid, name)
+            if key not in pending_creations:
                 malformed.append(line)
             else:
-                pending_creations.remove((caller_pid, name))
-                child_pid = int(process_resume.group(3))
+                pending_creations.remove(key)
+                result = process_resume.group(3)
+                child_match = PROCESS_CREATE_RESULT.match(result)
+                if child_match is None:
+                    if PROCESS_CREATE_FAILURE.match(result):
+                        pending_pidfd_creations.discard(key)
+                        continue
+                    malformed.append(line)
+                    continue
+                child_pid = int(child_match.group(1))
                 if child_pid > 0:
                     created.add(child_pid)
-                if (caller_pid, name) in pending_pidfd_creations:
-                    pending_pidfd_creations.remove((caller_pid, name))
+                if key in pending_pidfd_creations:
+                    pending_pidfd_creations.remove(key)
                     fd_match = PIDFD_CLONE_RESULT.search(process_resume.group(2))
                     if fd_match is None or child_pid <= 0:
                         malformed.append(line)
@@ -270,7 +292,7 @@ def main(argv: list[str]) -> int:
     command = [
         "unshare", "--user", "--map-root-user", "--pid", "--fork", "--mount-proc",
         "setsid", "-w", "strace", "-f", "-e",
-        "trace=kill,tkill,tgkill,pidfd_open,pidfd_send_signal,rt_sigqueueinfo,rt_tgsigqueueinfo,process",
+        "trace=" + ",".join(TRACE_SYSCALLS),
         "-o", str(trace_path), "--", "setsid", "-w", *argv,
     ]
 
