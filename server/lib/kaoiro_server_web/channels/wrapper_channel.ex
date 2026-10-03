@@ -23,6 +23,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.AgentStatusLines
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
@@ -36,12 +37,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
+  alias KaoiroServer.StatusLineWire
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServer.WorkStore
   alias KaoiroServerWeb.AgentId
+  alias KaoiroServerWeb.DirectoryEligibility
   alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServerWeb.SynthEnvelope
 
@@ -110,6 +113,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "work_op_result_request" => :versioned,
     "disconnect_intent" => :versioned,
     "directory_request" => :versioned,
+    "status_line_set" => :versioned,
+    "status_line_get" => :versioned,
     "history_reset" => :versioned,
     "history_replay_complete" => :versioned,
     "replay_ia" => :versioned,
@@ -663,6 +668,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     build_infos = WrapperBuildInfos.snapshot()
     reply_modes = KaoiroServer.InterAgentReplyBasis.snapshot()
     delivery_modes = WorkStore.modes_snapshot()
+    # One read of every committed head: a complete view, or none at all.
+    status_lines = AgentStatusLines.heads()
 
     live =
       Enum.map(states, fn {id, env} ->
@@ -697,7 +704,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # 数より少なく返る事故になる (33 件 eligible のとき 31 件しか返らない
     # など)。self reject → directory_only 印付きのみを 32 件で cap、の
     # 順にすることでこれを閉じる。
-    merged = Enum.reject(live ++ directory_only, &(&1["agent_id"] == self_id))
+    merged =
+      (live ++ directory_only)
+      |> Enum.reject(&(&1["agent_id"] == self_id))
+      |> Enum.map(&put_status_line(&1, status_lines))
+
     {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
     agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
 
@@ -708,6 +719,53 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       Logger.warning("directory_request reply exceeded the transport frame budget")
       {:reply, {:error, %{reason: "directory_too_large"}}, socket}
+    end
+  end
+
+  # Issue 482. The agent id is the socket's own; a payload `agent_id` is never
+  # read, so a wrapper can only ever write its own line.
+  defp handle_wrapper_in("status_line_set", payload, socket) do
+    text = if is_map(payload), do: Map.get(payload, "text")
+
+    case AgentStatusLines.put(socket.assigns.agent_id, text) do
+      {:ok, %{status: :clear}} ->
+        {:reply, {:ok, %{"status_line" => nil}}, socket}
+
+      {:ok, %{status: :set} = result} ->
+        status_line = %{
+          "bytes" => result.bytes,
+          "truncated" => result.truncated,
+          "updated_at" => result.updated_at
+        }
+
+        {:reply, {:ok, %{"status_line" => status_line}}, socket}
+
+      {:error, {:status_line_too_large, bytes}} ->
+        reply = %{
+          reason: "status_line_too_large",
+          max_bytes: AgentStatusLines.max_bytes(),
+          bytes: bytes
+        }
+
+        {:reply, {:error, reply}, socket}
+
+      {:error, reason} when is_atom(reason) ->
+        {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+    end
+  end
+
+  # A peer's full-text read of another agent's latest line (`read_status_line`).
+  # Order matters: the id format, then who may be read (the same rule as
+  # `directory_request`, answering `unknown_agent` for a hidden id and a
+  # nonexistent one alike), and only then the store, which refuses while dirty.
+  defp handle_wrapper_in("status_line_get", payload, socket) do
+    with {:ok, id} <- fetch_status_line_agent_id(payload),
+         :ok <- require_readable_status_line(id),
+         {:ok, row} <- AgentStatusLines.latest(id) do
+      {:reply, {:ok, StatusLineWire.get_reply(id, row)}, socket}
+    else
+      {:error, reason} when is_atom(reason) ->
+        {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
     end
   end
 
@@ -1637,6 +1695,29 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp role_string(:admin), do: "admin"
   defp role_string(_other), do: nil
 
+  defp fetch_status_line_agent_id(%{"agent_id" => id}) when is_binary(id) do
+    if AgentId.valid?(id), do: {:ok, id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_status_line_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  defp require_readable_status_line(id) do
+    if DirectoryEligibility.eligible?(id), do: :ok, else: {:error, :unknown_agent}
+  end
+
+  # `list_agents` carries only the head of the latest line, and omits the key
+  # for a cleared or absent line and while the store is unavailable.
+  defp put_status_line(entry, :unavailable), do: entry
+
+  defp put_status_line(%{"agent_id" => id} = entry, {:ok, heads}) do
+    with %{} = row <- Map.get(heads, id),
+         %{} = field <- StatusLineWire.directory_field(row) do
+      Map.put(entry, "status_line", field)
+    else
+      _ -> entry
+    end
+  end
+
   defp directory_entry(id, envelope, activity, peers, delivery, build_info) do
     persona =
       case envelope do
@@ -1894,7 +1975,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # ここで適用する。落ちたエントリは丸ごと drop。
   defp directory_only_entry(id, %{persona_id: persona_id} = entry, peers)
        when is_binary(id) do
-    if AgentId.valid?(id) do
+    if DirectoryEligibility.directory_only?(id, entry) do
       display_name =
         case valid_display_name(Map.get(entry, :display_name)) do
           {:ok, trimmed} -> trimmed
