@@ -216,11 +216,10 @@ export class QueueLease {
         }
         for (const item of targets) item!.state = "permitted";
 
-        let used = false;
+        // Single use: the first invoke moves the items out of `permitted`.
         return {
           invoke: (submit) => {
-            if (used || this.#frozen || !current() || targets.some((item) => item!.state !== "permitted")) return false;
-            used = true;
+            if (this.#frozen || !current() || targets.some((item) => item!.state !== "permitted")) return false;
             for (const item of targets) item!.state = "submitting";
             submit();
             return true;
