@@ -232,6 +232,39 @@ describe("QueueLease — unknown outcomes", () => {
     expect(h.lease.heldLeaseIds()).toEqual([]);
   });
 
+  it("parks a return the server no longer finds in the lease, and settles it from the phases", async () => {
+    const h = harness(scripted({
+      return: [() => refusal("unknown_lease"), () => refusal("unknown_lease")],
+      resume: [phases([["10", "queued"]])],
+    }));
+    h.lease.receiveBatch(batch());
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await settled).toEqual({ ok: true });
+    expect(ops(h.sent, "resume")).toHaveLength(1);
+  });
+
+  it("a resume's phases decide only operations parked before it was sent", async () => {
+    let openResume: (() => void) | undefined;
+    const h = harness(scripted({
+      return: [unavailable, unavailable, unavailable],
+      resume: [(payload) => new Promise((resolve) => {
+        openResume = () => resolve(phases([["10", "queued"], ["11", "offered"]])(payload));
+      })],
+    }));
+    h.lease.receiveBatch(batch("1", ["10", "11"]));
+    const first = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ops(h.sent, "resume")).toHaveLength(1);
+    void h.offers[0]!.return([{ queue_id: "11", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    openResume!();
+    expect(await first).toEqual({ ok: true });
+    // The later return keeps its own id for the fast path; it is not re-issued from phases it predates.
+    const later = ops(h.sent, "return").filter((p) => (p.items as { queue_id: string }[])[0]!.queue_id === "11");
+    expect(later).toHaveLength(1);
+  });
+
   it.each([
     ["native_pending", true, ["1"]],
     ["offered", false, ["1"]],
