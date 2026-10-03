@@ -141,6 +141,43 @@ describe.skipIf(!enabled)("real server: credit-v1 queue round trip", () => {
     expect(again.items[0]!.envelope.payload).toMatchObject({ body: "kept" });
   }, 60_000);
 
+  it("a server notice reaches a queue recipient through credit, not a push", async () => {
+    const suffix = Date.now().toString(36);
+    const recipientId = `real.noticed${suffix}`;
+    const peerId = `real.leaving${suffix}`;
+    const recipient = await queueLink(recipientId);
+    const peer = new ServerLink(server.url, peerId, { personaId: "default" });
+    links.push(peer);
+    peer.send(state(peerId));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(await peer.sendInterAgent(message(peerId, recipientId, "before leaving"))).toMatchObject({ kind: "accepted" });
+    expect(await peer.reportDisconnectIntent("stop")).toBe(true);
+    peer.close();
+
+    const lease = recipient.link.queueLease()!;
+    const notice = async (): Promise<Envelope> => {
+      for (;;) {
+        const before = recipient.offers.length;
+        expect(await lease.credit("root", `turn-${before}`)).toMatchObject({ ok: true });
+        const offer = await until(() => recipient.offers[before]);
+        const [item] = offer.items;
+        const disposed = await offer.dispose([
+          { queue_id: item!.queueId, outcome: "intentional_non_injection", reason: "terminal_skip" },
+        ]);
+        expect(disposed.ok).toBe(true);
+        if (item!.envelope.agent_id === "server") return item!.envelope;
+      }
+    };
+
+    const envelope = await notice();
+    expect(envelope.payload).toMatchObject({
+      to: recipientId,
+      turn_number: 0,
+      error: { code: "disconnected" },
+    });
+  }, 60_000);
+
   it("delivers a routed message through credit, permit and disposition", async () => {
     const suffix = Date.now().toString(36);
     const recipientId = `real.recipient${suffix}`;
