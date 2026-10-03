@@ -966,8 +966,12 @@ defmodule KaoiroServer.PermissionSettingsTest do
       refute Map.has_key?(control, "rolled_back_to")
       assert next == entry.next
 
+      copy_path = "#{path}.probe"
+      assert :ok = File.cp(path, copy_path)
+      on_exit(fn -> File.rm(copy_path) end)
+
       probe_name = :"ps_mismatch_probe_#{System.unique_integer([:positive])}"
-      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(path))
+      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(copy_path))
 
       assert [{{:settings, "c.mismatch"}, persisted}] =
                :dets.lookup(probe_name, {:settings, "c.mismatch"})
@@ -975,6 +979,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       assert persisted.control.status == :failed
       assert persisted.next == entry.next
       :dets.close(probe_name)
+      File.rm(copy_path)
 
       :ok = GenServer.stop(server)
       name2 = :"ps_mismatch_restart_#{System.unique_integer([:positive])}"
@@ -1743,12 +1748,15 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      # A fresh, independent DETS handle on the SAME file sees the
-      # just-committed counter/settings rows without going through this
-      # store's own in-memory state — proof the write reached disk, not
+      # A copy taken while the store is STILL RUNNING sees only what is
+      # on disk at that instant — proof the write reached disk, not
       # just this GenServer's cache, before submit_request/6 returned.
+      copy_path = "#{path}.probe"
+      assert :ok = File.cp(path, copy_path)
+      on_exit(fn -> File.rm(copy_path) end)
+
       probe_name = :"ps_durable_probe_#{System.unique_integer([:positive])}"
-      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(path))
+      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(copy_path))
 
       assert :dets.lookup(probe_name, {:counter, "c.durable"}) == [{{:counter, "c.durable"}, 1}]
 
@@ -1758,6 +1766,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       assert settings.control.revision == 1
 
       :dets.close(probe_name)
+      File.rm(copy_path)
     end
   end
 
