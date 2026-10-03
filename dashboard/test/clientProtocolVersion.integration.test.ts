@@ -184,6 +184,11 @@ const SERVER_EVENT_PAYLOADS: Record<keyof typeof CLIENT_EVENT_VERSION_POLICY, Re
       },
     },
   },
+  status_line_snapshot: {
+    agents: { a: { seq: 1, head: "h", truncated: false, bytes: 1, updated_at: "t" } },
+  },
+  status_line: { agent_id: "a", seq: 1, head: "h", truncated: false, bytes: 1, updated_at: "t" },
+  status_line_settings: { retention: 20, source: "default", min: 1, max: 100 },
 };
 
 const AGENT_ID = "hostA.abc123";
@@ -255,6 +260,16 @@ const PUSH_CASES: ReadonlyArray<{
     method: "setQuagmireSettings",
     event: "set_quagmire_settings",
     fire: (c) => c.setQuagmireSettings(24),
+  },
+  {
+    method: "fetchStatusLineHistory",
+    event: "status_line_history",
+    fire: (c) => void c.fetchStatusLineHistory(AGENT_ID).catch(() => {}),
+  },
+  {
+    method: "setStatusLineRetention",
+    event: "set_status_line_retention",
+    fire: (c) => c.setStatusLineRetention(10),
   },
   {
     method: "renameAgent",
@@ -443,7 +458,7 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
   const events = (): Array<keyof typeof CLIENT_EVENT_VERSION_POLICY> =>
     Object.keys(CLIENT_EVENT_VERSION_POLICY).sort() as Array<keyof typeof CLIENT_EVENT_VERSION_POLICY>;
 
-  it("T3-1: policy の22種すべてで欠落をwarnし、受信を継続する", async () => {
+  it("T3-1: policy の25種すべてで欠落をwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -453,14 +468,14 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
       injectServerPush(ws, event, withoutVersion);
     }
 
-    expect(warn).toHaveBeenCalledTimes(22);
+    expect(warn).toHaveBeenCalledTimes(25);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version (absent)`));
     }
     warn.mockRestore();
   });
 
-  it("T3-2: policy の22種すべてで一致versionは無警告", async () => {
+  it("T3-2: policy の25種すべてで一致versionは無警告", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -472,7 +487,7 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
     warn.mockRestore();
   });
 
-  it("T3-3: policy の22種すべてで不一致versionをwarnし、受信を継続する", async () => {
+  it("T3-3: policy の25種すべてで不一致versionをwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -480,14 +495,14 @@ describe("server -> dashboard event bindings carry version checks (issue #260)",
       injectServerPush(ws, event, { ...SERVER_EVENT_PAYLOADS[event], version: "9" });
     }
 
-    expect(warn).toHaveBeenCalledTimes(22);
+    expect(warn).toHaveBeenCalledTimes(25);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version "9"`));
     }
     warn.mockRestore();
   });
 
-  it("T3-4: policy の22種すべてを一回ずつだけ bind する", async () => {
+  it("T3-4: policy の25種すべてを一回ずつだけ bind する", async () => {
     const on = vi.spyOn(Channel.prototype, "on");
     const { conn } = await connectAndJoin();
     const registrations = on.mock.calls

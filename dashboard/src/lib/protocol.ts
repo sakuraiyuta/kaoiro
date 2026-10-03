@@ -10,6 +10,15 @@ import { Socket } from "phoenix";
 import type { Channel } from "phoenix";
 
 import { randomUUID } from "./uuid";
+import {
+  parseStatusLine,
+  parseStatusLineHistory,
+  parseStatusLineSettings,
+  parseStatusLineSnapshot,
+  type StatusLineHistoryEntry,
+  type StatusLineRow,
+  type StatusLineSettings,
+} from "./statusLine";
 
 /** Envelope v0 frame (docs/specs/protocol.md). */
 export interface Persona {
@@ -2674,6 +2683,18 @@ export interface KaoiroHandlers {
   /** Rally threshold in force (issue #307). Pushed on join and again on
    *  every operator change, so several dashboards agree. Operator-only. */
   onQuagmireSettings?: (settings: QuagmireSettings) => void;
+  /** Every agent's committed status line, pushed right after the join
+   *  snapshot frames (issue 482). A viewer receives only agents in its own
+   *  snapshot. `incomplete` means the server could not vouch for the whole
+   *  set: an agent absent from `rows` is then unknown, not unset. */
+  onStatusLineSnapshot?: (
+    rows: Record<string, StatusLineRow>,
+    incomplete: boolean,
+  ) => void;
+  /** One agent's line changed (or was cleared, as a stamped row). */
+  onStatusLine?: (agentId: string, row: StatusLineRow) => void;
+  /** The change-log retention in force. Operator-only. */
+  onStatusLineSettings?: (settings: StatusLineSettings) => void;
   /** Current wrapper artifact identities, sent only to operators/admins. */
   onWrapperBuildInfoSnapshot?: (
     infos: Record<string, WrapperBuildInfo>,
@@ -2920,6 +2941,17 @@ export interface KaoiroConnection {
    *  comes back as a `quagmire_settings` push rather than in the ack, so
    *  every open dashboard agrees rather than only the one that asked. */
   setQuagmireSettings: (rallyTurns: number | null) => Promise<void>;
+  /** An agent's status line change log, newest first, with the full texts
+   *  (issue 482). Open to every role; the server answers `unknown_agent` for
+   *  an agent the caller may not see, the same for a hidden and a nonexistent
+   *  id. Rejects with the server's reason (`unknown_agent`,
+   *  `status_line_unavailable`, ...), `timeout` or `error`. */
+  fetchStatusLineHistory: (agentId: string) => Promise<StatusLineHistoryEntry[]>;
+  /** Sets how many entries each agent's change log keeps (issue 482).
+   *  Operator-only; rejects with `invalid_status_line_retention` outside the
+   *  server's bounds. The effective value comes back as a
+   *  `status_line_settings` push, so every open dashboard agrees. */
+  setStatusLineRetention: (retention: number) => Promise<void>;
   /** Requests a sandbox / network_access change for the agent's NEXT
    *  execution (issue #305); the running turn keeps its own configuration.
    *  Rejects with a `SetPermissionErrorReason` message on server refusal.
@@ -4247,6 +4279,9 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   runner_sessions: "checked",
   catalog_result: "checked",
   wrapper_build_info: "checked",
+  status_line_snapshot: "checked",
+  status_line: "checked",
+  status_line_settings: "checked",
 } as const satisfies Record<string, "checked">;
 
 export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
@@ -4613,6 +4648,18 @@ export function connectKaoiro(
     bindServerEvent(c, "quagmire_settings", (payload: unknown) => {
       const settings = parseQuagmireSettings(payload);
       if (settings !== null) handlers.onQuagmireSettings?.(settings);
+    });
+    bindServerEvent(c, "status_line_snapshot", (payload: unknown) => {
+      const snapshot = parseStatusLineSnapshot(payload);
+      if (snapshot !== null) handlers.onStatusLineSnapshot?.(snapshot.rows, snapshot.incomplete);
+    });
+    bindServerEvent(c, "status_line", (payload: unknown) => {
+      const line = parseStatusLine(payload);
+      if (line !== null) handlers.onStatusLine?.(line.agentId, line.row);
+    });
+    bindServerEvent(c, "status_line_settings", (payload: unknown) => {
+      const settings = parseStatusLineSettings(payload);
+      if (settings !== null) handlers.onStatusLineSettings?.(settings);
     });
     bindServerEvent(c, "wrapper_build_info", (payload: unknown) => {
       if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -5262,6 +5309,15 @@ export function connectKaoiro(
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
     setQuagmireSettings: (rallyTurns) =>
       pushAsync(channel, "set_quagmire_settings", { rally_turns: rallyTurns }),
+    fetchStatusLineHistory: async (agentId) => {
+      const entries = parseStatusLineHistory(
+        await pushAsyncReply(channel, "status_line_history", { agent_id: agentId }),
+      );
+      if (entries === null) throw new Error("error");
+      return entries;
+    },
+    setStatusLineRetention: (retention) =>
+      pushAsync(channel, "set_status_line_retention", { retention }),
     setPermission: async (agentId, patch) =>
       setPermissionAckOf(
         await pushAsyncReply(channel, "set_permission", {
