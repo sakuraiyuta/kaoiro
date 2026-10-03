@@ -5,10 +5,17 @@
 // what the server offered and has not yet been disposed or returned.
 //
 // Per item: offered -> begin-requested -> permitted -> submitting ->
-// disposed (or returned before submitting). The submit capability checks
-// the local freeze, the epoch and the lease synchronously right before the
-// host call, and is single-use; once the host was called, only a
-// disposition can settle the item.
+// disposing -> settled (or returning -> settled before submitting). The
+// submit capability checks the local freeze, the epoch and the lease
+// synchronously right before the host call, and is single-use; once the
+// host was called, only a disposition can settle the item.
+//
+// A lease operation whose outcome is unknown (no answer, transport loss)
+// is parked. While the link is up it is resent once under its own id; if
+// that does not succeed, a `resume` reports the server's lease-scoped
+// phases, and those decide it. QueueLease keeps a return or a disposition
+// until the server has it, re-issuing it under a new id when the phases
+// show it was not applied (channels.md, Idempotency; r8 §5.1).
 
 import type {
   DeliveryBatchPush,
@@ -17,6 +24,7 @@ import type {
   Envelope,
   InterAgentQueueDisposeItem,
   InterAgentQueueItemClass,
+  InterAgentQueueItemPhase,
   InterAgentQueueJoinReply,
   InterAgentQueueReturnItem,
 } from "@kaoiro/protocol";
@@ -28,16 +36,27 @@ import {
 
 type ControlOp = DeliveryQueueControlReply["op"];
 type Reply<Op extends ControlOp> = Extract<DeliveryQueueControlReply, { op: Op }>;
+type LeaseOp = "begin_native" | "return" | "dispose";
+type ServerPhase = InterAgentQueueItemPhase["phase"];
 
 /** Sends one `delivery_queue_control` payload and resolves with the raw
  *  reply, or rejects with the raw error payload. */
 export type QueueControlTransport = (payload: Record<string, unknown>) => Promise<unknown>;
 
+export type QueueControlError = DeliveryQueueControlError | { reason: "transport"; detail: unknown };
+
 export type QueueControlResult<Op extends ControlOp> =
   | { ok: true; reply: Reply<Op> }
-  | { ok: false; error: DeliveryQueueControlError | { reason: "transport"; detail: unknown } };
+  | { ok: false; error: QueueControlError };
 
-type ItemState = "offered" | "begin_requested" | "permitted" | "submitting" | "settled";
+/** How a return or disposition ended. `reply` is absent when the outcome
+ *  was read from a `resume` reply rather than from the operation's own. */
+export type QueueSettlement<Op extends "return" | "dispose"> =
+  | { ok: true; reply?: Reply<Op> }
+  | { ok: false; error: QueueControlError };
+
+type ItemState =
+  | "offered" | "begin_requested" | "permitted" | "submitting" | "returning" | "disposing" | "settled";
 
 interface LeaseItem {
   queueId: string;
@@ -45,6 +64,8 @@ interface LeaseItem {
   class: InterAgentQueueItemClass;
   envelope: Envelope;
   state: ItemState;
+  /** The engine left the native turn while this item's `begin` was pending. */
+  abandoned: boolean;
 }
 
 export interface QueueOfferItem {
@@ -56,6 +77,9 @@ export interface QueueOfferItem {
 
 /** A single-use permission to submit the permitted items natively. */
 export interface NativeSubmit {
+  /** The native turn the permit is bound to. Invoke only inside that turn;
+   *  an engine that has left it calls `QueueOffer.abandonBegin` instead. */
+  readonly nativeTurnToken: string;
   /** Runs `submit` only if the items are still permitted under the same
    *  epoch and lease and the queue is not frozen; returns whether it ran. */
   invoke(submit: () => void): boolean;
@@ -65,11 +89,19 @@ export interface QueueOffer {
   readonly leaseId: string;
   readonly kind: DeliveryBatchPush["kind"];
   readonly items: readonly QueueOfferItem[];
-  /** Asks the server to permit native submission of `queueIds`. */
+  /** Asks the server to permit native submission of `queueIds`. Resolves
+   *  `null` when the permit was not granted; may stay pending across a
+   *  reconnect while the outcome is unknown. */
   begin(queueIds: readonly string[], nativeTurnToken: string): Promise<NativeSubmit | null>;
-  /** Returns items whose host call was never invoked. */
-  return(items: readonly InterAgentQueueReturnItem[]): Promise<QueueControlResult<"return">>;
-  dispose(items: readonly InterAgentQueueDisposeItem[]): Promise<QueueControlResult<"dispose">>;
+  /** The engine left the native turn before invoking the host. Permitted
+   *  items, and items whose pending `begin` turns out permitted, are
+   *  returned with `permit_unused`; a pending `begin` resolves `null`. */
+  abandonBegin(queueIds: readonly string[]): void;
+  /** Returns items whose host call was never invoked. QueueLease keeps the
+   *  return until the server has it; the promise settles then. */
+  return(items: readonly InterAgentQueueReturnItem[]): Promise<QueueSettlement<"return">>;
+  /** Disposes items; kept until the server has it, like `return`. */
+  dispose(items: readonly InterAgentQueueDisposeItem[]): Promise<QueueSettlement<"dispose">>;
 }
 
 export interface QueueLeaseOptions {
@@ -78,6 +110,8 @@ export interface QueueLeaseOptions {
   /** Receives an accepted batch's sequences before its offer, for the
    *  receipt ledger. */
   onSequences?: (seqs: readonly number[]) => void;
+  /** Receives a line for a refusal that proves a wrapper bug. */
+  log?: (line: string) => void;
 }
 
 interface Binding {
@@ -86,27 +120,72 @@ interface Binding {
   generation: string;
 }
 
+/** A lease operation's end: its own reply, a definitive refusal, the
+ *  lease-scoped phases a `resume` reported, or a binding change. */
+type LeaseOutcome<Op extends LeaseOp> =
+  | { kind: "ok"; reply: Reply<Op> }
+  | { kind: "refused"; error: QueueControlError }
+  | { kind: "phases"; phases: ReadonlyMap<string, ServerPhase> }
+  | { kind: "stale" };
+
+interface Parked {
+  op: LeaseOp;
+  leaseId: string;
+  payload: Record<string, unknown>;
+  fastPath: boolean;
+  finish: (outcome: LeaseOutcome<LeaseOp>) => void;
+}
+
+const BUG_REFUSALS = new Set(["invalid_queue_control", "operation_payload_mismatch", "conflicting_disposition"]);
+const RETRY_FIRST_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+
+/** Whether a failed lease operation's outcome is unknown. A refused
+ *  `begin_native` is final (the engine owns the retry); a return or
+ *  disposition is final only on a refusal that proves a wrapper bug. */
+function indeterminate(op: LeaseOp, error: QueueControlError): boolean {
+  if (error.reason === "transport" || error.reason === "queue_unavailable" || error.reason.startsWith("stale_")) {
+    return true;
+  }
+  return op !== "begin_native" && !BUG_REFUSALS.has(error.reason);
+}
+
+/** Whether the phase shows the item still in the lease, i.e. a return or
+ *  disposition of it was not applied. */
+function stillLeased(phase: ServerPhase | undefined): boolean {
+  return phase === "offered" || phase === "native_pending";
+}
+
 export class QueueLease {
   readonly #transport: QueueControlTransport;
   readonly #onOffer: (offer: QueueOffer) => void;
   readonly #onSequences: (seqs: readonly number[]) => void;
+  readonly #log: (line: string) => void;
   #binding: Binding | null = null;
+  /** Bumped when the binding changes; outcomes from before are stale. */
+  #bindingSerial = 0;
   #nextOperation = 1;
   #frozen = false;
   readonly #leases = new Map<string, Map<string, LeaseItem>>();
+  readonly #parked = new Set<Parked>();
+  #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #retryDelay = RETRY_FIRST_MS;
+  #reconciling: Promise<void> | null = null;
 
   constructor(options: QueueLeaseOptions) {
     this.#transport = options.transport;
     this.#onOffer = options.onOffer;
     this.#onSequences = options.onSequences ?? (() => {});
+    this.#log = options.log ?? (() => {});
   }
 
   get frozen(): boolean {
     return this.#frozen;
   }
 
-  /** Binds to a join. A new epoch or generation drops every local lease: the
-   *  server already resolved them; the next offers come with new ids. */
+  /** Binds to a join. A new epoch, incarnation or generation drops every
+   *  local lease and ends parked operations: the server already resolved
+   *  them; the next offers come with new ids. */
   join(reply: InterAgentQueueJoinReply, incarnation: string, generation: string): void {
     const binding = { epoch: reply.inter_agent_queue_epoch, incarnation, generation };
     const previous = this.#binding;
@@ -114,10 +193,22 @@ export class QueueLease {
       previous === null || previous.epoch !== binding.epoch ||
       previous.generation !== binding.generation || previous.incarnation !== binding.incarnation
     ) {
+      this.#bindingSerial++;
       this.#leases.clear();
+      this.#endParked({ kind: "stale" });
       if (previous?.generation !== binding.generation) this.#nextOperation = 1;
     }
     this.#binding = binding;
+  }
+
+  /** After a join: reconciles through `resume` when the server requires it
+   *  or anything is still held locally. Resolves when that attempt ends;
+   *  credit should wait for it. */
+  rejoined(resumeRequired: boolean): Promise<void> {
+    if (!resumeRequired && this.#leases.size === 0 && this.#parked.size === 0) return Promise.resolve();
+    // After a rejoin the old ids are not resent: phases decide (H1).
+    for (const parked of this.#parked) parked.fastPath = false;
+    return this.#reconcile();
   }
 
   /** Lease ids still held locally, for `resume` after a same-generation rejoin. */
@@ -149,11 +240,12 @@ export class QueueLease {
         class: item.class,
         envelope: item.envelope,
         state: "offered",
+        abandoned: false,
       });
     }
     this.#leases.set(push.lease_id, items);
     this.#onSequences(push.items.map((item) => item.delivery_seq));
-    this.#onOffer(this.#offer(push.lease_id, push.kind, binding, items));
+    this.#onOffer(this.#offer(push.lease_id, push.kind, items));
     return true;
   }
 
@@ -192,15 +284,8 @@ export class QueueLease {
     return this.#control("freeze", { op: "freeze", reason });
   }
 
-  #offer(leaseId: string, kind: DeliveryBatchPush["kind"], binding: Binding, items: Map<string, LeaseItem>): QueueOffer {
-    const current = (): boolean => this.#binding === binding && this.#leases.get(leaseId) === items;
-    const settle = (queueIds: readonly string[]): void => {
-      for (const id of queueIds) {
-        const item = items.get(id);
-        if (item !== undefined) item.state = "settled";
-      }
-      if ([...items.values()].every((item) => item.state === "settled")) this.#leases.delete(leaseId);
-    };
+  #offer(leaseId: string, kind: DeliveryBatchPush["kind"], items: Map<string, LeaseItem>): QueueOffer {
+    const current = (): boolean => this.#leases.get(leaseId) === items;
 
     return {
       leaseId,
@@ -210,25 +295,41 @@ export class QueueLease {
       begin: async (queueIds, nativeTurnToken) => {
         const targets = queueIds.map((id) => items.get(id));
         if (this.#frozen || !current() || targets.some((item) => item?.state !== "offered")) return null;
-        for (const item of targets) item!.state = "begin_requested";
+        for (const item of targets) {
+          item!.state = "begin_requested";
+          item!.abandoned = false;
+        }
 
-        const result = await this.#control("begin_native", {
+        const outcome = await this.#leaseOp("begin_native", {
           op: "begin_native",
           lease_id: leaseId,
           queue_ids: [...queueIds],
           native_turn_token: nativeTurnToken,
         });
 
+        if (outcome.kind === "phases") {
+          const gone = queueIds.filter((id) => !stillLeased(outcome.phases.get(id)));
+          this.#settle(leaseId, items, gone);
+        }
+        const granted = outcome.kind === "ok" ||
+          (outcome.kind === "phases" && queueIds.every((id) => outcome.phases.get(id) === "native_pending"));
         // A return or a freeze while the permit was in flight wins.
         const stillWanted = targets.every((item) => item!.state === "begin_requested");
-        if (!result.ok || !stillWanted || !current()) {
+        if (!granted || !stillWanted || !current()) {
           for (const item of targets) if (item!.state === "begin_requested") item!.state = "offered";
+          return null;
+        }
+        if (targets.some((item) => item!.abandoned)) {
+          for (const item of targets) item!.state = "returning";
+          void this.#settleOp("return", leaseId, items,
+            queueIds.map((id) => ({ queue_id: id, reason: "permit_unused" as const })));
           return null;
         }
         for (const item of targets) item!.state = "permitted";
 
         // Single use: the first invoke moves the items out of `permitted`.
         return {
+          nativeTurnToken,
           invoke: (submit) => {
             if (this.#frozen || !current() || targets.some((item) => item!.state !== "permitted")) return false;
             for (const item of targets) item!.state = "submitting";
@@ -237,34 +338,171 @@ export class QueueLease {
           },
         };
       },
+      abandonBegin: (queueIds) => {
+        const permitted: string[] = [];
+        for (const id of queueIds) {
+          const item = items.get(id);
+          if (item?.state === "begin_requested") item.abandoned = true;
+          if (item?.state === "permitted") {
+            item.state = "returning";
+            permitted.push(id);
+          }
+        }
+        if (permitted.length > 0 && current()) {
+          void this.#settleOp("return", leaseId, items,
+            permitted.map((id) => ({ queue_id: id, reason: "permit_unused" as const })));
+        }
+      },
       return: async (entries) => {
-        const ids = entries.map((entry) => entry.queue_id);
-        const targets = ids.map((id) => items.get(id));
+        const targets = entries.map((entry) => items.get(entry.queue_id));
         // After the host call only a disposition can settle an item.
-        if (!current() || targets.some((item) => item === undefined || item.state === "submitting" || item.state === "settled")) {
+        if (
+          !current() ||
+          targets.some((item) => item === undefined || !["offered", "begin_requested", "permitted"].includes(item.state))
+        ) {
           return { ok: false, error: { reason: "unknown_queue_item" } };
         }
-        for (const item of targets) item!.state = "settled";
-        const result = await this.#control("return", { op: "return", lease_id: leaseId, items: [...entries] });
-        settle(ids);
-        return result;
+        for (const item of targets) item!.state = "returning";
+        return this.#settleOp("return", leaseId, items, entries);
       },
       dispose: async (entries) => {
-        const ids = entries.map((entry) => entry.queue_id);
-        if (!current() || ids.some((id) => items.get(id) === undefined || items.get(id)!.state === "settled")) {
+        const targets = entries.map((entry) => items.get(entry.queue_id));
+        if (
+          !current() ||
+          targets.some((item) => item === undefined || ["returning", "disposing", "settled"].includes(item.state))
+        ) {
           return { ok: false, error: { reason: "unknown_queue_item" } };
         }
-        const result = await this.#control("dispose", { op: "dispose", lease_id: leaseId, items: [...entries] });
-        if (result.ok) settle(ids);
-        return result;
+        for (const item of targets) item!.state = "disposing";
+        return this.#settleOp("dispose", leaseId, items, entries);
       },
     };
   }
 
-  async #control<Op extends ControlOp>(op: Op, body: Record<string, unknown>): Promise<QueueControlResult<Op>> {
+  #settle(leaseId: string, items: Map<string, LeaseItem>, queueIds: readonly string[]): void {
+    for (const id of queueIds) {
+      const item = items.get(id);
+      if (item !== undefined) item.state = "settled";
+    }
+    if (this.#leases.get(leaseId) === items && [...items.values()].every((item) => item.state === "settled")) {
+      this.#leases.delete(leaseId);
+    }
+  }
+
+  /** Drives a return or disposition until the server has it. */
+  async #settleOp<Op extends "return" | "dispose">(
+    op: Op,
+    leaseId: string,
+    items: Map<string, LeaseItem>,
+    entries: readonly (Op extends "return" ? InterAgentQueueReturnItem : InterAgentQueueDisposeItem)[],
+  ): Promise<QueueSettlement<Op>> {
+    let pending = [...entries];
+    for (;;) {
+      const outcome = await this.#leaseOp(op, { op, lease_id: leaseId, items: pending }) as LeaseOutcome<Op>;
+      if (outcome.kind === "ok") {
+        this.#settle(leaseId, items, pending.map((entry) => entry.queue_id));
+        return { ok: true, reply: outcome.reply };
+      }
+      if (outcome.kind === "stale") return { ok: false, error: { reason: "stale_channel" } };
+      if (outcome.kind === "refused") {
+        // A wrapper bug: left visible, not restored (the engine moved on).
+        this.#log(`QueueLease ${op} refused: ${JSON.stringify(outcome.error)} lease=${leaseId}`);
+        return { ok: false, error: outcome.error };
+      }
+      const applied = pending.filter((entry) => !stillLeased(outcome.phases.get(entry.queue_id)));
+      this.#settle(leaseId, items, applied.map((entry) => entry.queue_id));
+      pending = pending.filter((entry) => stillLeased(outcome.phases.get(entry.queue_id)));
+      if (pending.length === 0) return { ok: true };
+      this.#log(`QueueLease ${op} not applied; re-issuing lease=${leaseId} items=${pending.length}`);
+    }
+  }
+
+  /** Sends a lease operation; parks it when its outcome is unknown. */
+  async #leaseOp<Op extends LeaseOp>(op: Op, body: Record<string, unknown>): Promise<LeaseOutcome<Op>> {
     const binding = this.#binding;
-    if (binding === null) return { ok: false, error: { reason: "stale_channel" } };
-    const payload = {
+    if (binding === null) return { kind: "stale" };
+    const serial = this.#bindingSerial;
+    const payload = this.#payload(binding, body);
+    const result = await this.#send(op, payload);
+    if (serial !== this.#bindingSerial) return { kind: "stale" };
+    if (result.ok) return { kind: "ok", reply: result.reply };
+    if (!indeterminate(op, result.error)) return { kind: "refused", error: result.error };
+    return new Promise((resolve) => {
+      this.#parked.add({
+        op,
+        leaseId: String(body.lease_id),
+        payload,
+        fastPath: true,
+        finish: resolve as (outcome: LeaseOutcome<LeaseOp>) => void,
+      });
+      this.#scheduleRetry();
+    });
+  }
+
+  #endParked(outcome: LeaseOutcome<LeaseOp>): void {
+    clearTimeout(this.#retryTimer);
+    this.#retryTimer = undefined;
+    this.#retryDelay = RETRY_FIRST_MS;
+    const parked = [...this.#parked];
+    this.#parked.clear();
+    for (const entry of parked) entry.finish(outcome);
+  }
+
+  #scheduleRetry(): void {
+    if (this.#retryTimer !== undefined) return;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = undefined;
+      void this.#retry();
+    }, this.#retryDelay);
+    this.#retryTimer.unref?.();
+    this.#retryDelay = Math.min(this.#retryDelay * 2, RETRY_MAX_MS);
+  }
+
+  /** Fast path first (the same id, once), then a reconciliation. */
+  async #retry(): Promise<void> {
+    if (this.#reconciling !== null) return;
+    const serial = this.#bindingSerial;
+    for (const parked of [...this.#parked].filter((entry) => entry.fastPath)) {
+      parked.fastPath = false;
+      const result = await this.#send(parked.op, parked.payload);
+      if (serial !== this.#bindingSerial) return;
+      if (result.ok && this.#parked.delete(parked)) parked.finish({ kind: "ok", reply: result.reply });
+    }
+    if (this.#parked.size > 0) await this.#reconcile();
+    else this.#retryDelay = RETRY_FIRST_MS;
+  }
+
+  #reconcile(): Promise<void> {
+    this.#reconciling ??= this.#runReconcile().finally(() => {
+      this.#reconciling = null;
+    });
+    return this.#reconciling;
+  }
+
+  async #runReconcile(): Promise<void> {
+    clearTimeout(this.#retryTimer);
+    this.#retryTimer = undefined;
+    const serial = this.#bindingSerial;
+    // Only operations sent before the resume can be read from its phases.
+    const covered = [...this.#parked];
+    const result = await this.resume();
+    if (serial !== this.#bindingSerial) return;
+    if (!result.ok) {
+      if (this.#parked.size > 0) this.#scheduleRetry();
+      return;
+    }
+    this.#retryDelay = RETRY_FIRST_MS;
+    const phases = new Map(result.reply.leases.map((lease) =>
+      [lease.lease_id, new Map(lease.items.map((item) => [item.queue_id, item.phase]))]));
+    for (const parked of covered) {
+      if (!this.#parked.delete(parked)) continue;
+      parked.finish({ kind: "phases", phases: phases.get(parked.leaseId) ?? new Map() });
+    }
+    if (this.#parked.size > 0) this.#scheduleRetry();
+  }
+
+  #payload(binding: Binding, body: Record<string, unknown>): Record<string, unknown> {
+    return {
       version: "0",
       operation_id: String(this.#nextOperation++),
       queue_epoch: binding.epoch,
@@ -272,6 +510,15 @@ export class QueueLease {
       generation: binding.generation,
       ...body,
     };
+  }
+
+  async #control<Op extends ControlOp>(op: Op, body: Record<string, unknown>): Promise<QueueControlResult<Op>> {
+    const binding = this.#binding;
+    if (binding === null) return { ok: false, error: { reason: "stale_channel" } };
+    return this.#send(op, this.#payload(binding, body));
+  }
+
+  async #send<Op extends ControlOp>(op: Op, payload: Record<string, unknown>): Promise<QueueControlResult<Op>> {
     try {
       const raw = await this.#transport(payload);
       const reply = parseDeliveryQueueControlReply(raw, op);

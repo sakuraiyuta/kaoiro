@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueueLease, type QueueOffer } from "../src/queue_lease.js";
 
 const policy = { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 };
@@ -33,7 +33,10 @@ function batch(leaseId = "1", queueIds = ["10"], overrides: Record<string, unkno
 }
 
 /** A fake server: answers each control op from `respond`, recording payloads. */
-function harness(respond: (payload: Record<string, unknown>) => unknown = defaultReply) {
+function harness(
+  respond: (payload: Record<string, unknown>) => unknown = defaultReply,
+  log?: (line: string) => void,
+) {
   const sent: Record<string, unknown>[] = [];
   const offers: QueueOffer[] = [];
   const pending: Array<() => void> = [];
@@ -52,6 +55,7 @@ function harness(respond: (payload: Record<string, unknown>) => unknown = defaul
       }));
     },
     onOffer: (offer) => offers.push(offer),
+    ...(log === undefined ? {} : { log }),
   });
   lease.join(joinReply, "i1", "g1");
   return {
@@ -170,3 +174,163 @@ describe("QueueLease", () => {
     expect(sent.at(-1)).toMatchObject({ operation_id: "1", generation: "g2" });
   });
 });
+
+describe("QueueLease — unknown outcomes", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const ops = (sent: Record<string, unknown>[], op: string) => sent.filter((p) => p.op === op);
+  const phases = (items: [string, string][]) => (payload: Record<string, unknown>) => ({
+    op: "resume", operation_id: payload.operation_id, queue: counts,
+    leases: [{ lease_id: "1", items: items.map(([queue_id, phase]) => ({ queue_id, phase })) }],
+    registrations: [],
+  });
+
+  /** Answers each op from a per-op script, falling back to the default. */
+  function scripted(script: Record<string, Array<(payload: Record<string, unknown>) => unknown>>) {
+    return (payload: Record<string, unknown>) => {
+      const next = script[payload.op as string]?.shift();
+      return next === undefined ? defaultReply(payload) : next(payload);
+    };
+  }
+  const unavailable = () => refusal("queue_unavailable");
+  const lost = () => Object.assign(new Error("timeout"), { payload: { reason: "timeout" } });
+
+  it("resends an unanswered return once under its own id, then settles", async () => {
+    const h = harness(scripted({ return: [unavailable] }));
+    h.lease.receiveBatch(batch());
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await settled).toMatchObject({ ok: true, reply: { op: "return" } });
+    const returns = ops(h.sent, "return");
+    expect(returns.map((p) => p.operation_id)).toEqual(["1", "1"]);
+    expect(h.lease.heldLeaseIds()).toEqual([]);
+  });
+
+  it("re-issues under a new id a return the resume shows not applied, never the old id", async () => {
+    const h = harness(scripted({ return: [unavailable, unavailable], resume: [phases([["10", "offered"]])] }));
+    h.lease.receiveBatch(batch());
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await settled).toMatchObject({ ok: true });
+    const resumeId = Number(ops(h.sent, "resume")[0]!.operation_id);
+    const returns = ops(h.sent, "return").map((p) => Number(p.operation_id));
+    expect(returns.slice(0, 2)).toEqual([1, 1]);
+    expect(returns.slice(2)).toHaveLength(1);
+    expect(returns[2]).toBeGreaterThan(resumeId);
+    expect(ops(h.sent, "resume")[0]).toMatchObject({ leases: [{ lease_id: "1", queue_ids: ["10"] }] });
+  });
+
+  it("settles a parked return the resume shows applied, without a re-issue", async () => {
+    const unknownOp = () => refusal("unknown_operation");
+    const h = harness(scripted({ return: [lost, unknownOp], resume: [phases([["10", "queued"]])] }));
+    h.lease.receiveBatch(batch());
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await settled).toEqual({ ok: true });
+    expect(ops(h.sent, "return")).toHaveLength(2);
+    expect(h.lease.heldLeaseIds()).toEqual([]);
+  });
+
+  it.each([
+    ["native_pending", true, ["1"]],
+    ["offered", false, ["1"]],
+    ["queued", false, []],
+  ] as const)("a parked begin resolves from the resume phase %s", async (phase, permitted, held) => {
+    const h = harness(scripted({ begin_native: [unavailable, unavailable], resume: [phases([["10", phase]])] }));
+    h.lease.receiveBatch(batch());
+    const begin = h.offers[0]!.begin(["10"], "t1");
+    await vi.advanceTimersByTimeAsync(1_000);
+    const submit = await begin;
+    expect(submit !== null).toBe(permitted);
+    if (submit !== null) {
+      expect(submit.nativeTurnToken).toBe("t1");
+      expect(submit.invoke(() => {})).toBe(true);
+    }
+    expect(h.lease.heldLeaseIds()).toEqual(held);
+  });
+
+  it("a refused begin is final: the item is offered again", async () => {
+    const h = harness(scripted({ begin_native: [() => refusal("unknown_queue_item")] }));
+    h.lease.receiveBatch(batch());
+    expect(await h.offers[0]!.begin(["10"], "t1")).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ops(h.sent, "begin_native")).toHaveLength(1);
+    expect(await h.offers[0]!.begin(["10"], "t1")).not.toBeNull();
+  });
+
+  it("logs a disposition refused as a wrapper bug and leaves the item visible", async () => {
+    const lines: string[] = [];
+    const h = harness(scripted({ dispose: [() => refusal("conflicting_disposition")] }), (line) => lines.push(line));
+    h.lease.receiveBatch(batch());
+    const result = await h.offers[0]!.dispose([{ queue_id: "10", outcome: "intentional_non_injection", reason: "stale_skip" }]);
+    expect(result).toEqual({ ok: false, error: { reason: "conflicting_disposition" } });
+    expect(lines.join("\n")).toContain("dispose refused");
+    expect(h.lease.heldLeaseIds()).toEqual(["1"]);
+    expect(await h.offers[0]!.return([{ queue_id: "10", reason: "shutdown" }])).toMatchObject({ ok: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ops(h.sent, "dispose")).toHaveLength(1);
+  });
+
+  it("an abandoned begin that turns out permitted is returned as permit_unused", async () => {
+    const h = harness();
+    h.lease.receiveBatch(batch());
+    h.holdReplies();
+    const begin = h.offers[0]!.begin(["10"], "t1");
+    h.offers[0]!.abandonBegin(["10"]);
+    h.release();
+    expect(await begin).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    h.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops(h.sent, "return")).toEqual([
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "permit_unused" }] }),
+    ]);
+    expect(h.lease.heldLeaseIds()).toEqual([]);
+  });
+
+  it("abandoning a permitted item returns it and voids the permit", async () => {
+    const h = harness();
+    h.lease.receiveBatch(batch());
+    const submit = await h.offers[0]!.begin(["10"], "t1");
+    h.offers[0]!.abandonBegin(["10"]);
+    expect(submit!.invoke(() => {})).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops(h.sent, "return")).toEqual([
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "permit_unused" }] }),
+    ]);
+  });
+
+  it("a rejoin reconciles whenever a lease is held, without resending old ids", async () => {
+    const h = harness(scripted({ return: [lost], resume: [phases([["10", "offered"]])] }));
+    h.lease.receiveBatch(batch());
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    h.lease.join(joinReply, "i1", "g1");
+    await h.lease.rejoined(false);
+    expect(await settled).toMatchObject({ ok: true });
+    const returns = ops(h.sent, "return").map((p) => p.operation_id);
+    expect(returns).toHaveLength(2);
+    expect(new Set(returns).size).toBe(2);
+  });
+
+  it("nothing held and no resume required: a rejoin sends nothing", async () => {
+    const h = harness();
+    await h.lease.rejoined(false);
+    expect(h.sent).toEqual([]);
+  });
+
+  it("a generation change ends parked operations as stale", async () => {
+    const h = harness(scripted({ return: [lost], begin_native: [lost] }));
+    h.lease.receiveBatch(batch("1", ["10", "11"]));
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    const begin = h.offers[0]!.begin(["11"], "t1");
+    await vi.advanceTimersByTimeAsync(0);
+    h.lease.join(joinReply, "i1", "g2");
+    expect(await settled).toEqual({ ok: false, error: { reason: "stale_channel" } });
+    expect(await begin).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ops(h.sent, "resume")).toEqual([]);
+  });
+});
+

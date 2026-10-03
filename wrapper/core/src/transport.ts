@@ -1427,6 +1427,7 @@ export class ServerLink {
         transport: (payload) => this.#queueControl(payload),
         onOffer: (offer) => options.onQueueOffer?.(offer),
         onSequences: (seqs) => this.#deliveryRecovery.noteOffered(seqs),
+        log: (line) => writeRedactedStderr(`ServerLink ${line}\n`),
       });
     }
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
@@ -1763,11 +1764,8 @@ export class ServerLink {
             return;
           }
           this.#queueLease.join(queueReply, incarnation, this.#deliveryGeneration);
-          // Credit waits for resume after a same-generation rejoin.
-          if (queueReply.inter_agent_queue_resume_required) {
-            const lease = this.#queueLease;
-            this.#queueReady = lease.resume().then(() => undefined);
-          }
+          // Credit waits for the reconciliation after a rejoin.
+          this.#queueReady = this.#queueLease.rejoined(queueReply.inter_agent_queue_resume_required);
         }
         // Reset here, not on disconnect: a watermark buffered before this
         // join may have timed out unsent, and a channel-only rejoin never
