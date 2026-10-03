@@ -979,8 +979,10 @@ defmodule KaoiroServer.DeliveryStates do
       end)
 
     {:reply,
-     if(record, do: {:ok, Map.delete(record, :last_stage)}, else: {:ok, %{status: "expired"}}),
-     state}
+     if(record,
+       do: {:ok, Map.drop(record, [:last_stage, :origin])},
+       else: {:ok, %{status: "expired"}}
+     ), state}
   end
 
   def handle_call({:pending_early, sender, recipient}, _from, state) do
@@ -1010,7 +1012,9 @@ defmodule KaoiroServer.DeliveryStates do
     key = if entry, do: {agent_id, entry.incarnation}
     stage = if key, do: get_in(state.stages, [key, seq])
     disposition = report["yield_disposition"]
-    uncertainty = phase3_uncertainty(stage, report)
+    # A queue item is settled only by its own lease operations.
+    queue_origin? = stage[:origin] == :queue
+    uncertainty = if queue_origin?, do: :none, else: phase3_uncertainty(stage, report)
 
     cond do
       entry != nil and report["incarnation"] != entry.incarnation ->
@@ -1064,12 +1068,12 @@ defmodule KaoiroServer.DeliveryStates do
           (report["stage"] == "submitted" or uncertainty == :resolve) and
             seq > entry.acked_seq and
             seq not in entry.resolved and seq not in entry.skipped and
-            not MapSet.member?(live_queue_seqs(entry.queue), seq)
+            not queue_origin?
 
         next_entry = %{entry | stage_history: histories}
 
         next_entry =
-          if report["stage"] in @early_release_stages,
+          if report["stage"] in @early_release_stages and not queue_origin?,
             do: %{next_entry | early_pending: Map.delete(entry.early_pending, seq)},
             else: next_entry
 
@@ -1326,7 +1330,8 @@ defmodule KaoiroServer.DeliveryStates do
           stages: %{"accepted" => at},
           changed_at: at,
           last_stage: "accepted",
-          mode: if(offer.kind == :early, do: "early", else: "normal")
+          mode: if(offer.kind == :early, do: "early", else: "normal"),
+          origin: :queue
         })
       end)
 

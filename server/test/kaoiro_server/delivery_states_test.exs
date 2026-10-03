@@ -2740,6 +2740,61 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert DeliveryStates.queue_ledger_violation(entry(ctx)) == nil
     end
 
+    test "an uncertain stage report does not count against a queue sequence", %{name: name} do
+      recipient = "lp-early-#{System.unique_integer([:positive])}"
+      {:ok, _} = DeliveryStates.bind_queue(recipient, "g1", self(), @path_policy, name)
+      {:ok, token, _} = DeliveryStates.queue_reserve(recipient, :ordinary, 2, name)
+
+      {:ok, id} =
+        DeliveryStates.queue_commit(
+          recipient,
+          token,
+          %{sender: "s", conversation_id: "c", turn_number: 1, kind: "inform", early: true},
+          %{},
+          name
+        )
+
+      {:ok, offer} =
+        DeliveryStates.queue_offer(recipient, "g1", self(), {:early, :fold, "t1", nil}, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native(recipient, "g1", self(), offer.lease_id, [id], name)
+
+      assert :ok =
+               DeliveryStates.report_stage(
+                 recipient,
+                 "g1",
+                 self(),
+                 %{
+                   "incarnation" => DeliveryStates.incarnation(recipient, name),
+                   "generation" => "g1",
+                   "delivery_seq" => 1,
+                   "stage" => "unknown",
+                   "mode" => "early",
+                   "handoff" => "turn_steer_write_uncertain",
+                   "reason" => "turn_steer_timeout",
+                   "at" => "2026-10-04T00:00:00Z"
+                 },
+                 name
+               )
+
+      assert %{uncertain_count: 0, last_uncertain: nil} = DeliveryStates.get(recipient, name)
+      assert %{native_pending: 1} = DeliveryStates.queue_counts(recipient, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_dispose(
+          recipient,
+          "g1",
+          self(),
+          offer.lease_id,
+          [{id, :unknown}],
+          "t1",
+          name
+        )
+
+      assert %{uncertain_count: 1} = DeliveryStates.get(recipient, name)
+    end
+
     test "a legacy resync bind under a new generation releases the leases", ctx do
       DeliveryStates.bind_resync(ctx.recipient, "g2", self(), ctx.name)
 
