@@ -386,5 +386,122 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
       KaoiroServerWeb.DeliveryLossDispatcher.flush()
       refute_push "envelope", %{"payload" => %{"error" => %{"code" => "delivery_uncertain"}}}
     end
+
+    defp controller(reply, socket) do
+      fence = %{
+        "version" => "0",
+        "queue_epoch" => reply["inter_agent_queue_epoch"],
+        "incarnation" => reply["inter_agent_delivery_incarnation"],
+        "generation" => "generation"
+      }
+
+      counter = :counters.new(1, [])
+
+      fn op ->
+        :counters.add(counter, 1, 1)
+        id = Integer.to_string(:counters.get(counter, 1))
+
+        ref =
+          push(
+            socket,
+            "delivery_queue_control",
+            Map.merge(fence, Map.put(op, "operation_id", id))
+          )
+
+        assert_reply ref, :ok, response, TestTimeouts.durable_reply()
+        response
+      end
+    end
+
+    # Credits, permits and disposes the recipient's only queued item as unknown.
+    defp dispose_unknown(control, queue_id) do
+      control.(%{"op" => "credit", "kind" => "root", "native_turn_token" => "t"})
+
+      assert_push "delivery_batch", %{
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => ^queue_id}]
+      }
+
+      control.(%{
+        "op" => "begin_native",
+        "lease_id" => lease_id,
+        "queue_ids" => [queue_id],
+        "native_turn_token" => "t"
+      })
+
+      control.(%{
+        "op" => "dispose",
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => queue_id, "outcome" => "unknown", "reason" => "host_crashed"}]
+      })
+    end
+
+    defp uncertain_for(recipient),
+      do: Enum.filter(DeliveryStates.pending_queue_uncertain(), &(&1.recipient == recipient))
+
+    test "a refused uncertain notice keeps its obligation until the sender has room", ctx do
+      {sender_reply, sender} = join_agent(ctx.sender, queue_params(1))
+      {reply, recipient} = join_agent(ctx.recipient, queue_params(10))
+      descriptor = %{synthetic: true, kind: "reconnecting", conversation_id: "c", subject: "p"}
+
+      for n <- 1..(1 + InterAgentQueue.control_allowance()) do
+        :ok = SynthEnvelope.deliver(ctx.sender, notice(ctx.sender, "f#{n}"), descriptor)
+      end
+
+      {:ok, %{"queue_id" => queue_id}} =
+        send_message(sender, message(ctx.sender, ctx.recipient, "cnv-full"))
+
+      dispose_unknown(controller(reply, recipient), queue_id)
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      assert [%{reason: "host_crashed"}] = uncertain_for(ctx.recipient)
+
+      # The sender takes a batch of its queued notices, which makes room.
+      drain = controller(sender_reply, sender)
+      drain.(%{"op" => "credit", "kind" => "root", "native_turn_token" => "s"})
+      assert_push "delivery_batch", %{"lease_id" => lease_id, "items" => items}
+
+      drain.(%{
+        "op" => "dispose",
+        "lease_id" => lease_id,
+        "items" =>
+          for item <- items do
+            %{
+              "queue_id" => item["queue_id"],
+              "outcome" => "intentional_non_injection",
+              "reason" => "stale_skip"
+            }
+          end
+      })
+
+      %{queued: before} = DeliveryStates.queue_counts(ctx.sender)
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      assert uncertain_for(ctx.recipient) == []
+      assert %{queued: later} = DeliveryStates.queue_counts(ctx.sender)
+      assert later == before + 1
+    end
+
+    test "a server notice resolved as unknown needs no follow-up", ctx do
+      {reply, recipient} = join_agent(ctx.recipient, queue_params(10))
+
+      :ok =
+        SynthEnvelope.deliver(ctx.recipient, notice(ctx.recipient, "cnv-synthetic"), %{
+          synthetic: true,
+          kind: "reconnecting",
+          conversation_id: "cnv-synthetic",
+          subject: "peer"
+        })
+
+      [queue_id] =
+        Map.keys(:sys.get_state(DeliveryStates).entries[ctx.recipient].queue.items)
+        |> Enum.map(&Integer.to_string/1)
+
+      dispose_unknown(controller(reply, recipient), queue_id)
+      assert [%{descriptor: %{synthetic: true}}] = uncertain_for(ctx.recipient)
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      assert uncertain_for(ctx.recipient) == []
+      refute_push "envelope", %{"payload" => %{"error" => %{"code" => "delivery_uncertain"}}}
+    end
   end
 end
