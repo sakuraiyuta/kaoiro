@@ -675,6 +675,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
           store_and_broadcast(envelope, agent_id, received_at, socket)
       end
     else
+      {:error, %{reason: "stale_reply_basis"} = details} ->
+        {:reply, {:error, with_queue_recovery(details, envelope, socket)}, socket}
+
       {:error, %{reason: _} = details} ->
         {:reply, {:error, details}, socket}
 
@@ -1633,6 +1636,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   ## Queue admission (r8 §3-§4). Off until the wrapper lease path lands:
   ## while off, accepted input keeps the direct push.
+
+  # r8 §6.3: the refused sender gets its own queued input from that peer on
+  # that conversation inline, when it declared inline recovery.
+  defp with_queue_recovery(details, envelope, socket) do
+    with %{inline_recovery: true} <- socket.assigns[:inter_agent_queue],
+         %{} = recovery <-
+           DeliveryStates.queue_claim_recovery(
+             socket.assigns.agent_id,
+             socket.assigns.delivery_generation,
+             self(),
+             envelope["payload"]["to"],
+             details.conversation_id
+           ) do
+      Map.put(details, :queue_recovery, recovery)
+    else
+      _ -> details
+    end
+  end
 
   defp route_accepted? do
     :kaoiro_server

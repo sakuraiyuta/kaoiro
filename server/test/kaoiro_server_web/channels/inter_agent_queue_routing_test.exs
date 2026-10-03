@@ -176,4 +176,58 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
     assert_push "envelope", %{"type" => "inter_agent_message", "delivery_seq" => 1}
     assert %{queued: 0} = DeliveryStates.queue_counts(ctx.recipient)
   end
+
+  test "a stale-basis reply carries the sender's queued input from that peer", ctx do
+    params =
+      queue_params(10)
+      |> Map.merge(%{"inter_agent_reply_basis" => "v1", "inter_agent_inline_recovery" => "v1"})
+
+    {_reply, recipient} = join_agent(ctx.recipient, params)
+    {_reply, sender} = join_agent(ctx.sender, %{})
+
+    assert {:ok, %{"queue_id" => queue_id}} =
+             send_message(sender, message(ctx.sender, ctx.recipient, "cnv-recover", "first"))
+
+    stale =
+      ctx.recipient
+      |> message(ctx.sender, "cnv-recover", "answer")
+      |> update_in(["payload"], fn payload ->
+        Map.merge(payload, %{"turn_number" => 2, "in_reply_to" => 0, "new_conversation" => false})
+      end)
+
+    assert {:error,
+            %{
+              reason: "stale_reply_basis",
+              queue_recovery: %{
+                "lease_id" => _,
+                "items" => [
+                  %{
+                    "queue_id" => ^queue_id,
+                    "delivery_seq" => 1,
+                    "envelope" => %{"payload" => %{"body" => "first"}}
+                  }
+                ]
+              }
+            }} = send_message(recipient, stale)
+
+    assert %{queued: 0, offered: 1} = DeliveryStates.queue_counts(ctx.recipient)
+  end
+
+  test "without inline recovery the stale-basis reply carries nothing", ctx do
+    params = Map.put(queue_params(10), "inter_agent_reply_basis", "v1")
+    {_reply, recipient} = join_agent(ctx.recipient, params)
+    {_reply, sender} = join_agent(ctx.sender, %{})
+    {:ok, _} = send_message(sender, message(ctx.sender, ctx.recipient, "cnv-no-recover"))
+
+    stale =
+      ctx.recipient
+      |> message(ctx.sender, "cnv-no-recover", "answer")
+      |> update_in(["payload"], fn payload ->
+        Map.merge(payload, %{"turn_number" => 2, "in_reply_to" => 0, "new_conversation" => false})
+      end)
+
+    assert {:error, %{reason: "stale_reply_basis"} = details} = send_message(recipient, stale)
+    refute Map.has_key?(details, :queue_recovery)
+    assert %{queued: 1} = DeliveryStates.queue_counts(ctx.recipient)
+  end
 end

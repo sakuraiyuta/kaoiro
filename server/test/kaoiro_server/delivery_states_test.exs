@@ -2514,4 +2514,65 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert queue.items[waiting].phase == :queued
     end
   end
+
+  describe "stale-basis recovery claim" do
+    setup %{name: name} do
+      recipient = "rc-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        DeliveryStates.bind_queue(
+          recipient,
+          "g1",
+          self(),
+          %{batch_max_items: 10, backlog_max_items: 20, backlog_max_bytes: 100_000},
+          name
+        )
+
+      put = fn sender, cid, bytes ->
+        {:ok, token, _} = DeliveryStates.queue_reserve(recipient, :ordinary, bytes, name)
+
+        {:ok, id} =
+          DeliveryStates.queue_commit(
+            recipient,
+            token,
+            %{sender: sender, conversation_id: cid, turn_number: 1, kind: "inform"},
+            %{"cid" => cid},
+            name
+          )
+
+        id
+      end
+
+      %{recipient: recipient, put: put}
+    end
+
+    defp claimed(ctx, peer, cid) do
+      case DeliveryStates.queue_claim_recovery(ctx.recipient, "g1", self(), peer, cid, ctx.name) do
+        nil -> nil
+        %{"items" => items} -> Enum.map(items, &String.to_integer(&1["queue_id"]))
+      end
+    end
+
+    test "claims that peer's input on that conversation, oldest first, within 10 items", ctx do
+      ids = for _ <- 1..11, do: ctx.put.("p", "c", 10)
+      _other_cid = ctx.put.("p", "other", 10)
+      _other_peer = ctx.put.("q", "c", 10)
+
+      assert claimed(ctx, "p", "c") == Enum.take(ids, 10)
+      assert %{offered: 10} = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+    end
+
+    test "stops at 16384 bytes of body charge", ctx do
+      first = ctx.put.("p", "c", 10_000)
+      _second = ctx.put.("p", "c", 6_385)
+      assert claimed(ctx, "p", "c") == [first]
+    end
+
+    test "claims nothing while the lease slot is held", ctx do
+      ctx.put.("p", "c", 10)
+      {:ok, _offer} = DeliveryStates.queue_offer(ctx.recipient, "g1", self(), :root, ctx.name)
+      ctx.put.("p", "c", 10)
+      assert claimed(ctx, "p", "c") == nil
+    end
+  end
 end

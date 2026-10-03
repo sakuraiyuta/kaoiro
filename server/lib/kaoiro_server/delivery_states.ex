@@ -148,6 +148,16 @@ defmodule KaoiroServer.DeliveryStates do
     do:
       GenServer.call(server, {:queue_control, agent_id, generation, owner, operation_id, request})
 
+  @doc """
+  Claims `agent_id`'s queued input from `peer` on conversation `cid` for a
+  `stale_reply_basis` refusal (r8 §6.3): oldest first, ordinary input only,
+  at most 10 items and 16384 bytes of body charge, as one recovery
+  lease that takes the ordinary lease slot. Returns the wire
+  `queue_recovery` map, or nil when nothing can be claimed.
+  """
+  def queue_claim_recovery(agent_id, generation, owner, peer, cid, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_claim_recovery, agent_id, generation, owner, peer, cid})
+
   @doc "Whether the recipient's current generation must `resume` before new credit."
   def queue_resume_required?(agent_id, server \\ __MODULE__),
     do: GenServer.call(server, {:queue_resume_required, agent_id})
@@ -436,6 +446,29 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call(:queue_epoch, _from, state), do: {:reply, state.queue_epoch, state}
+
+  def handle_call({:queue_claim_recovery, agent_id, generation, owner, peer, cid}, _from, state) do
+    with {:ok, entry} <- queue_owner_entry(state, agent_id, generation, owner),
+         %{frozen: false, resume_required: false} <- state.queue_controls[agent_id],
+         [_ | _] = ids <- recovery_candidates(entry.queue, peer, cid),
+         {:ok, queue, offer, next_seq} <-
+           InterAgentQueue.offer_recovery(entry.queue, ids, entry.issued_seq + 1) do
+      entry = %{
+        entry
+        | queue: queue,
+          issued_seq: next_seq - 1,
+          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      persist(state.table, agent_id, entry)
+      state = %{state | entries: Map.put(state.entries, agent_id, entry)}
+      payload = batch_payload(state, agent_id, entry, %{kind: :recovery, revision: nil}, offer)
+
+      {:reply, %{"lease_id" => payload["lease_id"], "items" => payload["items"]}, state}
+    else
+      _ -> {:reply, nil, state}
+    end
+  end
 
   def handle_call({:queue_resume_required, agent_id}, _from, state),
     do: {:reply, get_in(state.queue_controls, [agent_id, :resume_required]) == true, state}
@@ -1621,6 +1654,25 @@ defmodule KaoiroServer.DeliveryStates do
     else
       _ -> state
     end
+  end
+
+  @recovery_max_items 10
+  @recovery_max_bytes 16_384
+
+  defp recovery_candidates(queue, peer, cid) do
+    queue.items
+    |> Enum.filter(fn {_id, item} ->
+      item.phase == :queued and item.class == :ordinary and item.sender == peer and
+        item.conversation_id == cid and item.descriptor[:notice_type] == nil
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce_while({[], 0}, fn {id, item}, {ids, bytes} ->
+      if length(ids) < @recovery_max_items and bytes + item.bytes <= @recovery_max_bytes,
+        do: {:cont, {[id | ids], bytes + item.bytes}},
+        else: {:halt, {ids, bytes}}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   defp credit_request(%{kind: :root}, _queue, _control), do: :root
