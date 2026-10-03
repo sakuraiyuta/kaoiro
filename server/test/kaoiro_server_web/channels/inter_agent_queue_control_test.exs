@@ -381,6 +381,39 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
 
     assert {:error, %{reason: "unknown_queue_item"}} =
              control(socket, Map.merge(begin, %{"operation_id" => "99"}))
+
+    # A disposition applied after its call timed out pushes no status; the
+    # replay under its id is the first chance, so it pushes one.
+    dispose =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "dispose",
+        "lease_id" => lease_id,
+        "items" => [
+          %{"queue_id" => queue_id, "outcome" => "observed", "witness" => "prompt_hook"}
+        ]
+      })
+
+    disposal = %{
+      op: :dispose,
+      lease_id: String.to_integer(lease_id),
+      items: [{String.to_integer(queue_id), :observed, "prompt_hook"}]
+    }
+
+    :ok = :sys.suspend(owner)
+
+    try do
+      call =
+        {:queue_control, id, "generation", socket.channel_pid, dispose["operation_id"], disposal}
+
+      assert {:timeout, _} = catch_exit(GenServer.call(owner, call, 100))
+    after
+      :ok = :sys.resume(owner)
+    end
+
+    assert %{acked_seq: 1} = DeliveryStates.get(id)
+    refute_push "delivery_status", %{acked_seq: 1}
+    assert {:ok, %{"disposed" => [^queue_id]}} = control(socket, dispose)
+    assert_push "delivery_status", %{acked_seq: 1}
   end
 
   test "a dispose pushes the advanced acked_seq; an unused permit returns", %{id: id} = ctx do
