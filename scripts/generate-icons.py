@@ -24,8 +24,19 @@ import sys
 from pathlib import Path
 from PIL import Image, ImageFilter
 
-# Pinned environment expectations
+# Supported environment: /usr/bin/python3 (Python 3.12.3, Pillow 10.2.0, zlib 1.3)
 EXPECTED_PILLOW_MAJOR = 10
+
+
+def validate_environment() -> None:
+    """Validate that the active Pillow installation matches the supported major version."""
+    import PIL
+    major = int(PIL.__version__.split(".")[0])
+    if major != EXPECTED_PILLOW_MAJOR:
+        raise RuntimeError(
+            f"Unsupported Pillow version: {PIL.__version__}. "
+            f"Expected major version {EXPECTED_PILLOW_MAJOR} (supported environment is Pillow 10.2.0)."
+        )
 
 # Pinned brand constants
 ALPHA_THRESHOLD = 102  # 40% of 255
@@ -182,6 +193,7 @@ def generate_all(repo_root: Path, icons_dir: Path, favicon_path: Path) -> None:
 
 
 def main():
+    validate_environment()
     parser = argparse.ArgumentParser(description="Generate kaoiro icons and favicon deterministically.")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--icons-dir", type=Path, default=None)

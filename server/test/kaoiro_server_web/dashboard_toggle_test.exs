@@ -45,8 +45,17 @@ defmodule KaoiroServerWeb.DashboardToggleTest do
 
   test "manifest.webmanifest が DashboardStatic 経由で配信され、トグルで遮断される", %{conn: conn} do
     fixture = Path.join([:code.priv_dir(:kaoiro_server), "static", "manifest.webmanifest"])
+    prior_content = if File.exists?(fixture), do: File.read!(fixture), else: nil
+
     File.write!(fixture, "{\"name\": \"kaoiro\"}")
-    on_exit(fn -> File.rm(fixture) end)
+
+    on_exit(fn ->
+      if prior_content != nil do
+        File.write!(fixture, prior_content)
+      else
+        File.rm(fixture)
+      end
+    end)
 
     assert get(conn, "/manifest.webmanifest").status == 200
 

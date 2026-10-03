@@ -97,14 +97,31 @@ class TestGenerateIcons(unittest.TestCase):
             subprocess.check_call(cmd1)
             subprocess.check_call(cmd2)
 
+            # 1. Compare regenerated outputs against committed repository files
+            for item in (p1 / "icons").iterdir():
+                committed_file = self.icons_dir / item.name
+                self.assertTrue(committed_file.is_file(), f"Committed file missing: {item.name}")
+                self.assertEqual(
+                    item.read_bytes(),
+                    committed_file.read_bytes(),
+                    f"Regenerated {item.name} differs from committed asset",
+                )
+
+            self.assertEqual(
+                (p1 / "favicon.ico").read_bytes(),
+                self.favicon_path.read_bytes(),
+                "Regenerated favicon.ico differs from committed asset",
+            )
+
+            # 2. Compare two independent generations to verify determinism
             for item in (p1 / "icons").iterdir():
                 b1 = item.read_bytes()
                 b2 = (p2 / "icons" / item.name).read_bytes()
-                self.assertEqual(b1, b2, f"Byte mismatch in {item.name}")
+                self.assertEqual(b1, b2, f"Byte mismatch between independent runs for {item.name}")
 
             b1 = (p1 / "favicon.ico").read_bytes()
             b2 = (p2 / "favicon.ico").read_bytes()
-            self.assertEqual(b1, b2, "Byte mismatch in favicon.ico")
+            self.assertEqual(b1, b2, "Byte mismatch between independent runs for favicon.ico")
 
 
 if __name__ == "__main__":

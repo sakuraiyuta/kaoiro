@@ -19,12 +19,31 @@ describe("Web App Manifest and Header Icon", () => {
     expect(content.theme_color).toBe("#14141d");
 
     expect(Array.isArray(content.icons)).toBe(true);
-    expect(content.icons).toHaveLength(4);
-
-    const iconPaths = content.icons.map((i: { src: string }) => i.src);
-    expect(iconPaths).toContain("/icons/icon-192.png");
-    expect(iconPaths).toContain("/icons/icon-512.png");
-    expect(iconPaths).toContain("/icons/icon-maskable-192.png");
-    expect(iconPaths).toContain("/icons/icon-maskable-512.png");
+    expect(content.icons).toEqual([
+      {
+        src: "/icons/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/icons/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/icons/icon-maskable-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "maskable",
+      },
+      {
+        src: "/icons/icon-maskable-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "maskable",
+      },
+    ]);
   });
 });
