@@ -46,7 +46,7 @@ import {
   createDeliveryAcknowledgementRuntime,
   DeliveryStageReporter,
   IaSidecar,
-  InterAgentAdmission,
+  InterAgentInputLifecycle,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   classifyInterAgentError,
@@ -56,6 +56,7 @@ import {
   personaOptInSource,
 } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
+import type { BatchDisposition } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import {
@@ -73,6 +74,7 @@ import {
   formatConsumerSettingsLine,
   formatTurnWatchdogLine,
   loadConfig,
+  WrapperShutdown,
 } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";
 import {
@@ -332,6 +334,16 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
    * copied into a CLI-only harness.
    */
   let interAgentTurns!: InterAgentTurnCoordinator;
+  const inputOutcomes = new Map<string, "observed" | "abandoned" | "uncertain">();
+  const settlementDisposition = (turnToken: string, definitelyUnstarted = false): BatchDisposition => {
+    const outcome = inputOutcomes.get(turnToken);
+    inputOutcomes.delete(turnToken);
+    if (outcome === "observed") return { kind: "already_observed", ownerToken: turnToken };
+    if (outcome === "abandoned" || definitelyUnstarted) {
+      return { kind: "abandoned", reason: outcome === "abandoned" ? "host_proved_unstarted" : "native_turn_never_started" };
+    }
+    return { kind: "uncertain", reason: outcome === "uncertain" ? "native_input_outcome_unknown" : "turn_ended_without_input_witness", ack: "hold" };
+  };
   const foldCandidates = new Map<string, DispatchedInterAgentBatch>();
   const yieldCandidates = new Map<string, DispatchedInterAgentBatch>();
   const pushedBatches = new Map<readonly Envelope[], {
@@ -388,13 +400,16 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       );
       return;
     }
+    const settlementError = settlement.completion.kind === "recovered_invariant_violation"
+      ? { reason: "unknown_input", detail: "Observed turn settlement recovered a missing input witness" }
+      : error;
     resolveInterAgentConversationIds(
       settlement.batch.turnToken,
       [...new Set([
         ...settlement.batch.conversationIds,
         ...(interAgent?.pendingConversationIdsForTurn(settlement.batch.turnToken) ?? []),
       ])],
-      error,
+      settlementError,
     );
     // Resolve the old generation before starting a same-CID successor:
     // InterAgentTool's pending map is intentionally one record per CID.
@@ -404,9 +419,24 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   let foldRecoveryEvictions = 0;
-  const interAgentAdmission = new InterAgentAdmission(config.inter_agent_backlog_max_items);
+  let deliveryIdentity = (): { incarnation: string; generation: string } | null => null;
+  let deliveryAcknowledgementRuntime!: ReturnType<typeof createDeliveryAcknowledgementRuntime>;
+  let deliveryStages!: DeliveryStageReporter;
+  const inputLifecycle = new InterAgentInputLifecycle({
+    ...(config.inter_agent_backlog_max_items === undefined ? {} : { maxPendingItems: config.inter_agent_backlog_max_items }),
+    currentIdentity: () => deliveryIdentity(),
+    captureDelivery: envelope => deliveryAcknowledgementRuntime.captureDelivery(envelope),
+    acknowledgeDelivery: envelope => deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope),
+    captureStage: envelope => deliveryStages.capture(envelope),
+    retirementCapability: () => link?.interAgentRetirementCapability() ?? "pending",
+    retireDelivery: envelope => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+    sendNotice: (notice, signal) => interAgent?.sendInternalNotice(notice, signal) ?? Promise.resolve("unknown"),
+    settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
+    log: line => writeRedactedStderr(line),
+    onInvariantViolation: event => writeRedactedStderr(`[kaoiro][input-lifecycle] ${JSON.stringify(event)}\n`),
+  });
   interAgentTurns = new InterAgentTurnCoordinator({
-    admission: interAgentAdmission,
+    inputLifecycle,
     maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     onFoldRecoveryEvicted: reason => {
       foldRecoveryEvictions += 1;
@@ -420,8 +450,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         `[kaoiro] queued inter-agent turn skipped: conversation_id=${String(payload.conversation_id)} ` +
         `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
       );
-      deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
-      deliveryStages?.settleEnvelope(item.envelope, "terminal_skip");
     },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
@@ -462,7 +490,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             // callback. Settle this exact token and let the coordinator, not
             // a CID lookup, decide whether its peer may advance.
             resolveInterAgentTurn(
-              interAgentTurns.settle(batch.turnToken),
+              interAgentTurns.settle(batch.turnToken, { kind: "abandoned", reason: "host_send_rejected_before_start" }),
               { detail: String(err) },
             );
           }),
@@ -638,7 +666,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : Promise.reject(new Error("work_control_unavailable")),
   };
   interAgent = new InterAgentTool({
-    admission: interAgentAdmission,
+    inputLifecycle,
     workTools,
     noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     replyBasisMode: () => replyBasisMode,
@@ -649,7 +677,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     returnInput: (envelope, mode, reservation) => interAgentTurns.receive(envelope, mode, false, reservation),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
-      for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
     onTicketPrepared: (ticket, turnToken, envelopes) => {
@@ -674,8 +701,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
-    sendInterAgent: (envelope, generation) =>
-      link?.sendInterAgent(envelope, generation) ??
+    sendInterAgent: (envelope, generation, signal) =>
+      link?.sendInterAgent(envelope, generation, signal === undefined ? {} : { signal }) ??
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK
@@ -748,12 +775,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : {}),
   });
 
-  const deliveryIdentity = () => {
+  deliveryIdentity = () => {
     if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
     const incarnation = link.deliveryIncarnation();
     return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
   };
-  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
+  deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => {
       writeDeliveryLifecycle("delivery_ack", undefined, deliverySeq);
       link?.acknowledgeInterAgentDelivery(deliverySeq);
@@ -762,7 +789,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     deliveryIdentity,
   );
 
-  const deliveryStages = new DeliveryStageReporter({
+  deliveryStages = new DeliveryStageReporter({
     send: report => link?.reportDeliveryStage(report),
     identity: deliveryIdentity,
     turns: interAgentTurns,
@@ -781,7 +808,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         foldCandidates.delete(batchToken);
         host.removeQueuedInput(batchToken);
         resolveInterAgentConversationIds(batchToken, prepared.removedConversationIds);
-        resolveInterAgentTurn(interAgentTurns.settle(batchToken));
+        resolveInterAgentTurn(interAgentTurns.settle(batchToken, { kind: "abandoned", reason: "terminal_reclassified_empty" }));
         continue;
       }
       const batch = prepared.batch;
@@ -1199,12 +1226,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       handleInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
-          admission: interAgentAdmission,
+          inputLifecycle,
           ingress: interAgentIngress,
           recordInboundIa: envelope => {
-            deliveryAcknowledgementRuntime.captureDelivery(envelope);
-            interAgentAdmission.captureDeliveryIdentity(envelope, deliveryIdentity());
-            deliveryStages.capture(envelope);
             recordInboundIa(envelope);
           },
           retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
@@ -1264,8 +1288,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
 
   const freezeInterAgentAdmission = (turnToken: string | undefined, attribution: string, reason: string): void => {
     admissionFailStopped = true;
-    const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-    const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+    const pendingIngress = interAgentIngress.close();
+    const preservedHandles = turnToken === undefined
+      ? []
+      : interAgentTurns.deliveryEnvelopesForTurn(turnToken)
+        .map(envelope => inputLifecycle.reservationFor(envelope))
+        .filter((handle): handle is NonNullable<typeof handle> => handle !== undefined);
+    void inputLifecycle.close({ preserveInFlight: preservedHandles, reason: "watchdog_fail_stop" });
+    const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
     writeRedactedStderr(
       `[kaoiro] ${reason}: token=${turnToken ?? "<unknown>"} ` +
         `attribution=${attribution}; ` +
@@ -1304,7 +1334,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         text: prepared.batch.text,
         conversationIds: prepared.batch.conversationIds,
       };
-      resolveInterAgentTurn(interAgentTurns.settle(turnToken));
+      resolveInterAgentTurn(interAgentTurns.settle(turnToken, { kind: "abandoned", reason: "terminal_reclassified_empty" }));
       return null;
     },
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
@@ -1314,8 +1344,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       turnWatchdog.progress(turnToken);
     },
     onPromptAdmitted: (turnToken) => {
+      inputOutcomes.set(turnToken, "observed");
       deliveryStages.submitted(turnToken, "prompt_hook");
-      interAgentTurns.handoff(turnToken);
+      interAgentTurns.handoff(turnToken, "prompt_hook", turnToken);
       interAgent?.confirmReplyInput(turnToken);
       interAgentTurns.retireFoldedBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
       attemptFoldCandidates();
@@ -1327,7 +1358,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       pushedBatches.delete(decision.envelopes);
       const { batch, ticketLease } = pushed;
       if (decision.kind === "fold" && decision.turnToken !== undefined && ticketLease.activate()) {
-        interAgentTurns.handoff(batch.turnToken);
+        inputOutcomes.set(batch.turnToken, "observed");
+        interAgentTurns.handoff(batch.turnToken, "fold_hook", decision.turnToken);
         interAgentTurns.retainFolded(decision.envelopes, decision.turnToken);
         for (const envelope of decision.envelopes) {
           foldedEnvelopes.add(envelope);
@@ -1345,7 +1377,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           freezeInterAgentAdmission(decision.turnToken, "unattributed", "pushed root ownership unavailable");
           return;
         }
-        interAgentTurns.handoff(decision.turnToken);
+        inputOutcomes.set(decision.turnToken, "observed");
+        interAgentTurns.handoff(decision.turnToken, "prompt_hook", decision.turnToken);
         interAgent?.prepareReplyInput(decision.turnToken, decision.envelopes);
         for (const envelope of decision.envelopes) {
           interAgent?.notePendingInjection(envelope, decision.turnToken);
@@ -1355,8 +1388,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         interAgentTurns.retireFoldedBeforeConfirmed(decision.envelopes);
       } else {
         ticketLease.discard();
+        inputOutcomes.set(batch.turnToken, "uncertain");
         deliveryStages.unknownEnvelopes(decision.envelopes, decision.reason ?? "fold_authorization_unavailable");
-        resolveInterAgentTurn(interAgentTurns.settle(batch.turnToken),
+        resolveInterAgentTurn(interAgentTurns.settle(batch.turnToken, settlementDisposition(batch.turnToken)),
           { detail: decision.reason ?? "fold_authorization_unavailable" },
           { dispatchNext: decision.reason !== "root_hook_timeout" });
       }
@@ -1393,7 +1427,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       if (turnToken) interAgent?.endReplyInput(turnToken);
       turnWatchdog.end(turnToken);
       if (turnToken !== undefined) {
-        const settlement = interAgentTurns.settle(turnToken);
+        const settlement = interAgentTurns.settle(turnToken, settlementDisposition(turnToken, cancellation?.started === false));
         // EOF cancellation must settle the exact token but must not free its
         // peer to dispatch a successor into a terminal host. onHostEnd drains
         // the coordinator's remaining batches and enqueues their notices
@@ -1402,7 +1436,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         if (settlement.kind === "settled") peersToDispatch.add(settlement.batch.peer);
         resolveInterAgentTurn(settlement, error, { dispatchNext: false });
         for (const batchToken of foldedBatchTokensByOwner.get(turnToken) ?? []) {
-          const folded = interAgentTurns.settle(batchToken);
+          const folded = interAgentTurns.settle(batchToken, settlementDisposition(batchToken, cancellation?.started === false));
           if (folded.kind === "settled") peersToDispatch.add(folded.batch.peer);
           resolveInterAgentTurn(folded, error, { dispatchNext: false });
         }
@@ -1426,7 +1460,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onHostEnd: ({ error }) => {
       turnWatchdog.dispose();
-      const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+      const pendingIngress = interAgentIngress.close();
       if (pendingIngress > 0) {
         process.stdout.write(
           `  inter_agent_message terminal ingress gate closed: pending=${pendingIngress}\n`,
@@ -1638,7 +1672,32 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   // default immediate-exit behavior, so the process naturally stays alive
   // until the SDK's own escalation (see host.ts's `#abort`) finishes the
   // child -- no explicit process.exit() here.
+  const shutdown = new WrapperShutdown({
+    begin: (_reason, receiptDeadline) => {
+      interAgentIngress.close();
+      const activeToken = host.activeInterAgentTurnToken() ?? undefined;
+      const preservedHandles = interAgentTurns.inFlightHandles(activeToken);
+      const closing = inputLifecycle.close({
+        preserveInFlight: preservedHandles,
+        reason: "wrapper_closed",
+        finalizeBy: receiptDeadline,
+      });
+      interAgentTurns.freezeForWatchdogFailStop(activeToken);
+      turnWatchdog.dispose();
+      broker?.close();
+      questionBroker?.close();
+      return closing;
+    },
+    flushRetirements: signal => link?.flushInterAgentRetirements?.({ signal }) ?? Promise.resolve("complete"),
+    closeRetirementRequests: () => {
+      inputLifecycle.stopRetirementRequests();
+      link?.stopInterAgentRetirementRequests?.();
+    },
+    reportDisconnectIntent: (reason, options) => link?.reportDisconnectIntent?.(reason, options) ?? Promise.resolve(false),
+    closeLink: () => link?.close(),
+  });
   const onSigterm = (): void => {
+    void shutdown.start("stop");
     host.close();
   };
   process.on("SIGTERM", onSigterm);
@@ -1679,19 +1738,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // more than once in the same process, each closing over an
     // already-finished host (issue #379's listener-accumulation lesson).
     process.off("SIGTERM", onSigterm);
-    // Deny in-flight permission requests, then release the socket so the
-    // process can exit.
-    try {
-      await link?.flushInterAgentRetirements?.();
-    } finally {
-      broker?.close();
-      questionBroker?.close();
-      try {
-        await link?.reportDisconnectIntent?.(disconnectReason);
-      } finally {
-        link?.close();
-      }
-    }
+    await shutdown.start(disconnectReason);
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InterAgentAdmission } from "@kaoiro/agent-common";
+import { InterAgentAdmission, InterAgentInputLifecycle } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
 import {
   CodexInterAgentTurnCoordinator,
@@ -28,6 +28,14 @@ function inbound(cid: string): Envelope {
   };
 }
 
+function retirementLifecycle(retired: Envelope[]): InterAgentInputLifecycle {
+  return new InterAgentInputLifecycle({
+    currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+    retirementCapability: () => "supported",
+    retireDelivery: envelope => { retired.push(envelope); return true; },
+  });
+}
+
 describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
   it("replaces a host-queued batch with survivors at the final input boundary", () => {
     const dispatched: DispatchedCodexInterAgentBatch[] = [];
@@ -44,14 +52,14 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
     coordinator.receive(inbound("active"), "reply-owed");
     coordinator.receive(inbound("closed"), "close-proposal");
     coordinator.receive(inbound("survivor"), "reply-owed");
-    coordinator.settle("turn-1");
+    coordinator.settle("turn-1", { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched[1]?.conversationIds).toEqual(["closed", "survivor"]);
     closed = true;
     const prepared = coordinator.prepareInput("turn-2");
     expect(prepared?.batch?.conversationIds).toEqual(["survivor"]);
     expect(prepared?.removedConversationIds).toEqual(["closed"]);
-    expect(coordinator.settle("turn-2")?.conversationIds).toEqual(["survivor"]);
+    expect(coordinator.settle("turn-2", { kind: "abandoned", reason: "test_cleanup" })?.conversationIds).toEqual(["survivor"]);
     expect(removed).toEqual(["closed"]);
   });
 
@@ -74,24 +82,25 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
 
   it("watchdog freeze retains only the active batch and closes future dispatch", () => {
     const dispatched: DispatchedCodexInterAgentBatch[] = [];
+    const retired: Envelope[] = [];
     const tokens = ["turn-active", "turn-other"];
     const coordinator = new CodexInterAgentTurnCoordinator({
       createTurnToken: () => tokens.shift()!,
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: (batch) => dispatched.push(batch),
     });
 
     coordinator.receive(inbound("active"), "reply-owed");
     coordinator.receive(inbound("pending"), "reply-owed");
     expect(dispatched).toHaveLength(1);
-    const retired: Envelope[] = [];
-    const frozen = coordinator.freezeForWatchdogFailStop("turn-active", (envelopes) => retired.push(...envelopes));
+    const frozen = coordinator.freezeForWatchdogFailStop("turn-active");
     expect(frozen).toEqual({ droppedDispatched: 0, droppedPending: 1 });
-    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending"]);
+    expect(retired.map(envelope => envelope.payload.conversation_id)).toEqual(["pending"]);
 
     coordinator.dispatchNextForPeer("peer.agent");
     coordinator.receive(inbound("after-freeze"), "reply-owed");
     expect(dispatched).toHaveLength(1);
-    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending", "after-freeze"]);
+    expect(retired.map(envelope => envelope.payload.conversation_id)).toEqual(["pending"]);
   });
 
   it("same CID の stale token は active batch を settle できず後続を dispatch しない", () => {
@@ -107,11 +116,11 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.turnToken).toBe("turn-1");
 
-    expect(coordinator.settle("stale-turn")).toBeUndefined();
+    expect(coordinator.settle("stale-turn", { kind: "abandoned", reason: "test_cleanup" })).toBeUndefined();
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched).toHaveLength(1);
 
-    expect(coordinator.settle("turn-1")?.turnToken).toBe("turn-1");
+    expect(coordinator.settle("turn-1", { kind: "abandoned", reason: "test_cleanup" })?.turnToken).toBe("turn-1");
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched).toHaveLength(2);
     expect(dispatched[1]?.turnToken).toBe("turn-2");
@@ -140,7 +149,7 @@ describe("Codex shared admission handoff", () => {
     expect(() => coordinator.receive(foreignEnvelope, "reply-owed", foreign.reservation)).toThrow("reservation is missing, foreign, or released");
     foreignAdmission.release(foreign.reservation, "retired");
 
-    coordinator.handoff(batches[0]!.turnToken);
+    coordinator.handoff(batches[0]!.turnToken, "exec_input_written");
     expect(admission.counts().total).toBe(0);
     const next = inbound("second");
     expect(admission.admit(next).kind).toBe("reserved");
@@ -184,7 +193,7 @@ describe("recovery ownership", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("first"), "reply-owed");
     coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator-turn", () => true)!;
     expect(lease.envelopes).toHaveLength(1); lease.commit();
     const prepared = coordinator.prepareInput("T2")!;
@@ -197,7 +206,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new CodexInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator", () => true)!;
     lease.rollback();
     expect(coordinator.prepareInput("T2")?.batch?.conversationIds).toEqual(["recover", "other"]);
@@ -208,7 +217,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new CodexInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("A"), "reply-owed"); coordinator.receive(message("B"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const a = coordinator.claimRecovery("A", "peer.agent", "operator", () => true)!;
     const b = coordinator.claimRecovery("B", "peer.agent", "operator", () => true)!;
     for (const lease of reverse ? [b, a] : [a, b]) lease.rollback();
@@ -226,7 +235,7 @@ describe("recovery ownership", () => {
     const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
     expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);
     lease.rollback(); lease.rollback(); expect(coordinator.unreadCount("T1")).toBe(2);
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     expect(coordinator.prepareInput("T2")?.batch?.items[0]?.envelope).toBe(first);
   });
 });
@@ -256,7 +265,7 @@ describe("steer fallback reservations", () => {
     expect(coordinator.unreadCount(null)).toBe(1);
     expect(coordinator.pendingSteerReservationCount).toBe(0);
     expect(slots.size).toBe(0);
-    coordinator.settle("T1");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched[1]?.conversationIds).toEqual(["successor"]);
   });
@@ -303,7 +312,7 @@ describe("steer fallback reservations", () => {
     coordinator.settleSteerReservation("first", true);
     expect(dispatched.map(batch => batch.conversationIds)).toEqual([["first"]]);
     expect(coordinator.pendingSteerReservationCount).toBe(1);
-    coordinator.settle(dispatched[0]!.turnToken);
+    coordinator.settle(dispatched[0]!.turnToken, { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched.map(batch => batch.conversationIds)).toEqual([["first"], ["second"]]);
     expect(coordinator.pendingSteerReservationCount).toBe(0);
@@ -382,7 +391,7 @@ describe("steer fallback reservations", () => {
     const envelope = inbound("unwritten");
     const coordinator = new CodexInterAgentTurnCoordinator({
       createPlaceholder: () => false,
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: () => { throw new Error("slotless fallback must not dispatch"); },
     });
     coordinator.reserveSteer("S", envelope, "reply-owed", 1);
@@ -400,7 +409,7 @@ describe("steer fallback reservations", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({
       createPlaceholder: id => { slots.add(id); return true; },
       removePlaceholder: id => { slots.delete(id); },
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onFallbackDispatchFailure: batch => { failed.push(batch); },
       onDispatch: batch => { dispatched.push(batch); return batch.fallbackId === undefined; },
     });
@@ -413,7 +422,6 @@ describe("steer fallback reservations", () => {
     expect(dispatched.map(batch => batch.conversationIds)).toEqual([["failed"], ["next"]]);
     expect(coordinator.pendingSteerReservationCount).toBe(0);
     expect(slots.size).toBe(0);
-    coordinator.retireEnvelopes([first]);
     expect(retired).toEqual([first]);
   });
 
@@ -424,7 +432,7 @@ describe("steer fallback reservations", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({
       createPlaceholder: id => { slots.add(id); return true; },
       removePlaceholder: id => { slots.delete(id); },
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: () => true,
     });
     coordinator.reserveSteer("first", first, "reply-owed", 1);
@@ -444,7 +452,7 @@ describe("steer fallback reservations", () => {
     const retired: Envelope[] = [];
     const definite = inbound("definite"), uncertain = inbound("uncertain");
     const coordinator = new CodexInterAgentTurnCoordinator({
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: () => true,
     });
     coordinator.reserveSteer("definite", definite, "reply-owed", 1);
@@ -465,7 +473,7 @@ describe("steer fallback reservations", () => {
     const retired: Envelope[] = [];
     const envelope = inbound("requeued");
     const coordinator = new CodexInterAgentTurnCoordinator({
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: () => true,
     });
     coordinator.reserveSteer("S", envelope, "reply-owed", 1);
@@ -500,7 +508,7 @@ describe("steer fallback reservations", () => {
     coordinator = new CodexInterAgentTurnCoordinator({
       createPlaceholder: () => true,
       removePlaceholder: () => {},
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       reclassifyQueued: item => {
         coordinator.freezeForWatchdogFailStop();
         return item.mode;
@@ -522,15 +530,14 @@ describe("steer fallback reservations", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({
       createPlaceholder: id => { slots.add(id); return true; },
       removePlaceholder: id => { slots.delete(id); },
-      retireDiscarded: envelopes => { retired.push(...envelopes); },
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: batch => { token = batch.turnToken; slots.delete(batch.fallbackId!); return true; },
     });
     coordinator.reserveSteer("S", envelope, "reply-owed", 1);
     coordinator.attachSteerPlaceholder("S");
     coordinator.settleSteerReservation("S", true);
     expect(coordinator.pendingSteerReservationCount).toBe(0);
-    const cancelled = coordinator.settle(token)!;
-    coordinator.retireEnvelopes(cancelled.items.map(item => item.envelope));
+    coordinator.settle(token, { kind: "abandoned", reason: "test_cleanup" });
     coordinator.freezeForWatchdogFailStop();
     expect(retired).toEqual([envelope]);
     expect(slots.size).toBe(0);

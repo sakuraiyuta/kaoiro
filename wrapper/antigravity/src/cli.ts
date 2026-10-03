@@ -5,6 +5,7 @@ import {
   classifyInterAgentError,
   createDeliveryAcknowledgementRuntime,
   DeliveryStageReporter,
+  InterAgentInputLifecycle,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   makeLog,
@@ -28,6 +29,7 @@ import {
   loadWrapperBuildInfo,
   parseCliArgs,
   ServerLink,
+  WrapperShutdown,
 } from "@kaoiro/wrapper-core";
 import type { PermissionSyncMessage } from "@kaoiro/protocol";
 import { AntigravityHost } from "./host.js";
@@ -158,6 +160,7 @@ export async function runAntigravityCli(
   let pendingPermissionSync: PermissionSyncMessage | undefined;
   let instructionChain: Promise<void> = Promise.resolve();
   let watchdogFailStopped = false;
+  const startedInputTurns = new Set<string>();
   let resolvePersona!: (value: string) => void;
   let rejectPersona!: (reason: Error) => void;
   const personaPrompt = new Promise<string>((resolvePrompt, rejectPrompt) => {
@@ -165,6 +168,7 @@ export async function runAntigravityCli(
     rejectPersona = rejectPrompt;
   });
   const send = (envelope: Envelope): void => link?.send(envelope);
+  let interAgent!: InterAgentTool;
   const permissionBroker = new PermissionBroker({
     config,
     send,
@@ -212,7 +216,24 @@ export async function runAntigravityCli(
       ? link.requestDeliveryStatus(input.conversation_id === undefined || input.turn_number === undefined ? {} : { conversation_id: input.conversation_id, turn_number: input.turn_number })
       : Promise.reject(new Error("work_control_unavailable")),
   };
-  const interAgent = new InterAgentTool({
+  let deliveryIdentity = (): { incarnation: string; generation: string } | null => null;
+  let deliveryAcknowledgementRuntime!: ReturnType<typeof createDeliveryAcknowledgementRuntime>;
+  let deliveryStages!: DeliveryStageReporter;
+  const inputLifecycle = new InterAgentInputLifecycle({
+    ...(config.inter_agent_backlog_max_items === undefined ? {} : { maxPendingItems: config.inter_agent_backlog_max_items }),
+    currentIdentity: () => deliveryIdentity(),
+    captureDelivery: envelope => deliveryAcknowledgementRuntime.captureDelivery(envelope),
+    captureStage: envelope => deliveryStages.capture(envelope),
+    acknowledgeDelivery: envelope => deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope),
+    retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
+    retireDelivery: envelope => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+    sendNotice: (notice, signal) => interAgent?.sendInternalNotice(notice, signal) ?? Promise.resolve("unknown"),
+    settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
+    log: line => writeRedactedStderr(line),
+    onInvariantViolation: event => writeRedactedStderr(`[kaoiro][input-lifecycle] ${JSON.stringify(event)}\n`),
+  });
+  interAgent = new InterAgentTool({
+    inputLifecycle,
     workTools,
     noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     config,
@@ -220,7 +241,7 @@ export async function runAntigravityCli(
     getActiveInterAgentTurnToken: () =>
       host?.activeInterAgentTurnToken() ?? null,
     send,
-    sendInterAgent: (envelope) => link?.sendInterAgent(envelope) ?? Promise.resolve({ kind: "unknown", reason: "not_connected" }),
+    sendInterAgent: (envelope, _generation, signal) => link?.sendInterAgent(envelope, undefined, signal === undefined ? {} : { signal }) ?? Promise.resolve({ kind: "unknown", reason: "not_connected" }),
     requestDirectory: () => link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
     requestInterAgentDeliveryStatus: () => link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => ({
@@ -237,7 +258,7 @@ export async function runAntigravityCli(
     }) as WhoamiSnapshot,
   });
   const interAgentTurns = new AntigravityInterAgentTurnCoordinator({
-    admission: interAgent.admission,
+    inputLifecycle,
     maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     reclassifyQueued: (item) => interAgent.queuedInboundMode(item.envelope, item.mode),
     onTerminalQueued: (item) => {
@@ -246,7 +267,6 @@ export async function runAntigravityCli(
         `[kaoiro] queued inter-agent turn skipped: conversation_id=${String(payload.conversation_id)} ` +
         `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
       );
-      deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
     },
     onDispatch: (batch) => {
       for (const item of batch.items) {
@@ -275,7 +295,11 @@ export async function runAntigravityCli(
           )) {
             link?.send(notice);
           }
-          const settled = interAgentTurns.settle(batch.turnToken);
+          const settled = interAgentTurns.settle(batch.turnToken, {
+            kind: "uncertain",
+            reason: "host_send_outcome_unknown",
+            ack: "hold",
+          });
           if (settled !== undefined && !watchdogFailStopped) {
             interAgentTurns.dispatchNextForPeer(settled.peer);
           }
@@ -356,12 +380,12 @@ export async function runAntigravityCli(
     failStop: (turnToken) => host?.failStopTurnForWatchdog(turnToken) ?? false,
     failStopUnattributed: () => { host?.failStopForWatchdogAttributionUnknown(); },
   });
-  const deliveryIdentity = () => {
+  deliveryIdentity = () => {
     if (link === undefined || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
     const incarnation = link.deliveryIncarnation();
     return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
   };
-  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
+  deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => {
       const turnToken = interAgentTurns.turnTokenForDeliverySequence(deliverySeq);
       writeAntigravityLifecycle({
@@ -374,7 +398,7 @@ export async function runAntigravityCli(
     interAgentTurns,
     deliveryIdentity,
   );
-  const deliveryStages = new DeliveryStageReporter({
+  deliveryStages = new DeliveryStageReporter({
     send: report => link?.reportDeliveryStage(report),
     identity: deliveryIdentity,
     turns: interAgentTurns,
@@ -435,17 +459,12 @@ export async function runAntigravityCli(
     onInterAgentMessage: (envelope) => {
       // The handler awaits before it classifies the envelope; the join
       // identity must be captured before that await can span a rejoin.
-      deliveryAcknowledgementRuntime.captureDelivery(envelope);
-      interAgent.admission.captureDeliveryIdentity(envelope, deliveryIdentity());
-      deliveryStages.capture(envelope);
       return handleAntigravityInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
-          admission: interAgent.admission,
+          inputLifecycle,
           send: (notice) => link?.send(notice),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
-          retireDelivery: (envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
-          retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
           inject: (inbound, mode, reservation) => interAgentTurns.receive(inbound, mode, reservation),
           log: (line) => process.stdout.write(line),
         }),
@@ -488,7 +507,7 @@ export async function runAntigravityCli(
         text: prepared.batch.text,
         conversationIds: prepared.batch.conversationIds,
       };
-      const settled = interAgentTurns.settle(turnToken);
+      const settled = interAgentTurns.settle(turnToken, { kind: "abandoned", reason: "terminal_reclassified_empty" });
       if (settled !== undefined && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(settled.peer);
       return null;
     },
@@ -539,7 +558,9 @@ export async function runAntigravityCli(
         )) {
           link?.send(notice);
         }
-        interAgentTurns.settle(turnToken);
+        interAgentTurns.settle(turnToken, startedInputTurns.has(turnToken)
+          ? { kind: "already_observed", ownerToken: turnToken }
+          : { kind: "uncertain", reason: "watchdog_turn_outcome_unknown", ack: "hold" });
         return;
       }
       for (const notice of interAgent.resolveTurnEnd(
@@ -549,14 +570,18 @@ export async function runAntigravityCli(
       )) {
         link?.send(notice);
       }
-      const settled = interAgentTurns.settle(turnToken);
+      const settled = interAgentTurns.settle(turnToken, startedInputTurns.has(turnToken)
+        ? { kind: "already_observed", ownerToken: turnToken }
+        : { kind: "uncertain", reason: "turn_input_outcome_unknown", ack: "hold" });
       if (settled !== undefined && !watchdogFailStopped) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+      const preservedHandles = interAgentTurns.inFlightHandles(turnToken);
+      void inputLifecycle.close({ preserveInFlight: preservedHandles, reason: "watchdog_fail_stop" });
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
       writeRedactedStderr(
         `[kaoiro] antigravity turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; discarded unstarted dispatched=${frozen.droppedDispatched}, ` +
@@ -596,6 +621,16 @@ export async function runAntigravityCli(
         ...(turnToken === undefined ? {} : { turnToken }),
         details: { shape: "no_op", reason },
       });
+      if (turnToken !== undefined) {
+        const settled = interAgentTurns.settle(turnToken, {
+          kind: "abandoned",
+          reason: `host_send_rejected_before_start:${reason}`,
+        });
+        if (settled !== undefined && !watchdogFailStopped) {
+          for (const notice of interAgent.resolveTurnEnd(turnToken, settled.conversationIds)) link?.send(notice);
+          interAgentTurns.dispatchNextForPeer(settled.peer);
+        }
+      }
     },
     toolDescriptors: [
       ...interAgent.descriptors(),
@@ -691,6 +726,7 @@ export async function runAntigravityCli(
     },
   }, (turnToken) => {
     interAgentTurns.handoff(turnToken);
+    startedInputTurns.add(turnToken);
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
   }));
@@ -736,11 +772,35 @@ export async function runAntigravityCli(
   // naturally stays alive (child stdio + the pending escalation timer keep
   // the event loop open) until `close()`'s SIGKILL escalation actually
   // finishes the agy subtree -- no explicit `process.exit()` here.
+  let disconnectReason: "stop" | "crash" = "stop";
+  const shutdown = new WrapperShutdown({
+    begin: (_reason, receiptDeadline) => {
+      const activeToken = host.activeInterAgentTurnToken() ?? undefined;
+      const preservedHandles = interAgentTurns.inFlightHandles(activeToken);
+      const closing = inputLifecycle.close({
+        preserveInFlight: preservedHandles,
+        reason: "wrapper_closed",
+        finalizeBy: receiptDeadline,
+      });
+      interAgentTurns.freezeForWatchdogFailStop(activeToken);
+      turnWatchdog.dispose();
+      questionBroker.close();
+      permissionBroker.close();
+      return closing;
+    },
+    flushRetirements: signal => link?.flushInterAgentRetirements?.({ signal }) ?? Promise.resolve("complete"),
+    closeRetirementRequests: () => {
+      inputLifecycle.stopRetirementRequests();
+      link?.stopInterAgentRetirementRequests?.();
+    },
+    reportDisconnectIntent: (reason, options) => link?.reportDisconnectIntent?.(reason, options) ?? Promise.resolve(false),
+    closeLink: () => link?.close(),
+  });
   const onSigterm = (): void => {
+    void shutdown.start("stop");
     host?.close();
   };
   process.on("SIGTERM", onSigterm);
-  let disconnectReason: "stop" | "crash" = "stop";
   try {
     await host.run(prompt);
   } catch (error) {
@@ -754,19 +814,7 @@ export async function runAntigravityCli(
     // once in the same process, each closing over an already-finished
     // `host`.
     process.off("SIGTERM", onSigterm);
-    interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-    try {
-      await link?.flushInterAgentRetirements?.();
-    } finally {
-      turnWatchdog.dispose();
-      questionBroker.close();
-      permissionBroker.close();
-      try {
-        await link.reportDisconnectIntent?.(disconnectReason);
-      } finally {
-        link.close();
-      }
-    }
+    await shutdown.start(disconnectReason);
   }
 }
 

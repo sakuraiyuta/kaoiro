@@ -42,7 +42,7 @@ function generatedStatusBatch(): string {
   coordinator.receive(status(1, "status-first"), "reply-owed");
   coordinator.receive(status(2, "status-second"), "reply-owed");
   expect(batches).toHaveLength(1);
-  coordinator.settle(batches[0]!.turnToken);
+  coordinator.settle(batches[0]!.turnToken, { kind: "abandoned", reason: "test_cleanup" });
   coordinator.dispatchNextForPeer("server");
   expect(batches).toHaveLength(2);
   expect(batches[1]!.items).toHaveLength(2);

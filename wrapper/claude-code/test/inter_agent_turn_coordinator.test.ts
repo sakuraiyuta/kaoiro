@@ -76,10 +76,10 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     expect(dispatched).toEqual(["token-1", "token-2"]);
     coordinator.prepareInput("token-2", false);
     coordinator.markPushed("token-2");
-    expect(coordinator.settle("token-1").kind).toBe("settled");
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" }).kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toHaveLength(2);
-    expect(coordinator.settle("token-2").kind).toBe("settled");
+    expect(coordinator.settle("token-2", { kind: "abandoned", reason: "test_cleanup" }).kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
   });
@@ -94,11 +94,11 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "T", 1), "reply-owed");
     coordinator.receive(inbound("peer", "early", 1), "reply-owed", true);
     coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
-    coordinator.settle("token-1");
+    coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
     expect(coordinator.prepareInput("token-3")?.batch?.conversationIds).toEqual(["ordinary"]);
-    expect(coordinator.settle("token-3").kind).toBe("settled");
+    expect(coordinator.settle("token-3", { kind: "abandoned", reason: "test_cleanup" }).kind).toBe("settled");
     expect(coordinator.prepareInput("token-2")?.batch?.conversationIds).toEqual(["early"]);
   });
 
@@ -113,7 +113,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "cut", 1), "reply-owed", true);
     coordinator.receive(inbound("peer", "later", 1), "reply-owed");
     coordinator.markPushed("token-2");
-    coordinator.settle("token-1");
+    coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toHaveLength(2);
     const root = coordinator.adoptPushedRoot("token-2", "root-F");
@@ -121,7 +121,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     expect(coordinator.deliveryEnvelopesForTurn("root-F")).toEqual(root!.items.map(item => item.envelope));
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toHaveLength(2);
-    expect(coordinator.settle("root-F")).toMatchObject({ kind: "settled", batch: { turnToken: "root-F" } });
+    expect(coordinator.settle("root-F", { kind: "abandoned", reason: "test_cleanup" })).toMatchObject({ kind: "settled", batch: { turnToken: "root-F" } });
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
   });
@@ -138,10 +138,10 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "after", 1), "reply-owed");
     coordinator.markPushed("token-2");
     coordinator.adoptPushedRoot("token-2", "root-F");
-    expect(coordinator.settle("root-F").kind).toBe("settled");
+    expect(coordinator.settle("root-F", { kind: "abandoned", reason: "test_cleanup" }).kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toHaveLength(2);
-    expect(coordinator.settle("token-1").kind).toBe("settled");
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" }).kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
   });
@@ -156,8 +156,8 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "cut", 1), "reply-owed", true);
     coordinator.markPushed("token-2");
     coordinator.adoptPushedRoot("token-2", "root-F");
-    expect(coordinator.settle("token-1")).toMatchObject({ kind: "settled", batch: { conversationIds: ["ordinary"] } });
-    expect(coordinator.settle("root-F")).toMatchObject({ kind: "settled", batch: { conversationIds: ["cut"] } });
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" })).toMatchObject({ kind: "settled", batch: { conversationIds: ["ordinary"] } });
+    expect(coordinator.settle("root-F", { kind: "abandoned", reason: "test_cleanup" })).toMatchObject({ kind: "settled", batch: { conversationIds: ["cut"] } });
   });
 
   it("drains a priority lease and ordinary peer work in arrival order after T retires", () => {
@@ -169,7 +169,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "T", 1), "reply-owed");
     coordinator.receive(inbound("peer", "early", 1), "reply-owed", true);
     coordinator.receive(inbound("peer", "ordinary", 1), "reply-owed");
-    coordinator.settle("token-1");
+    coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" });
     expect(coordinator.closeAndDrain().map(batch => batch.conversationIds)).toEqual([["early"], ["ordinary"]]);
   });
 
@@ -249,7 +249,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "same-cid", 2), "reply-owed");
     expect(dispatched).toEqual([{ token: "token-1", cids: ["same-cid"] }]);
 
-    const first = coordinator.settle("token-1");
+    const first = coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" });
     expect(first).toMatchObject({
       kind: "settled",
       batch: { conversationIds: ["same-cid"] },
@@ -274,7 +274,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     });
 
     coordinator.receive(inbound("peer", "cid", 1), "reply-owed");
-    const first = coordinator.settle("token-1");
+    const first = coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" });
     expect(first.kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     coordinator.receive(inbound("peer", "cid", 2), "reply-owed");
@@ -282,13 +282,13 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer", "cid", 3), "reply-owed");
     expect(dispatched).toEqual(["token-1", "token-2"]);
 
-    expect(coordinator.settle("token-1")).toEqual({
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" })).toEqual({
       kind: "stale",
       turnToken: "token-1",
     });
     expect(dispatched).toEqual(["token-1", "token-2"]);
 
-    const second = coordinator.settle("token-2");
+    const second = coordinator.settle("token-2", { kind: "abandoned", reason: "test_cleanup" });
     expect(second.kind).toBe("settled");
     coordinator.dispatchNextForPeer("peer");
     expect(dispatched).toEqual(["token-1", "token-2", "token-3"]);
@@ -320,7 +320,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
       { peer: "peer-b", cids: ["b2"] },
     ]);
     expect(coordinator.closeAndDrain()).toEqual([]);
-    expect(coordinator.settle("token-1")).toEqual({
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" })).toEqual({
       kind: "stale",
       turnToken: "token-1",
     });
@@ -345,19 +345,17 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer-b", "cid-b1", 1), "reply-owed");
     expect(dispatched).toEqual(["token-1", "token-2"]);
 
-    const retired: Envelope[] = [];
-    expect(coordinator.freezeForWatchdogFailStop("token-1", (envelopes) => retired.push(...envelopes))).toEqual({
+    expect(coordinator.freezeForWatchdogFailStop("token-1")).toEqual({
       droppedDispatched: 1,
       droppedPending: 1,
     });
-    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["cid-b1", "cid-a2"]);
     // The terminal result can still settle the exact started generation, but
     // no peer becomes dispatchable and no successor is created afterwards.
-    expect(coordinator.settle("token-1")).toMatchObject({
+    expect(coordinator.settle("token-1", { kind: "abandoned", reason: "test_cleanup" })).toMatchObject({
       kind: "settled",
       batch: { conversationIds: ["cid-a1"] },
     });
-    expect(coordinator.settle("token-2")).toEqual({
+    expect(coordinator.settle("token-2", { kind: "abandoned", reason: "test_cleanup" })).toEqual({
       kind: "stale",
       turnToken: "token-2",
     });
@@ -386,7 +384,7 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
       droppedPending: 2,
     });
     for (const token of ["token-1", "token-2"]) {
-      expect(coordinator.settle(token)).toEqual({ kind: "stale", turnToken: token });
+      expect(coordinator.settle(token, { kind: "abandoned", reason: "test_cleanup" })).toEqual({ kind: "stale", turnToken: token });
     }
     coordinator.dispatchNextForPeer("peer-a");
     coordinator.dispatchNextForPeer("peer-b");
@@ -405,7 +403,7 @@ describe("recovery ownership", () => {
     const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("first"), "reply-owed");
     coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator-turn", () => true)!;
     expect(lease.envelopes).toHaveLength(1); lease.commit();
     const prepared = coordinator.prepareInput("T2")!;
@@ -418,7 +416,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator", () => true)!;
     lease.rollback();
     expect(coordinator.prepareInput("T2")?.batch?.conversationIds).toEqual(["recover", "other"]);
@@ -429,7 +427,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("A"), "reply-owed"); coordinator.receive(message("B"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const a = coordinator.claimRecovery("A", "peer.agent", "operator", () => true)!;
     const b = coordinator.claimRecovery("B", "peer.agent", "operator", () => true)!;
     for (const lease of reverse ? [b, a] : [a, b]) lease.rollback();
@@ -447,7 +445,7 @@ describe("recovery ownership", () => {
     const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
     expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);
     lease.rollback(); lease.rollback(); expect(coordinator.unreadCount("T1")).toBe(2);
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     expect(coordinator.prepareInput("T2")?.batch?.items[0]?.envelope).toBe(first);
   });
 });
@@ -474,7 +472,7 @@ describe("shared admission handoff", () => {
     expect(() => coordinator.receive(foreignEnvelope, "reply-owed", false, foreign.reservation)).toThrow("reservation is missing, foreign, or released");
     foreignAdmission.release(foreign.reservation, "retired");
 
-    coordinator.handoff(batches[0]!.turnToken);
+    coordinator.handoff(batches[0]!.turnToken, "prompt_hook");
     expect(admission.counts().total).toBe(0);
     const next = inbound("peer", "second", 2);
     expect(admission.admit(next).kind).toBe("reserved");

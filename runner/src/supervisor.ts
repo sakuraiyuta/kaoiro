@@ -23,6 +23,8 @@ import type {
   WirePersona,
   WrapperConfig,
 } from "@kaoiro/protocol";
+import { RESET_TERMINATION_GRACE_MS } from "@kaoiro/protocol";
+export { RESET_TERMINATION_GRACE_MS } from "@kaoiro/protocol";
 import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { BehaviourRelay } from "./behaviour-settings.js";
@@ -57,12 +59,6 @@ export const MAX_RESTARTS = 5;
  *  after the window started resets the count, so the cap catches a tight
  *  crash-loop but not a few crashes spread across a long-running agent (#73). */
 export const RESTART_WINDOW_MS = 60_000;
-
-/** A reset must not wait forever for the wrapper it is replacing. Give the
- *  wrapper one normal-termination grace period before escalating to SIGKILL;
- *  a second missed exit is reported as a reset failure rather than silently
- *  leaving the old process and a pending server lock behind (#248). */
-export const RESET_TERMINATION_GRACE_MS = 5_000;
 
 /** agent_id rides a temp config filename and the spawn_result, so its charset
  *  is restricted exactly like the server's AgentId guard (no path separators). */

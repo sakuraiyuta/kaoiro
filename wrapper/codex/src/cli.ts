@@ -23,7 +23,7 @@ import {
   createDeliveryAcknowledgementRuntime,
   DeliveryStageReporter,
   IaSidecar,
-  InterAgentAdmission,
+  InterAgentInputLifecycle,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   PermissionBroker,
@@ -44,7 +44,9 @@ import {
   validateRequestSessionResetInput,
 } from "@kaoiro/agent-common";
 import type {
+  BatchDisposition,
   Envelope,
+  InputWitness,
   InterAgentAdmissionReservation,
   InboundReplyMode,
   KaoiroState,
@@ -58,6 +60,7 @@ import {
   formatTurnWatchdogLine,
   parseCliArgs,
   ServerLink,
+  WrapperShutdown,
 } from "@kaoiro/wrapper-core";
 import {
   CODEX_APPROVAL_TIMEOUT_MS,
@@ -321,7 +324,22 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   let pendingPermissionSelection: PermissionSelection | undefined;
   let pendingPermissionSync: PermissionSyncMessage | undefined;
   let permissionSyncSupported = false;
-  const interAgentAdmission = new InterAgentAdmission(config.inter_agent_backlog_max_items);
+  let deliveryIdentity = (): { incarnation: string; generation: string } | null => null;
+  let deliveryAcknowledgementRuntime!: ReturnType<typeof createDeliveryAcknowledgementRuntime>;
+  let deliveryStages!: DeliveryStageReporter;
+  const inputLifecycle = new InterAgentInputLifecycle({
+    ...(config.inter_agent_backlog_max_items === undefined ? {} : { maxPendingItems: config.inter_agent_backlog_max_items }),
+    currentIdentity: () => deliveryIdentity(),
+    captureDelivery: envelope => deliveryAcknowledgementRuntime.captureDelivery(envelope),
+    captureStage: envelope => deliveryStages.capture(envelope),
+    acknowledgeDelivery: envelope => deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope),
+    retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
+    retireDelivery: envelope => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+    sendNotice: (notice, signal) => interAgent?.sendInternalNotice(notice, signal) ?? Promise.resolve("unknown"),
+    settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
+    log: line => writeRedactedStderr(line),
+    onInvariantViolation: event => writeRedactedStderr(`[kaoiro][input-lifecycle] ${JSON.stringify(event)}\n`),
+  });
 
   const retainNewerPermissionSelection = (
     current: PermissionSelection | undefined,
@@ -334,12 +352,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   /** Production owner of Codex same-peer batching. Tests instantiate this
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
-    admission: interAgentAdmission,
+    inputLifecycle,
     maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     canDispatchPeer: peer => !interAgent?.hasPendingSteerPeer(peer),
     createPlaceholder: (id, arrival) => host.createInterAgentPlaceholder(id, arrival),
     removePlaceholder: id => host.removeInterAgentPlaceholder(id),
-    retireDiscarded: envelopes => { link?.retireInterAgentDeliveries?.(envelopes); },
     onFallbackDispatchFailure: batch => {
       const item = batch.items[0];
       writeRedactedStderr(
@@ -392,7 +409,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           batch.turnToken,
         ).catch((err: unknown) => {
           writeRedactedStderr(`inter-agent inject failed: ${String(err)}\n`);
-          const settled = interAgentTurns.settle(batch.turnToken);
+          const settled = interAgentTurns.settle(batch.turnToken, { kind: "uncertain", reason: "host_send_outcome_unknown", ack: "hold" });
           const classified = classifyInterAgentError({ detail: String(err) });
           for (const notice of interAgent?.resolveTurnEnd(
             batch.turnToken,
@@ -408,6 +425,16 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       );
     },
   });
+  const inputOutcomes = new Map<string, "observed" | "abandoned" | "uncertain">();
+  const settlementDisposition = (turnToken: string, definitelyUnstarted = false): BatchDisposition => {
+    const outcome = inputOutcomes.get(turnToken);
+    inputOutcomes.delete(turnToken);
+    if (outcome === "observed") return { kind: "already_observed", ownerToken: turnToken };
+    if (outcome === "abandoned" || definitelyUnstarted) {
+      return { kind: "abandoned", reason: outcome === "abandoned" ? "host_proved_unstarted" : "native_turn_never_started" };
+    }
+    return { kind: "uncertain", reason: outcome === "uncertain" ? "native_input_outcome_unknown" : "turn_ended_without_input_witness", ack: "hold" };
+  };
 
   const lifecycleRange = (
     turnToken: string | undefined,
@@ -590,7 +617,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : Promise.reject(new Error("work_control_unavailable")),
   };
   interAgent = new InterAgentTool({
-    admission: interAgentAdmission,
+    inputLifecycle,
     workTools,
     noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     replyBasisMode: () => replyBasisMode,
@@ -600,7 +627,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     returnInput: (envelope, mode, reservation) => interAgentTurns.receive(envelope, mode, reservation),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
-      for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
     onTicketPrepared: (ticket, _turnToken, envelopes) => { steerTickets.set(ticket, envelopes); },
@@ -620,8 +646,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
-    sendInterAgent: (envelope, generation) =>
-      link?.sendInterAgent(envelope, generation) ??
+    sendInterAgent: (envelope, generation, signal) =>
+      link?.sendInterAgent(envelope, generation, signal === undefined ? {} : { signal }) ??
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
@@ -687,12 +713,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : {}),
   });
 
-  const deliveryIdentity = () => {
+  deliveryIdentity = () => {
     if (link === null || typeof link.deliveryIncarnation !== "function" || typeof link.deliveryGeneration !== "function") return null;
     const incarnation = link.deliveryIncarnation();
     return incarnation === null ? null : { incarnation, generation: link.deliveryGeneration() };
   };
-  const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
+  deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
     (deliverySeq) => {
       const turnToken = interAgentTurns.turnTokenForDeliverySequence(deliverySeq);
       const range = lifecycleRange(turnToken);
@@ -708,7 +734,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     deliveryIdentity,
   );
 
-  const deliveryStages = new DeliveryStageReporter({
+  deliveryStages = new DeliveryStageReporter({
     send: report => link?.reportDeliveryStage(report),
     identity: deliveryIdentity,
     turns: interAgentTurns,
@@ -768,13 +794,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         if (response.kind !== "A") return;
         responseValid = true;
         deliveryStages.steerSubmitted(ownerToken, [envelope], "turn_steer_accepted");
-        deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
         maybeActivate();
       },
       onItem: (ownerToken: string): void => {
         itemMatched = true;
         deliveryStages.steerSubmitted(ownerToken, [envelope], "turn_steer_item_observed");
-        deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
         maybeActivate();
       },
       onTerminal: (): void => {
@@ -793,18 +817,28 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           return;
         }
         const corroborated = response.kind === "A" && observed && !conflict;
-        interAgentTurns.settleSteerReservation(batchId, false, corroborated ? "handed_off" : "retired");
-        if (corroborated) deliveryStages.steerSettled([envelope]);
-        else {
+        if (corroborated) {
+          interAgentTurns.settleSteerReservation(batchId, false, {
+            kind: "observed",
+            boundary: "turn_steer_corroborated",
+            ownerToken,
+          });
+          deliveryStages.steerSettled([envelope]);
+        } else {
           const reason = conflict ? "turn_steer_item_conflict"
             : response.kind === "A" ? "turn_steer_not_observed"
             : observed ? "turn_steer_no_valid_response"
             : response.kind === "V" ? "turn_steer_invalid_response"
             : response.kind === "C" && end === "X" ? "turn_steer_disconnected" : "turn_steer_timeout";
-          if (responseValid || itemMatched || writeState === "writing" || writeState === "written") {
+          const hadUncertaintyBoundary = responseValid || itemMatched || writeState === "writing" || writeState === "written";
+          interAgentTurns.settleSteerReservation(batchId, false, {
+            kind: "uncertain",
+            reason,
+            ack: hadUncertaintyBoundary ? "existing_boundary" : "hold",
+          });
+          if (hadUncertaintyBoundary) {
             deliveryStages.steerUnknown([envelope], reason, responseValid ? "turn_steer_accepted"
               : itemMatched ? "turn_steer_item_observed" : "turn_steer_write_uncertain");
-            deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
           }
         }
         for (const notice of interAgent.settleSteerInjection(ownerToken, sequence, corroborated ? "corroborated" : "uncertain")) {
@@ -968,11 +1002,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       handleInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
-          admission: interAgentAdmission,
+          inputLifecycle,
           recordInboundIa: envelope => {
-            deliveryAcknowledgementRuntime.captureDelivery(envelope);
-            interAgentAdmission.captureDeliveryIdentity(envelope, deliveryIdentity());
-            deliveryStages.capture(envelope);
             recordInboundIa(envelope);
           },
           reportQueued: envelope => deliveryStages.queued(envelope),
@@ -1072,7 +1103,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           conversationIds: prepared.batch.conversationIds,
         };
       }
-      const settled = interAgentTurns.settle(turnToken);
+      const settled = interAgentTurns.settle(turnToken, { kind: "abandoned", reason: "terminal_reclassified_empty" });
       lifecycleRanges.delete(turnToken);
       if (settled !== undefined && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(settled.peer);
       return null;
@@ -1103,7 +1134,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       turnWatchdog.progress(turnToken);
     },
     onInputHandedOff: ({ turnToken, handoff }) => {
-      interAgentTurns.handoff(turnToken);
+      inputOutcomes.set(turnToken, "observed");
+      interAgentTurns.handoff(turnToken, handoff, turnToken);
       deliveryStages.submitted(turnToken, handoff);
       interAgentTurns.retireSteeredBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
     },
@@ -1152,10 +1184,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         ) ?? []) {
           interAgent?.sendInternalNotice(envelope);
         }
-        const cancelled = interAgentTurns.settle(turnToken);
-        if (cancelled !== undefined) {
-          interAgentTurns.retireEnvelopes(cancelled.items.map(item => item.envelope));
-        }
+        const cancelled = interAgentTurns.settle(turnToken, { kind: "abandoned", reason: "watchdog_unstarted" });
         return;
       }
       const classified = error ? classifyInterAgentError(error) : undefined;
@@ -1171,7 +1200,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       // The coordinator releases its exact production batch only after the
       // pending CIDs above have resolved; a later same-CID batch can then be
       // dispatched without overwriting its predecessor's pending record.
-      const settled = interAgentTurns.settle(turnToken);
+      const settled = interAgentTurns.settle(turnToken, settlementDisposition(turnToken, cancellation?.started === false));
       if (settled !== undefined) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
@@ -1181,7 +1210,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+      const preservedHandles = interAgentTurns.inFlightHandles(turnToken);
+      void inputLifecycle.close({ preserveInFlight: preservedHandles, reason: "watchdog_fail_stop" });
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
       writeRedactedStderr(
         `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; discarded unstarted ` +
@@ -1324,11 +1355,55 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // this handler also suppresses Node's default immediate-exit behavior, so
   // the process naturally stays alive until close()'s own abort() settles
   // the child -- no explicit process.exit() here.
+  let hostRun: Promise<void> | undefined;
+  const waitForHostRunOrDeadline = (signal: AbortSignal): Promise<void> => {
+    const running = hostRun;
+    if (running === undefined || signal.aborted) return Promise.resolve();
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      signal.addEventListener("abort", finish, { once: true });
+      void running.then(finish, finish);
+      if (signal.aborted) finish();
+    });
+  };
+  const shutdown = new WrapperShutdown({
+    begin: (_reason, receiptDeadline) => {
+      replayer.close();
+      const activeToken = host.activeInterAgentTurnToken() ?? undefined;
+      const preservedHandles = interAgentTurns.inFlightHandles(activeToken);
+      const closing = inputLifecycle.close({
+        preserveInFlight: preservedHandles,
+        reason: "wrapper_closed",
+        finalizeBy: receiptDeadline,
+      });
+      interAgentTurns.freezeForWatchdogFailStop(activeToken);
+      turnWatchdog.dispose();
+      permissionBroker?.close();
+      questionBroker?.close();
+      return closing;
+    },
+    flushRetirements: signal => link?.flushInterAgentRetirements?.({ signal }) ?? Promise.resolve("complete"),
+    closeRetirementRequests: () => {
+      inputLifecycle.stopRetirementRequests();
+      link?.stopInterAgentRetirementRequests?.();
+    },
+    reportDisconnectIntent: (reason, options) => link?.reportDisconnectIntent?.(reason, options) ?? Promise.resolve(false),
+    closeLink: async signal => {
+      await waitForHostRunOrDeadline(signal);
+      link?.close();
+    },
+  });
   const onSigterm = (): void => {
+    void shutdown.start("stop");
     host.close();
   };
   process.on("SIGTERM", onSigterm);
-
   try {
     await prepareStartup({
       config,
@@ -1344,7 +1419,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // on startup and on every later reconnect. See the Claude CLI for the
     // rationale; the two wrappers share the coordinator.
     replayer.markReady();
-    await host.run(prompt);
+    hostRun = host.run(prompt);
+    await hostRun;
   } catch (error) {
     disconnectReason = "crash";
     throw error;
@@ -1355,20 +1431,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // once in the same process, each closing over an already-finished host
     // (issue #379's listener-accumulation lesson).
     process.off("SIGTERM", onSigterm);
-    replayer.close();
-    interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-    try {
-      await link?.flushInterAgentRetirements?.();
-    } finally {
-      turnWatchdog.dispose();
-      permissionBroker?.close();
-      questionBroker?.close();
-      try {
-        await link?.reportDisconnectIntent?.(disconnectReason);
-      } finally {
-        link?.close();
-      }
-    }
+    await shutdown.start(disconnectReason);
   }
 }
 

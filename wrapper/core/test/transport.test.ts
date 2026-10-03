@@ -17,7 +17,7 @@ const mock = vi.hoisted(() => ({
   connected: true,
   channelState: "joined",
   handlers: new Map<string, ((payload: unknown) => void)[]>(),
-  lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
+  lastPush: null as { event: string; payload: unknown; timeout?: number; receivers: Map<string, (payload: unknown) => void>; trigger: (status: string, payload: unknown) => void; triggered: string[] } | null,
   // Every push in order — `replay_ia` is chunked into several (M4), so a
   // test asserting the split cannot look at `lastPush` alone.
   pushes: [] as { event: string; payload: unknown }[],
@@ -30,8 +30,9 @@ const mock = vi.hoisted(() => ({
   joinReceivers: new Map<string, (payload: unknown) => void>(),
 }));
 
-vi.mock("phoenix", () => {
+  vi.mock("phoenix", () => {
   class Channel {
+    readonly timeout = 10_000;
     get state() { return mock.channelState; }
     on(event: string, cb: (payload: unknown) => void): void {
       const bound = mock.handlers.get(event);
@@ -52,20 +53,34 @@ vi.mock("phoenix", () => {
       };
       return chain;
     }
-    push(event: string, payload: unknown): {
+    push(event: string, payload: unknown, timeout?: number): {
       receive: (
         status: string,
         cb: (payload: unknown) => void,
       ) => ReturnType<Channel["push"]>;
+      trigger: (status: string, payload: unknown) => void;
     } {
       const receivers: PushReceivers = new Map();
-      mock.lastPush = { event, payload, receivers };
+      const triggered: string[] = [];
+      const trigger = (status: string, response: unknown): void => {
+        triggered.push(status);
+        receivers.get(status)?.(response);
+      };
+      mock.lastPush = {
+        event,
+        payload,
+        ...(timeout === undefined ? {} : { timeout }),
+        receivers,
+        triggered,
+        trigger,
+      };
       mock.pushes.push({ event, payload });
       const chain = {
         receive(status: string, cb: (payload: unknown) => void) {
           receivers.set(status, cb);
           return chain;
         },
+        trigger,
       };
       return chain;
     }
@@ -2018,6 +2033,40 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     mock.lastPush!.receivers.get("error")!({ reason: "stale_disconnect_owner" });
     await expect(rejected).resolves.toBe(false);
   });
+
+  it("bounds disconnect intent by Phoenix timeout and skips an expired attempt", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const accepted = link.reportDisconnectIntent("stop", { timeoutMs: 123 });
+    expect(mock.lastPush).toMatchObject({ event: "disconnect_intent", timeout: 123 });
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(accepted).resolves.toBe(true);
+
+    const controller = new AbortController();
+    controller.abort();
+    const pushesBeforeExpired = mock.pushes.length;
+    await expect(link.reportDisconnectIntent("crash", { signal: controller.signal })).resolves.toBe(false);
+    expect(mock.pushes).toHaveLength(pushesBeforeExpired);
+  });
+
+  it("cancels an in-flight delivery resync at the retirement cutoff", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const controller = new AbortController();
+    const request = {
+      request_id: "resync-1",
+      cutoff: 1,
+      missing_ranges: [[1, 1]] as [number, number][],
+      reason: "interrupted" as const,
+    };
+    const pending = link.requestInterAgentDeliveryResync(request, controller.signal);
+    const push = mock.lastPush!;
+
+    controller.abort();
+
+    await expect(pending).resolves.toBeNull();
+    expect(push.triggered).toEqual(["timeout"]);
+    push.receivers.get("ok")?.({ request_id: "resync-1", delivery: { issued_seq: 1, acked_seq: 1 }, skipped_ranges: [[1, 1]] });
+    await expect(pending).resolves.toBeNull();
+  });
 });
 
 describe("ServerLink — requestDirectory の users projection (issue #197 段階2)", () => {
@@ -2657,6 +2706,24 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     mock.lastPush?.receivers.get("timeout")?.({});
 
     await expect(pending).resolves.toEqual({ kind: "unknown", reason: "timeout" });
+  });
+
+  it("shutdown cancellation forces the Phoenix timeout leg and ignores a late acceptance", async () => {
+    const acks: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onInterAgentAck: (_envelope, stamp) => acks.push(stamp),
+    });
+    const controller = new AbortController();
+    const pending = link.sendInterAgent(interAgentEnvelope(), undefined, { signal: controller.signal });
+    const push = mock.lastPush!;
+
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ kind: "unknown", reason: "shutdown_cancelled" });
+    expect(push.triggered).toEqual(["timeout"]);
+    push.receivers.get("ok")?.({ ingress_stamp: [9, 5] });
+    expect(acks).toEqual([]);
   });
 
   it("reason の無い / 壊れた error 応答は unknown に正規化する", async () => {

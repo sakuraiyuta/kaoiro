@@ -45,6 +45,8 @@ import {
   type InterAgentAdmissionReservation,
   type InterAgentReleaseReason,
 } from "./inter_agent_admission.js";
+import { InterAgentInputLifecycle } from "./inter_agent_input_lifecycle.js";
+import type { IngressLease, InterAgentInputLifecyclePort } from "./inter_agent_input_lifecycle.js";
 import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
@@ -876,7 +878,8 @@ export interface InterAgentToolOptions {
   onInputHandoff?: (envelopes: readonly Envelope[], turnToken: string) => void;
   onTicketPrepared?: (ticket: string, turnToken: string, envelopes: readonly Envelope[]) => void;
   onTicketUsed?: (ticket: string, turnToken: string) => void;
-  returnInput?: (envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation) => void;
+  returnInput?: (envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation) => boolean;
+  inputLifecycle?: InterAgentInputLifecyclePort;
   admission?: InterAgentAdmission;
   onReplyDiagnostic?: (event: Record<string, unknown>) => void;
   claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; recoverySource?: "handoff_queue" | "retained_fold"; commit: () => void; rollback: () => void } | undefined;
@@ -896,7 +899,7 @@ export interface InterAgentToolOptions {
    *  server took the message — the pre-ADR-0051 behaviour, kept only so
    *  unit tests that exercise payload construction need not model a
    *  transport. */
-  sendInterAgent?: (envelope: Envelope, replyBasisGeneration?: number) => Promise<InterAgentAcceptance>;
+  sendInterAgent?: (envelope: Envelope, replyBasisGeneration?: number, signal?: AbortSignal) => Promise<InterAgentAcceptance>;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
@@ -956,7 +959,7 @@ type InvokeLockOutcome =
  */
 export class InterAgentTool {
   readonly replyBasis: ReplyBasis;
-  readonly admission: InterAgentAdmission;
+  readonly inputLifecycle: InterAgentInputLifecyclePort;
   readonly #handoffUnreadAdjustment = new WeakMap<InterAgentToolResult, number>();
   readonly #preparedInputs = new Map<string, readonly Envelope[]>();
 
@@ -1065,9 +1068,10 @@ export class InterAgentTool {
   constructor(options: InterAgentToolOptions) {
     this.replyBasis = new ReplyBasis(options.replyTicketClock);
     this.#options = options;
-    this.admission = options.admission ?? new InterAgentAdmission(
-      options.config.inter_agent_backlog_max_items ?? DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
-    );
+    this.inputLifecycle = options.inputLifecycle ?? new InterAgentInputLifecycle({
+      maxPendingItems: options.config.inter_agent_backlog_max_items ?? DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+      ...(options.admission === undefined ? {} : { admission: options.admission }),
+    });
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
     this.#nowMs = options.nowMs ?? Date.now;
@@ -1340,13 +1344,22 @@ export class InterAgentTool {
    *  split-brain that also defeats the local AC10 guard. The gate is short
    *  (until that ONE send's ack lands), never the full
    *  `wait_for_response` window. */
-  async receiveInbound(envelope: Envelope): Promise<InboundDisposition> {
+  async receiveInbound(envelope: Envelope, providedLease?: IngressLease): Promise<InboundDisposition> {
+    const lease = providedLease ?? this.inputLifecycle.beginIngress(envelope);
+    try {
+      return await this.#receiveInbound(envelope, lease);
+    } finally {
+      if (providedLease === undefined) this.inputLifecycle.finishIngress(lease);
+    }
+  }
+
+  async #receiveInbound(envelope: Envelope, lease: IngressLease): Promise<InboundDisposition> {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (
       typeof payload.conversation_id !== "string" ||
       typeof payload.turn_number !== "number"
     ) {
-      const reservation = this.admission.admitFallback(envelope);
+      const reservation = this.inputLifecycle.reserve(lease, { kind: "fallback" });
       if (reservation.kind === "duplicate_loss") {
         return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
       }
@@ -1357,20 +1370,20 @@ export class InterAgentTool {
             inject: false,
             mode: "reply-owed",
             overloaded: true,
-            ...(reservation.lossId === undefined ? {} : { lossId: reservation.lossId }),
-            ...(reservation.retirementAttemptCount === undefined ? {} : { retirementAttemptCount: reservation.retirementAttemptCount }),
-          };
+          ...(reservation.kind !== "refused" || reservation.lossId === undefined ? {} : { lossId: reservation.lossId }),
+          ...(reservation.kind !== "refused" || reservation.retirementAttemptCount === undefined ? {} : { retirementAttemptCount: reservation.retirementAttemptCount }),
+        };
     }
 
     const lossId = envelope.agent_id === "server" && payload.turn_number === 0 ? payload.loss_id : undefined;
-    if (typeof lossId === "string" && this.admission.isLossDuplicate(lossId)) {
+    if (typeof lossId === "string" && this.inputLifecycle.isLossDuplicate(lossId)) {
       return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
     }
     const conversationId = payload.conversation_id;
     const turnNumber = payload.turn_number;
     const doneGate = this.#pendingDoneAcks.get(conversationId);
     if (doneGate) await doneGate;
-    if (typeof lossId === "string" && this.admission.isLossDuplicate(lossId)) {
+    if (typeof lossId === "string" && this.inputLifecycle.isLossDuplicate(lossId)) {
       return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
     }
     const track = this.#getTrack(conversationId);
@@ -1537,15 +1550,17 @@ export class InterAgentTool {
             this.#options.noticeAttributionMode !== undefined)
     );
     if (waiter && matchesWaiter) {
-      const admission = this.admission.admit(envelope, {
-        waiter: true,
+      const admission = this.inputLifecycle.reserve(lease, {
+        kind: "waiter",
         ...(typeof lossId === "string" ? { lossId } : {}),
       });
       if (admission.kind === "duplicate_loss") {
         return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
       }
       if (admission.kind === "refused") {
-        return { consumed: false, inject: false, mode: "reply-owed", overloaded: true };
+        return { consumed: false, inject: false, mode: "reply-owed", overloaded: true,
+          ...(admission.lossId === undefined ? {} : { lossId: admission.lossId }),
+          ...(admission.retirementAttemptCount === undefined ? {} : { retirementAttemptCount: admission.retirementAttemptCount }) };
       }
       this.#replyWaiters.delete(conversationId);
       clearTimeout(waiter.timeout);
@@ -1563,25 +1578,24 @@ export class InterAgentTool {
     // reply is owed" — cli.ts must tell the two apart in its own logging
     // (mode is always returned alongside, so it can).
     if (mode === "terminal") {
-      if (typeof lossId === "string") this.admission.completeLoss(lossId);
+      this.inputLifecycle.finishInline(lease, "terminal_skip");
       return { consumed: false, inject: false, mode };
     }
 
-    const admission = this.admission.admit(envelope, typeof lossId === "string" ? { lossId } : {});
+    const admission = typeof lossId === "string"
+      ? this.inputLifecycle.reserve(lease, { kind: "loss", lossId })
+      : this.inputLifecycle.reserve(lease, { kind: "ordinary" });
     if (admission.kind === "duplicate_loss") {
       return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
     }
     if (admission.kind === "refused") {
-      const retirementAttemptCount = typeof lossId === "string"
-        ? this.admission.recordRefusedLoss()
-        : undefined;
       return {
         consumed: false,
         inject: false,
         mode: "reply-owed",
         overloaded: true,
-        ...(typeof lossId === "string" ? { lossId } : {}),
-        ...(retirementAttemptCount === undefined ? {} : { retirementAttemptCount }),
+        ...(admission.lossId === undefined ? {} : { lossId: admission.lossId }),
+        ...(admission.retirementAttemptCount === undefined ? {} : { retirementAttemptCount: admission.retirementAttemptCount }),
         ...(!payload.error && typeof lossId !== "string" ? { notice: this.#overloadedNotice(envelope, track, payload) } : {}),
       };
     }
@@ -1840,10 +1854,12 @@ export class InterAgentTool {
     return result;
   }
 
-  sendInternalNotice(envelope: Envelope): Promise<"accepted" | "rejected" | "unknown"> {
+  sendInternalNotice(envelope: Envelope, signal?: AbortSignal): Promise<"accepted" | "rejected" | "unknown"> {
     return (async () => {
       try {
-        const waited = this.#options.replyBasisMode?.() === "pending" ? await this.#options.waitReplyBasisMode?.() : undefined;
+        if (signal?.aborted) return "unknown";
+        const waited = this.#options.replyBasisMode?.() === "pending" ? await this.#options.waitReplyBasisMode?.(signal) : undefined;
+        if (signal?.aborted) return "unknown";
         if (waited === "closed" || waited === "pending") {
           this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id,
             turn_number: envelope.payload.turn_number, disposition: "rejected", reason: `reply_basis_${waited}`, send_not_attempted: true });
@@ -1855,7 +1871,7 @@ export class InterAgentTool {
         const payload = { ...envelope.payload };
         if (mode === "v1") payload.notice_type = (payload.error as { code?: string } | undefined)?.code === "stale_turn" ? "stale_delivery" : "turn_failure";
         else delete payload.notice_type;
-        const result = await this.#dispatch({ ...envelope, payload }, generation);
+        const result = await this.#dispatch({ ...envelope, payload }, generation, signal);
         if (result.kind !== "accepted") {
           this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: payload.conversation_id, turn_number: payload.turn_number, disposition: result.kind, reason: result.reason });
           return result.kind;
@@ -2671,50 +2687,84 @@ export class InterAgentTool {
       };
       const peerError = (JSON.parse(result.content[0]!.text) as { peer_error: Record<string, unknown> }).peer_error;
       const fields = { sent: sentAck, peer_error: peerError, ...(isStatusNotice ? { status_notice: inbound } : {}), ...(ordinaryPeerInput(inbound) ? { peer_error_envelope: inbound } : {}) };
-      return captured
-        ? this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound])
-        : { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
+      return this.#inputResult(captured?.origin, conversationId, args.to, fields, [inbound]);
     }
 
     const fields = isStatusNotice ? { sent: sentAck, status_notice: inbound } : { sent: sentAck, reply: inbound };
-    if (captured) return this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound]);
-    return { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
+    return this.#inputResult(captured?.origin, conversationId, args.to, fields, [inbound]);
   }
 
-  #inputResult(origin: ReplyOrigin, cid: string, peer: string, fields: Record<string, unknown>, envelopes: readonly Envelope[], lease?: { commit: () => void; rollback: () => void }): InterAgentToolResult {
+  #inputResult(origin: ReplyOrigin | undefined, cid: string, peer: string, fields: Record<string, unknown>, envelopes: readonly Envelope[], lease?: { commit: () => void; rollback: () => void }): InterAgentToolResult {
     let returned = false;
+    const inputEntries = envelopes.map(envelope => ({
+      envelope,
+      ...(this.inputLifecycle.reservationFor(envelope) === undefined ? {} : {
+        handle: this.inputLifecycle.reservationFor(envelope)!,
+      }),
+    }));
     const release = () => {
-      if (returned) return; returned = true;
+      if (returned) return;
+      returned = true;
       if (lease) lease.rollback();
-      else for (const envelope of envelopes) {
-        const reservation = this.admission.reservationFor(envelope);
-        if (this.#options.returnInput) this.#options.returnInput(envelope, this.queuedInboundMode(envelope, "reply-owed"), reservation);
-        else if (reservation !== undefined) this.admission.release(reservation, "retired");
+      else {
+        for (const entry of inputEntries) {
+          if (entry.handle === undefined) continue;
+          let restored = false;
+          try {
+            restored = this.#options.returnInput?.(
+              entry.envelope,
+              this.queuedInboundMode(entry.envelope, "reply-owed"),
+              entry.handle,
+            ) === true;
+          } catch {
+            restored = false;
+          }
+          if (!restored) this.inputLifecycle.finish(entry.handle, {
+            kind: "abandoned",
+            reason: "tool_result_not_returned",
+          });
+        }
       }
     };
     const ordinary = envelopes.filter(ordinaryPeerInput);
-    const basis = this.#conversations.get(cid)?.closed ? 0 : Math.max(0, ...ordinary.map(e => (e.payload as unknown as InterAgentMessagePayload).turn_number));
+    const basis = origin && !this.#conversations.get(cid)?.closed
+      ? Math.max(0, ...ordinary.map(e => (e.payload as unknown as InterAgentMessagePayload).turn_number))
+      : 0;
     let ticket: ReturnType<ReplyBasis["prepare"]>;
-    try { ticket = basis > 0 ? this.replyBasis.prepare(origin, cid, peer, basis) : undefined; }
+    try { ticket = origin && basis > 0 ? this.replyBasis.prepare(origin, cid, peer, basis) : undefined; }
     catch { release(); return this.#localReplyError("reply_authorization_unavailable"); }
-    if (basis > 0 && !ticket) { release(); return this.#localReplyError("reply_authorization_unavailable"); }
+    if (origin && basis > 0 && !ticket) { release(); return this.#localReplyError("reply_authorization_unavailable"); }
     const result = { ...(fields.error ? { isError: true } : {}), content: [{ type: "text" as const, text: JSON.stringify({ ...fields, ...(ticket ? { reply_authorization: ticket.authorization } : {}) }) }] };
     if (lease) this.#handoffUnreadAdjustment.set(result, envelopes.length);
     const abort = () => { ticket?.discard(); release(); };
-    origin.signal?.addEventListener("abort", abort, { once: true });
-    return bindToolResultHandoff(result, {
-      live: () => !returned && this.replyBasis.live(origin) === undefined && (ticket?.valid() ?? true),
-      commit: () => {
-        origin.signal?.removeEventListener("abort", abort); returned = true;
-        const activated = ticket?.activate(); this.replyBasis.observe(ordinary, origin.token);
-        if (activated && ticket) this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, origin.token, ordinary);
-        if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
-        lease?.commit();
-        if (!lease) for (const envelope of envelopes) this.admission.releaseEnvelope(envelope, "handed_off");
-        this.#options.onInputHandoff?.(envelopes, origin.token);
+    origin?.signal?.addEventListener("abort", abort, { once: true });
+    const resultInput = {
+      entries: inputEntries,
+      ownerToken: origin?.token ?? "inter_agent_tool_result",
+      live: () => !returned && (!origin || this.replyBasis.live(origin) === undefined) && (ticket?.valid() ?? true),
+      returnToInput: () => {
+        if (returned) return false;
+        release();
+        origin?.signal?.removeEventListener("abort", abort);
+        return true;
       },
-      rollback: () => { origin.signal?.removeEventListener("abort", abort); abort(); },
-    });
+      commitContainerTransfer: () => {
+        if (returned) return;
+        returned = true;
+        origin?.signal?.removeEventListener("abort", abort);
+        try {
+          const activated = ticket?.activate();
+          if (origin) this.replyBasis.observe(ordinary, origin.token);
+          if (activated && ticket && origin) this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, origin.token, ordinary);
+          if (origin) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
+          lease?.commit();
+          if (origin) this.#options.onInputHandoff?.(envelopes, origin.token);
+        } catch (error) {
+          this.#options.onReplyDiagnostic?.({ event: "result_companion_failed", detail: String(error).slice(0, 256) });
+        }
+      },
+    };
+    return this.inputLifecycle.bindResult(result, resultInput);
   }
 
   #localReplyError(code: string, guidance?: string): InterAgentToolResult {
@@ -2767,13 +2817,13 @@ export class InterAgentTool {
   /** Pushes through the acceptance-aware sink when one is wired, else falls
    *  back to the fire-and-forget sink and assumes acceptance (see
    *  `sendInterAgent` in the options). */
-  #dispatch(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+  #dispatch(envelope: Envelope, replyBasisGeneration?: number, signal?: AbortSignal): Promise<InterAgentAcceptance> {
     const sink = this.#options.sendInterAgent;
     if (sink === undefined) {
       this.#options.send(envelope);
       return Promise.resolve({ kind: "accepted", stamp: null });
     }
-    return sink(envelope, replyBasisGeneration);
+    return sink(envelope, replyBasisGeneration, signal);
   }
 
   /** Settles a pending `wait_for_response` waiter as "no reply" without

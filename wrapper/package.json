@@ -4,7 +4,7 @@
   "private": true,
   "description": "wrapper 5 パッケージ (core / agent-common / claude-code / codex / antigravity) への fan-out scripts。workspace 非メンバの shim (ADR-0017 / ADR-0032 F1 / ADR-0057 F1)",
   "scripts": {
-    "build": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity run build",
+    "build": "pnpm -r --filter @kaoiro/protocol --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity run build",
     "typecheck": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity run typecheck",
     "test": "pnpm -r --filter @kaoiro/wrapper-core --filter @kaoiro/agent-common --filter @kaoiro/claude-code --filter @kaoiro/codex --filter @kaoiro/antigravity run test",
     "demo": "for f in agent.*.json; do node claude-code/dist/cli.js \"$f\" & done; wait",

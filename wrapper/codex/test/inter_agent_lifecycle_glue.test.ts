@@ -15,6 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentAdmission,
+  InterAgentInputLifecycle,
   InterAgentTool,
   DeliveryStageReporter,
   createDeliveryAcknowledgementWiring,
@@ -179,10 +180,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       const errorLogs: string[] = [];
       await runOnInterAgentMessageGlue(tool, host, errorEnvelope, notices, errorLogs);
       expect(notices).toHaveLength(0);
-      expect(errorLogs).toEqual([
-        "  inter_agent_message stale/duplicate turn dropped, no notice " +
-          "(envelope itself is a peer_error notice): peer.agent\n",
-      ]);
+      expect(errorLogs).toEqual(["  inter_agent_message stale/duplicate, no input: peer.agent\n"]);
 
       // (b) track が既に closed — 双方 done=true で terminal にした上で、
       // その後の stale delivery が notice を積まないことを確認する。
@@ -210,10 +208,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       const closedLogs: string[] = [];
       await runOnInterAgentMessageGlue(tool, host, closedStale, notices, closedLogs);
       expect(notices).toHaveLength(0);
-      expect(closedLogs).toEqual([
-        "  inter_agent_message stale/duplicate turn dropped, no notice " +
-          "(track already closed): peer.agent\n",
-      ]);
+      expect(closedLogs).toEqual(["  inter_agent_message stale/duplicate, no input: peer.agent\n"]);
     },
   );
 
@@ -313,7 +308,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
       getState: () => "tool_running",
       send: () => {},
       replyBasisMode: () => "v1",
-      returnInput: envelope => returned.push(envelope),
+      returnInput: envelope => { returned.push(envelope); return true; },
       onInputHandoff: (envelopes, token) => {
         for (const envelope of envelopes) acknowledgements.push(envelope);
         stages.submittedEnvelopes(token, envelopes, "tool_result");
@@ -386,7 +381,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (codex)", () => {
 
     expect(injected).not.toHaveBeenCalled();
     expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
-    expect(logs).toEqual(["  inter_agent_message terminal, no reply owed: peer.agent\n"]);
+    expect(logs).toEqual(["  inter_agent_message terminal, no input: peer.agent\n"]);
   });
 });
 
@@ -473,6 +468,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const deliveryAcks: number[] = [];
   let host!: CodexHost;
   const coordinator = new CodexInterAgentTurnCoordinator({
+    inputLifecycle: interAgent.inputLifecycle,
     onDispatch: (batch) => {
       for (const item of batch.items) {
         interAgent.notePendingInjection(item.envelope, batch.turnToken);
@@ -494,7 +490,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
         acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
-        inject: (inbound, mode) => coordinator.receive(inbound, mode),
+        inject: (inbound, mode, reservation) => { coordinator.receive(inbound, mode, reservation); },
         log: () => {},
       },
       envelope,
@@ -502,6 +498,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   }
 
   function onTurnStart(turnToken: string): void {
+    coordinator.handoff(turnToken, "exec_input_written");
     deliveryAcknowledgementWiring.onTurnStart(turnToken);
   }
 
@@ -514,7 +511,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     for (const notice of interAgent.resolveTurnEnd(turnToken, conversationIds, classified)) {
       notices.push(notice);
     }
-    const settled = coordinator.settle(turnToken);
+    const settled = coordinator.settle(turnToken, { kind: "abandoned", reason: "test_cleanup" });
     if (settled !== undefined) {
       coordinator.dispatchNextForPeer(settled.peer);
     }
@@ -780,11 +777,11 @@ describe("queued inbound mode is rechecked at Codex dispatch", () => {
       recordInboundIa: () => {},
       send: () => {},
       acknowledgeDelivery: delivery.acknowledgeDelivery,
-      inject: (inbound, mode) => coordinator.receive(inbound, mode),
+      inject: (inbound, mode) => { coordinator.receive(inbound, mode); },
       log: () => {},
     }, envelope);
     const advance = () => {
-      const first = coordinator.settle(dispatched[0]!.turnToken);
+      const first = coordinator.settle(dispatched[0]!.turnToken, { kind: "abandoned", reason: "test_cleanup" });
       expect(first).toBeDefined();
       if (first) coordinator.dispatchNextForPeer(first.peer);
     };
@@ -873,12 +870,20 @@ describe("receiver overload handler settlement", () => {
     const stages: string[] = [];
     const retired = vi.fn(() => true);
     const overloadConfig = { ...config, inter_agent_backlog_max_items: 1 };
+    const inputLifecycle = new InterAgentInputLifecycle({
+      maxPendingItems: 1,
+      currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+      sendNotice: async notice => { notices.push(notice); return "accepted"; },
+      acknowledgeDelivery: envelope => { acknowledged.push(envelope); },
+      settleStage: (_envelope, reason) => { stages.push(reason); },
+    });
     const tool = new InterAgentTool({
+      inputLifecycle,
       config: overloadConfig,
       getState: () => "thinking",
       replyBasisMode: () => "v1",
       send: () => {},
-      sendInterAgent: async notice => { notices.push(notice); return { kind: "accepted", stamp: null }; },
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
     });
     const receive = (item: Envelope) => handleInterAgentMessage({
       interAgent: tool,
@@ -903,7 +908,7 @@ describe("receiver overload handler settlement", () => {
     expect(acknowledged).toEqual([refused]);
     expect(retired).not.toHaveBeenCalled();
     expect(stages).toEqual(["receiver_overloaded"]);
-    expect(tool.admission.reservationFor(first)).toBeDefined();
+    expect(tool.inputLifecycle.reservationFor(first)).toBeDefined();
   });
 
   it("bounds a null-tool fallback with the production shared admission instance", async () => {
@@ -918,12 +923,16 @@ describe("receiver overload handler settlement", () => {
 
     await handleInterAgentMessage({
       interAgent: null,
-      admission,
+      inputLifecycle: new InterAgentInputLifecycle({
+        admission,
+        currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+        retirementCapability: () => "supported",
+        acknowledgeDelivery: item => acknowledged.push(item),
+        retireDelivery: retired,
+      }),
       recordInboundIa: () => {},
       send: () => {},
       acknowledgeDelivery: item => acknowledged.push(item),
-      retirementCapability: () => "supported",
-      retireDelivery: retired,
       inject: item => { injected.push(item); },
       log: () => {},
     }, refused);

@@ -5,6 +5,8 @@
 // docs/specs/protocol.md and the related ADRs. SDK-coupled and adapter-internal
 // types stay in each wrapper, not here.
 
+export const RESET_TERMINATION_GRACE_MS = 5_000;
+
 export * from "./work.js";
 import type { DeliveryAuthority, DeliveryIntent, DeliveryModes, WorkControl, WorkControlResult, WorkStamp } from "./work.js";
 

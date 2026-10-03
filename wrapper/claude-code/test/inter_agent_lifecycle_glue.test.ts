@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InterAgentTool,
   InterAgentAdmission,
+  InterAgentInputLifecycle,
   DeliveryStageReporter,
   createDeliveryAcknowledgementWiring,
   handoffToolResult,
@@ -347,7 +348,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
       getState: () => "tool_running",
       send: () => {},
       replyBasisMode: () => "v1",
-      returnInput: envelope => returned.push(envelope),
+      returnInput: envelope => { returned.push(envelope); return true; },
       onInputHandoff: (envelopes, token) => {
         for (const envelope of envelopes) acknowledgements.push(envelope);
         stages.submittedEnvelopes(token, envelopes, "tool_result");
@@ -445,6 +446,11 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     await handleInterAgentMessage(
       {
         interAgent: { receiveInbound },
+        inputLifecycle: new InterAgentInputLifecycle({
+          currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+          retirementCapability: () => "supported",
+          retireDelivery,
+        }),
         ingress,
         recordInboundIa,
         send,
@@ -513,7 +519,7 @@ describe("queued inbound mode is rechecked at Claude dispatch", () => {
       log: () => {},
     }, envelope);
     const advance = () => {
-      const first = coordinator.settle(dispatched[0]!.turnToken);
+      const first = coordinator.settle(dispatched[0]!.turnToken, { kind: "abandoned", reason: "test_cleanup" });
       expect(first.kind).toBe("settled");
       if (first.kind === "settled") coordinator.dispatchNextForPeer(first.batch.peer);
     };
@@ -671,7 +677,7 @@ function makeControllableQueryFn(onInput?: (input: SDKUserMessage) => void): {
  * same-peer scheduling are deliberately NOT reproduced here: issue #246
  * extracted that state into InterAgentTurnCoordinator so these tests exercise
  * the same implementation used by cli.ts. */
-function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = false) {
+function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = false, ackSink?: number[]) {
   const sentBatches: { peer: string; cids: string[] }[] = [];
   const terminalIngressSkips: string[] = [];
   /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
@@ -682,7 +688,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
    *  pushed by `receive()` below. Both kinds share this one array because
    *  production sends both through the SAME `link?.send()` sink. */
   const notices: Envelope[] = [];
-  const deliveryAcks: number[] = [];
+  const deliveryAcks = ackSink ?? [];
   let host!: AgentHost;
   let tokenSequence = 0;
   let watchdogFailStopped = false;
@@ -690,6 +696,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
   const ingressGate = new InterAgentIngressGate();
   const coordinator = new InterAgentTurnCoordinator({
     createTurnToken: () => `test-token-${++tokenSequence}`,
+    inputLifecycle: interAgent.inputLifecycle,
     ...(recheckAtInput ? {
       reclassifyQueued: (item: { envelope: Envelope; mode: InboundReplyMode }) =>
         interAgent.queuedInboundMode(item.envelope, item.mode),
@@ -723,7 +730,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
         recordInboundIa: () => {},
         send: (notice) => notices.push(notice),
         acknowledgeDelivery: deliveryAcknowledgementWiring.acknowledgeDelivery,
-        inject: (inbound, mode) => coordinator.receive(inbound, mode),
+        inject: (inbound, mode, reservation) => coordinator.receive(inbound, mode, false, reservation),
         log: (line) => terminalIngressSkips.push(line),
       },
       envelope,
@@ -731,6 +738,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
   }
 
   function onTurnStart(turnToken: string): void {
+    coordinator.handoff(turnToken, "prompt_hook");
     deliveryAcknowledgementWiring.onTurnStart(turnToken);
   }
 
@@ -739,7 +747,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
     if (prepared === undefined) return undefined;
     interAgent.resolveTurnEnd(turnToken, prepared.removedConversationIds);
     if (prepared.batch !== null) return { text: prepared.batch.text, conversationIds: prepared.batch.conversationIds };
-    const settlement = coordinator.settle(turnToken);
+    const settlement = coordinator.settle(turnToken, { kind: "abandoned", reason: "test_cleanup" });
     if (settlement.kind === "settled") {
       interAgent.resolveTurnEnd(turnToken, settlement.batch.conversationIds);
       coordinator.dispatchNextForPeer(settlement.batch.peer);
@@ -756,7 +764,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = fals
     },
   ): void {
     if (turnToken === undefined) return;
-    const settlement = coordinator.settle(turnToken);
+    const settlement = coordinator.settle(turnToken, { kind: "abandoned", reason: "test_cleanup" });
     if (settlement.kind !== "settled") return;
     const classified = error ? classifyInterAgentError(error) : undefined;
     for (const notice of interAgent.resolveTurnEnd(
@@ -983,13 +991,21 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code gl
     const acceptance = new Promise<InterAgentAcceptance>((resolve) => {
       resolveAcceptance = resolve;
     });
+    const lateDeliveryAcks: number[] = [];
     const tool = new InterAgentTool({
+      inputLifecycle: new InterAgentInputLifecycle({
+        retirementCapability: () => "unsupported",
+        acknowledgeDelivery: envelope => {
+          const seq = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
+          if (typeof seq === "number") lateDeliveryAcks.push(seq);
+        },
+      }),
       config,
       getState: () => "idle",
       send: () => {},
       sendInterAgent: () => acceptance,
     });
-    const harness = makeCoalescingHarness(tool);
+    const harness = makeCoalescingHarness(tool, false, lateDeliveryAcks);
     let endStream!: () => void;
     const streamHeld = new Promise<void>((resolve) => {
       endStream = resolve;
@@ -1302,12 +1318,20 @@ describe("receiver overload handler settlement", () => {
     const stages: string[] = [];
     const retired = vi.fn(() => true);
     const overloadConfig = { ...config, inter_agent_backlog_max_items: 1 };
+    const inputLifecycle = new InterAgentInputLifecycle({
+      maxPendingItems: 1,
+      currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+      sendNotice: async notice => { notices.push(notice); return "accepted"; },
+      acknowledgeDelivery: envelope => { acknowledged.push(envelope); },
+      settleStage: (_envelope, reason) => { stages.push(reason); },
+    });
     const tool = new InterAgentTool({
+      inputLifecycle,
       config: overloadConfig,
       getState: () => "idle",
       replyBasisMode: () => "v1",
       send: () => {},
-      sendInterAgent: async notice => { notices.push(notice); return { kind: "accepted", stamp: null }; },
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
     });
     const receive = (item: Envelope) => handleInterAgentMessage({
       interAgent: tool,
@@ -1333,7 +1357,7 @@ describe("receiver overload handler settlement", () => {
     expect(acknowledged).toEqual([refused]);
     expect(retired).not.toHaveBeenCalled();
     expect(stages).toEqual(["receiver_overloaded"]);
-    expect(tool.admission.reservationFor(first)).toBeDefined();
+    expect(tool.inputLifecycle.reservationFor(first)).toBeDefined();
   });
 
   it("bounds a null-tool fallback with the production shared admission instance", async () => {
@@ -1348,13 +1372,17 @@ describe("receiver overload handler settlement", () => {
 
     await handleInterAgentMessage({
       interAgent: null,
-      admission,
+      inputLifecycle: new InterAgentInputLifecycle({
+        admission,
+        currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+        retirementCapability: () => "supported",
+        acknowledgeDelivery: item => acknowledged.push(item),
+        retireDelivery: retired,
+      }),
       ingress: new InterAgentIngressGate(),
       recordInboundIa: () => {},
       send: () => {},
       acknowledgeDelivery: item => acknowledged.push(item),
-      retirementCapability: () => "supported",
-      retireDelivery: retired,
       inject: item => injected.push(item),
       log: () => {},
     }, refused);

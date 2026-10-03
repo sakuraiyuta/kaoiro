@@ -98,6 +98,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     deliveryModes: () => ({ version: "v1", early: "steer", yield: "none", stage_reports: true }),
     noticeAttributionMode: () => "v1",
     deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
+    interAgentRetirementCapability: () => "supported",
     replyBasisGeneration: () => 1, setSessionId: () => {},
     permissionSyncPending: () => false,
     sendInterAgent: async () => ({ kind: "accepted" }),
@@ -458,7 +459,8 @@ it("the shared quiescence check detects orphaned slots, reservations, and frozen
   expect(() => f.assertQuiescent()).toThrow();
   coordinator.discardSteerReservation("orphan");
   f.assertQuiescent();
-  expect(coordinator.reserveSteer("frozen-orphan", orphan, "reply-owed", 2)).toBe(true);
+  const frozenOrphan = inbound(2, "frozen-orphan", "FROZEN ORPHAN", "early");
+  expect(coordinator.reserveSteer("frozen-orphan", frozenOrphan, "reply-owed", 2)).toBe(true);
   coordinator.freezeForWatchdogFailStop();
   expect(coordinator.pendingSteerReservationCount).toBe(0);
   expect(coordinator.pendingFrozenSteerCount).toBe(1);

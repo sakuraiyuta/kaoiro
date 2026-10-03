@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeliveryAcknowledgementWiring, InterAgentAdmission, InterAgentTool } from "@kaoiro/agent-common";
+import { createDeliveryAcknowledgementWiring, InterAgentAdmission, InterAgentInputLifecycle, InterAgentTool } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
 import {
   AntigravityInterAgentTurnCoordinator,
@@ -29,6 +29,14 @@ function inbound(cid: string, deliverySeq?: number): Envelope {
   } as unknown as Envelope;
 }
 
+function retirementLifecycle(retired: Envelope[]): InterAgentInputLifecycle {
+  return new InterAgentInputLifecycle({
+    currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+    retirementCapability: () => "supported",
+    retireDelivery: envelope => { retired.push(envelope); return true; },
+  });
+}
+
 describe("AntigravityInterAgentTurnCoordinator", () => {
   it("rechecks a dispatched host-queued proposal through the real conversation track", async () => {
     const tool = new InterAgentTool({
@@ -49,7 +57,7 @@ describe("AntigravityInterAgentTurnCoordinator", () => {
     const proposal = inbound("closed");
     proposal.payload.meta = { done: true, propose_next: "" };
     coordinator.receive(proposal, (await tool.receiveInbound(proposal)).mode);
-    coordinator.settle("turn-1");
+    coordinator.settle("turn-1", { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched).toHaveLength(2);
     await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "closed", done: true });
@@ -94,7 +102,7 @@ describe("AntigravityInterAgentTurnCoordinator", () => {
     coordinator.receive(queued, (await tool.receiveInbound(queued)).mode);
     await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "queued", done: true });
     delivery.onTurnStart(dispatched[0]!.turnToken);
-    const settled = coordinator.settle(dispatched[0]!.turnToken);
+    const settled = coordinator.settle(dispatched[0]!.turnToken, { kind: "abandoned", reason: "test_cleanup" });
     coordinator.dispatchNextForPeer(settled!.peer);
     expect(dispatched).toHaveLength(1);
     expect(tokens).toBe(1);
@@ -128,34 +136,34 @@ describe("AntigravityInterAgentTurnCoordinator", () => {
     coordinator.receive(inbound("shared"), "reply-owed");
     coordinator.receive(inbound("shared"), "reply-owed");
 
-    expect(coordinator.settle("stale-turn")).toBeUndefined();
+    expect(coordinator.settle("stale-turn", { kind: "abandoned", reason: "test_cleanup" })).toBeUndefined();
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched).toHaveLength(1);
 
-    expect(coordinator.settle("turn-1")?.turnToken).toBe("turn-1");
+    expect(coordinator.settle("turn-1", { kind: "abandoned", reason: "test_cleanup" })?.turnToken).toBe("turn-1");
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched.map((batch) => batch.turnToken)).toEqual(["turn-1", "turn-2"]);
   });
 
   it("freezes unstarted work while retaining the active batch for recovery", () => {
     const dispatched: DispatchedAntigravityInterAgentBatch[] = [];
+    const retired: Envelope[] = [];
     const coordinator = new AntigravityInterAgentTurnCoordinator({
       createTurnToken: () => "active",
+      inputLifecycle: retirementLifecycle(retired),
       onDispatch: (batch) => dispatched.push(batch),
     });
     coordinator.receive(inbound("active"), "reply-owed");
     coordinator.receive(inbound("pending"), "reply-owed");
 
-    const retired: Envelope[] = [];
-    expect(coordinator.freezeForWatchdogFailStop("active", (envelopes) => retired.push(...envelopes))).toEqual({
+    expect(coordinator.freezeForWatchdogFailStop("active")).toEqual({
       droppedDispatched: 0,
       droppedPending: 1,
     });
     expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending"]);
     coordinator.dispatchNextForPeer("peer.agent");
     coordinator.receive(inbound("after-freeze"), "reply-owed");
-    expect(dispatched).toHaveLength(1);
-    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending", "after-freeze"]);
+    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending"]);
   });
 });
 
@@ -186,7 +194,7 @@ describe("recovery ownership", () => {
     const coordinator = new AntigravityInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("first"), "reply-owed");
     coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator-turn", () => true)!;
     expect(lease.envelopes).toHaveLength(1); lease.commit();
     const prepared = coordinator.prepareInput("T2")!;
@@ -199,7 +207,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new AntigravityInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const lease = coordinator.claimRecovery("recover", "peer.agent", "operator", () => true)!;
     lease.rollback();
     expect(coordinator.prepareInput("T2")?.batch?.conversationIds).toEqual(["recover", "other"]);
@@ -210,7 +218,7 @@ describe("recovery ownership", () => {
     let next = 0;
     const coordinator = new AntigravityInterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
     coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("A"), "reply-owed"); coordinator.receive(message("B"), "reply-owed");
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     const a = coordinator.claimRecovery("A", "peer.agent", "operator", () => true)!;
     const b = coordinator.claimRecovery("B", "peer.agent", "operator", () => true)!;
     for (const lease of reverse ? [b, a] : [a, b]) lease.rollback();
@@ -227,7 +235,7 @@ describe("recovery ownership", () => {
     const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
     expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);
     lease.rollback(); lease.rollback(); expect(coordinator.unreadCount("T1")).toBe(2);
-    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.settle("T1", { kind: "abandoned", reason: "test_cleanup" }); coordinator.dispatchNextForPeer("peer.agent");
     expect(coordinator.prepareInput("T2")?.batch?.items[0]?.envelope).toBe(first);
   });
 });

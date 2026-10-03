@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { InterAgentAdmission, InterAgentTool } from "@kaoiro/agent-common";
+import { InterAgentAdmission, InterAgentInputLifecycle, InterAgentTool } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentMessagePayload, WrapperConfig } from "@kaoiro/agent-common";
 import { handleAntigravityInterAgentMessage } from "../src/inter_agent_message_handler.js";
 
@@ -40,12 +40,20 @@ describe("Antigravity receiver overload handling", () => {
     const acknowledged: Envelope[] = [];
     const stages: string[] = [];
     const retired = vi.fn(() => true);
+    const inputLifecycle = new InterAgentInputLifecycle({
+      maxPendingItems: 1,
+      currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+      sendNotice: async notice => { notices.push(notice); return "accepted"; },
+      acknowledgeDelivery: envelope => { acknowledged.push(envelope); },
+      settleStage: (_envelope, reason) => { stages.push(reason); },
+    });
     const tool = new InterAgentTool({
+      inputLifecycle,
       config: { ...config, inter_agent_backlog_max_items: 1 },
       getState: () => "thinking",
       replyBasisMode: () => "v1",
       send: () => {},
-      sendInterAgent: async notice => { notices.push(notice); return { kind: "accepted", stamp: null }; },
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
     });
     const receive = (envelope: Envelope) => handleAntigravityInterAgentMessage({
       interAgent: tool,
@@ -69,7 +77,7 @@ describe("Antigravity receiver overload handling", () => {
     expect(acknowledged).toEqual([refused]);
     expect(retired).not.toHaveBeenCalled();
     expect(stages).toEqual(["receiver_overloaded"]);
-    expect(tool.admission.reservationFor(first)).toBeDefined();
+    expect(tool.inputLifecycle.reservationFor(first)).toBeDefined();
   });
 
   it("bounds a null-tool fallback with the production shared admission instance", async () => {
@@ -84,11 +92,15 @@ describe("Antigravity receiver overload handling", () => {
 
     await handleAntigravityInterAgentMessage({
       interAgent: null,
-      admission,
+      inputLifecycle: new InterAgentInputLifecycle({
+        admission,
+        currentIdentity: () => ({ incarnation: "inc", generation: "gen" }),
+        retirementCapability: () => "supported",
+        acknowledgeDelivery: item => acknowledged.push(item),
+        retireDelivery: retired,
+      }),
       send: () => {},
       acknowledgeDelivery: item => acknowledged.push(item),
-      retirementCapability: () => "supported",
-      retireDelivery: retired,
       inject: item => injected.push(item),
       log: () => {},
     }, refused);

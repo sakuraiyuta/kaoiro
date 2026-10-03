@@ -35,6 +35,10 @@ export {
   normalizeWrapperBuildInfo,
 } from "./build_info.js";
 export type { WrapperBuildInfo } from "./build_info.js";
+export { WrapperShutdownBudget } from "./shutdown_budget.js";
+export type { ShutdownPhase } from "./shutdown_budget.js";
+export { WrapperShutdown } from "./shutdown.js";
+export type { WrapperDisconnectReason, WrapperShutdownHooks } from "./shutdown.js";
 export {
   MAX_LOG_BYTES,
   boundErrorDetail,

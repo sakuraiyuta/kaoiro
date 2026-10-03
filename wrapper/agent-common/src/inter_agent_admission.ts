@@ -39,6 +39,14 @@ export interface InterAgentAdmissionCounts {
   control: number;
 }
 
+export interface InterAgentPendingEntry {
+  readonly reservation: InterAgentAdmissionReservation;
+  readonly envelope: Envelope;
+  readonly reservationClass: InterAgentReservationClass;
+  readonly deliveryIdentity?: InterAgentDeliveryIdentity;
+  readonly lossId?: string;
+}
+
 export class InterAgentAdmission {
   readonly #maxPendingItems: number;
   readonly #active = new Map<InterAgentAdmissionReservation, ReservationState>();
@@ -113,6 +121,31 @@ export class InterAgentAdmission {
 
   isLossDuplicate(lossId: string): boolean {
     return this.#pendingLossIds.has(lossId) || this.#completedLossIds.has(lossId);
+  }
+
+  lossDisposition(lossId: string): "pending" | "completed" | "unknown" {
+    if (this.#pendingLossIds.has(lossId)) return "pending";
+    if (this.#completedLossIds.has(lossId)) return "completed";
+    return "unknown";
+  }
+
+  pendingEntry(reservation: InterAgentAdmissionReservation): InterAgentPendingEntry | undefined {
+    const state = this.#active.get(reservation);
+    if (state === undefined) return undefined;
+    return {
+      reservation,
+      envelope: state.envelope,
+      reservationClass: state.reservationClass,
+      ...(state.deliveryIdentity === undefined ? {} : { deliveryIdentity: { ...state.deliveryIdentity } }),
+      ...(state.lossId === undefined ? {} : { lossId: state.lossId }),
+    };
+  }
+
+  pendingEntries(): readonly InterAgentPendingEntry[] {
+    return [...this.#active.keys()].flatMap(reservation => {
+      const entry = this.pendingEntry(reservation);
+      return entry === undefined ? [] : [entry];
+    });
   }
 
   owns(reservation: InterAgentAdmissionReservation, envelope: Envelope): boolean {

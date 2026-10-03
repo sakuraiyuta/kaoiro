@@ -142,7 +142,7 @@ it("fences interrupt by Host token, keeps the queue until interrupted terminal, 
 });
 
 it.each(["exec", "app-server"] as const)("%s fail-stops once, retires pending and dispatched-but-unstarted IA, and ignores late terminal", async backend => {
-  const f = await cliAppFixture(false, backend);
+  const f = await cliAppFixture(false, backend, "legacy", { stages: true });
   const stderr = vi.spyOn(process.stderr, "write");
   try {
     await f.inbound(1, "active");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));

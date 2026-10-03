@@ -26,11 +26,13 @@ export class DeliveryRecovery {
   #timer: ReturnType<typeof setTimeout> | undefined;
   #pending: DeliveryResyncRequest | undefined;
   #inFlight = false;
+  #requestAbort: AbortController | undefined;
+  #retirementRequestsClosed = false;
   #settledWaiters = new Set<() => void>();
   #quarantined = new Map<number, Envelope>();
 
   constructor(private readonly callbacks: {
-    request: (request: DeliveryResyncRequest) => Promise<DeliveryResyncReply | null>;
+    request: (request: DeliveryResyncRequest, signal?: AbortSignal) => Promise<DeliveryResyncReply | null>;
     resolved: (reply: DeliveryResyncReply) => void;
     resendAck: (seq: number) => void;
     unavailable: () => void;
@@ -92,7 +94,7 @@ export class DeliveryRecovery {
   }
 
   retire(envelopes: readonly Envelope[]): boolean {
-    if (!this.#supported) return false;
+    if (!this.#supported || this.#retirementRequestsClosed) return false;
     for (const envelope of envelopes) {
       const seq = (envelope as Envelope & { delivery_seq?: number }).delivery_seq;
       if (Number.isSafeInteger(seq) && seq! > this.#resolved && this.#received.has(seq!)) this.#retiring.add(seq!);
@@ -106,9 +108,30 @@ export class DeliveryRecovery {
     return this.#supported ? "supported" : "unsupported";
   }
 
-  async flushRetirements(): Promise<void> {
-    if (!this.#supported || !this.#connected || (this.#retiring.size === 0 && this.#pending === undefined)) return;
-    await new Promise<void>((resolve) => this.#settledWaiters.add(resolve));
+  async flushRetirements(signal?: AbortSignal): Promise<"complete" | "unconfirmed"> {
+    if (!this.#supported || !this.#connected || (this.#retiring.size === 0 && this.#pending === undefined)) return "complete";
+    if (signal?.aborted) {
+      this.#requestAbort?.abort();
+      return "unconfirmed";
+    }
+    return await new Promise<"complete" | "unconfirmed">((resolve) => {
+      let settled = false;
+      let abort = (): void => {};
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+        this.#settledWaiters.delete(finish);
+        resolve(this.#retiring.size === 0 && this.#pending === undefined ? "complete" : "unconfirmed");
+      };
+      abort = (): void => {
+        this.#requestAbort?.abort();
+        finish();
+      };
+      this.#settledWaiters.add(finish);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+    });
   }
 
   disconnected(): void {
@@ -120,6 +143,17 @@ export class DeliveryRecovery {
   dispose(): void {
     this.disconnected();
     this.#disposed = true;
+    this.#retirementRequestsClosed = true;
+    this.#requestAbort?.abort();
+    for (const resolve of this.#settledWaiters) resolve();
+    this.#settledWaiters.clear();
+  }
+
+  stopRetirementRequests(): void {
+    this.#retirementRequestsClosed = true;
+    clearTimeout(this.#timer);
+    this.#timer = undefined;
+    this.#requestAbort?.abort();
     for (const resolve of this.#settledWaiters) resolve();
     this.#settledWaiters.clear();
   }
@@ -138,7 +172,7 @@ export class DeliveryRecovery {
   }
 
   #schedule(): void {
-    if (this.#disposed || !this.#connected || !this.#supported) return;
+    if (this.#disposed || this.#retirementRequestsClosed || !this.#connected || !this.#supported) return;
     if (this.#pending === undefined && this.#retiring.size === 0 && this.#missing(this.#issued).length === 0) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
@@ -158,17 +192,19 @@ export class DeliveryRecovery {
   #start(cutoff: number): void {
     const retiring = [...this.#retiring].filter((seq) => seq > this.#resolved && seq <= cutoff).sort((a, b) => a - b).slice(0, 256);
     const ranges: [number, number][] = retiring.length > 0 ? retiring.map((seq) => [seq, seq]) : this.#missing(cutoff);
-    if (ranges.length === 0 || this.#disposed) return;
+    if (ranges.length === 0 || this.#disposed || this.#retirementRequestsClosed) return;
     this.#pending = { request_id: randomUUID(), cutoff, missing_ranges: ranges, ...(retiring.length > 0 ? { reason: "interrupted" as const } : {}) };
     void this.#request();
   }
 
   async #request(): Promise<void> {
-    if (this.#pending === undefined || this.#inFlight || !this.#connected || this.#disposed) return;
+    if (this.#pending === undefined || this.#inFlight || !this.#connected || this.#disposed || this.#retirementRequestsClosed) return;
     const pending = this.#pending;
+    const controller = new AbortController();
+    this.#requestAbort = controller;
     this.#inFlight = true;
     try {
-      const reply = await this.callbacks.request(pending);
+      const reply = await this.callbacks.request(pending, controller.signal);
       if (this.#disposed || reply === null) return;
       for (const [first, last] of reply.skipped_ranges) {
         for (let seq = first; seq <= last; seq++) {
@@ -185,9 +221,12 @@ export class DeliveryRecovery {
         this.#settledWaiters.clear();
       }
     } finally {
+      if (this.#requestAbort === controller) this.#requestAbort = undefined;
       this.#inFlight = false;
-      if (this.#pending === undefined && this.#retiring.size > 0) this.#start(this.#issued);
-      this.#schedule();
+      if (!this.#retirementRequestsClosed) {
+        if (this.#pending === undefined && this.#retiring.size > 0) this.#start(this.#issued);
+        this.#schedule();
+      }
     }
   }
 }

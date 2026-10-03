@@ -10,6 +10,7 @@ import {
   DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentAdmission,
+  InterAgentInputLifecycle,
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
@@ -20,6 +21,9 @@ import type {
   InboundReplyMode,
   InterAgentMessagePayload,
   InterAgentAdmissionReservation,
+  InterAgentInputLifecyclePort,
+  BatchDisposition,
+  CompletionResult,
 } from "@kaoiro/agent-common";
 
 export interface InterAgentBatchItem {
@@ -61,7 +65,7 @@ interface FoldedRecoveryRecord {
 const MAX_FOLDED_RECOVERY_RECORDS = 256;
 
 export type InterAgentTurnSettlement =
-  | { kind: "settled"; batch: DispatchedInterAgentBatch }
+  | { kind: "settled"; batch: DispatchedInterAgentBatch; completion: CompletionResult }
   | { kind: "stale"; turnToken: string }
   | { kind: "untracked"; turnToken: string };
 
@@ -72,6 +76,7 @@ export interface InterAgentTurnCoordinatorOptions {
   onTerminalQueued?: (item: InterAgentBatchItem) => void;
   onFoldRecoveryEvicted?: (reason: "fold_recovery_capacity") => void;
   admission?: InterAgentAdmission;
+  inputLifecycle?: InterAgentInputLifecyclePort;
   maxBatchItems?: number;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
@@ -152,7 +157,7 @@ export class InterAgentTurnCoordinator {
   readonly #onTerminalQueued: ((item: InterAgentBatchItem) => void) | undefined;
   readonly #onFoldRecoveryEvicted: ((reason: "fold_recovery_capacity") => void) | undefined;
   readonly #createTurnToken: () => string;
-  readonly #admission: InterAgentAdmission;
+  readonly #inputLifecycle: InterAgentInputLifecyclePort;
   readonly #maxBatchItems: number;
   #closed = false;
 
@@ -162,7 +167,10 @@ export class InterAgentTurnCoordinator {
     this.#onTerminalQueued = options.onTerminalQueued;
     this.#onFoldRecoveryEvicted = options.onFoldRecoveryEvicted;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
-    this.#admission = options.admission ?? new InterAgentAdmission(DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS);
+    this.#inputLifecycle = options.inputLifecycle ?? new InterAgentInputLifecycle({
+      maxPendingItems: DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+      ...(options.admission === undefined ? {} : { admission: options.admission }),
+    });
     this.#maxBatchItems = options.maxBatchItems ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS;
   }
 
@@ -217,7 +225,6 @@ export class InterAgentTurnCoordinator {
       commit: () => {
         settled = true;
         this.#recoveryLeases.delete(envelopes);
-        for (const item of selected) if (item.reservation !== undefined) this.#admission.release(item.reservation, "handed_off");
       },
       rollback: () => {
         if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
@@ -284,14 +291,14 @@ export class InterAgentTurnCoordinator {
     this.#foldedRecovery.clear();
   }
 
-  receive(envelope: Envelope, mode: InboundReplyMode, priority = false, reservation?: InterAgentAdmissionReservation): void {
+  receive(envelope: Envelope, mode: InboundReplyMode, priority = false, reservation?: InterAgentAdmissionReservation): boolean {
     if (this.#closed) {
-      const held = reservation ?? this.#admission.reservationFor(envelope);
-      if (held !== undefined && this.#admission.owns(held, envelope)) this.#admission.release(held, "retired");
+      const held = reservation ?? this.#inputLifecycle.reservationFor(envelope);
+      if (held !== undefined && this.#inputLifecycle.owns(held, envelope)) this.#inputLifecycle.finish(held, { kind: "abandoned", reason: "coordinator_closed_before_receive" });
       throw new Error("inter-agent turn coordinator is closed");
     }
-    const held = reservation ?? this.#admission.reservationFor(envelope) ?? this.#reserveDirect(envelope);
-    if (!this.#admission.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
+    const held = reservation ?? this.#inputLifecycle.reservationFor(envelope) ?? this.#reserveDirect(envelope);
+    if (!this.#inputLifecycle.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: InterAgentBatchItem = { envelope, mode, reservation: held };
@@ -307,7 +314,7 @@ export class InterAgentTurnCoordinator {
       this.#priorityLeases.add(turnToken);
       this.#onDispatch(batch);
       this.#dispatchNext(peer);
-      return;
+      return true;
     }
     const itemBytes = Buffer.byteLength(
       formatInboundMessage(envelope, { mode }),
@@ -329,25 +336,28 @@ export class InterAgentTurnCoordinator {
     open.items.push(item);
     open.bytes += itemBytes;
     this.#dispatchNext(peer);
+    return true;
   }
 
   #reserveDirect(envelope: Envelope): InterAgentAdmissionReservation {
-    const result = this.#admission.admit(envelope);
-    if (result.kind !== "reserved") throw new Error("inter-agent input capacity exceeded");
-    return result.reservation;
+    const result = this.#inputLifecycle.reserveDirect(envelope);
+    if (result === undefined) throw new Error("inter-agent input capacity exceeded");
+    return result;
   }
 
-  handoff(turnToken: string): void {
+  handoff(turnToken: string, boundary: "prompt_hook" | "fold_hook", ownerToken = turnToken): void {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return;
-    for (const item of batch.items) if (item.reservation !== undefined) this.#admission.release(item.reservation, "handed_off");
+    for (const item of batch.items) if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, {
+      kind: "observed", boundary, ownerToken,
+    });
   }
 
   /**
    * Settles exactly one dispatched generation. A late callback for a retired
    * token can never release a peer's newer generation.
    */
-  settle(turnToken: string): InterAgentTurnSettlement {
+  settle(turnToken: string, disposition: BatchDisposition): InterAgentTurnSettlement {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) {
       return this.#retiredTurnTokens.has(turnToken)
@@ -355,6 +365,10 @@ export class InterAgentTurnCoordinator {
         : { kind: "untracked", turnToken };
     }
 
+    const completion = this.#inputLifecycle.completeBatch(
+      batch.items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      disposition,
+    );
     this.#batchByTurnToken.delete(turnToken);
     this.#releaseBatch(batch, "retired");
     this.#inputStarted.delete(turnToken);
@@ -367,9 +381,9 @@ export class InterAgentTurnCoordinator {
     if (this.#activeTokenByPeer.get(batch.peer) !== turnToken) {
       if (this.#suspendedTokenByPeer.get(batch.peer) === turnToken) {
         this.#suspendedTokenByPeer.delete(batch.peer);
-        return { kind: "settled", batch };
+        return { kind: "settled", batch, completion };
       }
-      return priorityLease ? { kind: "settled", batch } : { kind: "stale", turnToken };
+      return priorityLease ? { kind: "settled", batch, completion } : { kind: "stale", turnToken };
     }
 
     const suspended = this.#suspendedTokenByPeer.get(batch.peer);
@@ -379,7 +393,7 @@ export class InterAgentTurnCoordinator {
     } else {
       this.#activeTokenByPeer.delete(batch.peer);
     }
-    return { kind: "settled", batch };
+    return { kind: "settled", batch, completion };
   }
 
   /** A matched pushed root is an SDK turn. Its lease becomes that peer's
@@ -433,7 +447,7 @@ export class InterAgentTurnCoordinator {
     const survivingIds = new Set(conversationIds);
     const removedConversationIds = batch.conversationIds.filter(cid => !survivingIds.has(cid));
     for (const item of removed) {
-      if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+      if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
       this.#onTerminalQueued?.(item);
     }
     if (items.length === 0) return { batch: null, removedConversationIds };
@@ -466,6 +480,13 @@ export class InterAgentTurnCoordinator {
     return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
   }
 
+  inFlightHandles(turnToken?: string): readonly InterAgentAdmissionReservation[] {
+    if (turnToken === undefined) return [];
+    return this.#batchByTurnToken.get(turnToken)?.items.flatMap(item =>
+      item.reservation === undefined ? [] : [item.reservation],
+    ) ?? [];
+  }
+
   /** Stops future dispatch after a watchdog fail-stop while retaining the
    * exact SDK-active generation. Its outcome remains unknown until a real
    * ResultMessage/EOF, so resolving it (or a same-CID successor) here would
@@ -473,7 +494,7 @@ export class InterAgentTurnCoordinator {
    * ownership and reported through the caller's controlled-recovery warning;
    * server disconnect remains the peer-visible fallback on operator restore.
    */
-  freezeForWatchdogFailStop(activeTurnToken?: string, retire?: (envelopes: readonly Envelope[]) => void): {
+  freezeForWatchdogFailStop(activeTurnToken?: string): {
     droppedDispatched: number;
     droppedPending: number;
   } {
@@ -490,12 +511,10 @@ export class InterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
-      retire?.(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
-      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#admission.release(item.reservation, "retired");
-      retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
+      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "abandoned", reason: "coordinator_closed_pending" });
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
@@ -587,7 +606,7 @@ export class InterAgentTurnCoordinator {
       for (const item of pending.items) {
         const mode = this.#reclassifyQueued?.(item) ?? item.mode;
         if (mode === "terminal") {
-          if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+          if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
           this.#onTerminalQueued?.(item);
         } else {
           items.push(mode === item.mode ? item : { ...item, mode });
@@ -641,7 +660,10 @@ export class InterAgentTurnCoordinator {
     }
   }
 
-  #releaseBatch(batch: { items: readonly InterAgentBatchItem[] }, reason: "handed_off" | "completed" | "retired"): void {
-    for (const item of batch.items) if (item.reservation !== undefined) this.#admission.release(item.reservation, reason);
+  #releaseBatch(batch: { items: readonly InterAgentBatchItem[] }, _reason: "handed_off" | "completed" | "retired"): void {
+    this.#inputLifecycle.completeBatch(
+      batch.items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      { kind: "abandoned", reason: "coordinator_batch_removed" },
+    );
   }
 }

@@ -23,6 +23,22 @@ export { DeliveryStageReporter } from "./delivery_stages.js";
 export type { DeliveryStageIdentity, DeliveryStageSender, DeliveryStageTurnSource } from "./delivery_stages.js";
 export { settleOverloadedInbound } from "./inter_agent_overload.js";
 export type { InterAgentNoticeOutcome, InterAgentRetirementCapability } from "./inter_agent_overload.js";
+export { InterAgentInputLifecycle } from "./inter_agent_input_lifecycle.js";
+export type {
+  AdmissionClassification,
+  AdmissionResult,
+  BatchDisposition,
+  CompletionResult,
+  IngressLease,
+  InterAgentInputLifecyclePort,
+  InputHandle,
+  InputLifecycleOptions,
+  InputWitness,
+  OverloadDisposition,
+  PendingInput,
+  ResultInputEntry,
+  ResultInputLease,
+} from "./inter_agent_input_lifecycle.js";
 export {
   DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
@@ -36,6 +52,7 @@ export type {
   InterAgentAdmissionResult,
   InterAgentReleaseReason,
   InterAgentReservationClass,
+  InterAgentPendingEntry,
 } from "./inter_agent_admission.js";
 export type {
   HistoryReplayerOptions,

@@ -4,6 +4,7 @@ import {
   DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentAdmission,
+  InterAgentInputLifecycle,
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
@@ -13,6 +14,8 @@ import type {
   InterAgentAdmissionReservation,
   InboundReplyMode,
   InterAgentMessagePayload,
+  InterAgentInputLifecyclePort,
+  BatchDisposition,
 } from "@kaoiro/agent-common";
 
 export interface AntigravityInterAgentBatchItem {
@@ -40,6 +43,7 @@ export interface AntigravityInterAgentTurnCoordinatorOptions {
   onTerminalQueued?: (item: AntigravityInterAgentBatchItem) => void;
   createTurnToken?: () => string;
   admission?: InterAgentAdmission;
+  inputLifecycle?: InterAgentInputLifecyclePort;
   maxBatchItems?: number;
 }
 
@@ -60,8 +64,7 @@ export class AntigravityInterAgentTurnCoordinator {
   readonly #onTerminalQueued: ((item: AntigravityInterAgentBatchItem) => void) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
-  #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
-  readonly #admission: InterAgentAdmission;
+  readonly #inputLifecycle: InterAgentInputLifecyclePort;
   readonly #maxBatchItems: number;
 
   constructor(options: AntigravityInterAgentTurnCoordinatorOptions) {
@@ -69,17 +72,19 @@ export class AntigravityInterAgentTurnCoordinator {
     this.#reclassifyQueued = options.reclassifyQueued;
     this.#onTerminalQueued = options.onTerminalQueued;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
-    this.#admission = options.admission ?? new InterAgentAdmission(DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS);
+    this.#inputLifecycle = options.inputLifecycle ?? new InterAgentInputLifecycle({
+      maxPendingItems: DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+      ...(options.admission === undefined ? {} : { admission: options.admission }),
+    });
     this.#maxBatchItems = options.maxBatchItems ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS;
   }
 
-  freezeForWatchdogFailStop(activeTurnToken?: string, retire?: (envelopes: readonly Envelope[]) => void): {
+  freezeForWatchdogFailStop(activeTurnToken?: string): {
     droppedDispatched: number;
     droppedPending: number;
   } {
     if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
     this.#closed = true;
-    this.#retireDiscarded = retire;
     let droppedDispatched = 0;
     let droppedPending = 0;
     for (const [turnToken, batch] of this.#batchByTurnToken) {
@@ -89,12 +94,10 @@ export class AntigravityInterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
-      retire?.(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
-      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#admission.release(item.reservation, "retired");
-      retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
+      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "abandoned", reason: "watchdog_pending_unstarted" });
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
@@ -137,10 +140,16 @@ export class AntigravityInterAgentTurnCoordinator {
     this.#recoveryLeases.add(envelopes);
     let settled = false;
     return { envelopes,
-      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); this.#releaseItems(selected, "handed_off"); },
+      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); },
       rollback: () => {
         if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
-        if (this.#closed) { this.#releaseItems(selected, "retired"); this.#retireDiscarded?.(selected.map(item => item.envelope)); return; }
+        if (this.#closed) {
+          this.#inputLifecycle.completeBatch(
+            selected.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+            { kind: "abandoned", reason: "recovery_return_after_close" },
+          );
+          return;
+        }
         const remaining = new Set(selected);
         const restore = (before: readonly AntigravityInterAgentBatchItem[], current: readonly AntigravityInterAgentBatchItem[]): AntigravityInterAgentBatchItem[] => {
           const restored = before.filter(item => remaining.delete(item));
@@ -163,14 +172,14 @@ export class AntigravityInterAgentTurnCoordinator {
     };
   }
 
-  receive(envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation): void {
+  receive(envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation): boolean {
     if (this.#closed) {
-      const held = reservation ?? this.#admission.reservationFor(envelope);
-      if (held !== undefined && this.#admission.owns(held, envelope)) this.#admission.release(held, "retired");
-      this.#retireDiscarded?.([envelope]); return;
+      const held = reservation ?? this.#inputLifecycle.reservationFor(envelope);
+      if (held !== undefined && this.#inputLifecycle.owns(held, envelope)) this.#inputLifecycle.finish(held, { kind: "abandoned", reason: "coordinator_closed_before_receive" });
+      return false;
     }
-    const held = reservation ?? this.#admission.reservationFor(envelope) ?? this.#reserveDirect(envelope);
-    if (!this.#admission.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
+    const held = reservation ?? this.#inputLifecycle.reservationFor(envelope) ?? this.#reserveDirect(envelope);
+    if (!this.#inputLifecycle.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: AntigravityInterAgentBatchItem = { envelope, mode, reservation: held };
@@ -191,11 +200,16 @@ export class AntigravityInterAgentTurnCoordinator {
     open.items.push(item);
     open.bytes += itemBytes;
     this.#dispatchNext(peer);
+    return true;
   }
 
-  settle(turnToken: string): DispatchedAntigravityInterAgentBatch | undefined {
+  settle(turnToken: string, disposition: BatchDisposition): DispatchedAntigravityInterAgentBatch | undefined {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return undefined;
+    this.#inputLifecycle.completeBatch(
+      batch.items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      disposition,
+    );
     this.#batchByTurnToken.delete(turnToken);
     this.#releaseBatch(batch, "retired");
     this.#inputStarted.delete(turnToken);
@@ -205,9 +219,13 @@ export class AntigravityInterAgentTurnCoordinator {
     return batch;
   }
 
-  handoff(turnToken: string): void {
+  handoff(turnToken: string, ownerToken = turnToken): void {
     const batch = this.#batchByTurnToken.get(turnToken);
-    if (batch !== undefined) this.#releaseBatch(batch, "handed_off");
+    if (batch !== undefined) for (const item of batch.items) if (item.reservation !== undefined) {
+      this.#inputLifecycle.finish(item.reservation, {
+        kind: "observed", boundary: "antigravity_input_written", ownerToken,
+      });
+    }
   }
 
   deliverySequencesForTurn(turnToken: string): readonly number[] {
@@ -223,6 +241,13 @@ export class AntigravityInterAgentTurnCoordinator {
 
   deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[] {
     return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
+  }
+
+  inFlightHandles(turnToken?: string): readonly InterAgentAdmissionReservation[] {
+    if (turnToken === undefined) return [];
+    return this.#batchByTurnToken.get(turnToken)?.items.flatMap(item =>
+      item.reservation === undefined ? [] : [item.reservation],
+    ) ?? [];
   }
 
   deliverySequenceRangeForTurn(
@@ -268,7 +293,7 @@ export class AntigravityInterAgentTurnCoordinator {
     const survivingIds = new Set(conversationIds);
     const removedConversationIds = batch.conversationIds.filter(cid => !survivingIds.has(cid));
     for (const item of removed) {
-      if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+      if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
       this.#onTerminalQueued?.(item);
     }
     if (items.length === 0) return { batch: null, removedConversationIds };
@@ -289,7 +314,7 @@ export class AntigravityInterAgentTurnCoordinator {
       for (const item of pending.items) {
         const mode = this.#reclassifyQueued?.(item) ?? item.mode;
         if (mode === "terminal") {
-          if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+          if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
           this.#onTerminalQueued?.(item);
         } else {
           items.push(mode === item.mode ? item : { ...item, mode });
@@ -316,13 +341,16 @@ export class AntigravityInterAgentTurnCoordinator {
   }
 
   #reserveDirect(envelope: Envelope): InterAgentAdmissionReservation {
-    const result = this.#admission.admit(envelope);
-    if (result.kind !== "reserved") throw new Error("inter-agent input capacity exceeded");
-    return result.reservation;
+    const result = this.#inputLifecycle.reserveDirect(envelope);
+    if (result === undefined) throw new Error("inter-agent input capacity exceeded");
+    return result;
   }
 
-  #releaseItems(items: readonly AntigravityInterAgentBatchItem[], reason: "handed_off" | "completed" | "retired"): void {
-    for (const item of items) if (item.reservation !== undefined) this.#admission.release(item.reservation, reason);
+  #releaseItems(items: readonly AntigravityInterAgentBatchItem[], _reason: "handed_off" | "completed" | "retired"): void {
+    this.#inputLifecycle.completeBatch(
+      items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      { kind: "abandoned", reason: "coordinator_batch_removed" },
+    );
   }
 
   #releaseBatch(batch: { items: readonly AntigravityInterAgentBatchItem[] }, reason: "handed_off" | "completed" | "retired"): void {

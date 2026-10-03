@@ -24,7 +24,7 @@ describe("delivery recovery", () => {
     recovery.receive(envelope(2));
     recovery.observe(status(2, 0));
     recovery.retire([envelope(2)]);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[2, 2]], reason: "interrupted" }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[2, 2]], reason: "interrupted" }), expect.any(AbortSignal));
     recovery.dispose();
   });
 
@@ -36,7 +36,7 @@ describe("delivery recovery", () => {
     await vi.advanceTimersByTimeAsync(29_999);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ cutoff: 69, missing_ranges: [[68, 68]] }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ cutoff: 69, missing_ranges: [[68, 68]] }), expect.any(AbortSignal));
     recovery.dispose();
   });
 
@@ -50,7 +50,7 @@ describe("delivery recovery", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[2, 2]] }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[2, 2]] }), expect.any(AbortSignal));
     recovery.dispose();
   });
 
@@ -66,7 +66,7 @@ describe("delivery recovery", () => {
     request.mockResolvedValue({ delivery: status(2, 2), skipped_ranges: [[1, 2]] });
     recovery.join(true, status(2, 2));
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenLastCalledWith(first);
+    expect(request).toHaveBeenLastCalledWith(first, expect.any(AbortSignal));
     expect(resolved).toHaveBeenCalledOnce();
     expect(recovery.receive(envelope(2))).toBe(false);
     recovery.dispose();
@@ -96,7 +96,39 @@ describe("delivery recovery", () => {
   it("limits a retirement page to 256 sequences", () => {
     const { recovery, request } = setup();
     recovery.join(true, status(10_000, 0));
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[1, 256]] }));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[1, 256]] }), expect.any(AbortSignal));
+    recovery.dispose();
+  });
+
+  it("returns unconfirmed when a retirement flush reaches its cutoff", async () => {
+    const { recovery, request } = setup();
+    let resolveRequest!: (reply: DeliveryResyncReply | null) => void;
+    request.mockImplementation(() => new Promise(resolve => { resolveRequest = resolve; }));
+    recovery.join(true, status(1, 0));
+    recovery.receive(envelope(1));
+    recovery.retire([envelope(1)]);
+    const controller = new AbortController();
+    const flushed = recovery.flushRetirements(controller.signal);
+
+    controller.abort();
+
+    await expect(flushed).resolves.toBe("unconfirmed");
+    resolveRequest({ delivery: status(1, 1), skipped_ranges: [[1, 1]] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+    recovery.dispose();
+  });
+
+  it("stops all later retirement and gap-resync requests at the flush cutoff", async () => {
+    const { recovery, request } = setup();
+    recovery.join(true, status(1, 0));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+    recovery.stopRetirementRequests();
+    expect(recovery.retire([envelope(1)])).toBe(false);
+    recovery.join(true, status(1, 0));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledOnce();
     recovery.dispose();
   });
 });

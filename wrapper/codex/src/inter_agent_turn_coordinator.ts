@@ -9,6 +9,7 @@ import {
   DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
   DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentAdmission,
+  InterAgentInputLifecycle,
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
@@ -19,6 +20,9 @@ import type {
   InterAgentAdmissionReservation,
   InboundReplyMode,
   InterAgentMessagePayload,
+  InterAgentInputLifecyclePort,
+  BatchDisposition,
+  InputWitness,
 } from "@kaoiro/agent-common";
 
 export interface CodexInterAgentBatchItem {
@@ -66,9 +70,9 @@ export interface CodexInterAgentTurnCoordinatorOptions {
   createTurnToken?: () => string;
   createPlaceholder?: (id: string, arrival: number) => boolean;
   removePlaceholder?: (id: string) => void;
-  retireDiscarded?: (envelopes: readonly Envelope[]) => void;
   onFallbackDispatchFailure?: (batch: DispatchedCodexInterAgentBatch) => void;
   admission?: InterAgentAdmission;
+  inputLifecycle?: InterAgentInputLifecyclePort;
   maxBatchItems?: number;
 }
 
@@ -99,11 +103,9 @@ export class CodexInterAgentTurnCoordinator {
   readonly #createPlaceholder: ((id: string, arrival: number) => boolean) | undefined;
   readonly #removePlaceholder: ((id: string) => void) | undefined;
   readonly #onFallbackDispatchFailure: ((batch: DispatchedCodexInterAgentBatch) => void) | undefined;
-  readonly #retired = new WeakSet<Envelope>();
-  readonly #admission: InterAgentAdmission;
+  readonly #inputLifecycle: InterAgentInputLifecyclePort;
   readonly #maxBatchItems: number;
   #closed = false;
-  #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
 
   constructor(options: CodexInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
@@ -113,9 +115,11 @@ export class CodexInterAgentTurnCoordinator {
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
     this.#createPlaceholder = options.createPlaceholder;
     this.#removePlaceholder = options.removePlaceholder;
-    this.#retireDiscarded = options.retireDiscarded;
     this.#onFallbackDispatchFailure = options.onFallbackDispatchFailure;
-    this.#admission = options.admission ?? new InterAgentAdmission(DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS);
+    this.#inputLifecycle = options.inputLifecycle ?? new InterAgentInputLifecycle({
+      maxPendingItems: DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+      ...(options.admission === undefined ? {} : { admission: options.admission }),
+    });
     this.#maxBatchItems = options.maxBatchItems ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS;
   }
 
@@ -124,8 +128,8 @@ export class CodexInterAgentTurnCoordinator {
 
   reserveSteer(id: string, envelope: Envelope, mode: InboundReplyMode, arrival: number, reservation?: InterAgentAdmissionReservation): boolean {
     if (this.#closed || this.#steerReservations.has(id)) return false;
-    const held = reservation ?? this.#admission.reservationFor(envelope) ?? this.#reserveDirect(envelope);
-    if (!this.#admission.owns(held, envelope)) return false;
+    const held = reservation ?? this.#inputLifecycle.reservationFor(envelope) ?? this.#reserveDirect(envelope);
+    if (!this.#inputLifecycle.owns(held, envelope)) return false;
     this.#steerReservations.set(id, { id, envelope, mode, peer: envelope.agent_id, arrival, slot: false, status: "steering", reservation: held });
     return true;
   }
@@ -142,7 +146,7 @@ export class CodexInterAgentTurnCoordinator {
     this.#frozenSteers.delete(id);
     const reservation = this.#steerReservations.get(id);
     this.#releaseSteerReservation(id);
-    if (reservation !== undefined) this.#admission.release(reservation.reservation, "retired");
+    if (reservation !== undefined) this.#inputLifecycle.finish(reservation.reservation, { kind: "abandoned", reason: "steer_reservation_discarded" });
   }
 
   transferSteerReservation(id: string): InterAgentAdmissionReservation | undefined {
@@ -161,39 +165,38 @@ export class CodexInterAgentTurnCoordinator {
     if (reservation.slot) this.#removePlaceholder?.(id);
   }
 
-  settleSteerReservation(id: string, fallback: boolean, terminalReason: "handed_off" | "retired" = "handed_off"): void {
+  settleSteerReservation(id: string, fallback: boolean, disposition: InputWitness = { kind: "uncertain", reason: "steer_outcome_unknown", ack: "hold" }): void {
     const reservation = this.#steerReservations.get(id);
     if (reservation === undefined) {
       const frozen = this.#frozenSteers.get(id);
       this.#frozenSteers.delete(id);
       if (frozen !== undefined) {
-        if (fallback) this.retireEnvelopes([frozen.envelope]);
-        this.#admission.release(frozen.reservation, fallback ? "retired" : terminalReason);
+        this.#inputLifecycle.finish(frozen.reservation, fallback
+          ? { kind: "abandoned", reason: "steer_fallback_closed" }
+          : disposition);
       }
       return;
     }
     if (reservation.status !== "steering") return;
     if (!fallback) {
-      this.#admission.release(reservation.reservation, terminalReason);
+      this.#inputLifecycle.finish(reservation.reservation, disposition);
       this.#releaseSteerReservation(id);
       return;
     }
     if (!reservation.slot && !this.attachSteerPlaceholder(id)) {
       this.discardSteerReservation(id);
-      this.retireEnvelopes([reservation.envelope]);
       return;
     }
     const item = { envelope: reservation.envelope, mode: reservation.mode, reservation: reservation.reservation };
     if ((this.#reclassifyQueued?.(item) ?? item.mode) === "terminal") {
       this.#onTerminalQueued?.(item);
       this.#releaseSteerReservation(id);
-      this.#admission.release(reservation.reservation, "completed");
+      this.#inputLifecycle.finish(reservation.reservation, { kind: "inline", reason: "terminal_skip" });
       return;
     }
     if (this.#closed) {
       this.#releaseSteerReservation(id);
-      this.#admission.release(reservation.reservation, "retired");
-      this.retireEnvelopes([reservation.envelope]);
+      this.#inputLifecycle.finish(reservation.reservation, { kind: "abandoned", reason: "steer_fallback_after_close" });
       return;
     }
     reservation.status = "fallback";
@@ -204,13 +207,11 @@ export class CodexInterAgentTurnCoordinator {
     this.#dispatchNext(reservation.peer);
   }
 
-  retireEnvelopes(envelopes: readonly Envelope[]): void {
-    const fresh = envelopes.filter(envelope => {
-      if (this.#retired.has(envelope)) return false;
-      this.#retired.add(envelope);
-      return true;
-    });
-    if (fresh.length > 0) this.#retireDiscarded?.(fresh);
+  abandonEnvelopes(envelopes: readonly Envelope[], reason: string): void {
+    for (const envelope of envelopes) {
+      const handle = this.#inputLifecycle.reservationFor(envelope);
+      if (handle !== undefined) this.#inputLifecycle.finish(handle, { kind: "abandoned", reason });
+    }
   }
 
   #removePendingFallback(reservation: SteerReservation): void {
@@ -225,13 +226,12 @@ export class CodexInterAgentTurnCoordinator {
    * exact SDK-active generation. Unstarted generations are deliberately
    * discarded; the active generation remains unresolved for supervisor
    * recovery and must not be acknowledged by a late callback. */
-  freezeForWatchdogFailStop(activeTurnToken?: string, retire?: (envelopes: readonly Envelope[]) => void): {
+  freezeForWatchdogFailStop(activeTurnToken?: string): {
     droppedDispatched: number;
     droppedPending: number;
   } {
     if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
     this.#closed = true;
-    if (retire !== undefined) this.#retireDiscarded = retire;
     let droppedDispatched = 0;
     let droppedPending = 0;
     for (const [turnToken, batch] of this.#batchByTurnToken) {
@@ -241,7 +241,6 @@ export class CodexInterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
-      this.retireEnvelopes(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
     for (const reservation of [...this.#steerReservations.values()]) {
@@ -250,14 +249,12 @@ export class CodexInterAgentTurnCoordinator {
       }
       this.#releaseSteerReservation(reservation.id);
       if (reservation.status === "fallback") {
-        this.#admission.release(reservation.reservation, "retired");
-        this.retireEnvelopes([reservation.envelope]);
+        this.#inputLifecycle.finish(reservation.reservation, { kind: "abandoned", reason: "watchdog_fallback_unstarted" });
       }
       droppedPending += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
-      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#admission.release(item.reservation, "retired");
-      this.retireEnvelopes(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
+      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "abandoned", reason: "watchdog_pending_unstarted" });
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
@@ -308,10 +305,16 @@ export class CodexInterAgentTurnCoordinator {
     this.#recoveryLeases.add(envelopes);
     let settled = false;
     return { envelopes,
-      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); this.#releaseItems(selected, "handed_off"); },
+      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); },
       rollback: () => {
         if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
-        if (this.#closed) { this.#releaseItems(selected, "retired"); this.retireEnvelopes(selected.map(item => item.envelope)); return; }
+        if (this.#closed) {
+          this.#inputLifecycle.completeBatch(
+            selected.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+            { kind: "abandoned", reason: "recovery_return_after_close" },
+          );
+          return;
+        }
         const remaining = new Set(selected);
         const restore = (before: readonly CodexInterAgentBatchItem[], current: readonly CodexInterAgentBatchItem[]): CodexInterAgentBatchItem[] => {
           const restored = before.filter(item => remaining.delete(item));
@@ -374,32 +377,37 @@ export class CodexInterAgentTurnCoordinator {
   get steerRecoveryEvictions(): number { return this.#steerRecoveryEvictions; }
 
   #reserveDirect(envelope: Envelope): InterAgentAdmissionReservation {
-    const result = this.#admission.admit(envelope);
-    if (result.kind !== "reserved") throw new Error("inter-agent input capacity exceeded");
-    return result.reservation;
+    const result = this.#inputLifecycle.reserveDirect(envelope);
+    if (result === undefined) throw new Error("inter-agent input capacity exceeded");
+    return result;
   }
 
-  #releaseItems(items: readonly CodexInterAgentBatchItem[], reason: "handed_off" | "completed" | "retired"): void {
-    for (const item of items) if (item.reservation !== undefined) this.#admission.release(item.reservation, reason);
+  #releaseItems(items: readonly CodexInterAgentBatchItem[], _reason: "handed_off" | "completed" | "retired"): void {
+    this.#inputLifecycle.completeBatch(
+      items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      { kind: "abandoned", reason: "coordinator_batch_removed" },
+    );
   }
 
   #releaseBatch(batch: { items: readonly CodexInterAgentBatchItem[] }, reason: "handed_off" | "completed" | "retired"): void {
     this.#releaseItems(batch.items, reason);
   }
 
-  handoff(turnToken: string): void {
+  handoff(turnToken: string, boundary: "exec_input_written" | "turn_start_accepted", ownerToken = turnToken): void {
     const batch = this.#batchByTurnToken.get(turnToken);
-    if (batch !== undefined) this.#releaseBatch(batch, "handed_off");
+    if (batch !== undefined) for (const item of batch.items) if (item.reservation !== undefined) {
+      this.#inputLifecycle.finish(item.reservation, { kind: "observed", boundary, ownerToken });
+    }
   }
 
-  receive(envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation): void {
+  receive(envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation): boolean {
     if (this.#closed) {
-      const held = reservation ?? this.#admission.reservationFor(envelope);
-      if (held !== undefined && this.#admission.owns(held, envelope)) this.#admission.release(held, "retired");
-      this.retireEnvelopes([envelope]); return;
+      const held = reservation ?? this.#inputLifecycle.reservationFor(envelope);
+      if (held !== undefined && this.#inputLifecycle.owns(held, envelope)) this.#inputLifecycle.finish(held, { kind: "abandoned", reason: "coordinator_closed_before_receive" });
+      return false;
     }
-    const held = reservation ?? this.#admission.reservationFor(envelope) ?? this.#reserveDirect(envelope);
-    if (!this.#admission.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
+    const held = reservation ?? this.#inputLifecycle.reservationFor(envelope) ?? this.#reserveDirect(envelope);
+    if (!this.#inputLifecycle.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
     const item: CodexInterAgentBatchItem = { envelope, mode, reservation: held };
@@ -423,6 +431,7 @@ export class CodexInterAgentTurnCoordinator {
     open.items.push(item);
     open.bytes += itemBytes;
     this.#dispatchNext(peer);
+    return true;
   }
 
   /**
@@ -431,9 +440,13 @@ export class CodexInterAgentTurnCoordinator {
    * same-CID batch is valid protocol traffic and must not be settled by a
    * stale callback from the earlier turn.
    */
-  settle(turnToken: string): DispatchedCodexInterAgentBatch | undefined {
+  settle(turnToken: string, disposition: BatchDisposition): DispatchedCodexInterAgentBatch | undefined {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return undefined;
+    this.#inputLifecycle.completeBatch(
+      batch.items.flatMap(item => item.reservation === undefined ? [] : [item.reservation]),
+      disposition,
+    );
     this.#batchByTurnToken.delete(turnToken);
     this.#releaseBatch(batch, "retired");
     this.#inputStarted.delete(turnToken);
@@ -459,6 +472,19 @@ export class CodexInterAgentTurnCoordinator {
 
   deliveryEnvelopesForTurn(turnToken: string): readonly Envelope[] {
     return this.#batchByTurnToken.get(turnToken)?.items.map(item => item.envelope) ?? [];
+  }
+
+  inFlightHandles(turnToken?: string): readonly InterAgentAdmissionReservation[] {
+    const handles = new Set<InterAgentAdmissionReservation>();
+    if (turnToken !== undefined) {
+      for (const item of this.#batchByTurnToken.get(turnToken)?.items ?? []) {
+        if (item.reservation !== undefined) handles.add(item.reservation);
+      }
+    }
+    for (const reservation of this.#steerReservations.values()) {
+      if (reservation.status === "steering") handles.add(reservation.reservation);
+    }
+    return [...handles];
   }
 
   /** Returns the min/max delivery sequence represented by one active batch. */
@@ -525,7 +551,7 @@ export class CodexInterAgentTurnCoordinator {
     const survivingIds = new Set(conversationIds);
     const removedConversationIds = batch.conversationIds.filter(cid => !survivingIds.has(cid));
     for (const item of removed) {
-      if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+      if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
       this.#onTerminalQueued?.(item);
     }
     if (items.length === 0) return { batch: null, removedConversationIds };
@@ -549,7 +575,7 @@ export class CodexInterAgentTurnCoordinator {
       if (mode === "terminal") {
         this.#onTerminalQueued?.(item);
         this.#releaseSteerReservation(fallback.id);
-        this.#admission.release(fallback.reservation, "completed");
+        this.#inputLifecycle.finish(fallback.reservation, { kind: "inline", reason: "terminal_skip" });
         continue;
       }
       const selected = mode === item.mode ? item : { ...item, mode };
@@ -573,7 +599,7 @@ export class CodexInterAgentTurnCoordinator {
       this.#activeTokenByPeer.delete(peer);
       try { this.#onFallbackDispatchFailure?.(batch); } catch { /* Diagnostic output cannot strand the slot. */ }
       this.discardSteerReservation(fallback.id);
-      this.retireEnvelopes([fallback.envelope]);
+      this.#inputLifecycle.finish(fallback.reservation, { kind: "abandoned", reason: "steer_fallback_dispatch_failed" });
     }
     let items: CodexInterAgentBatchItem[];
     while (true) {
@@ -585,7 +611,7 @@ export class CodexInterAgentTurnCoordinator {
       for (const item of pending.items) {
         const mode = this.#reclassifyQueued?.(item) ?? item.mode;
         if (mode === "terminal") {
-          if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+          if (item.reservation !== undefined) this.#inputLifecycle.finish(item.reservation, { kind: "inline", reason: "terminal_skip" });
           this.#onTerminalQueued?.(item);
         } else {
           items.push(mode === item.mode ? item : { ...item, mode });

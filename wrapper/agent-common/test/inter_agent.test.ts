@@ -191,6 +191,15 @@ async function callTool(
   return { result: await tool.invoke(args) };
 }
 
+function completeToolInput(tool: InterAgentTool, envelope: Envelope): void {
+  const handle = tool.inputLifecycle.reservationFor(envelope);
+  if (handle !== undefined) tool.inputLifecycle.finish(handle, {
+    kind: "observed",
+    boundary: "turn_start_accepted",
+    ownerToken: "test-turn",
+  });
+}
+
 describe("delivery loss notifications", () => {
   it("evicts the oldest loss ID after 10000 distinct notices without refreshing duplicates", async () => {
     const { tool } = makeTool("recipient");
@@ -199,7 +208,7 @@ describe("delivery loss notifications", () => {
       inbound.payload.turn_number = 0;
       inbound.payload.loss_id = `loss-${id}`;
       const disposition = await tool.receiveInbound(inbound);
-      if (disposition.inject) tool.admission.releaseEnvelope(inbound, "handed_off");
+      if (disposition.inject) completeToolInput(tool, inbound);
       return disposition;
     };
     for (let id = 0; id < 10_000; id++) {
@@ -262,14 +271,14 @@ describe("receiver overload admission", () => {
         affected_deliveries: [{ delivery_seq: 41, peer_turn_number: 3, batch_id: "admission-attempt-1" }],
       },
     });
-    expect(tool.admission.counts()).toEqual({ total: 2, ordinary: 2, waiter: 0, control: 0 });
-    expect(tool.admission.reservationFor(first)).toBeDefined();
-    expect(tool.admission.reservationFor(second)).toBeDefined();
+    expect(tool.inputLifecycle.admissionCounts).toEqual({ total: 2, ordinary: 2, waiter: 0, control: 0 });
+    expect(tool.inputLifecycle.reservationFor(first)).toBeDefined();
+    expect(tool.inputLifecycle.reservationFor(second)).toBeDefined();
     expect(tool.pendingConversationIdsForTurn("older-owner")).toEqual(["overloaded-cid"]);
     expect(tool.queuedInboundMode(inboundEnvelope("overloaded-cid"), "reply-owed")).toBe("close-proposal");
 
-    tool.admission.releaseEnvelope(first, "retired");
-    tool.admission.releaseEnvelope(second, "retired");
+    completeToolInput(tool, first);
+    completeToolInput(tool, second);
   });
 
   it("admits a matched waiter above P and retains its reservation until tool-result handoff", async () => {
@@ -302,14 +311,14 @@ describe("receiver overload admission", () => {
     const reply = inboundEnvelope("wait-cid");
     const disposition = await tool.receiveInbound(reply);
     expect(disposition.consumed).toBe(true);
-    expect(tool.admission.counts()).toEqual({ total: 2, ordinary: 1, waiter: 1, control: 0 });
+    expect(tool.inputLifecycle.admissionCounts).toEqual({ total: 2, ordinary: 1, waiter: 1, control: 0 });
     const third = inboundEnvelope("third-cid", "inform");
     expect(await tool.receiveInbound(third)).toMatchObject({ overloaded: true });
 
     const result = await waiting;
     expect(handoffToolResult(result, () => {})).toBe(true);
-    expect(tool.admission.counts()).toEqual({ total: 1, ordinary: 1, waiter: 0, control: 0 });
-    tool.admission.releaseEnvelope(retained, "retired");
+    expect(tool.inputLifecycle.admissionCounts).toEqual({ total: 1, ordinary: 1, waiter: 0, control: 0 });
+    completeToolInput(tool, retained);
   });
 });
 

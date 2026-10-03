@@ -452,8 +452,15 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         queueMicrotask(() => callbacks.onPersonaPrompt?.("system"));
         return {
           currentSessionId: () => null, send: () => {},
+          deliveryIncarnation: () => "server-incarnation",
+          deliveryGeneration: () => "test-generation",
+          interAgentRetirementCapability: () => "supported",
+          reportDeliveryStage: () => {},
           acknowledgeInterAgentDelivery: () => {},
-          retireInterAgentDeliveries: (envelopes: Envelope[]) => retired.push(...envelopes.map((envelope) => (envelope as Envelope & { delivery_seq: number }).delivery_seq)),
+          retireInterAgentDeliveries: (envelopes: Envelope[]) => {
+            retired.push(...envelopes.map((envelope) => (envelope as Envelope & { delivery_seq: number }).delivery_seq));
+            return true;
+          },
           flushInterAgentRetirements: async () => { closing.push("flush"); },
           close: () => { closing.push("close"); },
         } as never;

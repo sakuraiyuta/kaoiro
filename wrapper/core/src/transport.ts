@@ -447,6 +447,11 @@ export interface ServerLinkOptions {
   onHydration?: (verdict: HydrationVerdictMessage | null) => void;
 }
 
+export interface PhoenixPushOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 /** Server acknowledgement of a self-initiated reset reservation. Acceptance
  *  is not completion: retain this id to correlate a later failure push. */
 export interface SessionResetAccepted {
@@ -462,6 +467,12 @@ export interface SessionResetFailure {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function phoenixPushTrigger(push: Push, status: "timeout"): void {
+  // Phoenix 1.8.8 exposes this runtime method, which clears its own timeout and
+  // settles the push locally; @types/phoenix omits it, so keep the cast narrow.
+  (push as Push & { trigger?: (status: "timeout", response: unknown) => void }).trigger?.(status, {});
 }
 
 /** The reasons a `session_reset_request` reply may carry — exactly the four
@@ -1312,6 +1323,7 @@ export class ServerLink {
   }
   readonly #deliveryGeneration = randomUUID();
   #deliveryRecovery: DeliveryRecovery;
+  #deliveryRetirementRequestsOpen = true;
   /** Incarnation the current recovery ledger belongs to. Unlike
    *  `#deliveryIncarnation` it survives a disconnect, so a rejoin can tell
    *  whether the server still recognises that ledger. */
@@ -1378,12 +1390,16 @@ export class ServerLink {
   ) {
     this.#onReplyBasisMode = options.onReplyBasisMode;
     this.#onNoticeAttributionMode = options.onNoticeAttributionMode;
-    const createDeliveryRecovery = () => new DeliveryRecovery({
-      request: (request) => this.requestInterAgentDeliveryResync(request),
-      resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
-      resendAck: (seq) => this.acknowledgeInterAgentDelivery(seq),
-      unavailable: () => writeRedactedStderr("[kaoiro] delivery recovery unavailable: server did not negotiate skip-v1\n"),
-    });
+    const createDeliveryRecovery = () => {
+      const recovery = new DeliveryRecovery({
+        request: (request, signal) => this.requestInterAgentDeliveryResync(request, signal),
+        resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
+        resendAck: (seq) => this.acknowledgeInterAgentDelivery(seq),
+        unavailable: () => writeRedactedStderr("[kaoiro] delivery recovery unavailable: server did not negotiate skip-v1\n"),
+      });
+      if (!this.#deliveryRetirementRequestsOpen) recovery.stopRetirementRequests();
+      return recovery;
+    };
     this.#deliveryRecovery = createDeliveryRecovery();
     this.#onInterAgentAck = options.onInterAgentAck;
     this.#permissionSync = options.permissionSync;
@@ -1966,37 +1982,52 @@ export class ServerLink {
   }
 
   retireInterAgentDeliveries(envelopes: readonly Envelope[]): boolean {
+    if (!this.#deliveryRetirementRequestsOpen) return false;
     return this.#deliveryRecovery.retire(envelopes);
+  }
+
+  stopInterAgentRetirementRequests(): void {
+    this.#deliveryRetirementRequestsOpen = false;
+    this.#deliveryRecovery.stopRetirementRequests();
   }
 
   interAgentRetirementCapability(): "pending" | "supported" | "unsupported" {
     return this.#deliveryRecovery.retirementCapability();
   }
 
-  async flushInterAgentRetirements(): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        this.#deliveryRecovery.flushRetirements(),
-        new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); }),
-      ]);
-    } finally { clearTimeout(timer); }
+  async flushInterAgentRetirements(options: { signal?: AbortSignal } = {}): Promise<"complete" | "unconfirmed"> {
+    return this.#deliveryRecovery.flushRetirements(options.signal);
   }
 
-  requestInterAgentDeliveryResync(request: DeliveryResyncRequest): Promise<DeliveryResyncReply | null> {
+  requestInterAgentDeliveryResync(request: DeliveryResyncRequest, signal?: AbortSignal): Promise<DeliveryResyncReply | null> {
+    if (signal?.aborted) return Promise.resolve(null);
     return new Promise((resolve) => {
-      this.#pushVersioned("delivery_resync", { ...request, generation: this.#deliveryGeneration })
+      const push = this.#pushVersioned("delivery_resync", { ...request, generation: this.#deliveryGeneration });
+      let settled = false;
+      const finish = (reply: DeliveryResyncReply | null): void => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        resolve(reply);
+      };
+      const onAbort = (): void => {
+        phoenixPushTrigger(push, "timeout");
+        finish(null);
+      };
+      push
         .receive("ok", (payload: unknown) => {
           const delivery = isObject(payload) ? deliveryStatusFrom(payload.delivery) : undefined;
           // The server must confirm the exact quarantined page, not a partial
           // or unrelated request that would reopen an unresolved late frame.
           if (isObject(payload) && payload.request_id === request.request_id && delivery !== undefined &&
               JSON.stringify(payload.skipped_ranges) === JSON.stringify(request.missing_ranges)) {
-            resolve({ delivery, skipped_ranges: request.missing_ranges });
-          } else resolve(null);
+            finish({ delivery, skipped_ranges: request.missing_ranges });
+          } else finish(null);
         })
-        .receive("error", () => resolve(null))
-        .receive("timeout", () => resolve(null));
+        .receive("error", () => finish(null))
+        .receive("timeout", () => finish(null));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
     });
   }
 
@@ -2168,7 +2199,8 @@ export class ServerLink {
    *  unchanged and stays on the ack — recording is about durability, this
    *  Promise is about the tool result, and they settle at the same moment
    *  only in the accepted case. */
-  sendInterAgent(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+  sendInterAgent(envelope: Envelope, replyBasisGeneration?: number, options: PhoenixPushOptions = {}): Promise<InterAgentAcceptance> {
+    if (options.signal?.aborted) return Promise.resolve({ kind: "unknown", reason: "shutdown_cancelled" });
     const payload = envelope.type === "inter_agent_message" ? envelope.payload : null;
     if (payload && ((payload.work_control !== undefined || payload.work_id !== undefined) && !this.#workControlSupported)) {
       return Promise.resolve({ kind: "rejected", reason: "work_control_unavailable", send_not_attempted: true });
@@ -2184,20 +2216,37 @@ export class ServerLink {
     }
     const { wire, push } = this.#pushEnvelope(envelope);
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: InterAgentAcceptance): void => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+      const onAbort = (): void => {
+        phoenixPushTrigger(push, "timeout");
+        finish({ kind: "unknown", reason: "shutdown_cancelled" });
+      };
       push
         .receive("ok", (reply: unknown) => {
-          resolve({
+          if (options.signal?.aborted) {
+            finish({ kind: "unknown", reason: "shutdown_cancelled" });
+            return;
+          }
+          finish({
             kind: "accepted",
             stamp: this.#recordInterAgentAck(wire, reply),
             ...interAgentSendReplyFields(reply),
           });
         })
         .receive("error", (reply: unknown) => {
-          resolve({ kind: "rejected", ...pushRejection(reply) });
+          finish({ kind: "rejected", ...pushRejection(reply) });
         })
         .receive("timeout", () => {
-          resolve({ kind: "unknown", reason: "timeout" });
+          finish({ kind: "unknown", reason: options.signal?.aborted ? "shutdown_cancelled" : "timeout" });
         });
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted) onAbort();
     });
   }
 
@@ -2224,11 +2273,13 @@ export class ServerLink {
   }
 
   /** Stamps wrapper -> server control messages (ADR-0015 stage 2). */
-  #pushVersioned(event: VersionedWrapperEvent, payload: Record<string, unknown>): Push {
+  #pushVersioned(event: VersionedWrapperEvent, payload: Record<string, unknown>, timeoutMs?: number): Push {
+    const channelTimeoutMs = (this.#channel as Channel & { timeout: number }).timeout;
+    const timeout = timeoutMs === undefined ? channelTimeoutMs : Math.max(1, Math.min(channelTimeoutMs, timeoutMs));
     return this.#channel.push(event, {
       ...payload,
       version: WRAPPER_PROTOCOL_VERSION,
-    });
+    }, timeout);
   }
 
   #rememberActiveTask(envelope: Envelope): void {
@@ -2458,12 +2509,32 @@ export class ServerLink {
   /** Records a terminal self-disconnect intent and waits for the server ack. */
   reportDisconnectIntent(
     reason: "stop" | "quota_exhausted" | "crash",
+    options: PhoenixPushOptions = {},
   ): Promise<boolean> {
+    if (options.signal?.aborted) return Promise.resolve(false);
+    const channelTimeoutMs = (this.#channel as Channel & { timeout: number }).timeout;
+    const timeoutMs = options.timeoutMs === undefined
+      ? channelTimeoutMs
+      : Math.max(1, Math.min(channelTimeoutMs, options.timeoutMs));
+    const push = this.#pushVersioned("disconnect_intent", { reason }, timeoutMs);
     return new Promise((resolve) => {
-      this.#pushVersioned("disconnect_intent", { reason })
-        .receive("ok", () => resolve(true))
-        .receive("error", () => resolve(false))
-        .receive("timeout", () => resolve(false));
+      let settled = false;
+      const finish = (accepted: boolean): void => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(accepted);
+      };
+      const onAbort = (): void => {
+        phoenixPushTrigger(push, "timeout");
+        finish(false);
+      };
+      push
+        .receive("ok", () => finish(true))
+        .receive("error", () => finish(false))
+        .receive("timeout", () => finish(false));
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted) onAbort();
     });
   }
 
