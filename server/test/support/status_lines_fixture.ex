@@ -226,6 +226,19 @@ defmodule KaoiroServer.StatusLinesFixture do
     end
   end
 
+  @doc """
+  Puts the application's own store back to "no stored retention pick". A test
+  that stored one would otherwise change the starting state of every later
+  module; the store offers no client path to unset it, so the record and the
+  owner's copy are reset directly.
+  """
+  def reset_app_retention(name \\ AgentStatusLines, default \\ 20) do
+    :ok = :dets.delete(name, :retention)
+    :ok = :dets.sync(name)
+    :sys.replace_state(name, fn state -> %{state | retention: default, source: :default} end)
+    :ok
+  end
+
   @doc "A `:broadcast` that forwards every event to the test process."
   def forward_broadcast(test_pid) do
     fn event, payload -> send(test_pid, {:broadcast, event, payload}) end

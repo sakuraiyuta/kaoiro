@@ -39,7 +39,10 @@ defmodule KaoiroServer.ApplicationChildrenTest do
   # its contract.
   test "the status line store follows the stores it reads and precedes the Endpoint" do
     children = App.children(true)
-    index = fn child -> Enum.find_index(children, &(&1 == child)) end
+
+    index = fn module ->
+      Enum.find_index(children, &(&1 == module or match?({^module, _opts}, &1)))
+    end
 
     store = index.(KaoiroServer.AgentStatusLines)
 

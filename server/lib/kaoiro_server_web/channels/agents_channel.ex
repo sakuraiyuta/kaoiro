@@ -88,6 +88,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.AgentStatusLines
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
@@ -110,6 +111,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
   alias KaoiroServerWeb.PeerConnectivity
+  alias KaoiroServerWeb.StatusLineHistory
+  alias KaoiroServerWeb.StatusLineSnapshot
+  alias KaoiroServerWeb.StatusLineVisibility
   alias KaoiroServerWeb.SynthEnvelope
 
   # Resource bound for an operator instruction; generous for prose,
@@ -181,7 +185,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # operator-only gate as `history_cleared`.
     "directory",
     "work_changed",
-    "work_scope_overlap"
+    "work_scope_overlap",
+    # Agent status lines (issue 482). `status_line` is filtered per viewer by
+    # the one visibility predicate; `status_line_settings` is the retention
+    # pick and is operator-only. `status_line_snapshot` is pushed straight
+    # from the join and needs no interception.
+    "status_line",
+    "status_line_settings"
   ])
 
   # Every server -> client event must leave through `push_versioned/3`.
@@ -195,6 +205,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     session_reset_started session_reset_completed session_reset_failed
     work_changed work_scope_overlap
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
+    status_line_snapshot status_line status_line_settings
   ))
 
   @join_snapshot_events [
@@ -245,7 +256,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_work work_state_conflict subject_mismatch
                    work_link_conflict work_carriage_invalid operation_id_conflict
                    operation_id_expired unknown_operation work_capacity
-                   transfer_pending verdict_not_effective)a
+                   transfer_pending verdict_not_effective
+                   invalid_status_line_retention status_line_unavailable
+                   status_line_history_too_large)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -309,8 +322,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_info(:after_join, socket) do
     role = socket.assigns[:role]
 
+    states = AgentStates.snapshot()
+
     agents =
-      AgentStates.snapshot()
+      states
       |> Enum.flat_map(fn {id, envelope} ->
         case sanitize_envelope_for(role, envelope) do
           :drop -> []
@@ -365,6 +380,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
       push_versioned(socket, event, Map.fetch!(snapshot_frames, event))
     end)
 
+    # Issue 482. Supplementary display data, pushed after the closed set of join
+    # snapshot frames and not part of it: every role gets the rows it may see,
+    # built from the same AgentStates snapshot as the agent frame.
+    push_versioned(socket, StatusLineSnapshot.event(), StatusLineSnapshot.build(role, states))
+
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are
     # sensitive, #46) or the offline-agent directory (ADR-0030 D10). The
@@ -414,6 +434,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # than an edge, so a joining operator needs it up front — the drawer
       # control has nothing to show otherwise.
       push_versioned(socket, "quagmire_settings", quagmire_settings_payload())
+
+      # The retention pick behind the change log. A settings call that cannot
+      # be answered (the store is restarting) skips the push; the store
+      # announces its settings once it is up.
+      with {:ok, settings} <- AgentStatusLines.settings() do
+        push_versioned(socket, "status_line_settings", status_line_settings_payload(settings))
+      end
     end
 
     {:noreply, socket}
@@ -511,6 +538,29 @@ defmodule KaoiroServerWeb.AgentsChannel do
     {:noreply, socket}
   end
 
+  # A status line reaches an operator or admin always, and a viewer only for an
+  # agent in its own role-filtered snapshot: the same predicate the join
+  # snapshot and the history request use, evaluated on the agent's current
+  # envelope. One AgentStates call per viewer per event; this must never move
+  # onto a per-envelope path (issues #148, #160). Any other role gets nothing.
+  @impl true
+  def handle_out("status_line", %{"agent_id" => agent_id} = payload, socket) do
+    visible? =
+      case socket.assigns[:role] do
+        role when role in @operator_capable_roles ->
+          true
+
+        :viewer ->
+          agent_id |> AgentStates.get_envelope() |> StatusLineVisibility.viewer_visible?()
+
+        _other ->
+          false
+      end
+
+    if visible?, do: push_versioned(socket, "status_line", payload)
+    {:noreply, socket}
+  end
+
   # This event intentionally has no role gate. Before it was intercepted it
   # reached viewers by Phoenix's default relay; preserving that behaviour is
   # outside this issue's policy scope, while the funnel owns its wire stamp.
@@ -545,7 +595,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "quagmire_settings",
              "wrapper_build_info",
              "work_changed",
-             "work_scope_overlap"
+             "work_scope_overlap",
+             "status_line_settings"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
       push_versioned(socket, event, payload)
@@ -1682,6 +1733,44 @@ defmodule KaoiroServerWeb.AgentsChannel do
         {:error, :not_found} ->
           {:reply, {:error, %{reason: safe_reason(:unknown_user)}}, socket}
       end
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Issue 482. The change log of one agent's status line. A viewer reads it for
+  # an agent in its own snapshot only; any other id, a hidden agent and a
+  # nonexistent one alike, is `unknown_agent`, so the request cannot probe for
+  # agents the viewer may not see. An operator reads any agent the server
+  # knows or has a record for.
+  #
+  # The order is the contract: payload shape (the generic clause above), the id
+  # format, the role, and only then, for operator-capable roles, the version
+  # warning. A viewer or an unauthenticated socket never makes the server log,
+  # which keeps `require_operator/4`'s rationale.
+  def handle_in("status_line_history", payload, socket) do
+    with {:ok, agent_id} <- fetch_status_line_agent_id(payload),
+         role = current_role(socket),
+         :ok <- require_history_role(role),
+         :ok <- warn_history_version(role, payload),
+         :ok <- require_history_visible(role, agent_id),
+         {:ok, entries} <- AgentStatusLines.history(agent_id),
+         :ok <- require_known_history(role, agent_id, entries),
+         {:ok, reply} <- StatusLineHistory.reply(entries) do
+      {:reply, {:ok, reply}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-only. Persist, prune every agent at once, then announce: the store
+  # broadcasts `status_line_settings` after the sync, so every operator sees the
+  # same retention.
+  def handle_in("set_status_line_retention", payload, socket) do
+    with :ok <- require_operator(socket, payload, "set_status_line_retention"),
+         {:ok, requested} <- requested_status_line_retention(payload),
+         {:ok, settings} <- AgentStatusLines.set_retention(requested) do
+      {:reply, {:ok, status_line_settings_payload(settings)}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -2832,6 +2921,54 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # An absent key is not a request to disable: JSON `null` and a missing
   # field both arrive as nil, and only one of them means ∞.
+  defp requested_status_line_retention(payload) do
+    case Map.fetch(payload, "retention") do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, :invalid_status_line_retention}
+    end
+  end
+
+  defp status_line_settings_payload(settings) do
+    %{
+      "retention" => settings.retention,
+      "source" => Atom.to_string(settings.source),
+      "min" => settings.min,
+      "max" => settings.max
+    }
+  end
+
+  defp fetch_status_line_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_status_line_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  defp require_history_role(role) when role in [:viewer | @operator_capable_roles], do: :ok
+  defp require_history_role(_role), do: {:error, :forbidden}
+
+  defp warn_history_version(role, payload) when role in @operator_capable_roles,
+    do: warn_on_version_mismatch(payload, "status_line_history", "accepting")
+
+  defp warn_history_version(_role, _payload), do: :ok
+
+  defp require_history_visible(:viewer, agent_id) do
+    visible? = agent_id |> AgentStates.get_envelope() |> StatusLineVisibility.viewer_visible?()
+    if visible?, do: :ok, else: {:error, :unknown_agent}
+  end
+
+  defp require_history_visible(_operator_capable, _agent_id), do: :ok
+
+  # An operator may read a log the store holds or one for an agent the server
+  # still knows; anything else is an id that never existed.
+  defp require_known_history(:viewer, _agent_id, _entries), do: :ok
+  defp require_known_history(_role, _agent_id, [_ | _]), do: :ok
+
+  defp require_known_history(_role, agent_id, []) do
+    if AgentStates.known?(agent_id) or AgentDirectory.get(agent_id) != nil,
+      do: :ok,
+      else: {:error, :unknown_agent}
+  end
+
   defp requested_rally_turns(payload) do
     case Map.fetch(payload, "rally_turns") do
       {:ok, nil} -> {:ok, :off}
