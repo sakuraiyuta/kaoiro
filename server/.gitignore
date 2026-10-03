@@ -30,3 +30,5 @@ kaoiro_server-*.tar
 # /dashboard since issue #44).
 /priv/static/index.html
 /priv/static/assets/
+/priv/static/manifest.webmanifest
+/priv/static/icons/
