@@ -2,7 +2,7 @@
 title: Responsive layout specification
 description: Breakpoint definitions, area-specific layout rules, sheet mechanism, and safe-area handling that make the dashboard equally viable at PC, tablet, and smartphone sizes.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-04
 related: [design, protocol, responsive-reachability]
 ---
 
@@ -97,7 +97,7 @@ already determined those and the horizontal layout remains viable when short.
 | Header | Reduce vertical padding. |
 | Composer | Start at one-line height and expand only on focus. |
 | In-flow docks | Set a height cap and scroll internally. Do not change expansion state. |
-| Global dialog / drawer | Vertical scroll owner at all heights whenever content exceeds available height (issue #507; maintained under `short`). |
+| Global dialog / drawer | Vertical scroll owner at all heights whenever content exceeds available height (also under `short`). |
 | Lobby grid / timeline / status / sheet maximum height | Unchanged. |
 
 Keep docks expanded under `short` because the implementation promises to clear
@@ -107,7 +107,7 @@ promise and ADR-0052 F6, which permits only sheet open/close as responsive
 Svelte state.
 
 `LaunchDialog` and `SettingsDrawer` make themselves vertical scroll owners with
-`max-block-size` at all heights (issue #507), so low viewports never clip their
+`max-block-size` at all heights, so low viewports never clip their
 controls.
 
 ### Sheet mechanism
