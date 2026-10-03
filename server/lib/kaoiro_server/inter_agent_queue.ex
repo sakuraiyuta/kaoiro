@@ -18,7 +18,8 @@ defmodule KaoiroServer.InterAgentQueue do
   """
 
   @control_allowance 16
-  @lease_kinds [:root, :early, :recovery]
+  @ordinary_lease_kinds [:root, :early, :recovery]
+  @lease_kinds [:waiter | @ordinary_lease_kinds]
   @terminal_outcomes [:observed, :intentional_non_injection, :unknown]
 
   @type queue_id :: pos_integer()
@@ -123,7 +124,11 @@ defmodule KaoiroServer.InterAgentQueue do
   ## Offers
 
   @doc "True while an ordinary lease still has an item awaiting `begin_native`."
-  def lease_slot_busy?(q), do: Enum.any?(q.items, fn {_id, item} -> item.phase == :offered end)
+  def lease_slot_busy?(q) do
+    Enum.any?(q.items, fn {_id, item} ->
+      item.phase == :offered and match?({_, kind} when kind in @ordinary_lease_kinds, item.lease)
+    end)
+  end
 
   @doc """
   Offers a root batch: queued waiter items first, then the next sender's
@@ -218,6 +223,17 @@ defmodule KaoiroServer.InterAgentQueue do
            end),
          do: {id, item}
     end)
+  end
+
+  @doc """
+  Offers one matched waiter item as its own lease, outside the ordinary
+  lease slot and without credit.
+  """
+  def offer_waiter(q, id, next_seq) do
+    case q.items[id] do
+      %{phase: :queued, class: :waiter} -> issue_lease(q, :waiter, [id], next_seq)
+      _ -> {:error, :unknown_queue_item}
+    end
   end
 
   @doc "Offers a recovery claim: the given queued items, as one lease."

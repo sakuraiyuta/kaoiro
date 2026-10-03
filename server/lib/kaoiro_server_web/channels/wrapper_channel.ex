@@ -620,75 +620,27 @@ defmodule KaoiroServerWeb.WrapperChannel do
     handle_wrapper_in(event, payload, socket)
   end
 
+  # The private waiter registration rides outside the envelope and is
+  # stripped before anything validates, relays, projects or records it.
   defp handle_wrapper_in("envelope", envelope, socket) do
-    agent_id = socket.assigns.agent_id
-    {envelope, dropped_model?} = drop_oversized_directory_model(envelope)
+    {registration, envelope} = Map.pop(envelope, "waiter_registration")
 
-    if dropped_model? do
-      Logger.warning("directory model dropped for #{agent_id}: exceeds 256 bytes")
-    end
-
-    with :ok <- validate(envelope, agent_id),
-         {:ok, inter_agent} <-
-           preflight_inter_agent(
-             envelope,
-             agent_id,
-             socket.assigns[:inter_agent_reply_basis],
-             socket.assigns[:work_control],
-             socket.assigns[:delivery_modes]
-           ) do
-      # ふじ 検収 2 fix-round M2 (2026-07-23): advance boundary BEFORE
-      # any ingress stamp is allocated. Pre-M2 this ran after store, so
-      # if the first envelope of a new session was an inter_agent_message
-      # its IA order was allocated first and the boundary allocated a
-      # strictly larger order — the very current-session IA was then
-      # filtered out on reload. Running maybe_advance first flips the
-      # ordering so any IA stamped by this envelope gets a post-boundary
-      # order.
-      #
-      # Also handles Codex lazy 采番 adopt: an envelope whose
-      # session_id matches an already-boundary'd sid (Trigger 1 stored
-      # nil, now filled) patches the boundary's sid so future retries
-      # are transition-idempotent.
-      maybe_advance_session_boundary(envelope, agent_id)
-
-      # This timestamp belongs to the accepting WrapperChannel, not the
-      # activity GenServer: a delayed cast must not make last_activity_at
-      # look newer than the envelope the server actually accepted.
-      received_at = DateTime.utc_now() |> DateTime.to_iso8601()
-
-      case inter_agent do
-        {:accept, to, escalate, reservation, work_result, authority} ->
-          accept_inter_agent(
-            envelope,
-            agent_id,
-            to,
-            escalate,
-            reservation,
-            work_result,
-            authority,
-            received_at,
-            socket
-          )
-
-        :not_inter_agent ->
-          store_and_broadcast(envelope, agent_id, received_at, socket)
-      end
-    else
-      {:error, %{reason: "stale_reply_basis"} = details} ->
-        {:reply, {:error, with_queue_recovery(details, envelope, socket)}, socket}
-
-      {:error, %{reason: _} = details} ->
+    case register_waiter(registration, envelope, socket) do
+      {:error, details} ->
         {:reply, {:error, details}, socket}
 
-      {:error, {:disconnected, disconnect}} ->
-        {:reply, {:error, %{reason: "disconnected", disconnect: disconnect}}, socket}
+      {:ok, nil} ->
+        handle_envelope(envelope, socket)
 
-      {:error, reason} when is_atom(reason) ->
-        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      {:ok, registration_id} ->
+        case handle_envelope(envelope, socket) do
+          {:reply, {:ok, reply}, socket} ->
+            {:reply, {:ok, Map.put(reply, "waiter_registration_id", registration_id)}, socket}
 
-      {:error, reason} ->
-        {:reply, {:error, %{reason: reason}}, socket}
+          other ->
+            :ok = DeliveryStates.queue_unregister_waiter(socket.assigns.agent_id, registration_id)
+            other
+        end
     end
   end
 
@@ -1661,9 +1613,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     |> Keyword.get(:route_accepted, false)
   end
 
-  defp reserve_delivery(to, body) do
+  defp reserve_delivery(to, from, cid, body) do
     with {:ok, token} <- DeliveryStates.reserve(to, self()) do
-      case reserve_queue(to, body) do
+      case reserve_queue(to, from, cid, body) do
         {:ok, queue} ->
           {:ok, %{delivery: token, queue: queue}}
 
@@ -1674,9 +1626,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp reserve_queue(to, body) when is_binary(body) do
+  defp reserve_queue(to, from, cid, body) when is_binary(body) do
     if route_accepted?() do
-      case DeliveryStates.queue_reserve(to, :ordinary, byte_size(body)) do
+      case DeliveryStates.queue_reserve_reply(to, from, cid, byte_size(body)) do
         {:ok, token, _class} ->
           {:ok, token}
 
@@ -1697,7 +1649,41 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp reserve_queue(_to, _body), do: {:ok, nil}
+  defp reserve_queue(_to, _from, _cid, _body), do: {:ok, nil}
+
+  defp register_waiter(nil, _envelope, _socket), do: {:ok, nil}
+
+  defp register_waiter(
+         %{"token" => token, "call_token" => call_token, "expires_in_ms" => expires},
+         %{"type" => "inter_agent_message", "payload" => %{} = payload},
+         socket
+       )
+       when is_binary(token) and byte_size(token) in 1..256 and is_binary(call_token) and
+              byte_size(call_token) in 1..256 and is_integer(expires) and expires in 1..300_000 do
+    if socket.assigns[:inter_agent_queue] && route_accepted?() do
+      case DeliveryStates.queue_register_waiter(
+             socket.assigns.agent_id,
+             socket.assigns.delivery_generation,
+             self(),
+             %{
+               peer: payload["to"],
+               cid: payload["conversation_id"],
+               turn: payload["turn_number"],
+               token: token,
+               call_token: call_token,
+               expires_in_ms: expires
+             }
+           ) do
+        {:ok, id} -> {:ok, id}
+        {:error, _} -> {:ok, nil}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp register_waiter(_registration, _envelope, _socket),
+    do: {:error, %{reason: "invalid value: waiter_registration"}}
 
   defp release_delivery(%{delivery: token, queue: queue}) do
     :ok = DeliveryStates.release(token)
@@ -2298,6 +2284,78 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Unlike the directory's optional display fields, delivery is a structured
   # status map. Keep `nil` absent (legacy wrapper means unknown), while
   # preserving the map verbatim for capability-aware clients.
+  defp handle_envelope(envelope, socket) do
+    agent_id = socket.assigns.agent_id
+    {envelope, dropped_model?} = drop_oversized_directory_model(envelope)
+
+    if dropped_model? do
+      Logger.warning("directory model dropped for #{agent_id}: exceeds 256 bytes")
+    end
+
+    with :ok <- validate(envelope, agent_id),
+         {:ok, inter_agent} <-
+           preflight_inter_agent(
+             envelope,
+             agent_id,
+             socket.assigns[:inter_agent_reply_basis],
+             socket.assigns[:work_control],
+             socket.assigns[:delivery_modes]
+           ) do
+      # ふじ 検収 2 fix-round M2 (2026-07-23): advance boundary BEFORE
+      # any ingress stamp is allocated. Pre-M2 this ran after store, so
+      # if the first envelope of a new session was an inter_agent_message
+      # its IA order was allocated first and the boundary allocated a
+      # strictly larger order — the very current-session IA was then
+      # filtered out on reload. Running maybe_advance first flips the
+      # ordering so any IA stamped by this envelope gets a post-boundary
+      # order.
+      #
+      # Also handles Codex lazy 采番 adopt: an envelope whose
+      # session_id matches an already-boundary'd sid (Trigger 1 stored
+      # nil, now filled) patches the boundary's sid so future retries
+      # are transition-idempotent.
+      maybe_advance_session_boundary(envelope, agent_id)
+
+      # This timestamp belongs to the accepting WrapperChannel, not the
+      # activity GenServer: a delayed cast must not make last_activity_at
+      # look newer than the envelope the server actually accepted.
+      received_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      case inter_agent do
+        {:accept, to, escalate, reservation, work_result, authority} ->
+          accept_inter_agent(
+            envelope,
+            agent_id,
+            to,
+            escalate,
+            reservation,
+            work_result,
+            authority,
+            received_at,
+            socket
+          )
+
+        :not_inter_agent ->
+          store_and_broadcast(envelope, agent_id, received_at, socket)
+      end
+    else
+      {:error, %{reason: "stale_reply_basis"} = details} ->
+        {:reply, {:error, with_queue_recovery(details, envelope, socket)}, socket}
+
+      {:error, %{reason: _} = details} ->
+        {:reply, {:error, details}, socket}
+
+      {:error, {:disconnected, disconnect}} ->
+        {:reply, {:error, %{reason: "disconnected", disconnect: disconnect}}, socket}
+
+      {:error, reason} when is_atom(reason) ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: reason}}, socket}
+    end
+  end
+
   ## delivery_queue_control wire
 
   @queue_return_reasons ~w(format_budget host_rejected_before_start credit_withdrawn
@@ -3292,7 +3350,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
             else
               with {:ok, admission} <-
                      KaoiroServer.InterAgentReplyBasis.admission(payload, protected?),
-                   {:ok, reservation} <- reserve_delivery(to, body) do
+                   {:ok, reservation} <- reserve_delivery(to, from, cid, body) do
                 principal = %{"kind" => "agent", "id" => from}
                 operation = payload["work_control"]
 

@@ -158,6 +158,29 @@ defmodule KaoiroServer.DeliveryStates do
   def queue_claim_recovery(agent_id, generation, owner, peer, cid, server \\ __MODULE__),
     do: GenServer.call(server, {:queue_claim_recovery, agent_id, generation, owner, peer, cid})
 
+  @doc """
+  Installs `agent_id`'s waiter registration for a waiting send to `peer` on
+  `cid` (r8 §6.1), replacing an unclaimed one on the same conversation.
+  `registration` carries `:peer`, `:cid`, `:turn`, `:token`, `:call_token`
+  and `:expires_in_ms`. Returns `{:ok, registration_id}`.
+  """
+  def queue_register_waiter(agent_id, generation, owner, registration, server \\ __MODULE__),
+    do:
+      GenServer.call(server, {:queue_register_waiter, agent_id, generation, owner, registration})
+
+  @doc "Removes an unclaimed registration after its send was refused."
+  def queue_unregister_waiter(agent_id, registration_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_unregister_waiter, agent_id, registration_id})
+
+  @doc """
+  `queue_reserve/4` for a reply from `sender` on `cid`: when it matches a
+  live registration of the recipient, the registration is claimed and the
+  reply is admitted as a waiter item outside P and M; otherwise it is an
+  ordinary reservation. Returns `{:ok, token, class}` or an error.
+  """
+  def queue_reserve_reply(agent_id, sender, cid, bytes, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_reserve_reply, agent_id, sender, cid, bytes})
+
   @doc "Whether the recipient's current generation must `resume` before new credit."
   def queue_resume_required?(agent_id, server \\ __MODULE__),
     do: GenServer.call(server, {:queue_resume_required, agent_id})
@@ -510,28 +533,86 @@ defmodule KaoiroServer.DeliveryStates do
     end
   end
 
-  def handle_call({:queue_reserve, agent_id, kind, bytes}, {owner, _}, state) do
-    case state.entries[agent_id] do
-      %{queue: %{} = queue} = entry ->
-        token = make_ref()
+  def handle_call(
+        {:queue_register_waiter, agent_id, generation, owner, registration},
+        _from,
+        state
+      ) do
+    with {:ok, entry} <- queue_owner_entry(state, agent_id, generation, owner),
+         %{generation: ^generation} = control <- state.queue_controls[agent_id] do
+      id = Integer.to_string(control.next_waiter)
 
-        case InterAgentQueue.reserve(queue, token, kind, bytes) do
-          {:ok, queue, class} ->
-            reservation = %{agent_id: agent_id, owner: owner, monitor: Process.monitor(owner)}
+      waiter = %{
+        id: id,
+        peer: registration.peer,
+        turn: registration.turn,
+        call_token: registration.call_token,
+        token_hash: :crypto.hash(:sha256, registration.token),
+        expires_at: System.monotonic_time(:millisecond) + registration.expires_in_ms,
+        claimed: nil
+      }
 
-            {:reply, {:ok, token, class},
-             %{
-               state
-               | entries: Map.put(state.entries, agent_id, %{entry | queue: queue}),
-                 queue_reservations: Map.put(state.queue_reservations, token, reservation)
-             }}
+      waiters =
+        control.waiters
+        |> Map.reject(fn {_cid, waiter} -> settled_waiter?(waiter, entry.queue) end)
+        |> Map.update(registration.cid, waiter, fn
+          %{claimed: nil} -> waiter
+          claimed -> claimed
+        end)
+
+      control = %{control | waiters: waiters, next_waiter: control.next_waiter + 1}
+
+      if waiters[registration.cid].id == id,
+        do: {:reply, {:ok, id}, put_in(state.queue_controls[agent_id], control)},
+        else: {:reply, {:error, :waiter_claimed}, state}
+    else
+      {:error, _} = error -> {:reply, error, state}
+      _ -> {:reply, {:error, :stale_channel}, state}
+    end
+  end
+
+  def handle_call({:queue_unregister_waiter, agent_id, registration_id}, _from, state) do
+    case state.queue_controls[agent_id] do
+      nil ->
+        {:reply, :ok, state}
+
+      control ->
+        waiters =
+          Map.reject(control.waiters, fn {_cid, waiter} ->
+            waiter.id == registration_id and waiter.claimed == nil
+          end)
+
+        {:reply, :ok, put_in(state.queue_controls[agent_id], %{control | waiters: waiters})}
+    end
+  end
+
+  def handle_call({:queue_reserve_reply, agent_id, sender, cid, bytes}, {owner, _}, state) do
+    now = System.monotonic_time(:millisecond)
+
+    case get_in(state.queue_controls, [agent_id, :waiters, cid]) do
+      %{peer: ^sender, claimed: nil, expires_at: expires_at} = waiter when expires_at > now ->
+        case reserve_in_queue(state, agent_id, owner, :waiter, bytes) do
+          {:ok, token, class, state} ->
+            state =
+              state
+              |> put_in([:queue_controls, agent_id, :waiters, cid, :claimed], {:reserved, token})
+              |> put_in([:queue_reservations, token, :waiter], {cid, waiter.id})
+
+            {:reply, {:ok, token, class}, state}
 
           {:error, _} = error ->
             {:reply, error, state}
         end
 
       _ ->
-        {:reply, {:error, :queue_unavailable}, state}
+        handle_call({:queue_reserve, agent_id, :ordinary, bytes}, {owner, nil}, state)
+    end
+  end
+
+  def handle_call({:queue_reserve, agent_id, kind, bytes}, {owner, _}, state) do
+    case reserve_in_queue(state, agent_id, owner, kind, bytes) do
+      {:ok, token, class, state} -> {:reply, {:ok, token, class}, state}
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
@@ -550,7 +631,16 @@ defmodule KaoiroServer.DeliveryStates do
           bodies: Map.put(state.bodies, {agent_id, queue_id}, body)
       }
 
-      {:reply, {:ok, queue_id}, maybe_offer(state, agent_id)}
+      state =
+        case reservation[:waiter] do
+          {cid, registration_id} ->
+            offer_matched_waiter(state, agent_id, cid, registration_id, queue_id)
+
+          nil ->
+            maybe_offer(state, agent_id)
+        end
+
+      {:reply, {:ok, queue_id}, state}
     else
       _ -> {:reply, {:error, :invalid_queue_reservation}, state}
     end
@@ -1391,7 +1481,9 @@ defmodule KaoiroServer.DeliveryStates do
             next_revision: 1,
             frozen: false,
             resume_required: leased?,
-            lease_tokens: %{}
+            lease_tokens: %{},
+            waiters: %{},
+            next_waiter: 1
           }
       end
 
@@ -1429,11 +1521,11 @@ defmodule KaoiroServer.DeliveryStates do
       %{op: :dispose} = op ->
         lease_control(state, agent_id, entry, control, op)
 
-      %{op: :waiter_close} ->
-        {:ok, state, reply(entry, %{closed: false, claimed: false}), :item_less}
+      %{op: :waiter_close, registration_id: id} ->
+        waiter_close(state, agent_id, entry, control, id)
 
-      %{op: :resume, lease_ids: lease_ids} ->
-        resume_control(state, agent_id, entry, control, lease_ids)
+      %{op: :resume, lease_ids: lease_ids, registration_ids: registration_ids} ->
+        resume_control(state, agent_id, entry, control, lease_ids, registration_ids)
 
       %{op: :freeze} ->
         freeze_control(state, agent_id, entry, control)
@@ -1564,7 +1656,7 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp restore_declined_credit(control, _op, _lease_id), do: control
 
-  defp resume_control(state, agent_id, entry, control, lease_ids) do
+  defp resume_control(state, agent_id, entry, control, lease_ids, registration_ids) do
     leases =
       for lease_id <- lease_ids do
         items =
@@ -1578,7 +1670,13 @@ defmodule KaoiroServer.DeliveryStates do
     control = %{control | resume_required: false}
 
     {:ok, put_in(state.queue_controls[agent_id], control),
-     reply(entry, %{leases: leases, registrations: []}), :item_less}
+     reply(entry, %{
+       leases: leases,
+       registrations:
+         for id <- registration_ids do
+           %{registration_id: id, active: live_waiter?(control, entry.queue, id)}
+         end
+     }), :item_less}
   end
 
   defp freeze_control(state, agent_id, entry, control) do
@@ -1738,6 +1836,90 @@ defmodule KaoiroServer.DeliveryStates do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp reserve_in_queue(state, agent_id, owner, kind, bytes) do
+    case state.entries[agent_id] do
+      %{queue: %{} = queue} = entry ->
+        token = make_ref()
+
+        with {:ok, queue, class} <- InterAgentQueue.reserve(queue, token, kind, bytes) do
+          reservation = %{agent_id: agent_id, owner: owner, monitor: Process.monitor(owner)}
+
+          {:ok, token, class,
+           %{
+             state
+             | entries: Map.put(state.entries, agent_id, %{entry | queue: queue}),
+               queue_reservations: Map.put(state.queue_reservations, token, reservation)
+           }}
+        end
+
+      _ ->
+        {:error, :queue_unavailable}
+    end
+  end
+
+  # A matched reply is offered as W at once, independent of credit (r8 §6.1).
+  defp offer_matched_waiter(state, agent_id, cid, registration_id, queue_id) do
+    state =
+      put_in(state, [:queue_controls, agent_id, :waiters, cid, :claimed], {:queued, queue_id})
+
+    entry = state.entries[agent_id]
+
+    with owner when is_pid(owner) <- state.owners[agent_id],
+         {:ok, queue, offer, next_seq} <-
+           InterAgentQueue.offer_waiter(entry.queue, queue_id, entry.issued_seq + 1) do
+      entry = %{
+        entry
+        | queue: queue,
+          issued_seq: next_seq - 1,
+          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      persist(state.table, agent_id, entry)
+      state = %{state | entries: Map.put(state.entries, agent_id, entry)}
+
+      payload =
+        batch_payload(state, agent_id, entry, %{kind: :waiter, revision: nil}, offer)
+        |> Map.delete("credit_revision")
+        |> Map.put("registration_id", registration_id)
+
+      send(owner, {:inter_agent_queue_batch, payload})
+      state
+    else
+      _ -> state
+    end
+  end
+
+  defp waiter_close(state, agent_id, entry, control, id) do
+    case Enum.find(control.waiters, fn {_cid, waiter} -> waiter.id == id end) do
+      {cid, %{claimed: nil}} ->
+        control = %{control | waiters: Map.delete(control.waiters, cid)}
+
+        {:ok, put_in(state.queue_controls[agent_id], control),
+         reply(entry, %{closed: true, claimed: false}), :item_less}
+
+      {_cid, _claimed} ->
+        {:ok, state, reply(entry, %{closed: false, claimed: true}), :item_less}
+
+      nil ->
+        {:ok, state, reply(entry, %{closed: false, claimed: false}), :item_less}
+    end
+  end
+
+  defp live_waiter?(control, queue, id) do
+    now = System.monotonic_time(:millisecond)
+
+    Enum.any?(control.waiters, fn {_cid, waiter} ->
+      waiter.id == id and not settled_waiter?(waiter, queue) and
+        (waiter.claimed != nil or waiter.expires_at > now)
+    end)
+  end
+
+  # A claimed registration is done once its W item has left the queue.
+  defp settled_waiter?(%{claimed: {:queued, queue_id}}, queue),
+    do: not Map.has_key?(queue.items, queue_id)
+
+  defp settled_waiter?(_waiter, _queue), do: false
+
   defp cancel_queue_reservation(state, token) do
     case Map.pop(state.queue_reservations, token) do
       {nil, _} ->
@@ -1745,6 +1927,20 @@ defmodule KaoiroServer.DeliveryStates do
 
       {reservation, rest} ->
         Process.demonitor(reservation.monitor, [:flush])
+
+        state =
+          case reservation[:waiter] do
+            {cid, _id} ->
+              update_in(state, [:queue_controls, reservation.agent_id], fn control ->
+                update_in(control, [:waiters, Access.key(cid, nil)], fn
+                  %{claimed: {:reserved, ^token}} = waiter -> %{waiter | claimed: nil}
+                  other -> other
+                end)
+              end)
+
+            nil ->
+              state
+          end
 
         entries =
           case state.entries[reservation.agent_id] do

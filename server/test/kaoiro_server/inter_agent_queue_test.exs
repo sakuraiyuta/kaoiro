@@ -129,6 +129,20 @@ defmodule KaoiroServer.InterAgentQueueTest do
       assert ids(offer) == [w, a1, a2]
     end
 
+    test "a waiter offer takes its own lease and leaves the ordinary slot free" do
+      {q, a} = queue() |> enqueue("a")
+      {q, w} = enqueue(q, "b", kind: :waiter)
+
+      assert {:ok, q, offer, 2} = Q.offer_waiter(q, w, 1)
+      assert offer.kind == :waiter
+      assert ids(offer) == [w]
+      refute Q.lease_slot_busy?(q)
+
+      assert {:ok, _q, root, _} = Q.offer_root(q, 2)
+      assert ids(root) == [a]
+      assert Q.offer_waiter(q, a, 3) == {:error, :unknown_queue_item}
+    end
+
     test "an empty queue offers nothing" do
       assert Q.offer_root(queue(), 1) == :empty
     end
