@@ -162,7 +162,7 @@ describe("QueueLease", () => {
     const { lease, sent } = harness();
     lease.receiveBatch(batch("7", ["10"]));
     await lease.resume();
-    expect(sent.at(-1)).toMatchObject({ op: "resume", lease_ids: ["7"], registration_ids: [] });
+    expect(sent.at(-1)).toMatchObject({ op: "resume", leases: [{ lease_id: "7", queue_ids: ["10"] }], registration_ids: [] });
 
     lease.join(joinReply, "i1", "g2");
     expect(lease.heldLeaseIds()).toEqual([]);

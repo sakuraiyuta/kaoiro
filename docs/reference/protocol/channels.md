@@ -214,7 +214,7 @@ discriminated `op`. Every request carries `operation_id`, `queue_epoch`,
 | `return` | `lease_id`, `items: [{queue_id, reason, sub_reason?}]` | `returned_ranges` (`[[first, last]]` delivery sequences) |
 | `dispose` | `lease_id`, `items: [{queue_id, outcome, witness?, reason?}]` | `disposed` (queue ids), `resolved_ranges`, `returned_ranges` |
 | `waiter_close` | `registration_id` | `closed` (boolean), `claimed` (boolean: a reply already matched and stays as W) |
-| `resume` | `lease_ids`, `registration_ids` | `leases: [{lease_id, items: [{queue_id, phase}]}]` with `phase` one of `queued`, `offered`, `native_pending`, `terminal`; `registrations: [{registration_id, active}]` |
+| `resume` | `leases: [{lease_id, queue_ids}]` (each lease the wrapper holds, with the queue ids it was offered), `registration_ids` | `leases: [{lease_id, items: [{queue_id, phase}]}]` for those ids, with `phase` one of `queued` (back in the queue), `offered`, `native_pending`, `terminal`; `registrations: [{registration_id, active}]` |
 | `freeze` | `reason`: `shutdown` or `session_reset` | `frozen: true` |
 
 Every success reply also echoes `op` and `operation_id` and carries `queue`
@@ -263,6 +263,10 @@ durable record. A retry with the same `operation_id`:
   `unknown_operation`, whether it expired or never succeeded. The wrapper
   reconciles through `resume`.
 
+An operation refused with an error is not recorded and does not raise the
+high-water mark; a retry after an error reply uses a new id, because the
+old one may already read as `unknown_operation`.
+
 *Return and dispose.* `return` reasons: `early_ineligible` with
 `sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
 `host_busy`, `pending_settings`, `steer_cap`, `fold_unavailable`,
@@ -307,7 +311,9 @@ reports those ranges in `returned_ranges` and `uncertain_ranges`, not in
 `credit`, `begin_native` and `delivery_resync` are refused with
 `queue_resume_required`. The order after a same-generation rejoin is
 `resume`, then `delivery_resync` for the remaining non-queue gap, then
-`credit`. `freeze` withdraws the outstanding credit, and no
+`credit`. A lease the `resume` request does not name never reached the
+wrapper: the server returns its un-permitted items to the queue and
+resolves its permitted ones as `unknown`, so it cannot hold the lease slot. `freeze` withdraws the outstanding credit, and no
 `delivery_batch` follows its reply. After `freeze`, `credit` and
 `begin_native` are refused with `queue_frozen`; `return`, `dispose`,
 `waiter_close` and `resume` stay valid.
@@ -368,11 +374,12 @@ budget:
 | `queued`, `offered`, `native_pending` | Non-waiter items in that phase; the three are disjoint |
 | `waiter` | Waiter items in any phase, disjoint from the three above |
 | `control` | Control-class items in any phase; a subset of the first three, not added to them |
-| `charged_bytes` | Body-byte charge of every counted item, including waiter and control items |
+| `charged_bytes` | Body-byte charge of every counted item, including waiter and control items, plus reservations of inputs being accepted |
 | `policy` | The bound tuple |
 
 The admission count Q is `queued + offered + native_pending + waiter`, and
-the byte charge E is `charged_bytes`. The wrapper's `unread_count` takes
+the byte charge E is `charged_bytes`; admission also counts the in-flight
+reservations, which these counts show only in `charged_bytes`. The wrapper's `unread_count` takes
 `queued` plus its own offered items not yet submitted. Bodies, tokens and
 registration secrets never appear in these counts.
 

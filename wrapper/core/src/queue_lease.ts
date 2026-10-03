@@ -120,6 +120,11 @@ export class QueueLease {
     return [...this.#leases.keys()];
   }
 
+  /** Each held lease with the queue ids it was offered, for `resume`. */
+  heldLeases(): { lease_id: string; queue_ids: string[] }[] {
+    return [...this.#leases].map(([leaseId, items]) => ({ lease_id: leaseId, queue_ids: [...items.keys()] }));
+  }
+
   /** Accepts a `delivery_batch` push; anything malformed or for another
    *  binding is ignored. Returns whether it was accepted. */
   receiveBatch(raw: unknown): boolean {
@@ -165,7 +170,7 @@ export class QueueLease {
   resume(registrationIds: readonly string[] = []): Promise<QueueControlResult<"resume">> {
     return this.#control("resume", {
       op: "resume",
-      lease_ids: this.heldLeaseIds(),
+      leases: this.heldLeases(),
       registration_ids: [...registrationIds],
     });
   }

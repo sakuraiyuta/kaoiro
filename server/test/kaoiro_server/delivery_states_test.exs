@@ -2342,9 +2342,51 @@ defmodule KaoiroServer.DeliveryStatesTest do
 
       assert {_,
               {:ok, %{leases: [%{lease_id: ^lease, items: [%{queue_id: ^a, phase: :offered}]}]}}} =
-               control(ctx, %{op: :resume, lease_ids: [lease], registration_ids: []})
+               control(ctx, %{op: :resume, leases: [{lease, [a]}], registration_ids: []})
 
       refute DeliveryStates.queue_resume_required?(ctx.recipient, ctx.name)
+    end
+
+    test "a lease whose batch never reached the wrapper is released at resume", ctx do
+      a = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit())
+      # The batch went to the old channel and was lost with it.
+      assert_receive {:inter_agent_queue_batch, _lost}
+
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+      assert {_, {:error, :queue_resume_required}} = control(ctx, root_credit("t2"))
+
+      assert {_, {:ok, %{leases: []}}} =
+               control(ctx, %{op: :resume, leases: [], registration_ids: []})
+
+      assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+      assert {_, {:ok, _}} = control(ctx, root_credit("t2"))
+
+      assert_receive {:inter_agent_queue_batch, %{"items" => [%{"queue_id" => again}]}}
+      assert again == Integer.to_string(a)
+    end
+
+    test "resume reports items that left a named lease", ctx do
+      a = put(ctx, "a")
+      b = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit())
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+      lease = String.to_integer(lease)
+      {_, {:ok, _}} = control(ctx, %{op: :return, lease_id: lease, items: [{a, "format_budget"}]})
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+
+      assert {_, {:ok, %{leases: [%{items: items}]}}} =
+               control(ctx, %{
+                 op: :resume,
+                 leases: [{lease, [a, b, b + 100]}],
+                 registration_ids: []
+               })
+
+      assert items == [
+               %{queue_id: a, phase: :queued},
+               %{queue_id: b, phase: :offered},
+               %{queue_id: b + 100, phase: :terminal}
+             ]
     end
 
     test "a declined early item keeps the early credit for the next one (B4)", ctx do

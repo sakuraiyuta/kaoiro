@@ -137,6 +137,20 @@ defmodule KaoiroServer.InterAgentQueuePolicyTest do
       end
     end
 
+    test "batch_max_items is capped at the largest safe integer" do
+      assert {:ok, _} =
+               Policy.validate_join(
+                 join(%{}, %{"batch_max_items" => 9_007_199_254_740_991}),
+                 @ceiling
+               )
+
+      assert {:error, %{field: "batch_max_items", detail: "above_ceiling"}} =
+               Policy.validate_join(
+                 join(%{}, %{"batch_max_items" => 9_007_199_254_740_992}),
+                 @ceiling
+               )
+    end
+
     test "backlog_max_items is capped at 1000" do
       assert {:ok, _} = Policy.validate_join(join(%{}, %{"backlog_max_items" => 1000}), @ceiling)
 

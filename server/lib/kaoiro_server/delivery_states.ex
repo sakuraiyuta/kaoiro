@@ -1612,8 +1612,8 @@ defmodule KaoiroServer.DeliveryStates do
       %{op: :waiter_close, registration_id: id} ->
         waiter_close(state, agent_id, entry, control, id)
 
-      %{op: :resume, lease_ids: lease_ids, registration_ids: registration_ids} ->
-        resume_control(state, agent_id, entry, control, lease_ids, registration_ids)
+      %{op: :resume, leases: leases, registration_ids: registration_ids} ->
+        resume_control(state, agent_id, entry, control, leases, registration_ids)
 
       %{op: :freeze} ->
         freeze_control(state, agent_id, entry, control)
@@ -1799,13 +1799,35 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp restore_declined_credit(control, _op, _lease_id), do: control
 
-  defp resume_control(state, agent_id, entry, control, lease_ids, registration_ids) do
+  # A lease the wrapper does not name never reached it (its batch was lost
+  # with the old channel): its un-permitted items go back to the queue and
+  # its native-pending ones become unknown, so it cannot hold the slot.
+  defp resume_control(state, agent_id, entry, control, named, registration_ids) do
+    named_ids = MapSet.new(named, &elem(&1, 0))
+
+    unseen =
+      for {_id, %{lease: {lease_id, _}, delivery_seq: seq}} <- entry.queue.items,
+          not MapSet.member?(named_ids, lease_id),
+          do: seq
+
+    {state, entry, _result} =
+      release_queue_sequences(state, agent_id, entry, unseen, "lease_unseen")
+
+    persist(state.table, agent_id, entry)
+
     leases =
-      for lease_id <- lease_ids do
+      for {lease_id, queue_ids} <- named do
         items =
-          for {id, item} <- Enum.sort(entry.queue.items),
-              match?({^lease_id, _}, item.lease),
-              do: %{queue_id: id, phase: item.phase}
+          for queue_id <- queue_ids do
+            phase =
+              case entry.queue.items[queue_id] do
+                nil -> :terminal
+                %{lease: {^lease_id, _}, phase: phase} -> phase
+                _ -> :queued
+              end
+
+            %{queue_id: queue_id, phase: phase}
+          end
 
         %{lease_id: lease_id, items: items}
       end

@@ -14,6 +14,8 @@ defmodule KaoiroServer.InterAgentQueuePolicy do
   """
 
   @backlog_max_items_ceiling 1_000
+  # The largest integer every JSON peer reads exactly (2^53 - 1).
+  @max_safe_integer 9_007_199_254_740_991
   @backlog_max_bytes_minimum 16_384
 
   @prerequisites [
@@ -96,7 +98,7 @@ defmodule KaoiroServer.InterAgentQueuePolicy do
 
   defp validate_policy(policy, ceiling) when is_map(policy) do
     bounds = [
-      {:batch_max_items, 1, nil},
+      {:batch_max_items, 1, @max_safe_integer},
       {:backlog_max_items, 1, @backlog_max_items_ceiling},
       {:backlog_max_bytes, @backlog_max_bytes_minimum, ceiling}
     ]

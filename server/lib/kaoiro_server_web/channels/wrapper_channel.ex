@@ -2427,14 +2427,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp queue_control_request(%{"op" => "resume"} = payload) do
-    with {:ok, lease_ids} <- queue_indexes(payload["lease_ids"], "lease_ids", true),
+    with {:ok, leases} <- queue_resume_leases(payload["leases"]),
          true <-
            (is_list(payload["registration_ids"]) and
               Enum.all?(payload["registration_ids"], &is_binary/1)) ||
              {:error, {:invalid_queue_control, "registration_ids"}},
-         do:
-           {:ok,
-            %{op: :resume, lease_ids: lease_ids, registration_ids: payload["registration_ids"]}}
+         do: {:ok, %{op: :resume, leases: leases, registration_ids: payload["registration_ids"]}}
   end
 
   defp queue_control_request(%{"op" => "freeze"} = payload) do
@@ -2447,6 +2445,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp queue_control_request(_payload), do: {:error, {:invalid_queue_control, "op"}}
+
+  defp queue_resume_leases(leases) when is_list(leases) do
+    Enum.reduce_while(leases, {:ok, []}, fn
+      %{"lease_id" => lease_id, "queue_ids" => queue_ids}, {:ok, acc} ->
+        with {:ok, lease} <- queue_index(lease_id, "leases"),
+             {:ok, ids} <- queue_indexes(queue_ids, "leases", true) do
+          {:cont, {:ok, acc ++ [{lease, ids}]}}
+        else
+          error -> {:halt, error}
+        end
+
+      _, _acc ->
+        {:halt, {:error, {:invalid_queue_control, "leases"}}}
+    end)
+  end
+
+  defp queue_resume_leases(_leases), do: {:error, {:invalid_queue_control, "leases"}}
 
   defp queue_string(payload, field) do
     case payload[field] do

@@ -1448,7 +1448,7 @@ export type DeliveryQueueControlRequest = DeliveryQueueControlBase & (
   | { op: "return"; lease_id: string; items: InterAgentQueueReturnItem[] }
   | { op: "dispose"; lease_id: string; items: InterAgentQueueDisposeItem[] }
   | { op: "waiter_close"; registration_id: string }
-  | { op: "resume"; lease_ids: string[]; registration_ids: string[] }
+  | { op: "resume"; leases: { lease_id: string; queue_ids: string[] }[]; registration_ids: string[] }
   | { op: "freeze"; reason: "shutdown" | "session_reset" }
 );
 
