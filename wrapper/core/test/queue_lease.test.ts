@@ -314,6 +314,17 @@ describe("QueueLease — unknown outcomes", () => {
     expect(new Set(returns).size).toBe(2);
   });
 
+  it("an outcome that arrives after a generation change is stale", async () => {
+    const h = harness();
+    h.lease.receiveBatch(batch());
+    h.holdReplies();
+    const settled = h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    h.lease.join(joinReply, "i1", "g2");
+    h.release();
+    expect(await settled).toEqual({ ok: false, error: { reason: "stale_channel" } });
+  });
+
   it("nothing held and no resume required: a rejoin sends nothing", async () => {
     const h = harness();
     await h.lease.rejoined(false);

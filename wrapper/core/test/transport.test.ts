@@ -106,6 +106,7 @@ import {
 import type { ServerLinkOptions } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
 import type { VersionedWrapperEvent } from "../src/transport.js";
+import type { QueueOffer } from "../src/queue_lease.js";
 import { createDeliveryAcknowledgementRuntime } from "../../agent-common/src/delivery_ack.js";
 
 function emit(event: string, payload: unknown): void {
@@ -3349,6 +3350,39 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     } finally {
       link.close();
       vi.useRealTimers();
+    }
+  });
+
+  it("logs a queue refusal that proves a wrapper bug to stderr", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const offers: QueueOffer[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentQueuePolicy: policy,
+      onQueueOffer: (offer) => offers.push(offer),
+    });
+    try {
+      mock.joinReceivers.get("ok")!({
+        inter_agent_queue: "credit-v1",
+        inter_agent_queue_policy: policy,
+        inter_agent_queue_epoch: "epoch",
+        inter_agent_queue_resume_required: false,
+        inter_agent_delivery_incarnation: "inc-1",
+      });
+      const generation = (mock.lastChannelParams as { delivery_generation: string }).delivery_generation;
+      emit("delivery_batch", {
+        version: "0", queue_epoch: "epoch", incarnation: "inc-1", generation, lease_id: "1",
+        kind: "root", credit_revision: "1",
+        items: [{ queue_id: "1", attempt_id: "1.1", delivery_seq: 1, class: "ordinary", byte_charge: 1,
+          envelope: { type: "inter_agent_message" } }],
+      });
+      const settled = offers[0]!.dispose([{ queue_id: "1", outcome: "intentional_non_injection", reason: "stale_skip" }]);
+      mock.lastPush!.receivers.get("error")!({ reason: "conflicting_disposition" });
+      expect(await settled).toMatchObject({ ok: false });
+      expect(stderr.mock.calls.map(([line]) => String(line)).join("")).toContain("dispose refused");
+    } finally {
+      link.close();
+      stderr.mockRestore();
     }
   });
 

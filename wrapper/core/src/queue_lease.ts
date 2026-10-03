@@ -206,8 +206,6 @@ export class QueueLease {
    *  credit should wait for it. */
   rejoined(resumeRequired: boolean): Promise<void> {
     if (!resumeRequired && this.#leases.size === 0 && this.#parked.size === 0) return Promise.resolve();
-    // After a rejoin the old ids are not resent: phases decide (H1).
-    for (const parked of this.#parked) parked.fastPath = false;
     return this.#reconcile();
   }
 
