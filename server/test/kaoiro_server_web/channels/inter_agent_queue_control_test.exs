@@ -455,7 +455,7 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
       Map.merge(fence(ctx, reply), %{
         "op" => "return",
         "lease_id" => lease_id,
-        "items" => [%{"queue_id" => second, "reason" => "permit_unused"}]
+        "items" => [%{"queue_id" => second, "reason" => "turn_abandoned"}]
       })
 
     assert {:ok, %{"returned_ranges" => [[2, 2]]}} = control(socket, unused)

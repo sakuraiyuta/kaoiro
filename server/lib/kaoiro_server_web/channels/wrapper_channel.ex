@@ -2371,7 +2371,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   ## delivery_queue_control wire
 
-  @queue_return_reasons ~w(format_budget host_rejected_before_start permit_unused
+  @queue_return_reasons ~w(format_budget host_rejected_before_start turn_abandoned
                            credit_withdrawn recovery_abandoned waiter_abandoned shutdown
                            epoch_changed)
   @queue_early_ineligible ~w(same_peer_in_turn conversation_pending host_busy

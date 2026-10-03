@@ -78,7 +78,7 @@ export interface QueueOfferItem {
 /** A single-use permission to submit the permitted items natively. */
 export interface NativeSubmit {
   /** The native turn the permit is bound to. Invoke only inside that turn;
-   *  an engine that has left it calls `QueueOffer.abandonBegin` instead. */
+   *  an engine that has left it calls `QueueOffer.release` instead. */
   readonly nativeTurnToken: string;
   /** Runs `submit` only if the items are still permitted under the same
    *  epoch and lease and the queue is not frozen; returns whether it ran. */
@@ -93,10 +93,13 @@ export interface QueueOffer {
    *  `null` when the permit was not granted; may stay pending across a
    *  reconnect while the outcome is unknown. */
   begin(queueIds: readonly string[], nativeTurnToken: string): Promise<NativeSubmit | null>;
-  /** The engine left the native turn before invoking the host. Permitted
-   *  items, and items whose pending `begin` turns out permitted, are
-   *  returned with `permit_unused`; a pending `begin` resolves `null`. */
-  abandonBegin(queueIds: readonly string[]): void;
+  /** The engine is leaving the native turn without invoking the host for
+   *  these items. Offered and permitted items, and items whose pending
+   *  `begin` turns out permitted, are returned with `turn_abandoned`; a
+   *  pending `begin` resolves `null`. Items already submitted are left for
+   *  their disposition. Every offered item ends in `begin` then `dispose`,
+   *  in `return`, or here. */
+  release(queueIds: readonly string[]): void;
   /** Returns items whose host call was never invoked. QueueLease keeps the
    *  return until the server has it; the promise settles then. */
   return(items: readonly InterAgentQueueReturnItem[]): Promise<QueueSettlement<"return">>;
@@ -139,6 +142,8 @@ interface Parked {
 const BUG_REFUSALS = new Set(["invalid_queue_control", "operation_payload_mismatch", "conflicting_disposition"]);
 const RETRY_FIRST_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
+/** Consecutive reconciliations after which a stall is logged, once. */
+const LOUD_AFTER = 3;
 
 /** Whether a failed lease operation's outcome is unknown. A refused
  *  `begin_native` is final (the engine owns the retry); a return or
@@ -171,6 +176,7 @@ export class QueueLease {
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
   #retryDelay = RETRY_FIRST_MS;
   #reconciling: Promise<void> | null = null;
+  #reconcileFailures = 0;
 
   constructor(options: QueueLeaseOptions) {
     this.#transport = options.transport;
@@ -320,7 +326,7 @@ export class QueueLease {
         if (targets.some((item) => item!.abandoned)) {
           for (const item of targets) item!.state = "returning";
           void this.#settleOp("return", leaseId, items,
-            queueIds.map((id) => ({ queue_id: id, reason: "permit_unused" as const })));
+            queueIds.map((id) => ({ queue_id: id, reason: "turn_abandoned" as const })));
           return null;
         }
         for (const item of targets) item!.state = "permitted";
@@ -336,19 +342,20 @@ export class QueueLease {
           },
         };
       },
-      abandonBegin: (queueIds) => {
-        const permitted: string[] = [];
+      release: (queueIds) => {
+        if (!current()) return;
+        const unused: string[] = [];
         for (const id of queueIds) {
           const item = items.get(id);
           if (item?.state === "begin_requested") item.abandoned = true;
-          if (item?.state === "permitted") {
+          if (item?.state === "offered" || item?.state === "permitted") {
             item.state = "returning";
-            permitted.push(id);
+            unused.push(id);
           }
         }
-        if (permitted.length > 0 && current()) {
+        if (unused.length > 0) {
           void this.#settleOp("return", leaseId, items,
-            permitted.map((id) => ({ queue_id: id, reason: "permit_unused" as const })));
+            unused.map((id) => ({ queue_id: id, reason: "turn_abandoned" as const })));
         }
       },
       return: async (entries) => {
@@ -395,7 +402,7 @@ export class QueueLease {
     entries: readonly (Op extends "return" ? InterAgentQueueReturnItem : InterAgentQueueDisposeItem)[],
   ): Promise<QueueSettlement<Op>> {
     let pending = [...entries];
-    for (;;) {
+    for (let reissues = 0; ; reissues++) {
       const outcome = await this.#leaseOp(op, { op, lease_id: leaseId, items: pending }) as LeaseOutcome<Op>;
       if (outcome.kind === "ok") {
         this.#settle(leaseId, items, pending.map((entry) => entry.queue_id));
@@ -411,7 +418,10 @@ export class QueueLease {
       this.#settle(leaseId, items, applied.map((entry) => entry.queue_id));
       pending = pending.filter((entry) => stillLeased(outcome.phases.get(entry.queue_id)));
       if (pending.length === 0) return { ok: true };
-      this.#log(`QueueLease ${op} not applied; re-issuing lease=${leaseId} items=${pending.length}`);
+      if (reissues + 1 === LOUD_AFTER) {
+        this.#log(`QueueLease ${op} still not applied after ${LOUD_AFTER} reconciliations; ` +
+          `re-issuing lease=${leaseId} items=${pending.map((entry) => entry.queue_id).join(",")}`);
+      }
     }
   }
 
@@ -441,6 +451,7 @@ export class QueueLease {
     clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
     this.#retryDelay = RETRY_FIRST_MS;
+    this.#reconcileFailures = 0;
     const parked = [...this.#parked];
     this.#parked.clear();
     for (const entry of parked) entry.finish(outcome);
@@ -486,9 +497,13 @@ export class QueueLease {
     const result = await this.resume();
     if (serial !== this.#bindingSerial) return;
     if (!result.ok) {
+      if (++this.#reconcileFailures === LOUD_AFTER) {
+        this.#log(`QueueLease reconciliation failing: ${JSON.stringify(result.error)}`);
+      }
       if (this.#parked.size > 0) this.#scheduleRetry();
       return;
     }
+    this.#reconcileFailures = 0;
     this.#retryDelay = RETRY_FIRST_MS;
     const phases = new Map(result.reply.leases.map((lease) =>
       [lease.lease_id, new Map(lease.items.map((item) => [item.queue_id, item.phase]))]));

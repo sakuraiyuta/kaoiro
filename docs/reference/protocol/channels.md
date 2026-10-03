@@ -279,8 +279,8 @@ id.
 `sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
 `host_busy`, `pending_settings`, `steer_cap`, `fold_unavailable`,
 `oversize`; and `format_budget`, `host_rejected_before_start`,
-`permit_unused` (the wrapper left the native turn after `begin_native` and
-before invoking the host), `credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
+`turn_abandoned` (the wrapper left the native turn without invoking the
+host for the item, permitted or not), `credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
 `epoch_changed`. The server also returns items on its own with
 `delivery_resync` (a resync range, below) and `lease_unseen` (an item that
 `resume` does not name); these appear as the item's last return reason and

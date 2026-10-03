@@ -305,32 +305,74 @@ describe("QueueLease — unknown outcomes", () => {
     expect(ops(h.sent, "dispose")).toHaveLength(1);
   });
 
-  it("an abandoned begin that turns out permitted is returned as permit_unused", async () => {
+  it("a released begin that turns out permitted is returned as turn_abandoned", async () => {
     const h = harness();
     h.lease.receiveBatch(batch());
     h.holdReplies();
     const begin = h.offers[0]!.begin(["10"], "t1");
-    h.offers[0]!.abandonBegin(["10"]);
+    h.offers[0]!.release(["10"]);
     h.release();
     expect(await begin).toBeNull();
     await vi.advanceTimersByTimeAsync(0);
     h.release();
     await vi.advanceTimersByTimeAsync(0);
     expect(ops(h.sent, "return")).toEqual([
-      expect.objectContaining({ items: [{ queue_id: "10", reason: "permit_unused" }] }),
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "turn_abandoned" }] }),
     ]);
     expect(h.lease.heldLeaseIds()).toEqual([]);
   });
 
-  it("abandoning a permitted item returns it and voids the permit", async () => {
+  it("releasing a permitted item returns it and voids the permit", async () => {
     const h = harness();
     h.lease.receiveBatch(batch());
     const submit = await h.offers[0]!.begin(["10"], "t1");
-    h.offers[0]!.abandonBegin(["10"]);
+    h.offers[0]!.release(["10"]);
     expect(submit!.invoke(() => {})).toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(ops(h.sent, "return")).toEqual([
-      expect.objectContaining({ items: [{ queue_id: "10", reason: "permit_unused" }] }),
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "turn_abandoned" }] }),
+    ]);
+  });
+
+  it("releasing an offered item returns it as turn_abandoned", async () => {
+    const h = harness();
+    h.lease.receiveBatch(batch("1", ["10", "11"]));
+    const submit = await h.offers[0]!.begin(["11"], "t1");
+    submit!.invoke(() => {});
+    h.offers[0]!.release(["10", "11"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops(h.sent, "return")).toEqual([
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "turn_abandoned" }] }),
+    ]);
+  });
+
+  it("warns once when a return stays unapplied across reconciliations", async () => {
+    const lines: string[] = [];
+    const many = <T>(n: number, f: T) => Array.from({ length: n }, () => f);
+    const h = harness(scripted({
+      return: many(20, unavailable),
+      resume: many(10, phases([["10", "offered"]])),
+    }), (line) => lines.push(line));
+    h.lease.receiveBatch(batch());
+    void h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 8_000 + 16_000);
+    expect(ops(h.sent, "resume").length).toBeGreaterThanOrEqual(4);
+    expect(lines.filter((line) => line.includes("still not applied after 3"))).toHaveLength(1);
+  });
+
+  it("warns once when reconciliation keeps failing", async () => {
+    const lines: string[] = [];
+    const stale = () => refusal("stale_queue_epoch");
+    const h = harness(scripted({
+      return: [lost, lost],
+      resume: Array.from({ length: 10 }, () => stale),
+    }), (line) => lines.push(line));
+    h.lease.receiveBatch(batch());
+    void h.offers[0]!.return([{ queue_id: "10", reason: "format_budget" }]);
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 8_000 + 16_000 + 30_000);
+    expect(ops(h.sent, "resume").length).toBeGreaterThanOrEqual(4);
+    expect(lines.filter((line) => line.includes("reconciliation failing"))).toEqual([
+      expect.stringContaining("stale_queue_epoch"),
     ]);
   });
 
