@@ -1313,6 +1313,10 @@ export interface InterAgentDeliveryStatus {
   last_uncertain?: { at: string; incarnation: string; generation: string; delivery_seq: number; reason: string };
   /** Bounded resync response only; not part of directory snapshots. */
   skipped_ranges?: [number, number][];
+  /** Resync response only, under `credit-v1`: queue-origin ranges returned
+   *  to the queue, and those resolved as uncertain. Never in skipped_ranges. */
+  returned_ranges?: [number, number][];
+  uncertain_ranges?: [number, number][];
   /** Present when the recipient negotiated `inter_agent_queue: "credit-v1"`. */
   queue?: InterAgentQueueCounts;
 }
@@ -1348,15 +1352,19 @@ export type InterAgentQueueJoinError =
     limit?: number;
   };
 
-/** Aggregates only; never bodies, tokens or registration secrets. */
+/** Aggregates only; never bodies, tokens or registration secrets. The
+ *  admission count is queued + offered + native_pending + waiter. */
 export interface InterAgentQueueCounts {
-  /** Items in the `queued` phase other than waiter replies. */
+  /** Non-waiter items per phase; the three are disjoint. */
   queued: number;
-  queued_bytes: number;
   offered: number;
   native_pending: number;
+  /** Waiter items in any phase, disjoint from the three above. */
   waiter: number;
+  /** Control-class items in any phase: a subset of the phase counts. */
   control: number;
+  /** Body-byte charge of every counted item, waiter and control included. */
+  charged_bytes: number;
   policy: InterAgentQueuePolicy;
 }
 
@@ -1399,6 +1407,7 @@ export type InterAgentQueueReturnItem =
   | {
     queue_id: string;
     reason:
+      | "format_budget"
       | "host_rejected_before_start"
       | "credit_withdrawn"
       | "recovery_abandoned"
@@ -1414,7 +1423,8 @@ export type InterAgentQueueObservedWitness =
   | "turn_start_accepted"
   | "exec_input_written"
   | "turn_steer_item_observed"
-  | "turn_input_written";
+  | "turn_input_written"
+  | "waiter_consumed";
 
 export type InterAgentQueueDisposeItem =
   | { queue_id: string; outcome: "observed"; witness: InterAgentQueueObservedWitness }
@@ -1452,27 +1462,44 @@ export type DeliveryQueueControlReply = DeliveryQueueControlReplyBase & (
   | { op: "withdraw"; withdrawn: boolean }
   | { op: "begin_native"; permitted_queue_ids: string[] }
   | { op: "return"; returned_ranges: [number, number][] }
-  | { op: "dispose"; disposed: string[]; resolved_ranges: [number, number][] }
+  | {
+    op: "dispose";
+    disposed: string[];
+    resolved_ranges: [number, number][];
+    /** Old sequences of items disposed `definitely_unstarted`. */
+    returned_ranges: [number, number][];
+  }
   | { op: "waiter_close"; closed: boolean; claimed: boolean }
   | {
     op: "resume";
-    leases: { lease_id: string; items: { queue_id: string; phase: "offered" | "native_pending" | "terminal" }[] }[];
+    leases: { lease_id: string; items: InterAgentQueueItemPhase[] }[];
     registrations: { registration_id: string; active: boolean }[];
   }
   | { op: "freeze"; frozen: true }
 );
 
+export interface InterAgentQueueItemPhase {
+  queue_id: string;
+  phase: "queued" | "offered" | "native_pending" | "terminal";
+}
+
 export type DeliveryQueueControlError =
   | {
     reason:
       | "stale_queue_epoch"
+      | "stale_channel"
       | "stale_delivery_owner"
+      | "queue_resume_required"
+      | "queue_frozen"
+      | "previous_root_pending"
       | "unknown_lease"
       | "unknown_queue_item"
       | "operation_payload_mismatch"
+      | "unknown_operation"
       | "conflicting_disposition"
       | "queue_unavailable";
   }
+  | { reason: "operation_superseded"; items: InterAgentQueueItemPhase[] }
   | { reason: "invalid_queue_control"; field: string };
 
 /** Outer field of a waiting `send_to_agent` push; stripped by the server

@@ -22,9 +22,9 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 
 | Direction | Event | Contents |
 |---|---|---|
-| wrapper → server | `envelope` | Full envelope. Accepted `inter_agent_message` replies carry `ingress_stamp: [us, seq]`, the same server-owned `delivery_authority` as the relayed payload, optional `work` and `work_control_result`, and `delivery.advisory` (`recipient_state`, `granted`, optional `downgrade`, `mechanism`, `unresolved_count`, `guidance: "accepted; do not resend"`). `unresolved_count` excludes submitted or retired entries above an earlier unresolved sequence; it is not the gap between issued and acknowledged sequence numbers. `mechanism` is `queue`, `fold`, `cut`, `steer`, `hook`, or `unknown`; receivers treat an unrecognized value as `unknown`. A receipt hit rejects with `work_operation_deduplicated`, `send_not_attempted: true`, stored `work_control_result` and delivery knowledge (`recorded`, `not_recorded`, or `unknown`), with no ingress stamp. An unknown work outcome rejects with `work_outcome_unknown`, `send_not_attempted: true`, and `operation_id`, also with no ingress stamp. Other envelope types receive an empty reply. Causal ordering follows [directory event contracts](../../reference/inter-agent/directory.md#event-contracts); sidecar recording uses [ADR-0051](../../adr/0051-history-restart-resilience.md). |
-| wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
-| wrapper → server | `delivery_stage` | ADR-0063 negotiated v1: `{version: "0", incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`. `stage` is `queued`, `submitted`, `included`, `settled`, or `unknown`; the server records `accepted` and `lost`, and returns `expired` on query. Codex steer handoffs are `turn_steer_accepted`, `turn_steer_item_observed`, and `turn_steer_write_uncertain`; eligible unknown reports resolve a gap as uncertainty, not loss. `yield_disposition` is set once. The current owner and ledger identity are checked before recording. |
+| wrapper → server | `envelope` | Full envelope. Accepted `inter_agent_message` replies carry `ingress_stamp: [us, seq]`, the same server-owned `delivery_authority` as the relayed payload, optional `work` and `work_control_result`, and `delivery.advisory` (`recipient_state`, `granted`, optional `downgrade`, `mechanism`, `unresolved_count`, `guidance: "accepted; do not resend"`). `unresolved_count` excludes submitted or retired entries above an earlier unresolved sequence; it is not the gap between issued and acknowledged sequence numbers. `mechanism` is `queue`, `fold`, `cut`, `steer`, `hook`, or `unknown`; receivers treat an unrecognized value as `unknown`. A receipt hit rejects with `work_operation_deduplicated`, `send_not_attempted: true`, stored `work_control_result` and delivery knowledge (`recorded`, `not_recorded`, or `unknown`), with no ingress stamp. An unknown work outcome rejects with `work_outcome_unknown`, `send_not_attempted: true`, and `operation_id`, also with no ingress stamp. Other envelope types receive an empty reply. Causal ordering follows [directory event contracts](../../reference/inter-agent/directory.md#event-contracts); sidecar recording uses [ADR-0051](../../adr/0051-history-restart-resilience.md). Under `credit-v1`, `unresolved_count` also counts the recipient's queued items, and the reply carries the [server-owned queue](#server-owned-inter-agent-queue-credit-v1) fields. |
+| wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. Under `credit-v1` it is a no-op for queue-origin sequences ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
+| wrapper → server | `delivery_stage` | ADR-0063 negotiated v1: `{version: "0", incarnation, generation, delivery_seq, stage, mode?, handoff?, evidence?, reason?, yield_disposition?, at}`. `stage` is `queued`, `submitted`, `included`, `settled`, or `unknown`; the server records `accepted` and `lost`, and returns `expired` on query. Codex steer handoffs are `turn_steer_accepted`, `turn_steer_item_observed`, and `turn_steer_write_uncertain`; eligible unknown reports resolve a gap as uncertainty, not loss. `yield_disposition` is set once. The current owner and ledger identity are checked before recording. Under `credit-v1` it is stage history only for queue-origin sequences and never resolves them ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
 | wrapper → server | `yield_claim` | `{version: "0", incarnation, generation, yield_token, conversation_id, turn_number, work_id, authority_epoch}`. The serialized server decision returns `{granted: true, repeated?}` or `{granted: false, reason}`; a stale owner receives `stale_channel`. |
 | wrapper → server | `work_transfer_ack` | `{version: "0", work_id, transfer_id}`; only the old assignee of that pending obligation may acknowledge it. The reply is `{work_id, transfer_id, state: "acknowledged"}` and includes no work record. |
 | wrapper → server | `work_op_result_request` | `{version: "0", operation_id}`; reads the caller's receipt, `unknown_operation`, or `operation_id_expired`. |
@@ -32,15 +32,15 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | wrapper → server | `work_check_request` | `{version: "0", work_id, action: "start" \| "land", expected_revision, subject_hash?}`; cooperative check and audit, without a resource lock. |
 | wrapper → server | `wrapper_build_info` | `{ build_revision, build_dirty, build_version, build_channel }` reports the wrapper artifact immediately after each successful channel join. The server derives `agent_id` from the topic, validates the complete identity pair, keeps only the latest connected value, and broadcasts it to operator-capable clients. `build_version` is `"unknown"` or `YYYY.M.PATCH`: a four-digit year, month `1` through `12`, and one to six decimal patch digits. The flat protocol `version` is added by the wrapper control-event funnel. |
 | wrapper → server | `delivery_status_request` | `{conversation_id?, turn_number?}`; without a message pair, reads the sender's ledger watermark. With a pair, reads the sender-authorized stage set or `expired`. Absence of a watermark is legacy/disarmed unknown. |
-| wrapper → server | `delivery_resync` | Negotiated by the additional join capability `delivery_resync: "skip-v1"`, echoed in the join reply. `{generation, request_id, cutoff, missing_ranges}` retires a bounded page of missing sequences under the current channel owner and generation. The reply echoes `request_id` and `skipped_ranges` with post-skip `delivery`; errors are `invalid_delivery_resync` or `stale_delivery_owner`. Version remains `"0"`. See [gap recovery](../../reference/inter-agent/delivery.md#negotiated-gap-recovery). |
+| wrapper → server | `delivery_resync` | Negotiated by the additional join capability `delivery_resync: "skip-v1"`, echoed in the join reply. `{generation, request_id, cutoff, missing_ranges}` retires a bounded page of missing sequences under the current channel owner and generation. The reply echoes `request_id` and `skipped_ranges` with post-skip `delivery`; errors are `invalid_delivery_resync` or `stale_delivery_owner`. Version remains `"0"`. See [gap recovery](../../reference/inter-agent/delivery.md#negotiated-gap-recovery). Under `credit-v1`, queue-origin ranges are returned or resolved as unknown and reported in `returned_ranges` and `uncertain_ranges`, not `skipped_ranges` ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
 | wrapper → server | `history_reset` | `{ replay_id }` starts replay. Use the server ID when the join verdict requires replay, otherwise a legacy wrapper ID. Clear display projection, retain IA for `replay_ia`, and acknowledge an absent entry as no-op ([ADR-0051](../../adr/0051-history-restart-resilience.md), [ADR-0014](../../adr/0014-session-resume-and-restore.md)). |
 | wrapper → server | `history_replay_complete` | `{ replay_id }` follows the final JSONL/sidecar row. The server broadcasts it and CAS-transitions matching in-flight hydration ([ADR-0051](../../adr/0051-history-restart-resilience.md)). |
 | wrapper → server | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }` restores one pane from the sidecar. Bind to the topic agent, upsert only that pane, reject stale/malformed stamps, and broadcast `history_replay_envelope`; operator-only ([ADR-0051](../../adr/0051-history-restart-resilience.md)). |
 | wrapper → server | `directory_request` | `{}` requests the peer directory. The server allow-lists AgentStates, merges AgentDirectory-only disconnected entries, and removes the sending wrapper once. It replies with `{ agents: [...], users: [...] }` only when the complete production JSON reply fits the transport frame budget; otherwise its Phoenix error body is `{ reason: "directory_too_large" }`. It never returns a partial directory, so a wrapper cannot use incomplete data for peer name resolution. Projection rules are normative in [peer directory](../../reference/inter-agent/directory.md). |
 | server → client | `snapshot` | `{ agents: { <agent_id>: envelope }, snapshot_incomplete?: true }` is pushed after join. The TransportLimits-bounded projection marks omission with `snapshot_incomplete`; compact entries may lose display-only fields while control state is unchanged. |
 | server → client | `task_snapshot` | `{ tasks: { <agent_id>: { <task_id>: envelope } } }` is the active subagent/workflow set, separate from agents. Viewer joins always receive `tasks: {}` ([ADR-0048](../../adr/0048-task-aggregation-delivery.md)). |
-| server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue; `uncertain_count` and `last_uncertain` persist for the ledger lifetime, while `lost_count` and `last_loss` reset on delivery-generation change (`InterAgentDeliveryStatus`). Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../../adr/0048-task-aggregation-delivery.md)). |
-| server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. |
+| server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue; `uncertain_count` and `last_uncertain` persist for the ledger lifetime, while `lost_count` and `last_loss` reset on delivery-generation change (`InterAgentDeliveryStatus`). Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../../adr/0048-task-aggregation-delivery.md)). Each entry gains `queue` under `credit-v1` ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
+| server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. `delivery` gains `queue` under `credit-v1` ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
 | server → client | `wrapper_build_info` | Join snapshot is `{ builds: { "<agent_id>": { build_revision, build_dirty, build_version, build_channel } }, build_info_incomplete?: true }`; live update is the same flat identity plus `agent_id`, and disconnect is `{ agent_id, cleared: true }`. Only currently connected wrappers appear in the snapshot. `build_info_incomplete: true` means the join snapshot omits one or more complete entries to fit the transport frame budget; live update semantics are unchanged. Operator-only. |
 | server → client | `envelope` | The complete envelope, broadcast on each state change. |
 | server → client | `history` | `{ agents: { "<pane_agent_id>": [...] }, clear_watermarks: { ... }, history_projection: "per-pane-v1", projection_epoch, history_incomplete?: true }` is pushed after join. `history_incomplete: true` means one or more oldest history entries or clear-watermark entries were omitted to fit the transport frame budget. Each retained pane remains chronological and contains a newest suffix; it does not alter the server's history or clear-watermark state. Operator-only. |
@@ -84,7 +84,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → wrapper | `permission_sync` | `{ version, control, next }`; authoritative permission settings after every join, including explicit nulls when empty. Gates the first/successor exec; see [permission synchronization](permission-sync-audit.md#persistence-join-synchronization-and-resume). |
 | server → wrapper | `persona_sync` | `{ version, name, revision }` is the legacy half of the dual emit with `display_name_sync`; both update only display_name and guard monotonic safe revisions (issue #209). |
 | server → wrapper | `display_name_sync` | `{ version, display_name, revision }` is the new dual-emitted form with the same contract and revision guard; wrappers route both forms through `renameDisplayName`. |
-| server → wrapper | `delivery_status` | `{ issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain?, version }`, flat (the topic already scopes `agent_id`) — same ledger fields as the `server → client` row below, but distinct: this copy drives the wrapper's own gap-recovery bookkeeping (`wrapper/core/src/transport.ts` `#bindServerEvent("delivery_status", ...)`), broadcast alongside the client-bound copy from the same `broadcast_delivery_status/1` call. |
+| server → wrapper | `delivery_status` | `{ issued_seq, acked_seq, pending_since?, lost_count?, last_loss?, uncertain_count?, last_uncertain?, version }`, flat (the topic already scopes `agent_id`) — same ledger fields as the `server → client` row below, but distinct: this copy drives the wrapper's own gap-recovery bookkeeping (`wrapper/core/src/transport.ts` `#bindServerEvent("delivery_status", ...)`), broadcast alongside the client-bound copy from the same `broadcast_delivery_status/1` call. Gains `queue` under `credit-v1` ([server-owned queue](#server-owned-inter-agent-queue-credit-v1)). |
 | client → server | `session_reset` | `{ agent_id, mode: "new" \| "clear" }` is operator-only. Validate role, agent, mode, capability, idle state, and pending lock atomically, then broadcast `session_reset_started` and push runner `reset_session`; reserved literal commands are rejected ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)). |
 | wrapper → server | `session_reset_request` | `{ mode: "new" \| "clear", reason?: string }` is the agent-self deferred reset request. Bind agent_id to the connection, reuse SessionResets checks, and return `{ request_id }` as lock confirmation only; use existing lifecycle rejection vocabulary ([ADR-0043](../../adr/0043-agent-initiated-session-reset.md)). |
 | wrapper → server | `session_lifecycle` | `{ kind, trigger?, at, details? }` records one session-lifecycle transition (phase-33, [ADR-0055](../../adr/0055-compaction-resume-and-lifecycle-log.md)). `kind` — wrapper-produced: `compacting` \| `compact_boundary` \| `compact_failed` \| `resume_reserved` \| `resume_fired` \| `threshold_notice` \| `conversation_reset` plus `permission_applied` / `permission_failed` with typed [permission details](permission-sync-audit.md#permission-lifecycle-audit); server-only `permission_requested` uses the same timeline. Server-merged into the same per-agent timeline: `disconnected` \| `reconnecting` \| `reconnected` \| `session_reset_started` \| `session_reset_completed` (a reset-driven rejoin records only `session_reset_completed`, never also `reconnected`). A server-authored `disconnected` may carry `details {origin, reason}` using the closed disconnect pairs; wrapper ingress cannot author this shape. `trigger` applies only to `compact_boundary`: `request_compact` when the wrapper's own FIFO reservation queue attributes this boundary to a `request_compact` call; otherwise the SDK's own account (`sdk_auto` for its `"auto"`, `manual` for its `"manual"` — which also covers an operator-typed `/compact` directly, indistinguishable from the SDK's side); omitted when neither is determinable. `at` is the wrapper's own observation timestamp, not server receipt time. Server retains up to `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` events per agent (default 10,000, oldest discarded first) and does not notify peers. |
@@ -150,12 +150,19 @@ implementation.
 ### Server-owned inter-agent queue (`credit-v1`)
 
 The server holds every undelivered inter-agent input for a recipient. The
-wrapper pulls it with credit, holds at most one offered ordinary batch, and
-reports a typed outcome for every item it was offered. Queue identity
-(`queue_id`) is distinct from the delivery sequence: a sequence is allocated
-only when an item is offered, and a returned item keeps its `queue_id` and
-receives a new sequence on its next offer. Every message below carries
-`version: "0"`.
+wrapper pulls it with credit, holds at most one offered and unsubmitted
+ordinary batch, and reports a typed outcome for every item it was offered.
+Queue identity (`queue_id`) is distinct from the delivery sequence: a
+sequence is allocated only when an item is offered, and a returned item
+keeps its `queue_id` and receives a new sequence on its next offer. Every
+request and push below carries `version: "0"`; replies do not, as for other
+channel replies.
+
+This section fixes the field names and meanings. The runtime validators
+for these shapes come with the server queue (C2). Because they make
+`@kaoiro/protocol` a runtime import, that change also declares it as a
+production dependency of the runner and the wrapper packages (director
+decision, 2026-10-04).
 
 **Join.** The wrapper join request must carry:
 
@@ -163,7 +170,7 @@ receives a new sequence on its next offer. Every message below carries
 |---|---|
 | `inter_agent_queue` | `"credit-v1"` |
 | `inter_agent_queue_policy` | `{batch_max_items, backlog_max_items, backlog_max_bytes}`, all integers, defaults already resolved by the launcher. Rules: `batch_max_items` ≥ 1; 1 ≤ `backlog_max_items` ≤ 1000; 16384 ≤ `backlog_max_bytes` ≤ the server ceiling (`backlog_max_bytes_ceiling`, default 8388608) |
-| `inter_agent_inline_recovery` | optional `"v1"`: the wrapper accepts `queue_recovery` on `stale_reply_basis` |
+| `inter_agent_inline_recovery` | optional `"v1"`, only together with `inter_agent_reply_basis: "v1"`: the wrapper accepts `queue_recovery` on `stale_reply_basis` |
 | prerequisites | `inter_agent_delivery_ack: "dispatch-v1"`, `delivery_resync: "skip-v1"`, `delivery_generation` |
 
 The join reply echoes `inter_agent_queue: "credit-v1"`, the bound
@@ -185,13 +192,15 @@ tuple. Join errors, returned before the agent is bound or published:
 The wrapper exits with status 78 on either error; the runner does not
 restart that exit.
 
+**Batch limits.** `credit` carries no limits. Every offer uses the bound
+`batch_max_items` (B), and the wrapper trims an offer to at most 16384 UTF-8
+bytes of formatted native input. A first item larger than that is offered
+alone. The trimmed suffix is returned with reason `format_budget` before any
+native submission and stays charged on the server.
+
 **Wrapper → server `delivery_queue_control`.** One event with a
-discriminated `op`. Every request carries `operation_id` (wrapper-generated,
-unique per operation), `queue_epoch`, `incarnation` and `generation`. A
-retry reuses the `operation_id` with the identical payload and receives the
-original reply; the same `operation_id` with a different payload is
-rejected. Every success reply echoes `op` and `operation_id` and carries
-`queue` (the counts below).
+discriminated `op`. Every request carries `operation_id`, `queue_epoch`,
+`incarnation` and `generation`.
 
 | `op` | Request fields | Success reply fields |
 |---|---|---|
@@ -199,39 +208,89 @@ rejected. Every success reply echoes `op` and `operation_id` and carries
 | `withdraw` | `credit_revision` | `withdrawn` (boolean; false when it was already consumed or superseded) |
 | `begin_native` | `lease_id`, `queue_ids` (subset of the lease), `native_turn_token` | `permitted_queue_ids` |
 | `return` | `lease_id`, `items: [{queue_id, reason, sub_reason?}]` | `returned_ranges` (`[[first, last]]` delivery sequences) |
-| `dispose` | `lease_id`, `items: [{queue_id, outcome, witness?, reason?}]` | `disposed` (queue ids), `resolved_ranges` |
+| `dispose` | `lease_id`, `items: [{queue_id, outcome, witness?, reason?}]` | `disposed` (queue ids), `resolved_ranges`, `returned_ranges` |
 | `waiter_close` | `registration_id` | `closed` (boolean), `claimed` (boolean: a reply already matched and stays as W) |
-| `resume` | `lease_ids`, `registration_ids` | `leases: [{lease_id, items: [{queue_id, phase}]}]`, `registrations: [{registration_id, active}]` |
+| `resume` | `lease_ids`, `registration_ids` | `leases: [{lease_id, items: [{queue_id, phase}]}]` with `phase` one of `queued`, `offered`, `native_pending`, `terminal`; `registrations: [{registration_id, active}]` |
 | `freeze` | `reason`: `shutdown` or `session_reset` | `frozen: true` |
 
-`return` reasons: `early_ineligible` with `sub_reason` one of
-`same_peer_in_turn`, `conversation_pending`, `host_busy`,
-`pending_settings`, `steer_cap`, `fold_unavailable`, `oversize`; and
-`host_rejected_before_start`, `credit_withdrawn`, `recovery_abandoned`,
-`waiter_abandoned`, `shutdown`, `epoch_changed`. A returned item keeps its
-`queue_id`, class, byte charge and queue position; its old sequence is
-resolved as returned, never as lost, uncertain or acknowledged. `return` is
-valid only for items without a `begin_native` permit, or whose permitted
-host call was proven not to have been invoked.
+Every success reply also echoes `op` and `operation_id` and carries `queue`
+(the counts below).
 
-`dispose` outcomes:
+*Credit.* A wrapper has at most one outstanding credit; a new `credit`
+supersedes the previous one. A `credit` with `kind: "root"` is refused with
+`previous_root_pending`, and recorded as an invariant violation, while any
+root item of an earlier native turn is still `native_pending`; the wrapper
+disposes such items first (as `unknown` when no witness arrived).
 
-| `outcome` | Meaning | Required field |
-|---|---|---|
-| `observed` | The native boundary took the input | `witness`: `prompt_hook`, `fold_hook`, `tool_result`, `turn_start_accepted`, `exec_input_written`, `turn_steer_item_observed` or `turn_input_written` |
-| `intentional_non_injection` | The wrapper classified the item and did not submit it | `reason`: `terminal_skip` or `stale_skip` |
-| `definitely_unstarted` | The invoked host call returned a definite not-started result | `reason`; the item returns to its queue position as for `return` |
-| `unknown` | Submission may have happened | `reason`; the item is removed and its capacity released |
+*Idempotency.* An operation is keyed by `(recipient, queue_epoch,
+generation, operation_id)`. The server keeps its record (payload digest,
+reply, and the phase each touched item entered) across reconnects in the
+same generation until every touched item has left that phase, or the epoch
+or generation changes. A retry with the same `operation_id`:
 
-A duplicate identical outcome is a no-op; a conflicting outcome for the same
-item is rejected. Under `credit-v1` the server resolves queue-origin
-sequences only through `return` and `dispose`. A `delivery_ack` for such a
-sequence is a no-op. A `delivery_resync` range that covers a queue-origin
+- with a different payload is refused with `operation_payload_mismatch`;
+- while every touched item is still in the recorded phase, receives the
+  original reply;
+- after any touched item moved on, is refused with `operation_superseded`
+  and the current `items: [{queue_id, phase}]`; it never repeats the
+  original success, so a stale `begin_native` cannot re-permit a returned
+  item;
+- after the record is gone, is refused with `unknown_operation`; an expired
+  id and a never-seen id are not distinguished, and the wrapper reconciles
+  through `resume`.
+
+*Return and dispose.* `return` reasons: `early_ineligible` with
+`sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
+`host_busy`, `pending_settings`, `steer_cap`, `fold_unavailable`,
+`oversize`; and `format_budget`, `host_rejected_before_start`,
+`credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
+`epoch_changed`. `return` is valid only when the host call for the item
+was never invoked, for example a host that refused before the call. A
+returned item keeps its `queue_id`, class, byte charge and queue position;
+its old sequence is resolved as returned, never as lost, uncertain or
+acknowledged.
+
+| `dispose` `outcome` | Meaning | Required field | Capacity |
+|---|---|---|---|
+| `observed` | The native boundary took the input | `witness` (below) | released |
+| `intentional_non_injection` | The wrapper classified the item and did not submit it | `reason`: `terminal_skip` or `stale_skip` | released |
+| `definitely_unstarted` | The host call was invoked and returned a definite not-started result | `reason` | kept: the item returns to its queue position as for `return`, and its old sequence is reported in `returned_ranges` |
+| `unknown` | Submission may have happened | `reason` | released; the sequence is resolved as uncertain |
+
+Witnesses: `prompt_hook` and `fold_hook` (Claude), `tool_result` (every
+engine's tool-result return), `turn_start_accepted` (Codex app-server),
+`exec_input_written` (Codex exec), `turn_steer_item_observed` (Codex
+steer), `turn_input_written` (Antigravity: a confirmed turn-input write
+followed by `onTurnStart`), and `waiter_consumed` (Antigravity only, a
+waiter reply consumed where the bridge exposes no tool-result return).
+
+An early item that was returned, or disposed `definitely_unstarted`, is not
+offered again under early credit for the same native turn. A duplicate
+identical outcome is a no-op; a conflicting outcome for the same item is
+refused.
+
+*Sequences.* Under `credit-v1` the server resolves queue-origin sequences
+only through `return`, `dispose` and the `delivery_resync` rule here.
+`delivery_ack` for such a sequence is a no-op, and `delivery_stage` for it
+is recorded as stage history only: it never resolves the sequence or
+changes the item. A `delivery_resync` range that covers a queue-origin
 sequence returns the item when it has no `begin_native` permit and resolves
-it as `unknown` otherwise; it never records a loss for it.
+it as `unknown` otherwise. It never records a loss for it, and the reply
+reports those ranges in `returned_ranges` and `uncertain_ranges`, not in
+`skipped_ranges`.
 
-Control errors (`reason`): `stale_queue_epoch`, `stale_delivery_owner`,
+*Resume and freeze.* While `inter_agent_queue_resume_required` is true,
+`credit`, `begin_native` and `delivery_resync` are refused with
+`queue_resume_required`. The order after a same-generation rejoin is
+`resume`, then `delivery_resync` for the remaining non-queue gap, then
+`credit`. After `freeze`, `credit` and `begin_native` are refused with
+`queue_frozen`; `return`, `dispose`, `waiter_close` and `resume` stay valid.
+
+Control errors (`reason`): `stale_queue_epoch`, `stale_channel` (stale
+`incarnation` or `generation`), `stale_delivery_owner`,
+`queue_resume_required`, `queue_frozen`, `previous_root_pending`,
 `unknown_lease`, `unknown_queue_item`, `operation_payload_mismatch`,
+`operation_superseded` (with `items`), `unknown_operation`,
 `conflicting_disposition`, `invalid_queue_control` (with `field`), and
 `queue_unavailable` (the queue owner cannot commit; nothing changed).
 
@@ -247,8 +306,9 @@ PubSub broadcast:
 | `registration_id` | The matched waiter registration (`waiter`) |
 | `items` | `[{queue_id, attempt_id, delivery_seq, class, byte_charge, envelope}]`; `class` is `ordinary`, `waiter` or `control`; `envelope` is the full `inter_agent_message` envelope |
 
-`root` offers carry at most `batch_max_items` items from one peer, in FIFO
-order; `early` and `waiter` offers carry one item.
+A `root` offer carries at most B items: one peer's FIFO prefix, plus any
+returned waiter items from any peer, which count toward B. `early` and
+`waiter` offers carry one item.
 
 **Sending (`envelope` with `type: "inter_agent_message"`).**
 
@@ -258,7 +318,8 @@ order; `early` and `waiter` offers carry one item.
   peer, conversation and sent turn come from the envelope itself. The server
   strips the field before relaying, projecting or recording the envelope.
 - An accepted reply adds `queue_id` and, when a registration was installed,
-  `waiter_registration_id`.
+  `waiter_registration_id`. Its `delivery.advisory.unresolved_count` counts
+  the recipient's queued items plus its issued-but-unresolved sequences.
 - Refusals add three `reason` values: `receiver_overloaded` with `from` (the
   recipient) and `message`, before any conversation, sequence or pane change;
   `delivery_unavailable` with `delivered: false` when the accepted message
@@ -266,15 +327,28 @@ order; `early` and `waiter` offers carry one item.
   `stale_reply_basis`, which gains `queue_recovery: {lease_id, items}` (the
   `delivery_batch` item shape) when the sender declared
   `inter_agent_inline_recovery` and matching queued input was claimed for
-  it.
+  it. The server claims at most 10 items and at most 16384 bytes of body
+  charge. The wrapper returns with `format_budget` any claimed item that
+  does not fit its rendered tool result.
 
 **Queue counts.** Control replies, the server → wrapper `delivery_status`
 push and `InterAgentDeliveryStatus` (whoami, `list_agents`, the dashboard
-delivery snapshot) carry `queue: {queued, queued_bytes, offered,
-native_pending, waiter, control, policy}`. `queued` counts items in the
-`queued` phase other than W; `queued_bytes` is the body-byte charge of all
-counted items; `policy` is the bound tuple. Bodies, tokens and registration
-secrets never appear in these counts.
+delivery snapshot) carry `queue: {queued, offered, native_pending, waiter,
+control, charged_bytes, policy}`, within the existing wire-projection
+budget:
+
+| Field | Counts |
+|---|---|
+| `queued`, `offered`, `native_pending` | Non-waiter items in that phase; the three are disjoint |
+| `waiter` | Waiter items in any phase, disjoint from the three above |
+| `control` | Control-class items in any phase; a subset of the first three, not added to them |
+| `charged_bytes` | Body-byte charge of every counted item, including waiter and control items |
+| `policy` | The bound tuple |
+
+The admission count Q is `queued + offered + native_pending + waiter`, and
+the byte charge E is `charged_bytes`. The wrapper's `unread_count` takes
+`queued` plus its own offered items not yet submitted. Bodies, tokens and
+registration secrets never appear in these counts.
 
 ### Client transport
 
