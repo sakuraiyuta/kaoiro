@@ -58,8 +58,8 @@ defmodule KaoiroServerWeb.Endpoint do
   # Serve at "/" the static files from "priv/static" directory.
   #
   # favicon/robots are always served; the dashboard files (index.html +
-  # built assets) go through DashboardStatic so :serve_dashboard can turn
-  # them off (ADR-0007).
+  # built assets + manifest + PWA icons) go through DashboardStatic so
+  # :serve_dashboard can turn them off (ADR-0007).
   plug Plug.Static,
     at: "/",
     from: :kaoiro_server,
@@ -70,7 +70,7 @@ defmodule KaoiroServerWeb.Endpoint do
     at: "/",
     from: :kaoiro_server,
     gzip: not code_reloading?,
-    only: ~w(index.html assets)
+    only: ~w(index.html assets manifest.webmanifest icons)
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
