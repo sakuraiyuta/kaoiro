@@ -414,32 +414,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
   end
 
-  defp wait_for_session_resets_restart(previous_pid, attempts \\ 100)
-
-  defp wait_for_session_resets_restart(_previous_pid, 0), do: :timeout
-
-  defp wait_for_session_resets_restart(previous_pid, attempts) do
-    case Process.whereis(KaoiroServer.SessionResets) do
-      pid when is_pid(pid) and pid != previous_pid ->
-        :ok
-
-      _ ->
-        Process.sleep(5)
-        wait_for_session_resets_restart(previous_pid, attempts - 1)
-    end
-  end
-
+  # A manual stop and restart does not count toward the root supervisor's
+  # restart intensity (3 in 5 s), unlike killing the child. Three tests use
+  # this helper; counting them left no room for one more restart before the
+  # supervisor gave up and stopped the application.
   defp with_session_resets_unavailable(fun) when is_function(fun, 0) do
-    supervisor = Process.whereis(KaoiroServer.Supervisor)
-    previous_pid = Process.whereis(KaoiroServer.SessionResets)
-    :ok = :sys.suspend(supervisor)
-    true = Process.exit(previous_pid, :kill)
+    :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets)
 
     try do
       fun.()
     after
-      :ok = :sys.resume(supervisor)
-      assert wait_for_session_resets_restart(previous_pid) == :ok
+      {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets)
     end
   end
 
