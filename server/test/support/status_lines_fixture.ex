@@ -215,14 +215,31 @@ defmodule KaoiroServer.StatusLinesFixture do
 
   def set_sync(flag, mode), do: Agent.update(flag, fn _ -> mode end)
 
-  @doc "A `:sync_fun` that announces itself and blocks until the test releases it."
+  @doc """
+  A `:sync_fun` that announces itself and blocks until the test releases it.
+  The first call is the start-up sync every start makes, and it passes
+  through.
+  """
   def blocking_sync(test_pid) do
     fn table ->
-      send(test_pid, {:sync_blocked, self()})
+      if Process.get(:asl_start_sync_done) do
+        send(test_pid, {:sync_blocked, self()})
 
-      receive do
-        :release_sync -> :dets.sync(table)
+        receive do
+          :release_sync -> :dets.sync(table)
+        end
+      else
+        Process.put(:asl_start_sync_done, true)
+        :dets.sync(table)
       end
+    end
+  end
+
+  @doc "A `:sync_fun` that reports each call to the test, then syncs for real."
+  def counting_sync(test_pid) do
+    fn table ->
+      send(test_pid, {:sync_called, table})
+      :dets.sync(table)
     end
   end
 
