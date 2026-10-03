@@ -43,7 +43,9 @@ defmodule KaoiroServer.AgentStatusLines do
   and is left alone), the revoked ids are read once from `TokenDenylist` (an
   unreadable denylist stops `init/1`, it is never treated as empty), the file is
   opened, records are validated, ids revoked or deleted are swept, the log is
-  pruned to the retention, and one sync writes the repairs. Phase B builds the
+  pruned to the retention, and one sync writes the repairs. That sync runs even
+  when nothing needed repair, so a disk that cannot be written is found at
+  start and not by the first agent to write. Phase B builds the
   rows in memory, phase C publishes them (build then rename), and phase D
   announces every row and the settings, but only when the Endpoint is already up
   (a child restart, not the first boot).
@@ -432,11 +434,9 @@ defmodule KaoiroServer.AgentStatusLines do
     end)
   end
 
-  # Writes the start-up repairs and syncs once. A failure here does not stop
-  # the server from starting: the store starts dirty and publishes the rows as
-  # they are on disk.
-  defp repair(_state, []), do: :ok
-
+  # Writes the start-up repairs and syncs once, with or without repairs. A
+  # failure here does not stop the server from starting: the store starts dirty
+  # and publishes the rows as they are on disk.
   defp repair(state, repairs) do
     result =
       persist(state, :start, nil, fn ->

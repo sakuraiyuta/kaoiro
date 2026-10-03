@@ -485,5 +485,70 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
 
       assert Fixture.disk(again.path).agents["a.one"] |> Enum.map(& &1.seq) == [6, 5, 4]
     end
+
+    # Nothing in these files needs repair, so only the sync itself can tell
+    # that the disk cannot be written.
+    test "a clean file whose sync fails starts dirty all the same" do
+      ctx = case_names()
+
+      Fixture.seed(ctx.path, [
+        {{:agent, "a.one"}, [Fixture.entry(2, "two"), Fixture.entry(1, "one")]}
+      ])
+
+      names = base(ctx)
+
+      log =
+        capture_log(fn ->
+          failed = Fixture.start_store(names ++ [sync_fun: fn _ -> {:error, :enospc} end])
+          send(self(), {:failed, failed})
+        end)
+
+      assert_received {:failed, failed}
+      assert log =~ "refusing history and writes"
+
+      assert {:ok, %{entry: %{seq: 2}}} = AgentStatusLines.read_latest("a.one", failed.table)
+      assert {:error, :status_line_unavailable} = AgentStatusLines.history("a.one", failed.name)
+      assert {:error, :status_line_unavailable} = AgentStatusLines.put("a.one", "x", failed.name)
+
+      # The control: the same file starts clean once its sync works.
+      Fixture.stop_store(failed)
+      again = Fixture.start_store(path: ctx.path)
+      assert {:ok, [%{seq: 2}, %{seq: 1}]} = AgentStatusLines.history("a.one", again.name)
+      assert {:ok, %{seq: 3}} = AgentStatusLines.put("a.one", "three", again.name)
+    end
+
+    test "a new file whose sync fails starts dirty all the same" do
+      ctx = case_names()
+
+      log =
+        capture_log(fn ->
+          failed = Fixture.start_store(base(ctx) ++ [sync_fun: fn _ -> {:error, :enospc} end])
+          send(self(), {:failed, failed})
+        end)
+
+      assert_received {:failed, failed}
+      assert log =~ "refusing history and writes"
+      assert {:ok, %{}} = AgentStatusLines.heads(failed.table)
+      assert {:error, :status_line_unavailable} = AgentStatusLines.put("a.one", "x", failed.name)
+    end
+
+    test "every start syncs exactly once, whether or not there was anything to repair" do
+      ctx = case_names()
+      sync = Fixture.counting_sync(self())
+
+      first = Fixture.start_store(base(ctx) ++ [sync_fun: sync])
+      assert_receive {:sync_called, _}
+      refute_received {:sync_called, _}
+
+      {:ok, _} = AgentStatusLines.put("a.one", "one", first.name)
+      assert_receive {:sync_called, _}
+      Fixture.stop_store(first)
+
+      # A restart over a clean, already-pruned file.
+      again = Fixture.start_store(path: ctx.path, sync_fun: sync)
+      assert_receive {:sync_called, _}
+      refute_received {:sync_called, _}
+      Fixture.stop_store(again)
+    end
   end
 end
