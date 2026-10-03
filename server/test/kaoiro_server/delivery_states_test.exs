@@ -2389,6 +2389,102 @@ defmodule KaoiroServer.DeliveryStatesTest do
              ]
     end
 
+    test "resume releases an item its named lease leaves out", ctx do
+      a = put(ctx, "a")
+      b = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit())
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+      lease = String.to_integer(lease)
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+
+      assert {_, {:ok, %{leases: [%{items: [%{queue_id: ^a, phase: :offered}]}]}}} =
+               control(ctx, %{op: :resume, leases: [{lease, [a]}], registration_ids: []})
+
+      assert %{queued: 1, offered: 1} = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+      assert [%{queue_id: ^b}] = queued_items(ctx)
+    end
+
+    defp queued_items(ctx) do
+      for {id, %{phase: :queued} = item} <-
+            :sys.get_state(ctx.name).entries[ctx.recipient].queue.items,
+          do: Map.put(item, :queue_id, id)
+    end
+
+    defp waiter_reply(ctx, peer) do
+      {:ok, registration} =
+        DeliveryStates.queue_register_waiter(
+          ctx.recipient,
+          "g1",
+          self(),
+          %{peer: peer, cid: "w", turn: 1, token: "t", call_token: "ct", expires_in_ms: 60_000},
+          ctx.name
+        )
+
+      {:ok, token, :waiter} =
+        DeliveryStates.queue_reserve_reply(ctx.recipient, peer, "w", 1, ctx.name)
+
+      {:ok, id} =
+        DeliveryStates.queue_commit(
+          ctx.recipient,
+          token,
+          %{sender: peer, conversation_id: "w", turn_number: 2, kind: "response"},
+          %{},
+          ctx.name
+        )
+
+      {registration, id}
+    end
+
+    test "no W batch follows a freeze", ctx do
+      {_, {:ok, %{frozen: true}}} = control(ctx, %{op: :freeze, reason: :shutdown})
+      {_registration, id} = waiter_reply(ctx, "p")
+      refute_received {:inter_agent_queue_batch, _}
+      assert [%{queue_id: ^id, class: :waiter}] = queued_items(ctx)
+    end
+
+    test "a W reply waits for resume, then goes to the waiting tool", ctx do
+      put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit())
+
+      assert_receive {:inter_agent_queue_batch,
+                      %{"lease_id" => lease, "items" => [%{"queue_id" => a}]}}
+
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+
+      {registration, id} = waiter_reply(ctx, "p")
+      refute_received {:inter_agent_queue_batch, _}
+
+      {_, {:ok, _}} =
+        control(ctx, %{
+          op: :resume,
+          leases: [{String.to_integer(lease), [String.to_integer(a)]}],
+          registration_ids: []
+        })
+
+      assert_received {:inter_agent_queue_batch,
+                       %{"kind" => "waiter", "registration_id" => ^registration, "items" => [w]}}
+
+      assert w["queue_id"] == Integer.to_string(id)
+    end
+
+    test "a W lease the resume finds unseen is offered again; a returned one is not", ctx do
+      {registration, id} = waiter_reply(ctx, "p")
+      assert_receive {:inter_agent_queue_batch, %{"kind" => "waiter"}}
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+      {_, {:ok, _}} = control(ctx, %{op: :resume, leases: [], registration_ids: []})
+
+      assert_received {:inter_agent_queue_batch,
+                       %{"kind" => "waiter", "registration_id" => ^registration} = again}
+
+      lease = String.to_integer(again["lease_id"])
+
+      {_, {:ok, _}} =
+        control(ctx, %{op: :return, lease_id: lease, items: [{id, "waiter_abandoned"}]})
+
+      {_, {:ok, _}} = control(ctx, %{op: :resume, leases: [], registration_ids: []})
+      refute_received {:inter_agent_queue_batch, _}
+    end
+
     test "a declined early item keeps the early credit for the next one (B4)", ctx do
       e1 = put(ctx, "a", early: true)
       e2 = put(ctx, "b", early: true)

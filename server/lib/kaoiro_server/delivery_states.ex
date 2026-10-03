@@ -1853,11 +1853,11 @@ defmodule KaoiroServer.DeliveryStates do
   # with the old channel): its un-permitted items go back to the queue and
   # its native-pending ones become unknown, so it cannot hold the slot.
   defp resume_control(state, agent_id, entry, control, named, registration_ids) do
-    named_ids = MapSet.new(named, &elem(&1, 0))
+    named_items = MapSet.new(for {lease_id, ids} <- named, id <- ids, do: {lease_id, id})
 
     unseen =
-      for {_id, %{lease: {lease_id, _}, delivery_seq: seq}} <- entry.queue.items,
-          not MapSet.member?(named_ids, lease_id),
+      for {id, %{lease: {lease_id, _}, delivery_seq: seq}} <- entry.queue.items,
+          not MapSet.member?(named_items, {lease_id, id}),
           do: seq
 
     {state, entry, _result} =
@@ -1883,9 +1883,10 @@ defmodule KaoiroServer.DeliveryStates do
       end
 
     control = %{control | resume_required: false}
+    state = state |> put_in([:queue_controls, agent_id], control) |> offer_held_waiters(agent_id)
 
-    {:ok, put_in(state.queue_controls[agent_id], control),
-     reply(entry, %{
+    {:ok, state,
+     reply(state.entries[agent_id], %{
        leases: leases,
        registrations:
          for id <- registration_ids do
@@ -2071,7 +2072,8 @@ defmodule KaoiroServer.DeliveryStates do
 
     entry = state.entries[agent_id]
 
-    with owner when is_pid(owner) <- state.owners[agent_id],
+    with %{frozen: false, resume_required: false} <- state.queue_controls[agent_id],
+         owner when is_pid(owner) <- state.owners[agent_id],
          {:ok, queue, offer, next_seq} <-
            InterAgentQueue.offer_waiter(entry.queue, queue_id, entry.issued_seq + 1) do
       {entry, state} = commit_offer(state, agent_id, entry, queue, offer, next_seq)
@@ -2086,6 +2088,24 @@ defmodule KaoiroServer.DeliveryStates do
     else
       _ -> state
     end
+  end
+
+  # A W reply held back until resume, or whose batch the resume found unseen,
+  # goes to the waiting tool now. One the wrapper returned waits for a root.
+  defp offer_held_waiters(state, agent_id) do
+    Enum.reduce(state.queue_controls[agent_id].waiters, state, fn
+      {cid, %{id: id, claimed: {:queued, queue_id}}}, acc ->
+        case acc.entries[agent_id].queue.items[queue_id] do
+          %{phase: :queued, last_return_reason: reason} when reason in [nil, "lease_unseen"] ->
+            offer_matched_waiter(acc, agent_id, cid, id, queue_id)
+
+          _ ->
+            acc
+        end
+
+      _waiter, acc ->
+        acc
+    end)
   end
 
   defp waiter_close(state, agent_id, entry, control, id) do
