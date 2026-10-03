@@ -91,9 +91,30 @@ defmodule KaoiroServer.AgentStates do
                            %{"snapshot_incomplete" => true}
                          )
 
+  @doc """
+  Starts the store. Besides `:name` and `:now_ms`, two callbacks supplied by the
+  web layer (as `PlannedDisconnects` takes `:on_timeout`) let the store announce
+  an agent that becomes visible to viewers (issue 482):
+
+    * `:visible?` - `(envelope | nil -> boolean)`, whether a viewer may see an
+      agent whose latest envelope is this one;
+    * `:on_viewer_visible` - `(agent_id -> any)`, called once when an agent turns
+      from hidden to visible.
+
+  Both run inside this process, so neither may call `AgentStates` or do I/O that
+  can block, and a failure of either is logged and dropped: the stored entry
+  and the reply are exactly what they would have been without them.
+  """
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %{now_ms: Keyword.get(opts, :now_ms)}, name: name)
+
+    arg = %{
+      now_ms: Keyword.get(opts, :now_ms),
+      visible?: Keyword.get(opts, :visible?),
+      on_viewer_visible: Keyword.get(opts, :on_viewer_visible)
+    }
+
+    GenServer.start_link(__MODULE__, arg, name: name)
   end
 
   @doc """
@@ -455,7 +476,16 @@ defmodule KaoiroServer.AgentStates do
   @impl true
   def init(arg) do
     now_ms = arg[:now_ms] || fn -> System.monotonic_time(:millisecond) end
-    {:ok, %{agents: %{}, hydration: %{}, epoch: new_epoch(), now_ms: now_ms}}
+
+    {:ok,
+     %{
+       agents: %{},
+       hydration: %{},
+       epoch: new_epoch(),
+       now_ms: now_ms,
+       visible?: arg[:visible?] || fn _envelope -> false end,
+       on_viewer_visible: arg[:on_viewer_visible] || fn _agent_id -> :ok end
+     }}
   end
 
   @impl true
@@ -844,8 +874,69 @@ defmodule KaoiroServer.AgentStates do
     |> Map.update("ext", %{}, fn _ext -> %{} end)
   end
 
+  # The only place the `agents` map gains or changes an entry, so a transition
+  # to "visible to viewers" is detected here and no writer can miss it
+  # (issue 482 design r3b A1). The callbacks run only when the envelope itself
+  # changed: history-only writers (a log line, a boundary) leave it as it was.
   defp put_agent(state, agent_id, entry) do
+    previous = Map.get(state.agents, agent_id)
+    announce_if_turned_visible(state, agent_id, previous, entry)
     %{state | agents: Map.put(state.agents, agent_id, entry)}
+  end
+
+  defp announce_if_turned_visible(_state, _agent_id, %{envelope: same}, %{envelope: same}),
+    do: :ok
+
+  defp announce_if_turned_visible(state, agent_id, previous, %{envelope: envelope}) do
+    was_visible? =
+      case previous do
+        nil -> {:ok, false}
+        %{envelope: old} -> safe_visible(state.visible?, agent_id, old)
+      end
+
+    with {:ok, false} <- was_visible?,
+         {:ok, true} <- safe_visible(state.visible?, agent_id, envelope) do
+      safe_on_viewer_visible(state.on_viewer_visible, agent_id)
+    else
+      _ -> :ok
+    end
+  end
+
+  # A failure on either envelope means "no transition": a failing evaluation of
+  # the old envelope must not read as "was hidden" and announce by mistake. The
+  # logs name the agent, the callback and the kind of failure, and never print
+  # the envelope or the exception message (a FunctionClauseError message shows
+  # its arguments, which can carry operator-only content).
+  defp safe_visible(visible?, agent_id, envelope) do
+    {:ok, visible?.(envelope) == true}
+  rescue
+    error ->
+      Logger.warning(
+        "agent_states: visible? raised #{inspect(error.__struct__)} for #{agent_id}; " <>
+          "no viewer announcement"
+      )
+
+      :error
+  catch
+    kind, _reason ->
+      Logger.warning(
+        "agent_states: visible? ended with #{kind} for #{agent_id}; no viewer announcement"
+      )
+
+      :error
+  end
+
+  defp safe_on_viewer_visible(callback, agent_id) do
+    callback.(agent_id)
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "agent_states: on_viewer_visible raised #{inspect(error.__struct__)} for #{agent_id}"
+      )
+  catch
+    kind, _reason ->
+      Logger.warning("agent_states: on_viewer_visible ended with #{kind} for #{agent_id}")
   end
 
   # Entries created before a field existed cannot occur (the process holds
