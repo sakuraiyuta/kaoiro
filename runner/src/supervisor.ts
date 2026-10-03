@@ -59,6 +59,11 @@ export const MAX_RESTARTS = 5;
  *  crash-loop but not a few crashes spread across a long-running agent (#73). */
 export const RESTART_WINDOW_MS = 60_000;
 
+/** EX_CONFIG: the wrapper's configuration was refused (for example an
+ *  inter-agent queue policy above a server ceiling). Restarting the same
+ *  snapshot cannot succeed, so the agent is left down. */
+export const WRAPPER_CONFIG_EXIT_CODE = 78;
+
 /** A reset must not wait forever for the wrapper it is replacing. Give the
  *  wrapper one normal-termination grace period before escalating to SIGKILL;
  *  a second missed exit is reported as a reset failure rather than silently
@@ -71,7 +76,9 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** The minimal child handle the supervisor needs; ChildProcess satisfies it. */
 export interface ManagedChild {
-  on(event: "exit", listener: () => void): void;
+  /** `code` is the process exit status; null or absent after a signal, a
+   *  spawn error, or a launcher that does not report it. */
+  on(event: "exit", listener: (code?: number | null) => void): void;
   /** Mirrors ChildProcess.kill: false means there was no live child to
    *  signal. The supervisor uses that outcome instead of waiting forever for
    *  an exit event that will never arrive. */
@@ -1525,7 +1532,7 @@ export class Supervisor {
       ...(ceiling === undefined ? {} : { permissionCeiling: ceiling }),
     };
     this.#children.set(agentId, entry);
-    child.on("exit", () => this.#onExit(agentId));
+    this.#watchExit(agentId, child);
     return true;
   }
 
@@ -1609,7 +1616,13 @@ export class Supervisor {
     });
   }
 
-  #onExit(agentId: string): void {
+  /** Every launch path watches its child through here, so the exit code
+   *  reaches #onExit the same way on all of them. */
+  #watchExit(agentId: string, child: ManagedChild): void {
+    child.on("exit", (code) => this.#onExit(agentId, code));
+  }
+
+  #onExit(agentId: string, code?: number | null): void {
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
 
@@ -1633,6 +1646,14 @@ export class Supervisor {
     if (entry.restarting) {
       entry.restarting = false;
       this.#relaunch(agentId, entry);
+      return;
+    }
+    if (code === WRAPPER_CONFIG_EXIT_CODE) {
+      process.stderr.write(
+        `runner: agent ${agentId} exited with ${WRAPPER_CONFIG_EXIT_CODE} ` +
+          "(configuration refused); leaving down, see the wrapper log\n",
+      );
+      this.#remove(agentId, entry);
       return;
     }
     // Unexpected exit = crash: relaunch (isolated from siblings) until the cap.
@@ -1693,7 +1714,7 @@ export class Supervisor {
       return;
     }
     entry.child = child;
-    child.on("exit", () => this.#onExit(agentId));
+    this.#watchExit(agentId, child);
   }
 
   /** phase-17 17-5: fresh-relaunch branch of a session reset (ADR-0036 F2).
@@ -1734,7 +1755,7 @@ export class Supervisor {
     entry.child = child;
     entry.restarts = 0;
     entry.windowStart = this.#now();
-    child.on("exit", () => this.#onExit(agentId));
+    this.#watchExit(agentId, child);
     // Release the F4 resume lock for the abandoned session_id (review
     // finding: without this, the id stays in #activeSessions forever
     // because #remove later reads entry.parsed.resumeSessionId which
@@ -1846,7 +1867,7 @@ export class Supervisor {
     entry.child = child;
     entry.restarts = 0;
     entry.windowStart = this.#now();
-    child.on("exit", () => this.#onExit(agentId));
+    this.#watchExit(agentId, child);
     // Transfer the F4 lock from oldResumeSessionId to rollbackSid when
     // they differ — mirrors handleSwitchSession's atomic delete + add.
     // If they match, the lock is already held from the original spawn

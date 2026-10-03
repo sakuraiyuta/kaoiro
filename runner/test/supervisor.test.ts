@@ -15,6 +15,7 @@ import {
   MAX_RESTARTS,
   RESTART_WINDOW_MS,
   Supervisor,
+  WRAPPER_CONFIG_EXIT_CODE,
   isCwdAllowed,
   parseSpawn,
   readAgentId,
@@ -54,11 +55,11 @@ function deferred<T>(): {
 
 /** A fake child whose exit can be driven and whose kills are counted. */
 class FakeChild implements ManagedChild {
-  readonly #listeners: Array<() => void> = [];
+  readonly #listeners: Array<(code?: number | null) => void> = [];
   kills = 0;
   readonly signals: NodeJS.Signals[] = [];
   onKill: ((signal: NodeJS.Signals | undefined) => boolean) | undefined;
-  on(_event: "exit", listener: () => void): void {
+  on(_event: "exit", listener: (code?: number | null) => void): void {
     this.#listeners.push(listener);
   }
   kill(signal?: NodeJS.Signals): boolean {
@@ -66,8 +67,8 @@ class FakeChild implements ManagedChild {
     if (signal !== undefined) this.signals.push(signal);
     return this.onKill?.(signal) ?? true;
   }
-  exit(): void {
-    for (const listener of [...this.#listeners]) listener();
+  exit(code: number | null = null): void {
+    for (const listener of [...this.#listeners]) listener(code);
   }
 }
 
@@ -1123,6 +1124,25 @@ describe("Supervisor restart/stop", () => {
     // 諦め後はエントリが消え、再度 spawn できる(already_running にならない)
     h.sup.handleSpawn(spawnMsg);
     expect(h.children).toHaveLength(MAX_RESTARTS + 2);
+  });
+
+  it("does not restart a wrapper that exits with the configuration-refused status", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.last().exit(WRAPPER_CONFIG_EXIT_CODE);
+    expect(h.children).toHaveLength(1);
+    // The entry is gone, so a later spawn is accepted rather than already_running.
+    h.sup.handleSpawn(spawnMsg);
+    expect(h.children).toHaveLength(2);
+  });
+
+  it("leaves a relaunched wrapper down when it exits with the configuration-refused status", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.last().exit(1);
+    expect(h.children).toHaveLength(2);
+    h.last().exit(WRAPPER_CONFIG_EXIT_CODE);
+    expect(h.children).toHaveLength(2);
   });
 });
 

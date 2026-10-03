@@ -261,7 +261,7 @@ describe("inter-agent queue keys", () => {
       inter_agent_backlog_max_bytes: 16_384,
     });
     const engine = block === "claude_code" ? "claude-code" : block;
-    const relay = computeBehaviourRelay({ [block]: { inter_agent_backlog_max_items: 3 } } as RunnerConfig, {});
+    const relay = computeBehaviourRelay({ ...base, [block]: { inter_agent_backlog_max_items: 3 } }, {});
     expect(relay[engine]).toEqual({ inter_agent_backlog_max_items: 3 });
   });
 

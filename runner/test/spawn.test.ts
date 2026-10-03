@@ -35,18 +35,18 @@ describe("resolveWrapperLaunch", () => {
 
 /** A child stub that can emit `exit` and `error` separately. */
 class FakeChild {
-  readonly #exit: Array<() => void> = [];
+  readonly #exit: Array<(code: number | null) => void> = [];
   readonly #error: Array<() => void> = [];
   kills = 0;
-  on(event: "exit" | "error", listener: () => void): void {
+  on(event: "exit" | "error", listener: (code: number | null) => void): void {
     (event === "exit" ? this.#exit : this.#error).push(listener);
   }
   kill(): boolean {
     this.kills += 1;
     return true;
   }
-  emitExit(): void {
-    for (const listener of [...this.#exit]) listener();
+  emitExit(code: number | null = 0): void {
+    for (const listener of [...this.#exit]) listener(code);
   }
   emitError(): void {
     for (const listener of [...this.#error]) listener();
@@ -79,6 +79,17 @@ describe("toManagedChild", () => {
     expect(n).toBe(1);
   });
 
+  it("passes the exit code through, and null for a spawn error", () => {
+    const exited = new FakeChild();
+    const codes: Array<number | null | undefined> = [];
+    toManagedChild(exited).on("exit", (code) => codes.push(code));
+    exited.emitExit(78);
+    const failed = new FakeChild();
+    toManagedChild(failed).on("exit", (code) => codes.push(code));
+    failed.emitError();
+    expect(codes).toEqual([78, null]);
+  });
+
   it("kill を委譲する", () => {
     const child = new FakeChild();
     toManagedChild(child).kill();
@@ -106,7 +117,7 @@ process.exit(0);`);
       const id = `fuji464-${engine}`;
       await new Promise<void>((resolve, reject) => {
         const child = launch(id, { agent_id: id, codex_tool_home: process.env.CODEX_HOME } as never, scratch, undefined, undefined, engine);
-        child.on("exit", resolve);
+        child.on("exit", () => resolve());
         setTimeout(() => reject(new Error(`${engine} did not exit`)), 10_000).unref();
       });
       const resultFile = join(scratch, `${id}-${["codex", "claude-code", "antigravity"].indexOf(engine)}.json.result`);
