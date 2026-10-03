@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-10-03
+last_updated: 2026-10-04
 related: [deployment]
 ---
 
@@ -66,6 +66,18 @@ to hold observed effective snapshots.
 `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
 Stage B) caps the per-agent event count the `session_lifecycle` DETS
 retains, oldest discarded first. Unset defaults to 10000.
+
+`KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING` caps, per recipient, the byte
+backlog (`backlog_max_bytes`) a wrapper may declare for the server-owned
+inter-agent queue ([channels](../protocol/channels.md#server-owned-inter-agent-queue-credit-v1)).
+Unset defaults to 8388608 (8 MiB); a value that is not an integer of at least
+16384 fails boot. A wrapper declaring more is refused at join with
+`invalid_queue_policy` and exits with status 78, which the runner does not
+restart. Lowering the ceiling below the value a running wrapper already bound
+refuses that wrapper's next rejoin the same way, even within its process
+generation: the agent stays down until it is relaunched with a runner config
+at or below the new ceiling. The backlog item count is capped at 1000 by the
+protocol, not by a setting.
 
 **These paths, including PermissionSettings when enabled, are the canonical
 persistence set.** The preflight in section 4

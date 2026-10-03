@@ -29,6 +29,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.DisconnectAttribution
   alias KaoiroServer.IngressOrder
+  alias KaoiroServer.InterAgentQueuePolicy
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionLifecycleEvents
@@ -131,9 +132,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- Auth.authorize_wrapper(agent_id, socket.assigns[:wrapper_token]),
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
-         :ok <- reject_if_connected(agent_id) do
-      delivery = bind_delivery(agent_id, params)
-
+         :ok <- reject_if_connected(agent_id),
+         {:ok, queue} <- validate_queue(params),
+         {:ok, delivery} <- bind_delivery(agent_id, params, queue) do
       modes =
         if(valid_delivery_modes?(params["inter_agent_delivery_modes"]),
           do: params["inter_agent_delivery_modes"]
@@ -206,6 +207,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           "permission_sync",
           if(permission_sync_engine, do: true)
         )
+        |> Map.merge(queue_join_reply(queue))
 
       {:ok, reply,
        socket
@@ -225,10 +227,37 @@ defmodule KaoiroServerWeb.WrapperChannel do
        |> assign(:persona_id, persona_id)
        |> assign(:transition_id, transition_id)
        |> assign(:permission_sync_engine, permission_sync_engine)
+       |> assign(:inter_agent_queue, queue)
        |> assign(:wrapper_token, nil)}
     else
+      {:error, %{reason: _} = details} -> {:error, details}
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
     end
+  end
+
+  # Legacy wrappers that declare no queue are still accepted until the
+  # delivery path moves to the queue; a declared queue is validated in full.
+  defp validate_queue(params) do
+    case InterAgentQueuePolicy.validate_join(params) do
+      :absent -> {:ok, nil}
+      result -> result
+    end
+  end
+
+  defp queue_join_reply(nil), do: %{}
+
+  defp queue_join_reply(queue) do
+    %{
+      "inter_agent_queue" => "credit-v1",
+      "inter_agent_queue_policy" => InterAgentQueuePolicy.to_wire(queue.policy),
+      "inter_agent_queue_epoch" => DeliveryStates.queue_epoch(),
+      # No lease or waiter registration outlives a channel yet.
+      "inter_agent_queue_resume_required" => false
+    }
+    |> maybe_put_optional_field(
+      "inter_agent_inline_recovery",
+      if(queue.inline_recovery, do: "v1")
+    )
   end
 
   # `transition_id` identifies a session transition, not a wrapper process:
@@ -239,19 +268,32 @@ defmodule KaoiroServerWeb.WrapperChannel do
          %{
            "inter_agent_delivery_ack" => "dispatch-v1",
            "delivery_generation" => generation
-         } = params
+         } = params,
+         queue
        )
        when is_binary(generation) and byte_size(generation) in 1..128 do
-    if params["delivery_resync"] == "skip-v1" do
-      DeliveryStates.bind_resync(agent_id, generation, self())
-    else
-      DeliveryStates.bind(agent_id, generation)
+    cond do
+      queue != nil ->
+        case DeliveryStates.bind_queue(agent_id, generation, self(), queue.policy) do
+          {:ok, delivery} ->
+            {:ok, delivery}
+
+          {:error, :generation_mismatch} ->
+            {:error,
+             InterAgentQueuePolicy.invalid("inter_agent_queue_policy", "generation_mismatch")}
+        end
+
+      params["delivery_resync"] == "skip-v1" ->
+        {:ok, DeliveryStates.bind_resync(agent_id, generation, self())}
+
+      true ->
+        {:ok, DeliveryStates.bind(agent_id, generation)}
     end
   end
 
-  defp bind_delivery(agent_id, _params) do
+  defp bind_delivery(agent_id, _params, _queue) do
     :ok = DeliveryStates.disarm(agent_id)
-    nil
+    {:ok, nil}
   end
 
   # `PermissionSyncJoinRequest` (issue #305, protocol.md "Persistence,

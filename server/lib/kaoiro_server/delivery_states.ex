@@ -68,6 +68,19 @@ defmodule KaoiroServer.DeliveryStates do
     GenServer.call(server, {:bind_resync, agent_id, generation, owner})
   end
 
+  @doc """
+  `bind_resync/4` for a `credit-v1` wrapper, binding its queue policy to the
+  process generation. A rejoin under the same generation must declare the
+  stored policy; otherwise nothing is bound and `{:error,
+  :generation_mismatch}` is returned.
+  """
+  def bind_queue(agent_id, generation, owner, policy, server \\ __MODULE__)
+      when is_map(policy),
+      do: GenServer.call(server, {:bind_queue, agent_id, generation, owner, policy})
+
+  @doc "Opaque identity of this queue owner's start; changes on every restart."
+  def queue_epoch(server \\ __MODULE__), do: GenServer.call(server, :queue_epoch)
+
   def acknowledge(agent_id, generation, owner, seq, server \\ __MODULE__) do
     GenServer.call(server, {:acknowledge, agent_id, generation, owner, seq})
   end
@@ -224,7 +237,8 @@ defmodule KaoiroServer.DeliveryStates do
        stages: stages,
        owners: %{},
        reservations: %{},
-       losses: table |> load_losses() |> drop_uncommitted_losses(entries, table)
+       losses: table |> load_losses() |> drop_uncommitted_losses(entries, table),
+       queue_epoch: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
      }}
   end
 
@@ -275,36 +289,24 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call({:bind_resync, agent_id, generation, owner}, _from, state) do
-    state = retire_generation(state, agent_id, generation)
-    old = state.entries[agent_id]
-
-    entry =
-      if old != nil and old.generation == generation do
-        Map.merge(recovery_defaults(), old)
-      else
-        issued = if old, do: old.issued_seq, else: 0
-
-        Map.merge(recovery_defaults(), %{
-          generation: generation,
-          issued_seq: issued,
-          acked_seq: issued,
-          pending_since: nil,
-          stage_history: if(old, do: old.stage_history, else: %{}),
-          uncertain_count: if(old, do: old.uncertain_count, else: 0),
-          last_uncertain: if(old, do: old.last_uncertain, else: nil)
-        })
-      end
-      |> Map.put(:resync, true)
-
-    persist(state.table, agent_id, entry)
-
-    {:reply, public(entry),
-     %{
-       state
-       | entries: Map.put(state.entries, agent_id, entry),
-         owners: Map.put(state.owners, agent_id, owner)
-     }}
+    {entry, state} = bind_resync_entry(state, agent_id, generation, owner, & &1)
+    {:reply, public(entry), state}
   end
+
+  def handle_call({:bind_queue, agent_id, generation, owner, policy}, _from, state) do
+    case state.entries[agent_id] do
+      %{generation: ^generation, queue_policy: bound} when bound not in [nil, policy] ->
+        {:reply, {:error, :generation_mismatch}, state}
+
+      _ ->
+        {entry, state} =
+          bind_resync_entry(state, agent_id, generation, owner, &%{&1 | queue_policy: policy})
+
+        {:reply, {:ok, public(entry)}, state}
+    end
+  end
+
+  def handle_call(:queue_epoch, _from, state), do: {:reply, state.queue_epoch, state}
 
   def handle_call({:acknowledge, agent_id, generation, owner, seq}, _from, state) do
     if owns_recovery?(state, agent_id, generation, owner) do
@@ -857,6 +859,39 @@ defmodule KaoiroServer.DeliveryStates do
     {Enum.count(pending, &(&1 == sender)), length(pending)}
   end
 
+  defp bind_resync_entry(state, agent_id, generation, owner, update) do
+    state = retire_generation(state, agent_id, generation)
+    old = state.entries[agent_id]
+
+    entry =
+      if old != nil and old.generation == generation do
+        Map.merge(recovery_defaults(), old)
+      else
+        issued = if old, do: old.issued_seq, else: 0
+
+        Map.merge(recovery_defaults(), %{
+          generation: generation,
+          issued_seq: issued,
+          acked_seq: issued,
+          pending_since: nil,
+          stage_history: if(old, do: old.stage_history, else: %{}),
+          uncertain_count: if(old, do: old.uncertain_count, else: 0),
+          last_uncertain: if(old, do: old.last_uncertain, else: nil)
+        })
+      end
+      |> Map.put(:resync, true)
+      |> update.()
+
+    persist(state.table, agent_id, entry)
+
+    {entry,
+     %{
+       state
+       | entries: Map.put(state.entries, agent_id, entry),
+         owners: Map.put(state.owners, agent_id, owner)
+     }}
+  end
+
   defp retire_generation(state, agent_id, generation) do
     case state.entries[agent_id] do
       %{generation: old} = entry when old != generation ->
@@ -1138,7 +1173,8 @@ defmodule KaoiroServer.DeliveryStates do
       lost_count: 0,
       last_loss: nil,
       uncertain_count: 0,
-      last_uncertain: nil
+      last_uncertain: nil,
+      queue_policy: nil
     }
   end
 
@@ -1214,7 +1250,8 @@ defmodule KaoiroServer.DeliveryStates do
        :lost_count,
        :last_loss,
        :uncertain_count,
-       :last_uncertain
+       :last_uncertain,
+       :queue_policy
      ])}
   end
 

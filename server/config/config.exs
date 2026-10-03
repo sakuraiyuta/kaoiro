@@ -65,6 +65,12 @@ config :kaoiro_server,
     work_checks_per_work: 64
   ]
 
+# Per-recipient ceiling on the inter-agent queue's byte backlog. A wrapper
+# declaring a larger `backlog_max_bytes` at join is refused
+# (KaoiroServer.InterAgentQueuePolicy). Operator-owned; overridden at boot by
+# KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING.
+config :kaoiro_server, :inter_agent_queue, backlog_max_bytes_ceiling: 8_388_608
+
 # Review-quagmire detection (issue #273). Advisory only: nothing here
 # rejects a message, closes a conversation, or messages an agent — a false
 # positive that stops a working loop costs more than a missed notice. Kept

@@ -235,7 +235,9 @@ or generation changes. Operations that touch no item keep their record as
 follows: a `credit` until it is consumed by an offer, withdrawn or
 superseded, so a retry returns the same `credit_revision`; `withdraw`,
 `waiter_close`, `freeze` and `resume` for the epoch and generation, at most
-the 64 most recent per recipient. A retry with the same `operation_id`:
+the 64 most recent per recipient. These item-less records live only in the
+queue owner's memory for the epoch; they are not written to the recipient's
+durable record. A retry with the same `operation_id`:
 
 - with a different payload is refused with `operation_payload_mismatch`;
 - while every touched item is still in the recorded phase, receives the

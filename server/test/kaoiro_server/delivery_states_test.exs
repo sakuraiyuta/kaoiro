@@ -1793,4 +1793,70 @@ defmodule KaoiroServer.DeliveryStatesTest do
     raw(name, path, &:dets.insert(&1, before_retirement))
     loss
   end
+
+  describe "queue policy binding" do
+    @policy %{batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288}
+
+    test "a same-generation rejoin must declare the bound tuple", %{name: name} do
+      first = self()
+      second = spawn(fn -> :ok end)
+
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-recipient", "g1", first, @policy, name)
+
+      assert {:error, :generation_mismatch} =
+               DeliveryStates.bind_queue(
+                 "queue-recipient",
+                 "g1",
+                 second,
+                 %{@policy | backlog_max_items: 99},
+                 name
+               )
+
+      # Nothing was bound by the refused join.
+      state = :sys.get_state(name)
+      assert state.owners["queue-recipient"] == first
+      assert state.entries["queue-recipient"].queue_policy == @policy
+
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-recipient", "g1", second, @policy, name)
+      assert :sys.get_state(name).owners["queue-recipient"] == second
+    end
+
+    test "a new generation establishes a new tuple", %{name: name} do
+      lower = %{@policy | backlog_max_bytes: 16_384}
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-new-gen", "g1", self(), @policy, name)
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-new-gen", "g2", self(), lower, name)
+      assert :sys.get_state(name).entries["queue-new-gen"].queue_policy == lower
+
+      assert {:error, :generation_mismatch} =
+               DeliveryStates.bind_queue("queue-new-gen", "g2", self(), @policy, name)
+    end
+
+    test "the bound tuple survives a restart", %{name: name, path: path} do
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-reload", "g1", self(), @policy, name)
+
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert {:error, :generation_mismatch} =
+               DeliveryStates.bind_queue(
+                 "queue-reload",
+                 "g1",
+                 self(),
+                 %{@policy | batch_max_items: 11},
+                 name
+               )
+
+      assert {:ok, _} = DeliveryStates.bind_queue("queue-reload", "g1", self(), @policy, name)
+    end
+
+    test "the queue epoch changes on every start", %{name: name, path: path} do
+      epoch = DeliveryStates.queue_epoch(name)
+      assert is_binary(epoch) and epoch != ""
+      assert DeliveryStates.queue_epoch(name) == epoch
+
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      refute DeliveryStates.queue_epoch(name) == epoch
+    end
+  end
 end

@@ -184,6 +184,18 @@ if System.get_env("KAOIRO_QUAGMIRE_STALL_MS") do
     quagmire: [stall_ms: quagmire_int.("KAOIRO_QUAGMIRE_STALL_MS")]
 end
 
+# Inter-agent queue byte ceiling. Below the protocol minimum no wrapper could
+# join, so an invalid value fails boot instead of taking every agent down.
+if v = System.get_env("KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING") do
+  case Integer.parse(v) do
+    {ceiling, ""} when ceiling >= 16_384 ->
+      config :kaoiro_server, :inter_agent_queue, backlog_max_bytes_ceiling: ceiling
+
+    _ ->
+      raise "KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING must be an integer of at least 16384, got #{inspect(v)}"
+  end
+end
+
 # ADR-0055 phase-33 Stage B — per-agent event cap for the session_lifecycle
 # timeline. Same idiom as the PORT parse above: String.to_integer/1 raises
 # (boot fails) on a non-numeric value rather than silently falling back,
