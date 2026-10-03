@@ -2083,6 +2083,20 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(description).toContain("peer_reconnecting_capacity");
     expect(description).toContain("no reconnected notice will follow");
   });
+
+  it("send_to_agent の delivery_intent schema が選び方を説明する (issue #508)", () => {
+    const { tool } = makeTool("self.agent");
+    const schema = tool
+      .descriptors()
+      .find((d) => d.name === "send_to_agent")!.inputSchema as any;
+    expect(schema.properties.delivery_intent.description).toBe(
+      [
+        "Use `early` only to change the recipient's current work (cancel or supersede it, correct scope or assignee, or flag an in-progress error), and only when `list_agents` reports a non-`none` `delivery_modes.early`; urgency alone is not a reason.",
+        "Use `normal` (default) for new requests, results, FYI, and done messages.",
+        "Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`. The server may downgrade non-normal requests, which require negotiated delivery modes.",
+      ].join("\n"),
+    );
+  });
 });
 
 // ふじ 30-10 must-fix M5: ADR-0051 D3-2 は「reject / timeout は tool result
