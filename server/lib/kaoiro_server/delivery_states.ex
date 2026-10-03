@@ -864,10 +864,11 @@ defmodule KaoiroServer.DeliveryStates do
           0
 
         entry ->
+          # Queued items have no sequence yet, so they are added on top.
           max(
             0,
             entry.issued_seq - entry.acked_seq - length(entry.resolved) - length(entry.skipped)
-          )
+          ) + queued_count(entry.queue)
       end
 
     {:reply, count, state}
@@ -2111,17 +2112,28 @@ defmodule KaoiroServer.DeliveryStates do
   defp public(%{issued_seq: issued, acked_seq: acked, pending_since: pending} = entry) do
     status = %{issued_seq: issued, acked_seq: acked, pending_since: pending}
 
-    if entry.resync do
-      Map.merge(status, %{
-        lost_count: entry.lost_count,
-        last_loss: entry.last_loss,
-        uncertain_count: entry.uncertain_count,
-        last_uncertain: entry.last_uncertain
-      })
-    else
-      status
+    status =
+      if entry.resync do
+        Map.merge(status, %{
+          lost_count: entry.lost_count,
+          last_loss: entry.last_loss,
+          uncertain_count: entry.uncertain_count,
+          last_uncertain: entry.last_uncertain
+        })
+      else
+        status
+      end
+
+    case entry do
+      %{queue: %{} = queue} -> Map.put(status, :queue, InterAgentQueue.counts(queue))
+      _ -> status
     end
   end
+
+  defp queued_count(nil), do: 0
+
+  defp queued_count(queue),
+    do: Enum.count(queue.items, fn {_id, item} -> item.phase == :queued end)
 
   defp entry_record(agent_id, entry) do
     {agent_id, entry.generation, entry.issued_seq, entry.acked_seq, entry.pending_since,

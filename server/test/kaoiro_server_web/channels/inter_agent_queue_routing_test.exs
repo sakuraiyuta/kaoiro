@@ -105,7 +105,12 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
     {recipient_reply, recipient} = join_agent(ctx.recipient, queue_params(10))
     {_reply, sender} = join_agent(ctx.sender, %{})
 
-    assert {:ok, %{"queue_id" => queue_id, "ingress_stamp" => stamp}} =
+    assert {:ok,
+            %{
+              "queue_id" => queue_id,
+              "ingress_stamp" => stamp,
+              "delivery" => %{"advisory" => %{"unresolved_count" => 1}}
+            }} =
              send_message(sender, message(ctx.sender, ctx.recipient, "cnv-route-1", "héllo"))
 
     refute_push "envelope", %{"type" => "inter_agent_message"}

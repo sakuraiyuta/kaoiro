@@ -1890,6 +1890,13 @@ defmodule KaoiroServer.DeliveryStatesTest do
                DeliveryStates.queue_counts("q-owner", name)
 
       assert :sys.get_state(name).bodies[{"q-owner", queue_id}] == %{"body" => "x"}
+
+      assert %{queue: %{queued: 1, charged_bytes: 10}} = DeliveryStates.get("q-owner", name)
+      assert DeliveryStates.unresolved_count("q-owner", name) == 1
+
+      {:ok, _offer} = DeliveryStates.queue_offer("q-owner", "g1", self(), :root, name)
+      # Offered, it is counted once, through its sequence.
+      assert DeliveryStates.unresolved_count("q-owner", name) == 1
     end
 
     test "only the reserving process may commit", %{name: name} do
