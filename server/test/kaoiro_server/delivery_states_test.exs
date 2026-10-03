@@ -2780,6 +2780,8 @@ defmodule KaoiroServer.DeliveryStatesTest do
 
       assert %{uncertain_count: 0, last_uncertain: nil} = DeliveryStates.get(recipient, name)
       assert %{native_pending: 1} = DeliveryStates.queue_counts(recipient, name)
+      assert {:ok, status} = DeliveryStates.message_status("s", "c", 1, name)
+      refute Map.has_key?(status, :origin)
 
       {:ok, _} =
         DeliveryStates.queue_dispose(

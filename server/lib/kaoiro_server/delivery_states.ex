@@ -1073,7 +1073,7 @@ defmodule KaoiroServer.DeliveryStates do
         next_entry = %{entry | stage_history: histories}
 
         next_entry =
-          if report["stage"] in @early_release_stages and not queue_origin?,
+          if report["stage"] in @early_release_stages,
             do: %{next_entry | early_pending: Map.delete(entry.early_pending, seq)},
             else: next_entry
 
