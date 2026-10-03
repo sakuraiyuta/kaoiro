@@ -30,6 +30,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
   const sent: Record<string, unknown>[] = [];
   const lines: string[] = [];
   const sends: Array<{ text: string; token: string }> = [];
+  const timers: Array<{ task: () => void; ms: number }> = [];
   let idle = true;
   let root!: ClaudeQueueRoot;
   const lease = new QueueLease({
@@ -59,6 +60,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
     tracked: () => true,
     log: (line) => lines.push(line),
     defer: (task) => task(),
+    schedule: (task, ms) => { timers.push({ task, ms }); return () => {}; },
     ...overrides,
   });
   let leaseId = 0;
@@ -72,7 +74,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
   };
   const ops = (op: string) => sent.filter((p) => p.op === op);
   const creditToken = () => ops("credit").at(-1)?.native_turn_token as string;
-  return { root, lease, sent, lines, sends, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
+  return { root, lease, sent, lines, sends, timers, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -202,10 +204,10 @@ describe("ClaudeQueueRoot", () => {
     const h = harness();
     h.root.checkReadiness();
     await settle();
-    h.root.turnStarted("operator-turn");
+    h.root.turnStarted();
     await settle();
     expect(h.ops("withdraw")).toEqual([expect.objectContaining({ credit_revision: "1" })]);
-    h.root.turnStarted("another-turn");
+    h.root.turnStarted();
     await settle();
     expect(h.ops("withdraw")).toHaveLength(1);
   });
@@ -217,7 +219,7 @@ describe("ClaudeQueueRoot", () => {
     h.root.checkReadiness();
     await settle();
     expect(h.ops("credit")).toHaveLength(1);
-    h.root.turnStarted("operator-turn");
+    h.root.turnStarted();
     open();
     await settle();
     expect(h.ops("withdraw")).toEqual([expect.objectContaining({ credit_revision: "1" })]);
@@ -244,5 +246,108 @@ describe("ClaudeQueueRoot", () => {
     expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "consumed_outside_waiter" }] });
     expect(h.lines.join("")).toContain("invariant violation");
   });
-});
 
+  describe("an idle host without a root always has a credit coming (liveness)", () => {
+    it.each(["queue_unavailable", "previous_root_pending", "transport"])(
+      "retries a credit refused with %s after a backoff", async (reason) => {
+        const refuse: Record<string, string> = { credit: reason };
+        const h = harness({}, refuse);
+        h.root.checkReadiness();
+        await settle();
+        expect(h.ops("credit")).toHaveLength(1);
+        expect(h.timers.map((t) => t.ms)).toEqual([250]);
+        h.timers[0]!.task();
+        await settle();
+        expect(h.timers.map((t) => t.ms)).toEqual([250, 500]);
+        delete refuse.credit;
+        h.timers[1]!.task();
+        await settle();
+        expect(h.ops("credit")).toHaveLength(3);
+        h.offer([inbound("c1")]);
+        await settle();
+        expect(h.sends).toHaveLength(1);
+      });
+
+    it("does not retry a credit refused because the queue is frozen", async () => {
+      const h = harness({}, { credit: "queue_frozen" });
+      h.root.checkReadiness();
+      await settle();
+      expect(h.timers).toEqual([]);
+    });
+
+    it("asks again when a root dropped by a new join leaves the host idle", async () => {
+      let open!: () => void;
+      const chain = new Promise<void>((resolve) => { open = resolve; });
+      const h = harness({ enqueue: async (task) => { await chain; await task(); } });
+      h.root.checkReadiness();
+      await settle();
+      h.offer([inbound("c1")]);
+      await settle();
+      expect(h.ops("begin_native")).toHaveLength(1);
+      h.lease.join({
+        inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
+        inter_agent_queue_epoch: "e1", inter_agent_queue_resume_required: false,
+      }, "i1", "g2");
+      h.root.rejoined();
+      await settle();
+      expect(h.ops("credit")).toHaveLength(1);
+      open();
+      await settle();
+      expect(h.sends).toEqual([]);
+      expect(h.ops("credit")).toHaveLength(2);
+    });
+
+    it("returns a permitted root unsent when the host turned busy before the send", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => { open = resolve; });
+      let classified = 0;
+      const h = harness({
+        classify: async () => { classified++; return { consumed: false, inject: true, mode: "reply-owed" }; },
+      }, {}, { begin_native: gate });
+      h.root.checkReadiness();
+      await settle();
+      h.offer([inbound("c1")]);
+      await settle();
+      h.setIdle(false);
+      h.root.turnStarted();
+      open();
+      await settle();
+      expect(h.sends).toEqual([]);
+      expect(h.ops("return")).toEqual([expect.objectContaining({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] })]);
+      h.setIdle(true);
+      h.root.turnEnded("operator-turn", true);
+      await settle();
+      h.offer([inbound("c1")], ["1"]);
+      await settle();
+      expect(classified).toBe(1);
+      expect(h.sends).toHaveLength(1);
+    });
+  });
+
+  it("an offer that crossed the withdrawal is returned as credit_withdrawn", async () => {
+    const h = harness();
+    h.root.checkReadiness();
+    await settle();
+    h.root.turnStarted();
+    h.offer([inbound("c1")]);
+    await settle();
+    expect(h.ops("return")).toEqual([expect.objectContaining({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] })]);
+    expect(h.lines.join("")).not.toContain("without a matching credit");
+  });
+
+  it("forgets an observed item's classification", async () => {
+    let classified = 0;
+    const h = harness({ classify: async () => { classified++; return { consumed: false, inject: true, mode: "reply-owed" }; } });
+    h.root.checkReadiness();
+    await settle();
+    const token = h.creditToken();
+    h.offer([inbound("c1")]);
+    await settle();
+    h.root.promptAdmitted(token);
+    h.root.turnEnded(token, true);
+    await settle();
+    h.offer([inbound("c1")], ["1"]);
+    await settle();
+    expect(classified).toBe(2);
+  });
+});

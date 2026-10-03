@@ -12,6 +12,10 @@
 // credit is withdrawn, and a root offer that arrives while the host is busy
 // is returned before it is classified. So no waiting tool can be running
 // when a root item is classified, and a root item is never consumed.
+//
+// Liveness: while the host is idle and holds no root, a root credit is
+// outstanding, requested, or scheduled for a retry. Every exit of a root
+// offer re-arms readiness, and a refused credit is retried with backoff.
 
 import { randomUUID } from "node:crypto";
 import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
@@ -33,7 +37,12 @@ export interface QueueRootDeps extends QueueInputDeps {
   log(line: string): void;
   /** Defers a readiness check past the current host callback. */
   defer?(task: () => void): void;
+  /** Runs `task` after `ms`; returns a cancel function. */
+  schedule?(task: () => void, ms: number): () => void;
 }
+
+const RETRY_FIRST_MS = 250;
+const RETRY_MAX_MS = 5_000;
 
 interface RootInput {
   offer: QueueOffer;
@@ -51,6 +60,10 @@ export class ClaudeQueueRoot {
   #creditToken: string | null = null;
   #creditRevision: string | null = null;
   readonly #roots = new Map<string, RootInput>();
+  /** The last root credit was withdrawn because another turn started. */
+  #withdrawn = false;
+  #cancelRetry: (() => void) | null = null;
+  #retryDelay = RETRY_FIRST_MS;
 
   constructor(deps: QueueRootDeps) {
     this.#deps = deps;
@@ -61,11 +74,15 @@ export class ClaudeQueueRoot {
   checkReadiness(): void {
     const lease = this.#deps.lease();
     if (lease === null || lease.frozen || this.#creditToken !== null) return;
+    this.#cancelRetry?.();
+    this.#cancelRetry = null;
     const token = randomUUID();
     this.#creditToken = token;
     this.#creditRevision = null;
+    this.#withdrawn = false;
     void this.#deps.ready().then(async () => {
       if (this.#creditToken !== token) return;
+      // A busy host re-arms at its turn end, a held root at its exit.
       if (!this.#deps.isIdle() || this.#roots.size > 0) {
         this.#creditToken = null;
         return;
@@ -75,8 +92,10 @@ export class ClaudeQueueRoot {
         if (this.#creditToken !== token) return;
         this.#creditToken = null;
         this.#deps.log(`[kaoiro] queue root credit refused: ${JSON.stringify(result.error)}\n`);
+        if (result.error.reason !== "queue_frozen") this.#scheduleRetry();
       } else if (this.#creditToken === token) {
         this.#creditRevision = result.reply.credit_revision;
+        this.#retryDelay = RETRY_FIRST_MS;
       } else {
         // The host left idle while the credit was in flight.
         void lease.withdraw(result.reply.credit_revision);
@@ -84,14 +103,39 @@ export class ClaudeQueueRoot {
     });
   }
 
-  /** A turn started. Unless it is a queue root, the host is no longer idle
-   *  and an outstanding root credit is withdrawn. */
-  turnStarted(turnToken: string): void {
-    if (this.#roots.has(turnToken) || this.#creditToken === null) return;
+  /** A turn started: the host is no longer idle and an outstanding root
+   *  credit is withdrawn. */
+  turnStarted(): void {
+    if (this.#creditToken === null) return;
     const revision = this.#creditRevision;
     this.#creditToken = null;
     this.#creditRevision = null;
+    this.#withdrawn = true;
     if (revision !== null) void this.#deps.lease()?.withdraw(revision);
+  }
+
+  /** Something that kept the host busy settled; root input may be ready. */
+  rearm(): void {
+    (this.#deps.defer ?? ((task) => setImmediate(task)))(() => this.#rearm());
+  }
+
+  #rearm(): void {
+    if (this.#roots.size === 0) this.checkReadiness();
+  }
+
+  #scheduleRetry(): void {
+    if (this.#cancelRetry !== null) return;
+    const delay = this.#retryDelay;
+    this.#retryDelay = Math.min(delay * 2, RETRY_MAX_MS);
+    const schedule = this.#deps.schedule ?? ((task, ms) => {
+      const timer = setTimeout(task, ms);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    });
+    this.#cancelRetry = schedule(() => {
+      this.#cancelRetry = null;
+      this.#rearm();
+    }, delay);
   }
 
   /** A join dropped any credit the server held for this link. */
@@ -101,8 +145,22 @@ export class ClaudeQueueRoot {
   }
 
   async onOffer(offer: QueueOffer): Promise<void> {
+    try {
+      await this.#onOffer(offer);
+    } finally {
+      this.#rearm();
+    }
+  }
+
+  async #onOffer(offer: QueueOffer): Promise<void> {
     const all = offer.items.map((item) => item.queueId);
     const token = this.#creditToken;
+    if (offer.kind === "root" && token === null && this.#withdrawn) {
+      // The offer crossed the withdrawal at another turn's start.
+      this.#withdrawn = false;
+      void offer.return(all.map((queue_id) => ({ queue_id, reason: "credit_withdrawn" as const })));
+      return;
+    }
     if (offer.kind !== "root" || token === null) {
       this.#deps.log(`[kaoiro] queue offer without a matching credit released: kind=${offer.kind} lease=${offer.leaseId}\n`);
       offer.release(all);
@@ -120,15 +178,11 @@ export class ClaudeQueueRoot {
     const injectIds = prepared.injected.map(({ item }) => item.queueId);
     const consumedIds = prepared.consumed.map((item) => item.queueId);
     const ids = [...injectIds, ...consumedIds];
-    if (ids.length === 0) {
-      this.checkReadiness();
-      return;
-    }
+    if (ids.length === 0) return;
 
     const submit = await offer.begin(ids, token);
     if (submit === null) {
       offer.release(ids);
-      this.checkReadiness();
       return;
     }
     if (consumedIds.length > 0) {
@@ -137,10 +191,7 @@ export class ClaudeQueueRoot {
       void offer.dispose(consumedIds.map((queue_id) => ({ queue_id, outcome: "unknown" as const, reason: "consumed_outside_waiter" })))
         .then((result) => { if (result.ok) this.#input.forget(consumedIds); });
     }
-    if (injectIds.length === 0) {
-      this.checkReadiness();
-      return;
-    }
+    if (injectIds.length === 0) return;
 
     const envelopes = prepared.injected.map(({ item }) => item.envelope as Envelope);
     const root: RootInput = {
@@ -155,6 +206,13 @@ export class ClaudeQueueRoot {
     this.#roots.set(token, root);
 
     await this.#deps.enqueue(async () => {
+      if (!this.#deps.isIdle()) {
+        // Another turn got ahead while the permit was in flight; the text
+        // was formatted for an idle host, so the items go back unsent.
+        this.#roots.delete(token);
+        void offer.return(injectIds.map((queue_id) => ({ queue_id, reason: "credit_withdrawn" as const })));
+        return;
+      }
       let sent: Promise<void> | undefined;
       const invoked = submit.invoke(() => {
         sent = this.#deps.send(root.text, root.conversationIds, token, root.envelopes);
@@ -210,6 +268,6 @@ export class ClaudeQueueRoot {
           .then((result) => { if (result.ok) this.#input.forget(root.ids); });
       }
     }
-    (this.#deps.defer ?? ((task) => setImmediate(task)))(() => this.checkReadiness());
+    this.rearm();
   }
 }

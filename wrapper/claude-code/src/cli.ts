@@ -362,7 +362,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const queueRoot = new ClaudeQueueRoot({
     lease: () => link?.queueLease?.() ?? null,
     ready: () => link?.queueReady?.() ?? Promise.resolve(),
-    isIdle: () => host !== undefined && host.isIdleForInput() && !admissionFailStopped,
+    isIdle: () => host !== undefined && host.isIdleForInput(),
     enqueue: (task) => enqueueInstruction(task),
     send: (text, conversationIds, turnToken, envelopes) =>
       host.send(text, undefined, conversationIds, turnToken, { source: "peer", urgent: false, envelopes }),
@@ -1344,6 +1344,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       attemptYieldCandidates();
     },
     onPushedInputDecision: decision => {
+      // A pending receipt keeps the host from idle; it may outlive the turn.
+      queueRoot.rearm();
       const pushed = pushedBatches.get(decision.envelopes);
       if (pushed === undefined) return;
       pushedBatches.delete(decision.envelopes);
@@ -1599,7 +1601,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   }, (turnToken, kind) => {
-    queueRoot.turnStarted(turnToken);
+    queueRoot.turnStarted();
     if (kind === "sdk_notification") interAgent?.beginNotificationReplyInput(turnToken);
     else {
       interAgent?.beginReplyInput(turnToken, undefined, true);

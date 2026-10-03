@@ -3386,6 +3386,41 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     }
   });
 
+  it("tells the engine after each join's reconciliation, with and without a resume", async () => {
+    const rejoined = vi.fn();
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentQueuePolicy: policy,
+      onQueueRejoined: rejoined,
+    });
+    const join = (resumeRequired: boolean) => mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1",
+      inter_agent_queue_policy: policy,
+      inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: resumeRequired,
+      inter_agent_delivery_incarnation: "inc-1",
+    });
+    try {
+      join(false);
+      await link.queueReady();
+      expect(rejoined).toHaveBeenCalledTimes(1);
+      join(true);
+      const resume = mock.lastPush!;
+      expect(resume).toMatchObject({ event: "delivery_queue_control", payload: { op: "resume" } });
+      await Promise.resolve();
+      expect(rejoined).toHaveBeenCalledTimes(1);
+      resume.receivers.get("ok")!({
+        op: "resume", operation_id: (resume.payload as { operation_id: string }).operation_id,
+        queue: { queued: 0, offered: 0, native_pending: 0, waiter: 0, control: 0, charged_bytes: 0, policy },
+        leases: [], registrations: [],
+      });
+      await link.queueReady();
+      expect(rejoined).toHaveBeenCalledTimes(2);
+    } finally {
+      link.close();
+    }
+  });
+
   it("needs no echo from a wrapper that declared no queue", () => {
     const { refused, hydration } = link(false);
     mock.joinReceivers.get("ok")!({});

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { QueueOffer, QueueOfferItem } from "@kaoiro/wrapper-core";
 import { InterAgentTool, formatInboundMessages } from "../src/inter_agent.js";
 import { QUEUE_INPUT_FORMAT_BUDGET, QueueInput } from "../src/queue_input.js";
@@ -134,6 +134,16 @@ describe("QueueInput", () => {
     expect(prepared.text).toBe("");
     expect(stale.disposed).toEqual([{ queue_id: "2", outcome: "intentional_non_injection", reason: "stale_skip" }]);
     expect(notices).toHaveLength(1);
+  });
+
+  it("forgets a skipped item once its disposal is settled", async () => {
+    const { input, tool } = harness();
+    const classify = vi.spyOn(tool, "receiveInbound");
+    await input.prepare(offerOf([inbound("c1", 3)], ["1"]).offer);
+    await input.prepare(offerOf([inbound("c1", 3)], ["2"]).offer);
+    await new Promise((resolve) => setImmediate(resolve));
+    await input.prepare(offerOf([inbound("c1", 3)], ["2"]).offer);
+    expect(classify).toHaveBeenCalledTimes(3);
   });
 
   it("partitions terminal and consumed items; a re-offered item whose conversation closed is terminal", async () => {

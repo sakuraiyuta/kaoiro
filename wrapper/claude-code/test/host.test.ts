@@ -10261,4 +10261,37 @@ describe("AgentHost.isIdleForInput (credit-v1 readiness)", () => {
     host.close();
     expect(host.isIdleForInput()).toBe(false);
   });
+
+  it("is not idle while a pushed input waits for its receipt after the turn ended", async () => {
+    const ready = deferred();
+    const ended = deferred();
+    const release = deferred();
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onTurnEnd: () => ended.resolve(),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        await input.next();
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+        } as never, undefined, signal);
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve();
+        await input.next();
+        yield result("success", { result: "T finished" });
+        await release.promise;
+      })())),
+    });
+    const running = host.run();
+    try {
+      await host.send("T");
+      await ready.promise;
+      await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+      await ended.promise;
+      expect(host.hasPendingPushedReceipt()).toBe(true);
+      expect(host.isIdleForInput()).toBe(false);
+    } finally { release.resolve(); host.close(); await running; }
+  });
 });
