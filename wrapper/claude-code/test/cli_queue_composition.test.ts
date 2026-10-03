@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { QueueLease } from "@kaoiro/wrapper-core";
-import { handoffToolResult, INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
-import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
+import { INTER_AGENT_TOOL_FQN } from "@kaoiro/agent-common";
+import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import type { McpSdkServerConfigWithInstance, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
@@ -186,12 +186,11 @@ describe("Claude CLI credit-v1 root composition", () => {
     expect(stderr).toContain("invariant violation");
   });
 
-  it("a reply a waiting tool consumed is observed at the tool-result handoff; a rejoin asks for credit again", async () => {
+  it("another turn starting withdraws the root credit; a rejoin asks for it again", async () => {
     const sent: Record<string, unknown>[] = [];
     let lease!: QueueLease;
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
-    let tool!: InterAgentTool;
     let finish!: () => void;
     let start!: () => void;
     const finished = new Promise<void>((resolve) => { finish = resolve; });
@@ -199,17 +198,12 @@ describe("Claude CLI credit-v1 root composition", () => {
     const running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
       loadConfig: () => ({ ...config }),
-      buildMcpServer: (interAgent) => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
         lease = new QueueLease({
           transport: async (payload) => {
             sent.push(payload);
-            const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
-            if (payload.op === "credit") return { ...base, credit_revision: String(sent.length) };
-            if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
-            if (payload.op === "dispose") return { ...base, disposed: ["9"], resolved_ranges: [[1, 1]], returned_ranges: [] };
-            return base;
+            return { op: payload.op, operation_id: payload.operation_id, queue: counts, credit_revision: String(sent.length) };
           },
           onOffer: (offer) => linkOptions.onQueueOffer(offer),
         });
@@ -235,7 +229,6 @@ describe("Claude CLI credit-v1 root composition", () => {
         hostOptions = options as unknown as Record<string, any>;
         return {
           state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => true,
-          activeInterAgentTurnToken: () => "waiter-turn",
           run: async () => { start(); await finished; },
           send: async () => {}, close: () => {},
         } as never;
@@ -244,31 +237,10 @@ describe("Claude CLI credit-v1 root composition", () => {
     try {
       await started;
       await vi.waitFor(() => expect(sent.filter((p) => p.op === "credit")).toHaveLength(1));
-      hostOptions.onTurnStart({ turnToken: "waiter-turn", kind: "wrapper_input" });
-      hostOptions.onPromptAdmitted("waiter-turn");
-      const waiting = tool.invoke({
-        to: "peer.agent", conversation_id: "waiter-q", kind: "query", body: "question",
-        wait_for_response: true, timeout_ms: 2_000,
-      }, { origin: { token: "waiter-turn" } });
-      const answer = inbound("waiter-q");
-      (answer.payload as Record<string, unknown>).turn_number = 2;
-      (answer.payload as Record<string, unknown>).kind = "response";
-      lease.receiveBatch({
-        version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "1", kind: "root",
-        credit_revision: "1",
-        items: [{ queue_id: "9", attempt_id: "9.1", delivery_seq: 1, class: "ordinary", byte_charge: 1, envelope: answer }],
-      });
-      const result = await waiting;
-      await vi.waitFor(() => expect(sent.some((p) => p.op === "begin_native")).toBe(true));
-      expect(sent.some((p) => p.op === "dispose")).toBe(false);
-      expect(handoffToolResult(result, () => {})).toBe(true);
-      await vi.waitFor(() => expect(sent.find((p) => p.op === "dispose")).toMatchObject({
-        items: [{ queue_id: "9", outcome: "observed", witness: "tool_result" }],
-      }));
-
-      const credits = sent.filter((p) => p.op === "credit").length;
+      hostOptions.onTurnStart({ turnToken: "operator-turn", kind: "wrapper_input" });
+      await vi.waitFor(() => expect(sent.find((p) => p.op === "withdraw")).toMatchObject({ credit_revision: "1" }));
       linkOptions.onQueueRejoined();
-      await vi.waitFor(() => expect(sent.filter((p) => p.op === "credit")).toHaveLength(credits + 1));
+      await vi.waitFor(() => expect(sent.filter((p) => p.op === "credit")).toHaveLength(2));
     } finally {
       finish();
       await running.catch(() => {});

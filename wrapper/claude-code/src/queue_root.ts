@@ -7,6 +7,11 @@
 // the host as turn T. The prompt hook for T is the witness. Settlement goes
 // only through QueueLease dispositions, never through the cumulative
 // delivery acknowledgement.
+//
+// Root credit stands for an idle host: when any other turn starts, the
+// credit is withdrawn, and a root offer that arrives while the host is busy
+// is returned before it is classified. So no waiting tool can be running
+// when a root item is classified, and a root item is never consumed.
 
 import { randomUUID } from "node:crypto";
 import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
@@ -44,9 +49,8 @@ export class ClaudeQueueRoot {
   readonly #input: QueueInput;
   /** Token of the outstanding root credit, if any. */
   #creditToken: string | null = null;
+  #creditRevision: string | null = null;
   readonly #roots = new Map<string, RootInput>();
-  /** Root items a waiting tool consumed, until their tool-result handoff. */
-  readonly #consumed = new Map<Envelope, { offer: QueueOffer; queueId: string }>();
 
   constructor(deps: QueueRootDeps) {
     this.#deps = deps;
@@ -58,15 +62,9 @@ export class ClaudeQueueRoot {
     const lease = this.#deps.lease();
     if (lease === null || lease.frozen || this.#creditToken !== null || this.#roots.size > 0) return;
     if (!this.#deps.isIdle()) return;
-    // No turn runs, so a consumed reply's waiting tool has returned or
-    // never will: one still not handed off is unknown.
-    for (const [envelope, { offer, queueId }] of this.#consumed) {
-      this.#consumed.delete(envelope);
-      this.#deps.log(`[kaoiro] queue item consumed by a waiting tool was never handed off: queue_id=${queueId}\n`);
-      void offer.dispose([{ queue_id: queueId, outcome: "unknown", reason: "waiter_result_not_observed" }]);
-    }
     const token = randomUUID();
     this.#creditToken = token;
+    this.#creditRevision = null;
     void this.#deps.ready().then(async () => {
       if (this.#creditToken !== token) return;
       if (!this.#deps.isIdle() || this.#roots.size > 0) {
@@ -74,11 +72,27 @@ export class ClaudeQueueRoot {
         return;
       }
       const result = await lease.credit("root", token);
-      if (!result.ok && this.#creditToken === token) {
+      if (!result.ok) {
+        if (this.#creditToken !== token) return;
         this.#creditToken = null;
         this.#deps.log(`[kaoiro] queue root credit refused: ${JSON.stringify(result.error)}\n`);
+      } else if (this.#creditToken === token) {
+        this.#creditRevision = result.reply.credit_revision;
+      } else {
+        // The host left idle while the credit was in flight.
+        void lease.withdraw(result.reply.credit_revision);
       }
     });
+  }
+
+  /** A turn started. Unless it is a queue root, the host is no longer idle
+   *  and an outstanding root credit is withdrawn. */
+  turnStarted(turnToken: string): void {
+    if (this.#roots.has(turnToken) || this.#creditToken === null) return;
+    const revision = this.#creditRevision;
+    this.#creditToken = null;
+    this.#creditRevision = null;
+    if (revision !== null) void this.#deps.lease()?.withdraw(revision);
   }
 
   /** A join dropped any credit the server held for this link. */
@@ -96,11 +110,17 @@ export class ClaudeQueueRoot {
       return;
     }
     this.#creditToken = null;
+    this.#creditRevision = null;
+    if (!this.#deps.isIdle()) {
+      // The offer crossed a withdrawal: return it before classifying.
+      void offer.return(all.map((queue_id) => ({ queue_id, reason: "credit_withdrawn" as const })));
+      return;
+    }
 
     const prepared = await this.#input.prepare(offer);
     const injectIds = prepared.injected.map(({ item }) => item.queueId);
-    const consumed = prepared.consumed;
-    const ids = [...injectIds, ...consumed.map((item) => item.queueId)];
+    const consumedIds = prepared.consumed.map((item) => item.queueId);
+    const ids = [...injectIds, ...consumedIds];
     if (ids.length === 0) {
       this.checkReadiness();
       return;
@@ -112,8 +132,16 @@ export class ClaudeQueueRoot {
       this.checkReadiness();
       return;
     }
-    for (const item of consumed) this.#consumed.set(item.envelope as Envelope, { offer, queueId: item.queueId });
-    if (injectIds.length === 0) return;
+    if (consumedIds.length > 0) {
+      // Classified while idle, so no waiting tool could have taken it.
+      this.#deps.log(`[kaoiro] invariant violation: a waiting tool consumed a queue root item: ${consumedIds.join(",")}\n`);
+      void offer.dispose(consumedIds.map((queue_id) => ({ queue_id, outcome: "unknown" as const, reason: "consumed_outside_waiter" })))
+        .then((result) => { if (result.ok) this.#input.forget(consumedIds); });
+    }
+    if (injectIds.length === 0) {
+      this.checkReadiness();
+      return;
+    }
 
     const envelopes = prepared.injected.map(({ item }) => item.envelope as Envelope);
     const root: RootInput = {
@@ -179,20 +207,10 @@ export class ClaudeQueueRoot {
       } else if (!root.witnessed) {
         this.#deps.log(`[kaoiro] invariant violation: queue root turn ended without a prompt-hook witness: turn=${turnToken}\n`);
         void root.offer.dispose(root.ids.map((queue_id) =>
-          ({ queue_id, outcome: "unknown" as const, reason: "root_turn_unwitnessed" })));
+          ({ queue_id, outcome: "unknown" as const, reason: "root_turn_unwitnessed" })))
+          .then((result) => { if (result.ok) this.#input.forget(root.ids); });
       }
     }
     (this.#deps.defer ?? ((task) => setImmediate(task)))(() => this.checkReadiness());
-  }
-
-  /** A waiting tool returned these envelopes as its result. */
-  inputHandoff(envelopes: readonly Envelope[]): void {
-    for (const envelope of envelopes) {
-      const consumed = this.#consumed.get(envelope);
-      if (consumed === undefined) continue;
-      this.#consumed.delete(envelope);
-      void consumed.offer.dispose([{ queue_id: consumed.queueId, outcome: "observed", witness: "tool_result" }])
-        .then((result) => { if (result.ok) this.#input.forget([consumed.queueId]); });
-    }
   }
 }

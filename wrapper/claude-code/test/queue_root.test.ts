@@ -26,7 +26,7 @@ function reply(payload: Record<string, unknown>): unknown {
   }
 }
 
-function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, string> = {}) {
+function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, string> = {}, gates: Record<string, Promise<void>> = {}) {
   const sent: Record<string, unknown>[] = [];
   const lines: string[] = [];
   const sends: Array<{ text: string; token: string }> = [];
@@ -35,6 +35,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
   const lease = new QueueLease({
     transport: async (payload) => {
       sent.push(payload);
+      await gates[payload.op as string];
       const reason = refuse[payload.op as string];
       if (reason !== undefined) throw { reason };
       return reply(payload);
@@ -55,6 +56,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
     classify: async () => ({ consumed: false, inject: true, mode: "reply-owed" }),
     reclassify: (_envelope, mode) => mode,
     sendNotice: () => {},
+    tracked: () => true,
     log: (line) => lines.push(line),
     defer: (task) => task(),
     ...overrides,
@@ -166,34 +168,6 @@ describe("ClaudeQueueRoot", () => {
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
   });
 
-  it("a reply a waiting tool consumed is observed at its tool-result handoff, or unknown once the host is idle", async () => {
-    const consumedEnvelope = inbound("c-wait");
-    const h = harness({
-      classify: async (envelope) => envelope === consumedEnvelope
-        ? { consumed: true, inject: false, mode: "reply-owed" }
-        : { consumed: false, inject: true, mode: "reply-owed" },
-    });
-    h.root.checkReadiness();
-    await settle();
-    h.offer([consumedEnvelope]);
-    await settle();
-    expect(h.ops("begin_native")[0]).toMatchObject({ queue_ids: ["1"] });
-    expect(h.sends).toEqual([]);
-    h.root.inputHandoff([consumedEnvelope]);
-    await settle();
-    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
-
-    const lost = inbound("c-lost");
-    const h2 = harness({ classify: async () => ({ consumed: true, inject: false, mode: "reply-owed" }) });
-    h2.root.checkReadiness();
-    await settle();
-    h2.offer([lost]);
-    await settle();
-    h2.root.checkReadiness();
-    await settle();
-    expect(h2.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "waiter_result_not_observed" }] });
-  });
-
   it("a rejoin forgets the outstanding credit and asks again", async () => {
     const h = harness();
     h.root.checkReadiness();
@@ -201,30 +175,6 @@ describe("ClaudeQueueRoot", () => {
     h.root.rejoined();
     await settle();
     expect(h.ops("credit")).toHaveLength(2);
-  });
-
-  it("does not sweep a consumed reply while a turn runs or a root is held", async () => {
-    const waiting = inbound("c-wait");
-    const h = harness({
-      classify: async (envelope) => envelope === waiting
-        ? { consumed: true, inject: false, mode: "reply-owed" }
-        : { consumed: false, inject: true, mode: "reply-owed" },
-    });
-    h.root.checkReadiness();
-    await settle();
-    // One offer: a reply a waiting tool takes, and a root input held as T.
-    h.offer([waiting, inbound("c-root")]);
-    await settle();
-    expect(h.sends).toHaveLength(1);
-    h.root.checkReadiness();
-    await settle();
-    expect(h.ops("dispose")).toEqual([]);
-
-    // The next turn is already running when this one ends.
-    h.setIdle(false);
-    h.root.turnEnded(h.creditToken(), true);
-    await settle();
-    expect(h.ops("dispose").filter((p) => (p.items as { reason?: string }[])[0]!.reason === "waiter_result_not_observed")).toEqual([]);
   });
 
   it("re-checks readiness after waiting for the link: a host that became busy gets no credit", async () => {
@@ -246,6 +196,53 @@ describe("ClaudeQueueRoot", () => {
     h.root.checkReadiness();
     await settle();
     expect(h.ops("credit")).toHaveLength(1);
+  });
+
+  it("another turn starting withdraws the outstanding root credit", async () => {
+    const h = harness();
+    h.root.checkReadiness();
+    await settle();
+    h.root.turnStarted("operator-turn");
+    await settle();
+    expect(h.ops("withdraw")).toEqual([expect.objectContaining({ credit_revision: "1" })]);
+    h.root.turnStarted("another-turn");
+    await settle();
+    expect(h.ops("withdraw")).toHaveLength(1);
+  });
+
+  it("a credit reply that lands after another turn started is withdrawn", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const h = harness({}, {}, { credit: gate });
+    h.root.checkReadiness();
+    await settle();
+    expect(h.ops("credit")).toHaveLength(1);
+    h.root.turnStarted("operator-turn");
+    open();
+    await settle();
+    expect(h.ops("withdraw")).toEqual([expect.objectContaining({ credit_revision: "1" })]);
+  });
+
+  it("a root offer that arrives while the host is busy is returned before classification", async () => {
+    let classified = 0;
+    const h = harness({ classify: async () => { classified++; return { consumed: false, inject: true, mode: "reply-owed" }; } });
+    h.root.checkReadiness();
+    await settle();
+    h.setIdle(false);
+    h.offer([inbound("c1")]);
+    await settle();
+    expect(classified).toBe(0);
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] });
+  });
+
+  it("a root item consumed by a waiting tool is an invariant violation, disposed unknown", async () => {
+    const h = harness({ classify: async () => ({ consumed: true, inject: false, mode: "reply-owed" }) });
+    h.root.checkReadiness();
+    await settle();
+    h.offer([inbound("c1")]);
+    await settle();
+    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "consumed_outside_waiter" }] });
+    expect(h.lines.join("")).toContain("invariant violation");
   });
 });
 

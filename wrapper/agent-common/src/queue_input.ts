@@ -6,6 +6,9 @@
 // offered again later, and classifying it twice would read it as a stale
 // duplicate. So each item is classified once per process, and a re-offer
 // only re-derives its mode, as the legacy path does for requeued input.
+// What is remembered goes only when the item is disposed, or once the
+// conversation's track is gone; a count bound would drop a live item's
+// classification and turn its re-offer into a silent stale drop.
 
 import type { QueueOffer, QueueOfferItem } from "@kaoiro/wrapper-core";
 import type { Envelope } from "./types.js";
@@ -17,7 +20,8 @@ import {
 
 /** Formatted bytes one native input may carry (r8 §5.3). */
 export const QUEUE_INPUT_FORMAT_BUDGET = 16_384;
-const MAX_REMEMBERED = 1_000;
+/** Remembered classifications above which a leak is reported, once. */
+const LOUD_REMEMBERED = 1_000;
 
 export interface QueueInputDeps {
   /** `InterAgentTool.receiveInbound`. */
@@ -26,6 +30,9 @@ export interface QueueInputDeps {
   reclassify(envelope: Envelope, saved: InboundReplyMode): InboundReplyMode;
   /** Sends a stale-turn notice back to the original sender. */
   sendNotice(notice: Envelope): void;
+  /** `InterAgentTool.hasConversationTrack`. */
+  tracked(conversationId: string): boolean;
+  log?(line: string): void;
 }
 
 export interface QueueInputItem {
@@ -52,12 +59,17 @@ type Classified =
 
 interface Remembered {
   identity: string;
+  conversationId: string;
   classified: Classified;
 }
 
 function identityOf(envelope: Envelope): string {
   const payload = envelope.payload as { conversation_id?: unknown; turn_number?: unknown };
   return JSON.stringify([envelope.agent_id, payload.conversation_id, payload.turn_number]);
+}
+
+function conversationOf(envelope: Envelope): string {
+  return String((envelope.payload as { conversation_id?: unknown }).conversation_id ?? "");
 }
 
 function formattedBytes(items: readonly QueueInputItem[]): number {
@@ -70,6 +82,7 @@ function formattedBytes(items: readonly QueueInputItem[]): number {
 export class QueueInput {
   readonly #deps: QueueInputDeps;
   readonly #remembered = new Map<string, Remembered>();
+  #warned = false;
 
   constructor(deps: QueueInputDeps) {
     this.#deps = deps;
@@ -79,6 +92,9 @@ export class QueueInput {
    *  settled here: terminal and stale ones disposed, the trimmed suffix
    *  returned with `format_budget`. */
   async prepare(offer: QueueOffer): Promise<PreparedQueueInput> {
+    for (const [id, remembered] of this.#remembered) {
+      if (!this.#deps.tracked(remembered.conversationId)) this.#remembered.delete(id);
+    }
     const injected: QueueInputItem[] = [];
     const consumed: QueueOfferItem[] = [];
     const skipped: { queue_id: string; reason: "terminal_skip" | "stale_skip" }[] = [];
@@ -146,10 +162,10 @@ export class QueueInput {
           : { kind: "stale" };
     if (disposition.notice !== undefined) this.#deps.sendNotice(disposition.notice);
 
-    this.#remembered.delete(item.queueId);
-    this.#remembered.set(item.queueId, { identity, classified });
-    if (this.#remembered.size > MAX_REMEMBERED) {
-      this.#remembered.delete(this.#remembered.keys().next().value!);
+    this.#remembered.set(item.queueId, { identity, conversationId: conversationOf(envelope), classified });
+    if (this.#remembered.size > LOUD_REMEMBERED && !this.#warned) {
+      this.#warned = true;
+      this.#deps.log?.(`[kaoiro] queue input remembers ${this.#remembered.size} classifications; settled items are not being forgotten\n`);
     }
     return classified;
   }

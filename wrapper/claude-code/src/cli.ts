@@ -373,6 +373,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     classify: (envelope) => interAgent!.receiveInbound(envelope),
     reclassify: (envelope, mode) => interAgent?.queuedInboundMode(envelope, mode) ?? mode,
     sendNotice: (notice) => interAgent?.sendInternalNotice(notice),
+    tracked: (conversationId) => interAgent?.hasConversationTrack(conversationId) ?? false,
     log: (line) => writeRedactedStderr(line),
   });
 
@@ -667,7 +668,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
-      queueRoot.inputHandoff(envelopes);
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
@@ -1599,6 +1599,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   }, (turnToken, kind) => {
+    queueRoot.turnStarted(turnToken);
     if (kind === "sdk_notification") interAgent?.beginNotificationReplyInput(turnToken);
     else {
       interAgent?.beginReplyInput(turnToken, undefined, true);

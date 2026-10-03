@@ -61,6 +61,7 @@ function harness() {
     classify: (envelope) => tool.receiveInbound(envelope),
     reclassify: (envelope, mode) => tool.queuedInboundMode(envelope, mode),
     sendNotice: (notice) => notices.push(notice),
+    tracked: (conversationId) => tool.hasConversationTrack(conversationId),
   });
   return { input, notices, tool };
 }
@@ -147,6 +148,7 @@ describe("QueueInput", () => {
       classify: async () => answers[next++]!,
       reclassify: () => reclassified,
       sendNotice: () => {},
+      tracked: () => true,
     });
     const offer = offerOf([inbound("c1"), inbound("c2"), inbound("c3")]);
     const prepared = await input.prepare(offer.offer);
@@ -158,5 +160,21 @@ describe("QueueInput", () => {
     const again = offerOf([inbound("c3")], ["3"]);
     expect((await input.prepare(again.offer)).injected).toEqual([]);
     expect(again.disposed).toEqual([{ queue_id: "3", outcome: "intentional_non_injection", reason: "terminal_skip" }]);
+  });
+
+  it("keeps a classification while its conversation track is held, and forgets it once the track is gone", async () => {
+    let classified = 0;
+    let held = true;
+    const input = new QueueInput({
+      classify: async () => { classified++; return { consumed: false, inject: true, mode: "reply-owed" }; },
+      reclassify: (_envelope, mode) => mode,
+      sendNotice: () => {},
+      tracked: () => held,
+    });
+    for (let n = 0; n < 3; n++) await input.prepare(offerOf([inbound("c1")]).offer);
+    expect(classified).toBe(1);
+    held = false;
+    await input.prepare(offerOf([inbound("c1")]).offer);
+    expect(classified).toBe(2);
   });
 });

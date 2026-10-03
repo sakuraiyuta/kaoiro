@@ -950,6 +950,10 @@ export class InterAgentTool {
   readonly #preparedInputs = new Map<string, readonly Envelope[]>();
 
   prepareReplyInput(token: string, envelopes: readonly Envelope[]): void { this.#preparedInputs.set(token, envelopes); }
+  /** Whether the track that remembers this conversation's turn numbers is
+   *  still held. A classification that track knows about must not be
+   *  repeated (it would read as a stale duplicate). */
+  hasConversationTrack(conversationId: string): boolean { return this.#conversations.has(conversationId); }
   beginReplyInput(token: string, signal?: AbortSignal, deferInputConfirmation = false): void {
     const envelopes = this.#preparedInputs.get(token) ?? [];
     this.#preparedInputs.delete(token);
