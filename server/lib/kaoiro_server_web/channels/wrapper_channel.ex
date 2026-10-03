@@ -1615,11 +1615,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp route_accepted? do
-    :kaoiro_server
-    |> Application.fetch_env!(:inter_agent_queue)
-    |> Keyword.get(:route_accepted, false)
-  end
+  defp route_accepted?, do: InterAgentQueuePolicy.route_accepted?()
 
   defp reserve_delivery(to, from, cid, body) do
     with {:ok, token} <- DeliveryStates.reserve(to, self()) do

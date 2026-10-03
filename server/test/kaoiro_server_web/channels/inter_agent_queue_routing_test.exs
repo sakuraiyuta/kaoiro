@@ -230,4 +230,92 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
     refute Map.has_key?(details, :queue_recovery)
     assert %{queued: 1} = DeliveryStates.queue_counts(ctx.recipient)
   end
+
+  describe "server notices" do
+    alias KaoiroServer.InterAgentQueue
+    alias KaoiroServerWeb.SynthEnvelope
+
+    defp notice(to, cid) do
+      SynthEnvelope.build(
+        %{
+          "to" => to,
+          "conversation_id" => cid,
+          "turn_number" => 0,
+          "kind" => "inform",
+          "body" => "peer is reconnecting",
+          "meta" => %{"done" => false, "propose_next" => ""},
+          "owner" => %{"kind" => "user", "id" => "system"}
+        },
+        "2026-10-04T00:00:00Z"
+      )
+    end
+
+    test "a notice is queued, not pushed, and reaches the recipient through credit", ctx do
+      {reply, recipient} = join_agent(ctx.recipient, queue_params(10))
+
+      assert :ok =
+               SynthEnvelope.deliver(ctx.recipient, notice(ctx.recipient, "cnv-notice"), %{
+                 synthetic: true,
+                 kind: "reconnecting",
+                 conversation_id: "cnv-notice",
+                 subject: "peer"
+               })
+
+      refute_push "envelope", %{"agent_id" => "server"}
+      assert %{queued: 1} = DeliveryStates.queue_counts(ctx.recipient)
+
+      [item] = Map.values(:sys.get_state(DeliveryStates).entries[ctx.recipient].queue.items)
+      assert %{sender: "server", descriptor: %{synthetic: true, kind: "reconnecting"}} = item
+
+      credit = %{
+        "version" => "0",
+        "queue_epoch" => reply["inter_agent_queue_epoch"],
+        "incarnation" => reply["inter_agent_delivery_incarnation"],
+        "generation" => "generation",
+        "operation_id" => "1",
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      }
+
+      ref = push(recipient, "delivery_queue_control", credit)
+      assert_reply ref, :ok, _, TestTimeouts.durable_reply()
+      assert_push "delivery_batch", %{"items" => [%{"envelope" => %{"agent_id" => "server"}}]}
+    end
+
+    test "a saturated queue refuses a notice past the control allowance", ctx do
+      {_reply, _recipient} = join_agent(ctx.recipient, queue_params(1))
+      descriptor = %{synthetic: true, kind: "reconnecting", conversation_id: "c", subject: "p"}
+
+      results =
+        for n <- 1..(1 + InterAgentQueue.control_allowance() + 1) do
+          SynthEnvelope.deliver(ctx.recipient, notice(ctx.recipient, "c#{n}"), descriptor)
+        end
+
+      assert List.last(results) == {:error, :receiver_overloaded}
+      assert Enum.count(results, &(&1 == :ok)) == 1 + InterAgentQueue.control_allowance()
+      assert %{control: 16} = DeliveryStates.queue_counts(ctx.recipient)
+    end
+
+    test "a loss notice the sender's queue refuses stays pending", ctx do
+      {_reply, sender} = join_agent(ctx.sender, queue_params(1))
+      {_reply, _recipient} = join_agent(ctx.recipient, queue_params(10))
+      descriptor = %{synthetic: true, kind: "reconnecting", conversation_id: "c", subject: "p"}
+
+      # The sender's own queue is saturated, control allowance included.
+      for n <- 1..(1 + InterAgentQueue.control_allowance()) do
+        :ok = SynthEnvelope.deliver(ctx.sender, notice(ctx.sender, "f#{n}"), descriptor)
+      end
+
+      {:ok, _} = send_message(sender, message(ctx.sender, ctx.recipient, "cnv-lost"))
+      :ok = DeliveryStates.delete(ctx.recipient)
+
+      assert [%{recipient: recipient, reason: "delivery_lost"} = loss] =
+               Enum.filter(DeliveryStates.pending_losses(), &(&1.recipient == ctx.recipient))
+
+      assert recipient == ctx.recipient
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      assert loss in DeliveryStates.pending_losses()
+    end
+  end
 end

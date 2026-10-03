@@ -21,9 +21,12 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   suite never needs to boot the web layer).
   """
 
+  require Logger
+
   alias KaoiroServer.AgentStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
+  alias KaoiroServer.InterAgentQueuePolicy
 
   @doc """
   Builds one recipient-addressed synthetic envelope. `payload` must be a
@@ -56,8 +59,14 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   recipient's wrapper topic and the operator dashboard's lobby feed —
   matching the delivery this module's predecessor (`wrapper_channel.ex`'s
   private `deliver_synth_inter_agent/2`) always performed.
+
+  For a `credit-v1` recipient with queue routing on, the notice is admitted
+  to its queue instead (ordinary capacity first, then the control
+  allowance) and reaches it through credit; a refusal returns
+  `{:error, reason}` and projects nothing, so a caller with a durable
+  obligation keeps it.
   """
-  @spec deliver(String.t(), map()) :: :ok
+  @spec deliver(String.t(), map(), map() | nil) :: :ok | {:error, atom()}
   def deliver(recipient, envelope, descriptor \\ nil) do
     descriptor =
       descriptor ||
@@ -70,6 +79,54 @@ defmodule KaoiroServerWeb.SynthEnvelope do
     {us, seq} = stamp = IngressOrder.allocate()
     stamped = Map.put(envelope, "ingress_stamp", [us, seq])
 
+    case queue_notice(recipient, stamped, descriptor) do
+      :not_queued ->
+        push_notice(recipient, stamp, stamped, descriptor)
+
+      {:ok, _queue_id} ->
+        _ = AgentStates.upsert_ia(recipient, stamp, stamped)
+        KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
+        broadcast_status(recipient)
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "server notice not queued for #{recipient}: #{reason} kind=#{descriptor[:kind]}"
+        )
+
+        error
+    end
+  end
+
+  defp queue_notice(recipient, stamped, descriptor) do
+    body = get_in(stamped, ["payload", "body"])
+    bytes = if is_binary(body), do: byte_size(body), else: 0
+
+    with true <- InterAgentQueuePolicy.route_accepted?(),
+         {:ok, token, _class} <- DeliveryStates.queue_reserve(recipient, :notice, bytes) do
+      item =
+        Map.merge(descriptor, %{
+          sender: "server",
+          conversation_id: stamped["payload"]["conversation_id"],
+          turn_number: stamped["payload"]["turn_number"],
+          early: false
+        })
+
+      case DeliveryStates.queue_commit(recipient, token, item, stamped) do
+        {:ok, queue_id} ->
+          {:ok, queue_id}
+
+        {:error, _} ->
+          :ok = DeliveryStates.queue_cancel(token)
+          {:error, :delivery_unavailable}
+      end
+    else
+      false -> :not_queued
+      {:error, :queue_unavailable} -> :not_queued
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp push_notice(recipient, stamp, stamped, descriptor) do
     routed =
       case DeliveryStates.issue_synthetic(recipient, descriptor) do
         delivery_seq when is_integer(delivery_seq) ->
@@ -82,6 +139,10 @@ defmodule KaoiroServerWeb.SynthEnvelope do
     _ = AgentStates.upsert_ia(recipient, stamp, routed)
     KaoiroServerWeb.Endpoint.broadcast("wrapper:#{recipient}", "envelope", routed)
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
+    broadcast_status(recipient)
+  end
+
+  defp broadcast_status(recipient) do
     status = DeliveryStates.get(recipient)
 
     # ADR-0015 (issue #208): the wrapper-bound copy carries the flat

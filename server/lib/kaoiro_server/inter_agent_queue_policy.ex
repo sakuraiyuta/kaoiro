@@ -33,6 +33,17 @@ defmodule KaoiroServer.InterAgentQueuePolicy do
 
   def backlog_max_bytes_minimum, do: @backlog_max_bytes_minimum
 
+  @doc """
+  Whether accepted input and server notices for a `credit-v1` recipient go
+  to its queue instead of the direct push. Off until the wrapper lease path
+  is in place.
+  """
+  def route_accepted? do
+    :kaoiro_server
+    |> Application.fetch_env!(:inter_agent_queue)
+    |> Keyword.get(:route_accepted, false)
+  end
+
   @doc "The operator's per-recipient ceiling for `backlog_max_bytes`."
   def backlog_max_bytes_ceiling do
     :kaoiro_server

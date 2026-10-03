@@ -38,8 +38,16 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
       if AgentStates.connected?(recipient) do
         {payload, next_descriptor} = regenerate(loss, recipient)
         envelope = SynthEnvelope.build(payload, DateTime.to_iso8601(DateTime.utc_now()))
-        SynthEnvelope.deliver(recipient, envelope, Map.put(next_descriptor, :loss_id, loss.id))
-        DeliveryStates.complete_loss(loss.id, loss.revision)
+        # A notice the recipient's queue refused leaves the obligation
+        # pending for the next flush (r8 §7): no recursive loss.
+        case SynthEnvelope.deliver(
+               recipient,
+               envelope,
+               Map.put(next_descriptor, :loss_id, loss.id)
+             ) do
+          :ok -> DeliveryStates.complete_loss(loss.id, loss.revision)
+          {:error, _reason} -> :pending
+        end
       end
     end)
   end
