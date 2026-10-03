@@ -89,6 +89,11 @@ config :kaoiro_server,
     sweep_interval_ms: 60_000
   ]
 
+# Agent status line change log (issue 482): how many entries each agent
+# keeps, 1..100. KAOIRO_STATUS_LINE_RETENTION (config/runtime.exs) overrides
+# it, and a value an operator stores from the dashboard overrides both.
+config :kaoiro_server, :agent_status_lines, retention: 20
+
 # Whether this node runs the detector at all. ON everywhere but `mix test`:
 # the sweep above is a wall-clock timer, so under test it fires in whatever
 # test happens to be running and broadcasts a conversation an EARLIER test

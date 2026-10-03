@@ -4,7 +4,7 @@ defmodule KaoiroServer.RuntimeProdConfigTest do
   use ExUnit.Case, async: false
 
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
-  @managed ~w(SECRET_KEY_BASE PHX_HOST RELEASE_COMMAND)
+  @managed ~w(SECRET_KEY_BASE PHX_HOST RELEASE_COMMAND KAOIRO_STATUS_LINE_RETENTION)
 
   setup do
     saved = Map.new(@managed, &{&1, System.get_env(&1)})
@@ -40,6 +40,41 @@ defmodule KaoiroServer.RuntimeProdConfigTest do
 
     assert String.length(endpoint[:secret_key_base]) == 64
     assert endpoint[:url][:host] == "release-eval.invalid"
+  end
+
+  describe "KAOIRO_STATUS_LINE_RETENTION" do
+    setup do
+      System.put_env("RELEASE_COMMAND", "eval")
+    end
+
+    test "sets the status line retention" do
+      System.put_env("KAOIRO_STATUS_LINE_RETENTION", "35")
+
+      assert read_prod_config()[:kaoiro_server][:agent_status_lines][:retention] == 35
+    end
+
+    test "leaves the config.exs default alone when unset" do
+      assert read_prod_config()[:kaoiro_server][:agent_status_lines] in [nil, []]
+    end
+
+    test "refuses to boot on a value outside 1 to 100 or one that is not a number" do
+      for bad <- ["0", "101", "-3", "twenty", "20.5", "", " 20"] do
+        System.put_env("KAOIRO_STATUS_LINE_RETENTION", bad)
+
+        assert_raise RuntimeError, ~r/KAOIRO_STATUS_LINE_RETENTION must be an integer/, fn ->
+          read_prod_config()
+        end
+      end
+    end
+
+    test "accepts the bounds" do
+      for ok <- ["1", "100"] do
+        System.put_env("KAOIRO_STATUS_LINE_RETENTION", ok)
+
+        assert read_prod_config()[:kaoiro_server][:agent_status_lines][:retention] ==
+                 String.to_integer(ok)
+      end
+    end
   end
 
   defp read_prod_config do

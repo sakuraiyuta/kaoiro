@@ -52,6 +52,7 @@ the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_S
 `KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
 `KAOIRO_WORK_STORE_PATH` /
 `KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` / `KAOIRO_QUAGMIRE_SETTINGS_PATH` /
+`KAOIRO_AGENT_STATUS_LINES_PATH` /
 `KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
 Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).
@@ -66,6 +67,11 @@ to hold observed effective snapshots.
 `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
 Stage B) caps the per-agent event count the `session_lifecycle` DETS
 retains, oldest discarded first. Unset defaults to 10000.
+
+`KAOIRO_STATUS_LINE_RETENTION` (issue 482) sets how many entries of each
+agent's status line change log are kept, from 1 to 100. Unset defaults to 20.
+A value an operator stores from the dashboard takes precedence, and an
+out-of-range value stops the server at boot.
 
 **These paths, including PermissionSettings when enabled, are the canonical
 persistence set.** The preflight in section 4

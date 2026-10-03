@@ -124,6 +124,11 @@ defmodule KaoiroServer.Application do
       # Operator-picked rally threshold (issue #307). Starts before the
       # detector and before the Endpoint, both of which read it.
       KaoiroServer.QuagmireSettings,
+      # Agent status lines and their change log (issue 482). Reads
+      # TokenDenylist at start, so it follows it and AgentDirectory, and it
+      # must be up before the Endpoint: no channel reads its table before it
+      # exists.
+      KaoiroServer.AgentStatusLines,
       # Review-quagmire detection (issue #273). Reads ConversationStates and
       # DeliveryStates, so it starts after both. `:on_notice` is the one
       # place its data crosses into KaoiroServerWeb, same boundary reason as
