@@ -52,6 +52,11 @@ defmodule KaoiroServer.AgentStatusLinesLatchTest do
       assert reply == {:error, :status_line_unavailable}
       refute log =~ "a.one text"
 
+      # The disk is healthy again, yet the store stays fail-closed: only a
+      # restart of the child may lift it. Without this the injected failure
+      # would keep refusing every write and hide a missing dirty gate.
+      Fixture.set_sync(flag, :real)
+
       # Nothing was published or announced.
       assert {:ok, ^committed} = AgentStatusLines.heads(ctx.table)
       refute_received {:broadcast, _, _}
