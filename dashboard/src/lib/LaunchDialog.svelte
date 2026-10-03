@@ -809,18 +809,12 @@
       calc(100vw - max(4vw, env(safe-area-inset-left))
         - max(4vw, env(safe-area-inset-right)))
     );
-  }
-
-  /* short: cap the dialog and let it scroll internally so a low viewport
-     never clips the top/bottom (ADR-0052 F8, phase-31 31-8). */
-  @media (max-height: 500px) {
-    :global(.launch-dialog-content) {
-      max-block-size: calc(
-        100dvh - max(1rem, env(safe-area-inset-top))
-          - max(1rem, env(safe-area-inset-bottom))
-      );
-      overflow-y: auto;
-    }
+    max-block-size: calc(
+      100dvh - max(1rem, env(safe-area-inset-top))
+        - max(1rem, env(safe-area-inset-bottom))
+    );
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   h2 {

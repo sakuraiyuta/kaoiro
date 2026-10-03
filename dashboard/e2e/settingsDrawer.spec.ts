@@ -246,4 +246,117 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
       await expect(page.locator(".conv-close")).toBeFocused();
     });
   });
+
+  // issue #507: SettingsDrawer vertical scroll container and reachability
+  // of bottom controls (logout button, users list, rename button) across
+  // all viewport heights.
+  test.describe("垂直スクロールと下部コントロールの到達性 (issue #507)", () => {
+    const VIEWPORTS = [
+      { name: "Desktop 1024x768", width: 1024, height: 768 },
+      { name: "Phone (iPhone SE) 375x667", width: 375, height: 667 },
+    ];
+
+    for (const vp of VIEWPORTS) {
+      test(`${vp.name} でスクロールして最下部のボタンに到達・操作できる`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto(DRAWER);
+        await page.locator("#drawer-trigger").click();
+        await expect(page.locator("dialog")).toBeVisible();
+        await page.waitForTimeout(250); // wait for slide-in animation
+
+        // S3 precondition: assert content actually overflows before checking scrolling
+        const overflowCheck = await page.evaluate(() => {
+          const drawer = document.querySelector(".settings-drawer-content")!;
+          return {
+            scrollHeight: drawer.scrollHeight,
+            clientHeight: drawer.clientHeight,
+            overflowY: getComputedStyle(drawer).overflowY,
+          };
+        });
+        expect(overflowCheck.scrollHeight).toBeGreaterThan(overflowCheck.clientHeight);
+        expect(overflowCheck.overflowY).toBe("auto");
+
+        // Scroll to bottom
+        await page.evaluate(() => {
+          const drawer = document.querySelector(".settings-drawer-content")!;
+          drawer.scrollTop = drawer.scrollHeight;
+        });
+
+        const logout = page.locator(".logout");
+        await expect(logout).toBeVisible();
+
+        const logoutRect = (await logout.boundingBox())!;
+        expect(logoutRect.y).toBeGreaterThanOrEqual(0);
+        expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(vp.height);
+
+        // Clickable without interception
+        await logout.click();
+      });
+    }
+
+    test("mouse.wheel で drawer のみスクロールし背景は動かない (overscroll-behavior: contain)", async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1024, height: 768 });
+      await page.goto(DRAWER);
+      await page.locator("#drawer-trigger").click();
+      await expect(page.locator("dialog")).toBeVisible();
+      await page.waitForTimeout(250);
+
+      const drawer = page.locator(".settings-drawer-content");
+      const box = (await drawer.boundingBox())!;
+
+      // Position mouse inside the drawer and wheel down
+      await page.mouse.move(box.x + box.width / 2, box.y + 100);
+      await page.mouse.wheel(0, 300);
+      await page.waitForTimeout(100);
+
+      const scrollState = await page.evaluate(() => {
+        const d = document.querySelector(".settings-drawer-content")!;
+        return {
+          drawerScrollTop: d.scrollTop,
+          windowScrollY: window.scrollY,
+        };
+      });
+
+      expect(scrollState.drawerScrollTop).toBeGreaterThan(0);
+      expect(scrollState.windowScrollY).toBe(0);
+    });
+
+    test("Tab 移動で画面外の項目へ自動スクロールインし、循環後も先頭へスクロールバックする", async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 375, height: 667 });
+      await page.goto(DRAWER);
+      await page.locator("#drawer-trigger").click();
+      await expect(page.locator("dialog")).toBeVisible();
+      await page.waitForTimeout(250);
+
+      const logout = page.locator(".logout");
+      const closeBtn = page.locator("dialog button.close");
+
+      // Tab until logout button is reached
+      for (let i = 0; i < 20; i++) {
+        await page.keyboard.press("Tab");
+        const isLogoutFocused = await logout.evaluate((el) => el === document.activeElement);
+        if (isLogoutFocused) break;
+      }
+
+      await expect(logout).toBeFocused();
+      const logoutRect = (await logout.boundingBox())!;
+      expect(logoutRect.y).toBeGreaterThanOrEqual(0);
+      expect(logoutRect.y + logoutRect.height).toBeLessThanOrEqual(667);
+
+      // Next Tab wraps around to the first control (close button)
+      await page.keyboard.press("Tab");
+      await expect(closeBtn).toBeFocused();
+
+      // Scrolled back into view
+      const closeRect = (await closeBtn.boundingBox())!;
+      expect(closeRect.y).toBeGreaterThanOrEqual(0);
+      expect(closeRect.y + closeRect.height).toBeLessThanOrEqual(667);
+    });
+  });
 });

@@ -97,7 +97,7 @@ already determined those and the horizontal layout remains viable when short.
 | Header | Reduce vertical padding. |
 | Composer | Start at one-line height and expand only on focus. |
 | In-flow docks | Set a height cap and scroll internally. Do not change expansion state. |
-| Global dialog / drawer | Set `max-block-size` and make itself the vertical scroll owner. |
+| Global dialog / drawer | Vertical scroll owner at all heights whenever content exceeds available height (issue #507; maintained under `short`). |
 | Lobby grid / timeline / status / sheet maximum height | Unchanged. |
 
 Keep docks expanded under `short` because the implementation promises to clear
@@ -106,9 +106,9 @@ old collapsed state). Changing initial state by viewport would violate both that
 promise and ADR-0052 F6, which permits only sheet open/close as responsive
 Svelte state.
 
-`LaunchDialog` currently has `position: fixed; top: 50%` with no height cap, so
-it is cut off above and below when the viewport is short. The table's rules
-include closing this gap.
+`LaunchDialog` and `SettingsDrawer` make themselves vertical scroll owners with
+`max-block-size` at all heights (issue #507), so low viewports never clip their
+controls.
 
 ### Sheet mechanism
 

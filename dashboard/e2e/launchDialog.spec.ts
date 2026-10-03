@@ -134,4 +134,50 @@ test.describe("LaunchDialog a11y (issue #277)", () => {
 
     await expect(page.locator("dialog")).toBeVisible();
   });
+
+  // issue #507 S1: LaunchDialog vertical scroll container and reachability
+  // of submit controls across all viewport heights (prevent top/bottom clipping).
+  test.describe("垂直スクロールと上下はみ出し防止 (issue #507 / S1)", () => {
+    const VIEWPORTS = [
+      { name: "501px height (800x501)", width: 800, height: 501 },
+      { name: "Small Desktop (1024x600)", width: 1024, height: 600 },
+      { name: "Phone (iPhone SE 375x667)", width: 375, height: 667 },
+    ];
+
+    for (const vp of VIEWPORTS) {
+      test(`${vp.name} でダイアログが上下に切れず、スクロールして送信ボタンに到達できる`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        await page.goto(DIALOG);
+        await page.locator("#dialog-trigger").click();
+        await expect(page.locator("dialog")).toBeVisible();
+
+        const dialog = page.locator(".launch-dialog-content");
+        const box = (await dialog.boundingBox())!;
+
+        // Content fits inside viewport vertically (not clipped top/bottom)
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
+
+        // Precondition: content actually overflows available height
+        const overflows = await dialog.evaluate(
+          (el) => el.scrollHeight > el.clientHeight,
+        );
+        expect(overflows).toBe(true);
+
+        // Scroll to bottom
+        await dialog.evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+        });
+
+        const submitBtn = dialog.locator('button[type="submit"]');
+        await expect(submitBtn).toBeVisible();
+
+        const submitRect = (await submitBtn.boundingBox())!;
+        expect(submitRect.y).toBeGreaterThanOrEqual(0);
+        expect(submitRect.y + submitRect.height).toBeLessThanOrEqual(vp.height);
+      });
+    }
+  });
 });

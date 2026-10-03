@@ -57,19 +57,17 @@ test.describe("T9: 500/501 boundary flips only the vertical compression", () => 
     ).not.toBe("none");
   });
 
-  test("dialog / drawer gain max-block-size + own scroll at 500", async ({ page }) => {
-    await page.setViewportSize({ width: 1300, height: 501 });
-    await page.goto(DIALOG);
-    expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).toBe("none");
-    await page.setViewportSize({ width: 1300, height: 500 });
-    expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).not.toBe("none");
-    expect(await cssOf(page, ".launch-dialog-content", "overflow-y")).toBe("auto");
+  test("dialog / drawer retain max-block-size + own scroll across 500 boundary (issue #507)", async ({ page }) => {
+    for (const height of [501, 500]) {
+      await page.setViewportSize({ width: 1300, height });
+      await page.goto(DIALOG);
+      expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).not.toBe("none");
+      expect(await cssOf(page, ".launch-dialog-content", "overflow-y")).toBe("auto");
 
-    await page.setViewportSize({ width: 1300, height: 501 });
-    await page.goto(DRAWER);
-    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("visible");
-    await page.setViewportSize({ width: 1300, height: 500 });
-    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
+      await page.goto(DRAWER);
+      expect(await cssOf(page, ".settings-drawer-content", "max-block-size")).not.toBe("none");
+      expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
+    }
   });
 
   test("sheet max height stays 60% across the boundary", async ({ page }) => {
