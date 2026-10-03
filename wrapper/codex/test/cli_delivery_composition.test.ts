@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { exitOnInterAgentQueueRefusal } from "@kaoiro/wrapper-core";
 import { handoffToolResult } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
@@ -910,5 +911,26 @@ describe("permission gate cancellation notice composition", () => {
       host?.close(); await running;
       stderr.mockRestore(); await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("declares the inter-agent queue policy and exits 78 on a queue refusal", async () => {
+    let linkOptions: Record<string, unknown> | undefined;
+    const stop = new Error("stop after the link options");
+    await expect(runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, inter_agent_backlog_max_items: 7 }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, unknown>;
+        throw stop;
+      },
+      createHost: () => { throw stop; },
+      prepareStartup: async () => {},
+    })).rejects.toBe(stop);
+    expect(linkOptions?.interAgentQueuePolicy).toEqual({
+      batch_max_items: 10,
+      backlog_max_items: 7,
+      backlog_max_bytes: 524_288,
+    });
+    expect(linkOptions?.onInterAgentQueueRefused).toBe(exitOnInterAgentQueueRefusal);
   });
 });

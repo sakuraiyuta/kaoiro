@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { exitOnInterAgentQueueRefusal } from "@kaoiro/wrapper-core";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -416,5 +417,25 @@ if (args[0] === "models") {
     })).rejects.toThrow("caught fatal");
 
     expect(events).toEqual(["intent:crash", "close"]);
+  });
+
+  it("declares the inter-agent queue policy and exits 78 on a queue refusal", async () => {
+    let linkOptions: Record<string, unknown> | undefined;
+    const stop = new Error("stop after the link options");
+    await expect(runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, inter_agent_backlog_max_items: 7 }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, unknown>;
+        throw stop;
+      },
+      createHost: () => { throw stop; },
+    })).rejects.toBe(stop);
+    expect(linkOptions?.interAgentQueuePolicy).toEqual({
+      batch_max_items: 10,
+      backlog_max_items: 7,
+      backlog_max_bytes: 524_288,
+    });
+    expect(linkOptions?.onInterAgentQueueRefused).toBe(exitOnInterAgentQueueRefusal);
   });
 });

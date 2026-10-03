@@ -3,6 +3,18 @@ import { createHash } from "node:crypto";
 import type { Duplex } from "node:stream";
 
 // Test-only Phoenix JSON wire peer. ServerLink and its WebSocket transport stay real.
+// Echoes a credit-v1 queue declaration the way the server does, so a real
+// ServerLink that declares the queue proceeds past its join.
+function queueEcho(payload: Record<string, unknown>): Record<string, unknown> {
+  if (payload.inter_agent_queue !== "credit-v1") return {};
+  return {
+    inter_agent_queue: "credit-v1",
+    inter_agent_queue_policy: payload.inter_agent_queue_policy,
+    inter_agent_queue_epoch: "loopback-epoch",
+    inter_agent_queue_resume_required: false,
+  };
+}
+
 export async function phoenixLoopback(
   joinReply: (joins: number) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({ permission_sync: true }),
   reply: (event: string, payload: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({}),
@@ -41,7 +53,7 @@ export async function phoenixLoopback(
         received.push({ event, payload });
         if (event === "phx_join") { joins += 1;joined = { socket, ref: joinRef, topic }; }
         const error = reject?.(event, payload);
-        void Promise.resolve(error ?? (event === "phx_join" ? joinReply(joins) : reply(event, payload))).then(response => {
+        void Promise.resolve(error ?? (event === "phx_join" ? Promise.resolve(joinReply(joins)).then(response => ({ ...queueEcho(payload), ...response })) : reply(event, payload))).then(response => {
           if (!socket.destroyed) frame(socket, [joinRef, ref, topic, "phx_reply", { status: error ? "error" : "ok", response }]);
         });
       }

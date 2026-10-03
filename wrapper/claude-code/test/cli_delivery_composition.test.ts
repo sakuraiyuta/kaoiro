@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { exitOnInterAgentQueueRefusal } from "@kaoiro/wrapper-core";
 import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
@@ -1475,5 +1476,25 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     hostOptions.onHostEnd({ error: {} });
     } finally { finishHost(); await running; }
     expect(disconnectReasons).toEqual(["stop"]);
+  });
+
+  it("declares the inter-agent queue policy and exits 78 on a queue refusal", async () => {
+    let linkOptions: Record<string, unknown> | undefined;
+    const stop = new Error("stop after the link options");
+    await expect(runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, inter_agent_backlog_max_items: 7 }),
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, unknown>;
+        throw stop;
+      },
+      createHost: () => { throw stop; },
+    })).rejects.toBe(stop);
+    expect(linkOptions?.interAgentQueuePolicy).toEqual({
+      batch_max_items: 10,
+      backlog_max_items: 7,
+      backlog_max_bytes: 524_288,
+    });
+    expect(linkOptions?.onInterAgentQueueRefused).toBe(exitOnInterAgentQueueRefusal);
   });
 });
