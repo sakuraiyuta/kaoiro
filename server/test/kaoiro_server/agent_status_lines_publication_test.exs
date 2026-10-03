@@ -2,8 +2,9 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
   # The public ETS name must exist only for a complete view, so a restarted
   # child never shows a reader a half-built table (issue 482 design r9 section
   # 1), and a reader must follow the name across a restart (C2). Every case
-  # here runs a real store on a real file; only the phase-C hook and the names
-  # are injected, and the supervisor case injects nothing at all.
+  # here runs a real store on a real file with its own names and options from
+  # the fixture; a case injects a hook only where it says so. The application's
+  # own store, with no injected option, is covered by agent_status_lines_app_test.
   use ExUnit.Case, async: true
 
   alias KaoiroServer.AgentStatusLines
@@ -132,34 +133,81 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
     end
   end
 
-  describe "a supervised child restarted with the default options" do
+  describe "a supervised child restarted with the fixture's names and options" do
     # The reader below is started against the old owner and kept alive through
     # the restart. A reader that held on to a table id, instead of resolving the
     # name on each call, would stay unavailable forever once the old owner is
-    # gone, so it would never see the full view again.
-    test "a continuing reader sees unavailable or the full view, and converges" do
+    # gone, so it would never see the full view again. There are two readers of
+    # the public table, `heads/1` (the join snapshot, the cards) and
+    # `read_latest/2` (the announcer, the visibility check), and each is held
+    # to it separately.
+    for {reader, label} <- [heads: "heads/1", read_latest: "read_latest/2"] do
+      test "a continuing #{label} reader sees unavailable or the full view, and converges" do
+        {ctx, heads} = seeded(3)
+
+        {read, full} = reader_for(unquote(reader), ctx, heads)
+
+        {:ok, sup} =
+          Supervisor.start_link(
+            [%{id: :store, start: {AgentStatusLines, :start_link, [Fixture.opts(ctx)]}}],
+            strategy: :one_for_one
+          )
+
+        on_exit(fn -> TestTeardown.stop_quietly(sup) end)
+
+        reader = spawn_link(fn -> read_loop(read, full, %{}) end)
+        assert_seen(reader, :full)
+
+        :ok = Supervisor.terminate_child(sup, :store)
+        assert_seen(reader, :unavailable)
+
+        reset(reader)
+        assert {:ok, _} = Fixture.restart_child(sup, :store, ctx.name)
+        assert_seen(reader, :full)
+
+        assert report(reader) |> Map.keys() |> Enum.all?(&(&1 in [:full, :unavailable]))
+        assert read.() == full
+      end
+    end
+  end
+
+  describe "a failure after the rename" do
+    # `endpoint_up?` is read in phase D, after the public name exists, so a raise
+    # there fails `init/1` with the complete view already readable.
+    test "readers saw the complete view while init was held, and nothing is served once it fails" do
       {ctx, heads} = seeded(3)
+      parent = self()
 
-      {:ok, sup} =
-        Supervisor.start_link(
-          [%{id: :store, start: {AgentStatusLines, :start_link, [Fixture.opts(ctx)]}}],
-          strategy: :one_for_one
-        )
+      endpoint_up? = fn ->
+        send(parent, {:phase_d, self()})
 
-      on_exit(fn -> TestTeardown.stop_quietly(sup) end)
+        receive do
+          :continue -> raise "phase D failed"
+        end
+      end
 
-      reader = spawn_link(fn -> read_loop(ctx.table, heads, %{}) end)
-      assert_seen(reader, :full)
+      start_async(ctx, endpoint_up?: endpoint_up?)
+      assert_receive {:phase_d, store}
 
-      :ok = Supervisor.terminate_child(sup, :store)
-      assert_seen(reader, :unavailable)
-
-      reset(reader)
-      assert {:ok, _} = Fixture.restart_child(sup, :store, ctx.name)
-      assert_seen(reader, :full)
-
-      assert report(reader) |> Map.keys() |> Enum.all?(&(&1 in [:full, :unavailable]))
       assert {:ok, ^heads} = AgentStatusLines.heads(ctx.table)
+      assert {:ok, heads["a.1"]} == AgentStatusLines.read_latest("a.1", ctx.table)
+      assert :ets.whereis(ctx.building) == :undefined
+
+      queued = Task.async(fn -> AgentStatusLines.settings(ctx.name) end)
+
+      Fixture.eventually(fn ->
+        Process.info(store, :message_queue_len) == {:message_queue_len, 1}
+      end)
+
+      send(store, :continue)
+      assert_receive {:started, {:error, {%RuntimeError{message: "phase D failed"}, _stack}}}
+
+      assert :unavailable = Task.await(queued)
+      Fixture.eventually(fn -> :ets.whereis(ctx.table) == :undefined end)
+      assert :unavailable = AgentStatusLines.heads(ctx.table)
+      assert :unavailable = AgentStatusLines.read_latest("a.1", ctx.table)
+      assert {:error, :status_line_unavailable} = AgentStatusLines.latest("a.1", ctx.name)
+      assert {:error, :status_line_unavailable} = AgentStatusLines.history("a.1", ctx.name)
     end
   end
 
@@ -194,24 +242,32 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
     end
   end
 
-  defp read_loop(table, expected, seen) do
+  # One call of a reader of the public table, and what it returns for a
+  # complete view.
+  defp reader_for(:heads, ctx, heads),
+    do: {fn -> AgentStatusLines.heads(ctx.table) end, {:ok, heads}}
+
+  defp reader_for(:read_latest, ctx, heads),
+    do: {fn -> AgentStatusLines.read_latest("a.1", ctx.table) end, {:ok, heads["a.1"]}}
+
+  defp read_loop(read, expected, seen) do
     receive do
       {:report, from} ->
         send(from, {:seen, seen})
-        read_loop(table, expected, seen)
+        read_loop(read, expected, seen)
 
       :reset ->
-        read_loop(table, expected, %{})
+        read_loop(read, expected, %{})
     after
       0 ->
         outcome =
-          case AgentStatusLines.heads(table) do
-            {:ok, ^expected} -> :full
+          case read.() do
+            ^expected -> :full
             :unavailable -> :unavailable
             other -> {:bad, other}
           end
 
-        read_loop(table, expected, Map.update(seen, outcome, 1, &(&1 + 1)))
+        read_loop(read, expected, Map.update(seen, outcome, 1, &(&1 + 1)))
     end
   end
 
