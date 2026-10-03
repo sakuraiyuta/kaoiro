@@ -2010,4 +2010,189 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert :sys.get_state(name).bodies == %{}
     end
   end
+
+  describe "queue leases and sequences" do
+    @lease_policy %{batch_max_items: 10, backlog_max_items: 10, backlog_max_bytes: 1_000}
+
+    defp queued(name, recipient, count) do
+      for n <- 1..count do
+        {:ok, token, _} = DeliveryStates.queue_reserve(recipient, :ordinary, 5, name)
+
+        {:ok, id} =
+          DeliveryStates.queue_commit(
+            recipient,
+            token,
+            %{sender: "s", conversation_id: "c", turn_number: n, kind: "inform"},
+            %{"n" => n},
+            name
+          )
+
+        id
+      end
+    end
+
+    defp status(name, recipient), do: DeliveryStates.get(recipient, name)
+
+    test "an offer allocates sequences, carries bodies and needs the delivery owner", %{
+      name: name
+    } do
+      {:ok, _} = DeliveryStates.bind_queue("l-offer", "g1", self(), @lease_policy, name)
+      [a, b] = queued(name, "l-offer", 2)
+
+      other = spawn(fn -> :ok end)
+
+      assert DeliveryStates.queue_offer("l-offer", "g1", other, :root, name) ==
+               {:error, :stale_delivery_owner}
+
+      assert {:ok, offer} = DeliveryStates.queue_offer("l-offer", "g1", self(), :root, name)
+
+      assert [
+               %{queue_id: ^a, delivery_seq: 1, body: %{"n" => 1}, attempt: 1, byte_charge: 5},
+               %{queue_id: ^b, delivery_seq: 2, body: %{"n" => 2}}
+             ] = offer.items
+
+      assert %{issued_seq: 2, acked_seq: 0} = status(name, "l-offer")
+
+      assert DeliveryStates.queue_offer("l-offer", "g1", self(), :root, name) ==
+               {:error, :lease_slot_busy}
+    end
+
+    test "a cumulative ack never resolves a pending queue sequence", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("l-ack", "g1", self(), @lease_policy, name)
+      [a, b] = queued(name, "l-ack", 2)
+      {:ok, offer} = DeliveryStates.queue_offer("l-ack", "g1", self(), :root, name)
+
+      assert %{acked_seq: 0} = DeliveryStates.acknowledge("l-ack", "g1", self(), 2, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native("l-ack", "g1", self(), offer.lease_id, [a], name)
+
+      assert {:ok, %{resolved: [1]}} =
+               DeliveryStates.queue_dispose(
+                 "l-ack",
+                 "g1",
+                 self(),
+                 offer.lease_id,
+                 [{a, :observed}],
+                 "t",
+                 name
+               )
+
+      assert %{acked_seq: 1} = status(name, "l-ack")
+
+      assert {:ok, %{returned: [2]}} =
+               DeliveryStates.queue_return(
+                 "l-ack",
+                 "g1",
+                 self(),
+                 offer.lease_id,
+                 [{b, :format_budget}],
+                 "t",
+                 name
+               )
+
+      assert %{acked_seq: 2, issued_seq: 2} = status(name, "l-ack")
+      refute Map.has_key?(:sys.get_state(name).bodies, {"l-ack", a})
+      assert :sys.get_state(name).bodies[{"l-ack", b}] == %{"n" => 2}
+
+      assert {:ok, again} = DeliveryStates.queue_offer("l-ack", "g1", self(), :root, name)
+      assert [%{queue_id: ^b, delivery_seq: 3, attempt: 2}] = again.items
+    end
+
+    test "an unknown outcome counts as uncertain and drops the body", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("l-unknown", "g1", self(), @lease_policy, name)
+      [a] = queued(name, "l-unknown", 1)
+      {:ok, offer} = DeliveryStates.queue_offer("l-unknown", "g1", self(), :root, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native("l-unknown", "g1", self(), offer.lease_id, [a], name)
+
+      assert {:ok, %{uncertain: [1]}} =
+               DeliveryStates.queue_dispose(
+                 "l-unknown",
+                 "g1",
+                 self(),
+                 offer.lease_id,
+                 [{a, :unknown}],
+                 "t",
+                 name
+               )
+
+      assert %{
+               acked_seq: 1,
+               uncertain_count: 1,
+               last_uncertain: %{delivery_seq: 1, reason: "queue_unknown"}
+             } =
+               status(name, "l-unknown")
+
+      assert :sys.get_state(name).bodies == %{}
+      assert %{charged_bytes: 0} = DeliveryStates.queue_counts("l-unknown", name)
+    end
+
+    test "a new generation returns offers, resolves native-pending as uncertain, keeps queued", %{
+      name: name
+    } do
+      {:ok, _} =
+        DeliveryStates.bind_queue(
+          "l-gen",
+          "g1",
+          self(),
+          %{@lease_policy | batch_max_items: 1},
+          name
+        )
+
+      [a, b, c] = queued(name, "l-gen", 3)
+      {:ok, first} = DeliveryStates.queue_offer("l-gen", "g1", self(), :root, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native("l-gen", "g1", self(), first.lease_id, [a], name)
+
+      {:ok, _second} = DeliveryStates.queue_offer("l-gen", "g1", self(), :root, name)
+
+      {:ok, _} =
+        DeliveryStates.bind_queue(
+          "l-gen",
+          "g2",
+          self(),
+          %{@lease_policy | batch_max_items: 1},
+          name
+        )
+
+      assert %{queued: 2, offered: 0, native_pending: 0} =
+               DeliveryStates.queue_counts("l-gen", name)
+
+      assert %{uncertain_count: 1, acked_seq: 2} = status(name, "l-gen")
+      refute Map.has_key?(:sys.get_state(name).bodies, {"l-gen", a})
+
+      assert {:ok, offer} = DeliveryStates.queue_offer("l-gen", "g2", self(), :root, name)
+      assert [%{queue_id: ^b, delivery_seq: 3, attempt: 2}] = offer.items
+      _ = c
+    end
+
+    test "lease operations refuse a stale owner or an unknown lease", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("l-refuse", "g1", self(), @lease_policy, name)
+      [a] = queued(name, "l-refuse", 1)
+      {:ok, offer} = DeliveryStates.queue_offer("l-refuse", "g1", self(), :root, name)
+
+      assert DeliveryStates.queue_begin_native(
+               "l-refuse",
+               "g0",
+               self(),
+               offer.lease_id,
+               [a],
+               name
+             ) ==
+               {:error, :stale_delivery_owner}
+
+      assert DeliveryStates.queue_begin_native(
+               "l-refuse",
+               "g1",
+               self(),
+               offer.lease_id + 1,
+               [a],
+               name
+             ) ==
+               {:error, :unknown_lease}
+    end
+  end
 end
