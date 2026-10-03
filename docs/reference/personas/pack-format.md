@@ -47,7 +47,7 @@ is the source of truth.
 |---|---|---|---|
 | `id` | string | Required | Unique persona identifier. `^[A-Za-z0-9._-]+$` / 1–256 characters. `default` is reserved for the built-in sprite-less persona and cannot be imported as a pack ID. [ADR-0003](../../adr/0003-persona-identity-persistence.md). Also becomes the filesystem directory name. |
 | `name` | string | Required | Proper name of the persona defined by the pack (Japanese permitted; canonical—issue #209 D19). 1–64 grapheme clusters and at most 256 UTF-8 bytes; control characters prohibited (same domain as agent `display_name`, D24). |
-| `sprite_set` | string | Required | Sprite-set identifier. Usually identical to `id`. 1–256 characters. The ID reservation does not reserve the set name: a pack with another ID may use `default` as its sprite set. |
+| `sprite_set` | string | Required | Sprite-set identifier. Usually identical to `id`. 1–256 characters. `default` is reserved for the sprite-less persona and must not be used by imported packs; see [Default persona](../../specs/personas.md#default-persona-plain-ai). |
 | `version` | string | Required | Semver (for example, `1.0.0`). The author bumps it each time they update the pack. |
 | `license` | string | Required | License identifier (SPDX-compliant recommended; for example, `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`). AI-generated works may not have copyright, so confirm that the license label matches reality. Separately confirm how far the model's terms extend to Outputs. |
 | `min_kaoiro_version` | string | Required | Lower semver bound of the server version needed to operate. The server rejects import if it is lower. |

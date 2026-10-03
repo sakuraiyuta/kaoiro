@@ -30,7 +30,7 @@ defmodule KaoiroServerWeb.PersonaDelivery do
       with {:ok, projected} <- ViewerAgentProjection.sanitize(envelope),
            false <- projected["state"] == "disconnected",
            %{"id" => id, "sprite_set" => set} <- projected["persona"],
-           true <- is_binary(id) and is_binary(set) and id != "default",
+           true <- is_binary(id) and is_binary(set) and id != "default" and set != "default",
            %{"id" => ^id, "sprite_set" => ^set} <- assets.personas_by_id[id],
            true <- Map.has_key?(assets.manifest["personas"], set),
            %MapSet{} = owners <- claimants[set],

@@ -281,7 +281,7 @@
       .filter(e => e.state !== "disconnected" &&
         ["state_change", "permission_request", "question_request", "session_boundary"].includes(e.type) &&
         typeof e.persona?.id === "string" && typeof e.persona?.sprite_set === "string" &&
-        e.persona.id !== "default")
+        e.persona.id !== "default" && e.persona.sprite_set !== "default")
       .map(e => JSON.stringify([e.persona!.id, e.persona!.sprite_set]));
     const key = JSON.stringify([...new Set(references)].sort());
     if (key === personaMembership) return;

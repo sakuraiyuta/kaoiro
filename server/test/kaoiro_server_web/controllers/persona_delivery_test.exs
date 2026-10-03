@@ -221,7 +221,7 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     denied_images(session, "unique")
   end
 
-  test "an ingested custom ID can use the default sprite set without granting the reserved persona",
+  test "viewer rejects the reserved sprite set even when ingest accepts a custom claimant",
        ctx do
     [a, _, _, _] = ctx.ids
 
@@ -233,17 +233,24 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     assert canonical["id"] == "custom-default-set"
     assert canonical["sprite_set"] == "default"
     viewer = cookie("v")
-    state(a, "default", "default")
-    assert body(viewer)["personas"] == %{}
-    denied_images(viewer, "default")
+    before = body(viewer)
+    assert before["personas"] == %{}
+
+    for {id, value} <- [
+          {canonical["id"], "idle"},
+          {canonical["id"], "disconnected"},
+          {"default", "idle"}
+        ] do
+      state(a, id, canonical["sprite_set"], value)
+      assert body(viewer) == before
+      denied_images(viewer, "default")
+    end
 
     state(a, canonical["id"], canonical["sprite_set"])
-    manifest = body(viewer)
-    assert Map.keys(manifest["personas"]) == ["default"]
-    url = manifest["personas"]["default"]["states"]["idle"]["url"]
+    url = body(cookie("o"))["personas"]["default"]["states"]["idle"]["url"]
     assert url =~ "&auth=1"
 
-    for session <- [viewer, cookie("o"), cookie("a")],
+    for session <- [cookie("o"), cookie("a")],
         path <- [url, "/personas/default/idle.png"],
         method <- [:get, :head] do
       conn =
@@ -255,12 +262,6 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     end
 
     assert get(build_conn(), url).status == 401
-    state(a, canonical["id"], canonical["sprite_set"], "disconnected")
-    assert body(viewer)["personas"] == %{}
-    denied_images(viewer, "default")
-    state(a, "default", "default")
-    assert body(viewer)["personas"] == %{}
-    denied_images(viewer, "default")
   end
 
   test "cookie login, denial order, live revocation, no-store and unchanged detail authorization",
