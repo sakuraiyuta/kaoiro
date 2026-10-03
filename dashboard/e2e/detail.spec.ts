@@ -196,15 +196,16 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
       await page.setViewportSize({ width: 1600, height: 900 });
       await page.goto(`${DETAIL}&taskRing=1${query}`);
       if (label === "sprite") {
-        const img = page.locator('.portrait-sprite[data-size="detail"]');
-        await expect
-          .poll(() =>
-            img.evaluate((el) => (el as HTMLImageElement).naturalWidth),
-          )
-          .toBe(0);
+        await expect(
+          page.locator('.portrait-sprite[data-size="detail"]'),
+        ).toHaveCount(0);
+        await expect(
+          page.locator('.face[data-size="detail"]'),
+        ).toBeVisible();
       }
       const ring = page.locator("aside.status .portrait .task-ring");
       await expect(ring).toBeVisible();
+      // 404 フォールバック後も AgentDetail はマニフェスト定義(!spriteUrl)に従い最大半径の sprite-orbit を維持して .bar 非重なりを検証する。
       await expect(ring).toHaveClass(
         expectFaceOrbit ? /face-orbit/ : /^(?!.*face-orbit).*$/,
       );
