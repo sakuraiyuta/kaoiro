@@ -36,6 +36,28 @@ describe("renderUntrustedMarkdown: layer one (marked)", () => {
     expect(root.querySelector("table")).not.toBeNull();
   });
 
+  it("keeps what GFM says: task ticks, a list's first number and column alignment", () => {
+    const root = htmlOf(
+      "- [x] done\n- [ ] todo\n\n3. three\n4. four\n\n| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |",
+    );
+
+    // A tick is text because an <input> is forbidden; done and todo differ.
+    const items = Array.from(root.querySelectorAll("li")).map((li) => li.textContent);
+    expect(items.slice(0, 2)).toEqual(["[x] done", "[ ] todo"]);
+    expect(root.querySelector("input")).toBeNull();
+    expect(root.querySelector("ol")?.getAttribute("start")).toBe("3");
+    const aligns = Array.from(root.querySelectorAll("th")).map((th) => th.getAttribute("align"));
+    expect(aligns).toEqual(["left", "center", "right"]);
+  });
+
+  it("shows the tick of a task in a loose list too", () => {
+    const items = Array.from(htmlOf("- [x] a\n\n- [ ] b").querySelectorAll("li")).map(
+      (li) => li.textContent?.trim(),
+    );
+
+    expect(items).toEqual(["[x] a", "[ ] b"]);
+  });
+
   it("turns single newlines into line breaks", () => {
     expect(htmlOf("one\ntwo").querySelector("br")).not.toBeNull();
   });
@@ -123,6 +145,13 @@ describe("sanitizeUntrustedHtml: layer two on its own", () => {
     expect(link?.hasAttribute("href") ?? false).toBe(false);
   });
 
+  it("keeps a list's start number and a cell's alignment, which are not URLs", () => {
+    const root = sanitized('<ol start="3"><li>x</li></ol><table><tr><td align="right">c</td></tr></table>');
+
+    expect(root.querySelector("ol")?.getAttribute("start")).toBe("3");
+    expect(root.querySelector("td")?.getAttribute("align")).toBe("right");
+  });
+
   it("keeps an https anchor and adds rel and target", () => {
     const [link] = anchors(sanitized('<a href="https://ok.example/">ok</a>'));
 
@@ -165,6 +194,16 @@ describe("failure is bounded", () => {
 
     expect(renderUntrustedMarkdown(nested(40))).toEqual({ kind: "plain" });
     expect(renderUntrustedMarkdown(nested(10))).toMatchObject({ kind: "html" });
+  });
+
+  it("switches exactly at the limit: 32 levels render and 33 do not", () => {
+    const nested = (depth: number) =>
+      Array.from({ length: depth }, (_, i) => `${"  ".repeat(i)}- item`).join("\n");
+
+    expect(renderUntrustedMarkdown(">".repeat(MAX_NESTING_DEPTH))).toMatchObject({ kind: "html" });
+    expect(renderUntrustedMarkdown(">".repeat(MAX_NESTING_DEPTH + 1))).toEqual({ kind: "plain" });
+    expect(renderUntrustedMarkdown(nested(MAX_NESTING_DEPTH))).toMatchObject({ kind: "html" });
+    expect(renderUntrustedMarkdown(nested(MAX_NESTING_DEPTH + 1))).toEqual({ kind: "plain" });
   });
 
   it("never throws, whatever the input", () => {
