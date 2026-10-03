@@ -17,6 +17,7 @@
     QuagmireSettings,
     UserSummary,
   } from "./protocol";
+  import type { StatusLineSettings } from "./statusLine";
   import Modal from "./Modal.svelte";
 
   // A future rejection reason cannot prove that the reset was not accepted.
@@ -36,6 +37,7 @@
     onLogout = undefined,
     connection = undefined,
     quagmireSettings = null,
+    statusLineSettings = null,
     agents = {},
     directory = {},
     appConnectionGeneration = 0,
@@ -71,7 +73,31 @@
      *  push. Owned by App.svelte so a change made elsewhere is reflected
      *  here without the drawer holding its own copy. */
     quagmireSettings?: QuagmireSettings | null;
+    /** Change-log retention in force (issue 482), or null before the first
+     *  push. Owned by App.svelte for the same reason as quagmireSettings. */
+    statusLineSettings?: StatusLineSettings | null;
   } = $props();
+
+  let retentionError = $state<string | null>(null);
+
+  const retentionSourceLabel = $derived(
+    statusLineSettings === null
+      ? "取得中"
+      : { stored: "設定済み", env: "環境変数", default: "既定値" }[statusLineSettings.source],
+  );
+
+  // The browser lets any number through; the server rejects out-of-range
+  // rather than clamping, so clamp first and tell the operator nothing odd.
+  function commitRetention(raw: string): void {
+    if (!connection || statusLineSettings === null) return;
+    const parsed = Math.trunc(Number(raw));
+    if (!Number.isFinite(parsed)) return;
+    const value = Math.min(statusLineSettings.max, Math.max(statusLineSettings.min, parsed));
+    retentionError = null;
+    connection.setStatusLineRetention(value).catch((err: unknown) => {
+      retentionError = err instanceof Error ? err.message : "error";
+    });
+  }
 
   let quagmireError = $state<string | null>(null);
 
@@ -798,6 +824,31 @@
       {/if}
     </section>
 
+    <section class="status-retention">
+      <h3>状況表示の履歴件数</h3>
+      <p class="hint">
+        各エージェントの状況表示について、変更履歴を何件まで残すかを決めます。
+        減らすと、超えた古い履歴はすぐに消えます
+        (現在の設定元: {retentionSourceLabel})。
+      </p>
+      <label>
+        件数{statusLineSettings
+          ? ` (${statusLineSettings.min}〜${statusLineSettings.max})`
+          : ""}
+        <input
+          type="number"
+          min={statusLineSettings?.min ?? 1}
+          max={statusLineSettings?.max ?? 100}
+          value={statusLineSettings?.retention ?? ""}
+          disabled={statusLineSettings === null}
+          onchange={(e) => commitRetention(e.currentTarget.value)}
+        />
+      </label>
+      {#if retentionError}
+        <p class="error">件数を変更できません: {retentionError}</p>
+      {/if}
+    </section>
+
     <section class="bulk-reset">
       <h3>一括クリーンアップ</h3>
       <p class="hint">開いている会話を閉じ、接続中のエージェントのセッションを clear します。</p>
@@ -1313,18 +1364,21 @@
      CSS. */
   .conv-status,
   .user-status,
+  .status-retention .hint,
   .quagmire .hint {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
   }
 
+  .status-retention .error,
   .quagmire .error {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--danger, #c62828);
   }
 
+  .status-retention input[type="number"],
   .quagmire input[type="number"] {
     width: 6rem;
   }

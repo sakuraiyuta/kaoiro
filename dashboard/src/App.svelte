@@ -7,6 +7,9 @@
   import PersonaDetailDialog from "./lib/PersonaDetailDialog.svelte";
   import PersonaFace from "./lib/PersonaFace.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
+  import StatusLineHistoryDialog from "./lib/StatusLineHistoryDialog.svelte";
+  import type { StatusLineSettings } from "./lib/statusLine";
+  import { StatusLines } from "./lib/statusLines.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
   import {
     conversationEntryKey,
@@ -370,6 +373,13 @@
   // click affordance; viewer disclosure is a separate future decision
   // (ADR-0021 F7).
   let personaDetailId = $state<string | null>(null);
+
+  // Agent status lines (issue 482). Held by agent id, independent of the card
+  // set: the server announces a line from inside the write that makes its
+  // agent visible, which can precede the envelope that creates the card.
+  const statusLines = new StatusLines();
+  let statusLineSettings = $state<StatusLineSettings | null>(null);
+  let statusHistoryAgentId = $state<string | null>(null);
   // issue #273: review-quagmire notices. Deliberately NOT the 6-second
   // spawn-notice toast — the whole point is that nobody was watching, so a
   // notice that expires on its own reproduces the problem it reports. One
@@ -873,6 +883,10 @@
           // DOES get a fresh "hosts" push) re-raises the flag.
           hosts = [];
           isOperator = false;
+          // issue 482: a rejoin brings its own snapshot; nothing held belongs
+          // to it, and a downgraded role must not keep the operator's setting.
+          statusLines.reset();
+          statusLineSettings = null;
           // issue #218 round 2 MF-4: every (re)join can follow a server
           // redeploy, so the health snapshot fetched at mount may already
           // be stale by the time this fires.
@@ -887,6 +901,9 @@
         onTaskSnapshot: (next) => (tasks = next),
         onQuagmireNotice: recordQuagmire,
         onQuagmireSettings: applyQuagmireSettings,
+        onStatusLineSnapshot: (rows, incomplete) => statusLines.applySnapshot(rows, incomplete),
+        onStatusLine: (agentId, row) => statusLines.applyLive(agentId, row),
+        onStatusLineSettings: (next) => (statusLineSettings = next),
         onDeliverySnapshot: (next) => { deliveries = next; resolveDeliveryNotices(next); },
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
@@ -1237,6 +1254,7 @@
           );
         },
         onAgentDeleted: (agentId) => {
+          statusLines.remove(agentId);
           // A disconnected agent was removed (#14, ADR-0030 D6): drop it
           // from the grid, its transcript, the directory ledger, AND any
           // sticky spawn error. Missing the directory drop leaves a
@@ -1512,6 +1530,9 @@
     // this tab has not seen them, and the detector re-announces on its own.
     quagmireNotices = [];
     quagmireSettings = null;
+    statusLines.reset();
+    statusLineSettings = null;
+    statusHistoryAgentId = null;
   }
 
   // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
@@ -1997,6 +2018,19 @@
     {agents}
     {directory}
     {quagmireSettings}
+    {statusLineSettings}
+  />
+{/if}
+
+{#if statusHistoryAgentId !== null && connection !== null}
+  <StatusLineHistoryDialog
+    agentId={statusHistoryAgentId}
+    label={agents[statusHistoryAgentId]?.display_name ??
+      directory[statusHistoryAgentId]?.display_name ??
+      statusHistoryAgentId}
+    fetchHistory={connection.fetchStatusLineHistory}
+    refreshKey={statusLines.stampOf(statusHistoryAgentId)}
+    onClose={() => (statusHistoryAgentId = null)}
   />
 {/if}
 
@@ -2159,6 +2193,8 @@
                   ? () => connection!.deleteAgent(envelope.agent_id)
                   : undefined}
                 onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
+                statusLine={statusLines.view(envelope.agent_id)}
+                onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
               />
             </li>
           {/each}
@@ -2226,6 +2262,8 @@
                     ? () => connection!.deleteAgent(tile.id)
                     : undefined}
                   onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
+                  statusLine={statusLines.view(tile.id)}
+                  onOpenStatusLineHistory={(id) => (statusHistoryAgentId = id)}
                 />
               </li>
             {/each}

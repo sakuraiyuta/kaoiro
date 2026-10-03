@@ -20,7 +20,9 @@
     STOP_SAFE_STATES,
   } from "./protocol";
   import type { Envelope, PersonaManifest } from "./protocol";
+  import { formatRelativeJa } from "./relativeTime";
   import { settings } from "./settings.svelte";
+  import type { StatusLineView } from "./statusLine";
 
   let {
     envelope,
@@ -35,6 +37,8 @@
     onRestore,
     onDelete,
     onOpenPersonaDetail,
+    statusLine = { kind: "none" },
+    onOpenStatusLineHistory,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
@@ -85,6 +89,13 @@
      *  image's click falls back to onSelect (handlePersonaOpenClick below),
      *  same as clicking the rest of the card. */
     onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
+    /** What the card says about the agent's self-written status line (issue
+     *  482). `none` draws no row; `unset` says so; `set` shows the head the
+     *  server cut, as plain text. */
+    statusLine?: StatusLineView;
+    /** Opens the change-log dialog for this agent. Offered to every role,
+     *  so it does not depend on the operator-only connection. */
+    onOpenStatusLineHistory?: ((agentId: string) => void) | undefined;
   } = $props();
 
   // issue #232 MF-2 round-2 must-fix (MF-R2-1): the expand origin must be
@@ -156,6 +167,27 @@
       : null;
   });
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+
+  // The row shows at most three lines of the head; a longer line, or a head the
+  // server cut, says so. The size is the server's, not recomputed here.
+  const statusLineMore = $derived(
+    statusLine.kind === "set" &&
+      (statusLine.truncated || statusLine.head.split("\n").length > 3)
+      ? `…続きあり (${(statusLine.bytes / 1024).toFixed(1)} KB)`
+      : null,
+  );
+  const statusLineClock = $derived(
+    statusLine.kind === "set" ? clockOf(statusLine.updatedAt) : "",
+  );
+  const statusLineAgo = $derived(
+    statusLine.kind === "set" ? formatRelativeJa(statusLine.updatedAt, Date.now()) : "",
+  );
+
+  function clockOf(iso: string): string {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
   const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
     spriteUrlFor(
@@ -643,6 +675,29 @@
       </div>
     {/if}
   </button>
+  {#if statusLine.kind !== "none"}
+    <!-- A sibling of .open and .persona-open, not nested in .open: a button
+         may not contain another interactive element, and opening the change
+         log must not also open the detail view. -->
+    <button
+      type="button"
+      class="status-line"
+      class:unset={statusLine.kind === "unset"}
+      onclick={() => onOpenStatusLineHistory?.(envelope.agent_id)}
+      disabled={onOpenStatusLineHistory === undefined}
+      aria-label="{name} の状況表示の履歴を開く"
+    >
+      {#if statusLine.kind === "set"}
+        <span class="status-text">{statusLine.head}</span>
+        {#if statusLineMore !== null}
+          <span class="status-more">{statusLineMore}</span>
+        {/if}
+        <span class="status-time" title={statusLineAgo}>{statusLineClock}</span>
+      {:else}
+        <span class="status-text">未設定</span>
+      {/if}
+    </button>
+  {/if}
   {#if canStop}
     <button
       type="button"
@@ -1062,6 +1117,51 @@
   .open:disabled:hover h2,
   .open:disabled:focus-visible h2 {
     color: inherit;
+  }
+
+  /* Self-written status line (issue 482). Plain text only: the head the server
+     cut is not complete markdown, and a link inside a button would also
+     trigger it. Nothing here ages or dims the row. */
+  .status-line {
+    display: block;
+    width: 100%;
+    margin: 0.6rem 0 0;
+    padding: 0.3rem 0.5rem;
+    border: 1px dashed var(--line);
+    border-radius: 0.3rem;
+    background: none;
+    font: inherit;
+    font-size: var(--fs-caption);
+    color: var(--fg-dim);
+    text-align: left;
+    white-space: normal;
+    cursor: pointer;
+  }
+
+  .status-line:hover:not(:disabled),
+  .status-line:focus-visible {
+    border-color: var(--tone);
+  }
+
+  .status-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .status-line.unset .status-text {
+    opacity: 0.6;
+  }
+
+  .status-more,
+  .status-time {
+    display: block;
+    font-size: var(--fs-micro);
+    opacity: 0.75;
   }
 
   /* Needs-attention badge: blinking chip on the card corner (ADR-0012). */
