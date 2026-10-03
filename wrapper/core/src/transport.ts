@@ -1070,7 +1070,7 @@ const STATUS_LINE_UNKNOWN_ERROR: StatusLineSetResult & StatusLineReadResult = {
 };
 
 function statusLineSetOkFrom(payload: unknown): StatusLineSetResult {
-  if (!isObject(payload) || !("status_line" in payload)) return STATUS_LINE_UNKNOWN_ERROR;
+  if (!isObject(payload)) return STATUS_LINE_UNKNOWN_ERROR;
   const stored = payload.status_line;
   if (stored === null) return { kind: "ok", status_line: null };
   if (!isObject(stored)) return STATUS_LINE_UNKNOWN_ERROR;
