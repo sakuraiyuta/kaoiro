@@ -1500,7 +1500,20 @@ defmodule KaoiroServer.DeliveryStates do
           reservation.agent_id == recipient and is_binary(reservation[:early_sender]),
           do: reservation.early_sender
 
-    pending = accepted ++ held
+    # An early item in the queue holds its quota slot until it is handed off
+    # natively, as an issued one does until its `submitted` stage.
+    queued =
+      case entry do
+        %{queue: %{} = queue} ->
+          for {_id, %{early: true, sender: early_sender, phase: phase}} <- queue.items,
+              phase in [:queued, :offered],
+              do: early_sender
+
+        _ ->
+          []
+      end
+
+    pending = accepted ++ held ++ queued
     {Enum.count(pending, &(&1 == sender)), length(pending)}
   end
 

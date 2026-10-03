@@ -2818,4 +2818,46 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert message =~ "resolved outside the queue"
     end
   end
+
+  describe "early quota with the queue" do
+    test "queued early items hold the pair quota until handed off", %{name: name} do
+      policy = %{batch_max_items: 10, backlog_max_items: 20, backlog_max_bytes: 1_000}
+      {:ok, _} = DeliveryStates.bind_queue("eq", "g1", self(), policy, name)
+
+      ids =
+        for n <- 1..4 do
+          {:ok, token, _} = DeliveryStates.queue_reserve("eq", :ordinary, 1, name)
+
+          {:ok, id} =
+            DeliveryStates.queue_commit(
+              "eq",
+              token,
+              %{
+                sender: "s",
+                conversation_id: "c#{n}",
+                turn_number: 1,
+                kind: "inform",
+                early: true
+              },
+              %{},
+              name
+            )
+
+          id
+        end
+
+      {:ok, slot} = DeliveryStates.reserve("eq", self(), name)
+      assert DeliveryStates.reserve_early("s", "eq", slot, 4, 16, name) == {:error, :early_quota}
+      assert DeliveryStates.reserve_early("other", "eq", slot, 4, 16, name) == :ok
+      :ok = DeliveryStates.release(slot, name)
+
+      {:ok, offer} = DeliveryStates.queue_offer("eq", "g1", self(), :root, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native("eq", "g1", self(), offer.lease_id, [hd(ids)], name)
+
+      {:ok, slot} = DeliveryStates.reserve("eq", self(), name)
+      assert DeliveryStates.reserve_early("s", "eq", slot, 4, 16, name) == :ok
+    end
+  end
 end

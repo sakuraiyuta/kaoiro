@@ -1709,10 +1709,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     }
 
     # The queue item takes no delivery sequence now, so the ledger slot
-    # reserved alongside it is released either way.
+    # reserved alongside it is released either way, but only after the
+    # commit: until then that slot is what holds the early quota.
+    result = DeliveryStates.queue_commit(to, queue, descriptor, stamped)
     :ok = DeliveryStates.release(token)
 
-    case DeliveryStates.queue_commit(to, queue, descriptor, stamped) do
+    case result do
       {:ok, queue_id} ->
         {:ok, queue_id}
 
