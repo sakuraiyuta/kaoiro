@@ -65,6 +65,11 @@ const marked = new Marked({
       const label = escapeHtml(token.text || token.href);
       return url === null ? escapeHtml(token.text) : `<a href="${escapeHtml(url)}">${label}</a>`;
     },
+    // A task list tick is an <input>, which layer two forbids, so it would
+    // vanish and "done" would read the same as "todo". Show it as text instead.
+    checkbox(token) {
+      return token.checked ? "[x] " : "[ ] ";
+    },
     // Only an http(s) link stays a link; any other keeps just its label.
     link(token) {
       const label = this.parser.parseInline(token.tokens);
@@ -99,6 +104,10 @@ function getPurifier(): ReturnType<typeof createDOMPurify> {
 export function sanitizeUntrustedHtml(html: string): string {
   return getPurifier().sanitize(html, {
     ALLOWED_URI_REGEXP: /^https?:\/\//i,
+    // DOMPurify tests every attribute outside its URI-safe list against the
+    // pattern above, not only href, so these two would lose their meaning
+    // (a list's first number, a table column's alignment). Neither is a URL.
+    ADD_URI_SAFE_ATTR: ["align", "start"],
     FORBID_TAGS: ["img", "style", "svg", "math", "iframe", "form", "input"],
     FORBID_ATTR: ["style"],
   });
@@ -120,7 +129,10 @@ function nestingDepth(tokens: readonly Token[]): number {
 }
 
 /** Markdown to sanitized HTML under the policy above, or `plain` when it cannot
- *  be done safely and quickly: the parser threw, or the nesting is too deep. */
+ *  be done safely and quickly: the parser threw, or the nesting is too deep.
+ *  The time is bounded per click, not per input: for 16 KB the slowest shape
+ *  measured (jsdom, load about 2.7) was "*a _b" x 3276 at 739 ms, and a deep
+ *  "> - " nest costs about 544 ms of lexing before it falls back to plain. */
 export function renderUntrustedMarkdown(text: string): UntrustedRender {
   try {
     const tokens = marked.lexer(text);
