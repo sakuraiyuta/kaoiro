@@ -2,6 +2,9 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import Phoenix.ChannelTest
+  import ExUnit.CaptureLog
+
+  require Logger
 
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.TestTimeouts
@@ -248,5 +251,64 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
                  TestTimeouts.durable_reply()
 
     assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(id)
+  end
+
+  test "a return logs the queue id, sequence and full reason", %{id: id} = ctx do
+    level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: level) end)
+
+    {reply, socket} = join_queue(id)
+
+    credit =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      })
+
+    {:ok, _} = control(socket, credit)
+    queue_id = enqueue(id, "peer.a")
+    assert_push "delivery_batch", %{"lease_id" => lease_id}
+
+    returned =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "return",
+        "lease_id" => lease_id,
+        "items" => [
+          %{"queue_id" => queue_id, "reason" => "early_ineligible", "sub_reason" => "host_busy"}
+        ]
+      })
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{"returned_ranges" => [[1, 1]]}} = control(socket, returned)
+      end)
+
+    assert log =~ "queue_id=#{queue_id} seq=1"
+    assert log =~ "reason=early_ineligible:host_busy"
+  end
+
+  test "a stalled queue owner is answered with queue_unavailable", %{id: id} = ctx do
+    {reply, socket} = join_queue(id)
+
+    credit =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      })
+
+    owner = Process.whereis(DeliveryStates)
+    :ok = :sys.suspend(owner)
+
+    try do
+      ref = push(socket, "delivery_queue_control", credit)
+      assert_reply ref, :error, %{reason: "queue_unavailable"}, 8_000
+    after
+      :ok = :sys.resume(owner)
+    end
+
+    assert Process.alive?(socket.channel_pid)
   end
 end
