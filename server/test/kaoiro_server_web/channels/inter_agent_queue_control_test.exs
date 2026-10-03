@@ -212,4 +212,41 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
     {again, _socket} = join_queue(id)
     assert again["inter_agent_queue_resume_required"] == true
   end
+
+  test "a resync over an offered queue sequence reports it as returned, not skipped",
+       %{id: id} = ctx do
+    {reply, socket} = join_queue(id)
+
+    credit =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      })
+
+    {:ok, _} = control(socket, credit)
+    enqueue(id, "peer.a")
+    assert_push "delivery_batch", %{"items" => [%{"delivery_seq" => 1}]}
+
+    ref =
+      push(socket, "delivery_resync", %{
+        "version" => "0",
+        "generation" => "generation",
+        "request_id" => "r1",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]]
+      })
+
+    assert_reply ref,
+                 :ok,
+                 %{
+                   "skipped_ranges" => [],
+                   "returned_ranges" => [[1, 1]],
+                   "uncertain_ranges" => [],
+                   "delivery" => %{lost_count: 0}
+                 },
+                 TestTimeouts.durable_reply()
+
+    assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(id)
+  end
 end

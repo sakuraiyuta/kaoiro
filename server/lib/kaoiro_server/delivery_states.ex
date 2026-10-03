@@ -160,12 +160,35 @@ defmodule KaoiroServer.DeliveryStates do
     GenServer.call(server, {:acknowledge, agent_id, generation, owner, seq})
   end
 
-  def resync(agent_id, generation, owner, cutoff, ranges, server \\ __MODULE__) do
-    GenServer.call(server, {:resync, agent_id, generation, owner, cutoff, ranges})
-  end
+  def resync(agent_id, generation, owner, cutoff, ranges, server \\ __MODULE__),
+    do:
+      without_queue(resync_detailed(:resync, agent_id, generation, owner, cutoff, ranges, server))
 
   def retire(agent_id, generation, owner, cutoff, ranges, server \\ __MODULE__),
-    do: GenServer.call(server, {:retire, agent_id, generation, owner, cutoff, ranges})
+    do:
+      without_queue(resync_detailed(:retire, agent_id, generation, owner, cutoff, ranges, server))
+
+  @doc """
+  `resync/6` or `retire/6` that also reports what happened to queue-origin
+  sequences in the ranges: `{:ok, status, %{returned:, uncertain:,
+  skipped:}}`, each a list of `[first, last]` ranges; `skipped` is the
+  request without the queue-origin sequences, which are never recorded as
+  losses.
+  """
+  def resync_detailed(
+        operation,
+        agent_id,
+        generation,
+        owner,
+        cutoff,
+        ranges,
+        server \\ __MODULE__
+      )
+      when operation in [:resync, :retire],
+      do: GenServer.call(server, {operation, agent_id, generation, owner, cutoff, ranges})
+
+  defp without_queue({:ok, status, _queue}), do: {:ok, status}
+  defp without_queue(other), do: other
 
   @doc "Retires every unresolved sequence owned by one live wrapper generation."
   def retire_owned_generation(agent_id, generation, owner, server \\ __MODULE__),
@@ -581,8 +604,17 @@ defmodule KaoiroServer.DeliveryStates do
       not valid_ranges?(ranges, cutoff, entry.issued_seq) ->
         {:reply, {:error, :invalid_delivery_resync}, state}
 
+      get_in(state.queue_controls, [agent_id, :resume_required]) == true ->
+        {:reply, {:error, :queue_resume_required}, state}
+
       true ->
         requested = for [first, last] <- ranges, seq <- first..last, do: seq
+
+        # Queue-origin sequences resolve as returned or uncertain, never as
+        # losses; resolving them first keeps them out of `added` below.
+        {state, entry, queue_result} =
+          release_queue_sequences(state, agent_id, entry, requested, :delivery_resync)
+
         previous = MapSet.new(entry.skipped)
         resolved = MapSet.new(entry.resolved)
 
@@ -638,13 +670,33 @@ defmodule KaoiroServer.DeliveryStates do
               "inter-agent delivery loss recipient=#{agent_id} count=#{length(added)} first=#{Enum.min(added)} last=#{Enum.max(added)} reason=#{loss_reason}"
             )
 
-        {:reply, {:ok, public(next)}, %{state | entries: Map.put(state.entries, agent_id, next)}}
+        queue_seqs = queue_result.returned ++ queue_result.uncertain
+
+        {:reply,
+         {:ok, public(next),
+          %{
+            returned: ranges(queue_result.returned),
+            uncertain: ranges(queue_result.uncertain),
+            skipped: if(queue_seqs == [], do: ranges, else: ranges(requested -- queue_seqs))
+          }}, %{state | entries: Map.put(state.entries, agent_id, next)}}
     end
   end
 
   def handle_call({:retire_owned_generation, agent_id, generation, owner}, _from, state) do
     if owns_recovery?(state, agent_id, generation, owner) do
       entry = state.entries[agent_id]
+
+      # A stopped recipient keeps its queue (r8b B6): its outstanding
+      # offers go back, native-pending items become unknown.
+      {state, entry, _queue_result} =
+        release_queue_sequences(
+          state,
+          agent_id,
+          entry,
+          leased_sequences(entry.queue),
+          :shutdown
+        )
+
       already_skipped = MapSet.new(entry.skipped)
       resolved = MapSet.new(entry.resolved)
 
@@ -1049,6 +1101,22 @@ defmodule KaoiroServer.DeliveryStates do
       {:reply, public(entry), state}
     end
   end
+
+  defp release_queue_sequences(state, _agent_id, %{queue: nil} = entry, _seqs, _reason),
+    do: {state, entry, %{returned: [], uncertain: [], disposed: []}}
+
+  defp release_queue_sequences(state, agent_id, entry, seqs, reason) do
+    {queue, result} = InterAgentQueue.release_sequences(entry.queue, seqs, reason)
+    {entry, _} = resolve_queue_sequences(%{entry | queue: queue}, :release, result)
+    bodies = Map.drop(state.bodies, Enum.map(result.disposed, &{agent_id, &1}))
+
+    {%{state | entries: Map.put(state.entries, agent_id, entry), bodies: bodies}, entry, result}
+  end
+
+  defp leased_sequences(nil), do: []
+
+  defp leased_sequences(queue),
+    do: for({_id, %{delivery_seq: seq}} <- queue.items, seq != nil, do: seq)
 
   defp oldest_pending_queue_seq(nil), do: nil
 

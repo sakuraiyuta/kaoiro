@@ -400,6 +400,37 @@ defmodule KaoiroServer.InterAgentQueue do
   end
 
   @doc """
+  Releases the items offered under the given delivery sequences, outside
+  any lease operation (a resync gap or the generation's retirement):
+  offered items go back to the queue with `reason`, native-pending items
+  become unknown. Sequences that are not queue-origin are ignored.
+  """
+  def release_sequences(q, seqs, reason) do
+    wanted = MapSet.new(seqs)
+
+    hit =
+      for {id, %{delivery_seq: seq} = item} <- q.items,
+          seq != nil and MapSet.member?(wanted, seq),
+          do: {id, item}
+
+    {offered, pending} = Enum.split_with(hit, fn {_id, item} -> item.phase == :offered end)
+    offered_ids = Enum.map(offered, &elem(&1, 0))
+    pending_ids = Enum.map(pending, &elem(&1, 0))
+
+    q =
+      update_items(q, offered_ids, fn item ->
+        %{item | phase: :queued, lease: nil, delivery_seq: nil, last_return_reason: reason}
+      end)
+
+    {%{q | items: Map.drop(q.items, pending_ids)},
+     %{
+       returned: offered |> Enum.map(&elem(&1, 1).delivery_seq) |> Enum.sort(),
+       uncertain: pending |> Enum.map(&elem(&1, 1).delivery_seq) |> Enum.sort(),
+       disposed: Enum.sort(pending_ids)
+     }}
+  end
+
+  @doc """
   Every live item is gone with its body (owner restart, recipient deletion):
   never-submitted items are lost, native-pending items unknown. Returns the
   emptied queue and the descriptors for notification.

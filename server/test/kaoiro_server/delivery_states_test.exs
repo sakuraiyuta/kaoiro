@@ -2416,4 +2416,95 @@ defmodule KaoiroServer.DeliveryStatesTest do
                {:error, {:invalid_queue_control, "operation_id"}}
     end
   end
+
+  describe "queue-origin sequences in resync and retirement" do
+    @resync_policy %{batch_max_items: 1, backlog_max_items: 10, backlog_max_bytes: 1_000}
+
+    setup %{name: name} do
+      recipient = "rs-#{System.unique_integer([:positive])}"
+      {:ok, _} = DeliveryStates.bind_queue(recipient, "g1", self(), @resync_policy, name)
+
+      ids =
+        for n <- 1..3 do
+          {:ok, token, _} = DeliveryStates.queue_reserve(recipient, :ordinary, 2, name)
+
+          {:ok, id} =
+            DeliveryStates.queue_commit(
+              recipient,
+              token,
+              %{sender: "s", conversation_id: "c", turn_number: n, kind: "inform"},
+              %{"n" => n},
+              name
+            )
+
+          id
+        end
+
+      # One native-pending (seq 1) and one offered (seq 2) item; the third stays queued.
+      {:ok, first} = DeliveryStates.queue_offer(recipient, "g1", self(), :root, name)
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native(
+          recipient,
+          "g1",
+          self(),
+          first.lease_id,
+          [hd(ids)],
+          name
+        )
+
+      {:ok, _second} = DeliveryStates.queue_offer(recipient, "g1", self(), :root, name)
+      %{recipient: recipient, ids: ids}
+    end
+
+    test "a resync gap returns offers and resolves native-pending without a loss", ctx do
+      [pending, offered, waiting] = ctx.ids
+
+      assert {:ok, status, %{returned: [[2, 2]], uncertain: [[1, 1]], skipped: []}} =
+               DeliveryStates.resync_detailed(
+                 :resync,
+                 ctx.recipient,
+                 "g1",
+                 self(),
+                 2,
+                 [[1, 2]],
+                 ctx.name
+               )
+
+      assert %{acked_seq: 2, lost_count: 0, uncertain_count: 1} = status
+      assert DeliveryStates.pending_losses(ctx.name) == []
+
+      counts = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+      assert %{queued: 2, offered: 0, native_pending: 0} = counts
+      bodies = :sys.get_state(ctx.name).bodies
+      refute Map.has_key?(bodies, {ctx.recipient, pending})
+      assert Map.has_key?(bodies, {ctx.recipient, offered})
+      assert Map.has_key?(bodies, {ctx.recipient, waiting})
+    end
+
+    test "the plain resync API keeps its shape", ctx do
+      assert {:ok, %{acked_seq: 2}} =
+               DeliveryStates.resync(ctx.recipient, "g1", self(), 2, [[1, 2]], ctx.name)
+    end
+
+    test "resync waits for resume after a same-generation rejoin", ctx do
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @resync_policy, ctx.name)
+
+      assert DeliveryStates.resync(ctx.recipient, "g1", self(), 2, [[1, 2]], ctx.name) ==
+               {:error, :queue_resume_required}
+    end
+
+    test "retiring a generation keeps the queue and records no queue loss", ctx do
+      [_pending, offered, waiting] = ctx.ids
+
+      assert {:ok, %{acked_seq: 2, lost_count: 0, uncertain_count: 1}} =
+               DeliveryStates.retire_owned_generation(ctx.recipient, "g1", self(), ctx.name)
+
+      assert DeliveryStates.pending_losses(ctx.name) == []
+      queue = :sys.get_state(ctx.name).entries[ctx.recipient].queue
+      assert queue.items[offered].phase == :queued
+      assert queue.items[offered].last_return_reason == :shutdown
+      assert queue.items[waiting].phase == :queued
+    end
+  end
 end

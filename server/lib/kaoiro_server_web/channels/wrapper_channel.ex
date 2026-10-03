@@ -935,22 +935,50 @@ defmodule KaoiroServerWeb.WrapperChannel do
     result =
       case payload["reason"] do
         nil ->
-          DeliveryStates.resync(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+          DeliveryStates.resync_detailed(
+            :resync,
+            socket.assigns.agent_id,
+            generation,
+            self(),
+            cutoff,
+            ranges
+          )
 
         "interrupted" ->
-          DeliveryStates.retire(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+          DeliveryStates.resync_detailed(
+            :retire,
+            socket.assigns.agent_id,
+            generation,
+            self(),
+            cutoff,
+            ranges
+          )
 
         _ ->
           {:error, :invalid_delivery_resync}
       end
 
     case result do
-      {:ok, status} ->
+      {:ok, status, queue} ->
         broadcast_delivery_status(socket.assigns.agent_id)
 
-        {:reply,
-         {:ok, %{"request_id" => request_id, "delivery" => status, "skipped_ranges" => ranges}},
-         socket}
+        reply = %{
+          "request_id" => request_id,
+          "delivery" => status,
+          "skipped_ranges" => queue.skipped
+        }
+
+        # Queue-origin sequences are never skipped (channels.md, resync).
+        reply =
+          if socket.assigns[:inter_agent_queue],
+            do:
+              Map.merge(reply, %{
+                "returned_ranges" => queue.returned,
+                "uncertain_ranges" => queue.uncertain
+              }),
+            else: reply
+
+        {:reply, {:ok, reply}, socket}
 
       {:error, reason} ->
         {:reply, {:error, %{reason: to_string(reason)}}, socket}

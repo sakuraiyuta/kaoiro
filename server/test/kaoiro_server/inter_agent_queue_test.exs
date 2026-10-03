@@ -298,6 +298,19 @@ defmodule KaoiroServer.InterAgentQueueTest do
       refute Q.lease_slot_busy?(q)
     end
 
+    test "releasing sequences returns offers, resolves native-pending, ignores the rest", ctx do
+      {q, result} = Q.release_sequences(ctx.q, [1, 2, 99], :shutdown)
+      assert result == %{returned: [2], uncertain: [1], disposed: [ctx.pending]}
+      assert q.items[ctx.offered].phase == :queued
+      assert q.items[ctx.offered].last_return_reason == :shutdown
+      refute Map.has_key?(q.items, ctx.pending)
+      assert q.items[ctx.waiting].phase == :queued
+
+      {same, none} = Q.release_sequences(ctx.q, [99], :shutdown)
+      assert same == ctx.q
+      assert none == %{returned: [], uncertain: [], disposed: []}
+    end
+
     test "dropping everything loses unsubmitted items and marks native-pending unknown", ctx do
       {q, result} = Q.drop_all(ctx.q)
       assert Enum.map(result.lost, &elem(&1, 0)) == [ctx.offered, ctx.waiting]
