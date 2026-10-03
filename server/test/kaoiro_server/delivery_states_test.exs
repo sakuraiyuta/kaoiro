@@ -2315,8 +2315,9 @@ defmodule KaoiroServer.DeliveryStatesTest do
     end
 
     test "freeze withdraws the credit and stops every later batch", ctx do
-      {_, {:ok, _}} = control(ctx, root_credit())
+      {_, {:ok, %{credit_revision: revision}}} = control(ctx, root_credit())
       assert {_, {:ok, %{frozen: true}}} = control(ctx, %{op: :freeze, reason: :shutdown})
+      assert {_, {:ok, %{withdrawn: false}}} = control(ctx, %{op: :withdraw, revision: revision})
       put(ctx, "a")
       refute_received {:inter_agent_queue_batch, _}
       assert {_, {:error, :queue_frozen}} = control(ctx, root_credit())
