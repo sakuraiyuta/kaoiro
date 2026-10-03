@@ -132,9 +132,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - name: mix checks
         shell: bash
         run: |
@@ -155,6 +160,14 @@ jobs:
           # unnoticed.
           set -euo pipefail
           node --test scripts/test/extract-session-reset-request-reply-vocabulary.test.mjs
+          pnpm install --frozen-lockfile
+          pnpm -C wrapper build
+          issue214_scratch=$(mktemp -d "$RUNNER_TEMP/kaoiro-issue-214-builder-validator.XXXXXX")
+          trap 'rm -rf -- "$issue214_scratch"' EXIT
+          node scripts/issue-214/prepare-builder-validator.mjs "$issue214_scratch"
+          export KAOIRO_ISSUE_214_BUILDER_PAYLOAD=/w/payload.json
+          export KAOIRO_ISSUE_214_BUILDER_MANIFEST=/w/manifest.json
+          export KAOIRO_ISSUE_214_EXPECTED_GIT_REVISION="$GITHUB_SHA"
           KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS="$(node scripts/extract-session-reset-request-reply-vocabulary.mjs)"
           export KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS
           # RuntimeConfigTest also reads the repository's scripts/dev.sh and
@@ -169,9 +182,13 @@ jobs:
           # pass-through. Value omitted so a local manual run of this same
           # command (no CI var set) leaves it unset inside the container
           # too, matching the local default.
-          tar --no-xattrs -cf - server scripts VERSION docs/reference/configuration/server.md \
-            protocol/fixtures runner/test/fixtures | docker run --rm -i -w /w \
+          tar --no-xattrs -cf - -C "$GITHUB_WORKSPACE" server scripts VERSION docs/reference/configuration/server.md \
+            protocol/fixtures runner/test/fixtures wrapper/agent-common/src/inter_agent.ts \
+            wrapper/agent-common/dist/inter_agent.js -C "$issue214_scratch" payload.json manifest.json | docker run --rm -i -w /w \
             -e CI \
+            -e KAOIRO_ISSUE_214_BUILDER_PAYLOAD \
+            -e KAOIRO_ISSUE_214_BUILDER_MANIFEST \
+            -e KAOIRO_ISSUE_214_EXPECTED_GIT_REVISION \
             -e KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '

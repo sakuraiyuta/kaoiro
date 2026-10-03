@@ -45,7 +45,8 @@ defmodule KaoiroServer.InterAgentReplyBasis do
     "permission_gate_blocked" =>
       "the peer stopped waiting to start an execution because permission dispatch remained blocked; the operator must reapply the same sandbox/network values to create a new revision before you resend",
     "stale_turn" => "the peer's local turn counter had already advanced past this message",
-    "receiver_overloaded" => "peer input backlog is full; this message was not submitted to the model"
+    "receiver_overloaded" =>
+      "peer input backlog is full; this message was not submitted to the model"
   }
 
   def admission(payload, true) do

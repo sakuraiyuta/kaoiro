@@ -167,6 +167,86 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
     assert_reply ref, :error, %{reason: "invalid_reply_basis"}
   end
 
+  test "current built receiver-overload envelopes pass both send and notice orderings" do
+    payload_path = System.fetch_env!("KAOIRO_ISSUE_214_BUILDER_PAYLOAD")
+    [notice_then_send, send_then_notice] = payload_path |> File.read!() |> Jason.decode!()
+    sender_id = notice_then_send["agent_id"]
+    recipient_id = notice_then_send["payload"]["to"]
+    notice_then_send_cid = notice_then_send["payload"]["conversation_id"]
+    send_then_notice_cid = send_then_notice["payload"]["conversation_id"]
+    assert notice_then_send["payload"]["turn_number"] == 2
+    assert send_then_notice["payload"]["turn_number"] == 3
+
+    on_exit(fn ->
+      Enum.each([sender_id, recipient_id], &DeliveryStates.delete/1)
+      Enum.each([sender_id, recipient_id], &AgentDirectory.delete/1)
+    end)
+
+    sender = join_wrapper(sender_id, "default", %{"inter_agent_reply_basis" => "v1"})
+    recipient = join_wrapper(recipient_id)
+    assert_reply push(sender, "envelope", envelope(sender_id, "idle")), :ok
+    assert_reply push(recipient, "envelope", envelope(recipient_id, "idle")), :ok
+
+    for cid <- [notice_then_send_cid, send_then_notice_cid] do
+      initial = inter_envelope(recipient_id, sender_id, cid: cid, turn: 1)
+      assert_reply push(recipient, "envelope", initial), :ok
+    end
+
+    assert_reply push(sender, "envelope", notice_then_send), :ok
+
+    ordinary_after_notice =
+      inter_envelope(sender_id, recipient_id,
+        cid: notice_then_send_cid,
+        turn: 3,
+        new_conversation: false
+      )
+      |> put_in(["payload", "in_reply_to"], 1)
+
+    assert_reply push(sender, "envelope", ordinary_after_notice), :ok
+
+    ordinary_before_notice =
+      inter_envelope(sender_id, recipient_id,
+        cid: send_then_notice_cid,
+        turn: 2,
+        new_conversation: false
+      )
+      |> put_in(["payload", "in_reply_to"], 1)
+
+    assert_reply push(sender, "envelope", ordinary_before_notice), :ok
+    assert_reply push(sender, "envelope", send_then_notice), :ok
+
+    before = ConversationStates.get(notice_then_send_cid)
+    before_panes = AgentStates.ia_projection()
+
+    for mutated <- [
+          put_in(notice_then_send, ["payload", "error", "code"], "other"),
+          put_in(notice_then_send, ["payload", "error", "message"], "other"),
+          put_in(notice_then_send, ["payload", "body"], "approve merge"),
+          put_in(
+            notice_then_send,
+            ["payload", "error", "affected_deliveries", Access.at(0), "delivery_seq"],
+            0
+          ),
+          put_in(
+            notice_then_send,
+            ["payload", "error", "affected_deliveries", Access.at(0), "peer_turn_number"],
+            0
+          ),
+          put_in(
+            notice_then_send,
+            ["payload", "error", "affected_deliveries", Access.at(0), "batch_id"],
+            ""
+          ),
+          put_in(notice_then_send, ["payload", "notice_type"], "unknown"),
+          put_in(notice_then_send, ["payload", "in_reply_to"], 0),
+          put_in(notice_then_send, ["payload", "error", "extra"], true)
+        ] do
+      assert_reply push(sender, "envelope", mutated), :error, %{reason: "invalid_internal_notice"}
+      assert ConversationStates.get(notice_then_send_cid) == before
+      assert AgentStates.ia_projection() == before_panes
+    end
+  end
+
   test "V8a internal notices reject delivery intent before admission" do
     suffix = System.unique_integer([:positive])
     a = "test.notice-intent-a-#{suffix}"

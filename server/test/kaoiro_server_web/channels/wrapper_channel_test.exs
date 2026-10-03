@@ -5194,6 +5194,106 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn -> Enum.each([to_id, from_id], &DeliveryStates.delete/1) end)
     end
 
+    test "server retirement regenerates an actual loss notice under its original loss ID" do
+      to_id = "test.loss-duplicate-recipient"
+      from_id = "test.loss-duplicate-sender"
+      recipient_generation = "loss-duplicate-recipient-generation"
+      sender_generation = "loss-duplicate-sender-generation"
+
+      on_exit(fn ->
+        Enum.each([to_id, from_id], &DeliveryStates.delete/1)
+        Enum.each([to_id, from_id], &AgentDirectory.delete/1)
+      end)
+
+      recipient =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => recipient_generation,
+          "delivery_resync" => "skip-v1"
+        })
+
+      sender =
+        join_wrapper(from_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => sender_generation,
+          "delivery_resync" => "skip-v1",
+          "inter_agent_reply_basis" => "v1"
+        })
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+      assert_reply push(sender, "envelope", envelope(from_id, "idle")), :ok
+      sender_topic = "wrapper:" <> from_id
+      @endpoint.subscribe(sender_topic)
+      cid = "loss-duplicate-#{System.unique_integer([:positive])}"
+      original = inter_envelope(from_id, to_id, cid: cid, body: "original receipt")
+      assert_reply push(sender, "envelope", put_in(original, ["payload", "in_reply_to"], 0)), :ok
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^to_id,
+        event: "envelope",
+        payload: %{"delivery_seq" => 1}
+      }
+
+      retire_original = %{
+        "version" => "0",
+        "generation" => recipient_generation,
+        "request_id" => "loss-duplicate-original",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", retire_original), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: ^sender_topic,
+        event: "envelope",
+        payload: %{
+          "delivery_seq" => 1,
+          "agent_id" => "server",
+          "payload" => %{
+            "conversation_id" => ^cid,
+            "error" => %{"code" => "delivery_lost", "loss_id" => loss_id}
+          }
+        }
+      }
+
+      assert is_binary(loss_id)
+
+      retire_loss_notice = %{
+        "version" => "0",
+        "generation" => sender_generation,
+        "request_id" => "loss-duplicate-notice",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]]
+      }
+
+      assert_reply push(sender, "delivery_resync", retire_loss_notice), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_received %Phoenix.Socket.Broadcast{
+        topic: ^sender_topic,
+        event: "envelope",
+        payload: %{
+          "delivery_seq" => 2,
+          "agent_id" => "server",
+          "payload" => %{
+            "conversation_id" => ^cid,
+            "error" => %{"code" => "delivery_lost", "loss_id" => ^loss_id}
+          }
+        }
+      }
+
+      assert %{acked_seq: 1, issued_seq: 2, lost_count: 1} = DeliveryStates.get(from_id)
+
+      assert_reply push(sender, "delivery_ack", %{"delivery_seq" => 2}), :ok, %{
+        "delivery" => %{acked_seq: 2, issued_seq: 2, pending_since: nil}
+      }
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      assert %{acked_seq: 2, issued_seq: 2, lost_count: 1} = DeliveryStates.get(from_id)
+    end
+
     test "negotiated recovery retires a dropped route and broadcasts the new prefix" do
       to_id = "test.delivery-recovery"
       from_id = "test.delivery-recovery-from"

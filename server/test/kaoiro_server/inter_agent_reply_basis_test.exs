@@ -53,6 +53,7 @@ defmodule KaoiroServer.InterAgentReplyBasisTest do
 
   test "receiver overload notice accepts the exact fixed wrapper template and rejects altered attribution" do
     message = "peer input backlog is full; this message was not submitted to the model"
+
     notice = %{
       "to" => "sender",
       "conversation_id" => "cid",
@@ -80,6 +81,48 @@ defmodule KaoiroServer.InterAgentReplyBasisTest do
           put_in(notice, ["error", "affected_deliveries", Access.at(0), "batch_id"], "")
         ] do
       assert {:error, :invalid_internal_notice} = InterAgentReplyBasis.admission(changed, true)
+    end
+  end
+
+  test "current built InterAgentTool overload notice passes the server validator" do
+    payload_path = System.fetch_env!("KAOIRO_ISSUE_214_BUILDER_PAYLOAD")
+    manifest_path = System.fetch_env!("KAOIRO_ISSUE_214_BUILDER_MANIFEST")
+    expected_revision = System.fetch_env!("KAOIRO_ISSUE_214_EXPECTED_GIT_REVISION")
+    root = Path.expand("../../..", __DIR__)
+    payload_bytes = File.read!(payload_path)
+    manifest = manifest_path |> File.read!() |> Jason.decode!()
+    builder_source = File.read!(Path.join(root, manifest["builder_source_path"]))
+    builder_build = File.read!(Path.join(root, manifest["builder_build_path"]))
+    hash = fn bytes -> :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower) end
+    envelopes = Jason.decode!(payload_bytes)
+    notices = Enum.map(envelopes, & &1["payload"])
+
+    assert manifest["git_revision"] == expected_revision
+    assert manifest["payload_path"] == Path.basename(payload_path)
+    assert manifest["payload_sha256"] == hash.(payload_bytes)
+    assert manifest["builder_source_sha256"] == hash.(builder_source)
+    assert manifest["builder_build_sha256"] == hash.(builder_build)
+    assert length(notices) == 2
+
+    for notice <- notices do
+      assert {:ok, :notice} = InterAgentReplyBasis.admission(notice, true)
+
+      invalid_notices = [
+        put_in(notice, ["error", "code"], "other"),
+        put_in(notice, ["error", "message"], "other"),
+        put_in(notice, ["body"], "other"),
+        put_in(notice, ["error", "affected_deliveries", Access.at(0), "delivery_seq"], 0),
+        put_in(notice, ["error", "affected_deliveries", Access.at(0), "peer_turn_number"], 0),
+        put_in(notice, ["error", "affected_deliveries", Access.at(0), "batch_id"], ""),
+        put_in(notice, ["notice_type"], "unknown"),
+        Map.put(notice, "in_reply_to", 0),
+        Map.put(notice, "unexpected", true)
+      ]
+
+      for changed <- invalid_notices do
+        assert {:error, :invalid_internal_notice} =
+                 InterAgentReplyBasis.admission(changed, true)
+      end
     end
   end
 
