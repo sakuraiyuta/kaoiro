@@ -382,4 +382,50 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
     assert {:error, %{reason: "unknown_queue_item"}} =
              control(socket, Map.merge(begin, %{"operation_id" => "99"}))
   end
+
+  test "a dispose pushes the advanced acked_seq; an unused permit returns", %{id: id} = ctx do
+    {reply, socket} = join_queue(id)
+
+    credit =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      })
+
+    first = enqueue(id, "peer.a")
+    second = enqueue(id, "peer.a")
+    {:ok, _} = control(socket, credit)
+    assert_push "delivery_batch", %{"lease_id" => lease_id}
+
+    begin =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "begin_native",
+        "lease_id" => lease_id,
+        "queue_ids" => [first, second],
+        "native_turn_token" => "t"
+      })
+
+    {:ok, _} = control(socket, begin)
+
+    dispose =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "dispose",
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => first, "outcome" => "observed", "witness" => "prompt_hook"}]
+      })
+
+    {:ok, _} = control(socket, dispose)
+    assert_push "delivery_status", %{acked_seq: 1, issued_seq: 2}
+
+    unused =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "return",
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => second, "reason" => "permit_unused"}]
+      })
+
+    assert {:ok, %{"returned_ranges" => [[2, 2]]}} = control(socket, unused)
+    assert_push "delivery_status", %{acked_seq: 2}
+  end
 end

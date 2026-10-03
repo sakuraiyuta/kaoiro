@@ -1409,6 +1409,7 @@ export type InterAgentQueueReturnItem =
     reason:
       | "format_budget"
       | "host_rejected_before_start"
+      | "permit_unused"
       | "credit_withdrawn"
       | "recovery_abandoned"
       | "waiter_abandoned"

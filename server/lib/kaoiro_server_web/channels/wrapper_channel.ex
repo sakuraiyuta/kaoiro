@@ -971,8 +971,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end
 
     case result do
-      {:ok, reply} -> {:reply, {:ok, reply}, socket}
-      {:error, reason} -> {:reply, {:error, queue_control_error(reason)}, socket}
+      {:ok, reply} ->
+        # These can move acked_seq through resolved queue sequences; the
+        # wrapper's acknowledger only advances past them on a status.
+        if payload["op"] in ~w(return dispose resume), do: broadcast_delivery_status(agent_id)
+        {:reply, {:ok, reply}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, queue_control_error(reason)}, socket}
     end
   end
 
@@ -2365,8 +2371,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   ## delivery_queue_control wire
 
-  @queue_return_reasons ~w(format_budget host_rejected_before_start credit_withdrawn
-                           recovery_abandoned waiter_abandoned shutdown epoch_changed)
+  @queue_return_reasons ~w(format_budget host_rejected_before_start permit_unused
+                           credit_withdrawn recovery_abandoned waiter_abandoned shutdown
+                           epoch_changed)
   @queue_early_ineligible ~w(same_peer_in_turn conversation_pending host_busy
                              pending_settings steer_cap fold_unavailable oversize)
   @queue_witnesses ~w(prompt_hook fold_hook tool_result turn_start_accepted exec_input_written

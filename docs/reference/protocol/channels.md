@@ -270,13 +270,17 @@ high-water mark; a retry after an error reply other than
 answer in time, and the operation may still be applied: the wrapper retries
 the same `operation_id`, which applies it once or returns the original
 reply, or reconciles through `resume`. After an owner restart the epoch has
-changed, and the retry is refused with `stale_queue_epoch`.
+changed, and the retry is refused with `stale_queue_epoch`. A `resume`
+raises the high-water mark, so an operation still unanswered at that point
+is settled from the resume reply's phases, never by a resend under its old
+id.
 
 *Return and dispose.* `return` reasons: `early_ineligible` with
 `sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
 `host_busy`, `pending_settings`, `steer_cap`, `fold_unavailable`,
 `oversize`; and `format_budget`, `host_rejected_before_start`,
-`credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
+`permit_unused` (the wrapper left the native turn after `begin_native` and
+before invoking the host), `credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
 `epoch_changed`. The server also returns items on its own with
 `delivery_resync` (a resync range, below) and `lease_unseen` (an item that
 `resume` does not name); these appear as the item's last return reason and
@@ -315,7 +319,10 @@ changes the item. A `delivery_resync` range that covers a queue-origin
 sequence returns the item when it has no `begin_native` permit and resolves
 it as `unknown` otherwise. It never records a loss for it, and the reply
 reports those ranges in `returned_ranges` and `uncertain_ranges`, not in
-`skipped_ranges`.
+`skipped_ranges`. After a successful `return`, `dispose` or `resume` the
+server pushes `delivery_status`, because resolving a queue sequence can
+advance `acked_seq` past it; the wrapper's acknowledgement waits for that
+status before it acknowledges a later envelope sequence.
 
 *Resume and freeze.* While `inter_agent_queue_resume_required` is true,
 `credit`, `begin_native` and `delivery_resync` are refused with
