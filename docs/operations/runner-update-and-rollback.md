@@ -373,12 +373,19 @@ by retired history need not exist for the receipt to be read.
 Accepting a restore or code recovery first marks its backup reference
 restored, then its original forward transaction, and only then publishes its
 own receipt. If a step fails, the recovery stays `awaiting-acceptance` without
-a receipt. Forward updates, code-only switches, new restores and retirement of
-its original reference then refuse (`Unresolved Codex recovery requires
-acceptance or operator recovery`) until the same `accept` command is run again
-while the runner is running the recorded target. If an `accept` run reports a
-failure but the recovery already shows `restored` with a receipt, do not accept
-it again; the sequence is assigned once.
+a receipt. Until the same `accept` command is run again while the runner is
+running the recorded target, these entry points refuse, each with its own
+message:
+
+| Entry point | Message |
+|---|---|
+| Forward update | `Recover or accept the previous Codex state transaction first` |
+| Code-only switch and updater preflight | `Unresolved Codex transaction requires recovery` |
+| New restore, and the guard and pre-start check of another transaction | `Unresolved Codex recovery requires acceptance or operator recovery` |
+| Retirement of the original reference | `Recovery still depends on this snapshot` |
+
+If an `accept` run reports a failure but the recovery already shows `restored`
+with a receipt, do not accept it again; the sequence is assigned once.
 
 ### Editing the runner environment
 
@@ -414,9 +421,11 @@ readable and still count for the unresolved and retained-reference checks, but
 they never supply a restored-home identity and are never converted. State-aware
 prepare refuses while a legacy reference is retained. Restoring a legacy
 reference, accepting a legacy transaction, recovering legacy unfinished work,
-and restoring while the latest accepted event is legacy all refuse before the
-runner stops (`Legacy Codex transaction requires operator recovery or
-retirement`). A record that claims the receipt version but has an incomplete or
+and restoring when the latest accepted event for the home is legacy and was
+prepared after the selected snapshot all refuse before the runner stops
+(`Legacy Codex transaction requires operator recovery or retirement`). An older
+legacy event does not apply: the snapshot's own recorded binding is used
+unchanged. A record that claims the receipt version but has an incomplete or
 unknown receipt is corruption, not legacy, and every scan refuses it.
 
 The exits are: explicit retirement of a terminal legacy reference (below),

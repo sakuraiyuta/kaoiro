@@ -288,6 +288,8 @@ async function prepareRollback(root, snapshotPath, home, service, tool, owner, n
   must(selected, "No retained reference matches this snapshot");
   const old = transaction(root, selected.uuid);
   requireModern(old);
+  // Defence in depth: only takeSnapshot writes backup references, always for a
+  // forward, so this fails only for a forged reference and transaction pair.
   must(old.mode === "forward", LINEAGE);
   const candidates = refs.filter((r) => !r.restored && r.binding.home.path === home).sort((a, b) => a.order - b.order);
   must(candidates.at(-1)?.uuid === selected.uuid, `Non-latest restore refused; intervening transactions: ${candidates.filter((r) => r.order > selected.order).map((r) => r.uuid).join(", ")}`);
@@ -352,6 +354,10 @@ async function accept(root, uuid, evidenceFile) {
   const first = await proof();
   const binding = { ...first.captured };
   delete binding.live;
+  // checkBinding in proof() established live static binding == tx.binding
+  // (a restore may differ in home dev/ino), the relation validateReceipt
+  // enforces, so done is not re-validated: a persisted invalid receipt would
+  // make every records() scan refuse.
   const done = { ...tx, acceptance: { version: 1, evidenceHash: first.evidenceHash, accepted: new Date().toISOString(), binding }, sequence: Math.max(0, ...records(root, "transactions").map((r) => r.sequence || 0)) + 1, phase: tx.mode !== "forward" ? "restored" : "completed" };
   // Settlement comes first so a failed write leaves this transaction
   // awaiting acceptance, and a rerun of accept finishes it.
