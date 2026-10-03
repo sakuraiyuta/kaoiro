@@ -202,4 +202,50 @@ describe("ClaudeQueueRoot", () => {
     await settle();
     expect(h.ops("credit")).toHaveLength(2);
   });
+
+  it("does not sweep a consumed reply while a turn runs or a root is held", async () => {
+    const waiting = inbound("c-wait");
+    const h = harness({
+      classify: async (envelope) => envelope === waiting
+        ? { consumed: true, inject: false, mode: "reply-owed" }
+        : { consumed: false, inject: true, mode: "reply-owed" },
+    });
+    h.root.checkReadiness();
+    await settle();
+    // One offer: a reply a waiting tool takes, and a root input held as T.
+    h.offer([waiting, inbound("c-root")]);
+    await settle();
+    expect(h.sends).toHaveLength(1);
+    h.root.checkReadiness();
+    await settle();
+    expect(h.ops("dispose")).toEqual([]);
+
+    // The next turn is already running when this one ends.
+    h.setIdle(false);
+    h.root.turnEnded(h.creditToken(), true);
+    await settle();
+    expect(h.ops("dispose").filter((p) => (p.items as { reason?: string }[])[0]!.reason === "waiter_result_not_observed")).toEqual([]);
+  });
+
+  it("re-checks readiness after waiting for the link: a host that became busy gets no credit", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    let idle = true;
+    const h = harness({ ready: () => gate, isIdle: () => idle });
+    h.root.checkReadiness();
+    idle = false;
+    open();
+    await settle();
+    expect(h.ops("credit")).toEqual([]);
+  });
+
+  it("asks for no second credit while one is outstanding", async () => {
+    const h = harness();
+    h.root.checkReadiness();
+    await settle();
+    h.root.checkReadiness();
+    await settle();
+    expect(h.ops("credit")).toHaveLength(1);
+  });
 });
+

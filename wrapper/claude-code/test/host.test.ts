@@ -10251,3 +10251,14 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     } finally { release.resolve(); host.close(); await running; stderr.mockRestore(); }
   });
 });
+
+describe("AgentHost.isIdleForInput (credit-v1 readiness)", () => {
+  it("is idle only with no turn running or queued and admission open", async () => {
+    const host = new AgentHost(config, { onState: () => {} });
+    expect(host.isIdleForInput()).toBe(true);
+    await host.send("operator input");
+    expect(host.isIdleForInput()).toBe(false);
+    host.close();
+    expect(host.isIdleForInput()).toBe(false);
+  });
+});
