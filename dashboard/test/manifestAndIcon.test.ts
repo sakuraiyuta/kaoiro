@@ -1,19 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import rawIndexHtml from "../index.html?raw";
+import rawManifest from "../public/manifest.webmanifest?raw";
 
 describe("Web App Manifest and Header Icon", () => {
   it("index.html contains manifest link and theme-color meta tag", () => {
-    const indexPath = resolve(__dirname, "../index.html");
-    const html = readFileSync(indexPath, "utf-8");
-
-    expect(html).toMatch(/<link\s+rel="manifest"\s+href="\/manifest\.webmanifest"/);
-    expect(html).toMatch(/<meta\s+name="theme-color"\s+content="#14141d"/);
+    expect(rawIndexHtml).toMatch(/<link\s+rel="manifest"\s+href="\/manifest\.webmanifest"/);
+    expect(rawIndexHtml).toMatch(/<meta\s+name="theme-color"\s+content="#14141d"/);
   });
 
   it("manifest.webmanifest is valid and declares required PWA metadata and icons", () => {
-    const manifestPath = resolve(__dirname, "../public/manifest.webmanifest");
-    const content = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    const content = JSON.parse(rawManifest);
 
     expect(content.name).toBe("kaoiro");
     expect(content.short_name).toBe("kaoiro");
