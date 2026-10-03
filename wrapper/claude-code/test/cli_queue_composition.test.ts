@@ -30,7 +30,7 @@ function inbound(cid: string): Envelope {
   } as unknown as Envelope;
 }
 
-async function runWithQueue(witness: boolean, fails = false, reply = false) {
+async function runWithQueue(witness: boolean, fails = false, reply = false, refuseFirstBegin = false) {
   const sent: Record<string, unknown>[] = [];
   const acknowledged: number[] = [];
   const prompts: string[] = [];
@@ -53,14 +53,19 @@ async function runWithQueue(witness: boolean, fails = false, reply = false) {
           sent.push(payload);
           const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
           if (payload.op === "credit") {
+            const leaseId = String(sent.filter((p) => p.op === "credit").length);
             setImmediate(() => lease.receiveBatch({
-              version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "1", kind: "root",
+              version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: leaseId, kind: "root",
               credit_revision: "1",
               items: [{ queue_id: "7", attempt_id: "7.1", delivery_seq: 1, class: "ordinary", byte_charge: 1, envelope: inbound("c-queue") }],
             }));
             return { ...base, credit_revision: "1" };
           }
-          if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
+          if (payload.op === "begin_native") {
+            if (refuseFirstBegin && sent.filter((p) => p.op === "begin_native").length === 1) throw { reason: "queue_resume_required" };
+            return { ...base, permitted_queue_ids: payload.queue_ids };
+          }
+          if (payload.op === "return") return { ...base, returned_ranges: [[1, 1]] };
           if (payload.op === "dispose") {
             done();
             return { ...base, disposed: ["7"], resolved_ranges: [[1, 1]], returned_ranges: [] };
@@ -168,6 +173,16 @@ describe("Claude CLI credit-v1 root composition", () => {
     expect(toolResults[0]).not.toContain("isError\":true");
     expect(notices.find((envelope) => envelope.payload.conversation_id === "c-queue")?.payload).toMatchObject({
       to: "peer.agent", kind: "response", body: "answer", in_reply_to: 1,
+    });
+  });
+
+  it("an item offered again after a refused permit is injected, not dropped as a stale duplicate", async () => {
+    const { sent, prompts } = await runWithQueue(true, false, false, true);
+    expect(sent.filter((p) => p.op === "begin_native")).toHaveLength(2);
+    expect(sent.find((p) => p.op === "return")).toMatchObject({ items: [{ queue_id: "7", reason: "turn_abandoned" }] });
+    expect(prompts[0]).toContain("queued hello");
+    expect(sent.find((p) => p.op === "dispose")).toMatchObject({
+      items: [{ queue_id: "7", outcome: "observed", witness: "prompt_hook" }],
     });
   });
 

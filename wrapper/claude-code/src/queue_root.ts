@@ -60,8 +60,7 @@ export class ClaudeQueueRoot {
   /** Requests root credit when the host is ready for root input. */
   checkReadiness(): void {
     const lease = this.#deps.lease();
-    if (lease === null || lease.frozen || this.#creditToken !== null || this.#roots.size > 0) return;
-    if (!this.#deps.isIdle()) return;
+    if (lease === null || lease.frozen || this.#creditToken !== null) return;
     const token = randomUUID();
     this.#creditToken = token;
     this.#creditRevision = null;
