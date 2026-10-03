@@ -112,7 +112,7 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
 
       assert File.read!(ctx.path) == original
       assert length(backups(ctx.path)) == 3
-      refute log =~ "starting empty"
+      refute log =~ "#{ctx.path} is not a DETS file"
     end
 
     test "a link that fails stops init with the file untouched" do
