@@ -30,6 +30,23 @@ defmodule KaoiroServer.DeliveryStates do
   Residual: an entry persisted before `incarnation` existed gets a fresh one
   on every load until it is next written, so an uncommitted intent for it is
   not recognised and can still be dispatched.
+
+  ## Queue-origin sequences
+
+  A sequence held by a live queue item is resolved only by the queue's own
+  transitions; `entry_record/2` raises on any other write
+  (`queue_ledger_violation/1`). The raise stops this process, and its
+  restart drops every recipient's queue, because bodies live only in
+  memory: unsubmitted items become loss intents and native-pending ones
+  unknown obligations. That blast radius is accepted. The state is
+  unreachable through the known paths, and a wrong ledger would be worse.
+
+  Unknown obligations (`queue_uncertain`) stay in the recipient record, or
+  as standalone objects once it is gone, until the sender accepts their
+  `delivery_uncertain` notice
+  (`KaoiroServerWeb.DeliveryLossDispatcher`). The list is not capped:
+  dropping an entry would drop the sender's only notice. It grows only while
+  the sender's queue keeps refusing those notices.
   """
   use GenServer
   require Logger

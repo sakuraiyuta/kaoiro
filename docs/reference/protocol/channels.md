@@ -264,15 +264,23 @@ durable record. A retry with the same `operation_id`:
   reconciles through `resume`.
 
 An operation refused with an error is not recorded and does not raise the
-high-water mark; a retry after an error reply uses a new id, because the
-old one may already read as `unknown_operation`.
+high-water mark; a retry after an error reply other than
+`queue_unavailable` uses a new id, because the old one may already read as
+`unknown_operation`. `queue_unavailable` means the queue owner did not
+answer in time, and the operation may still be applied: the wrapper retries
+the same `operation_id`, which applies it once or returns the original
+reply, or reconciles through `resume`. After an owner restart the epoch has
+changed, and the retry is refused with `stale_queue_epoch`.
 
 *Return and dispose.* `return` reasons: `early_ineligible` with
 `sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
 `host_busy`, `pending_settings`, `steer_cap`, `fold_unavailable`,
 `oversize`; and `format_budget`, `host_rejected_before_start`,
 `credit_withdrawn`, `recovery_abandoned`, `waiter_abandoned`, `shutdown`,
-`epoch_changed`. `return` is valid only when the host call for the item
+`epoch_changed`. The server also returns items on its own with
+`delivery_resync` (a resync range, below) and `lease_unseen` (an item that
+`resume` does not name); these appear as the item's last return reason and
+in the server log, never in a wrapper request. `return` is valid only when the host call for the item
 was never invoked, for example a host that refused before the call. A
 returned item keeps its `queue_id`, class, byte charge and queue position;
 its old sequence is resolved as returned, never as lost, uncertain or
@@ -294,8 +302,10 @@ waiter reply consumed where the bridge exposes no tool-result return).
 
 An early item that was returned, or disposed `definitely_unstarted`, is not
 offered again under early credit for the same native turn. A duplicate
-identical outcome is a no-op; a conflicting outcome for the same item is
-refused.
+identical `observed`, `intentional_non_injection` or `unknown` outcome is a
+no-op. `definitely_unstarted` takes the item out of the lease, so a repeat
+under a new id is refused with `unknown_lease`. A conflicting outcome for
+the same item is refused.
 
 *Sequences.* Under `credit-v1` the server resolves queue-origin sequences
 only through `return`, `dispose` and the `delivery_resync` rule here.
@@ -312,11 +322,15 @@ reports those ranges in `returned_ranges` and `uncertain_ranges`, not in
 `queue_resume_required`. The order after a same-generation rejoin is
 `resume`, then `delivery_resync` for the remaining non-queue gap, then
 `credit`. A lease the `resume` request does not name never reached the
-wrapper: the server returns its un-permitted items to the queue and
-resolves its permitted ones as `unknown`, so it cannot hold the lease slot. `freeze` withdraws the outstanding credit, and no
-`delivery_batch` follows its reply. After `freeze`, `credit` and
-`begin_native` are refused with `queue_frozen`; `return`, `dispose`,
-`waiter_close` and `resume` stay valid.
+wrapper, and neither did an item that a named lease's `queue_ids` leave
+out: the server returns such un-permitted items to the queue and resolves
+permitted ones as `unknown`, so they cannot hold the lease slot. A matched
+W reply is held while `resume` is required; `resume` offers it, or a W item
+whose lease it found unseen, to the waiting tool at once. A W item the
+wrapper returned waits for a root batch. `freeze` withdraws the outstanding
+credit, and no `delivery_batch`, W included, follows its reply. After
+`freeze`, `credit` and `begin_native` are refused with `queue_frozen`;
+`return`, `dispose`, `waiter_close` and `resume` stay valid.
 
 Control errors (`reason`): `stale_queue_epoch`, `stale_channel` (stale
 `incarnation` or `generation`), `stale_delivery_owner`,
@@ -324,7 +338,8 @@ Control errors (`reason`): `stale_queue_epoch`, `stale_channel` (stale
 `unknown_lease`, `unknown_queue_item`, `operation_payload_mismatch`,
 `operation_superseded` (with `items`), `unknown_operation`,
 `conflicting_disposition`, `invalid_queue_control` (with `field`), and
-`queue_unavailable` (the queue owner cannot commit; nothing changed).
+`queue_unavailable` (the queue owner did not answer; see Idempotency for
+the retry).
 
 **Server → wrapper `delivery_batch`.** Pushed on the channel, never through
 PubSub broadcast:
