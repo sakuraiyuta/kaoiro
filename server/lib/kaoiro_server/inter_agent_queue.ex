@@ -87,7 +87,8 @@ defmodule KaoiroServer.InterAgentQueue do
   @doc """
   Commits a reservation as a queued item. `descriptor` carries at least
   `:sender`, `:conversation_id`, `:turn_number` and `:early` (whether the
-  input was granted early delivery).
+  input was granted early delivery). The whole descriptor is kept for the
+  owner's loss notifications; scheduling reads only those fields.
   """
   def commit(q, ref, descriptor) do
     case Map.pop(q.reservations, ref) do
@@ -99,8 +100,10 @@ defmodule KaoiroServer.InterAgentQueue do
 
         item =
           descriptor
-          |> Map.take([:sender, :conversation_id, :turn_number, :early])
+          |> Map.take([:sender, :conversation_id, :turn_number])
           |> Map.merge(%{
+            early: descriptor[:early] == true,
+            descriptor: descriptor,
             class: reservation.class,
             bytes: reservation.bytes,
             phase: :queued,

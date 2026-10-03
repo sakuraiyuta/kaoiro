@@ -1859,4 +1859,155 @@ defmodule KaoiroServer.DeliveryStatesTest do
       refute DeliveryStates.queue_epoch(name) == epoch
     end
   end
+
+  describe "queue ownership" do
+    @policy %{batch_max_items: 10, backlog_max_items: 2, backlog_max_bytes: 100}
+
+    defp descriptor(sender, turn \\ 1),
+      do: %{sender: sender, conversation_id: "c-" <> sender, turn_number: turn, kind: "inform"}
+
+    defp enqueue(name, recipient, sender, bytes \\ 10) do
+      {:ok, token, class} = DeliveryStates.queue_reserve(recipient, :ordinary, bytes, name)
+
+      {:ok, queue_id} =
+        DeliveryStates.queue_commit(recipient, token, descriptor(sender), %{"body" => "x"}, name)
+
+      {queue_id, class}
+    end
+
+    test "a recipient without a bound queue refuses reservations", %{name: name} do
+      assert DeliveryStates.queue_reserve("no-queue", :ordinary, 1, name) ==
+               {:error, :queue_unavailable}
+
+      assert DeliveryStates.queue_counts("no-queue", name) == nil
+    end
+
+    test "reserve and commit queue an item with its body", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-owner", "g1", self(), @policy, name)
+      {queue_id, :ordinary} = enqueue(name, "q-owner", "a")
+
+      assert %{queued: 1, charged_bytes: 10, policy: @policy} =
+               DeliveryStates.queue_counts("q-owner", name)
+
+      assert :sys.get_state(name).bodies[{"q-owner", queue_id}] == %{"body" => "x"}
+    end
+
+    test "only the reserving process may commit", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-foreign", "g1", self(), @policy, name)
+      {:ok, token, _} = DeliveryStates.queue_reserve("q-foreign", :ordinary, 1, name)
+
+      result =
+        Task.async(fn ->
+          DeliveryStates.queue_commit("q-foreign", token, descriptor("a"), %{}, name)
+        end)
+        |> Task.await()
+
+      assert result == {:error, :invalid_queue_reservation}
+      assert DeliveryStates.queue_counts("q-foreign", name).queued == 0
+    end
+
+    test "a reservation dies with its owner and a cancel releases it", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-down", "g1", self(), @policy, name)
+      parent = self()
+
+      owner =
+        spawn(fn ->
+          send(parent, {:reserved, DeliveryStates.queue_reserve("q-down", :ordinary, 100, name)})
+          receive do: (:exit -> :ok)
+        end)
+
+      assert_receive {:reserved, {:ok, _token, :ordinary}}
+
+      assert DeliveryStates.queue_reserve("q-down", :ordinary, 1, name) ==
+               {:error, :receiver_overloaded}
+
+      ref = Process.monitor(owner)
+      send(owner, :exit)
+      assert_receive {:DOWN, ^ref, :process, _, _}
+
+      assert {:ok, token, :ordinary} =
+               DeliveryStates.queue_reserve("q-down", :ordinary, 100, name)
+
+      assert :ok = DeliveryStates.queue_cancel(token, name)
+      assert DeliveryStates.queue_counts("q-down", name).charged_bytes == 0
+    end
+
+    test "admission is bounded by the bound policy", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-full", "g1", self(), @policy, name)
+      enqueue(name, "q-full", "a")
+      enqueue(name, "q-full", "a")
+
+      assert DeliveryStates.queue_reserve("q-full", :ordinary, 1, name) ==
+               {:error, :receiver_overloaded}
+    end
+
+    test "a server restart turns retained items into loss obligations", %{name: name, path: path} do
+      {:ok, _} = DeliveryStates.bind_queue("q-restart", "g1", self(), @policy, name)
+      {queue_id, _} = enqueue(name, "q-restart", "sender-a")
+
+      for _ <- 1..2 do
+        GenServer.stop(Process.whereis(name))
+        {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+      end
+
+      assert [loss] = DeliveryStates.pending_losses(name)
+
+      assert %{
+               recipient: "q-restart",
+               queue_id: ^queue_id,
+               seq: nil,
+               reason: "delivery_lost",
+               descriptor: %{sender: "sender-a", kind: "inform"}
+             } = loss
+
+      assert %{queued: 0, charged_bytes: 0} = DeliveryStates.queue_counts("q-restart", name)
+      assert :sys.get_state(name).bodies == %{}
+
+      assert :ok = DeliveryStates.complete_loss(loss.id, loss.revision, name)
+      assert DeliveryStates.pending_losses(name) == []
+    end
+
+    test "a replacement generation keeps queued items and takes the new policy", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-replace", "g1", self(), @policy, name)
+      enqueue(name, "q-replace", "a")
+      enqueue(name, "q-replace", "a")
+
+      lower = %{@policy | backlog_max_items: 1}
+      {:ok, _} = DeliveryStates.bind_queue("q-replace", "g2", self(), lower, name)
+
+      assert %{queued: 2, policy: ^lower} = DeliveryStates.queue_counts("q-replace", name)
+
+      assert DeliveryStates.queue_reserve("q-replace", :ordinary, 1, name) ==
+               {:error, :receiver_overloaded}
+
+      assert DeliveryStates.pending_losses(name) == []
+    end
+
+    test "legacy binds under a new generation keep the queue", %{name: name} do
+      {:ok, _} = DeliveryStates.bind_queue("q-legacy", "g1", self(), @policy, name)
+      enqueue(name, "q-legacy", "a")
+
+      DeliveryStates.bind_resync("q-legacy", "g2", self(), name)
+      assert DeliveryStates.queue_counts("q-legacy", name).queued == 1
+
+      DeliveryStates.bind("q-legacy", "g3", name)
+      assert DeliveryStates.queue_counts("q-legacy", name).queued == 1
+    end
+
+    test "deletion and disarm turn retained items into losses", %{name: name} do
+      for {recipient, remove} <- [
+            {"q-delete", &DeliveryStates.delete/2},
+            {"q-disarm", &DeliveryStates.disarm/2}
+          ] do
+        {:ok, _} = DeliveryStates.bind_queue(recipient, "g1", self(), @policy, name)
+        enqueue(name, recipient, "a")
+        assert :ok = remove.(recipient, name)
+      end
+
+      assert ["q-delete", "q-disarm"] ==
+               name |> DeliveryStates.pending_losses() |> Enum.map(& &1.recipient) |> Enum.sort()
+
+      assert :sys.get_state(name).bodies == %{}
+    end
+  end
 end

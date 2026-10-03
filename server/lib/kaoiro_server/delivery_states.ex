@@ -35,6 +35,7 @@ defmodule KaoiroServer.DeliveryStates do
   require Logger
 
   alias KaoiroServer.AgentStates
+  alias KaoiroServer.InterAgentQueue
   alias KaoiroServer.TransportLimits
 
   @early_release_stages ~w(submitted settled unknown lost)
@@ -80,6 +81,30 @@ defmodule KaoiroServer.DeliveryStates do
 
   @doc "Opaque identity of this queue owner's start; changes on every restart."
   def queue_epoch(server \\ __MODULE__), do: GenServer.call(server, :queue_epoch)
+
+  @doc """
+  Reserves queue capacity for one input to `agent_id`, monitored by the
+  calling process. `kind` is `:ordinary`, `:waiter` or `:notice`. Returns
+  `{:ok, token, class}`, `{:error, :receiver_overloaded}` or
+  `{:error, :queue_unavailable}` when the recipient has no queue.
+  """
+  def queue_reserve(agent_id, kind, bytes, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_reserve, agent_id, kind, bytes})
+
+  @doc """
+  Commits a reservation as a queued item and installs its body, in one
+  call, so no offer can see one without the other. Only the reserving
+  process may commit.
+  """
+  def queue_commit(agent_id, token, descriptor, body, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_commit, agent_id, token, descriptor, body})
+
+  def queue_cancel(token, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_cancel, token})
+
+  @doc "Wire queue counts for a recipient, or nil when it has no queue."
+  def queue_counts(agent_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_counts, agent_id})
 
   def acknowledge(agent_id, generation, owner, seq, server \\ __MODULE__) do
     GenServer.call(server, {:acknowledge, agent_id, generation, owner, seq})
@@ -224,6 +249,20 @@ defmodule KaoiroServer.DeliveryStates do
     _ = File.chmod(path, 0o600)
 
     entries = load_entries(table)
+    losses = table |> load_losses() |> drop_uncommitted_losses(entries, table)
+
+    # Bodies live only in memory, so every retained item is gone with them.
+    {entries, losses} =
+      Enum.reduce(entries, {entries, losses}, fn {agent_id, entry}, {entries, losses} ->
+        case drop_queue(agent_id, entry, losses) do
+          {_entry, _losses, []} ->
+            {entries, losses}
+
+          {entry, losses, intents} ->
+            persist_with_losses(%{table: table}, agent_id, entry, intents)
+            {Map.put(entries, agent_id, entry), losses}
+        end
+      end)
 
     stages =
       Enum.reduce(entries, %{}, fn {_, entry}, acc ->
@@ -237,8 +276,10 @@ defmodule KaoiroServer.DeliveryStates do
        stages: stages,
        owners: %{},
        reservations: %{},
-       losses: table |> load_losses() |> drop_uncommitted_losses(entries, table),
-       queue_epoch: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+       losses: losses,
+       queue_epoch: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
+       queue_reservations: %{},
+       bodies: %{}
      }}
   end
 
@@ -270,7 +311,10 @@ defmodule KaoiroServer.DeliveryStates do
           {%{generation: generation, issued_seq: 0, acked_seq: 0, pending_since: nil}, true}
       end
 
-    entry = if changed?, do: Map.merge(entry, recovery_defaults()), else: entry
+    entry =
+      if changed?,
+        do: Map.merge(entry, %{recovery_defaults() | queue: Map.get(entry, :queue)}),
+        else: entry
 
     entry =
       if entry.resync,
@@ -300,13 +344,77 @@ defmodule KaoiroServer.DeliveryStates do
 
       _ ->
         {entry, state} =
-          bind_resync_entry(state, agent_id, generation, owner, &%{&1 | queue_policy: policy})
+          bind_resync_entry(state, agent_id, generation, owner, fn entry ->
+            # A lower policy never evicts admitted items; it only gates
+            # later admission.
+            queue =
+              if entry.queue,
+                do: %{entry.queue | policy: policy},
+                else: InterAgentQueue.new(policy)
+
+            %{entry | queue_policy: policy, queue: queue}
+          end)
 
         {:reply, {:ok, public(entry)}, state}
     end
   end
 
   def handle_call(:queue_epoch, _from, state), do: {:reply, state.queue_epoch, state}
+
+  def handle_call({:queue_reserve, agent_id, kind, bytes}, {owner, _}, state) do
+    case state.entries[agent_id] do
+      %{queue: %{} = queue} = entry ->
+        token = make_ref()
+
+        case InterAgentQueue.reserve(queue, token, kind, bytes) do
+          {:ok, queue, class} ->
+            reservation = %{agent_id: agent_id, owner: owner, monitor: Process.monitor(owner)}
+
+            {:reply, {:ok, token, class},
+             %{
+               state
+               | entries: Map.put(state.entries, agent_id, %{entry | queue: queue}),
+                 queue_reservations: Map.put(state.queue_reservations, token, reservation)
+             }}
+
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
+
+      _ ->
+        {:reply, {:error, :queue_unavailable}, state}
+    end
+  end
+
+  def handle_call({:queue_commit, agent_id, token, descriptor, body}, {owner, _}, state) do
+    with %{agent_id: ^agent_id, owner: ^owner} = reservation <- state.queue_reservations[token],
+         %{queue: %{} = queue} = entry <- state.entries[agent_id],
+         {:ok, queue, queue_id} <- InterAgentQueue.commit(queue, token, descriptor) do
+      Process.demonitor(reservation.monitor, [:flush])
+      entry = %{entry | queue: queue}
+      persist(state.table, agent_id, entry)
+
+      {:reply, {:ok, queue_id},
+       %{
+         state
+         | entries: Map.put(state.entries, agent_id, entry),
+           queue_reservations: Map.delete(state.queue_reservations, token),
+           bodies: Map.put(state.bodies, {agent_id, queue_id}, body)
+       }}
+    else
+      _ -> {:reply, {:error, :invalid_queue_reservation}, state}
+    end
+  end
+
+  def handle_call({:queue_cancel, token}, _from, state),
+    do: {:reply, :ok, cancel_queue_reservation(state, token)}
+
+  def handle_call({:queue_counts, agent_id}, _from, state) do
+    case state.entries[agent_id] do
+      %{queue: %{} = queue} -> {:reply, InterAgentQueue.counts(queue), state}
+      _ -> {:reply, nil, state}
+    end
+  end
 
   def handle_call({:acknowledge, agent_id, generation, owner, seq}, _from, state) do
     if owns_recovery?(state, agent_id, generation, owner) do
@@ -437,7 +545,7 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call({:disarm, agent_id}, _from, state) do
-    state = retire_generation(state, agent_id, nil)
+    state = state |> retire_generation(agent_id, nil) |> retire_queue(agent_id)
 
     if Map.has_key?(state.entries, agent_id) do
       :ok = :dets.delete(state.table, agent_id)
@@ -722,7 +830,7 @@ defmodule KaoiroServer.DeliveryStates do
     do: {:reply, Map.new(state.entries, fn {id, entry} -> {id, public(entry)} end), state}
 
   def handle_call({:delete, agent_id}, _from, state) do
-    state = retire_generation(state, agent_id, nil)
+    state = state |> retire_generation(agent_id, nil) |> retire_queue(agent_id)
     :ok = :dets.delete(state.table, agent_id)
     :ok = :dets.sync(state.table)
 
@@ -737,7 +845,15 @@ defmodule KaoiroServer.DeliveryStates do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     reservations = Map.reject(state.reservations, fn {_, r} -> r.monitor == ref end)
-    {:noreply, %{state | reservations: reservations}}
+
+    state =
+      state.queue_reservations
+      |> Enum.filter(fn {_token, r} -> r.monitor == ref end)
+      |> Enum.reduce(%{state | reservations: reservations}, fn {token, _}, state ->
+        cancel_queue_reservation(state, token)
+      end)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -876,7 +992,9 @@ defmodule KaoiroServer.DeliveryStates do
           pending_since: nil,
           stage_history: if(old, do: old.stage_history, else: %{}),
           uncertain_count: if(old, do: old.uncertain_count, else: 0),
-          last_uncertain: if(old, do: old.last_uncertain, else: nil)
+          last_uncertain: if(old, do: old.last_uncertain, else: nil),
+          # Retained across a same-agent replacement (r8b B6).
+          queue: if(old, do: old.queue, else: nil)
         })
       end
       |> Map.put(:resync, true)
@@ -890,6 +1008,99 @@ defmodule KaoiroServer.DeliveryStates do
        | entries: Map.put(state.entries, agent_id, entry),
          owners: Map.put(state.owners, agent_id, owner)
      }}
+  end
+
+  defp cancel_queue_reservation(state, token) do
+    case Map.pop(state.queue_reservations, token) do
+      {nil, _} ->
+        state
+
+      {reservation, rest} ->
+        Process.demonitor(reservation.monitor, [:flush])
+
+        entries =
+          case state.entries[reservation.agent_id] do
+            %{queue: %{} = queue} = entry ->
+              Map.put(state.entries, reservation.agent_id, %{
+                entry
+                | queue: InterAgentQueue.cancel(queue, token)
+              })
+
+            _ ->
+              state.entries
+          end
+
+        %{state | entries: entries, queue_reservations: rest}
+    end
+  end
+
+  # Before the record goes: every retained item becomes a loss obligation.
+  defp retire_queue(state, agent_id) do
+    with %{} = entry <- state.entries[agent_id],
+         {entry, losses, [_ | _] = intents} <- drop_queue(agent_id, entry, state.losses) do
+      persist_with_losses(state, agent_id, entry, intents)
+
+      %{
+        state
+        | entries: Map.put(state.entries, agent_id, entry),
+          losses: losses,
+          bodies: Map.reject(state.bodies, fn {{id, _}, _} -> id == agent_id end)
+      }
+    else
+      _ -> state
+    end
+  end
+
+  # Unsubmitted items become loss intents; native-pending items resolve as
+  # uncertain, since delivery may have happened.
+  defp drop_queue(agent_id, %{queue: %{items: items} = queue} = entry, losses)
+       when map_size(items) > 0 do
+    {queue, %{lost: lost, unknown: unknown}} = InterAgentQueue.drop_all(queue)
+
+    intents =
+      for {queue_id, item} <- lost do
+        revision = queue_loss_revision(agent_id, entry.incarnation, queue_id)
+
+        %{
+          id: item.descriptor[:loss_id] || revision,
+          revision: revision,
+          recipient: agent_id,
+          generation: entry.generation,
+          seq: nil,
+          queue_id: queue_id,
+          descriptor: item.descriptor,
+          reason: "delivery_lost"
+        }
+      end
+
+    entry = %{
+      entry
+      | queue: queue,
+        uncertain_count: entry.uncertain_count + length(unknown),
+        last_uncertain:
+          case List.last(unknown) do
+            nil ->
+              entry.last_uncertain
+
+            {_queue_id, item} ->
+              %{
+                at: DateTime.utc_now() |> DateTime.to_iso8601(),
+                incarnation: entry.incarnation,
+                generation: entry.generation,
+                delivery_seq: item.delivery_seq,
+                reason: "queue_dropped"
+              }
+          end
+    }
+
+    {entry, Enum.reduce(intents, losses, &Map.put(&2, &1.id, &1)), intents}
+  end
+
+  defp drop_queue(_agent_id, entry, losses), do: {entry, losses, []}
+
+  defp queue_loss_revision(agent_id, incarnation, queue_id) do
+    :crypto.hash(:sha256, :erlang.term_to_binary({agent_id, incarnation, :queue, queue_id}))
+    |> Base.url_encode64(padding: false)
   end
 
   defp retire_generation(state, agent_id, generation) do
@@ -1174,7 +1385,8 @@ defmodule KaoiroServer.DeliveryStates do
       last_loss: nil,
       uncertain_count: 0,
       last_uncertain: nil,
-      queue_policy: nil
+      queue_policy: nil,
+      queue: nil
     }
   end
 
@@ -1252,7 +1464,8 @@ defmodule KaoiroServer.DeliveryStates do
        :uncertain_count,
        :last_uncertain,
        :queue_policy
-     ])}
+     ])
+     |> Map.put(:queue, entry.queue && InterAgentQueue.durable(entry.queue))}
   end
 
   defp persist(table, agent_id, entry) do
@@ -1279,6 +1492,8 @@ defmodule KaoiroServer.DeliveryStates do
                  if Map.has_key?(recovery, :early_pending),
                    do: entry,
                    else: %{entry | early_pending: legacy_early_pending(id, entry)}
+
+               entry = %{entry | queue: entry.queue && InterAgentQueue.restore(entry.queue)}
 
                Map.put(acc, id, entry)
 
