@@ -421,10 +421,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   defp with_session_resets_unavailable(fun) when is_function(fun, 0) do
     :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets)
 
+    # An ExUnit timeout or a crash of the linked channel kills the test
+    # process before `after` runs; nothing else restarts the child then.
+    on_exit(fn ->
+      case Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets) do
+        {:ok, _pid} -> :ok
+        {:error, :running} -> :ok
+      end
+    end)
+
     try do
       fun.()
     after
-      {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets)
+      # The callers use SessionResets again once this returns, so it has to
+      # be back before then. Best effort: a failure here must not replace
+      # the failure of `fun`; the `on_exit` above asserts the restore.
+      _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.SessionResets)
     end
   end
 
