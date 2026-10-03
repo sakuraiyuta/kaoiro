@@ -4,6 +4,8 @@ import {
   askUserQuestionDescriptor,
   classifyInterAgentError,
   createDeliveryAcknowledgementRuntime,
+  DeliveryStageReporter,
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   makeLog,
   makeStateChange,
@@ -235,6 +237,8 @@ export async function runAntigravityCli(
     }) as WhoamiSnapshot,
   });
   const interAgentTurns = new AntigravityInterAgentTurnCoordinator({
+    admission: interAgent.admission,
+    maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     reclassifyQueued: (item) => interAgent.queuedInboundMode(item.envelope, item.mode),
     onTerminalQueued: (item) => {
       const payload = item.envelope.payload;
@@ -370,6 +374,11 @@ export async function runAntigravityCli(
     interAgentTurns,
     deliveryIdentity,
   );
+  const deliveryStages = new DeliveryStageReporter({
+    send: report => link?.reportDeliveryStage(report),
+    identity: deliveryIdentity,
+    turns: interAgentTurns,
+  });
   const buildInfo = loadBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
   link = createServerLink(config.server_url, config.agent_id, deliveryAcknowledgementRuntime.withServerLinkOptions({
     noticeAttribution: "v1",
@@ -427,11 +436,17 @@ export async function runAntigravityCli(
       // The handler awaits before it classifies the envelope; the join
       // identity must be captured before that await can span a rejoin.
       deliveryAcknowledgementRuntime.captureDelivery(envelope);
+      interAgent.admission.captureDeliveryIdentity(envelope, deliveryIdentity());
+      deliveryStages.capture(envelope);
       return handleAntigravityInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
+          admission: interAgent.admission,
           send: (notice) => link?.send(notice),
-          inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
+          settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
+          retireDelivery: (envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+          retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
+          inject: (inbound, mode, reservation) => interAgentTurns.receive(inbound, mode, reservation),
           log: (line) => process.stdout.write(line),
         }),
         envelope,
@@ -675,6 +690,7 @@ export async function runAntigravityCli(
       writeAntigravityLifecycle({ event: "epoch_stderr", details: { kind } });
     },
   }, (turnToken) => {
+    interAgentTurns.handoff(turnToken);
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
   }));

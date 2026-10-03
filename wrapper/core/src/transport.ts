@@ -1969,6 +1969,10 @@ export class ServerLink {
     return this.#deliveryRecovery.retire(envelopes);
   }
 
+  interAgentRetirementCapability(): "pending" | "supported" | "unsupported" {
+    return this.#deliveryRecovery.retirementCapability();
+  }
+
   async flushInterAgentRetirements(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {

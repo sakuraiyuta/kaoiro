@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-10-02
+last_updated: 2026-10-03
 ---
 
 # Runner configuration
@@ -115,10 +115,16 @@ hidden by a variable.
 | `KAOIRO_CLAUDE_FOLDS_PER_TURN` | `claude_code.folds_per_turn` | integer | 1..64 | 3 | Claude wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CLAUDE_TURN_WATCHDOG_INACTIVITY_MS` | `claude_code.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Claude wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_CLAUDE_TURN_WATCHDOG_ABORT_GRACE_MS` | `claude_code.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Claude wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| — | `claude_code.inter_agent_batch_max_items` | JSON integer | 1..9007199254740991 | 10 | runner and Claude wrapper | file > default |
+| — | `claude_code.inter_agent_backlog_max_items` | JSON integer | 1..9007199254740991 | 100 | runner and Claude wrapper | file > default |
 | `KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS` | `codex.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Codex wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS` | `codex.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Codex wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| — | `codex.inter_agent_batch_max_items` | JSON integer | 1..9007199254740991 | 10 | runner and Codex wrapper | file > default |
+| — | `codex.inter_agent_backlog_max_items` | JSON integer | 1..9007199254740991 | 100 | runner and Codex wrapper | file > default |
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` | `antigravity.turn_watchdog_inactivity_ms` | integer | 60000..2147483647 | 1800000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
+| — | `antigravity.inter_agent_batch_max_items` | JSON integer | 1..9007199254740991 | 10 | runner and Antigravity wrapper | file > default |
+| — | `antigravity.inter_agent_backlog_max_items` | JSON integer | 1..9007199254740991 | 100 | runner and Antigravity wrapper | file > default |
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
@@ -142,6 +148,16 @@ before it is ended. Both variables use the digits-only grammar; the epoch idle
 variable is capped at 2147483647 (a larger value reached `setTimeout`,
 which clamps it to 1 ms). `server_url` and `log_phoenix_heartbeats` are acted on
 by the runner itself and are never relayed to a wrapper.
+
+The two `inter_agent_*_max_items` settings are JSON-only in each engine block:
+`batch_max_items` bounds one same-peer batch, while `backlog_max_items` bounds
+all admitted inbound items still awaiting a handoff across peers. Both accept
+positive safe integers. Batch splitting preserves FIFO order and the existing
+16,384-byte limit; a single oversized item still forms its own batch. Ordinary
+input is refused once the backlog reaches its limit, with a `receiver_overloaded`
+peer notice when attribution is available. Matching waiter replies and up to 16
+overflow loss notices are counted exceptions. Valid reloads affect later
+wrapper spawns/restores only; existing wrappers keep their launch snapshot.
 
 ## Codex home
 

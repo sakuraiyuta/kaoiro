@@ -7,6 +7,9 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
+  InterAgentAdmission,
   canAddToCoalescedBatch,
   formatInboundMessage,
   formatInboundMessages,
@@ -16,11 +19,13 @@ import type {
   Envelope,
   InboundReplyMode,
   InterAgentMessagePayload,
+  InterAgentAdmissionReservation,
 } from "@kaoiro/agent-common";
 
 export interface InterAgentBatchItem {
   envelope: Envelope;
   mode: InboundReplyMode;
+  reservation?: InterAgentAdmissionReservation;
 }
 
 /** A batch that has been assigned to exactly one SDK turn. */
@@ -66,6 +71,8 @@ export interface InterAgentTurnCoordinatorOptions {
   reclassifyQueued?: (item: InterAgentBatchItem) => InboundReplyMode;
   onTerminalQueued?: (item: InterAgentBatchItem) => void;
   onFoldRecoveryEvicted?: (reason: "fold_recovery_capacity") => void;
+  admission?: InterAgentAdmission;
+  maxBatchItems?: number;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
 }
@@ -145,6 +152,8 @@ export class InterAgentTurnCoordinator {
   readonly #onTerminalQueued: ((item: InterAgentBatchItem) => void) | undefined;
   readonly #onFoldRecoveryEvicted: ((reason: "fold_recovery_capacity") => void) | undefined;
   readonly #createTurnToken: () => string;
+  readonly #admission: InterAgentAdmission;
+  readonly #maxBatchItems: number;
   #closed = false;
 
   constructor(options: InterAgentTurnCoordinatorOptions) {
@@ -153,6 +162,8 @@ export class InterAgentTurnCoordinator {
     this.#onTerminalQueued = options.onTerminalQueued;
     this.#onFoldRecoveryEvicted = options.onFoldRecoveryEvicted;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
+    this.#admission = options.admission ?? new InterAgentAdmission(DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS);
+    this.#maxBatchItems = options.maxBatchItems ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS;
   }
 
   /** Ordinary input waits behind a busy peer; priority input gets its own
@@ -203,7 +214,11 @@ export class InterAgentTurnCoordinator {
     this.#recoveryLeases.add(envelopes);
     let settled = false;
     return { envelopes,
-      commit: () => { settled = true; this.#recoveryLeases.delete(envelopes); },
+      commit: () => {
+        settled = true;
+        this.#recoveryLeases.delete(envelopes);
+        for (const item of selected) if (item.reservation !== undefined) this.#admission.release(item.reservation, "handed_off");
+      },
       rollback: () => {
         if (settled) return; settled = true; this.#recoveryLeases.delete(envelopes);
         if (this.#closed) return;
@@ -269,13 +284,17 @@ export class InterAgentTurnCoordinator {
     this.#foldedRecovery.clear();
   }
 
-  receive(envelope: Envelope, mode: InboundReplyMode, priority = false): void {
+  receive(envelope: Envelope, mode: InboundReplyMode, priority = false, reservation?: InterAgentAdmissionReservation): void {
     if (this.#closed) {
+      const held = reservation ?? this.#admission.reservationFor(envelope);
+      if (held !== undefined && this.#admission.owns(held, envelope)) this.#admission.release(held, "retired");
       throw new Error("inter-agent turn coordinator is closed");
     }
+    const held = reservation ?? this.#admission.reservationFor(envelope) ?? this.#reserveDirect(envelope);
+    if (!this.#admission.owns(held, envelope)) throw new Error("inter-agent input reservation is missing, foreign, or released");
     if (!this.#receiveOrder.has(envelope)) this.#receiveOrder.set(envelope, this.#nextReceiveOrder++);
     const peer = envelope.agent_id;
-    const item: InterAgentBatchItem = { envelope, mode };
+    const item: InterAgentBatchItem = { envelope, mode, reservation: held };
     if (priority) {
       const turnToken = this.#createTurnToken();
       const cid = (envelope.payload as Partial<InterAgentMessagePayload>).conversation_id;
@@ -302,7 +321,7 @@ export class InterAgentTurnCoordinator {
     let open = queue[queue.length - 1];
     if (
       open === undefined ||
-      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes)
+      !canAddToCoalescedBatch(open.items.length, open.bytes, itemBytes, this.#maxBatchItems)
     ) {
       open = { items: [], bytes: 0 };
       queue.push(open);
@@ -310,6 +329,18 @@ export class InterAgentTurnCoordinator {
     open.items.push(item);
     open.bytes += itemBytes;
     this.#dispatchNext(peer);
+  }
+
+  #reserveDirect(envelope: Envelope): InterAgentAdmissionReservation {
+    const result = this.#admission.admit(envelope);
+    if (result.kind !== "reserved") throw new Error("inter-agent input capacity exceeded");
+    return result.reservation;
+  }
+
+  handoff(turnToken: string): void {
+    const batch = this.#batchByTurnToken.get(turnToken);
+    if (batch === undefined) return;
+    for (const item of batch.items) if (item.reservation !== undefined) this.#admission.release(item.reservation, "handed_off");
   }
 
   /**
@@ -325,6 +356,7 @@ export class InterAgentTurnCoordinator {
     }
 
     this.#batchByTurnToken.delete(turnToken);
+    this.#releaseBatch(batch, "retired");
     this.#inputStarted.delete(turnToken);
     const priorityLease = this.#priorityLeases.delete(turnToken);
     this.#pushedPriorityLeases.delete(turnToken);
@@ -400,7 +432,10 @@ export class InterAgentTurnCoordinator {
       .filter((cid): cid is string => typeof cid === "string");
     const survivingIds = new Set(conversationIds);
     const removedConversationIds = batch.conversationIds.filter(cid => !survivingIds.has(cid));
-    for (const item of removed) this.#onTerminalQueued?.(item);
+    for (const item of removed) {
+      if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
+      this.#onTerminalQueued?.(item);
+    }
     if (items.length === 0) return { batch: null, removedConversationIds };
     const prepared = { ...batch, items, conversationIds, text: formatInboundMessages(items) };
     this.#batchByTurnToken.set(turnToken, prepared);
@@ -450,6 +485,7 @@ export class InterAgentTurnCoordinator {
     for (const [turnToken, batch] of this.#batchByTurnToken) {
       if (activeTurnToken !== undefined && turnToken === activeTurnToken) continue;
       this.#batchByTurnToken.delete(turnToken);
+      this.#releaseBatch(batch, "retired");
       this.#retire(turnToken);
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
@@ -458,6 +494,7 @@ export class InterAgentTurnCoordinator {
       droppedDispatched += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
+      for (const item of batches.flatMap(batch => batch.items)) if (item.reservation !== undefined) this.#admission.release(item.reservation, "retired");
       retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
       droppedPending += batches.length;
     }
@@ -532,6 +569,7 @@ export class InterAgentTurnCoordinator {
     this.#priorityLeases.clear();
     this.#pushedPriorityLeases.clear();
     this.#suspendedTokenByPeer.clear();
+    for (const batch of drained) this.#releaseBatch(batch, "retired");
     return drained;
   }
 
@@ -549,6 +587,7 @@ export class InterAgentTurnCoordinator {
       for (const item of pending.items) {
         const mode = this.#reclassifyQueued?.(item) ?? item.mode;
         if (mode === "terminal") {
+          if (item.reservation !== undefined) this.#admission.release(item.reservation, "completed");
           this.#onTerminalQueued?.(item);
         } else {
           items.push(mode === item.mode ? item : { ...item, mode });
@@ -600,5 +639,9 @@ export class InterAgentTurnCoordinator {
       const oldest = this.#retiredTurnTokens.values().next().value;
       if (typeof oldest === "string") this.#retiredTurnTokens.delete(oldest);
     }
+  }
+
+  #releaseBatch(batch: { items: readonly InterAgentBatchItem[] }, reason: "handed_off" | "completed" | "retired"): void {
+    for (const item of batch.items) if (item.reservation !== undefined) this.#admission.release(item.reservation, reason);
   }
 }

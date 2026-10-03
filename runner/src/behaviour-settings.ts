@@ -41,6 +41,8 @@ export const PHOENIX_HEARTBEAT_LOGS_ENV = "KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS"
 export interface WatchdogConfig {
   turn_watchdog_inactivity_ms?: number;
   turn_watchdog_abort_grace_ms?: number;
+  inter_agent_batch_max_items?: number;
+  inter_agent_backlog_max_items?: number;
 }
 
 /** Antigravity-only timing keys, next to its watchdog keys. */
@@ -77,12 +79,12 @@ interface BehaviourRow {
   /** A file value of `false` is the same as an absent key (global opt-in
    *  flags): it is neither relayed nor reported as shadowed. */
   readonly falseIsAbsent?: true;
-  readonly env: string;
-  readonly envIsSet: (raw: string | undefined) => boolean;
+  readonly env?: string;
+  readonly envIsSet?: (raw: string | undefined) => boolean;
   /** Parses a runner.config.json value; throws ConfigError. */
   readonly parseFile: (value: unknown) => BehaviourValue;
   /** Parses a set variable through the wrapper's own grammar; throws. */
-  readonly parseEnv: (raw: string) => BehaviourValue;
+  readonly parseEnv?: (raw: string) => BehaviourValue;
 }
 
 const CLAUDE_SCHEDULER_ROWS: readonly BehaviourRow[] =
@@ -240,6 +242,27 @@ const PERMISSION_TIMEOUT_ROW: BehaviourRow = {
 
 const ANTIGRAVITY_MIN_TIMING_MS = 1_000;
 
+const INTER_AGENT_QUEUE_ROWS: readonly BehaviourRow[] = [
+  ...([
+    ["claude_code", "claude-code"],
+    ["codex", "codex"],
+    ["antigravity", "antigravity"],
+  ] as const).flatMap(([block, engine]) =>
+    (["inter_agent_batch_max_items", "inter_agent_backlog_max_items"] as const).map((key): BehaviourRow => ({
+      block,
+      key,
+      wrapperField: key,
+      engine,
+      parseFile: (value) => {
+        if (!integerInRange(value, 1, Number.MAX_SAFE_INTEGER)) {
+          throw new ConfigError(`${block}.${key} must be an integer from 1 through ${Number.MAX_SAFE_INTEGER}`);
+        }
+        return value;
+      },
+    })),
+  ),
+];
+
 /** The three global opt-in flags. Config `true` is the global opt-in, the same
  *  as the variable being exactly "1"; `false` is the same as absent. A set
  *  variable is not relayed (the wrapper's flag argument takes the variable
@@ -375,7 +398,12 @@ const RUNNER_ROWS: readonly BehaviourRow[] = [
 
 export const BEHAVIOUR_ROWS: readonly BehaviourRow[] = [
   ...CLAUDE_SCHEDULER_ROWS,
-  ...WATCHDOG_ROWS,
+  ...WATCHDOG_ROWS.filter((row) => row.block === "claude_code"),
+  ...INTER_AGENT_QUEUE_ROWS.filter((row) => row.block === "claude_code"),
+  ...WATCHDOG_ROWS.filter((row) => row.block === "codex"),
+  ...INTER_AGENT_QUEUE_ROWS.filter((row) => row.block === "codex"),
+  ...WATCHDOG_ROWS.filter((row) => row.block === "antigravity"),
+  ...INTER_AGENT_QUEUE_ROWS.filter((row) => row.block === "antigravity"),
   ...ANTIGRAVITY_TIMING_ROWS,
   PERMISSION_TIMEOUT_ROW,
   ...FLAG_ROWS,
@@ -455,7 +483,7 @@ export function readSetVariables(
 ): SetVariable[] {
   const set: SetVariable[] = [];
   for (const row of BEHAVIOUR_ROWS) {
-    if (!isEnabled(config, row.engine)) continue;
+    if (!isEnabled(config, row.engine) || row.env === undefined || row.parseEnv === undefined || row.envIsSet === undefined) continue;
     const raw = env[row.env];
     if (!row.envIsSet(raw)) continue;
     set.push({ row, value: row.parseEnv(raw as string) });
@@ -476,7 +504,7 @@ export function computeBehaviourRelay(
   const relay: Record<string, Record<string, BehaviourValue>> = {};
   for (const row of BEHAVIOUR_ROWS) {
     if (row.engine === "runner" || row.wrapperField === undefined) continue;
-    if (row.envIsSet(env[row.env])) continue;
+    if (row.env !== undefined && row.envIsSet?.(env[row.env])) continue;
     const value = fileValue(config, row);
     if (value === undefined) continue;
     for (const engine of row.engine === "all" ? ALL_ENGINES : [row.engine]) {
@@ -499,6 +527,7 @@ export function behaviourWarnings(
 ): string[] {
   const lines: string[] = [];
   for (const { row, value } of set) {
+    if (row.env === undefined) continue;
     const path = behaviourConfigPath(row);
     if (!seen.has(row.env)) {
       seen.add(row.env);

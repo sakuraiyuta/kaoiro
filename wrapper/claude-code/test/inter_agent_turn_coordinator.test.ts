@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InterAgentTool, classifyInterAgentError, handoffToolResult } from "@kaoiro/agent-common";
+import { InterAgentAdmission, InterAgentTool, classifyInterAgentError, handoffToolResult } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { InterAgentIngressGate, InterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
@@ -449,5 +449,34 @@ describe("recovery ownership", () => {
     lease.rollback(); lease.rollback(); expect(coordinator.unreadCount("T1")).toBe(2);
     coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
     expect(coordinator.prepareInput("T2")?.batch?.items[0]?.envelope).toBe(first);
+  });
+});
+
+describe("shared admission handoff", () => {
+  it("keeps dispatched input counted until the actual handoff and rejects foreign reservations", () => {
+    const admission = new InterAgentAdmission(1);
+    const batches: Array<{ turnToken: string }> = [];
+    const coordinator = new InterAgentTurnCoordinator({ admission, onDispatch: batch => batches.push(batch) });
+    const first = inbound("peer", "first", 1);
+    const firstReservation = admission.admit(first);
+    expect(firstReservation.kind).toBe("reserved");
+    if (firstReservation.kind !== "reserved") throw new Error("expected reservation");
+
+    coordinator.receive(first, "reply-owed", false, firstReservation.reservation);
+    expect(admission.counts().total).toBe(1);
+    expect(admission.admit(inbound("peer", "second", 2))).toEqual({ kind: "refused" });
+
+    const foreignAdmission = new InterAgentAdmission(1);
+    const foreignEnvelope = inbound("peer", "foreign", 3);
+    const foreign = foreignAdmission.admit(foreignEnvelope);
+    expect(foreign.kind).toBe("reserved");
+    if (foreign.kind !== "reserved") throw new Error("expected foreign reservation");
+    expect(() => coordinator.receive(foreignEnvelope, "reply-owed", false, foreign.reservation)).toThrow("reservation is missing, foreign, or released");
+    foreignAdmission.release(foreign.reservation, "retired");
+
+    coordinator.handoff(batches[0]!.turnToken);
+    expect(admission.counts().total).toBe(0);
+    const next = inbound("peer", "second", 2);
+    expect(admission.admit(next).kind).toBe("reserved");
   });
 });

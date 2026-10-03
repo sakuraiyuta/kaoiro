@@ -166,6 +166,47 @@ describe("computeBehaviourRelay", () => {
   });
 });
 
+describe("inter-agent queue settings", () => {
+  const engineBlocks = ["claude_code", "codex", "antigravity"] as const;
+  const keys = ["inter_agent_batch_max_items", "inter_agent_backlog_max_items"] as const;
+
+  it.each(engineBlocks)("parses and relays both JSON-only limits for %s", (block) => {
+    const runnerConfig = parseRunnerConfig({
+      ...base,
+      [block]: { inter_agent_batch_max_items: 3, inter_agent_backlog_max_items: 7 },
+    });
+    expect(computeBehaviourRelay(runnerConfig, {})).toEqual({
+      [block === "claude_code" ? "claude-code" : block]: {
+        inter_agent_batch_max_items: 3,
+        inter_agent_backlog_max_items: 7,
+      },
+    });
+  });
+
+  it.each(engineBlocks.flatMap(block => keys.map(key => [block, key] as const)))(
+    "%s.%s rejects non-positive, fractional, unsafe and non-number values",
+    (block, key) => {
+      for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "2", true, null]) {
+        expect(() => parseRunnerConfig({ ...base, [block]: { [key]: invalid } })).toThrow(
+          `${block}.${key} must be an integer from 1 through ${Number.MAX_SAFE_INTEGER}`,
+        );
+      }
+    },
+  );
+
+  it("keeps the omitted defaults independent per wrapper", () => {
+    expect(computeBehaviourRelay(base, {})).toEqual({});
+    expect(BEHAVIOUR_ROWS.filter(row => keys.includes(row.key as typeof keys[number])).map(row => [row.block, row.key, row.env ?? null])).toEqual([
+      ["claude_code", "inter_agent_batch_max_items", null],
+      ["claude_code", "inter_agent_backlog_max_items", null],
+      ["codex", "inter_agent_batch_max_items", null],
+      ["codex", "inter_agent_backlog_max_items", null],
+      ["antigravity", "inter_agent_batch_max_items", null],
+      ["antigravity", "inter_agent_backlog_max_items", null],
+    ]);
+  });
+});
+
 describe("behaviourWarnings", () => {
   const fileA: RunnerConfig = { ...base, claude_code: { folds_per_turn: 5 } };
   const fileC: RunnerConfig = { ...base, claude_code: { folds_per_turn: 7 } };
@@ -218,15 +259,21 @@ describe("behaviourWarnings", () => {
 });
 
 describe("registry", () => {
-  it("lists the documented variables in table order, each tied to its engine and key", () => {
-    expect(BEHAVIOUR_ROWS.map((r) => [r.env, r.engine, r.block ?? null, r.key])).toEqual([
+  it("lists the documented settings in table order, each tied to its engine and key", () => {
+    expect(BEHAVIOUR_ROWS.map((r) => [r.env ?? "—", r.engine, r.block ?? null, r.key])).toEqual([
       ...FILE_KEYS.map(([key, env]) => [env, "claude-code", "claude_code", key]),
       ["KAOIRO_CLAUDE_TURN_WATCHDOG_INACTIVITY_MS", "claude-code", "claude_code", "turn_watchdog_inactivity_ms"],
       ["KAOIRO_CLAUDE_TURN_WATCHDOG_ABORT_GRACE_MS", "claude-code", "claude_code", "turn_watchdog_abort_grace_ms"],
+      ["—", "claude-code", "claude_code", "inter_agent_batch_max_items"],
+      ["—", "claude-code", "claude_code", "inter_agent_backlog_max_items"],
       ["KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "codex", "codex", "turn_watchdog_inactivity_ms"],
       ["KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS", "codex", "codex", "turn_watchdog_abort_grace_ms"],
+      ["—", "codex", "codex", "inter_agent_batch_max_items"],
+      ["—", "codex", "codex", "inter_agent_backlog_max_items"],
       ["KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS", "antigravity", "antigravity", "turn_watchdog_inactivity_ms"],
       ["KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS", "antigravity", "antigravity", "turn_watchdog_abort_grace_ms"],
+      ["—", "antigravity", "antigravity", "inter_agent_batch_max_items"],
+      ["—", "antigravity", "antigravity", "inter_agent_backlog_max_items"],
       ["KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS", "antigravity", "antigravity", "tool_timeout_ms"],
       ["KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS", "antigravity", "antigravity", "epoch_idle_ms"],
       ["KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS", "all", null, "permission_timeout_ms"],

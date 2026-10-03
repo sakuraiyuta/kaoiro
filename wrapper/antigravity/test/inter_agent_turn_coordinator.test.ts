@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeliveryAcknowledgementWiring, InterAgentTool } from "@kaoiro/agent-common";
+import { createDeliveryAcknowledgementWiring, InterAgentAdmission, InterAgentTool } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
 import {
   AntigravityInterAgentTurnCoordinator,
@@ -156,6 +156,25 @@ describe("AntigravityInterAgentTurnCoordinator", () => {
     coordinator.receive(inbound("after-freeze"), "reply-owed");
     expect(dispatched).toHaveLength(1);
     expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending", "after-freeze"]);
+  });
+});
+
+describe("Antigravity shared admission handoff", () => {
+  it("keeps a dispatched item counted until actual turn start", () => {
+    const admission = new InterAgentAdmission(1);
+    const batches: DispatchedAntigravityInterAgentBatch[] = [];
+    const coordinator = new AntigravityInterAgentTurnCoordinator({ admission, onDispatch: batch => batches.push(batch) });
+    const first = inbound("first");
+    const firstReservation = admission.admit(first);
+    expect(firstReservation.kind).toBe("reserved");
+    if (firstReservation.kind !== "reserved") throw new Error("expected reservation");
+
+    coordinator.receive(first, "reply-owed", firstReservation.reservation);
+    expect(admission.counts().total).toBe(1);
+    expect(admission.admit(inbound("second"))).toEqual({ kind: "refused" });
+    coordinator.handoff(batches[0]!.turnToken);
+    expect(admission.counts().total).toBe(0);
+    expect(admission.admit(inbound("second")).kind).toBe("reserved");
   });
 });
 

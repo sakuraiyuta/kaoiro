@@ -2,7 +2,7 @@
 title: Inter-agent error notices
 description: Error notices, their sources, stale-turn resynchronization, and server-synthesized reachability rules.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 related: [protocol, inter-agent-messaging]
 ---
 
@@ -60,6 +60,7 @@ added later. Treat an unknown code as `api_error`.
 | `reconnecting` | server announced a wrapper restart | Do not escalate; wait for `reconnected`, then retry the same `conversation_id`. |
 | `disconnected` | peer wrapper disconnected; optional `origin` / `reason` identifies the terminal cause | Retry is futile until it returns; escalate. |
 | `stale_turn` | receiver discarded a message whose turn_number was at or below its known maximum (AC9) | Send using a new conversation_id. |
+| `receiver_overloaded` | receiver accepted the transport delivery but its configured pending-input limit was full, so this item was not submitted to the model | Wait for the receiver to drain; do not resend automatically. Only this item was refused; earlier accepted work remains pending. If it is still needed, confirm peer state and send the needed context in a new conversation. A refused `done=true` proposal still updated protocol state; do not replay closure automatically. |
 
 ### Sources (four paths)
 
@@ -69,6 +70,33 @@ added later. Treat an unknown code as `api_error`.
 | server | wrapper channel terminated | Synthesize `code=reconnecting` for a planned cycle or `code=disconnected` otherwise. A terminal notice repeats the validated `origin` / `reason`, then pushes to every other participant in each conversation of that wrapper. |
 | server (preflight) | `envelope` send addressed to a `to` that is known but unexpectedly disconnected, with no active planned intent | Reject the `envelope` push itself with `reason=disconnected` and optional `disconnect {origin, reason}` before `ConversationStates.record_message` (issue #257) — without this, the disconnect that would ever trigger the notice above already fired (or never will while `to` stays down), so no notice follows and the send would silently drop. The sending wrapper maps the synchronous reject to the same structured `peer_error.code=disconnected` as the async notice. |
 | receiver wrapper | AC9 discarded a stale/duplicate turn (issue #212 defect 3) | Send directly through ServerLink to the discarded envelope's sender, except when that envelope is itself an error notice or the conversation is already closed (next section). |
+
+### Receiver overload (`receiver_overloaded`)
+
+When a well-formed ordinary input reaches a wrapper whose shared pending-input
+ledger is full, the wrapper preserves its received conversation state and
+refuses only that item. It emits one fixed `peer error (receiver_overloaded)`
+notice when the CID and turn are attributable. Under notice-attribution v1 the
+notice is `notice_type: "turn_failure"` with exactly the refused delivery's
+sequence, peer turn number and a fresh attempt ID. If attribution is missing,
+the wrapper does not fabricate it. The refused input does not create a pending
+model-reply obligation or reply authorization; an older obligation on the same
+CID remains intact.
+
+The fixed message says the item was not submitted to the model. Wait for the
+receiver to drain and do not resend automatically. Only the listed item was
+refused; earlier accepted work remains pending. A later item in the same
+conversation may be accepted without implying the refused item was processed.
+If the refused item is still needed, confirm peer state and send the needed
+context in a new conversation. A refused close proposal's `done=true` state
+remains recorded even though its content was not delivered; do not open a
+conversation only to replay closure, and overload does not reopen a closed CID.
+Error/status notices do not authorize an ordinary model reply.
+Error/status notices are never answered with another overload error. If notice
+dispatch is not accepted, the wrapper retires the original delivery when that
+capability is negotiated; only an explicitly unsupported legacy retirement
+uses intentional non-injection ACK, with a local diagnostic that notification
+was not confirmed.
 
 ### `stale_turn` notice structure (issue #212 defect 3)
 

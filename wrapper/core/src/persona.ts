@@ -261,6 +261,15 @@ export function parseConfig(raw: unknown): WrapperConfig {
 
   const config: WrapperConfig = { agent_id, persona, display_name, server_url };
 
+  for (const field of ["inter_agent_batch_max_items", "inter_agent_backlog_max_items"] as const) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+      throw new ConfigError(`${field} must be a positive safe integer`);
+    }
+    config[field] = value;
+  }
+
   if (raw.server_token !== undefined) {
     config.server_token = nonEmptyString(raw.server_token, "server_token");
   }

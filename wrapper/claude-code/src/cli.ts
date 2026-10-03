@@ -46,6 +46,8 @@ import {
   createDeliveryAcknowledgementRuntime,
   DeliveryStageReporter,
   IaSidecar,
+  InterAgentAdmission,
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   classifyInterAgentError,
   isIngressStamp,
@@ -402,7 +404,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   let foldRecoveryEvictions = 0;
+  const interAgentAdmission = new InterAgentAdmission(config.inter_agent_backlog_max_items);
   interAgentTurns = new InterAgentTurnCoordinator({
+    admission: interAgentAdmission,
+    maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     onFoldRecoveryEvicted: reason => {
       foldRecoveryEvictions += 1;
       writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "fold_recovery_evicted", reason, count: foldRecoveryEvictions })}\n`);
@@ -633,6 +638,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       : Promise.reject(new Error("work_control_unavailable")),
   };
   interAgent = new InterAgentTool({
+    admission: interAgentAdmission,
     workTools,
     noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     replyBasisMode: () => replyBasisMode,
@@ -640,7 +646,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
     waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
-    returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
+    returnInput: (envelope, mode, reservation) => interAgentTurns.receive(envelope, mode, false, reservation),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
@@ -1193,21 +1199,24 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       handleInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
+          admission: interAgentAdmission,
           ingress: interAgentIngress,
           recordInboundIa: envelope => {
             deliveryAcknowledgementRuntime.captureDelivery(envelope);
+            interAgentAdmission.captureDeliveryIdentity(envelope, deliveryIdentity());
             deliveryStages.capture(envelope);
             recordInboundIa(envelope);
           },
           retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+          retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
           reportQueued: envelope => deliveryStages.queued(envelope),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
           send: (notice) => interAgent?.sendInternalNotice(notice),
-          inject: (inbound, mode) => {
+          inject: (inbound, mode, reservation) => {
             const granted = (inbound.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
             interAgentTurns.receive(inbound, mode,
               (earlyNegotiated() && granted === "early") ||
-              (yieldNegotiated() && granted === "yield"));
+              (yieldNegotiated() && granted === "yield"), reservation);
           },
           log: (line) => process.stdout.write(line),
         }),
@@ -1306,6 +1315,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onPromptAdmitted: (turnToken) => {
       deliveryStages.submitted(turnToken, "prompt_hook");
+      interAgentTurns.handoff(turnToken);
       interAgent?.confirmReplyInput(turnToken);
       interAgentTurns.retireFoldedBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
       attemptFoldCandidates();
@@ -1317,6 +1327,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       pushedBatches.delete(decision.envelopes);
       const { batch, ticketLease } = pushed;
       if (decision.kind === "fold" && decision.turnToken !== undefined && ticketLease.activate()) {
+        interAgentTurns.handoff(batch.turnToken);
         interAgentTurns.retainFolded(decision.envelopes, decision.turnToken);
         for (const envelope of decision.envelopes) {
           foldedEnvelopes.add(envelope);
@@ -1334,6 +1345,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           freezeInterAgentAdmission(decision.turnToken, "unattributed", "pushed root ownership unavailable");
           return;
         }
+        interAgentTurns.handoff(decision.turnToken);
         interAgent?.prepareReplyInput(decision.turnToken, decision.envelopes);
         for (const envelope of decision.envelopes) {
           interAgent?.notePendingInjection(envelope, decision.turnToken);

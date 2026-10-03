@@ -1,6 +1,11 @@
 [
   {
     "notice_type": "turn_failure",
+    "code": "receiver_overloaded",
+    "message": "peer input backlog is full; this message was not submitted to the model"
+  },
+  {
+    "notice_type": "turn_failure",
     "code": "rate_limit",
     "message": "the peer hit a rate limit"
   },

@@ -101,6 +101,11 @@ export class DeliveryRecovery {
     return true;
   }
 
+  retirementCapability(): "pending" | "supported" | "unsupported" {
+    if (!this.#connected) return "pending";
+    return this.#supported ? "supported" : "unsupported";
+  }
+
   async flushRetirements(): Promise<void> {
     if (!this.#supported || !this.#connected || (this.#retiring.size === 0 && this.#pending === undefined)) return;
     await new Promise<void>((resolve) => this.#settledWaiters.add(resolve));

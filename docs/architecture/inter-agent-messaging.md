@@ -1,7 +1,7 @@
 ---
 title: Inter-agent messaging
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-03
 description: Inter-agent messaging and its boundaries.
 ---
 
@@ -56,6 +56,13 @@ count and the high cost of xhigh effort.
 
 See [Send and wait](../reference/inter-agent/send-and-wait.md) for the
 receiver, batching, and synchronous-wait contracts.
+
+Admission is shared across the three wrappers and counts envelope items across
+pending batches, dispatched-but-unstarted input, priority paths and deferred
+tool results. Each engine retains its own scheduling policy. Batching controls
+the size of one turn; the separate backlog setting controls admission. A full
+backlog refuses new ordinary input with a scoped peer error instead of evicting
+older accepted work.
 
 ## Related inter-agent topics
 

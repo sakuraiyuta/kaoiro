@@ -29,6 +29,8 @@ const ROUND_TRIP_CASES: {
 } = {
   server_token: { value: "tok-1" },
   permission_timeout_ms: { value: 5000 },
+  inter_agent_batch_max_items: { value: 3 },
+  inter_agent_backlog_max_items: { value: 12 },
   turn_watchdog_inactivity_ms: { value: 90_000 },
   turn_watchdog_abort_grace_ms: { value: 45_000 },
   antigravity_tool_timeout_ms: { value: 120_000 },
@@ -100,6 +102,17 @@ describe("parseConfig", () => {
     }
     delete process.env[envName];
   });
+
+  it.each(["inter_agent_batch_max_items", "inter_agent_backlog_max_items"] as const)(
+    "%s accepts positive safe integers and rejects other explicit values",
+    (key) => {
+      expect(parseConfig({ ...valid, [key]: 1 })[key]).toBe(1);
+      expect(parseConfig({ ...valid, [key]: Number.MAX_SAFE_INTEGER })[key]).toBe(Number.MAX_SAFE_INTEGER);
+      for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "3", true, null]) {
+        expect(() => parseConfig({ ...valid, [key]: bad })).toThrow(ConfigError);
+      }
+    },
+  );
 
   it.each([
     ["urgent_overtake_limit", "KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT"],

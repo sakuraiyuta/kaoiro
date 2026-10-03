@@ -207,7 +207,7 @@ export class DeliveryStageReporter {
     this.#deliveriesByTurn.delete(turnToken);
   }
 
-  settleEnvelope(envelope: Envelope, reason: "terminal_skip" | "stale_skip"): void {
+  settleEnvelope(envelope: Envelope, reason: "terminal_skip" | "stale_skip" | "receiver_overloaded"): void {
     this.#observeIdentity();
     this.capture(envelope);
     const delivery = this.#deliveryByEnvelope.get(envelope);

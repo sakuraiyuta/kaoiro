@@ -28,6 +28,7 @@ import type {
   WrapperConfig,
 } from "../src/types.js";
 import type { WorkToolHandlers } from "../src/work_tools.js";
+import { handoffToolResult } from "../src/reply_basis.js";
 
 const PERSONA = { id: "mio", name: "澪", sprite_set: "mio" };
 const TEST_TURN_TOKEN = "test-turn";
@@ -193,11 +194,13 @@ async function callTool(
 describe("delivery loss notifications", () => {
   it("evicts the oldest loss ID after 10000 distinct notices without refreshing duplicates", async () => {
     const { tool } = makeTool("recipient");
-    const receive = (id: number) => {
+    const receive = async (id: number) => {
       const inbound = inboundEnvelope("bounded-loss-cid", "inform", { code: "delivery_lost", message: "not dispatched" }, "server");
       inbound.payload.turn_number = 0;
       inbound.payload.loss_id = `loss-${id}`;
-      return tool.receiveInbound(inbound);
+      const disposition = await tool.receiveInbound(inbound);
+      if (disposition.inject) tool.admission.releaseEnvelope(inbound, "handed_off");
+      return disposition;
     };
     for (let id = 0; id < 10_000; id++) {
       expect((await receive(id)).inject).toBe(true);
@@ -220,6 +223,93 @@ describe("delivery loss notifications", () => {
       inject: false, noticeSkipReason: "duplicate delivery loss notice",
     });
 
+  });
+});
+
+describe("receiver overload admission", () => {
+  it("refuses only the over-limit item, preserves earlier ownership, and attributes the fixed v1 notice", async () => {
+    const config = { ...configFor("self.agent"), inter_agent_backlog_max_items: 2 };
+    const tool = new InterAgentTool({
+      config,
+      getState: () => "tool_running",
+      replyBasisMode: () => "v1",
+      send: () => {},
+      now: () => "2026-10-03T00:00:00Z",
+      newId: () => "admission-attempt-1",
+    });
+    const first = inboundEnvelope("overloaded-cid", "inform");
+    const second = inboundEnvelope("overloaded-cid", "inform");
+    const refused = inboundEnvelope("overloaded-cid", "inform");
+    Object.assign(first.payload, { turn_number: 1 });
+    Object.assign(second.payload, { turn_number: 2 });
+    Object.assign(refused.payload, { turn_number: 3 });
+    (refused as Envelope & { delivery_seq: number }).delivery_seq = 41;
+    (refused.payload as unknown as InterAgentMessagePayload).meta.done = true;
+    tool.notePendingInjection(first, "older-owner");
+
+    expect((await tool.receiveInbound(first)).inject).toBe(true);
+    expect((await tool.receiveInbound(second)).inject).toBe(true);
+    const disposition = await tool.receiveInbound(refused);
+
+    expect(disposition).toMatchObject({ consumed: false, inject: false, overloaded: true, mode: "reply-owed" });
+    expect(disposition.notice?.payload).toMatchObject({
+      notice_type: "turn_failure",
+      turn_number: 4,
+      body: "peer error (receiver_overloaded): peer input backlog is full; this message was not submitted to the model",
+      error: {
+        code: "receiver_overloaded",
+        message: "peer input backlog is full; this message was not submitted to the model",
+        affected_deliveries: [{ delivery_seq: 41, peer_turn_number: 3, batch_id: "admission-attempt-1" }],
+      },
+    });
+    expect(tool.admission.counts()).toEqual({ total: 2, ordinary: 2, waiter: 0, control: 0 });
+    expect(tool.admission.reservationFor(first)).toBeDefined();
+    expect(tool.admission.reservationFor(second)).toBeDefined();
+    expect(tool.pendingConversationIdsForTurn("older-owner")).toEqual(["overloaded-cid"]);
+    expect(tool.queuedInboundMode(inboundEnvelope("overloaded-cid"), "reply-owed")).toBe("close-proposal");
+
+    tool.admission.releaseEnvelope(first, "retired");
+    tool.admission.releaseEnvelope(second, "retired");
+  });
+
+  it("admits a matched waiter above P and retains its reservation until tool-result handoff", async () => {
+    const config = { ...configFor("self.agent"), inter_agent_backlog_max_items: 1 };
+    let sent: Envelope | undefined;
+    const tool = new InterAgentTool({
+      config,
+      getState: () => "tool_running",
+      send: () => {},
+      replyBasisMode: () => "v1",
+      sendInterAgent: async envelope => {
+        sent = envelope;
+        return { kind: "accepted", stamp: null };
+      },
+    });
+    const retained = inboundEnvelope("retained-cid", "inform");
+    retained.payload.turn_number = 1;
+    expect((await tool.receiveInbound(retained)).inject).toBe(true);
+    tool.beginReplyInput("waiter-origin");
+
+    const waiting = tool.invoke({
+      to: "peer.agent",
+      body: "please reply",
+      kind: "request",
+      conversation_id: "wait-cid",
+      wait_for_response: true,
+      timeout_ms: 1_000,
+    }, { origin: { token: "waiter-origin" } });
+    await vi.waitFor(() => expect(sent).toBeDefined());
+    const reply = inboundEnvelope("wait-cid");
+    const disposition = await tool.receiveInbound(reply);
+    expect(disposition.consumed).toBe(true);
+    expect(tool.admission.counts()).toEqual({ total: 2, ordinary: 1, waiter: 1, control: 0 });
+    const third = inboundEnvelope("third-cid", "inform");
+    expect(await tool.receiveInbound(third)).toMatchObject({ overloaded: true });
+
+    const result = await waiting;
+    expect(handoffToolResult(result, () => {})).toBe(true);
+    expect(tool.admission.counts()).toEqual({ total: 1, ordinary: 1, waiter: 0, control: 0 });
+    tool.admission.releaseEnvelope(retained, "retired");
   });
 });
 

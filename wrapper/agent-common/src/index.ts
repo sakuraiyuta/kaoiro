@@ -21,6 +21,22 @@ export type {
 } from "./delivery_ack.js";
 export { DeliveryStageReporter } from "./delivery_stages.js";
 export type { DeliveryStageIdentity, DeliveryStageSender, DeliveryStageTurnSource } from "./delivery_stages.js";
+export { settleOverloadedInbound } from "./inter_agent_overload.js";
+export type { InterAgentNoticeOutcome, InterAgentRetirementCapability } from "./inter_agent_overload.js";
+export {
+  DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
+  InterAgentAdmission,
+  MAX_PENDING_LOSS_NOTICE_ITEMS,
+} from "./inter_agent_admission.js";
+export type {
+  InterAgentAdmissionCounts,
+  InterAgentDeliveryIdentity,
+  InterAgentAdmissionReservation,
+  InterAgentAdmissionResult,
+  InterAgentReleaseReason,
+  InterAgentReservationClass,
+} from "./inter_agent_admission.js";
 export type {
   HistoryReplayerOptions,
   HydrationVerdict,
@@ -50,6 +66,7 @@ export {
   isFormattedInterAgentMessage,
 } from "./inter_agent.js";
 export type {
+  InboundDisposition,
   InboundReplyMode,
   InterAgentErrorClassifyInput,
   InterAgentToolOptions,

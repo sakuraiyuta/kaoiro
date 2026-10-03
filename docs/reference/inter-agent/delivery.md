@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-10-01
+last_updated: 2026-10-03
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -9,6 +9,55 @@ description: Inter-agent delivery contracts and compatibility.
 
 The structural type `InterAgentDeliveryStatus` is defined in
 [@kaoiro/protocol](../../../protocol/src/index.ts).
+
+## Receiver backlog admission (issue #214)
+
+Each wrapper owns one shared reservation ledger for inbound inter-agent items.
+`inter_agent_backlog_max_items` is 100 by default and counts retained items
+across peers, batches, host queues, priority paths, recovery claims and deferred
+tool results. `inter_agent_batch_max_items` is 10 by default and limits one
+batch; it does not set the total backlog. Both settings accept positive safe
+integers in the corresponding engine block and are snapshotted per wrapper
+lifetime. See [runner configuration](../configuration/runner.md#behaviour-settings).
+
+An ordinary item is admitted only while total retained `Q` is less than `P`,
+the configured backlog limit. Dispatch and preparation keep the reservation;
+confirmed model input or committed tool-result handoff releases it. Transfers
+and rollbacks carry the same token, bound to the receipt's captured delivery
+incarnation, generation and sequence when those values are available. A live matched waiter reply is counted in
+`W` and can exceed `P` so its blocked tool call can progress. Here `W` means all
+outstanding waiter-origin reservations, including resolved or returned inputs,
+not the number of waiters still in the lookup map. With ordinary reservations
+`O` and loss-control reservations `C`, `Q = O + W + C`, `O <= P`, and `C <= 16`;
+therefore `Q <= P + W + 16`.
+
+An eligible server loss notice first takes ordinary capacity whenever `Q < P`.
+Only at ordinary saturation can it use one of 16 counted control slots. When
+both are full, the wrapper retains no local retry copy, does not mark the loss
+ID seen, and requests explicit delivery retirement. A regenerated notice with
+that ID remains eligible later. A duplicate copy of a pending loss ID is
+intentionally ACKed without injection or retirement; the original stays owned,
+and the contiguous ACK prefix cannot pass an earlier unresolved delivery.
+Completed loss IDs use the existing 10,000-entry cache; exactly-once behavior
+across cache eviction or wrapper restart is not promised.
+
+If negotiated retirement is explicitly unsupported, the wrapper intentionally
+ACKs refused non-injection and logs that notification was not confirmed and no
+automatic loss recovery is available. It does not use this fallback while
+retirement capability is pending or a supported request is unresolved. In the
+legacy path a refused loss may never reach the model, and a refused ordinary
+message may lack a peer notice if notice dispatch failed. An accepted
+`receiver_overloaded` notice consumes a conversation turn; it is not free
+out-of-band traffic. Received turn/done/closed mutations remain applied even
+when input is refused. Order is preserved among retained items, but a later
+same-conversation turn can pass a refused earlier turn.
+
+These wrapper limits are separate from existing ceilings. The server ordinary
+delivery reservation cap is 1,000; synthetic notices bypass that check. The
+ACK completion set and stage reporter each retain up to 1,000 and 512 entries
+respectively. They are not whole-process memory bounds, and stage overflow
+does not disable refusal or retirement. See [negotiated gap recovery](#negotiated-gap-recovery)
+for recipient-ledger details.
 
 ## Dispatch-confirmation ledger (issue #237)
 

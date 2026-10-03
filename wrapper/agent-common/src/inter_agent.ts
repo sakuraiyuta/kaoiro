@@ -38,6 +38,13 @@ import type {
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
+import {
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
+  DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+  InterAgentAdmission,
+  type InterAgentAdmissionReservation,
+  type InterAgentReleaseReason,
+} from "./inter_agent_admission.js";
 import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
@@ -215,6 +222,7 @@ const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
     "planned restart in progress — do not escalate; wait for the reconnected notice before retrying",
   disconnected: "the peer is unreachable — do not retry, escalate to the operator",
   stale_turn: "resend using a new conversation_id",
+  receiver_overloaded: "wait for the receiver to drain; do not resend automatically. Only the listed input was refused; earlier accepted work may still be pending. Later input in this conversation may be accepted, but does not mean the refused input was processed. If still needed, confirm peer state and send the needed context in a new conversation. A refused done=true close proposal still updated protocol state although its content was not delivered; do not open a conversation just to replay closure, and overload does not reopen a closed conversation. Error/status notices do not authorize an ordinary reply.",
 };
 
 const DEFAULT_ERROR_GUIDANCE = "confirm the peer's state before retrying";
@@ -310,6 +318,7 @@ const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   disconnected: "the peer disconnected",
   stale_turn:
     "the peer's local turn counter had already advanced past this message",
+  receiver_overloaded: "peer input backlog is full; this message was not submitted to the model",
 };
 const DEFAULT_ERROR_MESSAGE = "the peer reported an unrecognized error";
 
@@ -371,6 +380,9 @@ export function classifyInterAgentError(
 ): InterAgentErrorPayload {
   const reason = input.reason;
   if (reason === "permission_gate_blocked") {
+    return { code: reason, message: messageForCode(reason) };
+  }
+  if (reason === "receiver_overloaded") {
     return { code: reason, message: messageForCode(reason) };
   }
   if (reason !== undefined) {
@@ -477,9 +489,10 @@ export function canAddToCoalescedBatch(
   currentCount: number,
   currentBytes: number,
   candidateBytes: number,
+  maxItems = MAX_COALESCED_MESSAGES,
 ): boolean {
   if (currentCount === 0) return true;
-  if (currentCount + 1 > MAX_COALESCED_MESSAGES) return false;
+  if (currentCount + 1 > maxItems) return false;
   if (currentBytes + candidateBytes > MAX_COALESCED_BYTES) return false;
   return true;
 }
@@ -667,7 +680,6 @@ const CLOSED_TRACK_TTL_MS = 24 * 60 * 60 * 1000;
  *  bound. When exceeded, the OLDEST closed tracks (by `closedAtMs`) are
  *  evicted first — see `#pruneClosedTracks()`. */
 const DEFAULT_MAX_CLOSED_TRACKS = 10_000;
-const DEFAULT_MAX_SEEN_LOSS_IDS = 10_000;
 
 /** Idle-age bound for OPEN tracks (issue #167 review round 2, "open track
  *  の unbounded 経路"): `#pruneClosedTracks()` only ever prunes tracks this
@@ -810,6 +822,16 @@ export type InboundDisposition =
       mode: "reply-owed";
       notice?: never;
       noticeSkipReason: InboundNoticeSkipReason;
+    }
+  | {
+      consumed: false;
+      inject: false;
+      mode: "reply-owed";
+      overloaded: true;
+      notice?: Envelope;
+      lossId?: string;
+      retirementAttemptCount?: number;
+      noticeSkipReason?: never;
     };
 
 interface ReplyWaiter {
@@ -854,7 +876,8 @@ export interface InterAgentToolOptions {
   onInputHandoff?: (envelopes: readonly Envelope[], turnToken: string) => void;
   onTicketPrepared?: (ticket: string, turnToken: string, envelopes: readonly Envelope[]) => void;
   onTicketUsed?: (ticket: string, turnToken: string) => void;
-  returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
+  returnInput?: (envelope: Envelope, mode: InboundReplyMode, reservation?: InterAgentAdmissionReservation) => void;
+  admission?: InterAgentAdmission;
   onReplyDiagnostic?: (event: Record<string, unknown>) => void;
   claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean, expectedTurn?: number) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; foldedEarlier?: true; recoverySource?: "handoff_queue" | "retained_fold"; commit: () => void; rollback: () => void } | undefined;
   config: WrapperConfig;
@@ -933,6 +956,7 @@ type InvokeLockOutcome =
  */
 export class InterAgentTool {
   readonly replyBasis: ReplyBasis;
+  readonly admission: InterAgentAdmission;
   readonly #handoffUnreadAdjustment = new WeakMap<InterAgentToolResult, number>();
   readonly #preparedInputs = new Map<string, readonly Envelope[]>();
 
@@ -1005,7 +1029,6 @@ export class InterAgentTool {
   endReplyInput(token: string): void { this.#preparedInputs.delete(token); this.replyBasis.retire(token); }
   resetReplyInput(): void { this.#preparedInputs.clear(); this.replyBasis.reset(); }
 
-  readonly #seenLossIds = new Set<string>();
   readonly #options: InterAgentToolOptions;
   readonly #now: () => string;
   readonly #newId: () => string;
@@ -1042,6 +1065,9 @@ export class InterAgentTool {
   constructor(options: InterAgentToolOptions) {
     this.replyBasis = new ReplyBasis(options.replyTicketClock);
     this.#options = options;
+    this.admission = options.admission ?? new InterAgentAdmission(
+      options.config.inter_agent_backlog_max_items ?? DEFAULT_INTER_AGENT_BACKLOG_MAX_ITEMS,
+    );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
     this.#nowMs = options.nowMs ?? Date.now;
@@ -1320,23 +1346,33 @@ export class InterAgentTool {
       typeof payload.conversation_id !== "string" ||
       typeof payload.turn_number !== "number"
     ) {
-      // Malformed shape: fail open to injection (existing behaviour) rather
-      // than silently dropping a message the model might still need to see.
-      return { consumed: false, inject: true, mode: "reply-owed" };
+      const reservation = this.admission.admitFallback(envelope);
+      if (reservation.kind === "duplicate_loss") {
+        return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
+      }
+      return reservation.kind === "reserved"
+        ? { consumed: false, inject: true, mode: "reply-owed" }
+        : {
+            consumed: false,
+            inject: false,
+            mode: "reply-owed",
+            overloaded: true,
+            ...(reservation.lossId === undefined ? {} : { lossId: reservation.lossId }),
+            ...(reservation.retirementAttemptCount === undefined ? {} : { retirementAttemptCount: reservation.retirementAttemptCount }),
+          };
     }
 
     const lossId = envelope.agent_id === "server" && payload.turn_number === 0 ? payload.loss_id : undefined;
-    if (typeof lossId === "string") {
-      if (this.#seenLossIds.has(lossId)) return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
-      this.#seenLossIds.add(lossId);
-      if (this.#seenLossIds.size > DEFAULT_MAX_SEEN_LOSS_IDS) {
-        this.#seenLossIds.delete(this.#seenLossIds.values().next().value!);
-      }
+    if (typeof lossId === "string" && this.admission.isLossDuplicate(lossId)) {
+      return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
     }
     const conversationId = payload.conversation_id;
     const turnNumber = payload.turn_number;
     const doneGate = this.#pendingDoneAcks.get(conversationId);
     if (doneGate) await doneGate;
+    if (typeof lossId === "string" && this.admission.isLossDuplicate(lossId)) {
+      return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
+    }
     const track = this.#getTrack(conversationId);
     // issue #167 review M1: turn_number=0 alone is not proof of server
     // provenance — a peer wrapper's own live ingress is now rejected
@@ -1501,6 +1537,16 @@ export class InterAgentTool {
             this.#options.noticeAttributionMode !== undefined)
     );
     if (waiter && matchesWaiter) {
+      const admission = this.admission.admit(envelope, {
+        waiter: true,
+        ...(typeof lossId === "string" ? { lossId } : {}),
+      });
+      if (admission.kind === "duplicate_loss") {
+        return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
+      }
+      if (admission.kind === "refused") {
+        return { consumed: false, inject: false, mode: "reply-owed", overloaded: true };
+      }
       this.#replyWaiters.delete(conversationId);
       clearTimeout(waiter.timeout);
       waiter.resolve(envelope);
@@ -1516,9 +1562,69 @@ export class InterAgentTool {
     // (track never mutated), this means "happened, track updated, but no
     // reply is owed" — cli.ts must tell the two apart in its own logging
     // (mode is always returned alongside, so it can).
-    if (mode === "terminal") return { consumed: false, inject: false, mode };
+    if (mode === "terminal") {
+      if (typeof lossId === "string") this.admission.completeLoss(lossId);
+      return { consumed: false, inject: false, mode };
+    }
+
+    const admission = this.admission.admit(envelope, typeof lossId === "string" ? { lossId } : {});
+    if (admission.kind === "duplicate_loss") {
+      return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
+    }
+    if (admission.kind === "refused") {
+      const retirementAttemptCount = typeof lossId === "string"
+        ? this.admission.recordRefusedLoss()
+        : undefined;
+      return {
+        consumed: false,
+        inject: false,
+        mode: "reply-owed",
+        overloaded: true,
+        ...(typeof lossId === "string" ? { lossId } : {}),
+        ...(retirementAttemptCount === undefined ? {} : { retirementAttemptCount }),
+        ...(!payload.error && typeof lossId !== "string" ? { notice: this.#overloadedNotice(envelope, track, payload) } : {}),
+      };
+    }
 
     return { consumed: false, inject: true, mode };
+  }
+
+  #overloadedNotice(
+    envelope: Envelope,
+    track: ConversationTrack,
+    payload: Partial<InterAgentMessagePayload>,
+  ): Envelope {
+    const error: InterAgentErrorPayload = {
+      code: "receiver_overloaded",
+      message: messageForCode("receiver_overloaded"),
+    };
+    track.turnNumber += 1;
+    track.mutationGen += 1;
+    const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
+    const peerTurn = payload.turn_number;
+    const batchId = this.#newId();
+    const attributed = this.#options.replyBasisMode?.() === "v1" &&
+      typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0 &&
+      typeof peerTurn === "number" && Number.isSafeInteger(peerTurn) && peerTurn > 0 &&
+      batchId.length > 0 && Buffer.byteLength(batchId, "utf8") <= 128;
+    if (attributed) error.affected_deliveries = [{
+      delivery_seq: sequence as number,
+      peer_turn_number: peerTurn as number,
+      batch_id: batchId,
+    }];
+    const noticePayload: InterAgentMessagePayload = {
+      to: envelope.agent_id,
+      conversation_id: payload.conversation_id!,
+      turn_number: track.turnNumber,
+      kind: "inform",
+      body: `peer error (${error.code}): ${error.message}`,
+      meta: { done: false, propose_next: "" },
+      owner: { kind: "user", id: "operator" },
+      new_conversation: false,
+      ...(this.#options.replyBasisMode?.() === "v1" ? { notice_type: "turn_failure" as const } : {}),
+      error,
+    };
+    return makeInterAgentMessage(this.#options.config, this.#options.getState(), this.#now(), noticePayload);
   }
 
   /** Records the turn-failure notice obligation for an input the SDK owns.
@@ -1734,14 +1840,14 @@ export class InterAgentTool {
     return result;
   }
 
-  sendInternalNotice(envelope: Envelope): void {
-    void (async () => {
+  sendInternalNotice(envelope: Envelope): Promise<"accepted" | "rejected" | "unknown"> {
+    return (async () => {
       try {
         const waited = this.#options.replyBasisMode?.() === "pending" ? await this.#options.waitReplyBasisMode?.() : undefined;
         if (waited === "closed" || waited === "pending") {
           this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id,
             turn_number: envelope.payload.turn_number, disposition: "rejected", reason: `reply_basis_${waited}`, send_not_attempted: true });
-          return;
+          return "rejected";
         }
         const mode = this.#options.replyBasisMode?.() ?? "legacy";
         const generation = this.#options.replyBasisGeneration?.();
@@ -1750,9 +1856,14 @@ export class InterAgentTool {
         if (mode === "v1") payload.notice_type = (payload.error as { code?: string } | undefined)?.code === "stale_turn" ? "stale_delivery" : "turn_failure";
         else delete payload.notice_type;
         const result = await this.#dispatch({ ...envelope, payload }, generation);
-        if (result.kind !== "accepted") this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: payload.conversation_id, turn_number: payload.turn_number, disposition: result.kind, reason: result.reason });
+        if (result.kind !== "accepted") {
+          this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: payload.conversation_id, turn_number: payload.turn_number, disposition: result.kind, reason: result.reason });
+          return result.kind;
+        }
+        return "accepted";
       } catch {
         this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id, turn_number: envelope.payload.turn_number, disposition: "unknown" });
+        return "unknown";
       }
     })();
   }
@@ -2575,7 +2686,11 @@ export class InterAgentTool {
     const release = () => {
       if (returned) return; returned = true;
       if (lease) lease.rollback();
-      else for (const envelope of envelopes) this.#options.returnInput?.(envelope, this.queuedInboundMode(envelope, "reply-owed"));
+      else for (const envelope of envelopes) {
+        const reservation = this.admission.reservationFor(envelope);
+        if (this.#options.returnInput) this.#options.returnInput(envelope, this.queuedInboundMode(envelope, "reply-owed"), reservation);
+        else if (reservation !== undefined) this.admission.release(reservation, "retired");
+      }
     };
     const ordinary = envelopes.filter(ordinaryPeerInput);
     const basis = this.#conversations.get(cid)?.closed ? 0 : Math.max(0, ...ordinary.map(e => (e.payload as unknown as InterAgentMessagePayload).turn_number));
@@ -2595,6 +2710,7 @@ export class InterAgentTool {
         if (activated && ticket) this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, origin.token, ordinary);
         if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
         lease?.commit();
+        if (!lease) for (const envelope of envelopes) this.admission.releaseEnvelope(envelope, "handed_off");
         this.#options.onInputHandoff?.(envelopes, origin.token);
       },
       rollback: () => { origin.signal?.removeEventListener("abort", abort); abort(); },
@@ -2622,7 +2738,7 @@ export class InterAgentTool {
       ...(workGuidance === undefined ? {} : { guidance: workGuidance }) };
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
-      const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
+      const fit = (envelopes: readonly Envelope[]) => envelopes.length <= (this.#options.config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS) && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
       const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit, acceptance.details?.expected_peer_turn);
       const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - (lease?.envelopes.length ?? 0));
       if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes, ...(lease.foldedEarlier ? { folded_earlier: true } : {}) }, lease.envelopes, lease);

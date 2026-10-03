@@ -23,6 +23,8 @@ import {
   createDeliveryAcknowledgementRuntime,
   DeliveryStageReporter,
   IaSidecar,
+  InterAgentAdmission,
+  DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
   InterAgentTool,
   PermissionBroker,
   QuestionBroker,
@@ -43,6 +45,7 @@ import {
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
+  InterAgentAdmissionReservation,
   InboundReplyMode,
   KaoiroState,
   ModelSource,
@@ -318,6 +321,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   let pendingPermissionSelection: PermissionSelection | undefined;
   let pendingPermissionSync: PermissionSyncMessage | undefined;
   let permissionSyncSupported = false;
+  const interAgentAdmission = new InterAgentAdmission(config.inter_agent_backlog_max_items);
 
   const retainNewerPermissionSelection = (
     current: PermissionSelection | undefined,
@@ -330,6 +334,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   /** Production owner of Codex same-peer batching. Tests instantiate this
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
+    admission: interAgentAdmission,
+    maxBatchItems: config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS,
     canDispatchPeer: peer => !interAgent?.hasPendingSteerPeer(peer),
     createPlaceholder: (id, arrival) => host.createInterAgentPlaceholder(id, arrival),
     removePlaceholder: id => host.removeInterAgentPlaceholder(id),
@@ -584,13 +590,14 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : Promise.reject(new Error("work_control_unavailable")),
   };
   interAgent = new InterAgentTool({
+    admission: interAgentAdmission,
     workTools,
     noticeAttributionMode: () => link?.noticeAttributionMode?.() ?? "pending",
     replyBasisMode: () => replyBasisMode,
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
     waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
-    returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
+    returnInput: (envelope, mode, reservation) => interAgentTurns.receive(envelope, mode, reservation),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
@@ -710,7 +717,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
 
   const steerTickets = new Map<string, readonly Envelope[]>();
   const phase3Enabled = backend === "app-server";
-  const trySteerInterAgent = async (envelope: Envelope, mode: InboundReplyMode): Promise<boolean> => {
+  const trySteerInterAgent = async (envelope: Envelope, mode: InboundReplyMode, admissionReservation?: InterAgentAdmissionReservation): Promise<boolean> => {
     const payload = envelope.payload as { conversation_id?: string; delivery_authority?: { granted?: string } };
     const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
     if (!phase3Enabled || typeof host === "undefined" || !interAgent ||
@@ -748,9 +755,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
             interAgent.queuedInboundMode(envelope, mode) === "terminal") return "inter_agent_steer_unavailable";
         if (interAgentTurns.hasQueuedForPeer(envelope.agent_id) || interAgent.hasPendingRootConversation(payload.conversation_id!) ||
             interAgentTurns.hasRootConversation(payload.conversation_id!)) return "behind_earlier_input";
-        if (!interAgentTurns.reserveSteer(batchId, envelope, mode, arrival)) return "inter_agent_steer_unavailable";
+        if (!interAgentTurns.reserveSteer(batchId, envelope, mode, arrival, admissionReservation)) return "inter_agent_steer_unavailable";
         if (!interAgent.noteSteerAttempt(envelope, ownerToken, batchId)) {
-          interAgentTurns.discardSteerReservation(batchId);
+          interAgentTurns.transferSteerReservation(batchId);
           return "behind_earlier_input";
         }
         return null;
@@ -785,8 +792,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           interAgentTurns.settleSteerReservation(batchId, true);
           return;
         }
-        interAgentTurns.settleSteerReservation(batchId, false);
         const corroborated = response.kind === "A" && observed && !conflict;
+        interAgentTurns.settleSteerReservation(batchId, false, corroborated ? "handed_off" : "retired");
         if (corroborated) deliveryStages.steerSettled([envelope]);
         else {
           const reason = conflict ? "turn_steer_item_conflict"
@@ -809,13 +816,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     try {
       const result = await host.steerInterAgentInput(text, hooks, batchId);
       if (result.kind === "sent") return true;
-      interAgentTurns.discardSteerReservation(batchId);
+      interAgentTurns.transferSteerReservation(batchId);
       interAgent.abandonSteerAttempt(token, sequence);
       tickets.discard();
       writeRedactedStderr(`[kaoiro] inter-agent early input queued: ${result.reason}\n`);
       return false;
     } catch (error) {
-      interAgentTurns.discardSteerReservation(batchId);
+      interAgentTurns.transferSteerReservation(batchId);
       interAgent.abandonSteerAttempt(token, sequence);
       tickets.discard();
       writeRedactedStderr(`[kaoiro] inter-agent steer attempt failed: ${String(error)}\n`);
@@ -961,18 +968,22 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       handleInterAgentMessage(
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
+          admission: interAgentAdmission,
           recordInboundIa: envelope => {
             deliveryAcknowledgementRuntime.captureDelivery(envelope);
+            interAgentAdmission.captureDeliveryIdentity(envelope, deliveryIdentity());
             deliveryStages.capture(envelope);
             recordInboundIa(envelope);
           },
           reportQueued: envelope => deliveryStages.queued(envelope),
           settleStage: (envelope, reason) => deliveryStages.settleEnvelope(envelope, reason),
+          retireDelivery: (envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
+          retirementCapability: () => link?.interAgentRetirementCapability?.() ?? "pending",
           send: (notice) => interAgent?.sendInternalNotice(notice),
-          inject: async (inbound, mode) => {
+          inject: async (inbound, mode, reservation) => {
             const attempt = priorityChain.then(async () => {
-              if (await trySteerInterAgent(inbound, mode)) return;
-              interAgentTurns.receive(inbound, mode);
+              if (await trySteerInterAgent(inbound, mode, reservation)) return;
+              interAgentTurns.receive(inbound, mode, reservation);
             });
             priorityChain = attempt.catch(error => { writeRedactedStderr(`inter-agent priority lane failed: ${String(error)}\n`); });
             await attempt;
@@ -1092,6 +1103,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       turnWatchdog.progress(turnToken);
     },
     onInputHandedOff: ({ turnToken, handoff }) => {
+      interAgentTurns.handoff(turnToken);
       deliveryStages.submitted(turnToken, handoff);
       interAgentTurns.retireSteeredBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
     },

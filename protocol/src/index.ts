@@ -200,6 +200,10 @@ export interface WrapperConfig {
    *  again, so a later pack rename cannot silently change it). */
   display_name: string;
   server_url: string;
+  /** Maximum envelopes bundled into one inter-agent input. Omitted selects 10. */
+  inter_agent_batch_max_items?: number;
+  /** Maximum admitted pending inter-agent envelopes across peers. Omitted selects 100. */
+  inter_agent_backlog_max_items?: number;
   /** Wrapper auth token, paired with agent_id on the server (ADR-0011). */
   server_token?: string;
   /** permission_request no-response window before the default deny

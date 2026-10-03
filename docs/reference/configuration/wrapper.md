@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-10-03
 related: [protocol]
 ---
 
@@ -26,6 +26,13 @@ launched Codex wrapper creates its own private directory when the field is
 absent. The wrapper rejects a missing path or one resolving to its state home
 before a turn. The directory is passed to native shell tools, while the native
 Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
+
+`inter_agent_batch_max_items?: number` and
+`inter_agent_backlog_max_items?: number` are optional flat `WrapperConfig`
+fields relayed from the matching engine block. They default to 10 items per
+batch and 100 pending items across peers. Each must be a positive safe integer.
+The settings are captured when the wrapper starts; a runner reload changes
+only later wrapper lifetimes. Direct wrapper config uses the same validation.
 
 - `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
   resolved to `"exec"` when omitted and relayed only for Codex launches. The

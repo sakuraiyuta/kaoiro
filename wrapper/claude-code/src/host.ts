@@ -1,4 +1,4 @@
-import { MAX_COALESCED_BYTES, MAX_COALESCED_MESSAGES, ToolOrigins } from "@kaoiro/agent-common";
+import { DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS, MAX_COALESCED_BYTES, ToolOrigins } from "@kaoiro/agent-common";
 // Agent host — runs a query() session, derives state from its message stream,
 // and routes tool-permission requests through canUseTool so they surface as
 // waiting_permission. Streaming input (send) and interrupt are wired here.
@@ -1242,7 +1242,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   pushedInputFits(text: string, envelopeCount: number): boolean {
-    return envelopeCount <= MAX_COALESCED_MESSAGES && Buffer.byteLength(text, "utf8") <= MAX_COALESCED_BYTES;
+    return envelopeCount <= (this.#config.inter_agent_batch_max_items ?? DEFAULT_INTER_AGENT_BATCH_MAX_ITEMS) && Buffer.byteLength(text, "utf8") <= MAX_COALESCED_BYTES;
   }
 
   pushLiveInput(options: {

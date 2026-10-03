@@ -14,6 +14,7 @@
 // call run() either.
 import { describe, expect, it, vi } from "vitest";
 import {
+  InterAgentAdmission,
   InterAgentTool,
   DeliveryStageReporter,
   createDeliveryAcknowledgementWiring,
@@ -861,5 +862,75 @@ describe("queued inbound mode is rechecked at Codex dispatch", () => {
     r.advance();
     expect(r.dispatched).toHaveLength(1);
     expect(r.suppressed).toEqual([{ cid: "later", mode: "reply-owed" }]);
+  });
+});
+
+describe("receiver overload handler settlement", () => {
+  it("notifies before acknowledging a refused delivery and keeps accepted work queued", async () => {
+    const notices: Envelope[] = [];
+    const injected: Envelope[] = [];
+    const acknowledged: Envelope[] = [];
+    const stages: string[] = [];
+    const retired = vi.fn(() => true);
+    const overloadConfig = { ...config, inter_agent_backlog_max_items: 1 };
+    const tool = new InterAgentTool({
+      config: overloadConfig,
+      getState: () => "thinking",
+      replyBasisMode: () => "v1",
+      send: () => {},
+      sendInterAgent: async notice => { notices.push(notice); return { kind: "accepted", stamp: null }; },
+    });
+    const receive = (item: Envelope) => handleInterAgentMessage({
+      interAgent: tool,
+      recordInboundIa: () => {},
+      send: () => {},
+      acknowledgeDelivery: item => acknowledged.push(item),
+      retirementCapability: () => "supported",
+      retireDelivery: retired,
+      settleStage: (_item, reason) => stages.push(reason),
+      inject: item => { injected.push(item); },
+      log: () => {},
+    }, item);
+    const first = inboundEnvelope("overload-handler", 1, false, 10);
+    const refused = inboundEnvelope("overload-handler", 2, false, 11);
+
+    await receive(first);
+    await receive(refused);
+
+    expect(injected).toEqual([first]);
+    expect(notices).toHaveLength(1);
+    expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error?.code).toBe("receiver_overloaded");
+    expect(acknowledged).toEqual([refused]);
+    expect(retired).not.toHaveBeenCalled();
+    expect(stages).toEqual(["receiver_overloaded"]);
+    expect(tool.admission.reservationFor(first)).toBeDefined();
+  });
+
+  it("bounds a null-tool fallback with the production shared admission instance", async () => {
+    const admission = new InterAgentAdmission(1);
+    const earlier = inboundEnvelope("null-tool-earlier", 1, false, 20);
+    const reservation = admission.admit(earlier);
+    expect(reservation.kind).toBe("reserved");
+    const acknowledged: Envelope[] = [];
+    const injected: Envelope[] = [];
+    const retired = vi.fn(() => true);
+    const refused = inboundEnvelope("null-tool-refused", 1, false, 21);
+
+    await handleInterAgentMessage({
+      interAgent: null,
+      admission,
+      recordInboundIa: () => {},
+      send: () => {},
+      acknowledgeDelivery: item => acknowledged.push(item),
+      retirementCapability: () => "supported",
+      retireDelivery: retired,
+      inject: item => { injected.push(item); },
+      log: () => {},
+    }, refused);
+
+    expect(injected).toEqual([]);
+    expect(retired).toHaveBeenCalledWith(refused);
+    expect(acknowledged).toEqual([]);
+    expect(admission.counts().total).toBe(1);
   });
 });

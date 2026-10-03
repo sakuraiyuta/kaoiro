@@ -51,6 +51,38 @@ defmodule KaoiroServer.InterAgentReplyBasisTest do
     assert {:ok, :legacy} = InterAgentReplyBasis.admission(%{}, false)
   end
 
+  test "receiver overload notice accepts the exact fixed wrapper template and rejects altered attribution" do
+    message = "peer input backlog is full; this message was not submitted to the model"
+    notice = %{
+      "to" => "sender",
+      "conversation_id" => "cid",
+      "turn_number" => 4,
+      "new_conversation" => false,
+      "kind" => "inform",
+      "meta" => %{"done" => false, "propose_next" => ""},
+      "notice_type" => "turn_failure",
+      "error" => %{
+        "code" => "receiver_overloaded",
+        "message" => message,
+        "affected_deliveries" => [
+          %{"delivery_seq" => 5, "peer_turn_number" => 7, "batch_id" => "attempt-1"}
+        ]
+      },
+      "body" => "peer error (receiver_overloaded): #{message}"
+    }
+
+    assert {:ok, :notice} = InterAgentReplyBasis.admission(notice, true)
+
+    for changed <- [
+          put_in(notice, ["error", "message"], "other"),
+          Map.put(notice, "body", "other"),
+          put_in(notice, ["error", "affected_deliveries", Access.at(0), "peer_turn_number"], 0),
+          put_in(notice, ["error", "affected_deliveries", Access.at(0), "batch_id"], "")
+        ] do
+      assert {:error, :invalid_internal_notice} = InterAgentReplyBasis.admission(changed, true)
+    end
+  end
+
   test "scoped turn-failure notices require exact, ordered, bounded coverage" do
     message = "the peer's turn timed out"
 

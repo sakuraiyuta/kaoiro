@@ -1,7 +1,7 @@
 ---
 title: Send and wait
 status: provisional
-last_updated: 2026-10-01
+last_updated: 2026-10-03
 description: Send and wait contracts and compatibility.
 ---
 
@@ -58,12 +58,24 @@ injecting the terminal notice into an SDK turn (see
   `[from <agent_id>] <kind>: <body>` block (including its conversation_id) and
   blocks are concatenated in arrival order. The model can select the matching
   conversation from each block.
-- **Cap count and total size.** A batch has at most **10 messages** (the same
-  order as `MAX_ATTACHMENTS_PER_INSTRUCTION`) and formatted text totals at most
+- **Cap count and total size.** A batch has at most **10 messages by default**
+  (configurable with `inter_agent_batch_max_items`) and formatted text totals at most
   **16,384 bytes** (the wrapper's `MAX_INPUT_BYTES`,
   `MAX_TASKLIST_ITEMS_JSON_BYTES`, and `MAX_LOG_BYTES`). Overflow is **not
   dropped**; defer it to the next batch/turn. A single oversized message still
   delivers by itself; the first item is always included regardless of the cap.
+
+Batch size is separate from the total receiver backlog. The default
+`inter_agent_backlog_max_items` is 100 admitted input items across all peers.
+Dispatch, host queueing and recovery do not free a slot; confirmed input or
+committed tool-result handoff does. Ordinary input arriving at capacity is
+refused with `receiver_overloaded`, while older accepted work remains queued.
+Matched waiter replies are counted but may exceed the ordinary limit so a
+blocked `send_to_agent` can finish. With `P` as the configured ordinary limit,
+`Q` as retained admitted items, `W` as outstanding waiter-origin reservations
+(including resolved, deferred and returned inputs), and `C` as overflow loss
+reservations, the wrapper maintains `Q <= P + W + 16`. `W` is not the live
+waiter-map size.
 
 **Trade-off: one turn failure affects every conversation in the batch.**
 After sending a turn to the SDK the wrapper cannot identify which message

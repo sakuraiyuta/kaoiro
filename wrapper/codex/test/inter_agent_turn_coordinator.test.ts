@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InterAgentAdmission } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
 import {
   CodexInterAgentTurnCoordinator,
@@ -114,6 +115,35 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
     coordinator.dispatchNextForPeer("peer.agent");
     expect(dispatched).toHaveLength(2);
     expect(dispatched[1]?.turnToken).toBe("turn-2");
+  });
+});
+
+describe("Codex shared admission handoff", () => {
+  it("keeps dispatched input counted until turn start and rejects foreign reservations", () => {
+    const admission = new InterAgentAdmission(1);
+    const batches: DispatchedCodexInterAgentBatch[] = [];
+    const coordinator = new CodexInterAgentTurnCoordinator({ admission, onDispatch: batch => batches.push(batch) });
+    const first = inbound("first");
+    const firstReservation = admission.admit(first);
+    expect(firstReservation.kind).toBe("reserved");
+    if (firstReservation.kind !== "reserved") throw new Error("expected reservation");
+
+    coordinator.receive(first, "reply-owed", firstReservation.reservation);
+    expect(admission.counts().total).toBe(1);
+    expect(admission.admit(inbound("second"))).toEqual({ kind: "refused" });
+
+    const foreignAdmission = new InterAgentAdmission(1);
+    const foreignEnvelope = inbound("foreign");
+    const foreign = foreignAdmission.admit(foreignEnvelope);
+    expect(foreign.kind).toBe("reserved");
+    if (foreign.kind !== "reserved") throw new Error("expected foreign reservation");
+    expect(() => coordinator.receive(foreignEnvelope, "reply-owed", foreign.reservation)).toThrow("reservation is missing, foreign, or released");
+    foreignAdmission.release(foreign.reservation, "retired");
+
+    coordinator.handoff(batches[0]!.turnToken);
+    expect(admission.counts().total).toBe(0);
+    const next = inbound("second");
+    expect(admission.admit(next).kind).toBe("reserved");
   });
 });
 
