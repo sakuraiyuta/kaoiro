@@ -304,7 +304,9 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
 
     try do
       ref = push(socket, "delivery_queue_control", credit)
-      assert_reply ref, :error, %{reason: "queue_unavailable"}, 8_000
+      # The channel gives up after GenServer.call's default 5000 ms timeout.
+      budget = 5_000 + TestTimeouts.durable_reply()
+      assert_reply ref, :error, %{reason: "queue_unavailable"}, budget
     after
       :ok = :sys.resume(owner)
     end
