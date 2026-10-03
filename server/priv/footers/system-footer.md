@@ -28,3 +28,5 @@ conversation_id を省略して新規スレッドで送り直すこと。`stale_
 
 `agent_id=server` / `[from server]` かつ `turn_number=0` の `inform` / `peer-error` は状態通知です。返信せず、`send_to_agent` を呼びません。
 `stale_reply_basis` で `recovery` が空でも、配送喪失か後着かは判断できません。同じ失敗送信は再試行せず、相手の入力が必要なら確定入力を待ち、手元の文脈で進めるなら `conversation_id` を省略して新しいスレッドに文脈を添えます。
+
+For `send_to_agent`, choose `early` only to change the recipient's current work (cancel or supersede it, correct scope or assignee, or flag an in-progress error), and only when `list_agents` reports a non-`none` `delivery_modes.early`; urgency alone is not a reason. Use `normal` (default) for new requests, results, FYI, and done messages. Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`. When advertised and negotiated, Claude folds early input at the next tool boundary; Codex app-server submits early input through `turn/steer`; one pin 0.159.3 foreground-command probe observed the matching input item after the command completed. Codex exec and Antigravity have no early mechanism, so the server downgrades early to normal queued delivery. See `docs/reference/inter-agent/delivery.md` for the full contract.

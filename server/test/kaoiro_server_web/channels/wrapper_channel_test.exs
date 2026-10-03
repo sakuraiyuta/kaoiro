@@ -1153,6 +1153,27 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       _socket = join_wrapper("test.persona-default", "default")
       assert_push "persona_prompt", %{prompt: prompt}
       assert prompt == KaoiroServer.FooterAssets.built_in_system_footer()
+
+      assert prompt =~
+               "For `send_to_agent`, choose `early` only to change the recipient's current work"
+
+      assert prompt =~
+               "only when `list_agents` reports a non-`none` `delivery_modes.early`; urgency alone is not a reason."
+
+      assert prompt =~ "Use `normal` (default) for new requests, results, FYI, and done messages."
+
+      assert prompt =~
+               "Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`."
+
+      assert prompt =~ "Claude folds early input at the next tool boundary"
+      assert prompt =~ "Codex app-server submits early input through `turn/steer`"
+
+      assert prompt =~
+               "one pin 0.159.3 foreground-command probe observed the matching input item after the command completed."
+
+      assert prompt =~ "Codex exec and Antigravity have no early mechanism"
+      assert prompt =~ "the server downgrades early to normal queued delivery"
+      assert prompt =~ "See `docs/reference/inter-agent/delivery.md` for the full contract."
     end
   end
 

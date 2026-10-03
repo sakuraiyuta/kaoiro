@@ -551,7 +551,16 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
     .describe(
       "Maximum synchronous wait in milliseconds when wait_for_response=true (default and maximum 300000).",
     ),
-  delivery_intent: z.enum(["normal", "early", "yield"]).optional().describe("Requested delivery mode. The server may downgrade it; non-normal requests require negotiated delivery modes."),
+  delivery_intent: z
+    .enum(["normal", "early", "yield"])
+    .optional()
+    .describe(
+      [
+        "Use `early` only to change the recipient's current work (cancel or supersede it, correct scope or assignee, or flag an in-progress error), and only when `list_agents` reports a non-`none` `delivery_modes.early`; urgency alone is not a reason.",
+        "Use `normal` (default) for new requests, results, FYI, and done messages.",
+        "Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`. The server may downgrade non-normal requests, which require negotiated delivery modes.",
+      ].join("\n"),
+    ),
   work_id: z.string().min(1).max(128).optional().describe("Work targeted by a yield. Required with delivery_intent=yield."),
   expected_authority_epoch: WORK_REVISION.optional().describe("Caller-supplied expected authority epoch, normally copied from an observed work stamp; the wrapper validates presence and numeric shape but the server checks it against the current grant. Required with delivery_intent=yield."),
   work_control: WORK_CONTROL_SCHEMA.optional().describe("One revision-checked work operation to apply before admitting this message."),
