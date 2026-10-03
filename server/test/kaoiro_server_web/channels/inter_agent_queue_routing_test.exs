@@ -1,0 +1,181 @@
+defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
+  use KaoiroServerWeb.ChannelCase, async: false
+
+  import Phoenix.ChannelTest
+
+  alias KaoiroServer.{AgentDirectory, ConversationStates, DeliveryStates}
+  alias KaoiroServer.TestTimeouts
+
+  setup do
+    Process.flag(:trap_exit, true)
+    previous = Application.fetch_env!(:kaoiro_server, :inter_agent_queue)
+    on_exit(fn -> Application.put_env(:kaoiro_server, :inter_agent_queue, previous) end)
+
+    Application.put_env(
+      :kaoiro_server,
+      :inter_agent_queue,
+      Keyword.put(previous, :route_accepted, true)
+    )
+
+    n = System.unique_integer([:positive])
+    sender = "test.route-sender-#{n}"
+    recipient = "test.route-recipient-#{n}"
+
+    on_exit(fn ->
+      Enum.each([sender, recipient], fn id ->
+        DeliveryStates.delete(id)
+        AgentDirectory.delete(id)
+      end)
+    end)
+
+    %{sender: sender, recipient: recipient}
+  end
+
+  defp join_agent(id, params) do
+    {:ok, reply, socket} =
+      KaoiroServerWeb.WrapperSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(
+        KaoiroServerWeb.WrapperChannel,
+        "wrapper:" <> id,
+        Map.put(params, "persona_id", "default")
+      )
+
+    ref = push(socket, "envelope", state(id))
+    assert_reply ref, :ok, _, TestTimeouts.durable_reply()
+    {reply, socket}
+  end
+
+  defp queue_params(backlog_max_items) do
+    %{
+      "inter_agent_queue" => "credit-v1",
+      "inter_agent_queue_policy" => %{
+        "batch_max_items" => 10,
+        "backlog_max_items" => backlog_max_items,
+        "backlog_max_bytes" => 524_288
+      },
+      "inter_agent_delivery_ack" => "dispatch-v1",
+      "delivery_resync" => "skip-v1",
+      "delivery_generation" => "generation"
+    }
+  end
+
+  defp state(id) do
+    %{
+      "version" => "0",
+      "agent_id" => id,
+      "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+      "ts" => "2026-10-04T00:00:00Z",
+      "type" => "state_change",
+      "state" => "idle",
+      "payload" => %{},
+      "ext" => %{}
+    }
+  end
+
+  defp message(from, to, cid, body \\ "hello") do
+    %{
+      "version" => "0",
+      "agent_id" => from,
+      "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+      "ts" => "2026-10-04T00:00:00Z",
+      "type" => "inter_agent_message",
+      "state" => "tool_running",
+      "payload" => %{
+        "to" => to,
+        "conversation_id" => cid,
+        "turn_number" => 1,
+        "kind" => "inform",
+        "body" => body,
+        "meta" => %{"done" => false, "propose_next" => ""},
+        "owner" => %{"kind" => "user", "id" => "operator"},
+        "new_conversation" => true
+      },
+      "ext" => %{}
+    }
+  end
+
+  defp send_message(socket, envelope) do
+    ref = push(socket, "envelope", envelope)
+    assert_reply ref, status, reply, TestTimeouts.durable_reply()
+    {status, reply}
+  end
+
+  test "accepted input is queued, not pushed, and reaches the recipient through credit", ctx do
+    {recipient_reply, recipient} = join_agent(ctx.recipient, queue_params(10))
+    {_reply, sender} = join_agent(ctx.sender, %{})
+
+    assert {:ok, %{"queue_id" => queue_id, "ingress_stamp" => stamp}} =
+             send_message(sender, message(ctx.sender, ctx.recipient, "cnv-route-1", "héllo"))
+
+    refute_push "envelope", %{"type" => "inter_agent_message"}
+    assert %{queued: 1, charged_bytes: 6} = DeliveryStates.queue_counts(ctx.recipient)
+
+    credit = %{
+      "version" => "0",
+      "queue_epoch" => recipient_reply["inter_agent_queue_epoch"],
+      "incarnation" => recipient_reply["inter_agent_delivery_incarnation"],
+      "generation" => "generation",
+      "operation_id" => "1",
+      "op" => "credit",
+      "kind" => "root",
+      "native_turn_token" => "t1"
+    }
+
+    ref = push(recipient, "delivery_queue_control", credit)
+    assert_reply ref, :ok, _, TestTimeouts.durable_reply()
+
+    assert_push "delivery_batch", %{
+      "items" => [
+        %{
+          "queue_id" => ^queue_id,
+          "delivery_seq" => 1,
+          "envelope" => %{"ingress_stamp" => ^stamp, "payload" => %{"body" => "héllo"}}
+        }
+      ]
+    }
+  end
+
+  test "a saturated recipient refuses before the conversation is recorded", ctx do
+    {_reply, _recipient} = join_agent(ctx.recipient, queue_params(1))
+    {_reply, sender} = join_agent(ctx.sender, %{})
+
+    assert {:ok, %{"queue_id" => _}} =
+             send_message(sender, message(ctx.sender, ctx.recipient, "cnv-route-a"))
+
+    assert {:error, %{reason: "receiver_overloaded", from: from, message: message}} =
+             send_message(sender, message(ctx.sender, ctx.recipient, "cnv-route-b"))
+
+    assert from == ctx.recipient
+    assert message =~ "do not resend"
+    assert ConversationStates.get("cnv-route-b") == nil
+
+    # Neither reservation outlives the refusal.
+    state = :sys.get_state(DeliveryStates)
+    refute Enum.any?(state.reservations, fn {_, r} -> r.agent_id == ctx.recipient end)
+    refute Enum.any?(state.queue_reservations, fn {_, r} -> r.agent_id == ctx.recipient end)
+    assert %{queued: 1} = DeliveryStates.queue_counts(ctx.recipient)
+  end
+
+  test "with routing off, accepted input keeps the direct push", ctx do
+    Application.put_env(
+      :kaoiro_server,
+      :inter_agent_queue,
+      Keyword.put(
+        Application.fetch_env!(:kaoiro_server, :inter_agent_queue),
+        :route_accepted,
+        false
+      )
+    )
+
+    {_reply, _recipient} = join_agent(ctx.recipient, queue_params(10))
+    {_reply, sender} = join_agent(ctx.sender, %{})
+
+    assert {:ok, reply} =
+             send_message(sender, message(ctx.sender, ctx.recipient, "cnv-route-off"))
+
+    refute Map.has_key?(reply, "queue_id")
+    assert_push "envelope", %{"type" => "inter_agent_message", "delivery_seq" => 1}
+    assert %{queued: 0} = DeliveryStates.queue_counts(ctx.recipient)
+  end
+end

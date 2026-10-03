@@ -1475,24 +1475,70 @@ defmodule KaoiroServerWeb.WrapperChannel do
     wire_stamp = encode_stamp(stamp)
     stamped = Map.put(envelope, "ingress_stamp", wire_stamp)
 
-    retained = AgentStates.upsert_ia(from, stamp, stamped)
+    case commit_to_queue(reservation, from, to, stamped, authority) do
+      {:error, details} ->
+        {:reply, {:error, details}, socket}
 
-    {recipient_envelope, delivery_changed?} =
-      case DeliveryStates.issue_reserved(to, reservation, %{
-             sender: from,
-             conversation_id: envelope["payload"]["conversation_id"],
-             turn_number: envelope["payload"]["turn_number"],
-             kind: envelope["payload"]["kind"],
-             mode: authority.granted
-           }) do
-        seq when is_integer(seq) -> {Map.put(stamped, "delivery_seq", seq), true}
-        nil -> {stamped, false}
-      end
+      {:ok, queue_id} ->
+        retained = AgentStates.upsert_ia(from, stamp, stamped)
 
-    _ = AgentStates.upsert_ia(to, stamp, recipient_envelope)
+        delivery_changed? =
+          if queue_id do
+            _ = AgentStates.upsert_ia(to, stamp, stamped)
+            false
+          else
+            {recipient_envelope, delivery_changed?} =
+              case DeliveryStates.issue_reserved(to, reservation.delivery, %{
+                     sender: from,
+                     conversation_id: envelope["payload"]["conversation_id"],
+                     turn_number: envelope["payload"]["turn_number"],
+                     kind: envelope["payload"]["kind"],
+                     mode: authority.granted
+                   }) do
+                seq when is_integer(seq) -> {Map.put(stamped, "delivery_seq", seq), true}
+                nil -> {stamped, false}
+              end
 
-    push_to_wrapper(to, recipient_envelope)
+            _ = AgentStates.upsert_ia(to, stamp, recipient_envelope)
+            push_to_wrapper(to, recipient_envelope)
+            delivery_changed?
+          end
 
+        finish_accept(
+          envelope,
+          from,
+          to,
+          escalate,
+          work_result,
+          work_stamp,
+          authority,
+          received_at,
+          wire_stamp,
+          stamped,
+          retained,
+          delivery_changed?,
+          queue_id,
+          socket
+        )
+    end
+  end
+
+  defp finish_accept(
+         envelope,
+         from,
+         to,
+         escalate,
+         work_result,
+         work_stamp,
+         authority,
+         received_at,
+         wire_stamp,
+         stamped,
+         retained,
+         delivery_changed?,
+         queue_id,
+         socket
+       ) do
     work_status =
       if work_result do
         principal = %{"kind" => "agent", "id" => from}
@@ -1553,7 +1599,88 @@ defmodule KaoiroServerWeb.WrapperChannel do
     reply = if work_stamp, do: Map.put(reply, "work", work_stamp), else: reply
     reply = if work_result, do: Map.put(reply, "work_control_result", work_result), else: reply
     reply = Map.put(reply, "delivery", %{"advisory" => delivery_advisory(to, authority)})
+    reply = if queue_id, do: Map.put(reply, "queue_id", Integer.to_string(queue_id)), else: reply
     {:reply, {:ok, reply}, socket}
+  end
+
+  ## Queue admission (r8 §3-§4). Off until the wrapper lease path lands:
+  ## while off, accepted input keeps the direct push.
+
+  defp route_accepted? do
+    :kaoiro_server
+    |> Application.fetch_env!(:inter_agent_queue)
+    |> Keyword.get(:route_accepted, false)
+  end
+
+  defp reserve_delivery(to, body) do
+    with {:ok, token} <- DeliveryStates.reserve(to, self()) do
+      case reserve_queue(to, body) do
+        {:ok, queue} ->
+          {:ok, %{delivery: token, queue: queue}}
+
+        {:error, _} = error ->
+          :ok = DeliveryStates.release(token)
+          error
+      end
+    end
+  end
+
+  defp reserve_queue(to, body) when is_binary(body) do
+    if route_accepted?() do
+      case DeliveryStates.queue_reserve(to, :ordinary, byte_size(body)) do
+        {:ok, token, _class} ->
+          {:ok, token}
+
+        {:error, :queue_unavailable} ->
+          {:ok, nil}
+
+        {:error, :receiver_overloaded} ->
+          {:error,
+           %{
+             reason: "receiver_overloaded",
+             from: to,
+             message:
+               "#{to} has too much undelivered input. Wait for it to drain; do not resend automatically."
+           }}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp reserve_queue(_to, _body), do: {:ok, nil}
+
+  defp release_delivery(%{delivery: token, queue: queue}) do
+    :ok = DeliveryStates.release(token)
+    if queue, do: :ok = DeliveryStates.queue_cancel(queue)
+    :ok
+  end
+
+  # The queued item is committed with its body before anything is
+  # projected; a failed commit is reported and nothing is projected.
+  defp commit_to_queue(%{queue: nil}, _from, _to, _stamped, _authority), do: {:ok, nil}
+
+  defp commit_to_queue(%{delivery: token, queue: queue}, from, to, stamped, authority) do
+    descriptor = %{
+      sender: from,
+      conversation_id: stamped["payload"]["conversation_id"],
+      turn_number: stamped["payload"]["turn_number"],
+      kind: stamped["payload"]["kind"],
+      early: authority.granted in ["early", "yield"]
+    }
+
+    # The queue item takes no delivery sequence now, so the ledger slot
+    # reserved alongside it is released either way.
+    :ok = DeliveryStates.release(token)
+
+    case DeliveryStates.queue_commit(to, queue, descriptor, stamped) do
+      {:ok, queue_id} ->
+        {:ok, queue_id}
+
+      {:error, _} ->
+        :ok = DeliveryStates.queue_cancel(queue)
+        {:error, %{reason: "delivery_unavailable", delivered: false}}
+    end
   end
 
   defp delivery_advisory(recipient, authority) do
@@ -3116,7 +3243,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
             else
               with {:ok, admission} <-
                      KaoiroServer.InterAgentReplyBasis.admission(payload, protected?),
-                   {:ok, reservation} <- DeliveryStates.reserve(to, self()) do
+                   {:ok, reservation} <- reserve_delivery(to, body) do
                 principal = %{"kind" => "agent", "id" => from}
                 operation = payload["work_control"]
 
@@ -3158,7 +3285,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
                          cid,
                          turn_number,
                          intent_decision,
-                         reservation
+                         reservation.delivery
                        ),
                      record_result <-
                        ConversationStates.record_bound_message(
@@ -3210,7 +3337,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
                             end)
                       end
 
-                      :ok = DeliveryStates.release(reservation)
+                      :ok = release_delivery(reservation)
 
                       if work_result do
                         {:error,
@@ -3228,7 +3355,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
                   end
                 else
                   {:error, reason} ->
-                    :ok = DeliveryStates.release(reservation)
+                    :ok = release_delivery(reservation)
                     {:error, reason}
                 end
               end

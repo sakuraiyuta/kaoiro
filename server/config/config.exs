@@ -68,8 +68,12 @@ config :kaoiro_server,
 # Per-recipient ceiling on the inter-agent queue's byte backlog. A wrapper
 # declaring a larger `backlog_max_bytes` at join is refused
 # (KaoiroServer.InterAgentQueuePolicy). Operator-owned; overridden at boot by
-# KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING.
-config :kaoiro_server, :inter_agent_queue, backlog_max_bytes_ceiling: 8_388_608
+# KAOIRO_INTER_AGENT_BACKLOG_MAX_BYTES_CEILING. `route_accepted` sends
+# accepted input to a credit-v1 recipient's queue instead of pushing it; it
+# stays off until the wrapper lease path is in place.
+config :kaoiro_server, :inter_agent_queue,
+  backlog_max_bytes_ceiling: 8_388_608,
+  route_accepted: false
 
 # Review-quagmire detection (issue #273). Advisory only: nothing here
 # rejects a message, closes a conversation, or messages an agent — a false
