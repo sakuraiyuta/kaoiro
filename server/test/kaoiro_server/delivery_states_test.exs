@@ -2576,4 +2576,35 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert claimed(ctx, "p", "c") == nil
     end
   end
+
+  describe "waiter matching" do
+    test "a reply matches only the registered peer", %{name: name} do
+      policy = %{batch_max_items: 10, backlog_max_items: 10, backlog_max_bytes: 1_000}
+      {:ok, _} = DeliveryStates.bind_queue("wm", "g1", self(), policy, name)
+
+      {:ok, _id} =
+        DeliveryStates.queue_register_waiter(
+          "wm",
+          "g1",
+          self(),
+          %{peer: "p", cid: "c", turn: 1, token: "t", call_token: "ct", expires_in_ms: 60_000},
+          name
+        )
+
+      assert {:ok, _token, :ordinary} =
+               DeliveryStates.queue_reserve_reply("wm", "q", "c", 1, name)
+
+      assert {:ok, _token, :ordinary} =
+               DeliveryStates.queue_reserve_reply("wm", "p", "other", 1, name)
+
+      assert {:ok, token, :waiter} = DeliveryStates.queue_reserve_reply("wm", "p", "c", 1, name)
+
+      # Claimed: a second reply on the same route is ordinary, until a cancel restores it.
+      assert {:ok, _token, :ordinary} =
+               DeliveryStates.queue_reserve_reply("wm", "p", "c", 1, name)
+
+      :ok = DeliveryStates.queue_cancel(token, name)
+      assert {:ok, _token, :waiter} = DeliveryStates.queue_reserve_reply("wm", "p", "c", 1, name)
+    end
+  end
 end
