@@ -200,12 +200,43 @@ remaining descriptors as interrupted before reclaiming the old ledger.
 
 A wrapper may explicitly retire received but permanently discarded, unstarted
 inputs using `delivery_resync` with `reason: "interrupted"`. This is distinct
-from missing-sequence detection: watchdog fail-stop preserves the active turn,
-while retiring discarded queued batches and a frozen steer later proven to
-have failed its precondition without an observed item. Possibly written steers
-report an unknown outcome after settlement instead. Shutdown attempts retirement before
-closing transport, bounded to five seconds; it cannot promise acceptance after
-a broken connection. A subsequent generation bind retires surviving metadata.
+from missing-sequence detection: watchdog fail-stop in Claude, Codex and
+Antigravity preserves the exact native-active turn, while retiring discarded
+queued batches and a frozen steer later proven to have failed its precondition
+without an observed item. Possibly written steers report an unknown outcome
+after settlement instead. The same server loss-notification cycle can occur
+after Claude or Codex fail-stop as after Antigravity fail-stop.
+
+Each wrapper uses one 5,000 ms monotonic shutdown budget, shared with the
+runner's reset escalation. At 40% (2,000 ms), pending refusal sends are canceled
+and finalized as unknown; an unresolved native-active input is completed as
+uncertain with a hold, without retiring it. Retirement flush is bounded at 70%
+(3,500 ms). The wrapper then attempts `disconnect_intent`, bounded by both the
+remaining budget and Phoenix's channel push timeout, and closes the link by
+95% (4,750 ms) at latest. Codex waits for the native run to settle before
+closing the link. A broken connection can still prevent server acceptance.
+Once the flush completes or reaches its cutoff, the wrapper stops starting
+local retirement and gap-resync requests. An input received after that point
+and before link close relies on the server retiring the old generation when
+the wrapper next joins.
+
+If a batch claims `already_observed` while any of its input handles remain
+pending, the shared lifecycle records a sticky invariant violation and a
+diagnostic. It completes each remaining handle as uncertain using the host's
+observation as an intentional ACK, and does not retire the delivery. This
+closes the resolved prefix without telling the sender that an observed input
+was lost. The regular lifecycle test gate fails if this recovery or its sticky
+diagnostic is removed.
+
+For a release's manual native check, launch a separate wrapper process using
+the existing authentication available to that process. Do not copy secrets or
+perform a login. Start a fresh native conversation, record its native
+conversation/session ID, and compare it with the IDs visible for all running
+peers in shared metadata; the new ID must be distinct. For Antigravity, launch
+a disposable peer from the owner's dashboard. Exercise one ordinary inbound
+message and verify it reaches the native engine and the reply is accepted.
+Record the engine, fresh ID, peer ID, and observed result with the release
+check.
 
 A terminal intentional disconnect (`operator`, `runner`, or `agent_self`) also
 retires every unresolved sequence of the channel's exact owner and generation.

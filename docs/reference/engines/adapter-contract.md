@@ -59,6 +59,13 @@ Per-engine timing (measured where noted; Linux unless stated otherwise):
 | Codex exec child + its sandboxed grandchild | both gone ~50ms after SIGTERM | measured offline, `workspace-write` and `danger-full-access`, 2 runs each — issue #401 |
 | Codex app-server child | SIGKILL 2000ms after stdin EOF if still alive | `shutdownTimeoutMs`, wired by `CodexHost` below `RESET_TERMINATION_GRACE_MS` |
 
+The wrapper also uses this 5000 ms reset window for delivery cleanup. One
+monotonic start time governs receipt finalization at 2000 ms, retirement flush
+through 3500 ms, and the disconnect-intent attempt through 4500 ms. The native
+host is closed as soon as this cleanup begins; the process does not wait for
+the native run promise before stopping receipt admission. Codex keeps the link
+open until its native run settles, with a 4750 ms cutoff.
+
 The wrapper's 4000ms direct-child deadline completes before runner reset's
 5000ms escalation. The SDK's later 7000ms escalation remains a fallback.
 The wrapper owns only the CLI child, not processes launched by Claude tools:
