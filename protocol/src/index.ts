@@ -235,6 +235,11 @@ export interface WrapperConfig {
   urgent_overtake_limit?: number;
   /** Maximum pushed fold batches reserved for one live Claude turn. */
   folds_per_turn?: number;
+  /** Inter-agent queue limits declared at join. The runner resolves omitted
+   *  keys to their defaults (10, 100, 524288) in the spawn snapshot. */
+  inter_agent_batch_max_items?: number;
+  inter_agent_backlog_max_items?: number;
+  inter_agent_backlog_max_bytes?: number;
   /** Optional soft work-budget denominator as a percentage of the SDK's
    * authoritative context window. The Claude adapter defaults this to 60
    * when absent, then derives the actual token denominator from each

@@ -210,8 +210,28 @@ describe("parseSpawn / resolveWrapperConfig", () => {
       display_name: spawnMsg.persona.name,
       server_url: spawnMsg.server_url,
       server_token: "tok",
+      inter_agent_batch_max_items: 10,
+      inter_agent_backlog_max_items: 100,
+      inter_agent_backlog_max_bytes: 524_288,
     });
     expect("allowed_tools" in config).toBe(false);
+  });
+
+  it("resolves omitted inter-agent queue keys in the spawn snapshot and keeps relayed ones", () => {
+    const parsed = parseSpawn(spawnMsg)!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      { inter_agent_backlog_max_items: 2, inter_agent_backlog_max_bytes: 16_384 },
+    );
+    expect({
+      batch: config.inter_agent_batch_max_items,
+      items: config.inter_agent_backlog_max_items,
+      bytes: config.inter_agent_backlog_max_bytes,
+    }).toEqual({ batch: 10, items: 2, bytes: 16_384 });
   });
 
   it("context_work_budget_percent を runner から wrapper config へ透過する", () => {

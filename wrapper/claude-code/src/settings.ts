@@ -12,6 +12,13 @@ export type {
   ClaudeSchedulerSetting,
 } from "@kaoiro/wrapper-core";
 export {
+  INTER_AGENT_QUEUE_SETTINGS,
+  interAgentQueueRangeMessage,
+  parseInterAgentQueueSetting,
+  resolveInterAgentQueueSettings,
+} from "@kaoiro/wrapper-core";
+export type { InterAgentQueueSetting } from "@kaoiro/wrapper-core";
+export {
   PERMISSION_TIMEOUT_ENV,
   TURN_WATCHDOG_MAX_DELAY_MS,
   TURN_WATCHDOG_MIN_ABORT_GRACE_MS,

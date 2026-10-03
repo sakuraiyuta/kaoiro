@@ -23,6 +23,9 @@ import {
   parseClaudeSchedulerNumber,
   parsePermissionTimeoutEnv,
   readTurnWatchdogSettings as readClaudeWatchdog,
+  INTER_AGENT_QUEUE_SETTINGS,
+  interAgentQueueRangeMessage,
+  parseInterAgentQueueSetting,
 } from "@kaoiro/claude-code/settings";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError } from "./config-error.js";
@@ -41,6 +44,9 @@ export const PHOENIX_HEARTBEAT_LOGS_ENV = "KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS"
 export interface WatchdogConfig {
   turn_watchdog_inactivity_ms?: number;
   turn_watchdog_abort_grace_ms?: number;
+  inter_agent_batch_max_items?: number;
+  inter_agent_backlog_max_items?: number;
+  inter_agent_backlog_max_bytes?: number;
 }
 
 /** Antigravity-only timing keys, next to its watchdog keys. */
@@ -77,12 +83,13 @@ interface BehaviourRow {
   /** A file value of `false` is the same as an absent key (global opt-in
    *  flags): it is neither relayed nor reported as shadowed. */
   readonly falseIsAbsent?: true;
-  readonly env: string;
-  readonly envIsSet: (raw: string | undefined) => boolean;
+  /** Absent for a JSON-only key, which has no environment variable. */
+  readonly env?: string;
+  readonly envIsSet?: (raw: string | undefined) => boolean;
   /** Parses a runner.config.json value; throws ConfigError. */
   readonly parseFile: (value: unknown) => BehaviourValue;
   /** Parses a set variable through the wrapper's own grammar; throws. */
-  readonly parseEnv: (raw: string) => BehaviourValue;
+  readonly parseEnv?: (raw: string) => BehaviourValue;
 }
 
 const CLAUDE_SCHEDULER_ROWS: readonly BehaviourRow[] =
@@ -373,10 +380,36 @@ const RUNNER_ROWS: readonly BehaviourRow[] = [
   },
 ];
 
+/** JSON-only queue limits in every engine block. Omitted keys are resolved to
+ *  their defaults when the spawn snapshot is built (supervisor.ts), and the
+ *  server applies its own ceilings on top, which the runner cannot see. */
+const INTER_AGENT_QUEUE_ROWS: readonly BehaviourRow[] = (
+  [
+    ["claude_code", "claude-code"],
+    ["codex", "codex"],
+    ["antigravity", "antigravity"],
+  ] as const
+).flatMap(([block, engine]) =>
+  INTER_AGENT_QUEUE_SETTINGS.map((setting): BehaviourRow => ({
+    block,
+    key: setting.field,
+    wrapperField: setting.field,
+    engine,
+    parseFile: (value) => {
+      const parsed = parseInterAgentQueueSetting(setting, value);
+      if (parsed === undefined) {
+        throw new ConfigError(`${block}.${interAgentQueueRangeMessage(setting)}`);
+      }
+      return parsed;
+    },
+  })),
+);
+
 export const BEHAVIOUR_ROWS: readonly BehaviourRow[] = [
   ...CLAUDE_SCHEDULER_ROWS,
   ...WATCHDOG_ROWS,
   ...ANTIGRAVITY_TIMING_ROWS,
+  ...INTER_AGENT_QUEUE_ROWS,
   PERMISSION_TIMEOUT_ROW,
   ...FLAG_ROWS,
   ...RUNNER_ROWS,
@@ -456,6 +489,7 @@ export function readSetVariables(
   const set: SetVariable[] = [];
   for (const row of BEHAVIOUR_ROWS) {
     if (!isEnabled(config, row.engine)) continue;
+    if (row.env === undefined || row.envIsSet === undefined || row.parseEnv === undefined) continue;
     const raw = env[row.env];
     if (!row.envIsSet(raw)) continue;
     set.push({ row, value: row.parseEnv(raw as string) });
@@ -476,7 +510,7 @@ export function computeBehaviourRelay(
   const relay: Record<string, Record<string, BehaviourValue>> = {};
   for (const row of BEHAVIOUR_ROWS) {
     if (row.engine === "runner" || row.wrapperField === undefined) continue;
-    if (row.envIsSet(env[row.env])) continue;
+    if (row.env !== undefined && row.envIsSet?.(env[row.env]) === true) continue;
     const value = fileValue(config, row);
     if (value === undefined) continue;
     for (const engine of row.engine === "all" ? ALL_ENGINES : [row.engine]) {
@@ -499,6 +533,7 @@ export function behaviourWarnings(
 ): string[] {
   const lines: string[] = [];
   for (const { row, value } of set) {
+    if (row.env === undefined) continue;
     const path = behaviourConfigPath(row);
     if (!seen.has(row.env)) {
       seen.add(row.env);

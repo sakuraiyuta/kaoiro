@@ -12,6 +12,17 @@ export {
 } from "./claude_scheduler.js";
 export { formatConsumerSettingsLine } from "./consumer_settings.js";
 export {
+  INTER_AGENT_QUEUE_SETTINGS,
+  interAgentQueueRangeMessage,
+  parseInterAgentQueueSetting,
+  resolveInterAgentQueueSettings,
+} from "./inter_agent_queue_settings.js";
+export type {
+  InterAgentQueueField,
+  InterAgentQueueSetting,
+  InterAgentQueueSettings,
+} from "./inter_agent_queue_settings.js";
+export {
   PERMISSION_TIMEOUT_ENV,
   isPermissionTimeoutEnvSet,
   parsePermissionTimeoutEnv,

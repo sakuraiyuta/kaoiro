@@ -121,6 +121,15 @@ hidden by a variable.
 | `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS` | `antigravity.turn_watchdog_abort_grace_ms` | integer | 1..2147483647 | 60000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` | `antigravity.tool_timeout_ms` | integer | 1000..2147483647 | 600000 | Antigravity wrapper (`resolveTurnWatchdogSettings`) | variable > file > default |
 | `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` | `antigravity.epoch_idle_ms` | integer | 1000..2147483647 | 1800000 | Antigravity wrapper (`resolveEpochIdleMs`) | variable > file > default |
+| — | `claude_code.inter_agent_batch_max_items` | integer | 1..9007199254740991 | 10 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `claude_code.inter_agent_backlog_max_items` | integer | 1..1000 | 100 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `claude_code.inter_agent_backlog_max_bytes` | integer | 16384..9007199254740991, and at most the server's `backlog_max_bytes_ceiling` at join | 524288 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `codex.inter_agent_batch_max_items` | integer | 1..9007199254740991 | 10 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `codex.inter_agent_backlog_max_items` | integer | 1..1000 | 100 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `codex.inter_agent_backlog_max_bytes` | integer | 16384..9007199254740991, and at most the server's `backlog_max_bytes_ceiling` at join | 524288 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `antigravity.inter_agent_batch_max_items` | integer | 1..9007199254740991 | 10 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `antigravity.inter_agent_backlog_max_items` | integer | 1..1000 | 100 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
+| — | `antigravity.inter_agent_backlog_max_bytes` | integer | 16384..9007199254740991, and at most the server's `backlog_max_bytes_ceiling` at join | 524288 | every wrapper (`parseConfig`); omitted keys are resolved in the spawn snapshot | file > default |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CODEX_OPERATOR_STEER` | `codex.operator_steer` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |

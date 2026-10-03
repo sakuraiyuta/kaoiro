@@ -18,6 +18,11 @@ import {
   parseClaudeSchedulerNumber,
 } from "./claude_scheduler.js";
 import {
+  INTER_AGENT_QUEUE_SETTINGS,
+  interAgentQueueRangeMessage,
+  parseInterAgentQueueSetting,
+} from "./inter_agent_queue_settings.js";
+import {
   PERMISSION_TIMEOUT_ENV,
   isPermissionTimeoutEnvSet,
   parsePermissionTimeoutEnv,
@@ -343,6 +348,16 @@ export function parseConfig(raw: unknown): WrapperConfig {
     const parsed = parseClaudeSchedulerNumber(value, setting.max);
     if (parsed === undefined) {
       throw new ConfigError(claudeSchedulerRangeMessage(setting));
+    }
+    config[setting.field] = parsed;
+  }
+
+  for (const setting of INTER_AGENT_QUEUE_SETTINGS) {
+    const value = raw[setting.field];
+    if (value === undefined) continue;
+    const parsed = parseInterAgentQueueSetting(setting, value);
+    if (parsed === undefined) {
+      throw new ConfigError(interAgentQueueRangeMessage(setting));
     }
     config[setting.field] = parsed;
   }

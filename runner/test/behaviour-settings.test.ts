@@ -229,6 +229,13 @@ describe("registry", () => {
       ["KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS", "antigravity", "antigravity", "turn_watchdog_abort_grace_ms"],
       ["KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS", "antigravity", "antigravity", "tool_timeout_ms"],
       ["KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS", "antigravity", "antigravity", "epoch_idle_ms"],
+      ...([
+        ["claude-code", "claude_code"],
+        ["codex", "codex"],
+        ["antigravity", "antigravity"],
+      ] as const).flatMap(([engine, block]) =>
+        ["inter_agent_batch_max_items", "inter_agent_backlog_max_items", "inter_agent_backlog_max_bytes"]
+          .map((key) => [undefined, engine, block, key])),
       ["KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS", "all", null, "permission_timeout_ms"],
       ["KAOIRO_CODEX_OPERATOR_STEER", "codex", "codex", "operator_steer"],
       ["KAOIRO_CODEX_APPROVAL_AXIS", "codex", "codex", "approval_axis"],
@@ -236,5 +243,37 @@ describe("registry", () => {
       ["KAOIRO_RUNNER_SERVER_URL", "runner", null, "server_url"],
       ["KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS", "runner", null, "log_phoenix_heartbeats"],
     ]);
+  });
+});
+
+describe("inter-agent queue keys", () => {
+  const blocks = ["claude_code", "codex", "antigravity"] as const;
+
+  it.each(blocks)("%s accepts each bound and relays only file values, with no variable", (block) => {
+    const parsed = parseBehaviourBlock(block, {
+      inter_agent_batch_max_items: 1,
+      inter_agent_backlog_max_items: 1000,
+      inter_agent_backlog_max_bytes: 16_384,
+    });
+    expect(parsed).toEqual({
+      inter_agent_batch_max_items: 1,
+      inter_agent_backlog_max_items: 1000,
+      inter_agent_backlog_max_bytes: 16_384,
+    });
+    const engine = block === "claude_code" ? "claude-code" : block;
+    const relay = computeBehaviourRelay({ [block]: { inter_agent_backlog_max_items: 3 } } as RunnerConfig, {});
+    expect(relay[engine]).toEqual({ inter_agent_backlog_max_items: 3 });
+  });
+
+  it.each([
+    ["inter_agent_batch_max_items", [0, 1.5, "10", null]],
+    ["inter_agent_backlog_max_items", [0, 1001, "100", null]],
+    ["inter_agent_backlog_max_bytes", [16_383, 2.5, "524288", null]],
+  ] as const)("rejects an invalid %s in every block", (key, bad) => {
+    for (const block of blocks) {
+      for (const value of bad) {
+        expect(() => parseBehaviourBlock(block, { [key]: value })).toThrow(ConfigError);
+      }
+    }
   });
 });

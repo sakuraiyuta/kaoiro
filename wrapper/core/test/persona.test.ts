@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError, parseConfig } from "../src/persona.js";
+import { resolveInterAgentQueueSettings } from "../src/inter_agent_queue_settings.js";
 
 const valid = {
   agent_id: "lab-pc-1.claude-a",
@@ -40,6 +41,9 @@ const ROUND_TRIP_CASES: {
   pending_receipt_root_timeout_ms: { value: 2500 },
   urgent_overtake_limit: { value: 2 },
   folds_per_turn: { value: 3 },
+  inter_agent_batch_max_items: { value: 3 },
+  inter_agent_backlog_max_items: { value: 7 },
+  inter_agent_backlog_max_bytes: { value: 65_536 },
   context_work_budget_percent: { value: 60 },
   permission_mode: { value: "acceptEdits" },
   allowed_tools: { value: ["Read", "Edit"] },
@@ -715,4 +719,47 @@ it.each([null, "", "auto", true, {}, []])("rejects malformed Codex backend %#", 
 });
 it("does not infer a backend from unknown config fields", () => {
   expect(parseConfig({ ...valid, backend: "app-server", codex: { backend: "app-server" } }).codex_backend).toBeUndefined();
+});
+
+describe("inter-agent queue settings", () => {
+  it("leaves omitted keys unset and resolves them to the defaults", () => {
+    const config = parseConfig(valid);
+    expect(config.inter_agent_batch_max_items).toBeUndefined();
+    expect(resolveInterAgentQueueSettings(config)).toEqual({
+      inter_agent_batch_max_items: 10,
+      inter_agent_backlog_max_items: 100,
+      inter_agent_backlog_max_bytes: 524_288,
+    });
+  });
+
+  it("keeps configured values over the defaults", () => {
+    const config = parseConfig({
+      ...valid,
+      inter_agent_batch_max_items: 20,
+      inter_agent_backlog_max_items: 3,
+      inter_agent_backlog_max_bytes: 16_384,
+    });
+    expect(resolveInterAgentQueueSettings(config)).toEqual({
+      inter_agent_batch_max_items: 20,
+      inter_agent_backlog_max_items: 3,
+      inter_agent_backlog_max_bytes: 16_384,
+    });
+  });
+
+  it.each([
+    ["inter_agent_batch_max_items", [0, -1, 1.5, "10", null, Number.MAX_SAFE_INTEGER + 1]],
+    ["inter_agent_backlog_max_items", [0, 1001, 2.5, "100", null]],
+    ["inter_agent_backlog_max_bytes", [16_383, 0, 1.5, "524288", null]],
+  ] as const)("rejects an out-of-range or non-number %s", (key, bad) => {
+    for (const value of bad) {
+      expect(() => parseConfig({ ...valid, [key]: value })).toThrow(ConfigError);
+    }
+  });
+
+  it("accepts each bound itself", () => {
+    expect(parseConfig({ ...valid, inter_agent_backlog_max_items: 1000 }).inter_agent_backlog_max_items).toBe(1000);
+    expect(parseConfig({ ...valid, inter_agent_backlog_max_items: 1 }).inter_agent_backlog_max_items).toBe(1);
+    expect(parseConfig({ ...valid, inter_agent_backlog_max_bytes: 16_384 }).inter_agent_backlog_max_bytes).toBe(16_384);
+    expect(parseConfig({ ...valid, inter_agent_batch_max_items: 1 }).inter_agent_batch_max_items).toBe(1);
+  });
 });

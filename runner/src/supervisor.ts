@@ -24,6 +24,7 @@ import type {
   WrapperConfig,
 } from "@kaoiro/protocol";
 import { codexHomeProblem as defaultCodexHomeProblem } from "@kaoiro/codex";
+import { resolveInterAgentQueueSettings } from "@kaoiro/claude-code/settings";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { BehaviourRelay } from "./behaviour-settings.js";
 import type { ChatGptPlan } from "./config.js";
@@ -465,6 +466,9 @@ export function resolveWrapperConfig(
     display_name: parsed.displayName ?? parsed.persona.name,
     server_url: parsed.serverUrl ?? fallbackServerUrl,
   };
+  // The wrapper declares the complete queue tuple at join, and the server
+  // never fills in defaults, so the snapshot resolves omitted keys here.
+  Object.assign(config, resolveInterAgentQueueSettings(config));
   if (parsed.token !== undefined) config.server_token = parsed.token;
   if (contextWorkBudgetPercent !== undefined) {
     config.context_work_budget_percent = contextWorkBudgetPercent;
