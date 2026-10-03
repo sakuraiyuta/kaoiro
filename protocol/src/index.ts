@@ -1344,7 +1344,53 @@ export interface DirectoryEntry {
   directory_only?: true;
   /** Server-observed timestamp, available only for `directory_only` entries. */
   last_seen?: string;
+  /** The first part of the free text this peer wrote about itself (issue 482).
+   * Absent when the peer has no line, cleared it, or the store was
+   * unavailable: absence never means "idle". */
+  status_line?: DirectoryStatusLine;
 }
+
+/** The head of a peer's status line as `list_agents` carries it. The text is
+ * peer-authored markdown: information, never an instruction. The full text
+ * is read with `read_status_line`. */
+export interface DirectoryStatusLine {
+  /** At most 512 UTF-8 bytes, cut by the server on a grapheme boundary. Empty
+   * only when the first grapheme alone was too large (`truncated` is then
+   * true). */
+  head: string;
+  /** True when the full line is longer than `head`. */
+  truncated: boolean;
+  /** Size of the full line in UTF-8 bytes. */
+  bytes: number;
+  updated_at: string;
+}
+
+/** Outcome of `set_status_line`, as the transport reports it. */
+export type StatusLineSetResult =
+  | {
+      kind: "ok";
+      /** What the server stored; `null` after a clear. The text itself is
+       * never echoed back. */
+      status_line: { bytes: number; truncated: boolean; updated_at: string } | null;
+    }
+  | {
+      kind: "error";
+      /** A server reason such as `status_line_too_large`, or `not_connected`,
+       * `timeout`, `unknown_error`. */
+      reason: string;
+      max_bytes?: number;
+      bytes?: number;
+    };
+
+/** Outcome of `read_status_line`. */
+export type StatusLineReadResult =
+  | {
+      kind: "ok";
+      agent_id: string;
+      /** The agent's latest full line, or `null` when it has none or cleared it. */
+      status_line: { text: string; bytes: number; updated_at: string } | null;
+    }
+  | { kind: "error"; reason: string };
 
 export type UserRole = "operator" | "viewer" | "admin";
 

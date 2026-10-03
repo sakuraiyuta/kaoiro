@@ -1725,6 +1725,8 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
     history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),
     directory_request: (link) => void link.requestDirectory(),
+    status_line_set: (link) => void link.setStatusLine("working"),
+    status_line_get: (link) => void link.readStatusLine("b.agent"),
     session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
     session_lifecycle: (link) =>
       link.reportSessionLifecycle(
@@ -1740,7 +1742,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: all 16 active versioned events are actually sent", () => {
+  it("T1-2: every active versioned event is actually sent", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       interAgentReplyBasis: "v1",
@@ -3192,5 +3194,188 @@ describe("delivery ACK reconnect through production ServerLink", () => {
     } finally {
       link.close();
     }
+  });
+});
+
+describe("ServerLink — status line (issue 482)", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  const newLink = () => new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+
+  describe("the status_line field of a directory entry", () => {
+    const head = "# Reviewing\n\nissue 482";
+    const valid = { head, truncated: false, bytes: Buffer.byteLength(head), updated_at: "2026-10-03T12:00:00.000001Z" };
+
+    async function narrowed(statusLine: unknown): Promise<Record<string, unknown>> {
+      const link = newLink();
+      const pending = link.requestDirectory();
+      mock.lastPush!.receivers.get("ok")!({
+        agents: [{ agent_id: "peer.1", persona: {}, state: "idle", engine: "codex", status_line: statusLine }],
+      });
+      const {
+        agents: [entry],
+      } = await pending;
+      return entry as unknown as Record<string, unknown>;
+    }
+
+    it("keeps a valid head with its flag, size and time", async () => {
+      expect((await narrowed(valid)).status_line).toEqual(valid);
+    });
+
+    it("keeps a head cut at the limit, and an empty head when even the first grapheme did not fit", async () => {
+      const atLimit = { head: "a".repeat(512), truncated: true, bytes: 16384, updated_at: "t" };
+      const none = { head: "", truncated: true, bytes: 601, updated_at: "t" };
+
+      expect((await narrowed(atLimit)).status_line).toEqual(atLimit);
+      expect((await narrowed(none)).status_line).toEqual(none);
+    });
+
+    // Each malformed variant drops the field alone; the entry and its siblings
+    // still reach the model.
+    it.each([
+      ["a head over 512 bytes", { ...valid, head: "a".repeat(513), truncated: true, bytes: 600 }],
+      ["a head over 512 bytes of multibyte text", { ...valid, head: "あ".repeat(171), truncated: true, bytes: 600 }],
+      ["a size smaller than its own head", { ...valid, bytes: 3 }],
+      ["a size of zero", { ...valid, bytes: 0 }],
+      ["a size over the stored limit", { ...valid, bytes: 16385 }],
+      ["a fractional size", { ...valid, bytes: 21.5 }],
+      ["a non-boolean truncated", { ...valid, truncated: "no" }],
+      ["a missing truncated", { head: valid.head, bytes: valid.bytes, updated_at: valid.updated_at }],
+      ["an empty head that is not truncated", { ...valid, head: "", truncated: false }],
+      ["an escape character in the head", { ...valid, head: "x\u001b[31m", bytes: 10 }],
+      ["a NUL in the head", { ...valid, head: "x\u0000y", bytes: 10 }],
+      ["an empty updated_at", { ...valid, updated_at: "" }],
+      ["a missing updated_at", { head: valid.head, truncated: false, bytes: valid.bytes }],
+      ["a head that is not a string", { ...valid, head: 7 }],
+      ["not an object", "# Reviewing"],
+    ])("drops the field alone for %s", async (_name, statusLine) => {
+      const entry = await narrowed(statusLine);
+
+      expect(entry).not.toHaveProperty("status_line");
+      expect(entry).toMatchObject({ agent_id: "peer.1", state: "idle", engine: "codex" });
+    });
+
+    it("lets newline and tab through", async () => {
+      const text = { head: "a\n\tb", truncated: false, bytes: 4, updated_at: "t" };
+
+      expect((await narrowed(text)).status_line).toEqual(text);
+    });
+  });
+
+  describe("setStatusLine", () => {
+    it("pushes status_line_set with the text and a flat version", () => {
+      void newLink().setStatusLine("working");
+
+      expect(mock.lastPush?.event).toBe("status_line_set");
+      expect(mock.lastPush?.payload).toEqual({ text: "working", version: "0" });
+    });
+
+    it("resolves the stored size and never the text", async () => {
+      const pending = newLink().setStatusLine("working");
+      mock.lastPush!.receivers.get("ok")!({
+        status_line: { bytes: 7, truncated: false, updated_at: "2026-10-03T12:00:00.000001Z" },
+      });
+
+      expect(await pending).toEqual({
+        kind: "ok",
+        status_line: { bytes: 7, truncated: false, updated_at: "2026-10-03T12:00:00.000001Z" },
+      });
+    });
+
+    it("resolves null after a clear", async () => {
+      const pending = newLink().setStatusLine("");
+      mock.lastPush!.receivers.get("ok")!({ status_line: null });
+
+      expect(await pending).toEqual({ kind: "ok", status_line: null });
+    });
+
+    it("carries the server's reason, with the sizes of a too-large line", async () => {
+      const pending = newLink().setStatusLine("x");
+      mock.lastPush!.receivers.get("error")!({ reason: "status_line_too_large", max_bytes: 16384, bytes: 16385 });
+
+      expect(await pending).toEqual({
+        kind: "error",
+        reason: "status_line_too_large",
+        max_bytes: 16384,
+        bytes: 16385,
+      });
+    });
+
+    it("resolves an error result on a timeout and queues nothing", async () => {
+      const pending = newLink().setStatusLine("x");
+      mock.lastPush!.receivers.get("timeout")!(undefined);
+
+      expect(await pending).toEqual({ kind: "error", reason: "timeout" });
+      expect(mock.pushes.filter((push) => push.event === "status_line_set")).toHaveLength(1);
+    });
+
+    it.each([
+      ["a reply with no status_line", {}],
+      ["a size that is not an integer", { status_line: { bytes: "7", truncated: false, updated_at: "t" } }],
+      ["a missing truncated", { status_line: { bytes: 7, updated_at: "t" } }],
+      ["a size of zero", { status_line: { bytes: 0, truncated: false, updated_at: "t" } }],
+      ["an empty time", { status_line: { bytes: 7, truncated: false, updated_at: "" } }],
+      ["a payload that is not an object", "ok"],
+    ])("does not report success for %s", async (_name, payload) => {
+      const pending = newLink().setStatusLine("x");
+      mock.lastPush!.receivers.get("ok")!(payload);
+
+      expect(await pending).toEqual({ kind: "error", reason: "unknown_error" });
+    });
+
+    it("reads an error payload without a reason as unknown_error", async () => {
+      const pending = newLink().setStatusLine("x");
+      mock.lastPush!.receivers.get("error")!({});
+
+      expect(await pending).toEqual({ kind: "error", reason: "unknown_error" });
+    });
+  });
+
+  describe("readStatusLine", () => {
+    it("pushes status_line_get for the agent with a flat version", () => {
+      void newLink().readStatusLine("peer.1");
+
+      expect(mock.lastPush?.event).toBe("status_line_get");
+      expect(mock.lastPush?.payload).toEqual({ agent_id: "peer.1", version: "0" });
+    });
+
+    it("resolves the full text, its size and time", async () => {
+      const pending = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("ok")!({ agent_id: "peer.1", text: "# full", bytes: 6, updated_at: "t" });
+
+      expect(await pending).toEqual({
+        kind: "ok",
+        agent_id: "peer.1",
+        status_line: { text: "# full", bytes: 6, updated_at: "t" },
+      });
+    });
+
+    it("resolves null when the peer has no line or cleared it", async () => {
+      const pending = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("ok")!({ agent_id: "peer.1", status_line: null });
+
+      expect(await pending).toEqual({ kind: "ok", agent_id: "peer.1", status_line: null });
+    });
+
+    it("refuses an answer about another agent", async () => {
+      const pending = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("ok")!({ agent_id: "peer.2", text: "x", bytes: 1, updated_at: "t" });
+
+      expect(await pending).toEqual({ kind: "error", reason: "unknown_error" });
+    });
+
+    it("carries the server's reason, and times out as an error result", async () => {
+      const refused = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("error")!({ reason: "unknown_agent" });
+      expect(await refused).toEqual({ kind: "error", reason: "unknown_agent" });
+
+      const slow = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("timeout")!(undefined);
+      expect(await slow).toEqual({ kind: "error", reason: "timeout" });
+    });
   });
 });

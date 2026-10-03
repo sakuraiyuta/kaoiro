@@ -2029,12 +2029,14 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     expect(capture.envelopes).toHaveLength(1);
   });
 
-  it("3 tool の inputSchema が JSON Schema object で揃う", () => {
+  it("5 tool の inputSchema が JSON Schema object で揃う", () => {
     const { tool } = makeTool("self.agent");
     const descriptors = tool.descriptors();
     expect(descriptors.map((d) => d.name).sort()).toEqual([
       "list_agents",
+      "read_status_line",
       "send_to_agent",
+      "set_status_line",
       "whoami",
     ]);
     for (const d of descriptors) {

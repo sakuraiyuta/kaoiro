@@ -19,6 +19,9 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  DirectoryStatusLine,
+  StatusLineReadResult,
+  StatusLineSetResult,
   DeliveryAdvisory,
   DeliveryAuthority,
   DeliveryModes,
@@ -268,6 +271,8 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   replay_ia: "versioned",
   history_replay_complete: "versioned",
   directory_request: "versioned",
+  status_line_set: "versioned",
+  status_line_get: "versioned",
   session_reset_request: "versioned",
   session_lifecycle: "versioned",
   envelope: "envelopeFrame",
@@ -1025,7 +1030,95 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (v.directory_only === true) entry.directory_only = true;
   const lastSeen = nonEmptyText(v.last_seen);
   if (lastSeen !== undefined) entry.last_seen = lastSeen;
+  const statusLine = statusLineFrom(v.status_line);
+  if (statusLine !== undefined) entry.status_line = statusLine;
   return entry;
+}
+
+/** Longest head the server sends (issue 482). Mirrors the server's constant;
+ *  a longer value is a malformed field, not something to cut here. */
+const STATUS_LINE_HEAD_MAX_BYTES = 512;
+/** Largest status line the server stores. */
+const STATUS_LINE_MAX_BYTES = 16384;
+
+/** C0 controls other than newline and tab, and DEL. Markdown needs the two;
+ *  anything else in peer-authored text is not vouched for. */
+const STATUS_LINE_FORBIDDEN_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+
+/** Narrow for a peer's status line as `directory_request` carries it. All four
+ *  parts must hold or the whole field is dropped: a head that does not fit its
+ *  own declared size, or a cleared line posing as a set one, is not something
+ *  the model should be shown. An empty head is valid only when the server
+ *  could not fit even the first grapheme (`truncated` is then true). */
+function statusLineFrom(value: unknown): DirectoryStatusLine | undefined {
+  if (!isObject(value)) return undefined;
+  const { head, truncated, bytes, updated_at: updatedAt } = value;
+  if (typeof head !== "string" || typeof truncated !== "boolean") return undefined;
+  if (typeof bytes !== "number" || !Number.isInteger(bytes)) return undefined;
+  if (typeof updatedAt !== "string" || updatedAt === "") return undefined;
+  const headBytes = Buffer.byteLength(head, "utf8");
+  if (headBytes > STATUS_LINE_HEAD_MAX_BYTES) return undefined;
+  if (bytes < 1 || bytes > STATUS_LINE_MAX_BYTES || bytes < headBytes) return undefined;
+  if (head === "" && !truncated) return undefined;
+  if (STATUS_LINE_FORBIDDEN_CONTROLS.test(head)) return undefined;
+  return { head, truncated, bytes, updated_at: updatedAt };
+}
+
+const STATUS_LINE_UNKNOWN_ERROR: StatusLineSetResult & StatusLineReadResult = {
+  kind: "error",
+  reason: "unknown_error",
+};
+
+function statusLineSetOkFrom(payload: unknown): StatusLineSetResult {
+  if (!isObject(payload) || !("status_line" in payload)) return STATUS_LINE_UNKNOWN_ERROR;
+  const stored = payload.status_line;
+  if (stored === null) return { kind: "ok", status_line: null };
+  if (!isObject(stored)) return STATUS_LINE_UNKNOWN_ERROR;
+  const { bytes, truncated, updated_at: updatedAt } = stored;
+  if (
+    typeof bytes !== "number" ||
+    !Number.isInteger(bytes) ||
+    bytes < 1 ||
+    typeof truncated !== "boolean" ||
+    typeof updatedAt !== "string" ||
+    updatedAt === ""
+  ) {
+    return STATUS_LINE_UNKNOWN_ERROR;
+  }
+  return { kind: "ok", status_line: { bytes, truncated, updated_at: updatedAt } };
+}
+
+function statusLineReadOkFrom(payload: unknown, agentId: string): StatusLineReadResult {
+  if (!isObject(payload) || payload.agent_id !== agentId) return STATUS_LINE_UNKNOWN_ERROR;
+  if (payload.status_line === null) return { kind: "ok", agent_id: agentId, status_line: null };
+  const { text, bytes, updated_at: updatedAt } = payload;
+  if (
+    typeof text !== "string" ||
+    typeof bytes !== "number" ||
+    !Number.isInteger(bytes) ||
+    typeof updatedAt !== "string" ||
+    updatedAt === ""
+  ) {
+    return STATUS_LINE_UNKNOWN_ERROR;
+  }
+  return { kind: "ok", agent_id: agentId, status_line: { text, bytes, updated_at: updatedAt } };
+}
+
+/** The server's reason, with the sizes it adds to `status_line_too_large`. A
+ *  payload with no usable reason is `unknown_error`. */
+function statusLineErrorFrom(payload: unknown): { kind: "error"; reason: string; max_bytes?: number; bytes?: number } {
+  if (!isObject(payload) || typeof payload.reason !== "string" || payload.reason === "") {
+    return { kind: "error", reason: "unknown_error" };
+  }
+  const result: { kind: "error"; reason: string; max_bytes?: number; bytes?: number } = {
+    kind: "error",
+    reason: payload.reason,
+  };
+  const maxBytes = nonNegativeInteger(payload.max_bytes);
+  if (maxBytes !== undefined) result.max_bytes = maxBytes;
+  const bytes = nonNegativeInteger(payload.bytes);
+  if (bytes !== undefined) result.bytes = bytes;
+  return result;
 }
 
 function deliveryModesFrom(value: unknown): DeliveryModes | undefined {
@@ -2447,6 +2540,44 @@ export class ServerLink {
         })
         .receive("timeout", () => {
           reject(new Error("timeout"));
+        });
+    });
+  }
+
+  /** Sets this agent's own status line (issue 482). The server takes the agent
+   *  from the channel, never from the payload. Resolves, never rejects: a
+   *  server refusal, a timeout and a payload that is not a stored-size report
+   *  all come back as `kind: "error"`, and nothing is queued locally for a
+   *  later retry. */
+  setStatusLine(text: string): Promise<StatusLineSetResult> {
+    return new Promise((resolve) => {
+      this.#pushVersioned("status_line_set", { text })
+        .receive("ok", (payload: unknown) => {
+          resolve(statusLineSetOkFrom(payload));
+        })
+        .receive("error", (payload: unknown) => {
+          resolve(statusLineErrorFrom(payload));
+        })
+        .receive("timeout", () => {
+          resolve({ kind: "error", reason: "timeout" });
+        });
+    });
+  }
+
+  /** Reads another agent's full latest status line (issue 482). The server
+   *  answers `unknown_agent` for an id this agent may not read, the same for a
+   *  hidden id and a nonexistent one. */
+  readStatusLine(agentId: string): Promise<StatusLineReadResult> {
+    return new Promise((resolve) => {
+      this.#pushVersioned("status_line_get", { agent_id: agentId })
+        .receive("ok", (payload: unknown) => {
+          resolve(statusLineReadOkFrom(payload, agentId));
+        })
+        .receive("error", (payload: unknown) => {
+          resolve(statusLineErrorFrom(payload));
+        })
+        .receive("timeout", () => {
+          resolve({ kind: "error", reason: "timeout" });
         });
     });
   }
