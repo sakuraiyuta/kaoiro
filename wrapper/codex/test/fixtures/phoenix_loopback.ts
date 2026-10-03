@@ -12,6 +12,7 @@ function queueEcho(payload: Record<string, unknown>): Record<string, unknown> {
     inter_agent_queue_policy: payload.inter_agent_queue_policy,
     inter_agent_queue_epoch: "loopback-epoch",
     inter_agent_queue_resume_required: false,
+    inter_agent_delivery_incarnation: "loopback-incarnation",
   };
 }
 

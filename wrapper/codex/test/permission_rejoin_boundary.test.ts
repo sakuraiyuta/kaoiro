@@ -16,6 +16,7 @@ const QUEUE_ECHO = {
   inter_agent_queue_policy: { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 },
   inter_agent_queue_epoch: "epoch",
   inter_agent_queue_resume_required: false,
+  inter_agent_delivery_incarnation: "inc-1",
 };
 
 type Receiver = (payload: unknown) => void;

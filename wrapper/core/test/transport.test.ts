@@ -1733,6 +1733,15 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
         "2026-08-31T00:00:00Z",
       ),
     wrapper_build_info: () => {},
+    delivery_queue_control: (link) => void link.queueLease()?.credit("root", "turn"),
+  };
+
+  const queuePolicy = { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 };
+  const queueEcho = {
+    inter_agent_queue: "credit-v1",
+    inter_agent_queue_policy: queuePolicy,
+    inter_agent_queue_epoch: "epoch-1",
+    inter_agent_queue_resume_required: false,
   };
 
   it("T1-1: fire table covers every active versioned event", () => {
@@ -1740,16 +1749,18 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: all 16 active versioned events are actually sent", () => {
+  it("T1-2: all 17 active versioned events are actually sent", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       interAgentReplyBasis: "v1",
       interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
+      interAgentQueuePolicy: queuePolicy,
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
     // delivery_ack(1) must name a sequence the ledger has seen issued.
     mock.joinReceivers.get("ok")?.({
+      ...queueEcho,
       inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
       delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
     });
@@ -1763,10 +1774,12 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       interAgentReplyBasis: "v1",
       interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
+      interAgentQueuePolicy: queuePolicy,
       buildInfo: { revision: "0123456789012345678901234567890123456789", dirty: false, version: "2026.9.0", channel: "dev" },
     });
     // delivery_ack(1) must name a sequence the ledger has seen issued.
     mock.joinReceivers.get("ok")?.({
+      ...queueEcho,
       inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
       delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
     });
@@ -3264,9 +3277,49 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
       inter_agent_queue_policy: policy,
       inter_agent_queue_epoch: "epoch",
       inter_agent_queue_resume_required: false,
+      inter_agent_delivery_incarnation: "inc-1",
     });
     expect(refused).not.toHaveBeenCalled();
     expect(hydration).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an echo without a ledger incarnation to bind to", () => {
+    const { refused, hydration } = link();
+    mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1",
+      inter_agent_queue_policy: policy,
+      inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: false,
+    });
+    expect(refused).toHaveBeenCalledWith({ reason: "queue_not_acknowledged" });
+    expect(hydration).not.toHaveBeenCalled();
+  });
+
+  it("routes delivery_batch to the queue lease and resumes when asked", async () => {
+    const offers: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentQueuePolicy: policy,
+      onQueueOffer: (offer) => offers.push(offer),
+    });
+    mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1",
+      inter_agent_queue_policy: policy,
+      inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: true,
+      inter_agent_delivery_incarnation: "inc-1",
+    });
+    expect(mock.lastPush).toMatchObject({ event: "delivery_queue_control", payload: { op: "resume", version: "0" } });
+
+    const generation = (mock.lastChannelParams as { delivery_generation: string }).delivery_generation;
+    emit("delivery_batch", {
+      version: "0", queue_epoch: "epoch", incarnation: "inc-1", generation, lease_id: "1",
+      kind: "root", credit_revision: "1",
+      items: [{ queue_id: "1", attempt_id: "1.1", delivery_seq: 1, class: "ordinary", byte_charge: 1,
+        envelope: { type: "inter_agent_message" } }],
+    });
+    emit("delivery_batch", { version: "0", queue_epoch: "other" });
+    expect(offers).toHaveLength(1);
   });
 
   it("needs no echo from a wrapper that declared no queue", () => {

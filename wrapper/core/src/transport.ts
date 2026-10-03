@@ -59,6 +59,8 @@ import {
   type WrapperBuildInfo,
 } from "./build_info.js";
 import { writeRedactedStderr } from "./redact.js";
+import { parseInterAgentQueueJoinReply } from "./inter_agent_queue_codec.js";
+import { QueueLease, type QueueOffer } from "./queue_lease.js";
 import { DeliveryRecovery, type DeliveryResyncRequest, type DeliveryResyncReply } from "./delivery_recovery.js";
 
 type ServerSocketFactory = (
@@ -247,6 +249,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
   attach_close: "checked",
   envelope: "checked",
   delivery_status: "checked",
+  delivery_batch: "checked",
   work_notice: "checked",
   session_reset_failed: "checked",
 } as const satisfies Record<string, "checked" | "binaryFrame" | "phoenixControl">;
@@ -258,6 +261,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
   delivery_stage: "versioned",
+  delivery_queue_control: "versioned",
   yield_claim: "versioned",
   work_transfer_ack: "versioned",
   work_op_result_request: "versioned",
@@ -326,6 +330,8 @@ export interface ServerLinkOptions {
    *  `onInterAgentQueueRefused` receives the server's reason. */
   interAgentQueuePolicy?: InterAgentQueuePolicy;
   onInterAgentQueueRefused?: (reason: unknown) => void;
+  /** Receives each offer the server makes under this link's credit. */
+  onQueueOffer?: (offer: QueueOffer) => void;
   interAgentReplyBasis?: "v1";
   noticeAttribution?: "v1";
   onNoticeAttributionMode?: (mode: "v1" | "legacy" | "pending") => void;
@@ -1323,6 +1329,8 @@ export class ServerLink {
     }
   }
   readonly #deliveryGeneration = randomUUID();
+  #queueLease: QueueLease | null = null;
+  #queueReady: Promise<void> = Promise.resolve();
   #deliveryRecovery: DeliveryRecovery;
   /** Incarnation the current recovery ledger belongs to. Unlike
    *  `#deliveryIncarnation` it survives a disconnect, so a rejoin can tell
@@ -1414,6 +1422,12 @@ export class ServerLink {
     // apart from any other connection for the agent; omitted entirely when
     // unknown, since the server reads a blank value as a mismatch rather
     // than as the legacy absent case.
+    if (options.interAgentQueuePolicy !== undefined) {
+      this.#queueLease = new QueueLease({
+        transport: (payload) => this.#queueControl(payload),
+        onOffer: (offer) => options.onQueueOffer?.(offer),
+      });
+    }
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
@@ -1676,6 +1690,9 @@ export class ServerLink {
       const envelope = payload as unknown as Envelope;
       if (this.#deliveryRecovery.receive(envelope)) options.onInterAgentMessage?.(envelope);
     });
+    this.#bindServerEvent("delivery_batch", (payload: unknown) => {
+      this.#queueLease?.receiveBatch(payload);
+    });
     this.#bindServerEvent("delivery_status", (payload: unknown) => {
       const status = deliveryStatusFrom(payload) ?? null;
       this.#deliveryRecovery.observe(status);
@@ -1737,12 +1754,19 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         if (this.#replyBasisTerminal) return;
-        if (
-          options.interAgentQueuePolicy !== undefined &&
-          !(isObject(reply) && reply.inter_agent_queue === "credit-v1")
-        ) {
-          this.#refuseInterAgentQueue({ reason: "queue_not_acknowledged" }, options);
-          return;
+        if (this.#queueLease !== null) {
+          const queueReply = parseInterAgentQueueJoinReply(reply);
+          const incarnation = isObject(reply) ? reply.inter_agent_delivery_incarnation : undefined;
+          if (queueReply === undefined || typeof incarnation !== "string" || incarnation === "") {
+            this.#refuseInterAgentQueue({ reason: "queue_not_acknowledged" }, options);
+            return;
+          }
+          this.#queueLease.join(queueReply, incarnation, this.#deliveryGeneration);
+          // Credit waits for resume after a same-generation rejoin.
+          if (queueReply.inter_agent_queue_resume_required) {
+            const lease = this.#queueLease;
+            this.#queueReady = lease.resume().then(() => undefined);
+          }
         }
         // Reset here, not on disconnect: a watermark buffered before this
         // join may have timed out unsent, and a channel-only rejoin never
@@ -2490,6 +2514,25 @@ export class ServerLink {
   }
 
   /** Leaves the channel and closes the socket. */
+  /** The link's queue lease, when the queue was declared. Credit should
+   *  wait for `queueReady()` after a rejoin. */
+  queueLease(): QueueLease | null {
+    return this.#queueLease;
+  }
+
+  queueReady(): Promise<void> {
+    return this.#queueReady;
+  }
+
+  #queueControl(payload: Record<string, unknown>): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      this.#pushVersioned("delivery_queue_control", payload)
+        .receive("ok", (reply: unknown) => resolve(reply))
+        .receive("error", (reason: unknown) => reject(reason))
+        .receive("timeout", () => reject({ reason: "timeout" }));
+    });
+  }
+
   #refuseInterAgentQueue(reason: unknown, options: ServerLinkOptions): void {
     writeRedactedStderr(`ServerLink inter-agent queue refused: ${JSON.stringify(reason)}\n`);
     this.close();
