@@ -948,23 +948,29 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp handle_wrapper_in("delivery_queue_control", payload, socket) do
     agent_id = socket.assigns.agent_id
 
-    with %{} <- socket.assigns[:inter_agent_queue] || {:error, {:invalid_queue_control, "op"}},
-         :ok <- queue_fence(payload, agent_id, socket),
-         {:ok, request} <- queue_control_request(payload) do
-      case DeliveryStates.queue_control(
-             agent_id,
-             socket.assigns.delivery_generation,
-             self(),
-             payload["operation_id"],
-             request
-           ) do
-        {:ok, reply} ->
-          {:reply, {:ok, queue_control_reply(payload, request.op, reply)}, socket}
-
-        {:error, reason} ->
-          {:reply, {:error, queue_control_error(reason)}, socket}
+    result =
+      try do
+        with %{} <- socket.assigns[:inter_agent_queue] || {:error, {:invalid_queue_control, "op"}},
+             :ok <- queue_fence(payload, agent_id, socket),
+             {:ok, request} <- queue_control_request(payload),
+             {:ok, reply} <-
+               DeliveryStates.queue_control(
+                 agent_id,
+                 socket.assigns.delivery_generation,
+                 self(),
+                 payload["operation_id"],
+                 request
+               ) do
+          {:ok, queue_control_reply(payload, request.op, reply)}
+        end
+      catch
+        # The queue owner failed (a storage fault stops it): nothing changed,
+        # and this channel stays up to say so.
+        :exit, _ -> {:error, :queue_unavailable}
       end
-    else
+
+    case result do
+      {:ok, reply} -> {:reply, {:ok, reply}, socket}
       {:error, reason} -> {:reply, {:error, queue_control_error(reason)}, socket}
     end
   end
@@ -2496,7 +2502,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp queue_return_item(%{"queue_id" => id, "reason" => "early_ineligible", "sub_reason" => sub})
        when sub in @queue_early_ineligible do
-    with {:ok, index} <- queue_index(id, "items"), do: {:ok, {index, "early_ineligible"}}
+    with {:ok, index} <- queue_index(id, "items"),
+         do: {:ok, {index, "early_ineligible:" <> sub}}
   end
 
   defp queue_return_item(%{"queue_id" => id, "reason" => reason})
@@ -2517,7 +2524,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     with true <- valid? || {:error, {:invalid_queue_control, "items"}},
          {:ok, index} <- queue_index(id, "items"),
-         do: {:ok, {index, String.to_existing_atom(outcome)}}
+         do: {:ok, {index, String.to_existing_atom(outcome), item["witness"] || item["reason"]}}
   end
 
   defp queue_dispose_item(_item), do: {:error, {:invalid_queue_control, "items"}}
@@ -2584,6 +2591,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp queue_control_error(reason)
        when reason in [:lease_slot_busy, :invalid_queue_items, :invalid_outcome],
        do: %{reason: "unknown_queue_item"}
+
+  # A native outcome for an item without a begin_native permit.
+  defp queue_control_error(:outcome_needs_permit),
+    do: %{reason: "invalid_queue_control", field: "items"}
 
   defp queue_control_error(reason), do: %{reason: to_string(reason)}
 

@@ -36,7 +36,8 @@ defmodule KaoiroServer.InterAgentQueue do
       next_lease: 1,
       items: %{},
       reservations: %{},
-      cursor: nil
+      cursor: nil,
+      disposed: []
     }
   end
 
@@ -67,7 +68,9 @@ defmodule KaoiroServer.InterAgentQueue do
       )
       when is_integer(next_index) and is_integer(next_lease) and is_map(items) do
     if Enum.all?(items, &valid_item?(&1, next_index)) do
-      durable |> Map.delete(:version) |> Map.merge(%{reservations: %{}, cursor: nil})
+      durable
+      |> Map.delete(:version)
+      |> Map.merge(%{reservations: %{}, cursor: nil, disposed: []})
     else
       raise ArgumentError, "unsupported inter-agent queue record: malformed item"
     end
@@ -341,29 +344,68 @@ defmodule KaoiroServer.InterAgentQueue do
     end
   end
 
+  @disposed_memo 256
+  @permitted_outcomes [:observed, :unknown, :definitely_unstarted]
+
   @doc """
   Applies per-item outcomes. `entries` is a list of `{queue_id, outcome}`
   with outcome `:observed`, `:intentional_non_injection`, `:unknown` or
-  `:definitely_unstarted`. Terminal outcomes remove the item and release
-  its charge; `:definitely_unstarted` returns it like `return/4`.
+  `:definitely_unstarted`. Only `:intentional_non_injection` applies to an
+  item without a `begin_native` permit. Terminal outcomes remove the item
+  and release its charge; `:definitely_unstarted` returns it like
+  `return/4`. Repeating the recorded outcome of an already disposed item is
+  a no-op; a different one is `:conflicting_disposition`.
   """
   def dispose(q, lease_id, entries, turn) do
-    ids = Enum.map(entries, &elem(&1, 0))
+    {repeats, fresh} =
+      Enum.split_with(entries, fn {id, _outcome} ->
+        not Map.has_key?(q.items, id) and disposed_outcome(q, lease_id, id) != nil
+      end)
 
-    with :ok <- check_outcomes(entries),
-         :ok <- check_lease(q, lease_id, ids, [:offered, :native_pending]) do
+    ids = Enum.map(fresh, &elem(&1, 0))
+
+    with :ok <- if(entries == [], do: {:error, :invalid_queue_items}, else: :ok),
+         :ok <- check_outcomes(entries),
+         :ok <- check_repeats(q, lease_id, repeats),
+         :ok <-
+           if(fresh == [],
+             do: :ok,
+             else: check_lease(q, lease_id, ids, [:offered, :native_pending])
+           ),
+         :ok <- check_permits(q, fresh) do
       {terminal, unstarted} =
-        Enum.split_with(entries, fn {_id, outcome} -> outcome in @terminal_outcomes end)
+        Enum.split_with(fresh, fn {_id, outcome} -> outcome in @terminal_outcomes end)
 
       resolution =
-        Enum.reduce(terminal, %{resolved: [], uncertain: [], disposed: []}, fn {id, outcome},
-                                                                               acc ->
-          seq = q.items[id].delivery_seq
-          bucket = if outcome == :unknown, do: :uncertain, else: :resolved
-          %{acc | bucket => [seq | acc[bucket]], disposed: [id | acc.disposed]}
-        end)
+        Enum.reduce(
+          terminal,
+          %{resolved: [], uncertain: [], disposed: [], unknown_items: []},
+          fn {id, outcome}, acc ->
+            item = q.items[id]
 
-      q = %{q | items: Map.drop(q.items, resolution.disposed)}
+            if outcome == :unknown,
+              do: %{
+                acc
+                | uncertain: [item.delivery_seq | acc.uncertain],
+                  disposed: [id | acc.disposed],
+                  unknown_items: [{id, item} | acc.unknown_items]
+              },
+              else: %{
+                acc
+                | resolved: [item.delivery_seq | acc.resolved],
+                  disposed: [id | acc.disposed]
+              }
+          end
+        )
+
+      memo =
+        Enum.map(terminal, fn {id, outcome} -> {id, lease_id, outcome} end) ++ q.disposed
+
+      q = %{
+        q
+        | items: Map.drop(q.items, resolution.disposed),
+          disposed: Enum.take(memo, @disposed_memo)
+      }
 
       {:ok, q, returned} =
         case unstarted do
@@ -374,7 +416,7 @@ defmodule KaoiroServer.InterAgentQueue do
             return(
               q,
               lease_id,
-              Enum.map(unstarted, fn {id, _} -> {id, :definitely_unstarted} end),
+              Enum.map(unstarted, fn {id, _} -> {id, "definitely_unstarted"} end),
               turn
             )
         end
@@ -384,9 +426,32 @@ defmodule KaoiroServer.InterAgentQueue do
          disposed: Enum.sort(resolution.disposed),
          resolved: Enum.sort(resolution.resolved),
          uncertain: Enum.sort(resolution.uncertain),
+         unknown_items: Enum.sort_by(resolution.unknown_items, &elem(&1, 0)),
          returned: returned
        }}
     end
+  end
+
+  defp disposed_outcome(q, lease_id, id) do
+    Enum.find_value(q.disposed, fn
+      {^id, ^lease_id, outcome} -> outcome
+      _ -> nil
+    end)
+  end
+
+  defp check_repeats(q, lease_id, repeats) do
+    if Enum.all?(repeats, fn {id, outcome} -> disposed_outcome(q, lease_id, id) == outcome end),
+      do: :ok,
+      else: {:error, :conflicting_disposition}
+  end
+
+  # A native outcome needs the begin_native permit (r8 §5.1, §6.4).
+  defp check_permits(q, entries) do
+    if Enum.all?(entries, fn {id, outcome} ->
+         outcome not in @permitted_outcomes or q.items[id].phase == :native_pending
+       end),
+       do: :ok,
+       else: {:error, :outcome_needs_permit}
   end
 
   defp check_outcomes(entries) do
@@ -421,37 +486,6 @@ defmodule KaoiroServer.InterAgentQueue do
   ## Generation and lifetime
 
   @doc """
-  A replacement wrapper generation for the same agent (r8b B6): queued items
-  stay, un-permitted offers are returned with `epoch_changed`, native-pending
-  items become unknown.
-  """
-  def replace_generation(q) do
-    offered = for {id, %{phase: :offered}} <- q.items, do: id
-    pending = for {id, %{phase: :native_pending}} <- q.items, do: id
-
-    returned = for id <- offered, do: q.items[id].delivery_seq
-    uncertain = for id <- pending, do: q.items[id].delivery_seq
-
-    q =
-      update_items(q, offered, fn item ->
-        %{
-          item
-          | phase: :queued,
-            lease: nil,
-            delivery_seq: nil,
-            last_return_reason: :epoch_changed
-        }
-      end)
-
-    {%{q | items: Map.drop(q.items, pending)},
-     %{
-       returned: Enum.sort(returned),
-       uncertain: Enum.sort(uncertain),
-       disposed: Enum.sort(pending)
-     }}
-  end
-
-  @doc """
   Releases the items offered under the given delivery sequences, outside
   any lease operation (a resync gap or the generation's retirement):
   offered items go back to the queue with `reason`, native-pending items
@@ -478,7 +512,8 @@ defmodule KaoiroServer.InterAgentQueue do
      %{
        returned: offered |> Enum.map(&elem(&1, 1).delivery_seq) |> Enum.sort(),
        uncertain: pending |> Enum.map(&elem(&1, 1).delivery_seq) |> Enum.sort(),
-       disposed: Enum.sort(pending_ids)
+       disposed: Enum.sort(pending_ids),
+       unknown_items: Enum.sort_by(pending, &elem(&1, 0))
      }}
   end
 

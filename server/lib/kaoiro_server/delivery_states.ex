@@ -242,6 +242,14 @@ defmodule KaoiroServer.DeliveryStates do
 
   def pending_losses(server \\ __MODULE__), do: GenServer.call(server, :pending_losses)
 
+  @doc """
+  Queue items resolved as unknown, with their descriptors, kept until the
+  sender is told that delivery may have happened (r8 §7). Includes those of
+  recipients whose record has since been removed.
+  """
+  def pending_queue_uncertain(server \\ __MODULE__),
+    do: GenServer.call(server, :pending_queue_uncertain)
+
   def complete_loss(loss_id, revision, server \\ __MODULE__),
     do: GenServer.call(server, {:complete_loss, loss_id, revision})
 
@@ -360,7 +368,7 @@ defmodule KaoiroServer.DeliveryStates do
     # Bodies live only in memory, so every retained item is gone with them.
     {entries, losses} =
       Enum.reduce(entries, {entries, losses}, fn {agent_id, entry}, {entries, losses} ->
-        case drop_queue(agent_id, entry, losses) do
+        case drop_queue(agent_id, entry, losses, "server_restart") do
           {_entry, _losses, []} ->
             {entries, losses}
 
@@ -383,6 +391,7 @@ defmodule KaoiroServer.DeliveryStates do
        owners: %{},
        reservations: %{},
        losses: losses,
+       orphan_uncertain: load_orphan_uncertain(table),
        queue_epoch: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
        queue_reservations: %{},
        bodies: %{},
@@ -401,6 +410,15 @@ defmodule KaoiroServer.DeliveryStates do
 
   @impl true
   def handle_call({:bind, agent_id, generation}, _from, state) do
+    state =
+      case state.entries[agent_id] do
+        %{generation: old, resync: resync} when old != generation or resync ->
+          release_leases(state, agent_id, "epoch_changed")
+
+        _ ->
+          state
+      end
+
     state = retire_generation(state, agent_id, nil)
 
     {entry, changed?} =
@@ -420,7 +438,12 @@ defmodule KaoiroServer.DeliveryStates do
 
     entry =
       if changed?,
-        do: Map.merge(entry, %{recovery_defaults() | queue: Map.get(entry, :queue)}),
+        do:
+          Map.merge(entry, %{
+            recovery_defaults()
+            | queue: Map.get(entry, :queue),
+              queue_uncertain: Map.get(entry, :queue_uncertain, [])
+          }),
         else: entry
 
     entry =
@@ -450,8 +473,6 @@ defmodule KaoiroServer.DeliveryStates do
         {:reply, {:error, :generation_mismatch}, state}
 
       _ ->
-        state = replace_queue_generation(state, agent_id, generation)
-
         {entry, state} =
           bind_resync_entry(state, agent_id, generation, owner, fn entry ->
             # A lower policy never evicts admitted items; it only gates
@@ -476,15 +497,7 @@ defmodule KaoiroServer.DeliveryStates do
          [_ | _] = ids <- recovery_candidates(entry.queue, peer, cid),
          {:ok, queue, offer, next_seq} <-
            InterAgentQueue.offer_recovery(entry.queue, ids, entry.issued_seq + 1) do
-      entry = %{
-        entry
-        | queue: queue,
-          issued_seq: next_seq - 1,
-          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-
-      persist(state.table, agent_id, entry)
-      state = %{state | entries: Map.put(state.entries, agent_id, entry)}
+      {entry, state} = commit_offer(state, agent_id, entry, queue, offer, next_seq)
       payload = batch_payload(state, agent_id, entry, %{kind: :recovery, revision: nil}, offer)
 
       {:reply, %{"lease_id" => payload["lease_id"], "items" => payload["items"]}, state}
@@ -506,12 +519,18 @@ defmodule KaoiroServer.DeliveryStates do
          {:ok, id} <- control_operation_id(operation_id) do
       digest = :crypto.hash(:sha256, :erlang.term_to_binary(request))
 
-      case InterAgentQueueOps.classify(control.ops, id, digest, &queue_phase(entry.queue, &1)) do
+      case InterAgentQueueOps.classify(
+             control.ops,
+             id,
+             digest,
+             &queue_attempt_phase(entry.queue, &1)
+           ) do
         {:replay, reply} ->
           {:reply, {:ok, reply}, state}
 
         {:error, {:operation_superseded, phases}} ->
-          {:reply, {:error, {:operation_superseded, phases}}, state}
+          wire = for {queue_id, phase} <- phases, do: {queue_id, plain_phase(phase)}
+          {:reply, {:error, {:operation_superseded, wire}}, state}
 
         {:error, _} = error ->
           {:reply, error, state}
@@ -659,14 +678,7 @@ defmodule KaoiroServer.DeliveryStates do
   def handle_call({:queue_offer, agent_id, generation, owner, request}, _from, state) do
     with {:ok, entry} <- queue_owner_entry(state, agent_id, generation, owner),
          {:ok, queue, offer, next_seq} <- offer(entry.queue, request, entry.issued_seq + 1) do
-      entry = %{
-        entry
-        | queue: queue,
-          issued_seq: next_seq - 1,
-          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-
-      persist(state.table, agent_id, entry)
+      {entry, state} = commit_offer(state, agent_id, entry, queue, offer, next_seq)
 
       items =
         Enum.map(offer.items, fn item ->
@@ -677,8 +689,8 @@ defmodule KaoiroServer.DeliveryStates do
           })
         end)
 
-      {:reply, {:ok, %{offer | items: items}},
-       %{state | entries: Map.put(state.entries, agent_id, entry)}}
+      _ = entry
+      {:reply, {:ok, %{offer | items: items}}, state}
     else
       :empty -> {:reply, :empty, state}
       {:error, _} = error -> {:reply, error, state}
@@ -691,18 +703,9 @@ defmodule KaoiroServer.DeliveryStates do
         state
       ) do
     with {:ok, entry} <- queue_owner_entry(state, agent_id, generation, owner),
-         {:ok, queue, result} <- lease_op(entry.queue, op, lease_id, entries, turn) do
-      {entry, result} = resolve_queue_sequences(%{entry | queue: queue}, op, result)
-      persist(state.table, agent_id, entry)
-
-      bodies =
-        case result do
-          %{disposed: disposed} -> Map.drop(state.bodies, Enum.map(disposed, &{agent_id, &1}))
-          _ -> state.bodies
-        end
-
-      {:reply, {:ok, result},
-       %{state | entries: Map.put(state.entries, agent_id, entry), bodies: bodies}}
+         {:ok, state, _entry, result} <-
+           apply_lease_op(state, agent_id, entry, op, lease_id, entries, turn) do
+      {:reply, {:ok, result}, state}
     else
       {:error, _} = error -> {:reply, error, state}
     end
@@ -736,7 +739,7 @@ defmodule KaoiroServer.DeliveryStates do
         # Queue-origin sequences resolve as returned or uncertain, never as
         # losses; resolving them first keeps them out of `added` below.
         {state, entry, queue_result} =
-          release_queue_sequences(state, agent_id, entry, requested, :delivery_resync)
+          release_queue_sequences(state, agent_id, entry, requested, "delivery_resync")
 
         previous = MapSet.new(entry.skipped)
         resolved = MapSet.new(entry.resolved)
@@ -817,7 +820,7 @@ defmodule KaoiroServer.DeliveryStates do
           agent_id,
           entry,
           leased_sequences(entry.queue),
-          :shutdown
+          "shutdown"
         )
 
       already_skipped = MapSet.new(entry.skipped)
@@ -1056,7 +1059,8 @@ defmodule KaoiroServer.DeliveryStates do
         resolving? =
           (report["stage"] == "submitted" or uncertainty == :resolve) and
             seq > entry.acked_seq and
-            seq not in entry.resolved and seq not in entry.skipped
+            seq not in entry.resolved and seq not in entry.skipped and
+            not MapSet.member?(live_queue_seqs(entry.queue), seq)
 
         next_entry = %{entry | stage_history: histories}
 
@@ -1104,6 +1108,15 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call(:pending_losses, _from, state), do: {:reply, Map.values(state.losses), state}
+
+  def handle_call(:pending_queue_uncertain, _from, state) do
+    held =
+      for {agent_id, entry} <- state.entries,
+          obligation <- entry.queue_uncertain,
+          do: Map.put(obligation, :recipient, agent_id)
+
+    {:reply, held ++ Map.values(state.orphan_uncertain), state}
+  end
 
   def handle_call({:complete_loss, id, revision}, _from, state) do
     # Delivery can race a new retirement of the recovery notice itself.
@@ -1231,10 +1244,19 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp release_queue_sequences(state, agent_id, entry, seqs, reason) do
     {queue, result} = InterAgentQueue.release_sequences(entry.queue, seqs, reason)
-    {entry, _} = resolve_queue_sequences(%{entry | queue: queue}, :release, result)
+    entry = resolve_queue_sequences(%{entry | queue: queue}, result, fn _ -> reason end)
     bodies = Map.drop(state.bodies, Enum.map(result.disposed, &{agent_id, &1}))
 
     {%{state | entries: Map.put(state.entries, agent_id, entry), bodies: bodies}, entry, result}
+  end
+
+  defp release_leases(state, agent_id, reason) do
+    entry = state.entries[agent_id]
+
+    {state, _entry, _result} =
+      release_queue_sequences(state, agent_id, entry, leased_sequences(entry.queue), reason)
+
+    state
   end
 
   defp leased_sequences(nil), do: []
@@ -1249,6 +1271,73 @@ defmodule KaoiroServer.DeliveryStates do
     |> Map.values()
     |> Enum.flat_map(fn item -> if item.delivery_seq, do: [item.delivery_seq], else: [] end)
     |> Enum.min(fn -> nil end)
+  end
+
+  # Every offer's ledger side: sequences issued, and a stage record per item
+  # so stage reports are kept as history (they never resolve a queue item).
+  defp commit_offer(state, agent_id, entry, queue, offer, next_seq) do
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+    key = {agent_id, entry.incarnation}
+
+    by_seq =
+      Enum.reduce(offer.items, entry.stage_history[key] || %{}, fn item, acc ->
+        queued = queue.items[item.queue_id]
+
+        Map.put(acc, item.delivery_seq, %{
+          sender: queued.sender,
+          conversation_id: queued.conversation_id,
+          turn_number: queued.turn_number,
+          recipient: agent_id,
+          incarnation: entry.incarnation,
+          generation: entry.generation,
+          delivery_seq: item.delivery_seq,
+          stages: %{"accepted" => at},
+          changed_at: at,
+          last_stage: "accepted",
+          mode: if(offer.kind == :early, do: "early", else: "normal")
+        })
+      end)
+
+    histories = entry.stage_history |> Map.put(key, by_seq) |> bound_stage_histories()
+
+    entry = %{
+      entry
+      | queue: queue,
+        issued_seq: next_seq - 1,
+        pending_since: entry.pending_since || at,
+        stage_history: histories
+    }
+
+    persist(state.table, agent_id, entry)
+
+    {entry,
+     %{
+       state
+       | entries: Map.put(state.entries, agent_id, entry),
+         stages: replace_agent_stages(state.stages, agent_id, histories)
+     }}
+  end
+
+  @doc false
+  # The one guarantee for the ledger (r8 §7): a sequence held by a live
+  # queue item is resolved only by the queue's own transitions, which take
+  # the item out first. Every durable write passes here, so no other path
+  # (ack, resync, retire, stage, bind, restart) can store it as acked,
+  # skipped or resolved.
+  def queue_ledger_violation(entry) do
+    live = live_queue_seqs(entry.queue)
+    skipped = MapSet.new(entry.skipped)
+    resolved = MapSet.new(entry.resolved)
+
+    Enum.find(live, fn seq ->
+      seq <= entry.acked_seq or MapSet.member?(skipped, seq) or MapSet.member?(resolved, seq)
+    end)
+  end
+
+  defp live_queue_seqs(nil), do: MapSet.new()
+
+  defp live_queue_seqs(queue) do
+    for {_id, %{delivery_seq: seq}} <- queue.items, seq != nil, into: MapSet.new(), do: seq
   end
 
   defp queue_owner_entry(state, agent_id, generation, owner) do
@@ -1285,51 +1374,46 @@ defmodule KaoiroServer.DeliveryStates do
     do: InterAgentQueue.dispose(queue, lease_id, entries, turn)
 
   # Returned, resolved and uncertain queue-origin sequences all leave the
-  # unresolved range; uncertain ones are also counted as uncertainty.
-  defp resolve_queue_sequences(entry, _op, result) do
+  # unresolved range. An unknown item also leaves its descriptor as an
+  # obligation, so the sender can be told that delivery may have happened.
+  defp resolve_queue_sequences(entry, result, reason_of) do
     seqs = Enum.flat_map([:returned, :resolved, :uncertain], &Map.get(result, &1, []))
 
-    entry =
-      %{entry | resolved: Enum.uniq(entry.resolved ++ seqs)}
-      |> count_uncertain(Map.get(result, :uncertain, []))
-      |> advance_skipped()
-
-    {entry, result}
+    %{entry | resolved: Enum.uniq(entry.resolved ++ seqs)}
+    |> record_unknown(Map.get(result, :unknown_items, []), reason_of)
+    |> advance_skipped()
   end
 
-  defp count_uncertain(entry, []), do: entry
+  defp record_unknown(entry, [], _reason_of), do: entry
 
-  defp count_uncertain(entry, seqs) do
+  defp record_unknown(entry, items, reason_of) do
+    at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    obligations =
+      for {queue_id, item} <- items do
+        %{
+          queue_id: queue_id,
+          delivery_seq: item.delivery_seq,
+          descriptor: item.descriptor,
+          reason: reason_of.(queue_id),
+          at: at
+        }
+      end
+
+    last = List.last(obligations)
+
     %{
       entry
-      | uncertain_count: entry.uncertain_count + length(seqs),
+      | uncertain_count: entry.uncertain_count + length(items),
         last_uncertain: %{
-          at: DateTime.utc_now() |> DateTime.to_iso8601(),
+          at: at,
           incarnation: entry.incarnation,
           generation: entry.generation,
-          delivery_seq: List.last(seqs),
-          reason: "queue_unknown"
-        }
+          delivery_seq: last.delivery_seq,
+          reason: last.reason
+        },
+        queue_uncertain: entry.queue_uncertain ++ obligations
     }
-  end
-
-  # r8b B6: on a new generation, un-permitted offers go back to the queue
-  # and native-pending items resolve as uncertain; queued items stay.
-  defp replace_queue_generation(state, agent_id, generation) do
-    case state.entries[agent_id] do
-      %{generation: old, queue: %{} = queue} = entry when old != generation ->
-        {queue, result} = InterAgentQueue.replace_generation(queue)
-        entry = %{entry | queue: queue} |> count_uncertain(result.uncertain)
-
-        %{
-          state
-          | entries: Map.put(state.entries, agent_id, entry),
-            bodies: Map.drop(state.bodies, Enum.map(result.disposed, &{agent_id, &1}))
-        }
-
-      _ ->
-        state
-    end
   end
 
   defp issue_with_metadata(agent_id, descriptor, state) do
@@ -1421,6 +1505,16 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   defp bind_resync_entry(state, agent_id, generation, owner, update) do
+    # r8b B6: a new generation gets the queued items, not the old leases.
+    state =
+      case state.entries[agent_id] do
+        %{generation: old} when old != generation ->
+          release_leases(state, agent_id, "epoch_changed")
+
+        _ ->
+          state
+      end
+
     state = retire_generation(state, agent_id, generation)
     old = state.entries[agent_id]
 
@@ -1439,7 +1533,8 @@ defmodule KaoiroServer.DeliveryStates do
           uncertain_count: if(old, do: old.uncertain_count, else: 0),
           last_uncertain: if(old, do: old.last_uncertain, else: nil),
           # Retained across a same-agent replacement (r8b B6).
-          queue: if(old, do: old.queue, else: nil)
+          queue: if(old, do: old.queue, else: nil),
+          queue_uncertain: if(old, do: old.queue_uncertain, else: [])
         })
       end
       |> Map.put(:resync, true)
@@ -1494,13 +1589,6 @@ defmodule KaoiroServer.DeliveryStates do
     case InterAgentQueueOps.parse_id(operation_id) do
       {:ok, id} -> {:ok, id}
       :error -> :error
-    end
-  end
-
-  defp queue_phase(queue, queue_id) do
-    case queue.items[queue_id] do
-      nil -> :terminal
-      item -> item.phase
     end
   end
 
@@ -1605,25 +1693,13 @@ defmodule KaoiroServer.DeliveryStates do
             _ -> request.items
           end
 
-        with {:ok, queue, result} <- lease_op(entry.queue, op, lease_id, argument, turn) do
-          {entry, result} = resolve_queue_sequences(%{entry | queue: queue}, op, result)
-          persist(state.table, agent_id, entry)
+        with {:ok, state, entry, result} <-
+               apply_lease_op(state, agent_id, entry, op, lease_id, argument, turn) do
+          touched =
+            for id <- touched_ids(op, argument), do: {id, queue_attempt_phase(entry.queue, id)}
 
-          bodies =
-            case result do
-              %{disposed: disposed} -> Map.drop(state.bodies, Enum.map(disposed, &{agent_id, &1}))
-              _ -> state.bodies
-            end
-
-          touched = for id <- touched_ids(op, argument), do: {id, queue_phase(queue, id)}
           control = restore_declined_credit(control, op, lease_id)
-
-          state = %{
-            state
-            | entries: Map.put(state.entries, agent_id, entry),
-              bodies: bodies,
-              queue_controls: Map.put(state.queue_controls, agent_id, control)
-          }
+          state = put_in(state.queue_controls[agent_id], control)
 
           {:ok, state, reply(entry, lease_reply(op, result)), {:touching, touched}}
         end
@@ -1632,6 +1708,73 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp touched_ids(:begin_native, ids), do: ids
   defp touched_ids(_op, entries), do: Enum.map(entries, &elem(&1, 0))
+
+  # One path for every lease operation's ledger side, whoever calls it.
+  # Entries may carry a third element (a dispose reason or witness) that is
+  # logged and kept with an unknown obligation; the reducer sees pairs.
+  defp apply_lease_op(state, agent_id, entry, op, lease_id, argument, turn) do
+    {reducer_argument, details} =
+      case op do
+        :begin_native ->
+          {argument, %{}}
+
+        _ ->
+          {Enum.map(argument, &{elem(&1, 0), elem(&1, 1)}),
+           Map.new(argument, fn
+             {id, _outcome, detail} -> {id, detail}
+             {id, reason} when op == :return -> {id, reason}
+             {id, _outcome} -> {id, nil}
+           end)}
+      end
+
+    before = entry.queue
+
+    with {:ok, queue, result} <- lease_op(before, op, lease_id, reducer_argument, turn) do
+      log_lease_op(agent_id, op, before, reducer_argument, details)
+
+      entry =
+        resolve_queue_sequences(%{entry | queue: queue}, result, fn queue_id ->
+          details[queue_id] || "unknown"
+        end)
+
+      persist(state.table, agent_id, entry)
+
+      bodies =
+        case result do
+          %{disposed: disposed} -> Map.drop(state.bodies, Enum.map(disposed, &{agent_id, &1}))
+          _ -> state.bodies
+        end
+
+      {:ok, %{state | entries: Map.put(state.entries, agent_id, entry), bodies: bodies}, entry,
+       result}
+    end
+  end
+
+  # r8 §5.2 (K7): one line per returned or disposed item.
+  defp log_lease_op(_agent_id, :begin_native, _queue, _entries, _details), do: :ok
+
+  defp log_lease_op(agent_id, op, queue, entries, details) do
+    Enum.each(entries, fn {queue_id, outcome} ->
+      seq = get_in(queue.items, [queue_id, :delivery_seq])
+
+      Logger.info(
+        "inter-agent queue #{op} recipient=#{agent_id} queue_id=#{queue_id} seq=#{seq} " <>
+          "outcome=#{outcome} reason=#{details[queue_id]}"
+      )
+    end)
+  end
+
+  # Touched records also carry the attempt, so an item that leaves a phase
+  # and comes back under a new offer is never mistaken for the old one.
+  defp plain_phase({_attempt, phase}), do: phase
+  defp plain_phase(phase), do: phase
+
+  defp queue_attempt_phase(queue, queue_id) do
+    case queue.items[queue_id] do
+      nil -> :terminal
+      item -> {item.attempt, item.phase}
+    end
+  end
 
   defp lease_reply(:begin_native, %{permitted: ids}), do: %{permitted_queue_ids: ids}
   defp lease_reply(:return, %{returned: seqs}), do: %{returned_ranges: ranges(seqs)}
@@ -1707,7 +1850,7 @@ defmodule KaoiroServer.DeliveryStates do
             InterAgentQueueOps.record_touching(control.ops, id, digest, reply, touched)
         end
 
-      %{control | ops: InterAgentQueueOps.prune(ops, &queue_phase(queue, &1))}
+      %{control | ops: InterAgentQueueOps.prune(ops, &queue_attempt_phase(queue, &1))}
     end)
   end
 
@@ -1723,14 +1866,7 @@ defmodule KaoiroServer.DeliveryStates do
          false <- credit.kind == :root and previous_root_pending?(queue),
          {:ok, queue, offer, next_seq} <-
            offer(queue, credit_request(credit, queue, control), entry.issued_seq + 1) do
-      entry = %{
-        entry
-        | queue: queue,
-          issued_seq: next_seq - 1,
-          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-
-      persist(state.table, agent_id, entry)
+      {entry, state} = commit_offer(state, agent_id, entry, queue, offer, next_seq)
 
       control = %{
         control
@@ -1746,8 +1882,7 @@ defmodule KaoiroServer.DeliveryStates do
 
       %{
         state
-        | entries: Map.put(state.entries, agent_id, entry),
-          queue_controls: Map.put(state.queue_controls, agent_id, control)
+        | queue_controls: Map.put(state.queue_controls, agent_id, control)
       }
     else
       _ -> state
@@ -1867,15 +2002,7 @@ defmodule KaoiroServer.DeliveryStates do
     with owner when is_pid(owner) <- state.owners[agent_id],
          {:ok, queue, offer, next_seq} <-
            InterAgentQueue.offer_waiter(entry.queue, queue_id, entry.issued_seq + 1) do
-      entry = %{
-        entry
-        | queue: queue,
-          issued_seq: next_seq - 1,
-          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-
-      persist(state.table, agent_id, entry)
-      state = %{state | entries: Map.put(state.entries, agent_id, entry)}
+      {entry, state} = commit_offer(state, agent_id, entry, queue, offer, next_seq)
 
       payload =
         batch_payload(state, agent_id, entry, %{kind: :waiter, revision: nil}, offer)
@@ -1959,25 +2086,55 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   # Before the record goes: every retained item becomes a loss obligation.
+  # Before the record goes, its uncertain obligations are written as their
+  # own objects, so they outlive it like loss intents do.
   defp retire_queue(state, agent_id) do
-    with %{} = entry <- state.entries[agent_id],
-         {entry, losses, [_ | _] = intents} <- drop_queue(agent_id, entry, state.losses) do
-      persist_with_losses(state, agent_id, entry, intents)
+    case state.entries[agent_id] do
+      %{} = entry ->
+        {entry, losses, intents} = drop_queue(agent_id, entry, state.losses, "recipient_removed")
+        persist_with_losses(state, agent_id, entry, intents)
 
-      %{
+        orphans =
+          Map.new(entry.queue_uncertain, fn obligation ->
+            {"#{agent_id}:#{obligation.queue_id}", Map.put(obligation, :recipient, agent_id)}
+          end)
+
+        Enum.each(orphans, fn {id, obligation} ->
+          :ok = :dets.insert(state.table, {{:queue_uncertain, id}, obligation})
+        end)
+
+        if orphans != %{}, do: :ok = :dets.sync(state.table)
+
+        %{
+          state
+          | entries: Map.put(state.entries, agent_id, %{entry | queue_uncertain: []}),
+            losses: losses,
+            orphan_uncertain: Map.merge(state.orphan_uncertain, orphans),
+            bodies: Map.reject(state.bodies, fn {{id, _}, _} -> id == agent_id end)
+        }
+
+      nil ->
         state
-        | entries: Map.put(state.entries, agent_id, entry),
-          losses: losses,
-          bodies: Map.reject(state.bodies, fn {{id, _}, _} -> id == agent_id end)
-      }
-    else
-      _ -> state
     end
+  end
+
+  defp load_orphan_uncertain(table) do
+    :dets.foldl(
+      fn
+        {{:queue_uncertain, id}, obligation}, acc when is_map(obligation) ->
+          Map.put(acc, id, obligation)
+
+        _, acc ->
+          acc
+      end,
+      %{},
+      table
+    )
   end
 
   # Unsubmitted items become loss intents; native-pending items resolve as
   # uncertain, since delivery may have happened.
-  defp drop_queue(agent_id, %{queue: %{items: items} = queue} = entry, losses)
+  defp drop_queue(agent_id, %{queue: %{items: items} = queue} = entry, losses, reason)
        when map_size(items) > 0 do
     {queue, %{lost: lost, unknown: unknown}} = InterAgentQueue.drop_all(queue)
 
@@ -1997,30 +2154,20 @@ defmodule KaoiroServer.DeliveryStates do
         }
       end
 
-    entry = %{
-      entry
-      | queue: queue,
-        uncertain_count: entry.uncertain_count + length(unknown),
-        last_uncertain:
-          case List.last(unknown) do
-            nil ->
-              entry.last_uncertain
+    # Their sequences leave the ledger here, so no later resync can record
+    # them a second time.
+    dropped_seqs =
+      for {_id, %{delivery_seq: seq}} <- lost ++ unknown, seq != nil, do: seq
 
-            {_queue_id, item} ->
-              %{
-                at: DateTime.utc_now() |> DateTime.to_iso8601(),
-                incarnation: entry.incarnation,
-                generation: entry.generation,
-                delivery_seq: item.delivery_seq,
-                reason: "queue_dropped"
-              }
-          end
-    }
+    entry =
+      %{entry | queue: queue, resolved: Enum.uniq(entry.resolved ++ dropped_seqs)}
+      |> record_unknown(unknown, fn _ -> reason end)
+      |> advance_skipped()
 
     {entry, Enum.reduce(intents, losses, &Map.put(&2, &1.id, &1)), intents}
   end
 
-  defp drop_queue(_agent_id, entry, losses), do: {entry, losses, []}
+  defp drop_queue(_agent_id, entry, losses, _reason), do: {entry, losses, []}
 
   defp queue_loss_revision(agent_id, incarnation, queue_id) do
     :crypto.hash(:sha256, :erlang.term_to_binary({agent_id, incarnation, :queue, queue_id}))
@@ -2310,7 +2457,8 @@ defmodule KaoiroServer.DeliveryStates do
       uncertain_count: 0,
       last_uncertain: nil,
       queue_policy: nil,
-      queue: nil
+      queue: nil,
+      queue_uncertain: []
     }
   end
 
@@ -2384,6 +2532,11 @@ defmodule KaoiroServer.DeliveryStates do
     do: Enum.count(queue.items, fn {_id, item} -> item.phase == :queued end)
 
   defp entry_record(agent_id, entry) do
+    if seq = queue_ledger_violation(entry) do
+      raise ArgumentError,
+            "queue-origin sequence #{seq} of #{agent_id} resolved outside the queue"
+    end
+
     {agent_id, entry.generation, entry.issued_seq, entry.acked_seq, entry.pending_since,
      Map.take(entry, [
        :schema_version,
@@ -2398,7 +2551,8 @@ defmodule KaoiroServer.DeliveryStates do
        :last_loss,
        :uncertain_count,
        :last_uncertain,
-       :queue_policy
+       :queue_policy,
+       :queue_uncertain
      ])
      |> Map.put(:queue, entry.queue && InterAgentQueue.durable(entry.queue))}
   end

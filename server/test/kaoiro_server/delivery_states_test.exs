@@ -2128,7 +2128,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert %{
                acked_seq: 1,
                uncertain_count: 1,
-               last_uncertain: %{delivery_seq: 1, reason: "queue_unknown"}
+               last_uncertain: %{delivery_seq: 1, reason: "unknown"}
              } =
                status(name, "l-unknown")
 
@@ -2510,7 +2510,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert DeliveryStates.pending_losses(ctx.name) == []
       queue = :sys.get_state(ctx.name).entries[ctx.recipient].queue
       assert queue.items[offered].phase == :queued
-      assert queue.items[offered].last_return_reason == :shutdown
+      assert queue.items[offered].last_return_reason == "shutdown"
       assert queue.items[waiting].phase == :queued
     end
   end
@@ -2631,6 +2631,149 @@ defmodule KaoiroServer.DeliveryStatesTest do
 
       assert [{"schema", _, _, _, _, %{queue: %{version: 99}}}] =
                raw(name, path, &:dets.lookup(&1, "schema"))
+    end
+  end
+
+  describe "queue-origin sequences across every ledger path" do
+    @path_policy %{batch_max_items: 1, backlog_max_items: 10, backlog_max_bytes: 1_000}
+
+    setup %{name: name} do
+      recipient = "lp-#{System.unique_integer([:positive])}"
+      {:ok, _} = DeliveryStates.bind_queue(recipient, "g1", self(), @path_policy, name)
+
+      for n <- 1..2 do
+        {:ok, token, _} = DeliveryStates.queue_reserve(recipient, :ordinary, 2, name)
+
+        {:ok, _id} =
+          DeliveryStates.queue_commit(
+            recipient,
+            token,
+            %{sender: "s", conversation_id: "c", turn_number: n, kind: "inform"},
+            %{"n" => n},
+            name
+          )
+      end
+
+      # seq 1 native-pending, seq 2 offered.
+      {:ok, first} = DeliveryStates.queue_offer(recipient, "g1", self(), :root, name)
+      [%{queue_id: pending}] = first.items
+
+      {:ok, _} =
+        DeliveryStates.queue_begin_native(
+          recipient,
+          "g1",
+          self(),
+          first.lease_id,
+          [pending],
+          name
+        )
+
+      {:ok, second} = DeliveryStates.queue_offer(recipient, "g1", self(), :root, name)
+      [%{queue_id: offered}] = second.items
+      %{recipient: recipient, pending: pending, offered: offered}
+    end
+
+    defp entry(ctx), do: :sys.get_state(ctx.name).entries[ctx.recipient]
+
+    test "a stage report is history only for a queue sequence", ctx do
+      incarnation = DeliveryStates.incarnation(ctx.recipient, ctx.name)
+
+      assert :ok =
+               DeliveryStates.report_stage(
+                 ctx.recipient,
+                 "g1",
+                 self(),
+                 %{
+                   "incarnation" => incarnation,
+                   "generation" => "g1",
+                   "delivery_seq" => 1,
+                   "stage" => "submitted",
+                   "handoff" => "prompt_hook",
+                   "at" => "2026-10-04T00:00:00Z"
+                 },
+                 ctx.name
+               )
+
+      assert %{acked_seq: 0, resolved: []} = entry(ctx)
+      assert DeliveryStates.queue_ledger_violation(entry(ctx)) == nil
+    end
+
+    test "a legacy resync bind under a new generation releases the leases", ctx do
+      DeliveryStates.bind_resync(ctx.recipient, "g2", self(), ctx.name)
+
+      assert %{queued: 1, offered: 0, native_pending: 0} =
+               DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+
+      assert [%{queue_id: pending, reason: "epoch_changed"}] = entry(ctx).queue_uncertain
+      assert pending == ctx.pending
+    end
+
+    test "a legacy bind under a new generation releases the leases", ctx do
+      DeliveryStates.bind(ctx.recipient, "g2", ctx.name)
+      assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
+      assert DeliveryStates.queue_ledger_violation(entry(ctx)) == nil
+    end
+
+    test "the retire form of resync treats queue sequences like resync", ctx do
+      assert {:ok, %{lost_count: 0}, %{returned: [[2, 2]], uncertain: [[1, 1]]}} =
+               DeliveryStates.resync_detailed(
+                 :retire,
+                 ctx.recipient,
+                 "g1",
+                 self(),
+                 2,
+                 [[1, 2]],
+                 ctx.name
+               )
+
+      assert DeliveryStates.pending_losses(ctx.name) == []
+    end
+
+    test "after a restart a resync records no loss for the dropped items", %{name: name} = ctx do
+      path = :sys.get_state(name).table |> :dets.info(:filename) |> List.to_string()
+      GenServer.stop(Process.whereis(name))
+      {:ok, _} = DeliveryStates.start_link(name: name, path: path)
+
+      assert [%{reason: "delivery_lost", queue_id: offered}] = DeliveryStates.pending_losses(name)
+      assert offered == ctx.offered
+
+      assert [%{queue_id: pending, reason: "server_restart", recipient: recipient}] =
+               DeliveryStates.pending_queue_uncertain(name)
+
+      assert {pending, recipient} == {ctx.pending, ctx.recipient}
+
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @path_policy, name)
+      {:ok, status} = DeliveryStates.resync(ctx.recipient, "g1", self(), 2, [[1, 2]], name)
+      assert status.lost_count == 0
+    end
+
+    test "uncertain obligations outlive a deleted record", ctx do
+      :ok = DeliveryStates.delete(ctx.recipient, ctx.name)
+
+      assert [%{queue_id: pending, reason: "recipient_removed"}] =
+               DeliveryStates.pending_queue_uncertain(ctx.name)
+
+      assert pending == ctx.pending
+    end
+
+    test "the ledger refuses to store a queue sequence resolved elsewhere", ctx do
+      Process.flag(:trap_exit, true)
+
+      :sys.replace_state(ctx.name, fn state ->
+        update_in(state.entries[ctx.recipient], &%{&1 | acked_seq: 2})
+      end)
+
+      assert DeliveryStates.queue_ledger_violation(entry(ctx)) == 1
+
+      assert {{%ArgumentError{message: message}, _}, _} =
+               catch_exit(
+                 DeliveryStates.queue_reserve(ctx.recipient, :ordinary, 1, ctx.name) &&
+                   DeliveryStates.queue_counts(ctx.recipient, ctx.name) &&
+                   DeliveryStates.queue_cancel(make_ref(), ctx.name) &&
+                   DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @path_policy, ctx.name)
+               )
+
+      assert message =~ "resolved outside the queue"
     end
   end
 end

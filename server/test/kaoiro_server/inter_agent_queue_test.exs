@@ -112,7 +112,10 @@ defmodule KaoiroServer.InterAgentQueueTest do
       served =
         Enum.map_reduce(1..3, q, fn _, q ->
           {:ok, q, offer, _} = Q.offer_root(q, 1)
-          {:ok, q, _} = Q.dispose(q, offer.lease_id, [{hd(ids(offer)), :observed}], "t")
+
+          {:ok, q, _} =
+            Q.dispose(q, offer.lease_id, [{hd(ids(offer)), :intentional_non_injection}], "t")
+
           {hd(ids(offer)), q}
         end)
         |> elem(0)
@@ -254,15 +257,19 @@ defmodule KaoiroServer.InterAgentQueueTest do
       assert {:ok, q, result} =
                Q.dispose(q, ctx.lease, [{ctx.a1, :observed}, {ctx.a2, :unknown}], "t")
 
-      assert result == %{disposed: [ctx.a1, ctx.a2], resolved: [1], uncertain: [2], returned: []}
+      assert %{disposed: [a1, a2], resolved: [1], uncertain: [2], returned: []} = result
+      assert {a1, a2} == {ctx.a1, ctx.a2}
+      assert [{^a2, %{delivery_seq: 2}}] = result.unknown_items
       assert q.items == %{}
       assert Q.counts(q).charged_bytes == 0
     end
 
     test "definitely_unstarted returns the item and keeps its charge", ctx do
+      {:ok, q, _} = Q.begin_native(ctx.q, ctx.lease, [ctx.a2])
+
       assert {:ok, q, result} =
                Q.dispose(
-                 ctx.q,
+                 q,
                  ctx.lease,
                  [{ctx.a1, :intentional_non_injection}, {ctx.a2, :definitely_unstarted}],
                  "t"
@@ -271,7 +278,7 @@ defmodule KaoiroServer.InterAgentQueueTest do
       assert result.returned == [2]
       assert result.resolved == [1]
       assert q.items[ctx.a2].phase == :queued
-      assert q.items[ctx.a2].last_return_reason == :definitely_unstarted
+      assert q.items[ctx.a2].last_return_reason == "definitely_unstarted"
       assert Q.counts(q).charged_bytes == 20
     end
 
@@ -279,6 +286,27 @@ defmodule KaoiroServer.InterAgentQueueTest do
       {:ok, q, _} = Q.begin_native(ctx.q, ctx.lease, [ctx.a1])
       assert {:ok, q, [1]} = Q.return(q, ctx.lease, [{ctx.a1, :host_rejected_before_start}], "t")
       assert q.items[ctx.a1].phase == :queued
+    end
+
+    test "native outcomes need the permit; non-injection does not", ctx do
+      for outcome <- [:observed, :unknown, :definitely_unstarted] do
+        assert Q.dispose(ctx.q, ctx.lease, [{ctx.a1, outcome}], "t") ==
+                 {:error, :outcome_needs_permit}
+      end
+
+      assert {:ok, _q, %{resolved: [1]}} =
+               Q.dispose(ctx.q, ctx.lease, [{ctx.a1, :intentional_non_injection}], "t")
+    end
+
+    test "a repeated outcome is a no-op and a different one conflicts", ctx do
+      {:ok, q, _} = Q.begin_native(ctx.q, ctx.lease, [ctx.a1])
+      {:ok, q, _} = Q.dispose(q, ctx.lease, [{ctx.a1, :observed}], "t")
+
+      assert {:ok, ^q, %{disposed: [], resolved: [], uncertain: []}} =
+               Q.dispose(q, ctx.lease, [{ctx.a1, :observed}], "t")
+
+      assert Q.dispose(q, ctx.lease, [{ctx.a1, :unknown}], "t") ==
+               {:error, :conflicting_disposition}
     end
 
     test "invalid entries change nothing", ctx do
@@ -301,28 +329,19 @@ defmodule KaoiroServer.InterAgentQueueTest do
       %{q: q, pending: queued, offered: offered, waiting: waiting}
     end
 
-    test "a replacement generation keeps queued items, returns offers, and resolves native-pending as unknown",
-         ctx do
-      {q, result} = Q.replace_generation(ctx.q)
-      assert result == %{returned: [2], uncertain: [1], disposed: [ctx.pending]}
-      assert q.items[ctx.offered].phase == :queued
-      assert q.items[ctx.offered].last_return_reason == :epoch_changed
-      assert q.items[ctx.waiting].phase == :queued
-      refute Map.has_key?(q.items, ctx.pending)
-      refute Q.lease_slot_busy?(q)
-    end
-
     test "releasing sequences returns offers, resolves native-pending, ignores the rest", ctx do
-      {q, result} = Q.release_sequences(ctx.q, [1, 2, 99], :shutdown)
-      assert result == %{returned: [2], uncertain: [1], disposed: [ctx.pending]}
+      {q, result} = Q.release_sequences(ctx.q, [1, 2, 99], "shutdown")
+      assert %{returned: [2], uncertain: [1], disposed: [pending]} = result
+      assert pending == ctx.pending
+      assert [{^pending, %{delivery_seq: 1}}] = result.unknown_items
       assert q.items[ctx.offered].phase == :queued
-      assert q.items[ctx.offered].last_return_reason == :shutdown
+      assert q.items[ctx.offered].last_return_reason == "shutdown"
       refute Map.has_key?(q.items, ctx.pending)
       assert q.items[ctx.waiting].phase == :queued
 
-      {same, none} = Q.release_sequences(ctx.q, [99], :shutdown)
+      {same, none} = Q.release_sequences(ctx.q, [99], "shutdown")
       assert same == ctx.q
-      assert none == %{returned: [], uncertain: [], disposed: []}
+      assert none == %{returned: [], uncertain: [], disposed: [], unknown_items: []}
     end
 
     test "dropping everything loses unsubmitted items and marks native-pending unknown", ctx do
