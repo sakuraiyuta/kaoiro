@@ -158,11 +158,15 @@ keeps its `queue_id` and receives a new sequence on its next offer. Every
 request and push below carries `version: "0"`; replies do not, as for other
 channel replies.
 
-This section fixes the field names and meanings. The runtime validators
-for these shapes come with the server queue (C2). Because they make
-`@kaoiro/protocol` a runtime import, that change also declares it as a
-production dependency of the runner and the wrapper packages (director
-decision, 2026-10-04).
+This section fixes the field names and meanings. The wrapper's runtime
+validators for the server-to-wrapper shapes live in `@kaoiro/wrapper-core`
+(`inter_agent_queue_codec.ts`) and return the `@kaoiro/protocol` types,
+which they import as types only; a compile-time check fails when a protocol
+type gains a field the validator does not handle. `@kaoiro/protocol` stays
+a types-only package (director decision, 2026-10-04): only the wrapper
+validates these shapes at run time (the server validates in Elixir), a
+types-only package cannot become an import that a production deploy fails
+to resolve, and the packaging stays unchanged.
 
 **Join.** The wrapper join request must carry:
 
