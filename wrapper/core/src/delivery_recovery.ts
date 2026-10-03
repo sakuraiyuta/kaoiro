@@ -53,6 +53,18 @@ export class DeliveryRecovery {
     return true;
   }
 
+  /** Records sequences the server issued to queue offers: they are not
+   * missing, and they leave the ledger only through the server's acked
+   * prefix, never through a local `confirm`. */
+  noteOffered(seqs: readonly number[]): void {
+    for (const seq of seqs) {
+      if (!Number.isSafeInteger(seq) || seq <= this.#resolved) continue;
+      this.#issued = Math.max(this.#issued, seq);
+      this.#received.add(seq);
+    }
+    this.#schedule();
+  }
+
   /** Whether `seq` lies within the sequences this ledger has received or
    * seen issued, the only ones a dispatch completion can refer to. */
   admits(seq: number): boolean {

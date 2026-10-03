@@ -1426,6 +1426,7 @@ export class ServerLink {
       this.#queueLease = new QueueLease({
         transport: (payload) => this.#queueControl(payload),
         onOffer: (offer) => options.onQueueOffer?.(offer),
+        onSequences: (seqs) => this.#deliveryRecovery.noteOffered(seqs),
       });
     }
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {

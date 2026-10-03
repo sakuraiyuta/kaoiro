@@ -3322,6 +3322,36 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     expect(offers).toHaveLength(1);
   });
 
+  it("feeds offered sequences to the receipt ledger, so they are never reported missing", async () => {
+    vi.useFakeTimers();
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", interAgentQueuePolicy: policy });
+    try {
+      mock.joinReceivers.get("ok")!({
+        inter_agent_queue: "credit-v1",
+        inter_agent_queue_policy: policy,
+        inter_agent_queue_epoch: "epoch",
+        inter_agent_queue_resume_required: false,
+        inter_agent_delivery_incarnation: "inc-1",
+        delivery_resync: "skip-v1",
+        delivery: { issued_seq: 0, acked_seq: 0, pending_since: null },
+      });
+      const generation = (mock.lastChannelParams as { delivery_generation: string }).delivery_generation;
+      emit("delivery_batch", {
+        version: "0", queue_epoch: "epoch", incarnation: "inc-1", generation, lease_id: "1",
+        kind: "root", credit_revision: "1",
+        items: [{ queue_id: "1", attempt_id: "1.1", delivery_seq: 1, class: "ordinary", byte_charge: 1,
+          envelope: { type: "inter_agent_message" } }],
+      });
+      emit("delivery_status", { version: "0", issued_seq: 2, acked_seq: 0, pending_since: "T" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const resyncs = mock.pushes.filter((push) => push.event === "delivery_resync");
+      expect(resyncs.map((push) => (push.payload as { missing_ranges: unknown }).missing_ranges)).toEqual([[[2, 2]]]);
+    } finally {
+      link.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("needs no echo from a wrapper that declared no queue", () => {
     const { refused, hydration } = link(false);
     mock.joinReceivers.get("ok")!({});

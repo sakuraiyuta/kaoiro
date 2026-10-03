@@ -75,6 +75,9 @@ export interface QueueOffer {
 export interface QueueLeaseOptions {
   transport: QueueControlTransport;
   onOffer: (offer: QueueOffer) => void;
+  /** Receives an accepted batch's sequences before its offer, for the
+   *  receipt ledger. */
+  onSequences?: (seqs: readonly number[]) => void;
 }
 
 interface Binding {
@@ -86,6 +89,7 @@ interface Binding {
 export class QueueLease {
   readonly #transport: QueueControlTransport;
   readonly #onOffer: (offer: QueueOffer) => void;
+  readonly #onSequences: (seqs: readonly number[]) => void;
   #binding: Binding | null = null;
   #nextOperation = 1;
   #frozen = false;
@@ -94,6 +98,7 @@ export class QueueLease {
   constructor(options: QueueLeaseOptions) {
     this.#transport = options.transport;
     this.#onOffer = options.onOffer;
+    this.#onSequences = options.onSequences ?? (() => {});
   }
 
   get frozen(): boolean {
@@ -147,6 +152,7 @@ export class QueueLease {
       });
     }
     this.#leases.set(push.lease_id, items);
+    this.#onSequences(push.items.map((item) => item.delivery_seq));
     this.#onOffer(this.#offer(push.lease_id, push.kind, binding, items));
     return true;
   }
