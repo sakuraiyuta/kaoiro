@@ -221,6 +221,48 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     denied_images(session, "unique")
   end
 
+  test "an ingested custom ID can use the default sprite set without granting the reserved persona",
+       ctx do
+    [a, _, _, _] = ctx.ids
+
+    pack =
+      PersonaPackFixture.write!(ctx.ingest, "default-set.zip", "custom-default-set", "default")
+
+    :ok = PersonaAssets.rebuild()
+    canonical = PersonaAssets.delivery_snapshot().personas_by_id["custom-default-set"]
+    assert canonical["id"] == "custom-default-set"
+    assert canonical["sprite_set"] == "default"
+    viewer = cookie("v")
+    state(a, "default", "default")
+    assert body(viewer)["personas"] == %{}
+    denied_images(viewer, "default")
+
+    state(a, canonical["id"], canonical["sprite_set"])
+    manifest = body(viewer)
+    assert Map.keys(manifest["personas"]) == ["default"]
+    url = manifest["personas"]["default"]["states"]["idle"]["url"]
+    assert url =~ "&auth=1"
+
+    for session <- [viewer, cookie("o"), cookie("a")],
+        path <- [url, "/personas/default/idle.png"],
+        method <- [:get, :head] do
+      conn =
+        session |> put_req_header("if-none-match", "*") |> dispatch(@endpoint, method, path, nil)
+
+      assert conn.status == 200
+      assert conn.resp_body == if(method == :head, do: "", else: pack.idle)
+      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
+    end
+
+    assert get(build_conn(), url).status == 401
+    state(a, canonical["id"], canonical["sprite_set"], "disconnected")
+    assert body(viewer)["personas"] == %{}
+    denied_images(viewer, "default")
+    state(a, "default", "default")
+    assert body(viewer)["personas"] == %{}
+    denied_images(viewer, "default")
+  end
+
   test "cookie login, denial order, live revocation, no-store and unchanged detail authorization",
        ctx do
     [_, _, u, _] = ctx.ids

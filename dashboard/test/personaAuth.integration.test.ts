@@ -96,6 +96,27 @@ it("ignores stale 401 even when abort does not stop fetch", async () => {
   expect(captured.disconnect).not.toHaveBeenCalled();
   expect(imgs().some(img => img.src.includes("/q/"))).toBe(true);
 });
+it("refreshes for a custom persona using the default set, but not the reserved persona", async () => {
+  const h = await start();
+  h.onSnapshot({ one: envelope() }); await settle();
+  pending[0]!.resolve(response(manifest())); await settle();
+  h.onEnvelope(envelope("reserved", "default")); await settle();
+  expect(pending).toHaveLength(1);
+  const custom = envelope("custom", "default");
+  custom.persona!.id = "custom-default-set";
+  h.onEnvelope(custom); await settle();
+  expect(pending).toHaveLength(2);
+  pending[1]!.resolve(response(manifest("default"))); await settle();
+  expect(imgs().some(img => img.src.includes("/personas/default/idle.png"))).toBe(true);
+  h.onEnvelope({ ...custom, state: "thinking" }); await settle();
+  expect(pending).toHaveLength(2);
+  h.onEnvelope({ ...custom, state: "disconnected" }); await settle();
+  expect(pending).toHaveLength(3);
+  pending[2]!.resolve(response(manifest())); await settle();
+  expect(imgs().some(img => img.src.includes("/personas/default/"))).toBe(false);
+  h.onEnvelope(custom); await settle();
+  expect(pending).toHaveLength(4);
+});
 it("current 401 returns to login and retries after a fresh login and snapshot", async () => {
   const h = await start(); h.onSnapshot({ one: envelope() }); await settle();
   pending[0]!.resolve(response({}, 401)); await settle();
