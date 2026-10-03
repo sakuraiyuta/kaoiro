@@ -332,6 +332,9 @@ export interface ServerLinkOptions {
   onInterAgentQueueRefused?: (reason: unknown) => void;
   /** Receives each offer the server makes under this link's credit. */
   onQueueOffer?: (offer: QueueOffer) => void;
+  /** Called after each join's queue reconciliation: any root credit the
+   *  wrapper held before the join is gone, and credit may be requested. */
+  onQueueRejoined?: () => void;
   interAgentReplyBasis?: "v1";
   noticeAttribution?: "v1";
   onNoticeAttributionMode?: (mode: "v1" | "legacy" | "pending") => void;
@@ -1765,7 +1768,8 @@ export class ServerLink {
           }
           this.#queueLease.join(queueReply, incarnation, this.#deliveryGeneration);
           // Credit waits for the reconciliation after a rejoin.
-          this.#queueReady = this.#queueLease.rejoined(queueReply.inter_agent_queue_resume_required);
+          this.#queueReady = this.#queueLease.rejoined(queueReply.inter_agent_queue_resume_required)
+            .then(() => options.onQueueRejoined?.());
         }
         // Reset here, not on disconnect: a watermark buffered before this
         // join may have timed out unsent, and a channel-only rejoin never

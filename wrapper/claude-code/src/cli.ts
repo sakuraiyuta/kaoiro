@@ -40,6 +40,7 @@ import type {
   SessionLifecycleTrigger,
 } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
+import { ClaudeQueueRoot } from "./queue_root.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
@@ -356,6 +357,24 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   // gate, so host terminal teardown can stop a late handler before it enters
   // turn ownership (issue #236).
   const interAgentIngress = new InterAgentIngressGate();
+  // Root input from the server-owned queue (credit-v1). The legacy push path
+  // above stays as it is for input the server still pushes.
+  const queueRoot = new ClaudeQueueRoot({
+    lease: () => link?.queueLease?.() ?? null,
+    ready: () => link?.queueReady?.() ?? Promise.resolve(),
+    isIdle: () => host !== undefined && host.isIdleForInput() && !admissionFailStopped,
+    enqueue: (task) => enqueueInstruction(task),
+    send: (text, conversationIds, turnToken, envelopes) =>
+      host.send(text, undefined, conversationIds, turnToken, { source: "peer", urgent: false, envelopes }),
+    preparePending: (turnToken, envelopes) => {
+      for (const envelope of envelopes) interAgent?.notePendingInjection(envelope, turnToken);
+      interAgent?.prepareReplyInput(turnToken, envelopes);
+    },
+    classify: (envelope) => interAgent!.receiveInbound(envelope),
+    reclassify: (envelope, mode) => interAgent?.queuedInboundMode(envelope, mode) ?? mode,
+    sendNotice: (notice) => interAgent?.sendInternalNotice(notice),
+    log: (line) => writeRedactedStderr(line),
+  });
 
   const resolveInterAgentConversationIds = (
     turnToken: string,
@@ -648,6 +667,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
+      queueRoot.inputHandoff(envelopes);
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
@@ -985,6 +1005,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   >({
     interAgentQueuePolicy: interAgentQueuePolicy(config),
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
+    onQueueOffer: (offer) => void queueRoot.onOffer(offer),
+    onQueueRejoined: () => queueRoot.rejoined(),
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
     interAgentDeliveryModes: {
@@ -1291,6 +1313,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           outcome: "downgraded", reason: "no_work_input", at: new Date().toISOString(),
         });
       }
+      const queued = queueRoot.prepareInput(turnToken);
+      if (queued !== undefined) return queued;
       const prepared = interAgentTurns.prepareInput(turnToken);
       if (prepared === undefined) return undefined;
       resolveInterAgentConversationIds(turnToken, prepared.removedConversationIds);
@@ -1312,6 +1336,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       turnWatchdog.progress(turnToken);
     },
     onPromptAdmitted: (turnToken) => {
+      queueRoot.promptAdmitted(turnToken);
       deliveryStages.submitted(turnToken, "prompt_hook");
       interAgent?.confirmReplyInput(turnToken);
       interAgentTurns.retireFoldedBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
@@ -1362,6 +1387,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, kind, error, cancellation }) => {
+      queueRoot.turnEnded(turnToken, cancellation?.started !== false);
       if (turnToken !== undefined && cancellation?.started === false) {
         for (const envelope of interAgentTurns.deliveryEnvelopesForTurn(turnToken)) {
           interAgent?.notePendingInjection(envelope, turnToken);
@@ -1663,6 +1689,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // wrapper is ready to serve one. A legacy server without a verdict
     // falls back to the pre-ADR-0051 startup replay inside the replayer.
     replayer.markReady();
+    queueRoot.checkReadiness();
     await host.run(prompt);
   } catch (error) {
     disconnectReason = "crash";

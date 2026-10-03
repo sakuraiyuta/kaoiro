@@ -67,7 +67,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_cfg, options) => {
         hostOptions = options;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { start(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], _token: string, policy?: { urgent?: boolean }) => {
             sends.push({ urgent: policy?.urgent ?? false });
@@ -542,7 +542,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         } as never;
       },
       createHost: (_cfg, options) => ({
-        state: "thinking", statusExtSnapshot: () => ({}),
+        state: "thinking", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
         run: async () => { started(); await finished; },
         send: async (text: string, _attachments: unknown, _cids: readonly string[], token: string, policy?: { source?: string }) => {
           if (policy?.source === "peer") queued.add(token);
@@ -650,7 +650,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         } as never;
       },
       createHost: () => ({
-        state: "thinking", statusExtSnapshot: () => ({}),
+        state: "thinking", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
         run: async () => { started(); await finished; },
         send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string, policy?: { source?: string }) => {
           if (policy?.source === "peer") queued.add(token);
@@ -727,7 +727,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         } as never;
       },
       createHost: () => ({
-        state: "idle", statusExtSnapshot: () => ({}),
+        state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
         run: async () => { started(); await finished; },
         send: async (text: string, _attachments: unknown, _cids: readonly string[], _token: string,
           policy?: { urgent?: boolean }) => { inputs.push({ text, urgent: policy?.urgent ?? false }); },
@@ -772,7 +772,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_cfg, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "error", statusExtSnapshot: () => ({}),
+          state: "error", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
             hostOptions.onTurnEnd({ turnToken: token, error: { reason: "timeout" },
@@ -862,7 +862,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
             sentTokens.push(token);
@@ -921,7 +921,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
             activeToken = token;
@@ -968,7 +968,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return { state: "idle", statusExtSnapshot: () => ({}), run: async () => { started(); await finished; } } as never;
+        return { state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false, run: async () => { started(); await finished; } } as never;
       },
     });
     try {
@@ -1180,7 +1180,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { startHost(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
             const prepared = hostOptions.prepareInput(token);
@@ -1231,7 +1231,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           run: async () => { startHost(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
             const prepared = hostOptions.prepareInput(token);
@@ -1288,7 +1288,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
         return {
-          state: "idle", statusExtSnapshot: () => ({}),
+          state: "idle", statusExtSnapshot: () => ({}), isIdleForInput: () => false,
           activeInterAgentTurnToken: () => "waiter-turn",
           run: async () => { startHost(); await finished; },
           send: async () => {}, close: () => {},
