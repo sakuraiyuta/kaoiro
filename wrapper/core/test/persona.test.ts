@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError, parseConfig } from "../src/persona.js";
-import { resolveInterAgentQueueSettings } from "../src/inter_agent_queue_settings.js";
+import {
+  interAgentQueuePolicy,
+  resolveInterAgentQueueSettings,
+} from "../src/inter_agent_queue_settings.js";
 
 const valid = {
   agent_id: "lab-pc-1.claude-a",
@@ -722,6 +725,14 @@ it("does not infer a backend from unknown config fields", () => {
 });
 
 describe("inter-agent queue settings", () => {
+  it("builds the complete join policy tuple from a partial config", () => {
+    expect(interAgentQueuePolicy({ inter_agent_backlog_max_items: 7 })).toEqual({
+      batch_max_items: 10,
+      backlog_max_items: 7,
+      backlog_max_bytes: 524_288,
+    });
+  });
+
   it("leaves omitted keys unset and resolves them to the defaults", () => {
     const config = parseConfig(valid);
     expect(config.inter_agent_batch_max_items).toBeUndefined();

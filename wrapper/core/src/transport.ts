@@ -29,6 +29,7 @@ import type {
   EngineKind,
   Envelope,
   InterAgentDeliveryStatus,
+  InterAgentQueuePolicy,
   PermissionAxesExt,
   PermissionConfiguration,
   PermissionControlExt,
@@ -319,6 +320,12 @@ export function chunkReplayIaItems(
 }
 
 export interface ServerLinkOptions {
+  /** Declares the server-owned inter-agent queue (`credit-v1`) with the
+   *  launcher-resolved policy. A join refusal, or a join reply without the
+   *  queue echo, is terminal: the link closes and
+   *  `onInterAgentQueueRefused` receives the server's reason. */
+  interAgentQueuePolicy?: InterAgentQueuePolicy;
+  onInterAgentQueueRefused?: (reason: unknown) => void;
   interAgentReplyBasis?: "v1";
   noticeAttribution?: "v1";
   onNoticeAttributionMode?: (mode: "v1" | "legacy" | "pending") => void;
@@ -458,6 +465,11 @@ export interface SessionResetAccepted {
 export interface SessionResetFailure {
   requestId: string;
   reason: string;
+}
+
+function isInterAgentQueueRefusal(reason: unknown): boolean {
+  return isObject(reason) &&
+    (reason.reason === "queue_capability_required" || reason.reason === "invalid_queue_policy");
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -1405,6 +1417,12 @@ export class ServerLink {
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
+      ...(options.interAgentQueuePolicy
+        ? {
+          inter_agent_queue: "credit-v1",
+          inter_agent_queue_policy: options.interAgentQueuePolicy,
+        }
+        : {}),
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
       ...(options.noticeAttribution ? { notice_attribution: options.noticeAttribution } : {}),
       ...(options.interAgentDeliveryModes
@@ -1719,6 +1737,13 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         if (this.#replyBasisTerminal) return;
+        if (
+          options.interAgentQueuePolicy !== undefined &&
+          !(isObject(reply) && reply.inter_agent_queue === "credit-v1")
+        ) {
+          this.#refuseInterAgentQueue({ reason: "queue_not_acknowledged" }, options);
+          return;
+        }
         // Reset here, not on disconnect: a watermark buffered before this
         // join may have timed out unsent, and a channel-only rejoin never
         // closes the socket. The join-time resends below must still go out.
@@ -1782,6 +1807,7 @@ export class ServerLink {
         writeRedactedStderr(
           `ServerLink join error: ${JSON.stringify(reason)}\n`,
         );
+        if (isInterAgentQueueRefusal(reason)) this.#refuseInterAgentQueue(reason, options);
       })
       .receive("timeout", () => {
         invalidateReplyBasis(false, true);
@@ -2464,6 +2490,12 @@ export class ServerLink {
   }
 
   /** Leaves the channel and closes the socket. */
+  #refuseInterAgentQueue(reason: unknown, options: ServerLinkOptions): void {
+    writeRedactedStderr(`ServerLink inter-agent queue refused: ${JSON.stringify(reason)}\n`);
+    this.close();
+    options.onInterAgentQueueRefused?.(reason);
+  }
+
   close(): void {
     this.#failReplyBasis(true, true);
     this.#deliveryRecovery.dispose();

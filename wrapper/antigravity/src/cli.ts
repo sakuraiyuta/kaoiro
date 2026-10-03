@@ -20,6 +20,8 @@ import {
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import {
+  exitOnInterAgentQueueRefusal,
+  interAgentQueuePolicy,
   formatConsumerSettingsLine,
   formatTurnWatchdogLine,
   loadConfig,
@@ -372,6 +374,8 @@ export async function runAntigravityCli(
   );
   const buildInfo = loadBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
   link = createServerLink(config.server_url, config.agent_id, deliveryAcknowledgementRuntime.withServerLinkOptions({
+    interAgentQueuePolicy: interAgentQueuePolicy(config),
+    onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
     noticeAttribution: "v1",
     personaId: config.persona.id,
     ...(config.server_token === undefined ? {} : { token: config.server_token }),

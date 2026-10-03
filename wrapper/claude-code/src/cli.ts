@@ -23,7 +23,12 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadWrapperBuildInfo, parseCliArgs } from "@kaoiro/wrapper-core";
+import {
+  exitOnInterAgentQueueRefusal,
+  interAgentQueuePolicy,
+  loadWrapperBuildInfo,
+  parseCliArgs,
+} from "@kaoiro/wrapper-core";
 import {
   readSessionHistory,
   sessionLogPath,
@@ -978,6 +983,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
+    interAgentQueuePolicy: interAgentQueuePolicy(config),
+    onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
     interAgentDeliveryModes: {

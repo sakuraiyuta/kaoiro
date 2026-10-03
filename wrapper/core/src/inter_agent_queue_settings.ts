@@ -3,6 +3,11 @@
 // when it builds a spawn snapshot. The server applies its own ceilings on top
 // (docs/reference/protocol/channels.md, server-owned inter-agent queue).
 
+import type { InterAgentQueuePolicy } from "@kaoiro/protocol";
+
+/** EX_CONFIG. The runner does not restart a wrapper that exits with it. */
+export const WRAPPER_CONFIG_EXIT_CODE = 78;
+
 export const INTER_AGENT_QUEUE_SETTINGS = [
   {
     field: "inter_agent_batch_max_items",
@@ -63,4 +68,23 @@ export function resolveInterAgentQueueSettings(
     resolved[setting.field] = config[setting.field] ?? setting.defaultValue;
   }
   return resolved;
+}
+
+/** The join-time policy tuple, with omitted keys at their defaults. */
+export function interAgentQueuePolicy(
+  config: Partial<InterAgentQueueSettings>,
+): InterAgentQueuePolicy {
+  const settings = resolveInterAgentQueueSettings(config);
+  return {
+    batch_max_items: settings.inter_agent_batch_max_items,
+    backlog_max_items: settings.inter_agent_backlog_max_items,
+    backlog_max_bytes: settings.inter_agent_backlog_max_bytes,
+  };
+}
+
+/** A queue refusal is a configuration error, not a crash: exit so the
+ *  runner leaves the agent down instead of restarting it into the same
+ *  refusal. ServerLink has already logged the server's reason. */
+export function exitOnInterAgentQueueRefusal(): never {
+  process.exit(WRAPPER_CONFIG_EXIT_CODE);
 }

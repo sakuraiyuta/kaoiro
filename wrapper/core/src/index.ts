@@ -13,6 +13,9 @@ export {
 export { formatConsumerSettingsLine } from "./consumer_settings.js";
 export {
   INTER_AGENT_QUEUE_SETTINGS,
+  WRAPPER_CONFIG_EXIT_CODE,
+  exitOnInterAgentQueueRefusal,
+  interAgentQueuePolicy,
   interAgentQueueRangeMessage,
   parseInterAgentQueueSetting,
   resolveInterAgentQueueSettings,

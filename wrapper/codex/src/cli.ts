@@ -49,6 +49,8 @@ import type {
 } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
+  exitOnInterAgentQueueRefusal,
+  interAgentQueuePolicy,
   loadConfig,
   loadWrapperBuildInfo,
   formatConsumerSettingsLine,
@@ -826,6 +828,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
+    interAgentQueuePolicy: interAgentQueuePolicy(config),
+    onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
     interAgentDeliveryModes: { version: "v1", early: phase3Enabled ? "steer" : "none", yield: "none", stage_reports: true },

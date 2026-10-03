@@ -3194,3 +3194,86 @@ describe("delivery ACK reconnect through production ServerLink", () => {
     }
   });
 });
+
+describe("ServerLink — inter-agent queue join (credit-v1)", () => {
+  const policy = { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 };
+
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+    mock.joinReceivers.clear();
+    mock.channelState = "joined";
+    mock.onClose = null;
+    mock.lastChannelParams = null;
+  });
+
+  function link(options: Partial<ServerLinkOptions> = {}) {
+    const refused = vi.fn();
+    const hydration = vi.fn();
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      interAgentQueuePolicy: policy,
+      onInterAgentQueueRefused: refused,
+      onHydration: hydration,
+      ...options,
+    });
+    return { refused, hydration };
+  }
+
+  it("declares the queue and its policy in the join params", () => {
+    link();
+    expect(mock.lastChannelParams).toMatchObject({
+      inter_agent_queue: "credit-v1",
+      inter_agent_queue_policy: policy,
+    });
+  });
+
+  it("declares nothing when no policy is given", () => {
+    link({ interAgentQueuePolicy: undefined });
+    expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_queue");
+    expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_queue_policy");
+  });
+
+  it.each([
+    { reason: "invalid_queue_policy", field: "backlog_max_bytes", detail: "above_ceiling", limit: 16_384 },
+    { reason: "queue_capability_required", missing: ["delivery_resync"] },
+  ])("treats the join refusal $reason as terminal", (reason) => {
+    const { refused } = link();
+    mock.joinReceivers.get("error")!(reason);
+    expect(refused).toHaveBeenCalledOnce();
+    expect(refused).toHaveBeenCalledWith(reason);
+  });
+
+  it("leaves other join errors to the client's own retry", () => {
+    const { refused } = link();
+    mock.joinReceivers.get("error")!({ reason: "unknown_persona" });
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  it("does not proceed when the join reply lacks the queue echo", () => {
+    const { refused, hydration } = link();
+    mock.joinReceivers.get("ok")!({ delivery_resync: "skip-v1" });
+    expect(refused).toHaveBeenCalledWith({ reason: "queue_not_acknowledged" });
+    expect(hydration).not.toHaveBeenCalled();
+  });
+
+  it("proceeds when the join reply echoes the queue", () => {
+    const { refused, hydration } = link();
+    mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1",
+      inter_agent_queue_policy: policy,
+      inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: false,
+    });
+    expect(refused).not.toHaveBeenCalled();
+    expect(hydration).toHaveBeenCalledOnce();
+  });
+
+  it("needs no echo from a wrapper that declared no queue", () => {
+    const { refused, hydration } = link({ interAgentQueuePolicy: undefined });
+    mock.joinReceivers.get("ok")!({});
+    expect(refused).not.toHaveBeenCalled();
+    expect(hydration).toHaveBeenCalledOnce();
+  });
+});
