@@ -167,7 +167,7 @@ describe("Claude CLI credit-v1 root composition", () => {
     const { notices, toolResults } = await runWithQueue(true, false, true);
     expect(toolResults[0]).not.toContain("isError\":true");
     expect(notices.find((envelope) => envelope.payload.conversation_id === "c-queue")?.payload).toMatchObject({
-      to: "peer.agent", kind: "response", body: "answer",
+      to: "peer.agent", kind: "response", body: "answer", in_reply_to: 1,
     });
   });
 
