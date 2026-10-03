@@ -104,6 +104,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "delivery_status_request" => :versioned,
     "delivery_resync" => :versioned,
     "delivery_stage" => :versioned,
+    "delivery_queue_control" => :versioned,
     "yield_claim" => :versioned,
     "work_status_request" => :versioned,
     "work_check_request" => :versioned,
@@ -133,7 +134,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id),
-         {:ok, queue} <- validate_queue(params),
+         {:ok, queue} <- validate_queue(agent_id, params),
          {:ok, delivery} <- bind_delivery(agent_id, params, queue) do
       modes =
         if(valid_delivery_modes?(params["inter_agent_delivery_modes"]),
@@ -237,10 +238,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # Legacy wrappers that declare no queue are still accepted until the
   # delivery path moves to the queue; a declared queue is validated in full.
-  defp validate_queue(params) do
+  defp validate_queue(agent_id, params) do
     case InterAgentQueuePolicy.validate_join(params) do
       :absent -> {:ok, nil}
-      result -> result
+      {:ok, queue} -> {:ok, Map.put(queue, :agent_id, agent_id)}
+      error -> error
     end
   end
 
@@ -251,8 +253,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       "inter_agent_queue" => "credit-v1",
       "inter_agent_queue_policy" => InterAgentQueuePolicy.to_wire(queue.policy),
       "inter_agent_queue_epoch" => DeliveryStates.queue_epoch(),
-      # No lease or waiter registration outlives a channel yet.
-      "inter_agent_queue_resume_required" => false
+      "inter_agent_queue_resume_required" => DeliveryStates.queue_resume_required?(queue.agent_id)
     }
     |> maybe_put_optional_field(
       "inter_agent_inline_recovery",
@@ -342,6 +343,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
         :ok -> {:noreply, socket}
       end
     end
+  end
+
+  # A batch the queue owner made for this channel's credit.
+  def handle_info({:inter_agent_queue_batch, payload}, socket) do
+    push(socket, "delivery_batch", payload)
+    {:noreply, socket}
   end
 
   defp after_join_handshake(socket) do
@@ -952,6 +959,30 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp handle_wrapper_in("delivery_resync", _, socket),
     do: {:reply, {:error, %{reason: "invalid_delivery_resync"}}, socket}
+
+  defp handle_wrapper_in("delivery_queue_control", payload, socket) do
+    agent_id = socket.assigns.agent_id
+
+    with %{} <- socket.assigns[:inter_agent_queue] || {:error, {:invalid_queue_control, "op"}},
+         :ok <- queue_fence(payload, agent_id, socket),
+         {:ok, request} <- queue_control_request(payload) do
+      case DeliveryStates.queue_control(
+             agent_id,
+             socket.assigns.delivery_generation,
+             self(),
+             payload["operation_id"],
+             request
+           ) do
+        {:ok, reply} ->
+          {:reply, {:ok, queue_control_reply(payload, request.op, reply)}, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, queue_control_error(reason)}, socket}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, queue_control_error(reason)}, socket}
+    end
+  end
 
   defp handle_wrapper_in("delivery_ack", _payload, socket) do
     {:reply, :ok, socket}
@@ -2091,6 +2122,235 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Unlike the directory's optional display fields, delivery is a structured
   # status map. Keep `nil` absent (legacy wrapper means unknown), while
   # preserving the map verbatim for capability-aware clients.
+  ## delivery_queue_control wire
+
+  @queue_return_reasons ~w(format_budget host_rejected_before_start credit_withdrawn
+                           recovery_abandoned waiter_abandoned shutdown epoch_changed)
+  @queue_early_ineligible ~w(same_peer_in_turn conversation_pending host_busy
+                             pending_settings steer_cap fold_unavailable oversize)
+  @queue_witnesses ~w(prompt_hook fold_hook tool_result turn_start_accepted exec_input_written
+                      turn_steer_item_observed turn_input_written waiter_consumed)
+
+  defp queue_fence(payload, agent_id, socket) do
+    cond do
+      payload["queue_epoch"] != DeliveryStates.queue_epoch() ->
+        {:error, :stale_queue_epoch}
+
+      payload["generation"] != socket.assigns.delivery_generation or
+          payload["incarnation"] != DeliveryStates.incarnation(agent_id) ->
+        {:error, :stale_channel}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp queue_control_request(%{"op" => "credit", "kind" => "root"} = payload) do
+    with {:ok, token} <- queue_string(payload, "native_turn_token"),
+         do: {:ok, %{op: :credit, kind: :root, token: token}}
+  end
+
+  defp queue_control_request(%{"op" => "credit", "kind" => "early"} = payload) do
+    with {:ok, token} <- queue_string(payload, "native_turn_token"),
+         {:ok, mechanism} <-
+           queue_enum(payload, "mechanism", %{"fold" => :fold, "steer" => :steer}),
+         do: {:ok, %{op: :credit, kind: :early, token: token, mechanism: mechanism}}
+  end
+
+  defp queue_control_request(%{"op" => "credit"}), do: {:error, {:invalid_queue_control, "kind"}}
+
+  defp queue_control_request(%{"op" => "withdraw"} = payload) do
+    with {:ok, revision} <- queue_string(payload, "credit_revision"),
+         do: {:ok, %{op: :withdraw, revision: revision}}
+  end
+
+  defp queue_control_request(%{"op" => "begin_native"} = payload) do
+    with {:ok, lease_id} <- queue_index(payload["lease_id"], "lease_id"),
+         {:ok, ids} <- queue_indexes(payload["queue_ids"], "queue_ids"),
+         {:ok, token} <- queue_string(payload, "native_turn_token"),
+         do: {:ok, %{op: :begin_native, lease_id: lease_id, queue_ids: ids, token: token}}
+  end
+
+  defp queue_control_request(%{"op" => op} = payload) when op in ["return", "dispose"] do
+    parse = if op == "return", do: &queue_return_item/1, else: &queue_dispose_item/1
+
+    with {:ok, lease_id} <- queue_index(payload["lease_id"], "lease_id"),
+         {:ok, items} <- queue_items(payload["items"], parse),
+         do: {:ok, %{op: String.to_existing_atom(op), lease_id: lease_id, items: items}}
+  end
+
+  defp queue_control_request(%{"op" => "waiter_close"} = payload) do
+    with {:ok, id} <- queue_string(payload, "registration_id"),
+         do: {:ok, %{op: :waiter_close, registration_id: id}}
+  end
+
+  defp queue_control_request(%{"op" => "resume"} = payload) do
+    with {:ok, lease_ids} <- queue_indexes(payload["lease_ids"], "lease_ids", true),
+         true <-
+           (is_list(payload["registration_ids"]) and
+              Enum.all?(payload["registration_ids"], &is_binary/1)) ||
+             {:error, {:invalid_queue_control, "registration_ids"}},
+         do:
+           {:ok,
+            %{op: :resume, lease_ids: lease_ids, registration_ids: payload["registration_ids"]}}
+  end
+
+  defp queue_control_request(%{"op" => "freeze"} = payload) do
+    with {:ok, reason} <-
+           queue_enum(payload, "reason", %{
+             "shutdown" => :shutdown,
+             "session_reset" => :session_reset
+           }),
+         do: {:ok, %{op: :freeze, reason: reason}}
+  end
+
+  defp queue_control_request(_payload), do: {:error, {:invalid_queue_control, "op"}}
+
+  defp queue_string(payload, field) do
+    case payload[field] do
+      value when is_binary(value) and byte_size(value) in 1..256 -> {:ok, value}
+      _ -> {:error, {:invalid_queue_control, field}}
+    end
+  end
+
+  defp queue_enum(payload, field, values) do
+    case Map.fetch(values, payload[field]) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, {:invalid_queue_control, field}}
+    end
+  end
+
+  defp queue_index(value, field) do
+    with true <- is_binary(value),
+         {index, ""} when index > 0 <- Integer.parse(value),
+         true <- Integer.to_string(index) == value do
+      {:ok, index}
+    else
+      _ -> {:error, {:invalid_queue_control, field}}
+    end
+  end
+
+  defp queue_indexes(values, field, allow_empty \\ false)
+
+  defp queue_indexes(values, field, allow_empty) when is_list(values) do
+    if values == [] and not allow_empty do
+      {:error, {:invalid_queue_control, field}}
+    else
+      Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
+        case queue_index(value, field) do
+          {:ok, index} -> {:cont, {:ok, acc ++ [index]}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp queue_indexes(_values, field, _allow_empty), do: {:error, {:invalid_queue_control, field}}
+
+  defp queue_items(items, parse) when is_list(items) and items != [] do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+      case parse.(item) do
+        {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp queue_items(_items, _parse), do: {:error, {:invalid_queue_control, "items"}}
+
+  defp queue_return_item(%{"queue_id" => id, "reason" => "early_ineligible", "sub_reason" => sub})
+       when sub in @queue_early_ineligible do
+    with {:ok, index} <- queue_index(id, "items"), do: {:ok, {index, "early_ineligible"}}
+  end
+
+  defp queue_return_item(%{"queue_id" => id, "reason" => reason})
+       when reason in @queue_return_reasons do
+    with {:ok, index} <- queue_index(id, "items"), do: {:ok, {index, reason}}
+  end
+
+  defp queue_return_item(_item), do: {:error, {:invalid_queue_control, "items"}}
+
+  defp queue_dispose_item(%{"queue_id" => id, "outcome" => outcome} = item) do
+    valid? =
+      case outcome do
+        "observed" -> item["witness"] in @queue_witnesses
+        "intentional_non_injection" -> item["reason"] in ["terminal_skip", "stale_skip"]
+        o when o in ["definitely_unstarted", "unknown"] -> is_binary(item["reason"])
+        _ -> false
+      end
+
+    with true <- valid? || {:error, {:invalid_queue_control, "items"}},
+         {:ok, index} <- queue_index(id, "items"),
+         do: {:ok, {index, String.to_existing_atom(outcome)}}
+  end
+
+  defp queue_dispose_item(_item), do: {:error, {:invalid_queue_control, "items"}}
+
+  defp queue_control_reply(payload, op, reply) do
+    base = %{
+      "op" => Atom.to_string(op),
+      "operation_id" => payload["operation_id"],
+      "queue" => reply.queue
+    }
+
+    fields =
+      case reply do
+        %{permitted_queue_ids: ids} ->
+          %{"permitted_queue_ids" => Enum.map(ids, &Integer.to_string/1)}
+
+        %{disposed: ids} = r ->
+          %{
+            "disposed" => Enum.map(ids, &Integer.to_string/1),
+            "resolved_ranges" => r.resolved_ranges,
+            "returned_ranges" => r.returned_ranges
+          }
+
+        %{leases: leases, registrations: registrations} ->
+          %{
+            "leases" =>
+              for lease <- leases do
+                %{
+                  "lease_id" => Integer.to_string(lease.lease_id),
+                  "items" =>
+                    Enum.map(lease.items, fn item ->
+                      %{
+                        "queue_id" => Integer.to_string(item.queue_id),
+                        "phase" => Atom.to_string(item.phase)
+                      }
+                    end)
+                }
+              end,
+            "registrations" => registrations
+          }
+
+        other ->
+          other
+          |> Map.delete(:queue)
+          |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+      end
+
+    Map.merge(base, fields)
+  end
+
+  defp queue_control_error({:invalid_queue_control, field}),
+    do: %{reason: "invalid_queue_control", field: field}
+
+  defp queue_control_error({:operation_superseded, phases}),
+    do: %{
+      reason: "operation_superseded",
+      items:
+        Enum.map(phases, fn {id, phase} ->
+          %{queue_id: Integer.to_string(id), phase: Atom.to_string(phase)}
+        end)
+    }
+
+  # Reducer-level refusals map onto the wire vocabulary.
+  defp queue_control_error(reason)
+       when reason in [:lease_slot_busy, :invalid_queue_items, :invalid_outcome],
+       do: %{reason: "unknown_queue_item"}
+
+  defp queue_control_error(reason), do: %{reason: to_string(reason)}
+
   defp maybe_put_optional_field(entry, _key, nil), do: entry
   defp maybe_put_optional_field(entry, key, value), do: Map.put(entry, key, value)
 
