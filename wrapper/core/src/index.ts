@@ -82,6 +82,15 @@ export type {
   ReplayIaItem,
   ServerLinkOptions,
 } from "./transport.js";
+export { QueueLease } from "./queue_lease.js";
+export type {
+  NativeSubmit,
+  QueueControlError,
+  QueueControlResult,
+  QueueOffer,
+  QueueOfferItem,
+  QueueSettlement,
+} from "./queue_lease.js";
 /** Backward-compatible type exports. New consumers should import these
  * directory wire shapes from `@kaoiro/protocol`. */
 export type {

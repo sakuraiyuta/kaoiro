@@ -57,6 +57,8 @@ export type {
   WhoamiSnapshot,
 } from "./inter_agent.js";
 export { MAX_LOG_BYTES, clipText, logEntryToPayload } from "./logpayload.js";
+export { QUEUE_INPUT_FORMAT_BUDGET, QueueInput } from "./queue_input.js";
+export type { PreparedQueueInput, QueueInputDeps, QueueInputItem } from "./queue_input.js";
 export {
   boundErrorDetail,
   redactCredentials,
