@@ -2607,4 +2607,30 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert {:ok, _token, :waiter} = DeliveryStates.queue_reserve_reply("wm", "p", "c", 1, name)
     end
   end
+
+  describe "queue schema on load" do
+    test "an unsupported queue record stops the owner and stays on disk", %{
+      name: name,
+      path: path
+    } do
+      policy = %{batch_max_items: 10, backlog_max_items: 10, backlog_max_bytes: 1_000}
+      {:ok, _} = DeliveryStates.bind_queue("schema", "g1", self(), policy, name)
+      GenServer.stop(Process.whereis(name))
+
+      [{"schema", generation, issued, acked, pending, recovery}] =
+        raw(name, path, &:dets.lookup(&1, "schema"))
+
+      broken = put_in(recovery, [:queue, :version], 99)
+
+      raw(name, path, fn table ->
+        :ok = :dets.insert(table, {"schema", generation, issued, acked, pending, broken})
+      end)
+
+      Process.flag(:trap_exit, true)
+      assert {:error, {%ArgumentError{}, _}} = DeliveryStates.start_link(name: name, path: path)
+
+      assert [{"schema", _, _, _, _, %{queue: %{version: 99}}}] =
+               raw(name, path, &:dets.lookup(&1, "schema"))
+    end
+  end
 end

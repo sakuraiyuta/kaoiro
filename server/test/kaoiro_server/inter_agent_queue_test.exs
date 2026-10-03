@@ -332,6 +332,20 @@ defmodule KaoiroServer.InterAgentQueueTest do
       assert q.items == %{}
     end
 
+    test "an unknown or malformed durable form fails closed", ctx do
+      durable = Q.durable(ctx.q)
+      assert durable.version == 1
+
+      for bad <- [
+            Map.put(durable, :version, 2),
+            Map.delete(durable, :items),
+            put_in(durable, [:items, ctx.pending, :phase], :lost),
+            put_in(durable.items[ctx.pending + 100], %{phase: :queued})
+          ] do
+        assert_raise ArgumentError, fn -> Q.restore(bad) end
+      end
+    end
+
     test "the durable part survives a round trip without reservations", ctx do
       {:ok, q, _} = Q.reserve(ctx.q, make_ref(), :ordinary, 1)
       restored = q |> Q.durable() |> Q.restore()

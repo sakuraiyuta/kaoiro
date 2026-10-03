@@ -41,9 +41,45 @@ defmodule KaoiroServer.InterAgentQueue do
   end
 
   @doc "The part the owner persists. Reservations and the cursor are not durable."
-  def durable(q), do: Map.take(q, [:policy, :next_index, :next_lease, :items])
+  @schema_version 1
+  @phases [:queued, :offered, :native_pending]
+  @classes [:ordinary, :waiter, :control]
 
-  def restore(durable), do: Map.merge(%{reservations: %{}, cursor: nil}, durable)
+  def durable(q),
+    do:
+      q
+      |> Map.take([:policy, :next_index, :next_lease, :items])
+      |> Map.put(:version, @schema_version)
+
+  @doc """
+  Rebuilds a queue from its durable form. A form this version does not
+  understand raises: the owner must fail closed rather than drop or
+  reinterpret accepted input.
+  """
+  def restore(
+        %{
+          version: @schema_version,
+          policy: %{batch_max_items: _, backlog_max_items: _, backlog_max_bytes: _},
+          next_index: next_index,
+          next_lease: next_lease,
+          items: items
+        } = durable
+      )
+      when is_integer(next_index) and is_integer(next_lease) and is_map(items) do
+    if Enum.all?(items, &valid_item?(&1, next_index)) do
+      durable |> Map.delete(:version) |> Map.merge(%{reservations: %{}, cursor: nil})
+    else
+      raise ArgumentError, "unsupported inter-agent queue record: malformed item"
+    end
+  end
+
+  def restore(_durable), do: raise(ArgumentError, "unsupported inter-agent queue record")
+
+  defp valid_item?({id, item}, next_index) do
+    is_integer(id) and id > 0 and id < next_index and is_map(item) and
+      item[:phase] in @phases and item[:class] in @classes and is_integer(item[:bytes]) and
+      is_map(item[:descriptor])
+  end
 
   ## Admission
 
