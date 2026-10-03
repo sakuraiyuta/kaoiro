@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -174,16 +175,38 @@ describe("Codex pin activation guard through installed symlinks", () => {
     expect(rollback().status).toBe(0);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
   });
-  it.each(["barrier", "codex-state"])("refuses differing native rollback after deleting %s with zero link mutations", (removed) => {
-    mkdirSync(join(root, "codex-state/barriers"), { recursive: true, mode: 0o700 });
-    writeFileSync(join(root, "codex-state/barriers/marker.json"), "{}");
-    rmSync(join(root, removed === "barrier" ? "codex-state/barriers/marker.json" : "codex-state"), { recursive: true });
+  const stale = (home = "/home/operator/.codex") => JSON.stringify({ schema: 1, binding: { home: { path: home, dev: 1, ino: 2, mode: 0o700 }, unit: "x.service", config: "/c", sourceHash: "0".repeat(64), configIdentity: { dev: 1, ino: 3 }, manager: {}, effective: {}, unitSources: [], execStart: "x", live: { pid: 1, start: "1" } }, native: { id: revisionOf("codex-state-a"), path: "p", sha256: "e".repeat(64) }, uuid: "0".repeat(8) + "-0000-0000-0000-" + "0".repeat(12), acceptance: { evidenceHash: "0".repeat(64), accepted: "2026-01-01T00:00:00.000Z" } });
+  const forwardSwitch = () => runScript(join(root, "current/deploy/kaoiro-runner-switch.sh"), [B, "--install-dir", root]);
+  it.each([["absent barrier directory"], ["absent registry"]].flatMap(([state]) => [[state, "rollback"], [state, "forward switch"]] as const))("refuses a differing native pin through current with %s on %s and zero link mutations", (state, path) => {
+    if (state === "absent barrier directory") mkdirSync(join(root, "codex-state/transactions"), { recursive: true, mode: 0o700 });
     writeFileSync(binary(B), "#!/bin/sh\nexit 1\n"); chmodSync(binary(B), 0o755);
+    if (path === "forward switch") rmSync(join(root, "previous"));
+    const result = path === "rollback" ? rollback() : forwardSwitch();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("native pin differs");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    if (path === "rollback") expect(readlinkSync(join(root, "previous"))).toBe(`releases/${B}`);
+    else expect(existsSync(join(root, "previous"))).toBe(false);
+  });
+  it("ignores a well-formed stale barrier whose hashes differ from the installation", () => {
+    mkdirSync(join(root, "codex-state/barriers"), { recursive: true, mode: 0o700 });
+    const file = join(root, "codex-state/barriers", `${createHash("sha256").update("/home/operator/.codex").digest("hex")}.json`);
+    writeFileSync(file, stale(), { mode: 0o600 });
+    const before = lstatSync(file);
+    const result = rollback();
+    expect(result.status, result.stderr).toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readFileSync(file, "utf8")).toBe(stale());
+    expect(lstatSync(file).ino).toBe(before.ino);
+  });
+  it("still refuses a differing native pin when a stale barrier names the candidate's hash", () => {
+    mkdirSync(join(root, "codex-state/barriers"), { recursive: true, mode: 0o700 });
+    writeFileSync(binary(B), "#!/bin/sh\nexit 1\n"); chmodSync(binary(B), 0o755);
+    writeFileSync(join(root, "codex-state/barriers/stale.json"), stale(), { mode: 0o600 });
     const result = rollback();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("native pin differs");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${B}`);
   });
   it("rejects a dangling state-record directory instead of treating it as absent", () => {
     symlinkSync(join(root, "missing-state"), join(root, "codex-state"));
@@ -234,5 +257,30 @@ describe("Codex pin activation guard through installed symlinks", () => {
     writeFileSync(join(root, "releases", B, "README.md"), "Documentation only");
     const result = spawnSync(process.execPath, ["--experimental-vm-modules", join(deploy, "verify-release.mjs"), join(root, "releases", B), "--require-deploy-manifest", "--hash"], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe("removed barrier repair action", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "ao498-repair-")); });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const run = () => spawnSync(process.execPath, [join(deploy, "kaoiro-runner-codex-state.mjs"), "repair-barrier", root, "00000000-0000-0000-0000-000000000000"], { encoding: "utf8" });
+  it("is an unknown action", () => {
+    const result = run();
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("codex-state: Unknown Codex state action");
+    expect(existsSync(join(root, "codex-state"))).toBe(false);
+  });
+  it.each([".lock.update", ".lock.links"])("fails as an unknown action, not on a lock, while %s is held", (held) => {
+    const other = held === ".lock.update" ? ".lock.links" : ".lock.update";
+    mkdirSync(join(root, held));
+    writeFileSync(join(root, held, "sentinel"), "owner");
+    const result = run();
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("codex-state: Unknown Codex state action");
+    expect(result.stderr).not.toContain("EEXIST");
+    expect(readFileSync(join(root, held, "sentinel"), "utf8")).toBe("owner");
+    expect(existsSync(join(root, other))).toBe(false);
+    expect(existsSync(join(root, "codex-state"))).toBe(false);
   });
 });

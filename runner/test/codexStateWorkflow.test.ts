@@ -122,14 +122,23 @@ else if (args.includes('show')) {
     writeFileSync(file, JSON.stringify({ schema: 1, uuid: tx.uuid, nativeHash: tx.target.sha256, codexStart: true, history: true }), { mode: 0o600 });
     return file;
   };
-  it("publishes the first barrier only after explicit actual-start/history acceptance", () => {
+  it("publishes the accepted binding receipt only after explicit actual-start/history acceptance", () => {
     const forward = update(); expect(forward.status, forward.stderr).toBe(0);
-    expect(readdirSync(join(root, "codex-state/barriers"))).toEqual([]);
     const tx = forwardTransaction();
-    const result = stateAction("accept", root, tx.uuid, acceptance(tx));
+    expect(tx).toMatchObject({ bindingReceiptVersion: 1, phase: "awaiting-acceptance" });
+    expect(tx).not.toHaveProperty("acceptance");
+    expect(tx).not.toHaveProperty("sequence");
+    const evidence = acceptance(tx);
+    const result = stateAction("accept", root, tx.uuid, evidence);
     expect(result.status, result.stderr).toBe(0);
-    expect(readdirSync(join(root, "codex-state/barriers"))).toHaveLength(1);
-    expect(forwardTransaction().phase).toBe("completed");
+    const accepted = forwardTransaction();
+    expect(accepted).toMatchObject({ phase: "completed", sequence: 1 });
+    expect(accepted.acceptance).toEqual({ version: 1, evidenceHash: createHash("sha256").update(readFileSync(evidence)).digest("hex"), accepted: expect.any(String), binding: expect.any(Object) });
+    const { live, ...pre } = tx.binding;
+    expect(live).toEqual(expect.objectContaining({ pid: expect.any(Number) }));
+    expect(accepted.acceptance.binding).toEqual(pre);
+    expect(accepted.binding).toEqual(tx.binding);
+    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
   });
   it("refuses acceptance without history evidence", () => {
     expect(update().status).toBe(0);
@@ -138,21 +147,13 @@ else if (args.includes('show')) {
     writeFileSync(file, JSON.stringify(proof));
     const result = stateAction("accept", root, tx.uuid, file);
     expect(result.status).not.toBe(0);
-    expect(readdirSync(join(root, "codex-state/barriers"))).toEqual([]);
-    expect(forwardTransaction().phase).toBe("awaiting-acceptance");
+    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
+    const after = forwardTransaction();
+    expect(after.phase).toBe("awaiting-acceptance");
+    expect(after).not.toHaveProperty("acceptance");
+    expect(after).not.toHaveProperty("sequence");
   });
-  it("repairs a damaged barrier only from the matching accepted transaction", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-    const file = readdirSync(join(root, "codex-state/barriers"))[0]!;
-    writeFileSync(join(root, "codex-state/barriers", file), "corrupt");
-    const result = stateAction("repair-barrier", root, tx.uuid);
-    expect(result.status, result.stderr).toBe(0);
-    expect(readdirSync(join(root, "codex-state/barriers")).some((name) => name.includes("damaged"))).toBe(true);
-    expect(JSON.parse(readFileSync(join(root, "codex-state/barriers", file), "utf8")).native.sha256).toBe(tx.target.sha256);
-  });
-  it.each(["history", "new-session"])("retires an accepted snapshot with %s evidence and keeps its barrier", (basis) => {
+  it.each(["history", "new-session"])("retires an accepted snapshot with %s evidence and keeps its receipt", (basis) => {
     expect(update().status).toBe(0);
     const tx = forwardTransaction();
     const acceptanceFile = acceptance(tx);
@@ -162,13 +163,15 @@ else if (args.includes('show')) {
       writeFileSync(acceptanceFile, JSON.stringify(value));
     }
     expect(stateAction("accept", root, tx.uuid, acceptanceFile).status).toBe(0);
+    const receipt = forwardTransaction().acceptance;
     const proof = join(dir, "retire.json");
     writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: basis === "history", explicitNewSession: basis === "new-session", abandonRollback: true }), { mode: 0o600 });
     const result = stateAction("retire", root, tx.uuid, proof);
     expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).not.toHaveProperty("barriersRetained");
     expect(existsSync(join(dir, "backup"))).toBe(false);
-    expect(readdirSync(join(root, "codex-state/barriers"))).toHaveLength(1);
-    expect(forwardTransaction().phase).toBe("retired");
+    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
+    expect(forwardTransaction()).toMatchObject({ phase: "retired", sequence: 1, acceptance: receipt });
   });
   it("refuses retirement without either history or explicit new-session evidence", () => {
     expect(update().status).toBe(0);
@@ -177,6 +180,18 @@ else if (args.includes('show')) {
     const file = join(dir, "retire-missing.json");
     writeFileSync(file, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: false, explicitNewSession: false, abandonRollback: true }), { mode: 0o600 });
     expect(stateAction("retire", root, tx.uuid, file).status).not.toBe(0);
+    expect(existsSync(join(dir, "backup"))).toBe(true);
+    expect(forwardTransaction().phase).toBe("completed");
+  });
+  it("refuses retirement when the current release no longer verifies", () => {
+    expect(update().status).toBe(0);
+    const tx = forwardTransaction();
+    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+    writeFileSync(join(root, "releases", B, "dist/stub_dep.js"), "tampered");
+    const proof = join(dir, "retire.json");
+    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: true, abandonRollback: true }), { mode: 0o600 });
+    const result = stateAction("retire", root, tx.uuid, proof);
+    expect(result.status).not.toBe(0);
     expect(existsSync(join(dir, "backup"))).toBe(true);
     expect(forwardTransaction().phase).toBe("completed");
   });
@@ -407,5 +422,46 @@ else if (args.includes('show')) {
     const result = update();
     expect(result.status).not.toBe(0);
     expect(existsSync(calls)).toBe(false);
+  });
+  it("refuses a differing-native update without a state backup before stopping", () => {
+    const extraFiles = { "node_modules/@openai/codex/vendor/fixture/bin/codex": "#!/bin/sh\n# different candidate native\nexit 0\n" };
+    rmSync(join(root, "releases", B), { recursive: true });
+    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
+    mkdirSync(join(dir, "pin-tarball"));
+    archive = makeReleaseTarball(join(dir, "pin-tarball"), B, { extraFiles });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive], { KAOIRO_SYSTEMCTL: ctl });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Codex pin transition requires an explicit state backup");
+    expect(existsSync(calls)).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    expect(existsSync(join(root, "codex-state"))).toBe(false);
+  });
+  it("keeps a retained reference on the state-aware path for same-native code-only switching", () => {
+    expect(update().status).toBe(0);
+    const tx = forwardTransaction();
+    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+    const links = { current: readlinkSync(join(root, "current")), previous: readlinkSync(join(root, "previous")) };
+    const result = runScript(join(root, "current/deploy/kaoiro-runner-switch.sh"), ["--rollback", "--install-dir", root]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Retained Codex state requires a state-aware update/restore");
+    expect({ current: readlinkSync(join(root, "current")), previous: readlinkSync(join(root, "previous")) }).toEqual(links);
+  });
+  it.each(["a token edit", "a changed CODEX_HOME"])("lets %s through the code-only update path once nothing is retained", (edit) => {
+    expect(update().status).toBe(0);
+    const tx = forwardTransaction();
+    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+    const proof = join(dir, "retire.json");
+    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: true, abandonRollback: true }), { mode: 0o600 });
+    expect(stateAction("retire", root, tx.uuid, proof).status).toBe(0);
+    if (edit === "a token edit") writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${home}'\nTOKEN=changed\n`, { mode: 0o600 });
+    else { const other = join(dir, "other-home"); mkdirSync(other, { mode: 0o700 }); writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${other}'\n`, { mode: 0o600 }); }
+    const C = revisionOf("state-workflow-c");
+    mkdirSync(join(dir, "code-only-tarball"));
+    const codeOnly = makeReleaseTarball(join(dir, "code-only-tarball"), C);
+    const before = readFileSync(calls, "utf8");
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", codeOnly], { KAOIRO_SYSTEMCTL: ctl });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${C}`);
+    expect(readFileSync(calls, "utf8")).toBe(`${before}stop\nstart\n`);
   });
 });

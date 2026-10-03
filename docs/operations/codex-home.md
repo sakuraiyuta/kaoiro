@@ -244,7 +244,8 @@ operator may recover by rebuilding the home, accepting loss of Codex history,
 login and cache. Keep the runner stopped; preserve the failed home and private
 transaction records. Follow the registry/release handling in
 [second-level recovery](runner-update-and-rollback.md#second-level-recovery-fresh-setup)
-before restarting. An old migration barrier does not certify a fresh home.
+before restarting. A previous acceptance, a legacy transaction or a leftover
+barrier file does not certify a fresh home.
 Keep snapshots and failed trees outside cloud-synchronized or externally
 backed-up directories. After recovery, explicitly record whether old credential
 entries are deleted or retained privately with a deletion date. New login does
@@ -262,9 +263,17 @@ marker as in Cutover. This procedure is manual, never an updater error trap.
 This procedure reverses home isolation, not a Codex pin migration. After a
 pin update, use the [state-aware runner rollback](runner-update-and-rollback.md)
 to restore verified state at its original canonical path while preserving
-current credentials. A managed migration barrier also binds the installed
-unit to that path; changing homes requires the separately approved relocation
-procedure, not removal of the barrier.
+current credentials. A managed restore also compares the snapshot's recorded
+binding, which includes the installed unit and this canonical path, and takes
+the restored home identity from the latest accepted transaction
+([restore lineage](runner-update-and-rollback.md#restore-lineage-and-receipts)).
+Changing homes is a separate, approved relocation procedure; no record is
+edited to make a restore pass. Files in `codex-state/barriers` are ignored.
+Removing them does not enable a differing-native code-only rollback, and the
+comparison does not certify a home that `runner.env` or the unit redirects
+outside the managed path. Editing `runner.env` has restore consequences; read
+[editing the runner environment](runner-update-and-rollback.md#editing-the-runner-environment)
+first.
 
 Remove `CODEX_HOME` from `runner.env` and restart the runner. The wrappers use
 `~/.codex` again and the old threads resume there. Threads created in the

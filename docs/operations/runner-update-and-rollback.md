@@ -249,7 +249,7 @@ directory under both update/links locks. This manual registry reset is allowed
 only after confirming that the installation's records all belong to this
 home/unit. If that scope cannot be established, preserve the entire old
 installation and provision a fresh installation instead. Do not edit hashes,
-remove just a barrier, or claim that old acceptance certifies the new home.
+phases or receipts, or claim that an old acceptance certifies the new home.
 Recreate configuration, instruction links and hook trust, then have the
 operator log in. Start Codex peers as explicitly new sessions and verify their
 first turn and hook/profile marker; old session IDs must remain visibly missing.
@@ -328,19 +328,105 @@ node --experimental-vm-modules \
   accept "$install_root" "$transaction_uuid" "$acceptance_file"
 ```
 
-Acceptance publishes the auxiliary migration barrier. This manual evidence
-record is an operator attestation, not a model turn performed by the helper.
-The helper independently checks current release/hash and live/static home
-binding. Subsequent updates require both backup arguments while any reference
-is retained. Normal restore takes the newest applicable reference; older
-selections require a separate operator-approved recovery plan describing the
-intervening state loss. No force flag skips lineage.
+Acceptance publishes one self-contained receipt in the accepted transaction
+record: `bindingReceiptVersion: 1`, a unique `sequence`, and an `acceptance`
+object with `version`, `evidenceHash`, `accepted` and the static `binding`
+captured after startup, including the observed home device/inode. The receipt,
+the terminal phase and the sequence are saved in one atomic write, so a failed
+acceptance leaves the transaction `awaiting-acceptance` with no receipt. The
+evidence file is an operator attestation, not a model turn performed by the
+helper. The helper independently checks current release/hash and live/static
+home binding. Subsequent updates require both backup arguments while any
+reference is retained.
 
-Do not remove a barrier to fix it. `repair-barrier <install-root> <uuid>` uses
-only a completed accepted transaction matching current release and original
-home, preserving the damaged record for diagnosis. Otherwise use independently
-verified snapshot recovery; absence of either proof requires an explicit
-operator recovery plan. Home relocation is a separate reviewed operation.
+No other record carries the accepted home identity. The helper never reads,
+writes, repairs or deletes `codex-state/barriers`; files left there by older
+tools, well-formed or not, are ignored and stay untouched, and the
+`repair-barrier` action is rejected as an unknown action. Run every state
+action from a verified physical tool release that contains this behavior: an
+older pinned tool still runs its old code, and installing a new release does
+not change a tool path already in use.
+
+The native pin comparison does not depend on any state record. A differing
+pin is refused by the switch and the updater with no registry at all, and a
+retained reference still forces the state-aware path.
+
+### Restore lineage and receipts
+
+Restore takes the newest not-yet-restored reference for the home. A managed
+restore replaces the home directory, so the next restore needs the identity the
+previous one produced. The helper takes it from the latest accepted transaction
+for that home, ordered by `sequence`. That receipt is used only when its
+transaction is the selected one or was prepared after it, its target release
+and native hash equal the current verified release, its unit is the selected
+snapshot's unit and, for a recovery, its original forward and backup reference
+are settled. Only the home device/inode come from the receipt. Every other
+field is compared with the selected snapshot's own recorded binding, so a
+replaced home, another unit or a changed `runner.env` is refused before the
+runner stops. After A to B to C, restoring C to B and accepting it admits B to
+A with no extra file. A newer accepted event that does not match is never
+skipped in favor of an older one.
+
+Retirement keeps the receipt of a retired forward, and the releases named only
+by retired history need not exist for the receipt to be read.
+
+Accepting a restore or code recovery first marks its backup reference
+restored, then its original forward transaction, and only then publishes its
+own receipt. If a step fails, the recovery stays `awaiting-acceptance` without
+a receipt. Forward updates, code-only switches, new restores and retirement of
+its original reference then refuse (`Unresolved Codex recovery requires
+acceptance or operator recovery`) until the same `accept` command is run again
+while the runner is running the recorded target. If an `accept` run reports a
+failure but the recovery already shows `restored` with a receipt, do not accept
+it again; the sequence is assigned once.
+
+### Editing the runner environment
+
+With no retained reference and no unresolved transaction, editing `runner.env`
+does not block a same-native code-only update. Code-only preflight does not
+detect a changed `CODEX_HOME`; moving the home is a separately approved
+operation. State-aware prepare proves the requested and live home itself, and
+an in-flight transaction's binding stays strict, so do not edit the file while
+a transaction is unresolved.
+
+With a retained reference, restoring an older snapshot needs every recorded
+static binding field to be exactly restorable. `sourceHash` covers the whole
+file, so a token, comment or formatting change counts, and so does the file's
+device/inode. An editor that writes a temporary file and renames it changes the
+inode, and restoring the old text later does not restore the old inode. Only an
+in-place revert that keeps the inode and every other field passes; do not rely
+on an ordinary undo. Never edit snapshot or transaction fields to excuse a
+mismatch.
+
+Before editing, decide whether to keep the rollback points. To keep them, leave
+the file and its identity unchanged until those references are restored or
+retired. There is no rebind command. If the edit is needed, take a new
+state-aware forward snapshot under the new configuration, accept it, then
+retire each older reference that can no longer be restored; retirement does not
+compare configuration. The new snapshot covers only the later state. If the
+forward cannot be verified or recovered, keep the runner stopped and use the
+fresh setup above.
+
+### Legacy records
+
+Transactions written before receipts have no `bindingReceiptVersion`. They stay
+readable and still count for the unresolved and retained-reference checks, but
+they never supply a restored-home identity and are never converted. State-aware
+prepare refuses while a legacy reference is retained. Restoring a legacy
+reference, accepting a legacy transaction, recovering legacy unfinished work,
+and restoring while the latest accepted event is legacy all refuse before the
+runner stops (`Legacy Codex transaction requires operator recovery or
+retirement`). A record that claims the receipt version but has an incomplete or
+unknown receipt is corruption, not legacy, and every scan refuses it.
+
+The exits are: explicit retirement of a terminal legacy reference (below),
+after which a new independent forward snapshot captures its own binding; or,
+when the lineage cannot be abandoned or recovered, the operator-approved fresh
+setup above. A corrupt modern record cannot be retired either; its exit is the
+scoped full-registry archive or a fresh installation. Preserve diagnostic
+records and releases, and never edit fields to make a record pass.
+
+### Retirement
 
 Retirement requires accepted gate-6 snapshot/fresh-setup recovery results
 (not old-binary compatibility with migrated databases), actual production
@@ -350,8 +436,9 @@ with `schema: 1`, `uuid`, and true `gate6`, `productionCodexStart`,
 `abandonRollback`, plus either `productionHistory: true` or
 `explicitNewSession: true`, to
 `retire <install-root> <uuid> <evidence-file>`. The helper acquires update/link
-locks, marks the reference retired before deleting its named snapshot, and
-leaves the migration barrier. Releases needed by other references stay
+locks, refuses while a recovery still depends on the snapshot, marks the
+reference retired before deleting its named snapshot, and keeps the
+transaction record and its receipt. Releases needed by other references stay
 protected from prune/replacement. Manual deletion of protected releases is
 prohibited.
 
