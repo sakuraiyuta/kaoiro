@@ -203,6 +203,8 @@ const KIND_VALUES = [
  *  outside this table (open vocabulary) fall back to a generic caution. */
 const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
   delivery_lost: "the message was not dispatched; confirm the peer state before retrying",
+  delivery_uncertain:
+    "the peer may already have the message — confirm with it before resending; never resend automatically",
   permission_gate_blocked:
     "ask the operator to reapply the same sandbox/network values (a new revision), then resend; do not retry automatically",
   rate_limit: "wait before retrying",
@@ -299,6 +301,8 @@ function classifyByDetailKeywords(detail: string): string | null {
  *  classifier at all. */
 const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   delivery_lost: "the message was not dispatched by the peer",
+  delivery_uncertain:
+    "the message may have reached the peer, but its delivery could not be confirmed",
   permission_gate_blocked:
     "the peer stopped waiting to start an execution because permission dispatch remained blocked; the operator must reapply the same sandbox/network values to create a new revision before you resend",
   rate_limit: "the peer hit a rate limit",

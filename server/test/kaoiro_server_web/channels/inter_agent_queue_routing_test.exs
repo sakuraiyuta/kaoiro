@@ -317,5 +317,74 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
       KaoiroServerWeb.DeliveryLossDispatcher.flush()
       assert loss in DeliveryStates.pending_losses()
     end
+
+    test "an unknown outcome tells the sender delivery may have happened, once", ctx do
+      {reply, recipient} = join_agent(ctx.recipient, queue_params(10))
+      {_reply, sender} = join_agent(ctx.sender, %{})
+
+      {:ok, %{"queue_id" => queue_id}} =
+        send_message(sender, message(ctx.sender, ctx.recipient, "cnv-unknown"))
+
+      fence = %{
+        "version" => "0",
+        "queue_epoch" => reply["inter_agent_queue_epoch"],
+        "incarnation" => reply["inter_agent_delivery_incarnation"],
+        "generation" => "generation"
+      }
+
+      control = fn id, op ->
+        ref =
+          push(
+            recipient,
+            "delivery_queue_control",
+            Map.merge(fence, Map.put(op, "operation_id", id))
+          )
+
+        assert_reply ref, :ok, response, TestTimeouts.durable_reply()
+        response
+      end
+
+      control.("1", %{"op" => "credit", "kind" => "root", "native_turn_token" => "t"})
+      assert_push "delivery_batch", %{"lease_id" => lease_id}
+
+      control.("2", %{
+        "op" => "begin_native",
+        "lease_id" => lease_id,
+        "queue_ids" => [queue_id],
+        "native_turn_token" => "t"
+      })
+
+      control.("3", %{
+        "op" => "dispose",
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => queue_id, "outcome" => "unknown", "reason" => "host_crashed"}]
+      })
+
+      assert [%{reason: "host_crashed"}] =
+               Enum.filter(
+                 DeliveryStates.pending_queue_uncertain(),
+                 &(&1.recipient == ctx.recipient)
+               )
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_push "envelope", %{
+        "agent_id" => "server",
+        "payload" => %{
+          "to" => to,
+          "error" => %{"code" => "delivery_uncertain", "peer" => peer, "reason" => "host_crashed"}
+        }
+      }
+
+      assert {to, peer} == {ctx.sender, ctx.recipient}
+
+      assert Enum.filter(
+               DeliveryStates.pending_queue_uncertain(),
+               &(&1.recipient == ctx.recipient)
+             ) == []
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+      refute_push "envelope", %{"payload" => %{"error" => %{"code" => "delivery_uncertain"}}}
+    end
   end
 end

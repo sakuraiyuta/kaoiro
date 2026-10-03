@@ -2,7 +2,7 @@
 title: Inter-agent error notices
 description: Error notices, their sources, stale-turn resynchronization, and server-synthesized reachability rules.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-04
 related: [protocol, inter-agent-messaging]
 ---
 
@@ -51,6 +51,7 @@ added later. Treat an unknown code as `api_error`.
 | code | meaning | recommended action for origin |
 |---|---|---|
 | `delivery_lost` | server explicitly retired an undelivered message or unrecoverable synthetic notice | Confirm current peer/conversation state before retrying; duplicate loss IDs do not require another action. |
+| `delivery_uncertain` | the message was handed to the peer's engine but its delivery could not be confirmed (the queue item resolved as `unknown`); `peer` names the recipient and `reason` the cause | It may already have arrived: confirm with the peer before resending, and never resend automatically. Duplicate loss IDs do not require another action. |
 | `rate_limit` | usage or quota exceeded | Immediate retry is futile; wait or escalate. |
 | `context_overflow` | context length exceeded | Retry with the same content is futile; summarize/split or escalate. |
 | `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |

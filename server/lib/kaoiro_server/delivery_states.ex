@@ -250,6 +250,10 @@ defmodule KaoiroServer.DeliveryStates do
   def pending_queue_uncertain(server \\ __MODULE__),
     do: GenServer.call(server, :pending_queue_uncertain)
 
+  @doc "Removes one uncertain obligation once its sender notice was accepted."
+  def complete_queue_uncertain(recipient, queue_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:complete_queue_uncertain, recipient, queue_id})
+
   def complete_loss(loss_id, revision, server \\ __MODULE__),
     do: GenServer.call(server, {:complete_loss, loss_id, revision})
 
@@ -1116,6 +1120,34 @@ defmodule KaoiroServer.DeliveryStates do
           do: Map.put(obligation, :recipient, agent_id)
 
     {:reply, held ++ Map.values(state.orphan_uncertain), state}
+  end
+
+  def handle_call({:complete_queue_uncertain, recipient, queue_id}, _from, state) do
+    orphan = "#{recipient}:#{queue_id}"
+
+    state =
+      cond do
+        Map.has_key?(state.orphan_uncertain, orphan) ->
+          :ok = :dets.delete(state.table, {:queue_uncertain, orphan})
+          :ok = :dets.sync(state.table)
+          %{state | orphan_uncertain: Map.delete(state.orphan_uncertain, orphan)}
+
+        entry = state.entries[recipient] ->
+          kept = Enum.reject(entry.queue_uncertain, &(&1.queue_id == queue_id))
+
+          if kept == entry.queue_uncertain do
+            state
+          else
+            entry = %{entry | queue_uncertain: kept}
+            persist(state.table, recipient, entry)
+            %{state | entries: Map.put(state.entries, recipient, entry)}
+          end
+
+        true ->
+          state
+      end
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:complete_loss, id, revision}, _from, state) do

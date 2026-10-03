@@ -25,6 +25,78 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
   end
 
   defp deliver_pending do
+    deliver_pending_losses()
+    deliver_pending_uncertain()
+  end
+
+  # A queue item resolved as unknown may have reached its recipient: its
+  # sender is told so, once, and must not resend automatically (r8 §7). A
+  # server notice in that state needs no follow-up.
+  defp deliver_pending_uncertain do
+    DeliveryStates.pending_queue_uncertain()
+    |> Enum.take(100)
+    |> Enum.each(fn obligation ->
+      descriptor = obligation.descriptor
+
+      complete = fn ->
+        DeliveryStates.complete_queue_uncertain(obligation.recipient, obligation.queue_id)
+      end
+
+      cond do
+        descriptor[:synthetic] ->
+          complete.()
+
+        AgentStates.connected?(descriptor[:sender]) ->
+          envelope =
+            SynthEnvelope.build(
+              uncertain_notice(obligation),
+              DateTime.to_iso8601(DateTime.utc_now())
+            )
+
+          case SynthEnvelope.deliver(descriptor.sender, envelope, %{
+                 synthetic: true,
+                 kind: descriptor[:kind],
+                 conversation_id: descriptor[:conversation_id]
+               }) do
+            :ok -> complete.()
+            {:error, _reason} -> :pending
+          end
+
+        true ->
+          :pending
+      end
+    end)
+  end
+
+  defp uncertain_notice(obligation) do
+    descriptor = obligation.descriptor
+
+    message =
+      "the message may have reached the peer, but its delivery could not be confirmed; " <>
+        "confirm with the peer before resending"
+
+    %{
+      "to" => descriptor.sender,
+      "conversation_id" => descriptor[:conversation_id],
+      "turn_number" => 0,
+      "kind" => "inform",
+      "body" => message,
+      "meta" => %{"done" => false, "propose_next" => ""},
+      "owner" => %{"kind" => "user", "id" => "system"},
+      "loss_id" => "uncertain:#{obligation.recipient}:#{obligation.queue_id}",
+      "error" => %{
+        "code" => "delivery_uncertain",
+        "message" => message,
+        "synthetic" => false,
+        "kind" => descriptor[:kind],
+        "loss_id" => "uncertain:#{obligation.recipient}:#{obligation.queue_id}",
+        "peer" => obligation.recipient,
+        "reason" => obligation.reason
+      }
+    }
+  end
+
+  defp deliver_pending_losses do
     DeliveryStates.pending_losses()
     |> Enum.filter(fn loss ->
       recipient = if loss.descriptor[:synthetic], do: loss.recipient, else: loss.descriptor.sender
