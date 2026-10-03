@@ -217,7 +217,12 @@ Every success reply also echoes `op` and `operation_id` and carries `queue`
 (the counts below).
 
 *Credit.* A wrapper has at most one outstanding credit; a new `credit`
-supersedes the previous one. A `credit` with `kind: "root"` is refused with
+supersedes the previous one. The ordinary lease slot is held while any item
+of an ordinary lease (root, early or recovery) is still `offered`: the
+server makes no new ordinary offer under any credit until that lease's
+items are permitted by `begin_native`, returned or disposed, and a
+superseding credit waits for that. Permitted items become `native_pending`
+and free the slot. A `credit` with `kind: "root"` is refused with
 `previous_root_pending`, and recorded as an invariant violation, while any
 root item of an earlier native turn is still `native_pending`; the wrapper
 disposes such items first (as `unknown` when no witness arrived).
@@ -226,7 +231,11 @@ disposes such items first (as `unknown` when no witness arrived).
 generation, operation_id)`. The server keeps its record (payload digest,
 reply, and the phase each touched item entered) across reconnects in the
 same generation until every touched item has left that phase, or the epoch
-or generation changes. A retry with the same `operation_id`:
+or generation changes. Operations that touch no item keep their record as
+follows: a `credit` until it is consumed by an offer, withdrawn or
+superseded, so a retry returns the same `credit_revision`; `withdraw`,
+`waiter_close`, `freeze` and `resume` for the epoch and generation, at most
+the 64 most recent per recipient. A retry with the same `operation_id`:
 
 - with a different payload is refused with `operation_payload_mismatch`;
 - while every touched item is still in the recorded phase, receives the
@@ -283,8 +292,10 @@ reports those ranges in `returned_ranges` and `uncertain_ranges`, not in
 `credit`, `begin_native` and `delivery_resync` are refused with
 `queue_resume_required`. The order after a same-generation rejoin is
 `resume`, then `delivery_resync` for the remaining non-queue gap, then
-`credit`. After `freeze`, `credit` and `begin_native` are refused with
-`queue_frozen`; `return`, `dispose`, `waiter_close` and `resume` stay valid.
+`credit`. `freeze` withdraws the outstanding credit, and no
+`delivery_batch` follows its reply. After `freeze`, `credit` and
+`begin_native` are refused with `queue_frozen`; `return`, `dispose`,
+`waiter_close` and `resume` stay valid.
 
 Control errors (`reason`): `stale_queue_epoch`, `stale_channel` (stale
 `incarnation` or `generation`), `stale_delivery_owner`,
