@@ -91,6 +91,11 @@ jobs:
       - run: pnpm -C wrapper build
       - run: pnpm -C runner typecheck
       - run: pnpm -C runner test
+      # A runtime import of a package declared only as a devDependency is
+      # absent from the production deploy and from MANIFEST.json alike.
+      - run: node --test scripts/test/check-prod-deploy-imports.test.mjs
+      - run: pnpm -C runner build
+      - run: scripts/check-prod-deploy.sh
 
   # server/deploy (issue #306) has no dependencies of its own (plain
   # node:test, no package-lock.json) and is NOT covered by the `server`
