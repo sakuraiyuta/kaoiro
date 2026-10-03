@@ -81,6 +81,7 @@ describe("inter-agent queue codec", () => {
     it("binds credit_revision to root and early, registration_id to waiter", () => {
       expect(parseDeliveryBatchPush({ ...push, kind: "waiter" })).toBeUndefined();
       expect(parseDeliveryBatchPush({ ...push, registration_id: "r" })).toBeUndefined();
+      expect(parseDeliveryBatchPush({ ...push, kind: "waiter", registration_id: "r" })).toBeUndefined();
       const { credit_revision: _drop, ...waiter } = push;
       expect(parseDeliveryBatchPush({ ...waiter, kind: "waiter", registration_id: "r" })?.registration_id).toBe("r");
     });
