@@ -346,6 +346,8 @@ describe("kaoiro MCP server registration", () => {
       "send_to_agent",
       "list_agents",
       "whoami",
+      "set_status_line",
+      "read_status_line",
       "request_compact",
       "request_session_reset",
     ]);
@@ -366,13 +368,19 @@ describe("kaoiro MCP server registration", () => {
     expect(READ_ONLY_TOOLS.has(LIST_AGENTS_TOOL_FQN)).toBe(true);
   });
 
-  it("渡さなければ従来の 3 tool のまま (codex 側は出さない前提)", () => {
+  it("渡さなければ共通の 5 tool のまま (codex 側は出さない前提)", () => {
     // codex は InterAgentTool#descriptors() を直接使うため、request_compact
     // がそこに載っていないこと自体が「codex に出さない」の担保になる。
     const names = interAgent()
       .descriptors()
       .map((d) => d.name);
-    expect(names).toEqual(["send_to_agent", "list_agents", "whoami"]);
+    expect(names).toEqual([
+      "send_to_agent",
+      "list_agents",
+      "whoami",
+      "set_status_line",
+      "read_status_line",
+    ]);
     expect(kaoiroToolDescriptors(interAgent()).map((d) => d.name)).toEqual(
       names,
     );

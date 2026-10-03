@@ -676,6 +676,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // session has not opened yet either.
     requestDirectory: () =>
       link?.requestDirectory() ?? Promise.resolve({ agents: [], users: [] }),
+    // Issue 482. No link means nothing was stored or read; the tools report
+    // that rather than queueing for later.
+    setStatusLine: (text) =>
+      link?.setStatusLine(text) ??
+      Promise.resolve({ kind: "error" as const, reason: "not_connected" }),
+    readStatusLine: (agentId) =>
+      link?.readStatusLine(agentId) ??
+      Promise.resolve({ kind: "error" as const, reason: "not_connected" }),
     requestInterAgentDeliveryStatus: () =>
       link?.requestInterAgentDeliveryStatus() ?? Promise.resolve(null),
     getWhoami: () => ({

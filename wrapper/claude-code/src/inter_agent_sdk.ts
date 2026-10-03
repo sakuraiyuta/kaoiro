@@ -10,7 +10,9 @@ import {
   type McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
+  READ_STATUS_LINE_INPUT_SHAPE,
   SEND_TO_AGENT_INPUT_SHAPE,
+  SET_STATUS_LINE_INPUT_SHAPE,
   handoffToolResult,
   discardToolResult,
   type ReplyOrigin,
@@ -44,10 +46,19 @@ export function kaoiroToolDescriptors(
   const send = byName.get("send_to_agent");
   const list = byName.get("list_agents");
   const whoami = byName.get("whoami");
-  if (!send || !list || !whoami) {
+  const setStatusLine = byName.get("set_status_line");
+  const readStatusLine = byName.get("read_status_line");
+  if (!send || !list || !whoami || !setStatusLine || !readStatusLine) {
     throw new Error("inter-agent descriptors missing a required tool");
   }
-  return [send, list, whoami, ...claudeOnly.map((t) => t.descriptor)];
+  return [
+    send,
+    list,
+    whoami,
+    setStatusLine,
+    readStatusLine,
+    ...claudeOnly.map((t) => t.descriptor),
+  ];
 }
 
 /** Builds the SDK MCP server config to pass via Options.mcpServers.
@@ -61,11 +72,9 @@ export function buildKaoiroMcpServer(
   claudeOnly: ClaudeOnlyTool[] = [],
   resolveOrigin?: (id: unknown) => Promise<ReplyOrigin | undefined>,
 ): McpSdkServerConfigWithInstance {
-  const [send, list, whoami] = kaoiroToolDescriptors(interAgent) as [
-    ToolDescriptor,
-    ToolDescriptor,
-    ToolDescriptor,
-  ];
+  const [send, list, whoami, setStatusLine, readStatusLine] = kaoiroToolDescriptors(
+    interAgent,
+  ) as [ToolDescriptor, ToolDescriptor, ToolDescriptor, ToolDescriptor, ToolDescriptor];
   return createSdkMcpServer({
     name: "kaoiro",
     tools: [
@@ -85,6 +94,18 @@ export function buildKaoiroMcpServer(
       }),
       tool(list.name, list.description, {}, () => list.handler({})),
       tool(whoami.name, whoami.description, {}, () => whoami.handler({})),
+      tool(
+        setStatusLine.name,
+        setStatusLine.description,
+        SET_STATUS_LINE_INPUT_SHAPE,
+        (args) => setStatusLine.handler(args),
+      ),
+      tool(
+        readStatusLine.name,
+        readStatusLine.description,
+        READ_STATUS_LINE_INPUT_SHAPE,
+        (args) => readStatusLine.handler(args),
+      ),
       ...claudeOnly.map((t) =>
         tool(
           t.descriptor.name,
