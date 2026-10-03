@@ -39,7 +39,11 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
       descriptor = obligation.descriptor
 
       complete = fn ->
-        DeliveryStates.complete_queue_uncertain(obligation.recipient, obligation.queue_id)
+        DeliveryStates.complete_queue_uncertain(
+          obligation.recipient,
+          obligation.incarnation,
+          obligation.queue_id
+        )
       end
 
       cond do
@@ -70,6 +74,10 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
 
   defp uncertain_notice(obligation) do
     descriptor = obligation.descriptor
+    # Queue ids restart for a recreated recipient; the incarnation keeps a
+    # real second notice from reading as a duplicate.
+    loss_id =
+      "uncertain:#{obligation.recipient}:#{obligation.incarnation}:#{obligation.queue_id}"
 
     message =
       "the message may have reached the peer, but its delivery could not be confirmed; " <>
@@ -83,13 +91,13 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
       "body" => message,
       "meta" => %{"done" => false, "propose_next" => ""},
       "owner" => %{"kind" => "user", "id" => "system"},
-      "loss_id" => "uncertain:#{obligation.recipient}:#{obligation.queue_id}",
+      "loss_id" => loss_id,
       "error" => %{
         "code" => "delivery_uncertain",
         "message" => message,
         "synthetic" => false,
         "kind" => descriptor[:kind],
-        "loss_id" => "uncertain:#{obligation.recipient}:#{obligation.queue_id}",
+        "loss_id" => loss_id,
         "peer" => obligation.recipient,
         "reason" => obligation.reason
       }

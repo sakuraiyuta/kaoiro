@@ -267,9 +267,13 @@ defmodule KaoiroServer.DeliveryStates do
   def pending_queue_uncertain(server \\ __MODULE__),
     do: GenServer.call(server, :pending_queue_uncertain)
 
-  @doc "Removes one uncertain obligation once its sender notice was accepted."
-  def complete_queue_uncertain(recipient, queue_id, server \\ __MODULE__),
-    do: GenServer.call(server, {:complete_queue_uncertain, recipient, queue_id})
+  @doc """
+  Removes one uncertain obligation once its sender notice was accepted. Queue
+  ids restart when a recipient is recreated, so the ledger incarnation is
+  part of the key.
+  """
+  def complete_queue_uncertain(recipient, incarnation, queue_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:complete_queue_uncertain, recipient, incarnation, queue_id})
 
   def complete_loss(loss_id, revision, server \\ __MODULE__),
     do: GenServer.call(server, {:complete_loss, loss_id, revision})
@@ -1143,8 +1147,8 @@ defmodule KaoiroServer.DeliveryStates do
     {:reply, held ++ Map.values(state.orphan_uncertain), state}
   end
 
-  def handle_call({:complete_queue_uncertain, recipient, queue_id}, _from, state) do
-    orphan = "#{recipient}:#{queue_id}"
+  def handle_call({:complete_queue_uncertain, recipient, incarnation, queue_id}, _from, state) do
+    orphan = orphan_uncertain_id(recipient, incarnation, queue_id)
 
     state =
       cond do
@@ -1154,7 +1158,11 @@ defmodule KaoiroServer.DeliveryStates do
           %{state | orphan_uncertain: Map.delete(state.orphan_uncertain, orphan)}
 
         entry = state.entries[recipient] ->
-          kept = Enum.reject(entry.queue_uncertain, &(&1.queue_id == queue_id))
+          kept =
+            Enum.reject(
+              entry.queue_uncertain,
+              &(&1.queue_id == queue_id and &1.incarnation == incarnation)
+            )
 
           if kept == entry.queue_uncertain do
             state
@@ -1447,6 +1455,7 @@ defmodule KaoiroServer.DeliveryStates do
       for {queue_id, item} <- items do
         %{
           queue_id: queue_id,
+          incarnation: entry.incarnation,
           delivery_seq: item.delivery_seq,
           descriptor: item.descriptor,
           reason: reason_of.(queue_id),
@@ -2205,7 +2214,8 @@ defmodule KaoiroServer.DeliveryStates do
 
         orphans =
           Map.new(entry.queue_uncertain, fn obligation ->
-            {"#{agent_id}:#{obligation.queue_id}", Map.put(obligation, :recipient, agent_id)}
+            {orphan_uncertain_id(agent_id, obligation.incarnation, obligation.queue_id),
+             Map.put(obligation, :recipient, agent_id)}
           end)
 
         Enum.each(orphans, fn {id, obligation} ->
@@ -2226,6 +2236,9 @@ defmodule KaoiroServer.DeliveryStates do
         state
     end
   end
+
+  defp orphan_uncertain_id(recipient, incarnation, queue_id),
+    do: "#{recipient}:#{incarnation}:#{queue_id}"
 
   defp load_orphan_uncertain(table) do
     :dets.foldl(

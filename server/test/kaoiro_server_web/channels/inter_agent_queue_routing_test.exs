@@ -372,11 +372,15 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
         "agent_id" => "server",
         "payload" => %{
           "to" => to,
+          "loss_id" => loss_id,
           "error" => %{"code" => "delivery_uncertain", "peer" => peer, "reason" => "host_crashed"}
         }
       }
 
       assert {to, peer} == {ctx.sender, ctx.recipient}
+
+      assert loss_id ==
+               "uncertain:#{ctx.recipient}:#{reply["inter_agent_delivery_incarnation"]}:#{queue_id}"
 
       assert Enum.filter(
                DeliveryStates.pending_queue_uncertain(),

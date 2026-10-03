@@ -2136,6 +2136,48 @@ defmodule KaoiroServer.DeliveryStatesTest do
       assert %{charged_bytes: 0} = DeliveryStates.queue_counts("l-unknown", name)
     end
 
+    test "an uncertain obligation is keyed by incarnation across a recreated recipient", %{
+      name: name
+    } do
+      unknown = fn ->
+        {:ok, _} = DeliveryStates.bind_queue("l-recreate", "g1", self(), @lease_policy, name)
+        [a] = queued(name, "l-recreate", 1)
+        {:ok, offer} = DeliveryStates.queue_offer("l-recreate", "g1", self(), :root, name)
+
+        {:ok, _} =
+          DeliveryStates.queue_begin_native("l-recreate", "g1", self(), offer.lease_id, [a], name)
+
+        {:ok, _} =
+          DeliveryStates.queue_dispose(
+            "l-recreate",
+            "g1",
+            self(),
+            offer.lease_id,
+            [{a, :unknown}],
+            "t",
+            name
+          )
+
+        {a, DeliveryStates.incarnation("l-recreate", name)}
+      end
+
+      {first, old} = unknown.()
+      :ok = DeliveryStates.delete("l-recreate", name)
+      {second, new} = unknown.()
+      assert first == second and old != new
+
+      held = fn ->
+        for %{recipient: "l-recreate"} = o <- DeliveryStates.pending_queue_uncertain(name),
+            do: o.incarnation
+      end
+
+      assert Enum.sort(held.()) == Enum.sort([old, new])
+      :ok = DeliveryStates.complete_queue_uncertain("l-recreate", new, second, name)
+      assert held.() == [old]
+      :ok = DeliveryStates.complete_queue_uncertain("l-recreate", old, first, name)
+      assert held.() == []
+    end
+
     test "a new generation returns offers, resolves native-pending as uncertain, keeps queued", %{
       name: name
     } do
