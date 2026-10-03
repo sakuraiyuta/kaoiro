@@ -30,6 +30,16 @@ defmodule KaoiroServerWeb.StatusLineAnnouncerTest do
     %{agent: agent}
   end
 
+  # The store broadcasts every write through the production wiring too; only
+  # what the announcer sends after this point may satisfy an assertion.
+  defp flush_broadcasts do
+    receive do
+      %Phoenix.Socket.Broadcast{event: "status_line"} -> flush_broadcasts()
+    after
+      0 -> :ok
+    end
+  end
+
   defp live(agent) do
     {:ok, row} = AgentStatusLines.read_latest(agent)
     StatusLineWire.live_payload(agent, row)
@@ -37,6 +47,7 @@ defmodule KaoiroServerWeb.StatusLineAnnouncerTest do
 
   test "broadcasts the committed line as the live event", %{agent: agent} do
     {:ok, _} = AgentStatusLines.put(agent, "# Reviewing\n\nissue 482")
+    flush_broadcasts()
 
     assert :ok = StatusLineAnnouncer.announce(agent)
 
@@ -54,6 +65,7 @@ defmodule KaoiroServerWeb.StatusLineAnnouncerTest do
   test "announces a stamped clear, so a cached older line can be dropped", %{agent: agent} do
     {:ok, _} = AgentStatusLines.put(agent, "working")
     {:ok, _} = AgentStatusLines.put(agent, "")
+    flush_broadcasts()
 
     assert :ok = StatusLineAnnouncer.announce(agent)
 
@@ -71,6 +83,7 @@ defmodule KaoiroServerWeb.StatusLineAnnouncerTest do
 
   test "skips with a warning while the store is unavailable", %{agent: agent} do
     {:ok, _} = AgentStatusLines.put(agent, "working")
+    flush_broadcasts()
     :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, AgentStatusLines)
 
     log = capture_log(fn -> assert :ok = StatusLineAnnouncer.announce(agent) end)
@@ -86,6 +99,7 @@ defmodule KaoiroServerWeb.StatusLineAnnouncerTest do
     agent: agent
   } do
     {:ok, _} = AgentStatusLines.put(agent, "working")
+    flush_broadcasts()
     name = :"agent_states_announcer_#{System.unique_integer([:positive])}"
 
     start_supervised!(

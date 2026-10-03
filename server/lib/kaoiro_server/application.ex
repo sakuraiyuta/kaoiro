@@ -33,7 +33,13 @@ defmodule KaoiroServer.Application do
       KaoiroServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KaoiroServer.PubSub},
-      KaoiroServer.AgentStates,
+      # Both callbacks cross into KaoiroServerWeb the way PlannedDisconnects'
+      # :on_timeout does (issue 482): AgentStates announces an agent that has
+      # just become visible to viewers, and the web layer owns what "visible"
+      # means (ViewerAgentProjection).
+      {KaoiroServer.AgentStates,
+       visible?: &KaoiroServerWeb.StatusLineVisibility.viewer_visible?/1,
+       on_viewer_visible: &KaoiroServerWeb.StatusLineAnnouncer.announce/1},
       # In-memory peer-directory activity projection (#150). Kept separate
       # from AgentStates, whose sole ownership is latest envelopes/history.
       KaoiroServer.AgentActivity,
@@ -127,8 +133,11 @@ defmodule KaoiroServer.Application do
       # Agent status lines and their change log (issue 482). Reads
       # TokenDenylist at start, so it follows it and AgentDirectory, and it
       # must be up before the Endpoint: no channel reads its table before it
-      # exists.
-      KaoiroServer.AgentStatusLines,
+      # exists. :broadcast is the one place its data crosses into
+      # KaoiroServerWeb, same boundary reason as ConversationStates'
+      # :on_auto_closed above.
+      {KaoiroServer.AgentStatusLines,
+       broadcast: &KaoiroServerWeb.StatusLineBroadcast.broadcast/2},
       # Review-quagmire detection (issue #273). Reads ConversationStates and
       # DeliveryStates, so it starts after both. `:on_notice` is the one
       # place its data crosses into KaoiroServerWeb, same boundary reason as
