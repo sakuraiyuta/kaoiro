@@ -324,13 +324,62 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
 
     assert Process.alive?(socket.channel_pid)
 
-    # The timed-out request was applied once the owner resumed: the same id
-    # replays its reply, and a new id finds the lease already emptied.
+    # The stall caught the channel's fence calls, so nothing was applied: the
+    # same id applies the return once, and a new id finds the lease emptied.
     assert {:ok, %{"returned_ranges" => [[1, 1]]}} = control(socket, returned)
 
     assert {:error, %{reason: "unknown_lease"}} =
              control(socket, Map.merge(returned, %{"operation_id" => "99"}))
 
     assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(id)
+  end
+
+  test "a control call that times out at the owner applies later and replays", %{id: id} = ctx do
+    {reply, socket} = join_queue(id)
+
+    credit =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "credit",
+        "kind" => "root",
+        "native_turn_token" => "t"
+      })
+
+    {:ok, _} = control(socket, credit)
+    queue_id = enqueue(id, "peer.a")
+    assert_push "delivery_batch", %{"lease_id" => lease_id}
+
+    begin =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "begin_native",
+        "lease_id" => lease_id,
+        "queue_ids" => [queue_id],
+        "native_turn_token" => "t"
+      })
+
+    request = %{
+      op: :begin_native,
+      lease_id: String.to_integer(lease_id),
+      queue_ids: [String.to_integer(queue_id)],
+      token: "t"
+    }
+
+    owner = Process.whereis(DeliveryStates)
+    :ok = :sys.suspend(owner)
+
+    try do
+      # The channel's own call, timed out after its fence checks passed.
+      call =
+        {:queue_control, id, "generation", socket.channel_pid, begin["operation_id"], request}
+
+      assert {:timeout, _} = catch_exit(GenServer.call(owner, call, 100))
+    after
+      :ok = :sys.resume(owner)
+    end
+
+    assert %{native_pending: 1} = DeliveryStates.queue_counts(id)
+    assert {:ok, %{"permitted_queue_ids" => [^queue_id]}} = control(socket, begin)
+
+    assert {:error, %{reason: "unknown_queue_item"}} =
+             control(socket, Map.merge(begin, %{"operation_id" => "99"}))
   end
 end

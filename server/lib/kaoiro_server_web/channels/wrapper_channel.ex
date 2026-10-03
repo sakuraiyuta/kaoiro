@@ -964,8 +964,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
           {:ok, queue_control_reply(payload, request.op, reply)}
         end
       catch
-        # The queue owner failed (a storage fault stops it): nothing changed,
-        # and this channel stays up to say so.
+        # The queue owner did not answer (stalled, or stopped by a storage
+        # fault). A timed-out request may still apply; the wrapper retries
+        # the same operation_id (channels.md, Idempotency).
         :exit, _ -> {:error, :queue_unavailable}
       end
 
