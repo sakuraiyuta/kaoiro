@@ -61,9 +61,11 @@ defmodule KaoiroServer.AgentStatusLines do
 
   `:name` (process and DETS name), `:table` and `:building` (ETS names),
   `:path`, `:sync_fun`, `:clock`, `:broadcast`, `:fallback`, `:denylist`,
-  `:endpoint_up?`, `:ln_fun`, `:rm_fun`, `:backup_suffix` and `:phase_c_hook` exist so tests
-  can run isolated instances and inject a failure. Production sets none of
-  them.
+  `:endpoint_up?`, `:ln_fun`, `:rm_fun`, `:backup_suffix` and `:phase_c_hook`
+  are options. Production passes `:broadcast`
+  (`KaoiroServerWeb.StatusLineBroadcast.broadcast/2`, wired in `application.ex`)
+  and takes the default of every other one; tests set the rest to run isolated
+  instances and to inject a failure.
   """
 
   use GenServer
