@@ -849,30 +849,24 @@ describe("permission gate cancellation notice composition", () => {
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const root = await mkdtemp(join(tmpdir(), "fuji340-cli-notice-"));
-    const sent: Envelope[] = [];
-    const acknowledgements: number[] = [];
+    const wire = await phoenixLoopback(() => ({
+      delivery_resync: "skip-v1",
+      delivery: { issued_seq: 0, acked_seq: 0 },
+      permission_sync: true,
+    }));
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    // The CLI builds its real coordinator, classifier, notice resolver and
-    // Host. Transport and SDK process construction are replaced so delivery
-    // and attempted execution can be counted independently.
-    let onMessage!: (envelope: Envelope) => void | Promise<void>;
+    // The CLI builds its real ServerLink, coordinator, classifier, notice
+    // resolver and Host. Only the provider client remains at its documented
+    // external-I/O seam.
     let host: InstanceType<typeof CodexHost> | undefined;
     let sdkCalls = 0;
-    const running = runCodexCli({
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    let running: Promise<void> | undefined;
+    try {
+      running = runCodexCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ ...config, sandbox: "read-only", network_access: false }),
-      createServerLink: (_url, _id, options) => {
-        onMessage = options.onInterAgentMessage!;
-        queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("test"); });
-        return {
-          close() {}, currentSessionId: () => null,
-          send: (envelope: Envelope) => sent.push(envelope),
-          sendInterAgent: async (envelope: Envelope) => { sent.push(envelope); return { kind: "accepted", stamp: null }; },
-          acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
-          waitForPermissionSyncNegotiation: async () => true,
-          waitForPermissionSync: async () => {},
-        } as never;
-      },
+      loadConfig: () => ({ ...config, server_url: wire.url, sandbox: "read-only", network_access: false }),
       createHost: (cfg, options) => {
         host = new CodexHost(cfg, { ...options, permissionGateTimeoutMs: 50,
           turnTraceDir: root, permissionRolloutRoot: root,
@@ -891,24 +885,40 @@ describe("permission gate cancellation notice composition", () => {
         return host;
       },
       prepareStartup: async () => {},
-    });
-    try {
+      });
+      await vi.waitFor(() => expect(wire.joins).toBe(1));
+      wire.push("persona_prompt", { version: "0", prompt: "test" });
+      wire.push("permission_sync", { version: "0", control: null, next: null });
       await vi.waitFor(() => expect(host).toBeDefined());
-      await onMessage(inboundEnvelope(1));
-      await vi.waitFor(() => expect(sent.some((e) => JSON.stringify(e).includes('"permission_gate_blocked"'))).toBe(true));
-      const notices = sent.filter((e) => e.type === "inter_agent_message");
+      wire.push("envelope", inboundEnvelope(1) as unknown as Record<string, unknown>);
+      await vi.waitFor(() => expect(wire.received.some(item =>
+        item.event === "envelope" && JSON.stringify(item.payload).includes('"permission_gate_blocked"'),
+      )).toBe(true));
+      const notices = wire.received
+        .filter(item => item.event === "envelope" && item.payload.type === "inter_agent_message")
+        .map(item => item.payload as unknown as Envelope);
       expect(notices).toHaveLength(1);
       expect(notices[0]).toMatchObject({ payload: { to: "peer.agent", conversation_id: "c-1",
         error: { code: "permission_gate_blocked", message: expect.stringContaining("reapply the same sandbox/network") } } });
-      expect(acknowledgements).toEqual([]); expect(sdkCalls).toBe(0);
+      expect(wire.received.filter(item => item.event === "delivery_ack")).toEqual([]); expect(sdkCalls).toBe(0);
       expect(host!.state).toBe("waiting_input");
       const output = stderr.mock.calls.map(([text]) => String(text)).join("");
       expect(output).toContain('"event":"permission_gate_timeout"');
       expect(output).toContain('"revision":4');
       expect(output).toContain('"reason":"observation_unavailable"');
     } finally {
-      host?.close(); await running;
-      stderr.mockRestore(); await rm(root, { recursive: true, force: true });
+      host?.close();
+      try {
+        if (running !== undefined) await running;
+      } finally {
+        try {
+          await wire.close();
+        } finally {
+          if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+          else process.env.CODEX_HOME = originalCodexHome;
+          stderr.mockRestore(); await rm(root, { recursive: true, force: true });
+        }
+      }
     }
   });
 });

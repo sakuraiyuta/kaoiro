@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runAntigravityCli } from "../src/cli.js";
+import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -326,6 +327,10 @@ describe("Antigravity CLI delivery composition", () => {
 
   it("runs an inbound delivery through the production default CLI and host to an agy child", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-inbound-default-"));
+    const wire = await phoenixLoopback(() => ({
+      delivery_resync: "skip-v1",
+      delivery: { issued_seq: 0, acked_seq: 0 },
+    }));
     const executable = join(root, "agy-fixture.mjs");
     const configPath = join(root, "wrapper.config.json");
     const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
@@ -345,48 +350,40 @@ if (args[0] === "models") {
     chmodSync(executable, 0o755);
     writeFileSync(configPath, JSON.stringify({
       ...config,
+      server_url: wire.url,
       antigravity_cli_path: executable,
       antigravity_probe_timeout_ms: 45_000,
     }));
-    const acknowledgements: number[] = [];
-    let options!: Record<string, any>;
     let host: { close(): void } | undefined;
-    let resultSeen!: () => void;
-    const result = new Promise<void>((resolve) => { resultSeen = resolve; });
+    let running: Promise<void> | undefined;
+    const originalHome = process.env.HOME;
 
     try {
-      const run = runAntigravityCli({
+      process.env.HOME = root;
+      running = runAntigravityCli({
         parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
         onHostCreated: (created) => {
           host = created;
-          queueMicrotask(() => {
-            void (options.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
-              inbound(1, 1, "DEFAULT_COMPOSITION_SENTINEL"),
-            );
-          });
-        },
-        createServerLink: (_url, _agentId, createdOptions) => {
-          options = createdOptions as unknown as Record<string, any>;
-          queueMicrotask(() => {
-            options.onPersonaPrompt("persona");
-            options.onInterAgentDeliveryStatus({ acked_seq: 0 });
-          });
-          return {
-            close: () => {},
-            setSessionId: () => {},
-            acknowledgeInterAgentDelivery: (sequence: number) => acknowledgements.push(sequence),
-            send: (envelope: Envelope) => {
-              if (envelope.type === "result") resultSeen();
-            },
-          } as never;
         },
       });
 
-      await result;
+      await vi.waitFor(() => expect(wire.joins).toBe(1));
+      wire.push("persona_prompt", { prompt: "persona" });
+      const receipt = inbound(1, 1, "DEFAULT_COMPOSITION_SENTINEL");
+      receipt.payload.conversation_id = `issue214-default-${process.pid}`;
+      wire.push("envelope", receipt as unknown as Record<string, unknown>);
+      await vi.waitFor(() => expect(wire.received.some(item =>
+        item.event === "envelope" && item.payload.type === "result",
+      )).toBe(true));
+      await vi.waitFor(() => expect(wire.received.some(item => item.event === "delivery_ack" && item.payload.delivery_seq === 1)).toBe(true));
       host?.close();
-      await run;
-      expect(acknowledgements).toEqual([1]);
+      await running;
     } finally {
+      host?.close();
+      await wire.close();
+      if (running !== undefined) await running;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
       rmSync(root, { force: true, recursive: true });
     }
   });

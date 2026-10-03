@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
@@ -1055,9 +1058,15 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     }
   });
   it.each([false, true])(
-    "acks a mid-turn arrival only when the real host yields the next input (stderr failure: %s)",
+    "real Phoenix link and SDK iterator ack a mid-turn receipt only when the host yields it (stderr failure: %s)",
     async (stderrFails) => {
-      const acknowledgements: number[] = [];
+      const privateHome = mkdtempSync(join(tmpdir(), "kaoiro-claude-214-composition-"));
+      const originalHome = process.env.HOME;
+      const wire = await phoenixLoopback(() => ({
+        delivery_resync: "skip-v1",
+        delivery: { issued_seq: 0, acked_seq: 0 },
+      }));
+      process.env.HOME = privateHome;
       const inputs: SDKUserMessage[] = [];
       const lifecycle: Record<string, unknown>[] = [];
       const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -1074,7 +1083,6 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       const firstBoundary = new Promise<void>((resolve) => { releaseFirst = resolve; });
       let releaseSecond!: () => void;
       const secondBoundary = new Promise<void>((resolve) => { releaseSecond = resolve; });
-      let linkOptions!: Record<string, any>;
       let host!: AgentHost;
       const queryFn: NonNullable<AgentHostOptions["queryFn"]> = (args) => {
         async function* frames(): AsyncGenerator<SDKMessage, void> {
@@ -1093,19 +1101,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       };
       const running = runClaudeCli({
         parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
-        loadConfig: () => ({ ...config }),
-        createServerLink: (_url, _agentId, options) => {
-          linkOptions = options as unknown as Record<string, any>;
-          queueMicrotask(() => {
-            linkOptions.onInterAgentDeliveryStatus({ issued_seq: 0, acked_seq: 0 });
-            linkOptions.onPersonaPrompt("system prompt");
-          });
-          return {
-            acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
-            close: () => {}, currentSessionId: () => null, setSessionId: () => {}, send: () => {},
-            reportSessionLifecycle: () => {},
-          } as never;
-        },
+        loadConfig: () => ({ ...config, server_url: wire.url }),
         createHost: (config, options) => {
           host = new AgentHost(config, { ...options, queryFn });
           return host;
@@ -1115,18 +1111,20 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       // still awaits the original promise and propagates its rejection.
       void running.catch(() => {});
       try {
+        await vi.waitFor(() => expect(wire.joins).toBe(1));
+        wire.push("persona_prompt", { version: "0", prompt: "system prompt" });
         await vi.waitFor(() => expect(host?.state).toBe("tool_running"));
-        await linkOptions.onInterAgentMessage(inboundEnvelope(1));
+        wire.push("envelope", inboundEnvelope(1) as unknown as Record<string, unknown>);
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(inputs).toHaveLength(1);
-        expect(acknowledgements).toEqual([]);
+        expect(wire.received.filter((event) => event.event === "delivery_ack")).toEqual([]);
         if (!stderrFails) {
           expect(lifecycle.filter((event) => event.seq_first === 1).map((event) => event.event))
             .toEqual(["dispatch_queued"]);
         }
         releaseFirst();
         await vi.waitFor(() => expect(inputs).toHaveLength(2));
-        expect(acknowledgements).toEqual([1]);
+        await vi.waitFor(() => expect(wire.received.filter((event) => event.event === "delivery_ack").map((event) => event.payload.delivery_seq)).toEqual([1]));
         if (!stderrFails) {
           const queued = lifecycle.find((event) => event.event === "dispatch_queued")!;
           expect(lifecycle).toContainEqual(expect.objectContaining({
@@ -1146,8 +1144,15 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         try {
           await running;
         } finally {
-          stderr.mockRestore();
-          output.mockRestore();
+          try {
+            await wire.close();
+          } finally {
+            if (originalHome === undefined) delete process.env.HOME;
+            else process.env.HOME = originalHome;
+            rmSync(privateHome, { force: true, recursive: true });
+            stderr.mockRestore();
+            output.mockRestore();
+          }
         }
       }
     },

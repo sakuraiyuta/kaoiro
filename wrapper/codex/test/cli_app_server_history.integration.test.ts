@@ -26,12 +26,29 @@ it("wires full and tail history through the CLI, default Host session and real S
   const sent = vi.spyOn(ServerLink.prototype, "send");
   const scheduled = vi.spyOn(CodexHost.prototype, "scheduleHistoryReplay");
   const queued = vi.spyOn(CodexHost.prototype, "send");
-  const wire = await phoenixLoopback(n => ({ hydration: { replay_required: true, replay_id: `r${n}` } }));
+  let ackedDeliverySeq = 0;
+  const wire = await phoenixLoopback(
+    n => ({
+      hydration: { replay_required: true, replay_id: `r${n}` },
+      delivery_resync: "skip-v1",
+      delivery: { issued_seq: 1, acked_seq: ackedDeliverySeq },
+      inter_agent_delivery_incarnation: "server-incarnation",
+    }),
+    (event, payload) => {
+      if (event === "delivery_ack" && typeof payload.delivery_seq === "number") {
+        ackedDeliverySeq = Math.max(ackedDeliverySeq, payload.delivery_seq);
+      }
+      return {};
+    },
+  );
   let host: CodexHost | undefined, running: Promise<void> | undefined;
   const starts: string[] = [], finals: string[] = [];
+  const requestBodies: string[] = [];
   const signals = process.listeners("SIGINT");
   const server = createServer(async (request, response) => {
-    for await (const _chunk of request) {}
+    let requestBody = "";
+    for await (const chunk of request) requestBody += String(chunk);
+    requestBodies.push(requestBody);
     calls += 1;
     if (calls === 2) await hold;
     await responses.get(calls)?.ready;
@@ -105,8 +122,32 @@ enabled = false
       { kind: "assistant", text: "ANSWER_1_0" }, { kind: "assistant", text: "ANSWER_1_1" },
     ]);
     expect(calls).toBe(1);expect(starts).toEqual([]);expect(finals).toEqual([]);
-    wire.push("instruction", { version: "0", text: "NEXT" });
+    wire.push("envelope", {
+      version: "0",
+      agent_id: "peer.agent",
+      persona: { id: "peer", name: "Peer", sprite_set: "peer" },
+      display_name: "Peer",
+      ts: "2026-10-03T00:00:00.000Z",
+      type: "inter_agent_message",
+      state: "thinking",
+      payload: {
+        to: "history-cli",
+        conversation_id: "issue214-f1-real-boundary",
+        turn_number: 1,
+        kind: "inform",
+        body: "ISSUE214_NATIVE_INPUT_BOUNDARY",
+        meta: { done: false, propose_next: "" },
+        owner: { kind: "user", id: "operator" },
+        new_conversation: true,
+      },
+      delivery_seq: 1,
+      ext: {},
+    });
     await vi.waitFor(() => expect(calls).toBe(2), { timeout: 25_000 });
+    expect(requestBodies[1]).toContain("ISSUE214_NATIVE_INPUT_BOUNDARY");
+    await vi.waitFor(() => expect(wire.received.some(e =>
+      e.event === "delivery_ack" && e.payload.delivery_seq === 1,
+    )).toBe(true));
     wire.drop();await vi.waitFor(() => expect(wire.joins).toBe(2), { timeout: 10_000 });
     wire.push("instruction", { version: "0", text: "AFTER" });
     await vi.waitFor(() => expect(scheduled).toHaveBeenCalledTimes(2));
@@ -126,10 +167,9 @@ enabled = false
     const thirdAnswer = wire.received.findIndex(e => e.event === "envelope" && (e.payload.payload as { text?: string })?.text === "ANSWER_3_0");
     expect(thirdAnswer).toBeGreaterThan(completedReplay);
     expect(results()).toHaveLength(2);
-    expect(wire.received.filter(e => e.event === "delivery_ack")).toHaveLength(0);
+    expect(wire.received.filter(e => e.event === "delivery_ack")).toHaveLength(1);
     expect(calls).toBe(3);expect(starts).toHaveLength(2);
-    // The first two cycles above use the untouched default path. Hold one read
-    // here solely to make the live-user arrival window deterministic.
+    // Hold one history read here to make the live-user arrival window deterministic.
     let unblock!: () => void, reading = false;
     const blocked = new Promise<void>(resolve => { unblock = resolve; });
     const originalRead = AppServerSession.prototype.readHistory;
