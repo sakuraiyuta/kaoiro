@@ -28,7 +28,7 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
       end)
     end)
 
-    %{sender: sender, recipient: recipient}
+    %{sender: sender, recipient: recipient, configured: previous}
   end
 
   defp join_agent(id, params) do
@@ -157,16 +157,9 @@ defmodule KaoiroServerWeb.InterAgentQueueRoutingTest do
     assert %{queued: 1} = DeliveryStates.queue_counts(ctx.recipient)
   end
 
-  test "with routing off, accepted input keeps the direct push", ctx do
-    Application.put_env(
-      :kaoiro_server,
-      :inter_agent_queue,
-      Keyword.put(
-        Application.fetch_env!(:kaoiro_server, :inter_agent_queue),
-        :route_accepted,
-        false
-      )
-    )
+  test "routing is off by default and then accepted input keeps the direct push", ctx do
+    assert Keyword.get(ctx.configured, :route_accepted) == false
+    Application.put_env(:kaoiro_server, :inter_agent_queue, ctx.configured)
 
     {_reply, _recipient} = join_agent(ctx.recipient, queue_params(10))
     {_reply, sender} = join_agent(ctx.sender, %{})
