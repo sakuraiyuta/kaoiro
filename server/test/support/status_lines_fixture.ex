@@ -11,7 +11,7 @@ defmodule KaoiroServer.StatusLinesFixture do
 
   import ExUnit.Callbacks, only: [on_exit: 1]
 
-  alias KaoiroServer.{AgentStatusLines, TestTeardown}
+  alias KaoiroServer.{AgentStatusLines, TestTeardown, TokenDenylist}
 
   @fallback %{retention: 20, source: :default}
 
@@ -35,6 +35,7 @@ defmodule KaoiroServer.StatusLinesFixture do
   def start_store(overrides \\ []) do
     ctx = Map.merge(names(), Map.new(Keyword.take(overrides, [:name, :table, :building, :path])))
     if not Keyword.has_key?(overrides, :path), do: File.rm(ctx.path)
+    ctx = Map.put_new(ctx, :denylist, Keyword.get_lazy(overrides, :denylist, &start_denylist/0))
     {:ok, pid} = AgentStatusLines.start_link(opts(ctx, overrides))
 
     on_exit(fn ->
@@ -45,6 +46,26 @@ defmodule KaoiroServer.StatusLinesFixture do
     Map.put(ctx, :pid, pid)
   end
 
+  @doc """
+  An isolated `TokenDenylist` holding `ids`, stopped at teardown. Every store
+  reads one at start, so a test never depends on the application's own.
+  """
+  def start_denylist(ids \\ []) do
+    n = System.unique_integer([:positive])
+    name = :"asl_denylist_#{n}"
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "asl_denylist_#{n}.dets"])
+    File.rm(path)
+    {:ok, pid} = TokenDenylist.start_link(name: name, path: path)
+
+    on_exit(fn ->
+      TestTeardown.stop_quietly(pid)
+      File.rm(path)
+    end)
+
+    Enum.each(ids, &(:ok = TokenDenylist.revoke(&1, nil, name)))
+    name
+  end
+
   @doc "The `start_link` options for `ctx`, with `overrides` on top."
   def opts(ctx, overrides \\ []) do
     base = [
@@ -52,7 +73,11 @@ defmodule KaoiroServer.StatusLinesFixture do
       table: ctx.table,
       building: ctx.building,
       path: ctx.path,
-      fallback: @fallback
+      fallback: @fallback,
+      denylist: Map.get_lazy(ctx, :denylist, &start_denylist/0),
+      # The test node's Endpoint is always up; an isolated store behaves like a
+      # first boot unless a test says otherwise.
+      endpoint_up?: fn -> false end
     ]
 
     Keyword.merge(base, Keyword.drop(overrides, [:name, :table, :building]))

@@ -36,19 +36,39 @@ defmodule KaoiroServer.AgentStatusLines do
   `:unavailable`, never "no line". `settings/1`, `latest/2` and `history/2` go
   through the owner and map every exit of that call to `:unavailable`.
 
+  ## Start
+
+  Phase A reads the storage: this process must be the only opener of its DETS
+  name (an existing table stops `init/1` with `:status_line_table_already_open`
+  and is left alone), the revoked ids are read once from `TokenDenylist` (an
+  unreadable denylist stops `init/1`, it is never treated as empty), the file is
+  opened, records are validated, ids revoked or deleted are swept, the log is
+  pruned to the retention, and one sync writes the repairs. Phase B builds the
+  rows in memory, phase C publishes them (build then rename), and phase D
+  announces every row and the settings, but only when the Endpoint is already up
+  (a child restart, not the first boot).
+
+  Open errors: a file that is not a DETS file is moved aside to
+  `<path>.corrupt-<UTC>-<n>` by hard link then unlink, which never replaces an
+  existing backup, and a fresh file is opened. Every other error (`file_error`,
+  `type_mismatch`, anything unknown) stops `init/1` and leaves the file as it
+  was. A start-up sync failure after a successful open does not stop the
+  server: the store starts dirty and publishes the rows as read.
+
   ## Options
 
   `:name` (process and DETS name), `:table` and `:building` (ETS names),
-  `:path`, `:sync_fun`, `:clock`, `:broadcast`, `:fallback` and
-  `:phase_c_hook` exist so tests can run isolated instances and inject a
-  failure. Production sets none of them.
+  `:path`, `:sync_fun`, `:clock`, `:broadcast`, `:fallback`, `:denylist`,
+  `:endpoint_up?`, `:ln_fun`, `:rm_fun`, `:backup_suffix` and `:phase_c_hook` exist so tests
+  can run isolated instances and inject a failure. Production sets none of
+  them.
   """
 
   use GenServer
 
   require Logger
 
-  alias KaoiroServer.{DetsStorePath, MarkdownHead, MarkdownText, StatusLineWire}
+  alias KaoiroServer.{DetsStorePath, MarkdownHead, MarkdownText, StatusLineWire, TokenDenylist}
 
   @max_bytes 16_384
   @head_bytes 512
@@ -200,6 +220,12 @@ defmodule KaoiroServer.AgentStatusLines do
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
       broadcast: Keyword.get(opts, :broadcast, fn _event, _payload -> :ok end),
       phase_c_hook: Keyword.get(opts, :phase_c_hook),
+      denylist: Keyword.get(opts, :denylist, TokenDenylist),
+      endpoint_up?: Keyword.get(opts, :endpoint_up?, &endpoint_up?/0),
+      ln_fun: Keyword.get(opts, :ln_fun, &File.ln/2),
+      rm_fun: Keyword.get(opts, :rm_fun, &File.rm/1),
+      backup_suffix:
+        Keyword.get(opts, :backup_suffix, fn -> System.unique_integer([:positive]) end),
       dirty: false,
       retention: nil,
       source: nil
@@ -208,39 +234,109 @@ defmodule KaoiroServer.AgentStatusLines do
     fallback = Keyword.get(opts, :fallback) || boot_fallback()
 
     with :ok <- check_fallback(fallback),
-         DetsStorePath.prepare_parent!(path),
-         {:ok, table} <- open_table(name, path) do
-      # DETS has no creation-mode option; the parent directory is owner-only.
-      _ = File.chmod(path, 0o600)
-      start(state, table, fallback)
+         :ok <- check_single_opener(name) do
+      # Not rescued: if the denylist cannot be read, init stops. An unreadable
+      # denylist is never treated as an empty one.
+      denied = TokenDenylist.all(state.denylist)
+      DetsStorePath.prepare_parent!(path)
+
+      case open_table(state, path) do
+        {:ok, table} ->
+          # DETS has no creation-mode option; the parent directory is owner-only.
+          _ = File.chmod(path, 0o600)
+          start(state, table, fallback, denied)
+
+        {:error, reason} ->
+          {:stop, reason}
+      end
     else
       {:error, reason} -> {:stop, reason}
     end
   end
 
-  # Phase A (storage) and B (view), then C (publication).
-  defp start(state, table, fallback) do
+  # Only this process opens the table. Joining a table somebody else holds would
+  # make a close here silently succeed while the table stays, so a name that is
+  # already open stops init instead of being adopted.
+  defp check_single_opener(name) do
+    if :dets.info(name) == :undefined, do: :ok, else: {:error, :status_line_table_already_open}
+  end
+
+  defp endpoint_up?, do: is_pid(Process.whereis(KaoiroServerWeb.Endpoint))
+
+  # Phase A (storage) and B (view), then C (publication) and D (notification).
+  defp start(state, table, fallback, denied) do
     loaded = load(table)
     {retention, source} = effective_retention(loaded.retention, fallback)
 
-    {agents, repairs} = prune(loaded.agents, retention)
+    # Revoked and deleted agents lose their record at every start. The view
+    # below is built from what is left, whether or not the sync succeeds.
+    {live, swept} = sweep(loaded.agents, denied)
+    {agents, prunes} = prune(live, retention)
+    sweeps = for id <- swept, do: {:delete, {:agent, id}}
 
     state =
-      case repair(state, repairs ++ loaded.invalid) do
+      case repair(state, prunes ++ sweeps ++ loaded.invalid) do
         :ok -> %{state | retention: retention, source: source}
         :failed -> %{state | retention: retention, source: source, dirty: true}
       end
 
     rows = view(agents)
-    log_start(agents, state, loaded)
+    log_start(agents, state, loaded, length(swept))
     publish_table(state, rows)
+    announce(state, rows)
     {:ok, state}
   end
 
-  defp open_table(name, path) do
-    case :dets.open_file(name, file: String.to_charlist(path), type: :set) do
-      {:ok, ^name} -> {:ok, name}
+  defp sweep(agents, denied) do
+    {swept, live} = Map.split(agents, Map.keys(denied))
+    {live, Map.keys(swept)}
+  end
+
+  defp open_table(state, path) do
+    case :dets.open_file(state.name, file: String.to_charlist(path), type: :set) do
+      {:ok, name} -> {:ok, name}
+      {:error, {:not_a_dets_file, _path}} -> reopen_after_move_aside(state, path)
       {:error, reason} -> {:error, {:status_line_open_failed, reason}}
+    end
+  end
+
+  # Only a file that is not a DETS file at all is set aside; the stored
+  # retention pick goes with it. file_error, type_mismatch and anything unknown
+  # never reach here: renaming a live file over a transient error would turn it
+  # into data loss.
+  defp reopen_after_move_aside(state, path) do
+    with {:ok, backup} <- move_aside(state, path, 3) do
+      Logger.error(
+        "agent status lines: #{path} is not a DETS file; moved to #{backup} and starting " <>
+          "empty (the stored retention pick is lost)"
+      )
+
+      case :dets.open_file(state.name, file: String.to_charlist(path), type: :set) do
+        {:ok, name} -> {:ok, name}
+        {:error, reason} -> {:error, {:status_line_open_failed, reason}}
+      end
+    end
+  end
+
+  # A hard link to a unique name, then unlink. Unlike a rename, the link fails
+  # when the name exists, so an earlier backup is never replaced. If the link or
+  # the unlink fails, init stops with the original untouched and no fresh file.
+  defp move_aside(state, path, attempts) do
+    stamp = state.clock.() |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+    backup = "#{path}.corrupt-#{stamp}-#{state.backup_suffix.()}"
+
+    case state.ln_fun.(path, backup) do
+      :ok ->
+        case state.rm_fun.(path) do
+          :ok -> {:ok, backup}
+          {:error, reason} -> {:error, {:status_line_move_aside_failed, {:unlink, reason}}}
+        end
+
+      {:error, :eexist} when attempts > 1 ->
+        move_aside(state, path, attempts - 1)
+
+      {:error, reason} ->
+        {:error, {:status_line_move_aside_failed, {:link, reason}}}
     end
   end
 
@@ -382,7 +478,23 @@ defmodule KaoiroServer.AgentStatusLines do
   defp hook(%{phase_c_hook: nil}, _point), do: :ok
   defp hook(%{phase_c_hook: fun}, point), do: fun.(point)
 
-  defp log_start(agents, state, loaded) do
+  # Phase D. A child restart leaves clients connected, so they are told what is
+  # committed; the first boot has no client yet. Each broadcast is isolated, and
+  # a failed one does not undo the commit.
+  defp announce(state, rows) do
+    if state.endpoint_up?.() do
+      for {id, entry, head, truncated, bytes} <- Map.values(rows) do
+        published = %{entry: entry, head: head, truncated: truncated, bytes: bytes}
+        broadcast(state, "status_line", StatusLineWire.live_payload(id, published))
+      end
+
+      broadcast(state, "status_line_settings", settings_payload(state))
+    end
+
+    :ok
+  end
+
+  defp log_start(agents, state, loaded, swept) do
     size =
       case File.stat(state.path) do
         {:ok, %{size: size}} -> size
@@ -394,7 +506,8 @@ defmodule KaoiroServer.AgentStatusLines do
     Logger.info(
       "agent status lines: #{map_size(agents)} agents, #{entries} entries, " <>
         "file #{size} bytes, retention #{state.retention} (#{state.source}), " <>
-        "#{length(loaded.invalid)} invalid records dropped, dirty=#{state.dirty}"
+        "#{length(loaded.invalid)} invalid records dropped, #{swept} revoked swept, " <>
+        "dirty=#{state.dirty}"
     )
   end
 
