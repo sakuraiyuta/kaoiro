@@ -185,10 +185,10 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
       page,
     }) => {
       if (label === "sprite") {
-        // Pin the broken-<img> branch explicitly: Vite's missing-file SPA
+        // Pin the image-error path explicitly: Vite's missing-file SPA
         // fallback is 200/text/html, so the unstubbed response is not a
-        // stable HTTP-error fixture and a real file appearing under
-        // dashboard/public/sprites would silently turn this green.
+        // stable HTTP-error fixture. PersonaFace then drops the <img> and
+        // shows the CSS face.
         await page.route("**/sprites/ao/idle.png", (route) =>
           route.fulfill({ status: 404, body: "" }),
         );
@@ -205,7 +205,9 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
       }
       const ring = page.locator("aside.status .portrait .task-ring");
       await expect(ring).toBeVisible();
-      // 404 フォールバック後も AgentDetail はマニフェスト定義(!spriteUrl)に従い最大半径の sprite-orbit を維持して .bar 非重なりを検証する。
+      // The orbit follows the manifest (spriteUrl), not the image load
+      // result, so the sprite case still measures the larger sprite-orbit
+      // radius after the fallback.
       await expect(ring).toHaveClass(
         expectFaceOrbit ? /face-orbit/ : /^(?!.*face-orbit).*$/,
       );
