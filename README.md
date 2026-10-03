@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo/kaoiro-logo-on-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/logo/kaoiro-logo-on-light.png">
+    <img alt="kaoiro" src="docs/images/logo/kaoiro-logo.png" width="480">
+  </picture>
+</p>
+
 # kaoiro (kao-iro, 'complexion' or 'how someone looks')
 
 > **Status**: research prototype. It is developed mainly for daily use by the
