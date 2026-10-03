@@ -229,9 +229,16 @@ superseding credit waits for that. Permitted items become `native_pending`
 and free the slot. A `credit` with `kind: "root"` is refused with
 `previous_root_pending`, and recorded as an invariant violation, while any
 root item of an earlier native turn is still `native_pending`; the wrapper
-disposes such items first (as `unknown` when no witness arrived).
+disposes such items first (as `unknown` when no witness arrived). For the
+same reason an outstanding root credit is not served while a root item is
+`native_pending`: a root credit stands for an idle host. An early item
+returned under early credit leaves that credit outstanding for the next
+early item.
 
-*Idempotency.* An operation is keyed by `(recipient, queue_epoch,
+*Idempotency.* `operation_id` is a positive decimal integer without leading
+zeros that the wrapper increases with every operation of a generation; an
+id that is not one is refused with `invalid_queue_control`
+(`field: "operation_id"`). An operation is keyed by `(recipient, queue_epoch,
 generation, operation_id)`. The server keeps its record (payload digest,
 reply, and the phase each touched item entered) across reconnects in the
 same generation until every touched item has left that phase, or the epoch
@@ -250,9 +257,11 @@ durable record. A retry with the same `operation_id`:
   and the current `items: [{queue_id, phase}]`; it never repeats the
   original success, so a stale `begin_native` cannot re-permit a returned
   item;
-- after the record is gone, is refused with `unknown_operation`; an expired
-  id and a never-seen id are not distinguished, and the wrapper reconciles
-  through `resume`.
+- after the record is gone, is refused with `unknown_operation`. The server
+  keeps the highest id it has recorded for the generation: an id above it is
+  a new operation, and an id at or below it without a record is
+  `unknown_operation`, whether it expired or never succeeded. The wrapper
+  reconciles through `resume`.
 
 *Return and dispose.* `return` reasons: `early_ineligible` with
 `sub_reason` one of `same_peer_in_turn`, `conversation_pending`,
