@@ -62,6 +62,9 @@ answers `unknown_agent`. Both tools are in the Claude default auto-allow set
 ([inter-agent tool authorization](../security/inter-agent-tool-authorization.md));
 `set_status_line` is the one non-read-only entry there, because its effect is
 bounded to the caller's own line.
+A Claude peer whose config sets an explicit `allowed_tools` list does not get
+that set and must list both tools itself
+([runbook](../../operations/server-update-and-rollback.md#47-peers-with-an-explicit-allowed_tools-list)).
 
 ## Change log and retention
 
@@ -70,8 +73,9 @@ retention: 1 to 100, default 20. `KAOIRO_STATUS_LINE_RETENTION` sets the
 default at boot ([server configuration](../configuration/server.md)); an
 operator can store a pick from the dashboard, which takes precedence and is
 reported with its source (`stored`, `env` or `default`). Lowering the retention
-prunes every agent at once. An agent's record is removed when the agent is
-deleted or its token is revoked.
+prunes every agent at once. Deleting an agent removes its record at once.
+Revoking its token alone does not: the record is dropped by the denylist sweep
+at the next start of the store.
 
 ## Wire forms for dashboard clients
 

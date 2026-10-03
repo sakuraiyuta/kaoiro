@@ -689,6 +689,16 @@ limits and not measured. Pruning frees space inside the file, which is reused;
 the file is not compacted. The start-up log line reports the size, and `ls -l`
 on `KAOIRO_AGENT_STATUS_LINES_PATH` shows it between starts.
 
+### 4.7 Peers with an explicit allowed_tools list
+
+The status line tools are in the Claude wrapper's default auto-allow set, and
+a peer whose config sets `allowed_tools` does not use that set. After updating
+to a build that has the status line, add `mcp__kaoiro__set_status_line` and
+`mcp__kaoiro__read_status_line` to the `allowed_tools` of each such peer;
+otherwise each of its status updates asks the operator for approval. Codex and
+Antigravity peers need no change
+([inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md)).
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).
