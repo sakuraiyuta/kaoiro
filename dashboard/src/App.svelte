@@ -1825,7 +1825,10 @@
 {:else if authChecked}
 <header>
   <div class="brand">
-    <h1>kaoiro</h1>
+    <div class="brand-title">
+      <img class="brand-icon" src="/icons/icon-32.png" alt="" width="24" height="24" />
+      <h1>kaoiro</h1>
+    </div>
     <div class="build-identities" aria-label="ビルド情報">
       <span data-component="server">
         {formatBuildIdentity(
@@ -2256,6 +2259,19 @@
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
+  }
+
+  .brand-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .brand-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    display: block;
+    flex-shrink: 0;
   }
 
   /* short (max-height 500px): 縦圧縮 override — header の縦 padding のみ。
