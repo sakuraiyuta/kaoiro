@@ -26,8 +26,12 @@ Manual Browser Acceptance Procedure (issue #196):
   4. Open DevTools (F12) -> Application tab -> Manifest pane.
   5. Verify that:
      - No manifest errors or warnings are shown.
-     - Identity (kaoiro), theme color (#14141d), and display (standalone) match.
+     - name and short_name (kaoiro), start_url (/), theme_color and
+       background_color (#14141d), and display (standalone) match.
      - All 4 declared icons (192, 512, maskable-192, maskable-512) load and preview cleanly.
+  6. Install the app (Chrome: install from the address bar or menu; iPad
+     Safari: Share -> Add to Home Screen), launch the installed app, and
+     check that its name, icon and standalone window match the manifest.
 """
 
 import argparse
