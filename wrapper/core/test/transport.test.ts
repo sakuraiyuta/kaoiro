@@ -3208,15 +3208,14 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     mock.lastChannelParams = null;
   });
 
-  function link(options: Partial<ServerLinkOptions> = {}) {
+  function link(declare = true) {
     const refused = vi.fn();
     const hydration = vi.fn();
     new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
-      interAgentQueuePolicy: policy,
+      ...(declare ? { interAgentQueuePolicy: policy } : {}),
       onInterAgentQueueRefused: refused,
       onHydration: hydration,
-      ...options,
     });
     return { refused, hydration };
   }
@@ -3230,7 +3229,7 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
   });
 
   it("declares nothing when no policy is given", () => {
-    link({ interAgentQueuePolicy: undefined });
+    link(false);
     expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_queue");
     expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_queue_policy");
   });
@@ -3271,7 +3270,7 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
   });
 
   it("needs no echo from a wrapper that declared no queue", () => {
-    const { refused, hydration } = link({ interAgentQueuePolicy: undefined });
+    const { refused, hydration } = link(false);
     mock.joinReceivers.get("ok")!({});
     expect(refused).not.toHaveBeenCalled();
     expect(hydration).toHaveBeenCalledOnce();

@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-10-04
 related: [protocol]
 ---
 
@@ -160,6 +160,23 @@ queued input, and enters `error`. The operator must then restart it using
 [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper).
 See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
 for stage and reply-authority behavior.
+
+Every engine reads three optional fields that bound its server-owned
+inter-agent queue ([channels](../protocol/channels.md#server-owned-inter-agent-queue-credit-v1)).
+They have no environment fallback. The runner resolves omitted keys to the
+defaults when it builds the spawn snapshot, and a directly launched wrapper
+does the same when it joins, so the join always declares the complete tuple.
+A value outside its range fails config loading.
+
+| Field | Default | Input | Effect |
+| --- | ---: | --- | --- |
+| `inter_agent_batch_max_items` | 10 | Integer of at least 1 | Most items the server offers in one batch |
+| `inter_agent_backlog_max_items` | 100 | Integer from 1 through 1000 | Most items the server holds for this recipient |
+| `inter_agent_backlog_max_bytes` | 524,288 | Integer of at least 16,384, and at most the server's ceiling at join | Most bytes the server holds for this recipient |
+
+A join the server refuses for these values, or a join reply that does not
+acknowledge the queue, makes the wrapper exit with status 78. The runner
+does not restart that exit; correct the value and relaunch.
 
 ## See Also
 

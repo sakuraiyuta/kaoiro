@@ -9,6 +9,14 @@ import { CodexHost } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 
+// The server echoes the credit-v1 queue this wrapper declares at join.
+const QUEUE_ECHO = {
+  inter_agent_queue: "credit-v1",
+  inter_agent_queue_policy: { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 },
+  inter_agent_queue_epoch: "epoch",
+  inter_agent_queue_resume_required: false,
+};
+
 type Receiver = (payload: unknown) => void;
 
 function deferred<T>(): {
@@ -169,7 +177,7 @@ describe("Codex CLI permission-sync composition", () => {
     });
     try {
       await vi.waitFor(() => expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
-      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO, permission_sync: true });
       emit("persona_prompt", { prompt: "system prompt" });
       await vi.waitFor(() => expect(host).toBeDefined());
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -215,7 +223,7 @@ describe("Codex CLI permission-sync composition", () => {
     });
     try {
       await vi.waitFor(() => expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
-      transport.joinReceivers.get("ok")?.({});
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO });
       emit("persona_prompt", { prompt: "system prompt" });
       await vi.waitFor(() => expect(spawns).toBe(1));
       expect(host?.statusExtSnapshot().session_capabilities).toMatchObject({
@@ -265,7 +273,7 @@ describe("Codex CLI permission-sync composition", () => {
     });
     try {
       await vi.waitFor(() => expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
-      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO, permission_sync: true });
       emit("persona_prompt", { prompt: "system prompt" });
       emit("permission_sync", { version: "0", control: null, next: null });
       await vi.waitFor(() => expect(spawns).toBe(1));
@@ -276,7 +284,7 @@ describe("Codex CLI permission-sync composition", () => {
       });
 
       transport.onOpen?.();
-      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO, permission_sync: true });
       await host!.send("second");
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(spawns).toBe(1);
@@ -329,13 +337,13 @@ describe("Codex CLI permission-sync composition", () => {
     });
     try {
       await vi.waitFor(() => expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
-      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO, permission_sync: true });
       emit("persona_prompt", { prompt: "system prompt" });
       emit("permission_sync", { version: "0", control: null, next: null });
       await diagnosticsStarted.promise;
 
       transport.onOpen?.();
-      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      transport.joinReceivers.get("ok")?.({ ...QUEUE_ECHO, permission_sync: true });
       releaseDiagnostics.resolve();
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(spawns).toBe(0);

@@ -8,7 +8,9 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 # A path relative to the workspace, like the tarball build: pnpm's legacy
 # deploy miscomputes the virtual store for some absolute targets outside it.
 stage_rel=".tarball-build.import-check.$$"
-trap 'rm -rf -- "${root:?}/$stage_rel"' EXIT
+# The legacy deploy also writes bin shims under the same relative path inside
+# the filtered package, so both copies are removed.
+trap 'rm -rf -- "${root:?}/$stage_rel" "${root:?}/runner/$stage_rel"' EXIT
 
 (cd "$root" && pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/runner" --legacy >/dev/null)
 node "$root/scripts/check-prod-deploy-imports.mjs" "$root/$stage_rel/runner"

@@ -114,7 +114,18 @@ async function startEndpoint(
           Record<string, unknown>,
         ];
         if (ref !== null) {
-          send([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]);
+          // A declared credit-v1 queue is echoed as the real server does;
+          // without it the wrapper refuses to proceed and exits.
+          const response =
+            event === "phx_join" && payload.inter_agent_queue === "credit-v1"
+              ? {
+                inter_agent_queue: "credit-v1",
+                inter_agent_queue_policy: payload.inter_agent_queue_policy,
+                inter_agent_queue_epoch: "gate-epoch",
+                inter_agent_queue_resume_required: false,
+              }
+              : {};
+          send([joinRef, ref, topic, "phx_reply", { status: "ok", response }]);
         }
         if (event === "phx_join" && isRunner && topic.startsWith("runner:")) {
           onRunnerJoined(send, topic);
@@ -263,6 +274,7 @@ describe("default composition (issue #469)", () => {
               turn_watchdog_inactivity_ms: 120_000,
               turn_watchdog_abort_grace_ms: 4000,
               phase2_delivery: true,
+              inter_agent_backlog_max_items: 50,
             },
             codex: {
               auth_mode: "chatgpt",
@@ -339,6 +351,13 @@ describe("default composition (issue #469)", () => {
           .toEqual({ version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true });
         expect(endpoint.wrapperJoins.get("wrapper:gate.codex")?.operator_input_modes)
           .toEqual({ version: "v1", early: "steer" });
+        // The queue policy: a configured key relayed, the rest defaulted.
+        expect(endpoint.wrapperJoins.get("wrapper:gate.claude-code")?.inter_agent_queue_policy)
+          .toEqual({ batch_max_items: 10, backlog_max_items: 50, backlog_max_bytes: 524_288 });
+        for (const engine of ["codex", "antigravity"]) {
+          expect(endpoint.wrapperJoins.get(`wrapper:gate.${engine}`)?.inter_agent_queue_policy)
+            .toEqual({ batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 });
+        }
 
         const claudeBehaviour = await lineFor(
           /\[kaoiro\] claude behaviour: pid=\d+ ([^\n]*)\n/,
