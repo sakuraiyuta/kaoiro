@@ -1308,6 +1308,183 @@ export interface InterAgentDeliveryStatus {
   last_uncertain?: { at: string; incarnation: string; generation: string; delivery_seq: number; reason: string };
   /** Bounded resync response only; not part of directory snapshots. */
   skipped_ranges?: [number, number][];
+  /** Present when the recipient negotiated `inter_agent_queue: "credit-v1"`. */
+  queue?: InterAgentQueueCounts;
+}
+
+/** Launch-resolved queue limits declared at join and bound to the process
+ *  generation (docs/reference/protocol/channels.md, server-owned queue). */
+export interface InterAgentQueuePolicy {
+  batch_max_items: number;
+  backlog_max_items: number;
+  backlog_max_bytes: number;
+}
+
+export interface InterAgentQueueJoinRequest {
+  inter_agent_queue: "credit-v1";
+  inter_agent_queue_policy: InterAgentQueuePolicy;
+  inter_agent_inline_recovery?: "v1";
+}
+
+export interface InterAgentQueueJoinReply {
+  inter_agent_queue: "credit-v1";
+  inter_agent_queue_policy: InterAgentQueuePolicy;
+  inter_agent_queue_epoch: string;
+  inter_agent_inline_recovery?: "v1";
+  inter_agent_queue_resume_required: boolean;
+}
+
+export type InterAgentQueueJoinError =
+  | { reason: "queue_capability_required"; missing: string[] }
+  | {
+    reason: "invalid_queue_policy";
+    field: keyof InterAgentQueuePolicy | "inter_agent_queue_policy";
+    detail: "missing" | "not_integer" | "below_minimum" | "above_ceiling" | "generation_mismatch";
+    limit?: number;
+  };
+
+/** Aggregates only; never bodies, tokens or registration secrets. */
+export interface InterAgentQueueCounts {
+  /** Items in the `queued` phase other than waiter replies. */
+  queued: number;
+  queued_bytes: number;
+  offered: number;
+  native_pending: number;
+  waiter: number;
+  control: number;
+  policy: InterAgentQueuePolicy;
+}
+
+export type InterAgentQueueItemClass = "ordinary" | "waiter" | "control";
+
+export interface InterAgentQueueItem {
+  queue_id: string;
+  attempt_id: string;
+  delivery_seq: number;
+  class: InterAgentQueueItemClass;
+  byte_charge: number;
+  envelope: Envelope;
+}
+
+export interface DeliveryBatchPush {
+  version: "0";
+  queue_epoch: string;
+  incarnation: string;
+  generation: string;
+  lease_id: string;
+  kind: "root" | "early" | "waiter";
+  /** Set for `root` and `early` offers. */
+  credit_revision?: string;
+  /** Set for `waiter` offers. */
+  registration_id?: string;
+  items: InterAgentQueueItem[];
+}
+
+export type InterAgentQueueEarlyIneligibleReason =
+  | "same_peer_in_turn"
+  | "conversation_pending"
+  | "host_busy"
+  | "pending_settings"
+  | "steer_cap"
+  | "fold_unavailable"
+  | "oversize";
+
+export type InterAgentQueueReturnItem =
+  | { queue_id: string; reason: "early_ineligible"; sub_reason: InterAgentQueueEarlyIneligibleReason }
+  | {
+    queue_id: string;
+    reason:
+      | "host_rejected_before_start"
+      | "credit_withdrawn"
+      | "recovery_abandoned"
+      | "waiter_abandoned"
+      | "shutdown"
+      | "epoch_changed";
+  };
+
+export type InterAgentQueueObservedWitness =
+  | "prompt_hook"
+  | "fold_hook"
+  | "tool_result"
+  | "turn_start_accepted"
+  | "exec_input_written"
+  | "turn_steer_item_observed"
+  | "turn_input_written";
+
+export type InterAgentQueueDisposeItem =
+  | { queue_id: string; outcome: "observed"; witness: InterAgentQueueObservedWitness }
+  | { queue_id: string; outcome: "intentional_non_injection"; reason: "terminal_skip" | "stale_skip" }
+  | { queue_id: string; outcome: "definitely_unstarted"; reason: string }
+  | { queue_id: string; outcome: "unknown"; reason: string };
+
+interface DeliveryQueueControlBase {
+  version: "0";
+  operation_id: string;
+  queue_epoch: string;
+  incarnation: string;
+  generation: string;
+}
+
+export type DeliveryQueueControlRequest = DeliveryQueueControlBase & (
+  | { op: "credit"; kind: "root"; native_turn_token: string }
+  | { op: "credit"; kind: "early"; native_turn_token: string; mechanism: "fold" | "steer" }
+  | { op: "withdraw"; credit_revision: string }
+  | { op: "begin_native"; lease_id: string; queue_ids: string[]; native_turn_token: string }
+  | { op: "return"; lease_id: string; items: InterAgentQueueReturnItem[] }
+  | { op: "dispose"; lease_id: string; items: InterAgentQueueDisposeItem[] }
+  | { op: "waiter_close"; registration_id: string }
+  | { op: "resume"; lease_ids: string[]; registration_ids: string[] }
+  | { op: "freeze"; reason: "shutdown" | "session_reset" }
+);
+
+interface DeliveryQueueControlReplyBase {
+  operation_id: string;
+  queue: InterAgentQueueCounts;
+}
+
+export type DeliveryQueueControlReply = DeliveryQueueControlReplyBase & (
+  | { op: "credit"; credit_revision: string }
+  | { op: "withdraw"; withdrawn: boolean }
+  | { op: "begin_native"; permitted_queue_ids: string[] }
+  | { op: "return"; returned_ranges: [number, number][] }
+  | { op: "dispose"; disposed: string[]; resolved_ranges: [number, number][] }
+  | { op: "waiter_close"; closed: boolean; claimed: boolean }
+  | {
+    op: "resume";
+    leases: { lease_id: string; items: { queue_id: string; phase: "offered" | "native_pending" | "terminal" }[] }[];
+    registrations: { registration_id: string; active: boolean }[];
+  }
+  | { op: "freeze"; frozen: true }
+);
+
+export type DeliveryQueueControlError =
+  | {
+    reason:
+      | "stale_queue_epoch"
+      | "stale_delivery_owner"
+      | "unknown_lease"
+      | "unknown_queue_item"
+      | "operation_payload_mismatch"
+      | "conflicting_disposition"
+      | "queue_unavailable";
+  }
+  | { reason: "invalid_queue_control"; field: string };
+
+/** Outer field of a waiting `send_to_agent` push; stripped by the server
+ *  before the envelope is relayed, projected or recorded. */
+export interface WaiterRegistrationRequest {
+  token: string;
+  call_token: string;
+  expires_in_ms: number;
+}
+
+export type InterAgentQueueSendError =
+  | { reason: "receiver_overloaded"; from: string; message: string }
+  | { reason: "delivery_unavailable"; delivered: false };
+
+export interface InterAgentQueueRecovery {
+  lease_id: string;
+  items: InterAgentQueueItem[];
 }
 
 /** One agent in the `directory_request` response. Runtime traits are optional
