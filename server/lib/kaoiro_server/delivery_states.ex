@@ -1158,11 +1158,9 @@ defmodule KaoiroServer.DeliveryStates do
           %{state | orphan_uncertain: Map.delete(state.orphan_uncertain, orphan)}
 
         entry = state.entries[recipient] ->
-          kept =
-            Enum.reject(
-              entry.queue_uncertain,
-              &(&1.queue_id == queue_id and &1.incarnation == incarnation)
-            )
+          # Queue ids are unique within a live record: its queue survives a
+          # rebind, so they never restart there.
+          kept = Enum.reject(entry.queue_uncertain, &(&1.queue_id == queue_id))
 
           if kept == entry.queue_uncertain do
             state
