@@ -27,7 +27,7 @@ function state(agentId: string): Envelope {
   } as unknown as Envelope;
 }
 
-function message(from: string, to: string, body: string): Envelope {
+function message(from: string, to: string, body: string, conversationId?: string, turn = 1): Envelope {
   return {
     version: "0",
     agent_id: from,
@@ -38,13 +38,13 @@ function message(from: string, to: string, body: string): Envelope {
     state: "tool_running",
     payload: {
       to,
-      conversation_id: `real-${Date.now()}`,
-      turn_number: 1,
+      conversation_id: conversationId ?? `real-${Date.now()}`,
+      turn_number: turn,
       kind: "inform",
       body,
       meta: { done: false, propose_next: "" },
       owner: { kind: "user", id: "operator" },
-      new_conversation: true,
+      new_conversation: turn === 1,
     },
     ext: {},
   } as unknown as Envelope;
@@ -72,6 +72,74 @@ describe.skipIf(!enabled)("real server: credit-v1 queue round trip", () => {
     for (const link of links) link.close();
     await server?.stop();
   }, 30_000);
+
+  /** A queue-declaring link that records its offers, joined and announced. */
+  async function queueLink(agentId: string): Promise<{ link: ServerLink; offers: QueueOffer[] }> {
+    const offers: QueueOffer[] = [];
+    let joined = false;
+    const link = new ServerLink(server.url, agentId, {
+      personaId: "default",
+      interAgentQueuePolicy: policy,
+      onQueueOffer: (offer) => offers.push(offer),
+      onHydration: () => { joined = true; },
+    });
+    links.push(link);
+    await until(() => (joined ? true : undefined));
+    link.send(state(agentId));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return { link, offers };
+  }
+
+  it("offers a waiting sender's reply at once as W, without credit", async () => {
+    const suffix = Date.now().toString(36);
+    const waiting = await queueLink(`real.waiting${suffix}`);
+    const peer = await queueLink(`real.peer${suffix}`);
+    const cid = `real-wait-${suffix}`;
+
+    const ask = {
+      ...message(`real.waiting${suffix}`, `real.peer${suffix}`, "question", cid),
+      waiter_registration: { token: "token-1", call_token: "call-1", expires_in_ms: 60_000 },
+    } as unknown as Envelope;
+    expect(await waiting.link.sendInterAgent(ask)).toMatchObject({ kind: "accepted" });
+
+    const answer = message(`real.peer${suffix}`, `real.waiting${suffix}`, "answer", cid, 2);
+    expect(await peer.link.sendInterAgent(answer)).toMatchObject({ kind: "accepted" });
+
+    const offer = await until(() => waiting.offers[0]);
+    expect(offer.kind).toBe("waiter");
+    expect(offer.items[0]).toMatchObject({ class: "waiter" });
+    expect(offer.items[0]!.envelope.payload).toMatchObject({ body: "answer" });
+
+    const permit = await offer.begin([offer.items[0]!.queueId], "tool-turn");
+    expect(permit?.invoke(() => {})).toBe(true);
+    const disposed = await offer.dispose([
+      { queue_id: offer.items[0]!.queueId, outcome: "observed", witness: "tool_result" },
+    ]);
+    expect(disposed).toMatchObject({ ok: true, reply: { queue: { waiter: 0 } } });
+  }, 60_000);
+
+  it("a replacement process gets the item its predecessor was offered but never submitted", async () => {
+    const suffix = Date.now().toString(36);
+    const recipientId = `real.replaced${suffix}`;
+    const first = await queueLink(recipientId);
+    const sender = new ServerLink(server.url, `real.sender2${suffix}`, { personaId: "default" });
+    links.push(sender);
+    sender.send(state(`real.sender2${suffix}`));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(await sender.sendInterAgent(message(`real.sender2${suffix}`, recipientId, "kept"))).toMatchObject({ kind: "accepted" });
+    await first.link.queueLease()!.credit("root", "turn-1");
+    const lost = await until(() => first.offers[0]);
+    first.link.close();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const second = await queueLink(recipientId);
+    await second.link.queueLease()!.credit("root", "turn-1");
+    const again = await until(() => second.offers[0]);
+    expect(again.items[0]!.queueId).toBe(lost.items[0]!.queueId);
+    expect(again.items[0]!.deliverySeq).toBeGreaterThan(lost.items[0]!.deliverySeq);
+    expect(again.items[0]!.envelope.payload).toMatchObject({ body: "kept" });
+  }, 60_000);
 
   it("delivers a routed message through credit, permit and disposition", async () => {
     const suffix = Date.now().toString(36);
