@@ -1765,6 +1765,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
       SessionResets.delete(agent_id)
       _ = PeerConnectivity.delete(agent_id)
       AgentActivity.delete(agent_id)
+      # issue 482. A refused purge (the store is dirty or restarting) is
+      # completed by the next store start, which drops the record of every
+      # revoked id, and the token was revoked above: so the result is not
+      # allowed to fail the delete.
+      _ = KaoiroServer.AgentStatusLines.purge(agent_id)
       # code-review-assessment finding (issue #305 round 1): without
       # this, an AgentAcceptance worker (M7) started for this agent_id
       # would never be reclaimed, growing without bound over the
