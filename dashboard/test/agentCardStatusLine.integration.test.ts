@@ -128,13 +128,19 @@ describe("AgentCard status line row", () => {
     const target = await render(setLine(), { onOpenStatusLineHistory, onSelect });
     const reachedArticle = vi.fn();
     target.querySelector("article")!.addEventListener("click", reachedArticle);
+    // Svelte delegates onclick to the root, so a handler that stopped
+    // propagation would not stop a listener on the card itself; asserting that
+    // nobody asks for it is what pins the structural separation.
+    const stopped = vi.spyOn(Event.prototype, "stopPropagation");
 
     row(target)!.click();
 
     expect(onOpenStatusLineHistory).toHaveBeenCalledWith("host-a.p");
     expect(onSelect).not.toHaveBeenCalled();
+    expect(stopped).not.toHaveBeenCalled();
     // The click bubbled to the card untouched: the separation is the markup's.
     expect(reachedArticle).toHaveBeenCalledTimes(1);
+    stopped.mockRestore();
   });
 
   it("is offered on a directory-only card too, and works without the operator's connection", async () => {
