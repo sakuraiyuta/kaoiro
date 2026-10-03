@@ -2195,4 +2195,224 @@ defmodule KaoiroServer.DeliveryStatesTest do
                {:error, :unknown_lease}
     end
   end
+
+  describe "queue control" do
+    @control_policy %{batch_max_items: 10, backlog_max_items: 10, backlog_max_bytes: 1_000}
+
+    setup %{name: name} do
+      recipient = "ctl-#{System.unique_integer([:positive])}"
+      {:ok, _} = DeliveryStates.bind_queue(recipient, "g1", self(), @control_policy, name)
+      counter = :counters.new(1, [])
+      %{recipient: recipient, counter: counter}
+    end
+
+    defp control(ctx, request, id \\ nil) do
+      id =
+        id ||
+          (
+            :counters.add(ctx.counter, 1, 1)
+            Integer.to_string(:counters.get(ctx.counter, 1))
+          )
+
+      {id, DeliveryStates.queue_control(ctx.recipient, "g1", self(), id, request, ctx.name)}
+    end
+
+    defp put(ctx, sender, opts \\ []) do
+      {:ok, token, _} = DeliveryStates.queue_reserve(ctx.recipient, :ordinary, 3, ctx.name)
+
+      {:ok, id} =
+        DeliveryStates.queue_commit(
+          ctx.recipient,
+          token,
+          %{
+            sender: sender,
+            conversation_id: "c-" <> sender,
+            turn_number: 1,
+            kind: "inform",
+            early: Keyword.get(opts, :early, false)
+          },
+          %{"type" => "inter_agent_message", "from" => sender},
+          ctx.name
+        )
+
+      id
+    end
+
+    defp root_credit(token \\ "t1"), do: %{op: :credit, kind: :root, token: token}
+
+    test "root credit pushes a batch to the owner", ctx do
+      a = put(ctx, "a")
+
+      assert {_, {:ok, %{credit_revision: "1", queue: %{queued: 1}}}} =
+               control(ctx, root_credit())
+
+      assert_receive {:inter_agent_queue_batch, batch}
+      assert %{"kind" => "root", "credit_revision" => "1", "version" => "0"} = batch
+
+      assert [%{"queue_id" => queue_id, "delivery_seq" => 1, "envelope" => %{"from" => "a"}}] =
+               batch["items"]
+
+      assert queue_id == Integer.to_string(a)
+    end
+
+    test "an outstanding credit is served when input arrives", ctx do
+      {_, {:ok, _}} = control(ctx, root_credit())
+      refute_received {:inter_agent_queue_batch, _}
+      put(ctx, "a")
+      assert_receive {:inter_agent_queue_batch, %{"items" => [_]}}
+    end
+
+    test "a credit retry replays until the credit is consumed", ctx do
+      request = root_credit()
+      {id, {:ok, first}} = control(ctx, request)
+      assert {_, {:ok, ^first}} = control(ctx, request, id)
+
+      put(ctx, "a")
+      assert_receive {:inter_agent_queue_batch, _}
+      assert {_, {:error, :unknown_operation}} = control(ctx, request, id)
+    end
+
+    test "begin_native is bound to the lease's turn, replays, then supersedes", ctx do
+      a = put(ctx, "a")
+      b = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit("turn-1"))
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+      lease = String.to_integer(lease)
+
+      begin = %{op: :begin_native, lease_id: lease, queue_ids: [a, b], token: "turn-2"}
+
+      assert {_, {:error, {:invalid_queue_control, "native_turn_token"}}} = control(ctx, begin)
+
+      begin = %{begin | token: "turn-1"}
+      {id, {:ok, %{permitted_queue_ids: [^a, ^b]}}} = control(ctx, begin)
+      assert {_, {:ok, %{permitted_queue_ids: [^a, ^b]}}} = control(ctx, begin, id)
+
+      assert {_, {:error, :operation_payload_mismatch}} =
+               control(ctx, %{begin | queue_ids: [a]}, id)
+
+      {_, {:ok, _}} = control(ctx, %{op: :dispose, lease_id: lease, items: [{a, :observed}]})
+
+      assert {_, {:error, {:operation_superseded, [{^a, :terminal}, {^b, :native_pending}]}}} =
+               control(ctx, begin, id)
+
+      {_, {:ok, _}} = control(ctx, %{op: :dispose, lease_id: lease, items: [{b, :unknown}]})
+      assert {_, {:error, :unknown_operation}} = control(ctx, begin, id)
+    end
+
+    test "root credit is refused while a previous root is native-pending", ctx do
+      a = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit("turn-1"))
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+      lease = String.to_integer(lease)
+
+      {_, {:ok, _}} =
+        control(ctx, %{op: :begin_native, lease_id: lease, queue_ids: [a], token: "turn-1"})
+
+      assert {_, {:error, :previous_root_pending}} = control(ctx, root_credit("turn-2"))
+
+      {_, {:ok, _}} = control(ctx, %{op: :dispose, lease_id: lease, items: [{a, :unknown}]})
+      assert {_, {:ok, _}} = control(ctx, root_credit("turn-2"))
+    end
+
+    test "freeze withdraws the credit and stops every later batch", ctx do
+      {_, {:ok, _}} = control(ctx, root_credit())
+      assert {_, {:ok, %{frozen: true}}} = control(ctx, %{op: :freeze, reason: :shutdown})
+      put(ctx, "a")
+      refute_received {:inter_agent_queue_batch, _}
+      assert {_, {:error, :queue_frozen}} = control(ctx, root_credit())
+    end
+
+    test "a same-generation rejoin with a lease must resume before new credit", ctx do
+      a = put(ctx, "a")
+      {_, {:ok, _}} = control(ctx, root_credit())
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+      lease = String.to_integer(lease)
+
+      {:ok, _} = DeliveryStates.bind_queue(ctx.recipient, "g1", self(), @control_policy, ctx.name)
+      assert DeliveryStates.queue_resume_required?(ctx.recipient, ctx.name)
+      assert {_, {:error, :queue_resume_required}} = control(ctx, root_credit())
+
+      assert {_,
+              {:ok, %{leases: [%{lease_id: ^lease, items: [%{queue_id: ^a, phase: :offered}]}]}}} =
+               control(ctx, %{op: :resume, lease_ids: [lease], registration_ids: []})
+
+      refute DeliveryStates.queue_resume_required?(ctx.recipient, ctx.name)
+    end
+
+    test "a declined early item keeps the early credit for the next one (B4)", ctx do
+      e1 = put(ctx, "a", early: true)
+      e2 = put(ctx, "b", early: true)
+
+      {_, {:ok, _}} =
+        control(ctx, %{op: :credit, kind: :early, token: "turn-1", mechanism: :fold})
+
+      assert_receive {:inter_agent_queue_batch,
+                      %{"lease_id" => lease, "items" => [%{"queue_id" => first}]}}
+
+      assert first == Integer.to_string(e1)
+
+      {_, {:ok, _}} =
+        control(ctx, %{
+          op: :return,
+          lease_id: String.to_integer(lease),
+          items: [{e1, :early_ineligible}]
+        })
+
+      assert_receive {:inter_agent_queue_batch, %{"items" => [%{"queue_id" => second}]}}
+      assert second == Integer.to_string(e2)
+    end
+
+    test "a superseding credit waits for the offered lease", ctx do
+      a = put(ctx, "a")
+      put(ctx, "b")
+      {_, {:ok, _}} = control(ctx, root_credit("turn-1"))
+      assert_receive {:inter_agent_queue_batch, %{"lease_id" => lease}}
+
+      {_, {:ok, _}} = control(ctx, root_credit("turn-1b"))
+      refute_received {:inter_agent_queue_batch, _}
+
+      {_, {:ok, _}} =
+        control(ctx, %{
+          op: :begin_native,
+          lease_id: String.to_integer(lease),
+          queue_ids: [a],
+          token: "turn-1"
+        })
+
+      {_, {:ok, _}} =
+        control(ctx, %{op: :credit, kind: :early, token: "turn-1b", mechanism: :fold})
+
+      refute_received {:inter_agent_queue_batch, _}
+    end
+
+    test "withdraw revokes only the outstanding revision", ctx do
+      {_, {:ok, %{credit_revision: revision}}} = control(ctx, root_credit())
+      assert {_, {:ok, %{withdrawn: false}}} = control(ctx, %{op: :withdraw, revision: "99"})
+      assert {_, {:ok, %{withdrawn: true}}} = control(ctx, %{op: :withdraw, revision: revision})
+      put(ctx, "a")
+      refute_received {:inter_agent_queue_batch, _}
+    end
+
+    test "a stale owner or a malformed id is refused", ctx do
+      assert DeliveryStates.queue_control(
+               ctx.recipient,
+               "g1",
+               spawn(fn -> :ok end),
+               "1",
+               root_credit(),
+               ctx.name
+             ) ==
+               {:error, :stale_delivery_owner}
+
+      assert DeliveryStates.queue_control(
+               ctx.recipient,
+               "g1",
+               self(),
+               "01",
+               root_credit(),
+               ctx.name
+             ) ==
+               {:error, {:invalid_queue_control, "operation_id"}}
+    end
+  end
 end

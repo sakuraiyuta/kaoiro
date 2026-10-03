@@ -36,6 +36,7 @@ defmodule KaoiroServer.DeliveryStates do
 
   alias KaoiroServer.AgentStates
   alias KaoiroServer.InterAgentQueue
+  alias KaoiroServer.InterAgentQueueOps
   alias KaoiroServer.TransportLimits
 
   @early_release_stages ~w(submitted settled unknown lost)
@@ -135,6 +136,21 @@ defmodule KaoiroServer.DeliveryStates do
         server,
         {:queue_lease, :dispose, agent_id, generation, owner, lease_id, entries, turn}
       )
+
+  @doc """
+  Applies one `delivery_queue_control` operation from the recipient's
+  delivery owner. `request` is the parsed op (see `queue_control_op/4`).
+  Returns `{:ok, reply}` or `{:error, reason}`; reasons are the wire
+  control errors. An offer the operation makes possible is sent to the
+  owner as `{:inter_agent_queue_batch, payload}`.
+  """
+  def queue_control(agent_id, generation, owner, operation_id, request, server \\ __MODULE__),
+    do:
+      GenServer.call(server, {:queue_control, agent_id, generation, owner, operation_id, request})
+
+  @doc "Whether the recipient's current generation must `resume` before new credit."
+  def queue_resume_required?(agent_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:queue_resume_required, agent_id})
 
   @doc "Wire queue counts for a recipient, or nil when it has no queue."
   def queue_counts(agent_id, server \\ __MODULE__),
@@ -313,7 +329,8 @@ defmodule KaoiroServer.DeliveryStates do
        losses: losses,
        queue_epoch: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
        queue_reservations: %{},
-       bodies: %{}
+       bodies: %{},
+       queue_controls: %{}
      }}
   end
 
@@ -382,7 +399,7 @@ defmodule KaoiroServer.DeliveryStates do
         {entry, state} =
           bind_resync_entry(state, agent_id, generation, owner, fn entry ->
             # A lower policy never evicts admitted items; it only gates
-            # later admission.
+            # later admission. Bound before the control state below.
             queue =
               if entry.queue,
                 do: %{entry.queue | policy: policy},
@@ -391,11 +408,51 @@ defmodule KaoiroServer.DeliveryStates do
             %{entry | queue_policy: policy, queue: queue}
           end)
 
-        {:reply, {:ok, public(entry)}, state}
+        {:reply, {:ok, public(entry)}, bind_queue_control(state, agent_id, entry)}
     end
   end
 
   def handle_call(:queue_epoch, _from, state), do: {:reply, state.queue_epoch, state}
+
+  def handle_call({:queue_resume_required, agent_id}, _from, state),
+    do: {:reply, get_in(state.queue_controls, [agent_id, :resume_required]) == true, state}
+
+  def handle_call(
+        {:queue_control, agent_id, generation, owner, operation_id, request},
+        _from,
+        state
+      ) do
+    with {:ok, entry} <- queue_owner_entry(state, agent_id, generation, owner),
+         %{generation: ^generation} = control <- state.queue_controls[agent_id],
+         {:ok, id} <- control_operation_id(operation_id) do
+      digest = :crypto.hash(:sha256, :erlang.term_to_binary(request))
+
+      case InterAgentQueueOps.classify(control.ops, id, digest, &queue_phase(entry.queue, &1)) do
+        {:replay, reply} ->
+          {:reply, {:ok, reply}, state}
+
+        {:error, {:operation_superseded, phases}} ->
+          {:reply, {:error, {:operation_superseded, phases}}, state}
+
+        {:error, _} = error ->
+          {:reply, error, state}
+
+        :new ->
+          case run_queue_control(state, agent_id, entry, control, request) do
+            {:ok, state, reply, record} ->
+              state = record_queue_control(state, agent_id, id, digest, reply, record)
+              {:reply, {:ok, reply}, maybe_offer(state, agent_id)}
+
+            {:error, _} = error ->
+              {:reply, error, state}
+          end
+      end
+    else
+      {:error, _} = error -> {:reply, error, state}
+      :error -> {:reply, {:error, {:invalid_queue_control, "operation_id"}}, state}
+      _ -> {:reply, {:error, :stale_channel}, state}
+    end
+  end
 
   def handle_call({:queue_reserve, agent_id, kind, bytes}, {owner, _}, state) do
     case state.entries[agent_id] do
@@ -430,13 +487,14 @@ defmodule KaoiroServer.DeliveryStates do
       entry = %{entry | queue: queue}
       persist(state.table, agent_id, entry)
 
-      {:reply, {:ok, queue_id},
-       %{
-         state
-         | entries: Map.put(state.entries, agent_id, entry),
-           queue_reservations: Map.delete(state.queue_reservations, token),
-           bodies: Map.put(state.bodies, {agent_id, queue_id}, body)
-       }}
+      state = %{
+        state
+        | entries: Map.put(state.entries, agent_id, entry),
+          queue_reservations: Map.delete(state.queue_reservations, token),
+          bodies: Map.put(state.bodies, {agent_id, queue_id}, body)
+      }
+
+      {:reply, {:ok, queue_id}, maybe_offer(state, agent_id)}
     else
       _ -> {:reply, {:error, :invalid_queue_reservation}, state}
     end
@@ -1203,6 +1261,360 @@ defmodule KaoiroServer.DeliveryStates do
        | entries: Map.put(state.entries, agent_id, entry),
          owners: Map.put(state.owners, agent_id, owner)
      }}
+  end
+
+  ## Queue control
+
+  # Credit and channel ownership are ephemeral: a rejoin drops the credit.
+  # A same-generation rejoin keeps operation records and must resume while
+  # a lease is outstanding; a new generation starts afresh.
+  defp bind_queue_control(state, agent_id, entry) do
+    leased? = Enum.any?(entry.queue.items, fn {_id, item} -> item.lease != nil end)
+
+    control =
+      case state.queue_controls[agent_id] do
+        %{generation: generation} = control when generation == entry.generation ->
+          %{
+            control
+            | credit: nil,
+              ops: InterAgentQueueOps.clear_credit(control.ops),
+              resume_required: leased?
+          }
+
+        _ ->
+          %{
+            generation: entry.generation,
+            ops: InterAgentQueueOps.new(),
+            credit: nil,
+            next_revision: 1,
+            frozen: false,
+            resume_required: leased?,
+            lease_tokens: %{}
+          }
+      end
+
+    put_in(state.queue_controls[agent_id], control)
+  end
+
+  defp control_operation_id(operation_id) do
+    case InterAgentQueueOps.parse_id(operation_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> :error
+    end
+  end
+
+  defp queue_phase(queue, queue_id) do
+    case queue.items[queue_id] do
+      nil -> :terminal
+      item -> item.phase
+    end
+  end
+
+  defp run_queue_control(state, agent_id, entry, control, request) do
+    case request do
+      %{op: :credit} = credit ->
+        grant_credit(state, agent_id, entry, control, credit)
+
+      %{op: :withdraw, revision: revision} ->
+        withdraw_credit(state, agent_id, control, revision)
+
+      %{op: :begin_native} = op ->
+        lease_control(state, agent_id, entry, control, op)
+
+      %{op: :return} = op ->
+        lease_control(state, agent_id, entry, control, op)
+
+      %{op: :dispose} = op ->
+        lease_control(state, agent_id, entry, control, op)
+
+      %{op: :waiter_close} ->
+        {:ok, state, reply(entry, %{closed: false, claimed: false}), :item_less}
+
+      %{op: :resume, lease_ids: lease_ids} ->
+        resume_control(state, agent_id, entry, control, lease_ids)
+
+      %{op: :freeze} ->
+        freeze_control(state, agent_id, entry, control)
+    end
+  end
+
+  defp reply(entry, fields), do: Map.put(fields, :queue, InterAgentQueue.counts(entry.queue))
+
+  defp grant_credit(state, agent_id, entry, control, credit) do
+    cond do
+      control.frozen ->
+        {:error, :queue_frozen}
+
+      control.resume_required ->
+        {:error, :queue_resume_required}
+
+      credit.kind == :root and previous_root_pending?(entry.queue) ->
+        Logger.warning(
+          "inter-agent queue invariant violation: root credit while a previous root is native-pending recipient=#{agent_id}"
+        )
+
+        {:error, :previous_root_pending}
+
+      true ->
+        revision = Integer.to_string(control.next_revision)
+
+        control = %{
+          control
+          | credit: Map.merge(credit, %{revision: revision, consumed_by: nil}),
+            next_revision: control.next_revision + 1
+        }
+
+        {:ok, put_in(state.queue_controls[agent_id], control),
+         reply(entry, %{credit_revision: revision}), :credit}
+    end
+  end
+
+  defp previous_root_pending?(queue) do
+    Enum.any?(queue.items, fn {_id, item} ->
+      item.phase == :native_pending and match?({_, :root}, item.lease)
+    end)
+  end
+
+  defp withdraw_credit(state, agent_id, control, revision) do
+    entry = state.entries[agent_id]
+
+    case control.credit do
+      %{revision: ^revision, consumed_by: nil} ->
+        control = %{control | credit: nil, ops: InterAgentQueueOps.clear_credit(control.ops)}
+
+        {:ok, put_in(state.queue_controls[agent_id], control), reply(entry, %{withdrawn: true}),
+         :item_less}
+
+      _ ->
+        {:ok, state, reply(entry, %{withdrawn: false}), :item_less}
+    end
+  end
+
+  defp lease_control(state, agent_id, entry, control, %{op: op, lease_id: lease_id} = request) do
+    turn = control.lease_tokens[lease_id]
+
+    cond do
+      op == :begin_native and control.frozen ->
+        {:error, :queue_frozen}
+
+      op == :begin_native and control.resume_required ->
+        {:error, :queue_resume_required}
+
+      # The permit is bound to the native turn the lease was offered for.
+      op == :begin_native and turn != nil and request.token != turn ->
+        {:error, {:invalid_queue_control, "native_turn_token"}}
+
+      true ->
+        argument =
+          case op do
+            :begin_native -> request.queue_ids
+            _ -> request.items
+          end
+
+        with {:ok, queue, result} <- lease_op(entry.queue, op, lease_id, argument, turn) do
+          {entry, result} = resolve_queue_sequences(%{entry | queue: queue}, op, result)
+          persist(state.table, agent_id, entry)
+
+          bodies =
+            case result do
+              %{disposed: disposed} -> Map.drop(state.bodies, Enum.map(disposed, &{agent_id, &1}))
+              _ -> state.bodies
+            end
+
+          touched = for id <- touched_ids(op, argument), do: {id, queue_phase(queue, id)}
+          control = restore_declined_credit(control, op, lease_id)
+
+          state = %{
+            state
+            | entries: Map.put(state.entries, agent_id, entry),
+              bodies: bodies,
+              queue_controls: Map.put(state.queue_controls, agent_id, control)
+          }
+
+          {:ok, state, reply(entry, lease_reply(op, result)), {:touching, touched}}
+        end
+    end
+  end
+
+  defp touched_ids(:begin_native, ids), do: ids
+  defp touched_ids(_op, entries), do: Enum.map(entries, &elem(&1, 0))
+
+  defp lease_reply(:begin_native, %{permitted: ids}), do: %{permitted_queue_ids: ids}
+  defp lease_reply(:return, %{returned: seqs}), do: %{returned_ranges: ranges(seqs)}
+
+  defp lease_reply(:dispose, result),
+    do: %{
+      disposed: result.disposed,
+      resolved_ranges: ranges(result.resolved ++ result.uncertain),
+      returned_ranges: ranges(result.returned)
+    }
+
+  # r8b B4: a declined early item does not use up the early credit.
+  defp restore_declined_credit(control, :return, lease_id) do
+    case control.credit do
+      %{kind: :early, consumed_by: ^lease_id} = credit ->
+        %{control | credit: %{credit | consumed_by: nil}}
+
+      _ ->
+        control
+    end
+  end
+
+  defp restore_declined_credit(control, _op, _lease_id), do: control
+
+  defp resume_control(state, agent_id, entry, control, lease_ids) do
+    leases =
+      for lease_id <- lease_ids do
+        items =
+          for {id, item} <- Enum.sort(entry.queue.items),
+              match?({^lease_id, _}, item.lease),
+              do: %{queue_id: id, phase: item.phase}
+
+        %{lease_id: lease_id, items: items}
+      end
+
+    control = %{control | resume_required: false}
+
+    {:ok, put_in(state.queue_controls[agent_id], control),
+     reply(entry, %{leases: leases, registrations: []}), :item_less}
+  end
+
+  defp freeze_control(state, agent_id, entry, control) do
+    control = %{
+      control
+      | frozen: true,
+        credit: nil,
+        ops: InterAgentQueueOps.clear_credit(control.ops)
+    }
+
+    {:ok, put_in(state.queue_controls[agent_id], control), reply(entry, %{frozen: true}),
+     :item_less}
+  end
+
+  defp record_queue_control(state, agent_id, id, digest, reply, record) do
+    update_in(state.queue_controls[agent_id], fn control ->
+      queue = state.entries[agent_id].queue
+
+      ops =
+        case record do
+          :credit ->
+            InterAgentQueueOps.record_credit(control.ops, id, digest, reply)
+
+          :item_less ->
+            InterAgentQueueOps.record_item_less(control.ops, id, digest, reply)
+
+          {:touching, touched} ->
+            InterAgentQueueOps.record_touching(control.ops, id, digest, reply, touched)
+        end
+
+      %{control | ops: InterAgentQueueOps.prune(ops, &queue_phase(queue, &1))}
+    end)
+  end
+
+  # Serves an outstanding credit when the lease slot is free and the
+  # owner's channel is live; the batch goes to that channel only.
+  defp maybe_offer(state, agent_id) do
+    with %{credit: %{consumed_by: nil} = credit, frozen: false, resume_required: false} = control <-
+           state.queue_controls[agent_id],
+         owner when is_pid(owner) <- state.owners[agent_id],
+         %{queue: %{} = queue} = entry <- state.entries[agent_id],
+         # A root credit stands for an idle host: once a root batch is
+         # submitted, an older or superseding root credit is not served.
+         false <- credit.kind == :root and previous_root_pending?(queue),
+         {:ok, queue, offer, next_seq} <-
+           offer(queue, credit_request(credit, queue, control), entry.issued_seq + 1) do
+      entry = %{
+        entry
+        | queue: queue,
+          issued_seq: next_seq - 1,
+          pending_since: entry.pending_since || DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      persist(state.table, agent_id, entry)
+
+      control = %{
+        control
+        | credit: %{credit | consumed_by: offer.lease_id},
+          ops: InterAgentQueueOps.clear_credit(control.ops),
+          lease_tokens: Map.put(control.lease_tokens, offer.lease_id, credit.token)
+      }
+
+      send(
+        owner,
+        {:inter_agent_queue_batch, batch_payload(state, agent_id, entry, credit, offer)}
+      )
+
+      %{
+        state
+        | entries: Map.put(state.entries, agent_id, entry),
+          queue_controls: Map.put(state.queue_controls, agent_id, control)
+      }
+    else
+      _ -> state
+    end
+  end
+
+  defp credit_request(%{kind: :root}, _queue, _control), do: :root
+
+  defp credit_request(%{kind: :early, mechanism: :fold, token: token}, _queue, _control),
+    do: {:early, :fold, token, nil}
+
+  # R(T): the peers and conversations of the root batch the credit's native
+  # turn is running.
+  defp credit_request(%{kind: :early, mechanism: :steer, token: token}, queue, control) do
+    root =
+      for {_id, %{lease: {lease_id, :root}} = item} <- queue.items,
+          control.lease_tokens[lease_id] == token,
+          do: item
+
+    {:early, :steer, token,
+     %{
+       peers: MapSet.new(root, & &1.sender),
+       conversations: MapSet.new(root, & &1.conversation_id)
+     }}
+  end
+
+  defp batch_payload(state, agent_id, entry, credit, offer) do
+    %{
+      "version" => "0",
+      "queue_epoch" => state.queue_epoch,
+      "incarnation" => entry.incarnation,
+      "generation" => entry.generation,
+      "lease_id" => Integer.to_string(offer.lease_id),
+      "kind" => Atom.to_string(credit.kind),
+      "credit_revision" => credit.revision,
+      "items" =>
+        for item <- offer.items do
+          queued = entry.queue.items[item.queue_id]
+
+          %{
+            "queue_id" => Integer.to_string(item.queue_id),
+            "attempt_id" => "#{item.queue_id}.#{queued.attempt}",
+            "delivery_seq" => item.delivery_seq,
+            "class" => Atom.to_string(item.class),
+            "byte_charge" => queued.bytes,
+            "envelope" => state.bodies[{agent_id, item.queue_id}]
+          }
+        end
+    }
+  end
+
+  defp ranges(seqs) do
+    seqs
+    |> Enum.sort()
+    |> Enum.chunk_while(
+      nil,
+      fn
+        seq, nil -> {:cont, [seq, seq]}
+        seq, [first, last] when seq == last + 1 -> {:cont, [first, seq]}
+        seq, range -> {:cont, range, [seq, seq]}
+      end,
+      fn
+        nil -> {:cont, nil}
+        range -> {:cont, range, nil}
+      end
+    )
+    |> Enum.reject(&is_nil/1)
   end
 
   defp cancel_queue_reservation(state, token) do
