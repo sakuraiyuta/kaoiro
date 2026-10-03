@@ -8,7 +8,9 @@
   import Modal from "../../src/lib/Modal.svelte";
   import PersonaDetailDialog from "../../src/lib/PersonaDetailDialog.svelte";
   import SettingsDrawer from "../../src/lib/SettingsDrawer.svelte";
+  import StatusLineHistoryDialog from "../../src/lib/StatusLineHistoryDialog.svelte";
   import {
+    hostileStatusLineHistory,
     launchHosts,
     settingsDrawerConnection,
     stubConnection,
@@ -23,7 +25,8 @@
       | "persona"
       | "modal-empty"
       | "dialog-triggered"
-      | "drawer-triggered";
+      | "drawer-triggered"
+      | "status-line-history";
   } = $props();
 
   const connection = stubConnection();
@@ -42,6 +45,10 @@
   // Modal.svelte is a general-purpose primitive and ふじ's Chromium probe
   // measured the zero-focusable case directly against it.
   let modalEmptyOpen = $state(false);
+  // issue 482: the status line change log, opened from a real trigger like the
+  // other dialogs. Only the history fetch is a fixture; the dialog and the
+  // markdown renderer under it are the production ones.
+  let statusLineOpen = $state(false);
 </script>
 
 <main class="harness-main">
@@ -84,6 +91,23 @@
           <p>no focusable content</p>
         {/snippet}
       </Modal>
+    {/if}
+  {:else if overlay === "status-line-history"}
+    <button
+      type="button"
+      id="status-line-trigger"
+      onclick={() => (statusLineOpen = true)}
+    >
+      open status line log
+    </button>
+    {#if statusLineOpen}
+      <StatusLineHistoryDialog
+        agentId="e2e.agent"
+        label="e2e"
+        refreshKey={null}
+        fetchHistory={async () => hostileStatusLineHistory()}
+        onClose={() => (statusLineOpen = false)}
+      />
     {/if}
   {:else if overlay === "dialog-triggered"}
     <button

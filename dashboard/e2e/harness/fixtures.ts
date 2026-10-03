@@ -8,6 +8,7 @@ import type {
   PersonaManifest,
   UserSummary,
 } from "../../src/lib/protocol";
+import type { StatusLineHistoryEntry } from "../../src/lib/statusLine";
 
 function agent(
   agentId: string,
@@ -387,5 +388,45 @@ export function launchHosts() {
       build_channel: "dev",
       build_revision: "0123456789abcdef0123456789abcdef01234567",
     },
+  ];
+}
+
+// A change log whose newest entry tries every way the untrusted markdown
+// policy could be broken: raw HTML that would run or load, an image, links
+// with a script or data scheme, and one safe link. The older entry is nested
+// past the renderer's limit. Nothing here is a stand-in for the renderer: the
+// harness mounts the production dialog and the real renderer reads this text.
+const HOSTILE_STATUS_LINE = [
+  "# Reviewing issue 482",
+  "",
+  '<script>window.__pwned = "script"</script>',
+  '<img src="https://evil.test/raw.png" onerror="window.__pwned = \'onerror\'">',
+  "",
+  "![tracking pixel](https://evil.test/pixel.png)",
+  "[run me](javascript:window.__pwned='link')",
+  "[inline data](data:text/plain;base64,eA==)",
+  "[safe link](https://example.test/ok)",
+  '<a href="javascript:window.__pwned=\'raw-anchor\'">raw anchor</a>',
+].join("\n");
+
+const TOO_DEEP_STATUS_LINE = `${">".repeat(40)} nested past the limit`;
+
+function statusLineEntry(
+  seq: number,
+  text: string | null,
+): StatusLineHistoryEntry {
+  return {
+    seq,
+    text,
+    bytes: text === null ? null : new TextEncoder().encode(text).length,
+    updatedAt: `2026-10-04T01:00:0${seq}.000000Z`,
+  };
+}
+
+export function hostileStatusLineHistory(): StatusLineHistoryEntry[] {
+  return [
+    statusLineEntry(3, HOSTILE_STATUS_LINE),
+    statusLineEntry(2, TOO_DEEP_STATUS_LINE),
+    statusLineEntry(1, null),
   ];
 }
