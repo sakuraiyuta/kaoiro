@@ -622,7 +622,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # The private waiter registration rides outside the envelope and is
   # stripped before anything validates, relays, projects or records it.
-  defp handle_wrapper_in("envelope", envelope, socket) do
+  defp handle_wrapper_in("envelope", envelope, socket) when is_map(envelope) do
     {registration, envelope} = Map.pop(envelope, "waiter_registration")
 
     case register_waiter(registration, envelope, socket) do
@@ -643,6 +643,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
         end
     end
   end
+
+  defp handle_wrapper_in("envelope", envelope, socket), do: handle_envelope(envelope, socket)
 
   # Peer directory request (docs/reference/inter-agent/directory.md).
   # The wrapper's `mcp__kaoiro__list_agents` tool calls this to resolve
