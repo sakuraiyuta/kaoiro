@@ -2554,9 +2554,10 @@ defmodule KaoiroServer.DeliveryStatesTest do
     end
 
     test "claims that peer's input on that conversation, oldest first, within 10 items", ctx do
-      ids = for _ <- 1..11, do: ctx.put.("p", "c", 10)
+      # Older input of another conversation or another peer is not claimed.
       _other_cid = ctx.put.("p", "other", 10)
       _other_peer = ctx.put.("q", "c", 10)
+      ids = for _ <- 1..11, do: ctx.put.("p", "c", 10)
 
       assert claimed(ctx, "p", "c") == Enum.take(ids, 10)
       assert %{offered: 10} = DeliveryStates.queue_counts(ctx.recipient, ctx.name)
