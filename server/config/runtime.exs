@@ -184,6 +184,19 @@ if System.get_env("KAOIRO_QUAGMIRE_STALL_MS") do
     quagmire: [stall_ms: quagmire_int.("KAOIRO_QUAGMIRE_STALL_MS")]
 end
 
+# Agent status line retention (issue 482). An out-of-range or non-numeric
+# value raises at boot, like the quagmire thresholds above: a change log
+# sized by a value nobody chose is worse than a server that refuses to start.
+if raw = System.get_env("KAOIRO_STATUS_LINE_RETENTION") do
+  case Integer.parse(raw) do
+    {value, ""} when value in 1..100 ->
+      config :kaoiro_server, :agent_status_lines, retention: value
+
+    _ ->
+      raise "KAOIRO_STATUS_LINE_RETENTION must be an integer from 1 to 100, got #{inspect(raw)}"
+  end
+end
+
 # ADR-0055 phase-33 Stage B — per-agent event cap for the session_lifecycle
 # timeline. Same idiom as the PORT parse above: String.to_integer/1 raises
 # (boot fails) on a non-numeric value rather than silently falling back,

@@ -135,6 +135,15 @@ defmodule KaoiroServer.PersistencePaths do
       config_key: :quagmire_settings_path,
       env: "KAOIRO_QUAGMIRE_SETTINGS_PATH",
       default_file: "quagmire_settings.dets"
+    },
+    # Agent status lines and their change log (issue 482). The operator reads
+    # this history from the dashboard, and the latest line is what every
+    # peer's `list_agents` shows, so a container recreation must not reset it.
+    %{
+      store: "agent_status_lines",
+      config_key: :agent_status_lines_path,
+      env: "KAOIRO_AGENT_STATUS_LINES_PATH",
+      default_file: "agent_status_lines.dets"
     }
   ]
 

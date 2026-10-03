@@ -105,6 +105,7 @@ export KAOIRO_USERS_PATH="${KAOIRO_USERS_PATH:-$data_dir/users.dets}"
 export KAOIRO_TOKEN_DENYLIST_PATH="${KAOIRO_TOKEN_DENYLIST_PATH:-$data_dir/token_denylist.dets}"
 export KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH="${KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH:-$data_dir/session_lifecycle_events.dets}"
 export KAOIRO_QUAGMIRE_SETTINGS_PATH="${KAOIRO_QUAGMIRE_SETTINGS_PATH:-$data_dir/quagmire_settings.dets}"
+export KAOIRO_AGENT_STATUS_LINES_PATH="${KAOIRO_AGENT_STATUS_LINES_PATH:-$data_dir/agent_status_lines.dets}"
 export KAOIRO_WORK_STORE_PATH="${KAOIRO_WORK_STORE_PATH:-$data_dir/work_store.dets}"
 
 pids=()

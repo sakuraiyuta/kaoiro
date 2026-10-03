@@ -107,6 +107,15 @@ config :kaoiro_server,
          "kaoiro_test_session_lifecycle_events_#{run_nonce}.dets"
        )
 
+# Per-run throwaway DETS file for the agent status lines (issue 482), for the
+# same reason as the rally threshold store above.
+config :kaoiro_server,
+       :agent_status_lines_path,
+       Path.join(
+         test_dets_dir,
+         "kaoiro_test_agent_status_lines_#{run_nonce}.dets"
+       )
+
 # issue #320: the detector's 60-second sweep crosses test boundaries. A test
 # that closes a conversation past the rally threshold leaves it readable, and
 # a sweep firing during a LATER test broadcasts it to `agents:lobby`, failing
