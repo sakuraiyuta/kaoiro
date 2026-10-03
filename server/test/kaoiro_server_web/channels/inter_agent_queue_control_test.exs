@@ -289,7 +289,7 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
     assert log =~ "reason=early_ineligible:host_busy"
   end
 
-  test "a stalled queue owner is answered with queue_unavailable", %{id: id} = ctx do
+  test "a stalled owner answers queue_unavailable; the same id applies once", %{id: id} = ctx do
     {reply, socket} = join_queue(id)
 
     credit =
@@ -299,11 +299,22 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
         "native_turn_token" => "t"
       })
 
+    {:ok, _} = control(socket, credit)
+    queue_id = enqueue(id, "peer.a")
+    assert_push "delivery_batch", %{"lease_id" => lease_id}
+
+    returned =
+      Map.merge(fence(ctx, reply), %{
+        "op" => "return",
+        "lease_id" => lease_id,
+        "items" => [%{"queue_id" => queue_id, "reason" => "format_budget"}]
+      })
+
     owner = Process.whereis(DeliveryStates)
     :ok = :sys.suspend(owner)
 
     try do
-      ref = push(socket, "delivery_queue_control", credit)
+      ref = push(socket, "delivery_queue_control", returned)
       # The channel gives up after GenServer.call's default 5000 ms timeout.
       budget = 5_000 + TestTimeouts.durable_reply()
       assert_reply ref, :error, %{reason: "queue_unavailable"}, budget
@@ -312,5 +323,14 @@ defmodule KaoiroServerWeb.InterAgentQueueControlTest do
     end
 
     assert Process.alive?(socket.channel_pid)
+
+    # The timed-out request was applied once the owner resumed: the same id
+    # replays its reply, and a new id finds the lease already emptied.
+    assert {:ok, %{"returned_ranges" => [[1, 1]]}} = control(socket, returned)
+
+    assert {:error, %{reason: "unknown_lease"}} =
+             control(socket, Map.merge(returned, %{"operation_id" => "99"}))
+
+    assert %{queued: 1, offered: 0} = DeliveryStates.queue_counts(id)
   end
 end
