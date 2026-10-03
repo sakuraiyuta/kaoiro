@@ -3361,6 +3361,37 @@ describe("ServerLink — status line (issue 482)", () => {
       expect(await pending).toEqual({ kind: "ok", agent_id: "peer.1", status_line: null });
     });
 
+    it("accepts a text of exactly the size limit, with newlines, tabs and multibyte text", async () => {
+      const edge = "a".repeat(16384);
+      const rich = "# 見出し\n\n- 項目\tok";
+      for (const text of [edge, rich]) {
+        const pending = newLink().readStatusLine("peer.1");
+        mock.lastPush!.receivers.get("ok")!({
+          agent_id: "peer.1",
+          text,
+          bytes: Buffer.byteLength(text, "utf8"),
+          updated_at: "t",
+        });
+
+        expect(await pending).toMatchObject({ kind: "ok", status_line: { text } });
+      }
+    });
+
+    it.each([
+      ["a size that does not match the text", { text: "abc", bytes: 4 }],
+      ["a size over the limit", { text: "a".repeat(16385), bytes: 16385 }],
+      ["an empty text", { text: "", bytes: 0 }],
+      ["a vertical tab", { text: "a\u000bb", bytes: 3 }],
+      ["an escape", { text: "a\u001b[31mb", bytes: 7 }],
+      ["a DEL", { text: "a\u007fb", bytes: 3 }],
+      ["a carriage return", { text: "a\rb", bytes: 3 }],
+    ])("does not hand the model %s", async (_name, fields) => {
+      const pending = newLink().readStatusLine("peer.1");
+      mock.lastPush!.receivers.get("ok")!({ agent_id: "peer.1", updated_at: "t", ...fields });
+
+      expect(await pending).toEqual({ kind: "error", reason: "unknown_error" });
+    });
+
     it("refuses an answer about another agent", async () => {
       const pending = newLink().readStatusLine("peer.1");
       mock.lastPush!.receivers.get("ok")!({ agent_id: "peer.2", text: "x", bytes: 1, updated_at: "t" });
