@@ -25,6 +25,18 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   (`mcp__kaoiro__send_to_agent` / `request_compact` /
   `request_session_reset` are intentionally omitted).
 
+- **An explicit `allowed_tools` list replaces the default allow set.** The
+  Claude wrapper starts from `config.allowed_tools ?? [...READ_ONLY_TOOLS]`
+  (`wrapper/claude-code/src/cli.ts`), so a peer whose config lists tools gets
+  none of the entries above automatically, the status line tools included.
+  Without `mcp__kaoiro__set_status_line` in that list, every status update
+  asks the operator for approval, and the common footer asks for one at the
+  start and end of every piece of work. Add `mcp__kaoiro__set_status_line` and
+  `mcp__kaoiro__read_status_line` to such lists (the same rule already applies
+  to `mcp__kaoiro__list_agents` and `mcp__kaoiro__whoami`). Codex and
+  Antigravity expose the tools through their own bridge and host, so this
+  concerns Claude peers only.
+
 - Codex has no canUseTool and auto-approves every kaoiro bridge tool
   (`default_tools_approval_mode: "approve"`), so a tool that needs per-use
   approval there asks on its own behalf: `operatorApprovalGated`
