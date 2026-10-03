@@ -48,6 +48,19 @@ defmodule KaoiroServer.FooterAssetsTest do
     refute String.ends_with?(footer, "\n")
   end
 
+  # issue 482: every agent is told when and how to write its status line. The
+  # tool description in the wrapper carries the same points in English.
+  test "内蔵デフォルトは状況表示 (set_status_line) の書き方を含む" do
+    footer = FooterAssets.built_in_system_footer()
+    assert footer =~ "作業を始めるとき・終えるとき"
+    assert footer =~ "`set_status_line`"
+    assert footer =~ "markdown"
+    assert footer =~ "要点は冒頭に置く"
+    assert footer =~ "16,384 バイト"
+    assert footer =~ "秘密情報・"
+    assert footer =~ "空文字で消してよい"
+  end
+
   test "KAOIRO_FOOTER_DIR 未設定ならファイル優先は無効" do
     Application.delete_env(:kaoiro_server, :footer_dir)
     :ok = FooterAssets.rebuild()

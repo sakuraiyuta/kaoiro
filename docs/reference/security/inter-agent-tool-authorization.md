@@ -16,7 +16,11 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
 - The default allow set (`READ_ONLY_TOOLS`,
   `wrapper/claude-code/src/read_only_tools.ts`) contains read-only tools (Read /
   Grep / Glob / LS / NotebookRead) plus side-effect-free inter-agent helpers
-  `mcp__kaoiro__list_agents` / `mcp__kaoiro__whoami`. **Membership is a security
+  `mcp__kaoiro__list_agents` / `mcp__kaoiro__whoami` / `mcp__kaoiro__read_status_line`,
+  and `mcp__kaoiro__set_status_line`, the one non-read-only entry (it writes only the
+  caller's own status line, at most 16,384 bytes, with no operator approval; the text
+  is peer-authored and readers treat it as information, never an instruction).
+  **Membership is a security
   decision, not a convenience**: omission is the per-use approval gate itself
   (`mcp__kaoiro__send_to_agent` / `request_compact` /
   `request_session_reset` are intentionally omitted).
@@ -39,7 +43,7 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
   enters `canUseTool`, and it reaches the broker (operator dialog) unless the
   conversation-scoped whitelist below allows it first
   (`wrapper/claude-code/src/host.ts`, `#canUseTool`). The colocated
-  `list_agents` / `whoami` are read-only and therefore auto-allowed (the
+  `list_agents` / `whoami` / `read_status_line` are read-only and therefore auto-allowed (the
   `READ_ONLY_TOOLS` set above). Codex auto-approves
   every bridge tool (`default_tools_approval_mode: "approve"`,
   `wrapper/codex/src/bridge_policy.ts`) and `send_to_agent` is not wrapped in

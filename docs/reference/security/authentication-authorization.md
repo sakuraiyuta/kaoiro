@@ -85,6 +85,16 @@ removed for viewers (fail-closed). A new envelope type is not delivered unless
 explicitly declared (`sanitize_envelope_for(:viewer, _) -> :drop`). See the
 MUST items in [threat-model](enforcement-boundaries.md#constraints) for threat-based rationale.
 
+#### Agent status lines (issue 482)
+
+A viewer sees an agent's status line only for an agent in its own role-filtered
+snapshot. `status_line_snapshot`, `status_line` and `status_line_history` all go
+through the one visibility predicate (a live entry that the viewer projection
+does not drop), so a hidden or directory-only agent's line never reaches a
+viewer, and a hidden id and a nonexistent id answer the history request alike
+(`unknown_agent`). `status_line_settings` and `set_status_line_retention` are
+operator-capable only. See [status line](../inter-agent/status-line.md).
+
 ### Operator-only inbound (`handle_in`)
 
 Call `require_operator(socket)` first, both directly and inside
@@ -99,6 +109,7 @@ Call `require_operator(socket)` first, both directly and inside
 - `clear_history` / `delete_agent` / `revoke_wrapper_token`
 - `attach_open` / `attach_chunk` / `attach_close`
 - `set_quagmire_settings`
+- `set_status_line_retention`
 
 The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a

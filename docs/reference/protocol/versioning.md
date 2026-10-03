@@ -41,7 +41,7 @@ original claim is warned before normalization.
 
 | Status | Message |
 |---|---|
-| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `set_quagmire_settings` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `set_quagmire_settings` / `status_line_history` / `set_status_line_retention` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
 | ADR-0063 phase 1, v0 contract | `work_control` (operator-only) |
 | Permanent carve-out | `attach_chunk` (below) |
 | Producer not implemented | `restart` (no dashboard push call; implementation will use `pushVersioned` and stamp automatically) |
@@ -75,7 +75,7 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 #### Wrapper → server (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
 `envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` / `delivery_resync` /
-`history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
+`history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` / `status_line_set` / `status_line_get` /
 `session_reset_request` / `wrapper_build_info` / `session_lifecycle` / `disconnect_intent`
 are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
 the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
@@ -91,13 +91,13 @@ existing `delivery_status_request` accepts an optional message key.
 
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. The remaining 21 events
+`envelope` is stamped by its frame key. The remaining 24 events
 (`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
 `hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
 `agent_deleted` / `delivery_status` / `quagmire_notice` / `quagmire_settings` /
 `session_reset_started` / `session_reset_completed` /
 `session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
-`wrapper_build_info`) receive flat
+`wrapper_build_info` / `status_line_snapshot` / `status_line` / `status_line_settings`) receive flat
 `version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
 
 ADR-0063 phase 1 adds operator-only `work_changed` and
