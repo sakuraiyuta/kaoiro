@@ -49,18 +49,26 @@ function searchPath(dir, boundary) {
     dirs.push(join(dir, "node_modules"));
     if (dir === boundary) return dirs;
     const parent = dirname(dir);
-    if (parent === dir || !within(parent, boundary)) return dirs;
+    if (parent === dir) return dirs;
     dir = parent;
   }
 }
 
+/** Node takes the first candidate it finds. One that is a link to outside
+ *  the deploy would dangle on the installed host, so it does not count. */
 function resolvesFrom(file, name, boundary) {
-  return searchPath(dirname(realpathSync(file)), boundary)
-    .some((dir) => existsSync(join(dir, name, "package.json")));
+  for (const dir of searchPath(dirname(realpathSync(file)), boundary)) {
+    const candidate = join(dir, name);
+    if (existsSync(join(candidate, "package.json"))) {
+      return within(realpathSync(candidate), boundary);
+    }
+  }
+  return false;
 }
 
 /** First-party package roots: the deploy root and every @kaoiro package
- *  that node would find from one of them, by real path. */
+ *  that node would find from one of them, by real path. A link to outside
+ *  the deploy is not followed; importing through one fails resolvesFrom. */
 function firstPartyRoots(boundary) {
   const roots = new Set([boundary]);
   const queue = [boundary];

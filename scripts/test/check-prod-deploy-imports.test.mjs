@@ -72,6 +72,22 @@ test("checks the runner's own dist as well as linked packages", () => {
   });
 });
 
+test("fails on an import that resolves only through a link to outside the deploy", () => {
+  withDeploy(({ root, core }) => {
+    const outsideProtocol = join(root, "..", "..", "node_modules", "@kaoiro", "protocol");
+    symlinkSync(outsideProtocol, join(root, "node_modules", "@kaoiro", "protocol"));
+    // Outside code is not first-party to this deploy and is not scanned.
+    write(join(outsideProtocol, "dist", "index.js"), 'import "not-installed";\n');
+    const unused = run(root);
+    assert.equal(unused.status, 0, "a link nothing imports is harmless");
+    write(join(root, "dist", "budget.js"), 'import "@kaoiro/protocol";\n');
+    const result = run(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /budget\.js imports "@kaoiro\/protocol", which is not installed/);
+    void core;
+  });
+});
+
 test("fails closed when the tree has no first-party JS", () => {
   const scratch = mkdtempSync(join(tmpdir(), "kuroe214-deploy-empty-"));
   try {
