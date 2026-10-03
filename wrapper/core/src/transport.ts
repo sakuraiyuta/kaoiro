@@ -1101,6 +1101,17 @@ function statusLineReadOkFrom(payload: unknown, agentId: string): StatusLineRead
   ) {
     return STATUS_LINE_UNKNOWN_ERROR;
   }
+  // The same vouching as the head: the text must fit its declared size, stay
+  // within what the server stores, and carry no control the model should not
+  // be shown as a peer's words.
+  if (
+    bytes < 1 ||
+    bytes > STATUS_LINE_MAX_BYTES ||
+    Buffer.byteLength(text, "utf8") !== bytes ||
+    STATUS_LINE_FORBIDDEN_CONTROLS.test(text)
+  ) {
+    return STATUS_LINE_UNKNOWN_ERROR;
+  }
   return { kind: "ok", agent_id: agentId, status_line: { text, bytes, updated_at: updatedAt } };
 }
 
