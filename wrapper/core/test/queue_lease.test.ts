@@ -322,6 +322,19 @@ describe("QueueLease — unknown outcomes", () => {
     expect(h.lease.heldLeaseIds()).toEqual([]);
   });
 
+  it("a released item whose begin is refused is still returned", async () => {
+    const h = harness(scripted({ begin_native: [() => refusal("queue_resume_required")] }));
+    h.lease.receiveBatch(batch());
+    const begin = h.offers[0]!.begin(["10"], "t1");
+    h.offers[0]!.release(["10"]);
+    expect(await begin).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ops(h.sent, "return")).toEqual([
+      expect.objectContaining({ items: [{ queue_id: "10", reason: "turn_abandoned" }] }),
+    ]);
+    expect(h.lease.heldLeaseIds()).toEqual([]);
+  });
+
   it("releasing a permitted item returns it and voids the permit", async () => {
     const h = harness();
     h.lease.receiveBatch(batch());

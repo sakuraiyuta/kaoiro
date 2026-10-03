@@ -320,7 +320,21 @@ export class QueueLease {
         // A return or a freeze while the permit was in flight wins.
         const stillWanted = targets.every((item) => item!.state === "begin_requested");
         if (!granted || !stillWanted || !current()) {
-          for (const item of targets) if (item!.state === "begin_requested") item!.state = "offered";
+          const released: string[] = [];
+          for (const item of targets) {
+            if (item!.state !== "begin_requested") continue;
+            // A released item the server did not permit still holds the lease.
+            if (item!.abandoned && current()) {
+              item!.state = "returning";
+              released.push(item!.queueId);
+            } else {
+              item!.state = "offered";
+            }
+          }
+          if (released.length > 0) {
+            void this.#settleOp("return", leaseId, items,
+              released.map((id) => ({ queue_id: id, reason: "turn_abandoned" as const })));
+          }
           return null;
         }
         if (targets.some((item) => item!.abandoned)) {
