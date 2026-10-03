@@ -170,6 +170,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), [conversation admission](reference/inter-agent/conversation-admission.md), [delivery](reference/inter-agent/delivery.md), [send and wait](reference/inter-agent/send-and-wait.md), and [IA sidecar and display restoration](reference/storage/inter-agent-sidecar.md).
 - Error and reachability notices: [error notices](reference/inter-agent/errors.md).
 - Session tools: [compaction, threshold notices, and session reset](reference/inter-agent/session-tools.md).
+- Agent status line: [writing, reading, change log, and failure model](reference/inter-agent/status-line.md).
 - Permission recovery: [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - Open questions carried from the former protocol spec: [inter-agent messaging](architecture/inter-agent-messaging.md#open-questions).
 - Provisional: external human messaging (Discord) — [protocol entry](specs/protocol-external-human.md).

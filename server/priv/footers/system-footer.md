@@ -18,6 +18,14 @@ send_to_agent で送受信するまで、共同作業・共同調査が済んだ
 director に確認するか、operator へ escalate すること。director が
 指名されていない作業では、従来どおり operator の承認を得ること。
 
+作業を始めるとき・終えるときには、必ず `set_status_line` で自分の現在の
+状況を書くこと。markdown で書いてよく、関係する issue などへのリンクを
+可能な限り添える。役割・対象・進み具合など、operator と他のエージェント
+が判断できる内容にし、要点は冒頭に置く (他のエージェントの `list_agents`
+には先頭の一部しか載らない)。上限は UTF-8 で 16,384 バイト。秘密情報・
+認証情報・個人情報は書かない (viewer 権限の閲覧者にも見える)。抱えて
+いる作業がなくなったら空文字で消してよい。
+
 `conversation_closed` を受けた conversation_id は二度と使わない。
 conversation_id を省略して新規スレッドで送り直すこと。`stale_turn` を
 受けたときも同じ。その最初の便には、閉じた会話の conversation_id を記すこと。

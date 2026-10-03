@@ -644,6 +644,51 @@ check is present.**
 not verify that the server handles requests without a restart loop, that the runner
 authenticates and registers, or that dashboard host projection works.
 
+### 4.6 Status line store recovery
+
+The agent status line store ([status line](../reference/inter-agent/status-line.md))
+latches itself after a failed write or sync: `set_status_line`,
+`read_status_line` and the change log answer `status_line_unavailable`, while
+the dashboard cards and `list_agents` keep the last committed lines. The store
+does not recover on its own. A restart of its supervisor child, after the cause
+is fixed, runs the start-up again from the file.
+
+1. Fix the cause when there is one (free disk space, correct the permissions of
+   the persistence directory).
+2. Restart only the child, from the server host:
+
+   ```sh
+   docker compose -f /path/to/deployment/docker-compose.yaml exec -T kaoiro \
+     /app/bin/kaoiro_server rpc '
+   Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.AgentStatusLines)
+   Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.AgentStatusLines)'
+   ```
+
+   Between the two calls, readers of the store get "unavailable" for the
+   duration of the restart. The supervisor stays alive whatever the result.
+3. Read the result and the start-up log line (agents, entries, file size,
+   retention, invalid records dropped, `dirty`).
+
+| `restart_child` result | Meaning | What to do |
+|---|---|---|
+| `{:ok, pid}` | Recovered. `dirty=false` in the log line. | Nothing more. |
+| `{:error, :status_line_table_already_open}` | The DETS service has not yet processed the previous process's exit; its cleanup is asynchronous. A refusal that persists means a foreign process holds the table. | Wait a few seconds and run `restart_child` again. If it keeps refusing, restart the whole server. Do not close the table from the console. |
+| `{:error, {:status_line_open_failed, reason}}` or `{:status_line_move_aside_failed, _}` | The file could not be opened, or a file that is not a DETS file could not be moved aside. The file is untouched. | Read `reason`: a disk or permission error is fixed and the restart retried. A `type_mismatch` means the file at the path is not this store's; do not delete it, find out why. |
+| any other `{:error, reason}` | Not necessarily the original disk or permission fault: start-up also fails on a defect in the store or an unreadable token denylist. | Read `reason` and the start-up log. Persistent I/O trouble is fixed at its source; an unexpected failure is reported, not retried or "fixed" by changing permissions over and over. A restart of the whole server also recovers. |
+
+If the log line reports `dirty=true`, the start-up sync failed and the store
+is serving the rows it read; fix the disk and restart the child again.
+
+A file that is not a DETS file is moved to `<path>.corrupt-<UTC>-<n>` and a
+fresh store starts empty (the stored retention pick is lost). Keep the backup
+until the cause is understood.
+
+**File size.** DETS files are limited to 2 GiB. The worst case at the limits
+(200 agents, 100 entries of 16 KiB each) is about 328 MiB, computed from the
+limits and not measured. Pruning frees space inside the file, which is reused;
+the file is not compacted. The start-up log line reports the size, and `ls -l`
+on `KAOIRO_AGENT_STATUS_LINES_PATH` shows it between starts.
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).

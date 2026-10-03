@@ -22,7 +22,7 @@ footer composition becomes the prompt.
 
 | File | Role | When missing |
 |---|---|---|
-| `system-footer.md` | kaoiro default (environment awareness + peer-routing rules + collaborative-behavior guidance). When present, replaces the built-in default completely | Use the default text built into the server binary |
+| `system-footer.md` | kaoiro default (environment awareness + peer-routing rules + collaborative-behavior guidance + when and how to write the agent's status line with `set_status_line`, [status line](../inter-agent/status-line.md)). When present, replaces the built-in default completely | Use the default text built into the server binary |
 | `user-footer.md` | Free-form operator overlay; an environment-specific file analogous to env | Add nothing |
 
 - Composition order: `preset(claude_code) + personality + system-footer +
