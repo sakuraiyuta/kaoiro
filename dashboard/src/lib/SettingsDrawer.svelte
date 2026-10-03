@@ -1189,15 +1189,11 @@
     border-left: 1px solid var(--line) !important;
     border-radius: 0 !important;
     background: var(--bg-card);
-  }
-
-  /* short: the drawer becomes its own vertical scroll owner so low
-     viewports never clip its rows (ADR-0052 F8). */
-  @media (max-height: 500px) {
-    :global(.settings-drawer-content) {
-      max-block-size: 100dvh;
-      overflow-y: auto;
-    }
+    /* The drawer is its own vertical scroll owner at every height: its sections
+       together are taller than a laptop viewport, and a row below the fold
+       would be unreachable (ADR-0052 F8). */
+    max-block-size: 100dvh;
+    overflow-y: auto;
   }
 
   @keyframes slide-in {

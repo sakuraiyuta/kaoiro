@@ -124,6 +124,32 @@ test.describe("SettingsDrawer a11y (issue #277)", () => {
     expect(rect.height).toBeCloseTo(rect.windowInnerHeight, 0);
   });
 
+  // issue 482 added the status line retention section; with it the drawer's
+  // sections are taller than a 720px viewport (measured against the harness
+  // fixture: 1066px of content), and the drawer only scrolled below 500px, so
+  // the rows past the fold were unreachable. The drawer scrolls at any height.
+  test("viewport より高い内容でも、drawer の最後の操作まで scroll で届く", async ({
+    page,
+  }) => {
+    await page.goto(DRAWER);
+    await page.locator("#drawer-trigger").click();
+    await expect(page.locator("dialog")).toBeVisible();
+
+    const overflow = await page.evaluate(() => {
+      const el = document.querySelector(".settings-drawer-content")!;
+      return { content: el.scrollHeight, shown: el.clientHeight };
+    });
+    expect(overflow.content).toBeGreaterThan(overflow.shown);
+
+    const last = page.locator(".settings-drawer-content button").last();
+    await last.scrollIntoViewIfNeeded();
+    const box = await last.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(
+      page.viewportSize()!.height,
+    );
+  });
+
   test("drawer 内のクリックでは閉じない", async ({ page }) => {
     await page.goto(DRAWER);
     await page.locator("#drawer-trigger").click();

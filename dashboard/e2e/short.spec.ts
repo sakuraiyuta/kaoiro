@@ -57,7 +57,7 @@ test.describe("T9: 500/501 boundary flips only the vertical compression", () => 
     ).not.toBe("none");
   });
 
-  test("dialog / drawer gain max-block-size + own scroll at 500", async ({ page }) => {
+  test("dialog gains max-block-size + own scroll at 500, and the drawer scrolls at both", async ({ page }) => {
     await page.setViewportSize({ width: 1300, height: 501 });
     await page.goto(DIALOG);
     expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).toBe("none");
@@ -65,9 +65,11 @@ test.describe("T9: 500/501 boundary flips only the vertical compression", () => 
     expect(await cssOf(page, ".launch-dialog-content", "max-block-size")).not.toBe("none");
     expect(await cssOf(page, ".launch-dialog-content", "overflow-y")).toBe("auto");
 
+    // The drawer is its own scroll owner at every height (issue 482: its
+    // sections outgrew a 720px viewport), so the boundary no longer flips it.
     await page.setViewportSize({ width: 1300, height: 501 });
     await page.goto(DRAWER);
-    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("visible");
+    expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
     await page.setViewportSize({ width: 1300, height: 500 });
     expect(await cssOf(page, ".settings-drawer-content", "overflow-y")).toBe("auto");
   });
