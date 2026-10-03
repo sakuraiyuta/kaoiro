@@ -375,17 +375,24 @@ defmodule KaoiroServer.AgentStatusLines do
     %{acc | invalid: [{:delete, key} | acc.invalid]}
   end
 
-  defp normalize_entries([_ | _] = entries) do
-    normalized = Enum.map(entries, &normalize_entry/1)
+  defp normalize_entries([_ | _] = entries), do: normalize_each(entries, [])
+  defp normalize_entries(_entries), do: :error
 
-    if Enum.all?(normalized, &(&1 != :error)) and strictly_descending?(normalized) do
-      {:ok, normalized}
-    else
-      :error
+  # Walks the list by hand: `[_ | _]` also matches an improper list, and `Enum`
+  # would raise on its tail instead of letting the record be dropped.
+  defp normalize_each([], acc) do
+    normalized = Enum.reverse(acc)
+    if strictly_descending?(normalized), do: {:ok, normalized}, else: :error
+  end
+
+  defp normalize_each([entry | rest], acc) do
+    case normalize_entry(entry) do
+      :error -> :error
+      normalized -> normalize_each(rest, [normalized | acc])
     end
   end
 
-  defp normalize_entries(_entries), do: :error
+  defp normalize_each(_improper_tail, _acc), do: :error
 
   defp normalize_entry(%{seq: seq, text: text, updated_at: at})
        when is_integer(seq) and seq > 0 and is_binary(at) do
@@ -400,8 +407,9 @@ defmodule KaoiroServer.AgentStatusLines do
 
   defp valid_text?(nil), do: true
 
-  defp valid_text?(text),
-    do: is_binary(text) and String.valid?(text) and byte_size(text) <= @max_bytes
+  # The stored form is what `MarkdownText.validate/2` returns, so a text is
+  # valid exactly when validating it changes nothing.
+  defp valid_text?(text), do: MarkdownText.validate(text, @max_bytes) == {:ok, {:set, text}}
 
   defp strictly_descending?(entries) do
     entries
