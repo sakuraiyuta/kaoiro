@@ -16,6 +16,18 @@ Outputs:
   - dashboard/public/icons/icon-maskable-192.png (192x192 maskable on #14141d)
   - dashboard/public/icons/icon-maskable-512.png (512x512 maskable on #14141d)
   - server/priv/static/favicon.ico (multi-size ICO: 16 head, 32 head, 48 full)
+
+Manual Browser Acceptance Procedure (issue #196):
+  1. Build dashboard assets:
+       corepack pnpm@10.20.0 -C dashboard build
+  2. Start local Phoenix development server:
+       (cd server && mix phx.server)
+  3. Open http://localhost:4000/ in Google Chrome / Chromium.
+  4. Open DevTools (F12) -> Application tab -> Manifest pane.
+  5. Verify that:
+     - No manifest errors or warnings are shown.
+     - Identity (kaoiro), theme color (#14141d), and display (standalone) match.
+     - All 4 declared icons (192, 512, maskable-192, maskable-512) load and preview cleanly.
 """
 
 import argparse
