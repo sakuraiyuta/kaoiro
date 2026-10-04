@@ -25,9 +25,12 @@ const describeEvents = (events: WireEvent[]) =>
   events.map((e) => `${e.topic} ${e.event}`).join("\n");
 
 describe(`reconnect after a server restart (Node ${process.versions.node})`, () => {
+  // After a 3 s outage Phoenix's next attempt lands about 1.3 s after the
+  // server is back. 5 s stays short of the 7 s the handshake bound would take
+  // to rescue a failed attempt, so the failure close is what passes here.
   it.each<[OutageMode, number]>([
-    ["refuse", 12_000],
-    ["502", 12_000],
+    ["refuse", 5_000],
+    ["502", 5_000],
     // The hung attempt ends only at the 10 s handshake bound.
     ["silent", 15_000],
   ])("RunnerLink re-registers after close 1012 and a %s outage", async (mode, recoveryMs) => {
@@ -64,7 +67,7 @@ describe(`reconnect after a server restart (Node ${process.versions.node})`, () 
       await server.outage("refuse", OUTAGE_MS);
       const recovered = await waitUntil(
         () => server.count("phx_join", "wrapper:") === 2 && modes.at(-1) === "v1",
-        12_000,
+        5_000,
       );
       expect(recovered, `${modes.join(",")}\n${describeEvents(server.events)}`).toBe(true);
       expect(modes.slice(modes.indexOf("v1") + 1)).toContain("pending");
