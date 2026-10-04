@@ -393,10 +393,15 @@ Places involving state colors resolve dynamically through `var(--tone)`.
   `--fg` at `--fs-body-sm` (12.2:1 on the card), a 1px `--line` border with a 2px
   `--tone` left edge, and an 8% `--tone` tint over `--bg-card`. Selecting it
   opens the change log, where the latest entry is rendered in the full profile.
-  Before the first snapshot, or after an incomplete one, no row is drawn; an
-  agent with no line shows 「未設定」 only when the snapshot was complete
+  A head the server cut is trimmed to what draws only what the full line draws;
+  when nothing is left the row shows 「(冒頭が長いため省略)」 in `.status-omitted`
+  (italic, the continuation note's `.75` opacity), a class of its own. Before
+  the first snapshot, or after an incomplete one, no row is drawn; an agent with
+  no line shows 「未設定」 only when the snapshot was complete
   ([status line](../inter-agent/status-line.md#dashboard)). The detail view
-  carries the same head in a panel at the top of its scrolling column.
+  carries the same head in a panel at the top of its scrolling column, with one
+  「続きを読む」 button by the same page's state table and the same sentence, in
+  `.omitted`, for an empty trimmed head.
 
 ### Buttons
 

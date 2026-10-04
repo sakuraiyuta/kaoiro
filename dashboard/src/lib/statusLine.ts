@@ -25,11 +25,25 @@ export type StatusLineRow =
 
 /** What a card shows. `none` is "do not draw the row": the snapshot has not
  *  arrived, or it was incomplete and this agent has no line of its own. It is
- *  never "unset", because "unset" is a statement about the agent. */
+ *  never "unset", because "unset" is a statement about the agent. `cleared` is
+ *  true when the agent had a line and withdrew it, so the change log has
+ *  something to read. A truncated `set` head is already trimmed to what draws
+ *  only what the full line draws (truncatedMarkdown.ts); it can be empty. */
 export type StatusLineView =
   | { kind: "none" }
-  | { kind: "unset" }
+  | { kind: "unset"; cleared: boolean }
   | { kind: "set"; head: string; truncated: boolean; bytes: number; updatedAt: string };
+
+/** Drawn in place of a truncated head that has nothing left to draw. A fixed
+ *  sentence of the dashboard, never markdown: the agent's text cannot spell it
+ *  into its own line without the normal class. */
+export const HEAD_OMITTED = "(冒頭が長いため省略)";
+
+/** Whether a `set` view draws HEAD_OMITTED instead of its head. A complete line
+ *  that is only blank keeps drawing its blank body. */
+export function headOmitted(view: { head: string; truncated: boolean }): boolean {
+  return view.truncated && view.head.trim() === "";
+}
 
 /** The retention behind the change log (operators only). */
 export type StatusLineSettings = {

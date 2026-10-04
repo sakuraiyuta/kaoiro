@@ -135,9 +135,19 @@ colour on its left edge and a faint tint of that colour.
 
 The member detail view shows the same head at the top of its scrolling column,
 with the full profile (headings, lists, tables and real links), its time, and,
-when the head was cut, the note and a button that opens the change log. It reads
-the line the dashboard already holds, so it follows live writes without a
-request.
+when the head was cut, the note. It reads the line the dashboard already holds,
+so it follows live writes without a request. One button, 続きを読む, opens the
+change log wherever the agent has written or withdrawn a line:
+
+| Line | Panel | 続きを読む |
+|---|---|---|
+| set | head and time | yes, cut or not |
+| cleared | 未設定 | yes |
+| never written | 未設定 | no |
+| unknown (no snapshot, or an incomplete one without this agent) | no panel | no |
+
+With no way to open the log (an embed without an opener) there is no button in
+any state.
 
 The change log dialog renders only the latest entry in full on open. An older
 entry shows its time and its first line, cut to 160 code points and drawn in the
@@ -173,9 +183,40 @@ phrasing content and has its own sanitizer instance.
 - the output holds no newline beside a break, so the three-line clamp counts
   the lines that are drawn.
 
-A head the server cut at 512 bytes is drawn the same way; a cut inside markup
-leaves its symbols as text at the end of the head, and the note says the text
-continues.
+### A head the server cut
+
+A head cut at 512 bytes may stop inside markup. Drawn as it is, it would show raw
+syntax (`**`, `[x](`) or a link to a half address that still opens
+(`https://gith`). `StatusLines.view()` therefore trims a head whose `truncated`
+is true (`truncatedMarkdown.ts`; a complete line is drawn as written) to the
+longest start of it that draws only what the full line draws, and both the card
+and the panel read the trimmed head. The note says the text continues.
+
+- The block structure and the extent of every closed inline construct come from
+  the lexer that draws the text, so the trim and the renderers cannot disagree
+  about them. Hand rules cover only what the lexer leaves as text: a delimiter
+  that has not been closed, a bracket, a trailing escape, an entity prefix, a
+  partial block marker, a table or a definition still being typed.
+- An address, which is anything the lexer gives an `href` (a link, an image, a
+  bare URL, an email, a definition), that reaches the end of the head is cut,
+  never kept: the rest of it is unknown.
+- When nothing precedes the first unfinished construct, its text is kept and its
+  markup dropped (a cut bold headline is drawn plain, a link keeps its label).
+- A head with nothing left to draw (it starts with a table, a bare URL, a link
+  destination, an angle-bracket autolink, an empty fence, or holds only
+  reference definitions) shows the fixed sentence `(冒頭が長いため省略)`, an
+  element of the dashboard in its own class (`.omitted` in the panel,
+  `.status-omitted` on the card; dim and italic), never passed through the
+  markdown path. The server's empty head for a first grapheme larger than 512
+  bytes shows it too.
+
+What the trim cannot do, because a start of the text does not hold what comes
+after it: a delimiter that the full line shows as literal text can be hidden
+(counted by the oracle, about 1.7% of cuts on the fuzz corpus); a reference
+link whose definition follows the head, a footnote-style definition and a table
+without leading pipes draw their brackets as text. None of these draws an
+address. `truncatedMarkdownOracle.test.ts` judges the trim by the renderers at
+every grapheme cut and is the alarm for a `marked` upgrade.
 
 The operator's retention control lives in the settings drawer.
 

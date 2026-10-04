@@ -7,6 +7,7 @@ import {
   type StatusLineRow,
   type StatusLineView,
 } from "./statusLine";
+import { trimIncompleteMarkdown } from "./truncatedMarkdown";
 
 export class StatusLines {
   #rows = $state<Record<string, StatusLineRow>>({});
@@ -56,15 +57,19 @@ export class StatusLines {
     const row = this.#rows[agentId];
     if (row !== undefined) {
       return row.cleared
-        ? { kind: "unset" }
+        ? { kind: "unset", cleared: true }
         : {
             kind: "set",
-            head: row.head,
+            // A head the server cut may stop inside markup; a complete line is
+            // drawn as written.
+            head: row.truncated ? trimIncompleteMarkdown(row.head) : row.head,
             truncated: row.truncated,
             bytes: row.bytes,
             updatedAt: row.updatedAt,
           };
     }
-    return this.#loaded && !this.#incomplete ? { kind: "unset" } : { kind: "none" };
+    return this.#loaded && !this.#incomplete
+      ? { kind: "unset", cleared: false }
+      : { kind: "none" };
   }
 }

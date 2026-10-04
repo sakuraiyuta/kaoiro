@@ -291,6 +291,24 @@ test.describe("a hostile status line on the agent card (issue 514)", () => {
 
     await expect(rows(page).first()).toHaveText("未設定");
   });
+
+  test("a head cut inside a link draws no raw syntax and no cut address", async ({ page }) => {
+    await page.goto("/e2e/harness/index.html?view=lobby&role=operator&statusLine=cutlink");
+    const text = rows(page).first().locator(".status-text");
+
+    await expect(text.locator("strong")).toHaveText("状況");
+    await expect(text).toHaveText("状況: 設計レビュー待ち。参照");
+    await expect(text.locator(".md-link")).toHaveCount(0);
+  });
+
+  test("a head with nothing left to draw says so, readably, in its own class", async ({ page }) => {
+    await page.goto("/e2e/harness/index.html?view=lobby&role=operator&statusLine=omitted");
+    const row = rows(page).first();
+
+    await expect(row.locator(".status-omitted")).toHaveText("(冒頭が長いため省略)");
+    await expect(row.locator(".status-more")).toContainText("続きあり");
+    expect(await effectiveContrast(row.locator(".status-omitted"))).toBeGreaterThanOrEqual(4.5);
+  });
 });
 
 test.describe("a hostile status line in the member detail view (issue 514)", () => {
@@ -332,10 +350,41 @@ test.describe("a hostile status line in the member detail view (issue 514)", () 
   test("keeps every piece of its text readable: the label, the time, the note and the buttons reach AA", async ({ page }) => {
     await page.goto(DETAIL);
 
-    for (const selector of ["h3", ".when", ".more", ".read-more", ".history", ".body"]) {
+    for (const selector of ["h3", ".when", ".more", ".read-more", ".body"]) {
       const contrast = await effectiveContrast(panel(page).locator(selector).first());
       expect(contrast, selector).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  test("offers one button and no second one for the history", async ({ page }) => {
+    await page.goto(DETAIL);
+
+    await expect(panel(page).locator("button")).toHaveCount(1);
+    await expect(panel(page).locator(".history")).toHaveCount(0);
+  });
+
+  test("a head cut inside a link draws no raw syntax and no cut address", async ({ page }) => {
+    await page.goto("/e2e/harness/index.html?view=detail&statusLine=cutlink");
+
+    await expect(panel(page).locator(".body strong")).toHaveText("状況");
+    await expect(panel(page).locator(".body")).toHaveText("状況: 設計レビュー待ち。参照");
+    await expect(panel(page).locator(".body a")).toHaveCount(0);
+  });
+
+  test("a head with nothing left to draw says so, and still opens the change log", async ({ page }) => {
+    await page.goto("/e2e/harness/index.html?view=detail&statusLine=omitted");
+
+    await expect(panel(page).locator(".omitted")).toHaveText("(冒頭が長いため省略)");
+    expect(await effectiveContrast(panel(page).locator(".omitted"))).toBeGreaterThanOrEqual(4.5);
+    await panel(page).getByRole("button", { name: "続きを読む" }).click();
+    await expect(page.locator("#history-opened")).not.toHaveText("");
+  });
+
+  test("a cleared line says 未設定 and still offers the change log", async ({ page }) => {
+    await page.goto("/e2e/harness/index.html?view=detail&statusLine=cleared");
+
+    await expect(panel(page).locator(".unset")).toHaveText("未設定");
+    await expect(panel(page).getByRole("button", { name: "続きを読む" })).toBeVisible();
   });
 
   test("keeps headings at body size and lets a table scroll inside the panel", async ({ page }) => {

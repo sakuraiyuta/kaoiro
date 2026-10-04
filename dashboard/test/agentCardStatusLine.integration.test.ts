@@ -6,7 +6,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
 import type { Envelope } from "../src/lib/protocol";
-import type { StatusLineView } from "../src/lib/statusLine";
+import { HEAD_OMITTED, type StatusLineView } from "../src/lib/statusLine";
 import { renderUntrustedInline } from "../src/lib/untrustedMarkdown";
 import { reactiveObject } from "./reactiveObject.svelte";
 
@@ -75,7 +75,7 @@ describe("AgentCard status line row", () => {
   });
 
   it("says 未設定 for an agent that is known to have no line", async () => {
-    const button = row(await render({ kind: "unset" }));
+    const button = row(await render({ kind: "unset", cleared: false }));
 
     expect(button?.textContent?.trim()).toBe("未設定");
     expect(button?.classList.contains("unset")).toBe(true);
@@ -221,6 +221,46 @@ describe("AgentCard status line row", () => {
     row(target)!.click();
 
     expect(onOpenStatusLineHistory).toHaveBeenCalledWith("host-a.p");
+  });
+
+  describe("a truncated head with nothing left to draw", () => {
+    const empty = (overrides: Partial<Extract<StatusLineView, { kind: "set" }>> = {}) =>
+      setLine({ head: "", truncated: true, bytes: 3000, ...overrides });
+
+    it("draws the fixed sentence in its own class and never parses it as markdown", async () => {
+      const button = row(await render(empty()))!;
+
+      const sentence = button.querySelector(".status-omitted");
+      expect(sentence?.textContent).toBe(HEAD_OMITTED);
+      expect(button.querySelector(".status-text")?.textContent?.trim()).toBe(HEAD_OMITTED);
+      expect(button.querySelector(".status-text :is(strong, em, span.md-link, code)")).toBeNull();
+      expect(vi.mocked(renderUntrustedInline)).not.toHaveBeenCalled();
+    });
+
+    it("keeps the size note and the click that opens the change log", async () => {
+      const onOpenStatusLineHistory = vi.fn();
+      const target = await render(empty(), { onOpenStatusLineHistory });
+
+      expect(row(target)!.querySelector(".status-more")?.textContent).toBe("…続きあり (2.9 KB)");
+      row(target)!.click();
+      expect(onOpenStatusLineHistory).toHaveBeenCalledWith("host-a.p");
+    });
+
+    it("treats a blank cut head the same way, but not a blank whole one", async () => {
+      const blankCut = row(await render(empty({ head: " \n " })))!;
+      const blankWhole = row(await render(setLine({ head: "  ", truncated: false, bytes: 2 })))!;
+
+      expect(blankCut.querySelector(".status-omitted")).not.toBeNull();
+      expect(blankWhole.querySelector(".status-omitted")).toBeNull();
+    });
+
+    it("draws the same words written by an agent as its own markdown, in the normal class", async () => {
+      const button = row(await render(setLine({ head: HEAD_OMITTED, truncated: true, bytes: 900 })))!;
+
+      expect(button.querySelector(".status-omitted")).toBeNull();
+      expect(button.querySelector(".status-text")?.textContent?.trim()).toBe(HEAD_OMITTED);
+      expect(vi.mocked(renderUntrustedInline)).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("is disabled when nothing can open the log", async () => {

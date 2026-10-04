@@ -2,11 +2,12 @@
   // The status line block of the member detail view (issue 514): what the agent
   // wrote about itself, drawn as markdown. It shows the head the server keeps
   // for every reader (at most 512 bytes), so it follows the live line without
-  // fetching the change log; when the head was cut it says so and offers the
-  // change log, whose newest entry is the whole text. Nothing interactive
-  // encloses the markdown here, so links are real http(s) links.
+  // fetching the change log; when the head was cut it says so. One button opens
+  // the change log wherever the agent has written or withdrawn a line, and its
+  // newest entry is the whole text. Nothing interactive encloses the markdown
+  // here, so links are real http(s) links.
   import { formatRelativeJa } from "./relativeTime";
-  import type { StatusLineView } from "./statusLine";
+  import { HEAD_OMITTED, headOmitted, type StatusLineView } from "./statusLine";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
 
   let {
@@ -14,7 +15,7 @@
     onOpenHistory,
   }: {
     view: StatusLineView;
-    /** Opens the change log of this agent. Undefined hides the buttons. */
+    /** Opens the change log of this agent. Undefined hides the button. */
     onOpenHistory?: (() => void) | undefined;
   } = $props();
 
@@ -23,6 +24,8 @@
       ? `…続きあり (${(view.bytes / 1024).toFixed(1)} KB)`
       : null,
   );
+  // An agent that never wrote a line has no change log to read.
+  const hasLog = $derived(view.kind === "set" || (view.kind === "unset" && view.cleared));
   const clock = $derived.by(() => {
     if (view.kind !== "set") return "";
     const date = new Date(view.updatedAt);
@@ -43,19 +46,20 @@
       {/if}
     </header>
     {#if view.kind === "set"}
-      <div class="body"><UntrustedMarkdown text={view.head} /></div>
+      {#if headOmitted(view)}
+        <p class="omitted">{HEAD_OMITTED}</p>
+      {:else}
+        <div class="body"><UntrustedMarkdown text={view.head} /></div>
+      {/if}
       {#if more !== null}
         <p class="more">{more}</p>
       {/if}
     {:else}
       <p class="unset">未設定</p>
     {/if}
-    {#if onOpenHistory !== undefined}
+    {#if onOpenHistory !== undefined && hasLog}
       <div class="actions">
-        {#if more !== null}
-          <button type="button" class="read-more" onclick={onOpenHistory}>続きを読む</button>
-        {/if}
-        <button type="button" class="history" onclick={onOpenHistory}>履歴</button>
+        <button type="button" class="read-more" onclick={onOpenHistory}>続きを読む</button>
       </div>
     {/if}
   </section>
@@ -108,6 +112,14 @@
   .unset {
     margin: 0.3rem 0 0;
     opacity: 0.6;
+  }
+
+  /* The dashboard's own sentence for a head with nothing left to draw: dim and
+     italic, in a class the agent's markdown never gets. */
+  .omitted {
+    margin: 0.3rem 0 0;
+    font-style: italic;
+    opacity: 0.75;
   }
 
   /* The panel sits in the narrow left column: headings stay at body size, and

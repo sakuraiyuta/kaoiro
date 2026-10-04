@@ -9,6 +9,7 @@ import type {
   UserSummary,
 } from "../../src/lib/protocol";
 import type { StatusLineHistoryEntry, StatusLineView } from "../../src/lib/statusLine";
+import { StatusLines } from "../../src/lib/statusLines.svelte";
 
 function agent(
   agentId: string,
@@ -458,6 +459,50 @@ const HOSTILE_HEAD = [
   "|---|---|",
   "| 1 | 2 |",
 ].join("\n");
+
+// The view the dashboard builds from a row the server sent, so the trim of a
+// cut head runs as it does in production.
+function viewOfRow(head: string, truncated: boolean, bytes: number): StatusLineView {
+  const lines = new StatusLines();
+  lines.applySnapshot(
+    { a: { cleared: false, seq: 1, head, truncated, bytes, updatedAt: "2026-10-04T01:00:00.000000Z" } },
+    false,
+  );
+  return lines.view("a");
+}
+
+/** A head cut inside a link destination, behind a complete bold. */
+export function cutLinkStatusLineView(): StatusLineView {
+  const head = "**状況**: 設計レビュー待ち。参照 [issue 514 の設計メモ](https://example.test/docs/issue-5";
+  return viewOfRow(head, true, 4096);
+}
+
+/** A head that is one long address: nothing is left to draw once it is trimmed. */
+export function omittedStatusLineView(): StatusLineView {
+  return viewOfRow(`https://example.test/${"a".repeat(480)}`, true, 4096);
+}
+
+export function clearedStatusLineView(): StatusLineView {
+  return { kind: "unset", cleared: true };
+}
+
+/** The scenario named by the `statusLine` query parameter. */
+export function statusLineViewNamed(name: string | null): StatusLineView | undefined {
+  switch (name) {
+    case "hostile":
+      return hostileStatusLineView();
+    case "cutlink":
+      return cutLinkStatusLineView();
+    case "omitted":
+      return omittedStatusLineView();
+    case "cleared":
+      return clearedStatusLineView();
+    case "unset":
+      return { kind: "unset", cleared: false };
+    default:
+      return undefined;
+  }
+}
 
 export function hostileStatusLineView(): StatusLineView {
   return {

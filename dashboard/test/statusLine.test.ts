@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  headOmitted,
   isNewer,
   parseStatusLine,
   parseStatusLineHistory,
@@ -103,6 +104,16 @@ describe("isNewer", () => {
   });
 });
 
+describe("headOmitted", () => {
+  it("is true for a truncated head with nothing left, and for nothing else", () => {
+    expect(headOmitted({ head: "", truncated: true })).toBe(true);
+    expect(headOmitted({ head: " \n\t", truncated: true })).toBe(true);
+    expect(headOmitted({ head: "a", truncated: true })).toBe(false);
+    expect(headOmitted({ head: "", truncated: false })).toBe(false);
+    expect(headOmitted({ head: "  ", truncated: false })).toBe(false);
+  });
+});
+
 describe("StatusLines", () => {
   it("shows no row before the snapshot, and unset after a complete one", () => {
     const lines = new StatusLines();
@@ -110,7 +121,7 @@ describe("StatusLines", () => {
 
     lines.applySnapshot({ b: set(1, "t1") }, false);
 
-    expect(lines.view("a")).toEqual({ kind: "unset" });
+    expect(lines.view("a")).toEqual({ kind: "unset", cleared: false });
     expect(lines.view("b")).toMatchObject({ kind: "set", head: "line" });
   });
 
@@ -128,7 +139,7 @@ describe("StatusLines", () => {
     lines.applySnapshot({ a: set(1, "t1") }, false);
 
     expect(lines.view("a")).toMatchObject({ kind: "set" });
-    expect(lines.view("other")).toEqual({ kind: "unset" });
+    expect(lines.view("other")).toEqual({ kind: "unset", cleared: false });
   });
 
   it("ignores a live event that is not newer than the held row", () => {
@@ -156,10 +167,10 @@ describe("StatusLines", () => {
     lines.applySnapshot({ a: set(1, "2026-10-03T12:00:01Z") }, false);
     lines.applyLive("a", cleared(2, "2026-10-03T12:00:02Z"));
 
-    expect(lines.view("a")).toEqual({ kind: "unset" });
+    expect(lines.view("a")).toEqual({ kind: "unset", cleared: true });
     lines.applyLive("a", set(1, "2026-10-03T12:00:01Z", "stale"));
 
-    expect(lines.view("a")).toEqual({ kind: "unset" });
+    expect(lines.view("a")).toEqual({ kind: "unset", cleared: true });
   });
 
   it("holds a line that arrives before anything else about its agent", () => {
@@ -175,11 +186,38 @@ describe("StatusLines", () => {
     lines.applySnapshot({ a: set(1, "t1"), b: set(1, "t1") }, false);
 
     lines.remove("a");
-    expect(lines.view("a")).toEqual({ kind: "unset" });
+    expect(lines.view("a")).toEqual({ kind: "unset", cleared: false });
     expect(lines.view("b")).toMatchObject({ kind: "set" });
 
     lines.reset();
     expect(lines.view("b")).toEqual({ kind: "none" });
+  });
+
+  it("trims the head of a truncated line only, and leaves the rest of the view alone", () => {
+    const lines = new StatusLines();
+    const head = "前の文 **太字の途中";
+    const row = (head: string, truncated: boolean, bytes: number): StatusLineRow => ({
+      cleared: false,
+      seq: 1,
+      head,
+      truncated,
+      bytes,
+      updatedAt: "t1",
+    });
+    lines.applySnapshot(
+      { cut: row(head, true, 900), whole: row(head, false, 900), gone: row("**a", true, 600) },
+      false,
+    );
+
+    expect(lines.view("cut")).toEqual({
+      kind: "set",
+      head: "前の文 ",
+      truncated: true,
+      bytes: 900,
+      updatedAt: "t1",
+    });
+    expect(lines.view("whole")).toMatchObject({ head, truncated: false });
+    expect(lines.view("gone")).toMatchObject({ head: "a", truncated: true });
   });
 
   it("names the stamp of the held row so a dialog can notice a new line", () => {

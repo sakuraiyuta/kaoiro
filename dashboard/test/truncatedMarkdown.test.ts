@@ -1,0 +1,321 @@
+// @vitest-environment jsdom
+// The trim of a truncated status line head (issue 514), rule by rule: the
+// exact head each rule leaves, and the premises about `marked` it stands on.
+// The oracle test judges the same module by what the renderers draw.
+import { Lexer } from "marked";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { trimIncompleteMarkdown } from "../src/lib/truncatedMarkdown";
+import { renderUntrustedMarkdown, untrustedMarked } from "../src/lib/untrustedMarkdown";
+import { SYNTHETIC, graphemeEnds } from "./truncatedMarkdownOracle";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** The trim, with a count of how often it fell back. */
+function trim(head: string): { shown: string; fallbacks: number } {
+  let fallbacks = 0;
+  const shown = trimIncompleteMarkdown(head, () => (fallbacks += 1));
+  return { shown, fallbacks };
+}
+
+const hasLink = (markdown: string): boolean => {
+  const rendered = renderUntrustedMarkdown(markdown);
+  return rendered.kind === "html" && rendered.html.includes("<a ");
+};
+
+describe("a block marker or rule still being typed", () => {
+  it.each([
+    ["a quote marker", "本文の段落\n>", "本文の段落\n"],
+    ["a bullet", "本文の段落\n-", "本文の段落\n"],
+    ["a number", "本文の段落\n1.", "本文の段落\n"],
+    ["a heading mark", "本文の段落\n\n#", "本文の段落\n\n"],
+    ["a fence of two backticks", "本文の段落\n\n``", "本文の段落\n\n"],
+    ["a table pipe", "本文の段落\n|", "本文の段落\n"],
+    ["a rule that may underline the line above", "本文の段落\n---", "本文の段落\n"],
+    ["a setext underline", "本文の段落\n===", "本文の段落\n"],
+    ["a bullet inside a list", "- 項目\n-", "- 項目\n"],
+    ["a quote marker inside a quote", "> 引用\n>", "> 引用\n"],
+    ["a nested bullet", "- 項\n  - ", "- 項\n"],
+  ])("drops %s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+
+  // Every trailing marker line goes in one step, so a long run is not a long
+  // chain of steps; the result is final.
+  it.each([
+    ["quote markers", "本文の段落\n" + ">\n".repeat(10) + ">", "本文の段落\n"],
+    ["bullets", "本文の段落\n" + "-\n".repeat(10) + "-", "本文の段落\n"],
+    ["fence runs", "本文の段落\n\n" + "```\n".repeat(10) + "`", "本文の段落\n\n" + "```\n".repeat(10)],
+    ["a long run of quote markers", "本文の段落\n" + ">\n".repeat(400) + ">", "本文の段落\n"],
+  ])("ends on %s without the fallback and is final", (_name, head, shown) => {
+    const result = trim(head);
+
+    expect(result).toEqual({ shown, fallbacks: 0 });
+    expect(trim(result.shown)).toEqual({ shown, fallbacks: 0 });
+  });
+});
+
+describe("a table, a fence, a definition", () => {
+  it.each([
+    ["a table is dropped whole", "前文\n\n| a | b |\n|---|---|\n| c |", "前文\n\n"],
+    ["a table header alone", "前文\n\n| a | b |\n|", "前文\n\n"],
+    ["a table delimiter row being typed", "前文\n\n| a | b |\n|--", "前文\n\n"],
+    ["a closed fence stays", "前文\n\n```ts\nconst a = 1;\n```\n後", "前文\n\n```ts\nconst a = 1;\n```\n後"],
+    ["an open fence with a body stays", "前文\n\n```ts\nconst a = 1;\n", "前文\n\n```ts\nconst a = 1;\n"],
+    ["an open fence with a partial line stays", "前文\n\n```ts\nconst a", "前文\n\n```ts\nconst a"],
+    ["a fence with no body goes", "前文\n\n```ts\n", "前文\n\n"],
+    ["a lone fence run goes", "前文\n\n```", "前文\n\n"],
+    ["an empty quote line goes", "> 引用\n> ", "> 引用\n"],
+  ])("%s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+
+  it("drops a definition on the last line, so the reference does not link to a half address", () => {
+    const head = "参照 [issue 514][i] を見る。\n\n[i]: https://gith";
+
+    expect(trim(head)).toEqual({ shown: "参照 [issue 514][i] を見る。\n\n", fallbacks: 0 });
+    expect(hasLink(head)).toBe(true);
+    expect(hasLink(trim(head).shown)).toBe(false);
+  });
+
+  it.each([
+    ["with its title being typed", '前置き\n\n[i]: https://example.com/x "ti', "前置き\n\n"],
+    ["with a parenthesised title being typed", "[i]: https://example.com/x (ti", ""],
+    ["with only its label", "前置き\n\n[i]:", "前置き\n\n"],
+    ["with a space after its colon", "前置き\n\n[i]: ", "前置き\n\n"],
+    // After a paragraph line the definition is paragraph text for the lexer,
+    // in the full line as well, so nothing is pending.
+    ["right under a paragraph line", '前置き\n[i]: https://example.com/x "ti', '前置き\n[i]: https://example.com/x "ti'],
+  ])("a line that starts like a definition: %s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+});
+
+describe("a label defined twice", () => {
+  // The lexer emits no token for the second definition, so the tokens' lengths
+  // do not add up to the head: nothing after it may be lost, and a duplicate
+  // at the end draws nothing and goes without a fallback.
+  const A = "[i]: https://a.example/x";
+  const B = "[i]: https://b.example/y";
+
+  it.each([
+    ["in the middle: the text after it stays", `${A}\n${B}\n\n本文 後`, `${A}\n${B}\n\n本文 後`],
+    [
+      "in the middle: the cut after it works",
+      `${A}\n\n${B}\n\n本文 [x][i] **太字`,
+      `${A}\n\n${B}\n\n本文 [x][i] `,
+    ],
+    ["at the end, with a newline: only definitions are left", `${A}\n${B}\n`, ""],
+    ["at the end, without one", `${A}\n${B}`, ""],
+    ["in a list item at the end", `- 項\n\n  ${A}\n\n  ${B}`, `- 項\n\n  ${A}\n\n`],
+    ["a head of definitions only", `${A}\n[j]: https://b.example/y\n`, ""],
+  ])("%s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+});
+
+describe("a delimiter that may still open or close", () => {
+  it.each([
+    ["a closed bold stays, the run after it goes", "前文 **太字**と**", "前文 **太字**と"],
+    ["an emphasis being opened goes", "前文 *強調", "前文 "],
+    ["an underscore emphasis being opened goes", "前文 _強調", "前文 "],
+    ["a strike being opened goes", "前文 ~~消す", "前文 "],
+    ["a code span being opened goes", "前文 `code", "前文 "],
+    ["a closed bold, then an open one", "前文 **a** 後 **b", "前文 **a** 後 "],
+    ["delimiters that cannot open stay", "snake_case_name と arr[0] と 2 * 3 と", "snake_case_name と arr[0] と 2 * 3 と"],
+    ["a heading keeps its mark", "# 見出し **太字", "# 見出し "],
+  ])("%s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+
+  it.each([
+    ["a trailing backslash", "前 \\", "前 "],
+    ["a trailing bang", "前 !", "前 "],
+    ["an entity prefix", "前 AT&amp", "前 AT"],
+    ["an entity that may grow", "前 &c", "前 "],
+    ["an entity that is complete", "前 &copy;", "前 &copy;"],
+    ["a tag being opened", "前 <b", "前 "],
+    ["a lone angle bracket", "前 <", "前 "],
+    ["an angle bracket before a space", "前 a < b", "前 a < b"],
+  ])("%s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+});
+
+describe("an address that touches the end of the head", () => {
+  // The rest of an address is unknown: it is cut, never unwrapped, and no
+  // link to the part that is there may remain.
+  it.each([
+    ["a bare URL", "参照 https://github.com/sakuraiyuta/kaoiro/issu", "参照 "],
+    ["a bare URL alone", "https://github.com/sakuraiyuta/kaoiro/issu", ""],
+    ["a www address", "see www.example.com/abc", "see "],
+    ["an email address", "mail foo@example.com", "mail "],
+    ["an angle autolink", "前 <https://example.com/abc", "前 "],
+    ["a link destination", "前 [リンク](https://exa", "前 "],
+    ["a link destination with a parenthesis", "前 [リンク](https://e.example/a_(b)_c", "前 "],
+    ["a closed link whose destination holds a parenthesis", "前 [a](https://example.com/a_(b)_c)", "前 "],
+    ["a link label that is not closed", "前 [リンク]", "前 "],
+  ])("cuts %s", (_name, head, shown) => {
+    const result = trim(head);
+
+    expect(result).toEqual({ shown, fallbacks: 0 });
+    expect(hasLink(result.shown)).toBe(false);
+  });
+
+  it.each([
+    ["a bare URL followed by text", "参照 https://github.com/a/b と続く"],
+    ["a closed link", "前 [リンク](https://e.example/a) 後"],
+    ["a closed link with a parenthesis, then text", "前 [a](https://example.com/a_(b)_c) 後"],
+  ])("leaves %s alone", (_name, head) => {
+    expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
+  });
+});
+
+describe("the first block is itself unfinished", () => {
+  // Nothing precedes the unfinished construct, so the text is kept and the
+  // markup goes: a cut bold headline is drawn plain, a link keeps its label.
+  it.each([
+    ["a bold headline", "**太字の見出し", "太字の見出し"],
+    ["a list item", "- **太字", "- 太字"],
+    ["a quote", "> **太字", "> 太字"],
+    ["a link label with no end", "[リンクのラベル", "リンクのラベル"],
+    ["an image description with no end", "![画像の説明", "画像の説明"],
+    ["a link whose destination was cut", "[リンク](https://exa", "リンク"],
+    ["a bold headline and an unclosed link", "**a [b](x y** 後 t", "a "],
+    ["nothing before the cut", "前 **a [b](x y** 後 t", "前 "],
+    ["a code span: the delimiters after it are code in the full line", "`code と **b", "code と "],
+    ["two kinds", "~~消す と **b", "消す と b"],
+    ["a code span that cannot be closed inside a link label", "[`a]b", ""],
+    ["the same, closed", "[`a]b`", ""],
+  ])("keeps the text of %s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+});
+
+describe("a head that is complete", () => {
+  it.each([
+    ["ends in a blank line", "前文。\n\n"],
+    ["ends in a blank line after markup", "前文 **太字** と [リンク](https://e.example/a) 。\n\n"],
+    ["has no unfinished construct", "前文 **太字** と `code` と [a](https://e.example/a) の文"],
+  ])("is left as it is when it %s", (_name, head) => {
+    expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
+  });
+
+  it("gives carriage returns the lexer's reading", () => {
+    expect(trim("前 **太字\r\n続").shown).toBe("前 ");
+    expect(trim("前\r\n\r\n").shown).toBe("前\n\n");
+    for (const doc of SYNTHETIC) {
+      for (const end of graphemeEnds(doc)) {
+        const head = doc.slice(0, end);
+        expect(trim(head.replace(/\n/g, "\r\n")).shown, JSON.stringify(head)).toBe(trim(head).shown);
+      }
+    }
+  });
+});
+
+describe("a cut never lands inside a character", () => {
+  const family = SYNTHETIC.find((doc) => doc.includes("👨‍👩‍👧‍👦"))!;
+  const plain = (text: string): string => text.replace(/[*_~`[\]!<\\&]/g, "");
+
+  it("keeps whole graphemes and a start of the text, once the markup is ignored", () => {
+    for (const end of graphemeEnds(family)) {
+      const head = family.slice(0, end);
+      const shown = trim(head).shown;
+      expect(shown, JSON.stringify(head)).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+      expect(plain(head).startsWith(plain(shown))).toBe(true);
+      expect(["", ...graphemeEnds(plain(head)).map(String)]).toContain(
+        shown === "" ? "" : String(plain(shown).length),
+      );
+    }
+  });
+});
+
+describe("a lexer that does not agree with the head", () => {
+  const head = "前文\n続き **a";
+
+  it("cuts back to the previous line and says so when the last block is not the tail of the head", () => {
+    // The text of the block is the last line, so only the check on the end of
+    // the head, not the line mapping, can see that the lexer lost the plot.
+    vi.spyOn(untrustedMarked, "lexer").mockReturnValueOnce([
+      { type: "paragraph", raw: "続き **a x", text: "続き **a", tokens: [] },
+    ] as never);
+
+    expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
+  });
+
+  it("falls back to the head, and says so, when the lexer throws", () => {
+    vi.spyOn(untrustedMarked, "lexer").mockImplementation(() => {
+      throw new Error("lexer failure");
+    });
+
+    expect(trim(head)).toEqual({ shown: head, fallbacks: 1 });
+  });
+});
+
+describe("what the trim reads of marked", () => {
+  const lex = (text: string) => untrustedMarked.lexer(text) as unknown as Record<string, any>[];
+
+  it("lexes with the options both renderers draw with", () => {
+    expect(untrustedMarked.defaults).toMatchObject({ gfm: true, breaks: true, async: false });
+  });
+
+  it("gives a quote its content in tokens and a list its content in items", () => {
+    const quote = lex("> a\n> b")[0]!;
+    const list = lex("- a\n- b")[0]!;
+
+    expect(quote.type).toBe("blockquote");
+    expect(quote.tokens[0].type).toBe("paragraph");
+    expect(list.type).toBe("list");
+    expect(list.items.at(-1).tokens[0]).toMatchObject({ type: "text", text: "b" });
+  });
+
+  it("gives a paragraph and a heading their text and their inline tokens", () => {
+    expect(lex("a **b**")[0]).toMatchObject({ type: "paragraph", text: "a **b**" });
+    expect(lex("# h")[0]).toMatchObject({ type: "heading", text: "h" });
+    // A setext heading's underline is part of the raw but not of the text.
+    expect(lex("h\n---")[0]).toMatchObject({ type: "heading", text: "h" });
+    expect(lex("h\n---")[0]!.raw.replace(/\n+$/, "").split("\n")).toHaveLength(2);
+  });
+
+  it("tells a fence from indented code, and a table from a paragraph", () => {
+    expect(lex("```ts\na\n```")[0]).toMatchObject({ type: "code" });
+    expect(lex("```ts\na\n```")[0]!.codeBlockStyle).toBeUndefined();
+    expect(lex("    a")[0]).toMatchObject({ type: "code", codeBlockStyle: "indented" });
+    expect(lex("| a |\n|---|\n| b |")[0]!.type).toBe("table");
+  });
+
+  it("gives every address an href: links, images, bare URLs, emails, definitions", () => {
+    const inline = (text: string) =>
+      Lexer.lexInline(text, untrustedMarked.defaults) as unknown as Record<string, any>[];
+
+    expect(inline("[a](https://x.example/p)")[0]).toMatchObject({ type: "link", href: "https://x.example/p" });
+    expect(inline("![a](https://x.example/p)")[0]).toMatchObject({ type: "image", href: "https://x.example/p" });
+    const bare = inline("see https://x.example/p")[1]!;
+    expect(bare).toMatchObject({ type: "link", href: "https://x.example/p", raw: "https://x.example/p" });
+    expect(inline("mail a@x.example")[1]).toMatchObject({ type: "link" });
+    expect(inline("<https://x.example/p>")[0]).toMatchObject({ type: "link", raw: "<https://x.example/p>" });
+    expect(lex("[i]: https://x.example/p\n")[0]).toMatchObject({ type: "def", href: "https://x.example/p" });
+  });
+
+  it("emits no token for a second definition of a label, and glues its newline to the one before", () => {
+    const tokens = lex("[i]: https://a.example/x\n[i]: https://b.example/y\n\n本文");
+
+    expect(tokens.map((t) => t.type)).toEqual(["def", "space", "paragraph"]);
+    expect(tokens.reduce((n, t) => n + t.raw.length, 0)).toBeLessThan(52);
+  });
+
+  it("exposes the patterns the opener test and the definition test read", () => {
+    const { emStrongLDelim, delLDelim } = Lexer.rules.inline.breaks;
+
+    expect(emStrongLDelim.exec("*a")?.slice(1, 5).some(Boolean)).toBe(true);
+    expect(emStrongLDelim.exec("**a")?.slice(1, 5).some(Boolean)).toBe(true);
+    expect(emStrongLDelim.exec("_a")?.slice(1, 5).some(Boolean)).toBe(true);
+    expect(emStrongLDelim.exec("* a")?.slice(1, 5).some(Boolean) ?? false).toBe(false);
+    expect(delLDelim.exec("~~a")).not.toBeNull();
+    expect(delLDelim.exec("~~ a")).toBeNull();
+    expect(Lexer.rules.block.gfm.def.exec("[i]: https://x.example/p")?.[0]).toBe("[i]: https://x.example/p");
+  });
+});

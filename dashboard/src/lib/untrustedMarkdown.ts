@@ -69,10 +69,12 @@ function httpUrl(href: string): string | null {
   }
 }
 
+/** What both profiles lex with. One constant, so the two cannot drift apart
+ *  and the trim of a cut head lexes as either one does. */
+const LEXER_OPTIONS = { async: false, breaks: true, gfm: true } as const;
+
 const marked = new Marked({
-  async: false,
-  breaks: true,
-  gfm: true,
+  ...LEXER_OPTIONS,
   renderer: {
     // Raw HTML is shown as the text the author wrote.
     html(token) {
@@ -105,6 +107,11 @@ const marked = new Marked({
   },
 });
 
+/** The instance whose lexer the full profile draws with. The inline profile
+ *  lexes with the same options, so truncatedMarkdown.ts lexes a cut head with
+ *  this one and agrees with both about what is closed. */
+export { marked as untrustedMarked };
+
 /** The class layer one gives a link it draws as text on the card. */
 const INLINE_LINK_CLASS = "md-link";
 
@@ -124,9 +131,7 @@ function oneLine(escaped: string): string {
 }
 
 const inlineMarked = new Marked({
-  async: false,
-  breaks: true,
-  gfm: true,
+  ...LEXER_OPTIONS,
   renderer: {
     html(token) {
       return breaks(escapeHtml(token.text));

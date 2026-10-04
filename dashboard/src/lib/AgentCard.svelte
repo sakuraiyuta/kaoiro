@@ -22,7 +22,7 @@
   import type { Envelope, PersonaManifest } from "./protocol";
   import { formatRelativeJa } from "./relativeTime";
   import { settings } from "./settings.svelte";
-  import type { StatusLineView } from "./statusLine";
+  import { HEAD_OMITTED, headOmitted, type StatusLineView } from "./statusLine";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
 
   let {
@@ -691,7 +691,13 @@
       aria-label="{name} の状況表示の履歴を開く"
     >
       {#if statusLine.kind === "set"}
-        <span class="status-text"><UntrustedMarkdown text={statusLine.head} variant="inline" bind:lines={statusLineLines} /></span>
+        <span class="status-text">
+          {#if headOmitted(statusLine)}
+            <span class="status-omitted">{HEAD_OMITTED}</span>
+          {:else}
+            <UntrustedMarkdown text={statusLine.head} variant="inline" bind:lines={statusLineLines} />
+          {/if}
+        </span>
         {#if statusLineMore !== null}
           <span class="status-more">{statusLineMore}</span>
         {/if}
@@ -1167,6 +1173,13 @@
   .status-time {
     display: block;
     font-size: var(--fs-micro);
+    opacity: 0.75;
+  }
+
+  /* The dashboard's own sentence for a head with nothing left to draw: dim and
+     italic, in a class the agent's markdown never gets. */
+  .status-omitted {
+    font-style: italic;
     opacity: 0.75;
   }
 

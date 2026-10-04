@@ -5,7 +5,7 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusLinePanel from "../src/lib/StatusLinePanel.svelte";
-import type { StatusLineView } from "../src/lib/statusLine";
+import { HEAD_OMITTED, type StatusLineView } from "../src/lib/statusLine";
 
 const mounted: object[] = [];
 
@@ -48,7 +48,7 @@ describe("StatusLinePanel", () => {
   });
 
   it("says 未設定 for an agent known to have no line", async () => {
-    const target = await render({ kind: "unset" });
+    const target = await render({ kind: "unset", cleared: false });
 
     expect(target.querySelector(".unset")?.textContent).toBe("未設定");
     expect(target.querySelector(".body")).toBeNull();
@@ -89,33 +89,89 @@ describe("StatusLinePanel", () => {
     expect(target.querySelector(".body")?.textContent).toContain("<span/class=md-link>fake link");
   });
 
-  it("offers 続きを読む and the size only when the server cut the head", async () => {
+  it("says how big the line is only when the server cut the head", async () => {
     const cut = await render(setLine({ truncated: true, bytes: 2048 }), () => {});
     const whole = await render(setLine(), () => {});
 
     expect(cut.querySelector(".more")?.textContent).toBe("…続きあり (2.0 KB)");
-    expect(cut.querySelector(".read-more")?.textContent).toBe("続きを読む");
     expect(whole.querySelector(".more")).toBeNull();
-    expect(whole.querySelector(".read-more")).toBeNull();
   });
 
-  it("opens the change log from both buttons, and from neither when nothing can open it", async () => {
+  // The state table of issue 514: one button, never the second "履歴" one.
+  it.each([
+    ["a cut line", setLine({ truncated: true, bytes: 2048 }), true],
+    ["a whole line", setLine(), true],
+    ["a cleared line", { kind: "unset", cleared: true } as StatusLineView, true],
+    ["an agent that never wrote", { kind: "unset", cleared: false } as StatusLineView, false],
+  ])("offers 続きを読む for %s: %s", async (_name, view, offered) => {
     const open = vi.fn();
-    const cut = await render(setLine({ truncated: true, bytes: 2048 }), open);
-    cut.querySelector<HTMLButtonElement>(".read-more")!.click();
-    cut.querySelector<HTMLButtonElement>(".history")!.click();
-    expect(open).toHaveBeenCalledTimes(2);
+    const target = await render(view, open);
 
-    const none = await render(setLine({ truncated: true, bytes: 2048 }));
-    expect(none.querySelector("button")).toBeNull();
+    const buttons = target.querySelectorAll("button");
+    expect(buttons).toHaveLength(offered ? 1 : 0);
+    expect(target.querySelector(".history")).toBeNull();
+    if (offered) {
+      expect(buttons[0]?.classList.contains("read-more")).toBe(true);
+      expect(buttons[0]?.textContent).toBe("続きを読む");
+      buttons[0]?.click();
+      expect(open).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it("offers the change log for a cleared line too", async () => {
-    const open = vi.fn();
-    const target = await render({ kind: "unset" }, open);
+  it("offers no button when nothing can open the change log", async () => {
+    for (const view of [
+      setLine({ truncated: true, bytes: 2048 }),
+      setLine(),
+      { kind: "unset", cleared: true } as StatusLineView,
+    ]) {
+      expect((await render(view)).querySelector("button")).toBeNull();
+    }
+  });
 
-    target.querySelector<HTMLButtonElement>(".history")!.click();
+  describe("a truncated head with nothing left to draw", () => {
+    const empty = (overrides: Partial<Extract<StatusLineView, { kind: "set" }>> = {}) =>
+      setLine({ head: "", truncated: true, bytes: 3000, ...overrides });
 
-    expect(open).toHaveBeenCalledTimes(1);
+    it("draws the fixed sentence in its own class, not markdown", async () => {
+      const target = await render(empty(), () => {});
+
+      const sentence = target.querySelector(".omitted");
+      expect(sentence?.textContent).toBe(HEAD_OMITTED);
+      expect(HEAD_OMITTED).toBe("(冒頭が長いため省略)");
+      expect(sentence?.tagName).toBe("P");
+      expect(target.querySelector(".body")).toBeNull();
+    });
+
+    it("keeps the size note and the way to the change log", async () => {
+      const open = vi.fn();
+      const target = await render(empty(), open);
+
+      expect(target.querySelector(".more")?.textContent).toBe("…続きあり (2.9 KB)");
+      target.querySelector<HTMLButtonElement>(".read-more")!.click();
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+
+    it("draws the sentence without a button when nothing can open the change log", async () => {
+      const target = await render(empty());
+
+      expect(target.querySelector(".omitted")?.textContent).toBe(HEAD_OMITTED);
+      expect(target.querySelector("button")).toBeNull();
+    });
+
+    it("treats a blank head the same way, but only when it was cut", async () => {
+      const blankCut = await render(empty({ head: " \n  " }));
+      const blankWhole = await render(setLine({ head: "  ", truncated: false, bytes: 2 }));
+
+      expect(blankCut.querySelector(".omitted")).not.toBeNull();
+      expect(blankWhole.querySelector(".omitted")).toBeNull();
+      expect(blankWhole.querySelector(".body")).not.toBeNull();
+    });
+
+    it("draws the same words written by an agent as its own markdown, in the normal class", async () => {
+      const target = await render(setLine({ head: HEAD_OMITTED, truncated: true, bytes: 900 }));
+
+      expect(target.querySelector(".omitted")).toBeNull();
+      expect(target.querySelector(".body")?.textContent).toContain(HEAD_OMITTED);
+    });
   });
 });
