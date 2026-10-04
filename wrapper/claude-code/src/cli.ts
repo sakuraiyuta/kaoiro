@@ -1424,8 +1424,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       freezeInterAgentAdmission(turnToken, attribution, "turn watchdog fail-stop",
-        "This host admits no new input. The turn did not answer an interrupt, so this wrapper may not exit " +
-          "by itself: if it stays connected, terminate it in the dashboard, wait for disconnected, then restore it.");
+        "This host admits no new input. The running turn did not end after an interrupt, or could not be " +
+          "interrupted or attributed, so this wrapper may not exit by itself: if it stays connected, terminate " +
+          "it in the dashboard, wait for disconnected, then restore it.");
     },
     onAdmissionFailStop: ({ turnToken }) => {
       freezeInterAgentAdmission(turnToken, "unattributed", "notification result fail-stop",

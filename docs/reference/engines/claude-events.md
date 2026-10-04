@@ -234,8 +234,9 @@ reason `stop` and exits with code 0. The exit waits for the running turn: in
 the case recorded on issue #520 (2026-10-04) it came about six minutes after the
 fail-stop. The runner's `Supervisor#onExit` (`runner/src/supervisor.ts`)
 treats every exit it did not request (no stop, restart or reset in progress) as
-a crash, whatever the exit code, and `#relaunch` starts the wrapper again, at
-most `MAX_RESTARTS` (5) times within `RESTART_WINDOW_MS` (60 s). This applies
+a crash, whatever the exit code, and `#relaunch` starts the wrapper again: up
+to `MAX_RESTARTS` (5) relaunches per `RESTART_WINDOW_MS` (60 s) window, which
+starts again at the first exit more than 60 s after it began. This applies
 to the notification, foreign-interval, result-index, session-binding and
 `root_hook_timeout` fail-stops alike. The `root_hook_timeout` fail-stop does
 not exchange the `Query` inside the failed wrapper either: the old `Query`
@@ -259,16 +260,17 @@ on relaunch is issue #524.
 
 | Case | Why | Action |
 | --- | --- | --- |
-| Turn watchdog fail-stop | The turn did not answer the interrupt within the grace period, so closing the CLI's input is not expected to end it, and the wrapper may never exit. This is inferred from the code and has not been measured. | Use the procedure below. |
+| Turn watchdog fail-stop | The watchdog stops the host when a turn stays inactive past its limit and does not end within the interrupt grace, or when it cannot interrupt the turn or attribute it. Closing the CLI's input is not expected to end such a turn, so the wrapper may never exit. This is inferred from the code and has not been measured. | Use the procedure below. |
 | Pushed root ownership unavailable | The coordinator could not adopt a pushed root (`InterAgentTurnCoordinator#adoptPushedRoot` found no lease, or the root token already had a batch). `runClaudeCli` freezes only inter-agent admission and sends; the host is not closed, reports no `error`, keeps accepting operator input, and the wrapper does not exit. | Use the procedure below. |
-| Restart cap reached | After 5 exits within 60 s the runner logs `exceeded restart cap; leaving down` and stops relaunching. | Remove the cause, then **復帰**. |
+| Restart cap reached | An unrequested exit after 5 relaunches in the same window logs `exceeded restart cap; leaving down`, and the runner stops relaunching. | Remove the cause, then **復帰**. |
 | Context lost after a fresh relaunch | See the session paragraph above. | Switch the agent back to its earlier session. |
 
 The procedure: use the dashboard's **終了** action on the affected agent card
 to terminate the wrapper (SIGTERM; `host.close()` makes the SDK escalate to
 SIGKILL). Wait until the card shows `disconnected`; the server rejects restore
 while that wrapper is still live. Then use the card's **復帰** action, which
-resumes the session in the server's session pointer. Confirm that the agent
+resumes the session in the server's session pointer (a fresh session when the
+pointer holds none). Confirm that the agent
 reconnects and reports `idle` or `waiting_input` with a new live wrapper, and
 that new input can be accepted.
 
