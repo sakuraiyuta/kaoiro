@@ -151,6 +151,165 @@ async function runWithQueue(witness: boolean, fails = false, reply = false, refu
   }
 }
 
+function earlyInbound(cid: string): Envelope {
+  const envelope = inbound(cid);
+  (envelope.payload as Record<string, unknown>).delivery_authority = { requested: "early", granted: "early" };
+  (envelope.payload as Record<string, unknown>).body = "early hello";
+  return envelope;
+}
+
+/** A running operator turn; the server offers one early item under the
+ *  wrapper's early credit. With `slowPermit`, the permit for it is held until
+ *  the turn has ended and root credit is asked for. */
+async function runEarlyFold(slowPermit: boolean) {
+  const sent: Record<string, unknown>[] = [];
+  const acknowledged: number[] = [];
+  const prompts: string[] = [];
+  let lease!: QueueLease;
+  let linkOptions!: Record<string, any>;
+  let host!: AgentHost;
+  let done!: () => void;
+  const finished = new Promise<void>((resolve) => { done = resolve; });
+  let turnOver!: () => void;
+  const ended = new Promise<void>((resolve) => { turnOver = resolve; });
+  let earlyOffered = false;
+  let rootOffered = false;
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const batch = (leaseId: string, kind: "root" | "early") => lease.receiveBatch({
+    version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: leaseId, kind,
+    credit_revision: "1",
+    items: [{ queue_id: "8", attempt_id: `8.${leaseId}`, delivery_seq: Number(leaseId), class: "ordinary", byte_charge: 1, envelope: earlyInbound("c-early") }],
+  });
+
+  const running = runClaudeCli({
+    parseCliArgs: () => ({ configPath: "test", prompt: "operator task", resume: undefined }),
+    loadConfig: () => ({ ...config, phase2_delivery: true }),
+    createServerLink: (_url, _id, options) => {
+      linkOptions = options as unknown as Record<string, any>;
+      lease = new QueueLease({
+        transport: async (payload) => {
+          sent.push(payload);
+          const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
+          if (payload.op === "credit") {
+            if (payload.kind === "early" && !earlyOffered) {
+              earlyOffered = true;
+              setImmediate(() => batch("1", "early"));
+            }
+            if (payload.kind === "root" && earlyOffered) {
+              turnOver();
+              if (slowPermit && !rootOffered) {
+                rootOffered = true;
+                // The returned item comes back in the next root batch.
+                setTimeout(() => batch("2", "root"), 20);
+              }
+            }
+            return { ...base, credit_revision: String(payload.operation_id) };
+          }
+          if (payload.op === "begin_native") {
+            if (slowPermit && payload.lease_id === "1") await ended;
+            return { ...base, permitted_queue_ids: payload.queue_ids };
+          }
+          if (payload.op === "return") return { ...base, returned_ranges: [[1, 1]] };
+          if (payload.op === "dispose") {
+            done();
+            return { ...base, disposed: ["8"], resolved_ranges: [[1, 1]], returned_ranges: [] };
+          }
+          if (payload.op === "withdraw") return { ...base, withdrawn: true };
+          return base;
+        },
+        onOffer: (offer) => linkOptions.onQueueOffer(offer),
+      });
+      lease.join({
+        inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
+        inter_agent_queue_epoch: "e1", inter_agent_queue_resume_required: false,
+      }, "i1", "g1");
+      queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+      return {
+        deliveryModes: () => ({ early: "fold", yield: "none", stage_reports: true }),
+        deliveryIncarnation: () => "i1", deliveryGeneration: () => "g1",
+        reportDeliveryStage: () => {},
+        acknowledgeInterAgentDelivery: (seq: number) => acknowledged.push(seq),
+        retireInterAgentDeliveries: () => true, flushInterAgentRetirements: async () => {},
+        sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+        send: () => {}, close: () => {}, currentSessionId: () => null, setSessionId: () => {},
+        reportDisconnectIntent: async () => true,
+        requestYieldClaim: async () => ({ granted: false, reason: "unused" }),
+        queueLease: () => lease,
+        queueReady: () => Promise.resolve(),
+      } as never;
+    },
+    createHost: (cfg, options) => {
+      host = new AgentHost(cfg, {
+        ...options,
+        queryFn: (({ prompt, options: sdkOptions }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+          const stream = (async function* (): AsyncGenerator<SDKMessage> {
+            const input = prompt[Symbol.asyncIterator]();
+            const signal = { signal: new AbortController().signal };
+            const hook = (promptId: string, text: string) => sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+              hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: promptId, prompt: text,
+            }, undefined, signal);
+            const first = (await input.next()).value!;
+            prompts.push(first.message.content as string);
+            await hook("p1", first.message.content as string);
+            yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+            if (!slowPermit) {
+              const fold = (await input.next()).value!;
+              prompts.push(fold.message.content as string);
+              await hook("p1", fold.message.content as string);
+            } else {
+              await vi.waitFor(() => expect(sent.some((p) => p.op === "begin_native")).toBe(true), { timeout: 4_000 });
+            }
+            yield { type: "result", result_index: resultIndexCounter++, subtype: "success", session_id: "s", result: "ok" } as SDKMessage;
+            if (slowPermit) {
+              const next = (await input.next()).value!;
+              prompts.push(next.message.content as string);
+              await hook("p2", next.message.content as string);
+              yield { type: "result", result_index: resultIndexCounter++, subtype: "success", session_id: "s", result: "ok" } as SDKMessage;
+            }
+            await finished;
+          })();
+          return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+        }) as never,
+      });
+      host.probeRateLimits = async () => {};
+      return host;
+    },
+  });
+
+  try {
+    await vi.waitFor(() => expect(sent.some((p) => p.op === "dispose")).toBe(true), { timeout: 4_000 });
+    return { sent, acknowledged, prompts };
+  } finally {
+    host?.close();
+    await running.catch(() => {});
+    stderr.mockRestore();
+  }
+}
+
+describe("Claude CLI credit-v1 early fold composition", () => {
+  it("folds an early offer into the running turn under its token and disposes it at the fold hook", async () => {
+    const { sent, acknowledged, prompts } = await runEarlyFold(false);
+    const credit = sent.find((p) => p.op === "credit" && p.kind === "early")!;
+    expect(credit).toMatchObject({ mechanism: "fold" });
+    expect(sent.find((p) => p.op === "begin_native")).toMatchObject({ native_turn_token: credit.native_turn_token, queue_ids: ["8"] });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Mid-turn peer delivery");
+    expect(prompts[1]).toContain("early hello");
+    expect(sent.find((p) => p.op === "dispose")).toMatchObject({ items: [{ queue_id: "8", outcome: "observed", witness: "fold_hook" }] });
+    expect(acknowledged).toEqual([]);
+  });
+
+  it("a permit that arrives after the fold window closed returns the item, which arrives once in the next root batch", async () => {
+    const { sent, prompts } = await runEarlyFold(true);
+    expect(sent.find((p) => p.op === "return")).toMatchObject({
+      lease_id: "1", items: [{ queue_id: "8", reason: "early_ineligible", sub_reason: "fold_unavailable" }],
+    });
+    expect(sent.find((p) => p.op === "dispose")).toMatchObject({ lease_id: "2", items: [{ queue_id: "8", outcome: "observed", witness: "prompt_hook" }] });
+    expect(prompts.filter((text) => text.includes("early hello"))).toHaveLength(1);
+    expect(prompts.some((text) => text.includes("Mid-turn peer delivery"))).toBe(false);
+  });
+});
+
 describe("Claude CLI credit-v1 root composition", () => {
   it("credits at readiness, submits the offer as the credit's turn and disposes it observed at the prompt hook", async () => {
     const { sent, acknowledged, prompts, stderr } = await runWithQueue(true);

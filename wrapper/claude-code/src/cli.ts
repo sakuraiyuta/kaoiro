@@ -42,6 +42,7 @@ import type {
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { ClaudeQueueRoot } from "./queue_root.js";
 import { CreditSlot } from "./queue_credit.js";
+import { ClaudeQueueEarly } from "./queue_early.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
@@ -384,6 +385,39 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     log: (line) => writeRedactedStderr(line),
   });
 
+  // Early input from the server-owned queue: folded into the running turn.
+  const queueEarly = new ClaudeQueueEarly({
+    input: queueInput,
+    slot: creditSlot,
+    lease: () => link?.queueLease?.() ?? null,
+    ready: () => link?.queueReady?.() ?? Promise.resolve(),
+    negotiated: earlyNegotiated,
+    activeTurn: () => host?.activeInterAgentTurnToken() ?? null,
+    hasFoldsLeft: () => host?.hasFoldsLeft() ?? false,
+    canFold: () => host?.canFoldLiveInput() ?? false,
+    receiptPending: () => host?.hasPendingPushedReceipt() ?? false,
+    waitForReceipt: (turn, ms) => host?.waitForPushedReceipt(turn, ms) ?? Promise.resolve(false),
+    prepareTicket: (turn, envelopes) => interAgent?.prepareFoldInput(turn, envelopes),
+    fits: (text, count) => host?.pushedInputFits(text, count) ?? false,
+    push: (input) => host?.pushLiveInput({ kind: "fold", ...input }) ?? false,
+    folded: (turn, envelopes) => {
+      interAgentTurns.retainFolded(envelopes, turn);
+      for (const envelope of envelopes) {
+        foldedEnvelopes.add(envelope);
+        interAgent?.notePendingInjection(envelope, turn);
+      }
+      deliveryStages.submittedEnvelopes(turn, envelopes, "fold_hook");
+    },
+    adopted: (turn, envelopes) => {
+      interAgent?.prepareReplyInput(turn, envelopes);
+      for (const envelope of envelopes) interAgent?.notePendingInjection(envelope, turn);
+      deliveryStages.submittedEnvelopes(turn, envelopes, "prompt_hook");
+      interAgentTurns.retireFoldedBeforeConfirmed(envelopes);
+    },
+    unknown: (envelopes, reason) => deliveryStages.unknownEnvelopes(envelopes, reason),
+    log: (line) => writeRedactedStderr(line),
+  });
+
   const resolveInterAgentConversationIds = (
     turnToken: string,
     conversationIds: readonly string[],
@@ -675,6 +709,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
+      queueInput.noteHandoff(envelopes);
+      queueEarly.handoff();
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
@@ -1012,10 +1048,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   >({
     interAgentQueuePolicy: interAgentQueuePolicy(config),
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
-    onQueueOffer: (offer) => void queueRoot.onOffer(offer),
+    onQueueOffer: (offer) => void (offer.kind === "early" ? queueEarly.onOffer(offer) : queueRoot.onOffer(offer)),
     onQueueRejoined: () => {
       creditSlot.reset();
       queueRoot.rejoined();
+      queueEarly.check();
     },
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
@@ -1347,6 +1384,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onPromptAdmitted: (turnToken) => {
       queueRoot.promptAdmitted(turnToken);
+      queueEarly.check();
       deliveryStages.submitted(turnToken, "prompt_hook");
       interAgent?.confirmReplyInput(turnToken);
       interAgentTurns.retireFoldedBeforeConfirmed(interAgentTurns.deliveryEnvelopesForTurn(turnToken));
@@ -1354,6 +1392,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       attemptYieldCandidates();
     },
     onPushedInputDecision: decision => {
+      if (queueEarly.pushedDecision(decision)) return;
       const pushed = pushedBatches.get(decision.envelopes);
       if (pushed === undefined) return;
       pushedBatches.delete(decision.envelopes);
@@ -1397,6 +1436,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, kind, error, cancellation }) => {
+      queueEarly.turnEnded(turnToken);
       queueRoot.turnEnded(turnToken, cancellation?.started !== false);
       if (turnToken !== undefined && cancellation?.started === false) {
         for (const envelope of interAgentTurns.deliveryEnvelopesForTurn(turnToken)) {

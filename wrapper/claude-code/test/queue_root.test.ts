@@ -83,7 +83,7 @@ function harness(overrides: Partial<QueueRootDeps & QueueInputDeps> = {}, refuse
   const ops = (op: string) => sent.filter((p) => p.op === op);
   const creditToken = () => ops("credit").at(-1)?.native_turn_token as string;
   const rejoin = () => { slot.reset(); root.rejoined(); };
-  return { root, rejoin, slot, lease, sent, lines, sends, timers, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
+  return { root, rejoin, slot, input, lease, sent, lines, sends, timers, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -244,6 +244,23 @@ describe("ClaudeQueueRoot", () => {
     await settle();
     expect(classified).toBe(0);
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] });
+  });
+
+  it("a consumed root item whose tool result was handed to the model is observed, not a violation", async () => {
+    let h!: ReturnType<typeof harness>;
+    h = harness({
+      classify: async (envelope) => {
+        // The tool result returns while the item is still being classified.
+        h.input.noteHandoff([envelope]);
+        return { consumed: true, inject: false, mode: "reply-owed" };
+      },
+    });
+    h.root.checkReadiness();
+    await settle();
+    h.offer([inbound("c1")]);
+    await settle();
+    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
+    expect(h.lines.join("")).not.toContain("invariant violation");
   });
 
   it("a root item consumed by a waiting tool is an invariant violation, disposed unknown", async () => {

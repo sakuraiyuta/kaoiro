@@ -60,7 +60,10 @@ type Classified =
 interface Remembered {
   identity: string;
   conversationId: string;
-  classified: Classified;
+  /** Unset while `classify` runs. */
+  classified?: Classified;
+  /** A waiting tool's result carrying this message was returned. */
+  handedOff: boolean;
 }
 
 function identityOf(envelope: Envelope): string {
@@ -140,18 +143,41 @@ export class QueueInput {
     for (const id of queueIds) this.#remembered.delete(id);
   }
 
+  /** A tool result carrying `envelopes` was returned to the model: the
+   *  witness for items a waiting tool consumed. It may come before their
+   *  classification has finished, so it is kept on the remembered entry. */
+  noteHandoff(envelopes: readonly Envelope[]): void {
+    const identities = new Set(envelopes.map(identityOf));
+    for (const remembered of this.#remembered.values()) {
+      if (identities.has(remembered.identity)) remembered.handedOff = true;
+    }
+  }
+
+  /** Whether the consumed item `queueId` was handed to the model. */
+  handedOff(queueId: string): boolean {
+    return this.#remembered.get(queueId)?.handedOff === true;
+  }
+
   async #classify(item: QueueOfferItem): Promise<Classified> {
     const envelope = item.envelope as Envelope;
     const identity = identityOf(envelope);
     const remembered = this.#remembered.get(item.queueId);
-    if (remembered !== undefined && remembered.identity === identity) {
+    if (remembered?.classified !== undefined && remembered.identity === identity) {
       const previous = remembered.classified;
       if (previous.kind !== "inject") return previous;
       const mode = this.#deps.reclassify(envelope, previous.mode);
       return mode === "terminal" ? { kind: "terminal" } : { kind: "inject", mode };
     }
 
-    const disposition = await this.#deps.classify(envelope);
+    const entry: Remembered = { identity, conversationId: conversationOf(envelope), handedOff: false };
+    this.#remembered.set(item.queueId, entry);
+    let disposition: InboundDisposition;
+    try {
+      disposition = await this.#deps.classify(envelope);
+    } catch (error) {
+      this.#remembered.delete(item.queueId);
+      throw error;
+    }
     const classified: Classified = disposition.consumed
       ? { kind: "consumed", mode: disposition.mode }
       : disposition.inject
@@ -162,7 +188,7 @@ export class QueueInput {
           : { kind: "stale" };
     if (disposition.notice !== undefined) this.#deps.sendNotice(disposition.notice);
 
-    this.#remembered.set(item.queueId, { identity, conversationId: conversationOf(envelope), classified });
+    entry.classified = classified;
     if (this.#remembered.size > LOUD_REMEMBERED && !this.#warned) {
       this.#warned = true;
       this.#deps.log?.(`[kaoiro] queue input remembers ${this.#remembered.size} classifications; settled items are not being forgotten\n`);

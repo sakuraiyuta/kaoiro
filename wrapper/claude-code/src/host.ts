@@ -1208,6 +1208,14 @@ export class AgentHost implements EngineAdapter {
     return this.#options.pendingReceiptRootTimeoutMs ?? 2_000;
   }
 
+  /** The active turn can still take a fold now or later in the turn: it is
+   *  not an SDK notification turn and has folds left. */
+  hasFoldsLeft(): boolean {
+    const turn = this.#activeTurn;
+    return turn !== null && turn.kind !== "sdk_notification" &&
+      (this.#foldsUsedByTurn.get(turn.turnToken) ?? 0) < this.foldsPerTurn;
+  }
+
   canFoldLiveInput(): boolean {
     const token = this.#activeTurn?.turnToken;
     return token !== undefined && this.canPushLiveInput() &&
