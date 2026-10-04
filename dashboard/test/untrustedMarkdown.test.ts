@@ -106,6 +106,14 @@ describe("renderUntrustedMarkdown: layer one (marked)", () => {
     });
   });
 
+  it("keeps formatting inside a tight list item", () => {
+    const root = htmlOf("- **bold** item\n- [l](https://e.test/) and `code`");
+
+    expect(root.querySelectorAll("li strong")).toHaveLength(1);
+    expect(root.querySelector("li a")?.textContent).toBe("l");
+    expect(root.querySelector("li code")?.textContent).toBe("code");
+  });
+
   it("keeps an http(s) link, with the safe-attribute hook applied", () => {
     const [link] = anchors(htmlOf("[issue](https://github.com/o/r/issues/482)"));
 
@@ -264,6 +272,7 @@ describe("inline profile: layer one (the string marked emits, before sanitizing)
     ["a table as rows of cells", "| a | b |\n|:-:|--:|\n| 1 | 2 |", "a | b<br>1 | 2"],
     ["a nested list on its own line", "- a\n  - b", "・a<br>・b"],
     ["a loose list without a blank line", "- a\n\n- b", "・a<br>・b"],
+    ["formatting inside a tight list item", "- **bold** item\n- `code`", "・<strong>bold</strong> item<br>・<code>code</code>"],
     ["an empty list item as a line of its own", "-\n- b", "・<br>・b"],
     ["a list followed by a paragraph", "- a\n- b\n\ntext", "・a<br>・b<br>text"],
     ["a blank line inside a code block as one break", "```\na\n\nb\n```", "<code>a<br>b</code>"],
