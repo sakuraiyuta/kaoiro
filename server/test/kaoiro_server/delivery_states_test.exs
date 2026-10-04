@@ -288,7 +288,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
              DeliveryStates.message_status("sender", "cid", 2, name)
   end
 
-  test "message_status reads the record with a yield disposition, else the newest", %{
+  test "message_status reads the newest record, with a yield disposition from any", %{
     name: name
   } do
     owner = self()
@@ -332,7 +332,17 @@ defmodule KaoiroServer.DeliveryStatesTest do
                    name
                  )
 
-        assert {:ok, %{yield_disposition: %{"outcome" => "cut"}}} =
+        # The newest record is read: here only it has the submitted stage.
+        assert :ok =
+                 DeliveryStates.report_stage(
+                   recipient,
+                   "generation",
+                   owner,
+                   report.(2, %{"stage" => "submitted", "handoff" => "prompt_hook"}),
+                   name
+                 )
+
+        assert {:ok, %{yield_disposition: %{"outcome" => "cut"}, stages: %{"submitted" => _}}} =
                  DeliveryStates.message_status(recipient <> "-sender", "cid", 3, name)
       else
         assert :ok =

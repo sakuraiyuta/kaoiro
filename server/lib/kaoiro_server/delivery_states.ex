@@ -997,17 +997,21 @@ defmodule KaoiroServer.DeliveryStates do
             stage.turn_number == turn,
           do: {seq, stage}
 
-    # A queue item offered more than once has a record per offered sequence:
-    # the one with a yield disposition, else the newest, carries its status.
+    # A queue item offered more than once has a record per offered sequence.
+    # The newest is the current offer (the yield claim checks its generation);
+    # the yield disposition, set once, may sit on an earlier one.
     record =
       case matches do
         [] ->
           nil
 
         _ ->
-          matches
-          |> Enum.max_by(fn {seq, stage} -> {stage[:yield_disposition] != nil, seq} end)
-          |> elem(1)
+          {_seq, newest} = Enum.max_by(matches, &elem(&1, 0))
+
+          case Enum.find_value(matches, fn {_seq, stage} -> stage[:yield_disposition] end) do
+            nil -> newest
+            disposition -> Map.put(newest, :yield_disposition, disposition)
+          end
       end
 
     {:reply,
