@@ -206,8 +206,8 @@ and the panel read the trimmed head. The note says the text continues.
   there, and the block is cut instead when dropping a delimiter would make the
   text draw a link the full line does not (a `www.` address joined across the
   dropped character, an address in an unfinished link label).
-- Carriage returns become line feeds and tabs four spaces before the lexer reads
-  the head. A failure inside the trim shows the empty-head sentence below, never
+- Carriage returns become line feeds and tabs go to the next multiple of four
+  columns before the lexer reads the head. A failure inside the trim shows the empty-head sentence below, never
   the untrimmed head.
 - A head with nothing left to draw (it starts with a table, a bare URL, a link
   destination, an angle-bracket autolink, an unclosed code span, an empty fence,
@@ -219,11 +219,14 @@ and the panel read the trimmed head. The note says the text continues.
 
 What the trim cannot do, because a start of the text does not hold what comes
 after it: a delimiter that the full line shows as literal text can be hidden
-(counted by the oracle, about 1.4% of cuts on the fuzz corpus); a reference
-link whose definition follows the head, a footnote-style definition and a table
-without leading pipes draw their brackets as text. None of these draws an
-address. `truncatedMarkdownOracle.test.ts` judges the trim by the renderers at
-every grapheme cut and is the alarm for a `marked` upgrade.
+(counted by the oracle: 1.4% of the cuts of the large fuzz corpus the
+measurements used, 0.3% of the committed one); a reference link whose
+definition follows the head, a footnote-style definition and a table without
+leading pipes draw their brackets as text; and a later line that makes the
+renderers fall back to plain text (nesting deeper than 32) takes the links of
+the head with it. None of these draws a link the full line does not draw.
+`truncatedMarkdownOracle.test.ts` judges the trim by the renderers at every
+grapheme cut and is the alarm for a `marked` upgrade.
 
 The operator's retention control lives in the settings drawer.
 

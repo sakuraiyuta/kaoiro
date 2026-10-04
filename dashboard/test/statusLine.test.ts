@@ -262,6 +262,10 @@ describe("StatusLines", () => {
     lines.applySnapshot({ a: row(4, "前 **別の太字") }, false);
     lines.view("a");
     expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(5);
+
+    lines.applySnapshot({ a: row(4, "前 **別の太字") }, false);
+    lines.view("a");
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(6);
   });
 
   it("names the stamp of the held row so a dialog can notice a new line", () => {

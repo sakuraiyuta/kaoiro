@@ -11,9 +11,9 @@
 // address (anything the lexer gives an `href`) that reaches the end of the head
 // is always cut, never unwrapped, because the rest of it is unknown.
 //
-// Carriage returns become line feeds and tabs become four spaces first. The
-// lexer expands the tabs of a list item's text, and the line map below needs the
-// head to say what the text says.
+// Carriage returns become line feeds and tabs are expanded to the next multiple
+// of four columns first. The lexer expands the tabs of a list item's text, and
+// the line map below needs the head to say what the text says.
 //
 // Known residuals, none of which draws a link the full text does not draw:
 // - A delimiter the full text shows literally can be hidden here (the unwrap
@@ -24,7 +24,9 @@
 // - A cut bold headline is drawn plain.
 // - What a prefix cannot see: a reference link whose definition comes after the
 //   head, a footnote-style definition and a table without leading pipes draw
-//   their brackets as text.
+//   their brackets as text; and a later line that makes the renderers fall back
+//   to plain text (nesting deeper than they allow) takes the links of the head
+//   with it.
 //
 // Every regex here runs on a head of at most 512 bytes but also inside a loop
 // that runs once per removed line, so none may backtrack: each character of a
@@ -131,6 +133,25 @@ function addressesOf(text: string): Set<string> {
   };
   visit(lexBlocks(text));
   return found;
+}
+
+/** Tabs to the next multiple of four columns, as CommonMark reads them: a tab
+ *  after a list marker is two spaces, not an indented code block. */
+function expandTabs(text: string): string {
+  if (!text.includes("\t")) return text;
+  return text
+    .split("\n")
+    .map((line) => {
+      let out = "";
+      let column = 0;
+      for (const ch of line) {
+        const width = ch === "\t" ? 4 - (column % 4) : 1;
+        out += ch === "\t" ? " ".repeat(width) : ch;
+        column += width;
+      }
+      return out;
+    })
+    .join("\n");
 }
 
 /** The head without its last line when that line is a whole reference
@@ -366,7 +387,10 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   walk(inline, 0);
   if (tailAt < s.length) pending.push({ pos: tailAt, len: s.length - tailAt });
   if (endsOpen) {
-    if (s.endsWith("\\") || s.endsWith("!")) pending.push({ pos: s.length - 1, len: 1 });
+    // The whole run goes at once: one character per step would lex the head
+    // once per character.
+    const bang = /[\\!]+$/.exec(s);
+    if (bang !== null) pending.push({ pos: bang.index, len: bang[0].length });
     const entity = /&#?\w*$/.exec(s);
     if (entity !== null) pending.push({ pos: entity.index, len: s.length - entity.index });
   }
@@ -418,20 +442,21 @@ function step(head: string, onFallback: (() => void) | undefined): string {
     const h = toHead(pos);
     for (let i = h; i < h + len && i < kept.length; i++) drop.add(i);
   };
-  let deletedBracket = false;
+  let bracketAt: number | undefined;
   for (const p of pending) {
     if (p.pos >= codeAt || p.len === 0 || toHead(p.pos) >= limit) continue;
     mark(p.pos, p.len);
     if (p.pair !== undefined) mark(p.pair.pos, p.pair.len);
-    if (p.bracket) deletedBracket = true;
+    if (p.bracket && bracketAt === undefined) bracketAt = toHead(p.pos);
   }
   if (drop.size > 0) {
     kept = kept.split("").filter((_, i) => !drop.has(i)).join("");
     // Deleting a delimiter can join the text on both sides of it into an
     // address, and the text after a deleted bracket may be a link label in the
     // full text, where an address is not a link of its own. Either way the
-    // head would draw a link the full text does not.
-    const allowed = deletedBracket ? new Set<string>() : addressesOf(head.slice(0, limit));
+    // head would draw a link the full text does not: only the addresses the
+    // head already draws before its first deleted bracket may stay.
+    const allowed = addressesOf(head.slice(0, bracketAt ?? limit));
     for (const address of addressesOf(kept)) {
       if (!allowed.has(address)) return head.slice(0, leafLineStart);
     }
@@ -454,8 +479,8 @@ function onlyDefinitions(head: string): boolean {
  *  lexer's tokens could not be laid over the head and the head was cut back to
  *  its previous line instead; that is expected never to happen. */
 export function trimIncompleteMarkdown(head: string, onFallback?: () => void): string {
-  let current = head.replace(/\r\n?/g, "\n").replace(/\t/g, "    ");
   try {
+    let current = expandTabs(head.replace(/\r\n?/g, "\n"));
     // A step returns its input or a strictly shorter string, so this ends
     // within `current.length` steps.
     for (let left = current.length; left >= 0; left--) {

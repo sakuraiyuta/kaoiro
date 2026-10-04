@@ -214,6 +214,11 @@ describe("the first block is itself unfinished", () => {
     ["an address in an unfinished link label", "[see http://a.co/x and more", ""],
     ["a closed link in an unfinished bold keeps its link", "**状況 [issue 514](https://x.example/1) 完了", "状況 [issue 514](https://x.example/1) 完了"],
     ["and loses only the star after it", "**状況 [issue 514](https://x.example/1) 完了 *注", "状況 [issue 514](https://x.example/1) 完了 注"],
+    // The links before the first deleted bracket are the head's own and stay.
+    ["a link before an unfinished bracket stays", "**a [b](https://x.example/1) c [d", "a [b](https://x.example/1) c d"],
+    ["so does one before an unfinished label", "**a [b](https://x.example/1) and [issue", "a [b](https://x.example/1) and issue"],
+    ["so does a bare address", "*a https://x.example/1 b [c", "a https://x.example/1 b c"],
+    ["a link after the unfinished bracket cuts the block", "**a [c [d](https://y.example/2) tail", ""],
     ["two kinds", "~~消す と **b", "消す と b"],
     ["a code span that cannot be closed inside a link label", "[`a]b", ""],
     ["the same, closed", "[`a]b`", ""],
@@ -236,13 +241,16 @@ describe("a head that is complete", () => {
   // The lexer expands the tabs of a list item's text, so a head with a tab in a
   // list item would not line up with its own text: four spaces say the same.
   it.each([
-    ["a tab in a list item", "- a\t**b", "- a    "],
+    ["a tab in a list item", "- a\t**b", "- a "],
     ["a tab in an ordered item", "1. a\t**b", "1. a    "],
-    ["a tab on a continuation line", "- a\n  b\t**c", "- a\n  b    "],
-    ["a tab before an address", "- x\thttp://a.com/b", "- x    "],
-    ["two tabs", "- a\t\t**b", "- a        "],
-    ["a tab in a quote", "> a\t**b", "> a    "],
-    ["a tab in a paragraph", "a\t**b", "a    "],
+    ["a tab on a continuation line", "- a\n  b\t**c", "- a\n  b "],
+    ["a tab before an address", "- x\thttp://a.com/b", "- x "],
+    ["two tabs", "- a\t\t**b", "- a     "],
+    ["a tab in a quote", "> a\t**b", "> a "],
+    ["a tab in a paragraph", "a\t**b", "a   "],
+    // A tab after a marker is two spaces, so the item stays an item and not code.
+    ["a tab after a bullet", "- \tcode **b", "-   code "],
+    ["a tab after a number", "1. \tx **y", "1.  x "],
   ])("reads %s", (_name, head, shown) => {
     expect(trim(head)).toEqual({ shown, fallbacks: 0 });
   });
@@ -299,6 +307,22 @@ describe("a head built to make a pattern backtrack", () => {
   });
 });
 
+// One character per step would lex the head once per character: 512 lexes for
+// 512 exclamation marks (about 230 ms). The run goes in one step.
+describe("a head that ends in a long run", () => {
+  it.each([
+    ["exclamation marks", "!".repeat(512), ""],
+    ["exclamation marks after a letter", "a" + "!".repeat(511), "a"],
+    ["backslashes", "\\".repeat(500), ""],
+    ["both in one run", "a" + "!\\".repeat(200), "a"],
+  ])("trims %s in a few lexes", (_name, head, shown) => {
+    const lexer = vi.spyOn(untrustedMarked, "lexer");
+
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+    expect(lexer.mock.calls.length).toBeLessThan(10);
+  });
+});
+
 describe("a lexer that does not agree with the head", () => {
   const head = "前文\n続き **a";
 
@@ -325,6 +349,10 @@ describe("a lexer that does not agree with the head", () => {
     ] as never);
 
     expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
+  });
+
+  it("shows nothing for a head that is not a string, instead of throwing into the view", () => {
+    expect(trim(null as never)).toEqual({ shown: "", fallbacks: 1 });
   });
 
   // A head that is not trimmed could draw a link to a half address, so a failure

@@ -25,6 +25,7 @@ export class StatusLines {
     this.#rows = rows;
     this.#incomplete = incomplete;
     this.#loaded = true;
+    this.#trims.clear();
   }
 
   /** A live event, applied only if strictly newer than what is held. An older
