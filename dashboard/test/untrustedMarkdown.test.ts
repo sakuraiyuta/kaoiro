@@ -277,6 +277,34 @@ describe("inline profile: layer one (the string marked emits, before sanitizing)
     expect(html).not.toContain("\n");
   });
 
+  describe.each(["<code>", "<kbd>", "<pre>", "<script>"])("after an inline %s tag", (opener) => {
+    // marked treats the text after these tags as already raw; the profile shows
+    // the tag itself as text, so it must show what follows as text too.
+    it.each([
+      ["a tag marked does not recognise", "<strong/x>bold", "&lt;strong/x&gt;bold"],
+      ["a forged link", "<span/class=md-link>fake link", "&lt;span/class=md-link&gt;fake link"],
+      ["a break", "a<br/>b", "a&lt;br/&gt;b"],
+    ])("shows %s as text", (_name, rest, shown) => {
+      const html = inlineMarkdownToHtml(`${opener} ${rest}`);
+
+      expect(html).toContain(shown);
+      expect(html).not.toMatch(/<(?!br>)/);
+    });
+  });
+
+  it("keeps a character reference as the character, like the dialog, and escapes a bare ampersand", () => {
+    const source = "a &amp; b &lt;x&gt; &copy; &#38; &#x26; c & d";
+    const card = document.createElement("div");
+    card.innerHTML = sanitizeUntrustedInlineHtml(inlineMarkdownToHtml(source));
+    const dialog = document.createElement("div");
+    const full = renderUntrustedMarkdown(source);
+    dialog.innerHTML = full.kind === "html" ? full.html : "";
+
+    expect(card.textContent).toBe("a & b <x> © & & c & d");
+    expect(card.textContent).toBe(dialog.textContent?.trim());
+    expect(inlineMarkdownToHtml("c & d")).toBe("c &amp; d");
+  });
+
   it("never emits an anchor, an image or a newline, whatever the source", () => {
     for (const source of HOSTILE_CORPUS) {
       const html = inlineMarkdownToHtml(source);
@@ -369,6 +397,15 @@ describe("inline profile: the composed render", () => {
   const ALLOWED = new Set(["STRONG", "EM", "CODE", "DEL", "BR", "SPAN"]);
 
   function assertAllowed(source: string): void {
+    // Layer one itself emits only the allowed elements: raw HTML is text there.
+    for (const el of elements(inlineMarkdownToHtml(source))) {
+      expect(ALLOWED.has(el.tagName), `layer one: ${el.tagName} in ${JSON.stringify(source)}`).toBe(true);
+      for (const name of el.getAttributeNames()) {
+        expect(name, source).toBe("class");
+        expect(el.tagName, source).toBe("SPAN");
+        expect(el.getAttribute("class"), source).toBe("md-link");
+      }
+    }
     const rendered = renderUntrustedInline(source);
     if (rendered.kind !== "html") return;
     for (const el of elements(rendered.html)) {
@@ -425,6 +462,7 @@ describe("inline profile: the composed render", () => {
       "a", "b c", "\n", "\n\n", "# ", "- ", "1. ", "3. ", "> ", "```", "```js\n", "    ", "|", "|---|",
       "| x | y |", "**", "*", "~~", "`", "[l](https://e.test/)", "![i](https://e.test/p.png)", "![a\nb](x)",
       "<div>", "</div>", "<b>", "<!-- c -->", "---", "- [x] ", "\r\n", "  \n", "\\", "&amp;", "<https://e.test>",
+      "<code>", "<kbd>", "<pre>", "<script>", "<b/x>", "<span/class=md-link>", "<strong/x>",
     ];
     let seed = 12345;
     const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
@@ -492,5 +530,6 @@ const CUT_CORPUS = [
   "**bold [#482](https://github.com/sakuraiyuta/kaoiro/issues/482) と `code` ![alt](https://e.test/p.png)",
   "# 作業中\n- [x] 設計 😀👨‍👩‍👧\n- [ ] 実装\n3. 三\n> 引用\n| a | b |\n|:-:|--:|\n| 1 | 2 |",
   "```js\nlet a = 1;\n```\n<script>alert(1)</script><img src=x onerror=alert(1)> [x](javascript:alert(1))",
+  "<code>x <strong/x>bold <span/class=md-link>fake</span> <kbd>k <b/x>b</kbd> <pre>p <img/src=x/onerror=alert(1)>",
   "é \u{1F468}‍\u{1F469}‍\u{1F467} **強調 ~~取り消し~~** <b>raw</b>\n\n本文",
 ];
