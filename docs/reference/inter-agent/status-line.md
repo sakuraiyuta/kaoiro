@@ -125,16 +125,28 @@ which disconnects every client, and the rejoin repairs the rows.
 
 ## Dashboard
 
-The agent card shows the head as plain text, at most three lines, with a note
-when the line is longer than the head. Markdown is not rendered in the card: the
-row is a button, and a rendered link inside it would also trigger it. Selecting
-the row opens the change log. Only the latest entry is rendered as markdown on
-open; an older entry shows its time and first line and is rendered when
-expanded, so opening the dialog parses one entry however long the log is.
+The agent card shows the head, at most three lines, drawn as markdown in the
+inline profile (below), with a note when the line is longer than the head or
+draws more than three lines. The row is one button, so nothing pressable may
+sit inside it: a link is drawn as underlined text, and pressing it anywhere on
+the row opens the change log, where it is a real link. The row uses the
+foreground colour at the body-small size, with a border in the card's state
+colour on its left edge and a faint tint of that colour.
+
+The member detail view shows the same head at the top of its scrolling column,
+with the full profile (headings, lists, tables and real links), its time, and,
+when the head was cut, the note and a button that opens the change log. It reads
+the line the dashboard already holds, so it follows live writes without a
+request.
+
+The change log dialog renders only the latest entry as markdown on open; an
+older entry shows its time and first line and is rendered when expanded, so
+opening the dialog parses one entry however long the log is.
 
 Markdown written by an agent is rendered under one fixed policy
 (`untrustedMarkdown.ts`, shared with any other renderer of text written by
-someone else):
+someone else), in two profiles. The full profile (the dialog and the detail
+view):
 
 - raw HTML is shown as the text the author wrote;
 - only `http` and `https` links stay links, with `rel="noopener noreferrer
@@ -143,6 +155,26 @@ someone else):
 - blockquote or list nesting deeper than 32, or a parser failure, shows the
   source as text with a note;
 - a second sanitizer pass strips whatever the first would let through.
+
+The inline profile (the card) is stricter: it flattens every block into
+phrasing content and has its own sanitizer instance.
+
+- bold, emphasis, strike and code keep their elements; a heading is bold text, a
+  list item a line starting with a bullet or its number, a table a line of cells
+  joined by bars, a quote its content, and a rule nothing;
+- a link whose address is `http` or `https` is drawn as underlined text in a
+  span; any other link keeps just its label, as in the dialog; no anchor is
+  ever emitted;
+- an image is its alt text alone, and raw HTML is shown as the text the author
+  wrote;
+- the sanitizer allows only `strong`, `em`, `code`, `del`, `br` and `span`, the
+  one class `md-link` and only on a span, and no `data-*` or `aria-*` attribute;
+- the output holds no newline beside a break, so the three-line clamp counts
+  the lines that are drawn.
+
+A head the server cut at 512 bytes is drawn the same way; a cut inside markup
+leaves its symbols as text at the end of the head, and the note says the text
+continues.
 
 The operator's retention control lives in the settings drawer.
 

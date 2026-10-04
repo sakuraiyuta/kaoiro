@@ -385,15 +385,18 @@ Places involving state colors resolve dynamically through `var(--tone)`.
 - `border`: `1px solid var(--line)`
 - `box-shadow`: Glow around the face sprite (see `{Elevation}`)
 - Stack face / lamp / state label / metadata rows vertically inside
-- Status line row (issue 482): a sibling `<button>` below the metadata rows that
-  shows the head of the agent's self-written line as plain text, clamped to three
-  lines, with a continuation note when the line is longer. It is plain text on
-  purpose: a button may not contain interactive content, and a head cut at 512
-  bytes renders broken markdown. Selecting it opens the change log, where the
-  latest entry is rendered as markdown under the untrusted policy. Before the
-  first snapshot, or after an incomplete one, no row is drawn; an agent with no
-  line shows 「未設定」 only when the snapshot was complete
-  ([status line](../inter-agent/status-line.md#dashboard)).
+- Status line row (issues 482, 514): a sibling `<button>` below the metadata rows
+  that shows the head of the agent's self-written line as markdown in the inline
+  profile (phrasing content only; a link is underlined text, never an anchor, so
+  nothing pressable sits inside the button), clamped to three lines, with a
+  continuation note when the line is longer. It is the main text of the card:
+  `--fg` at `--fs-body-sm` (12.2:1 on the card), a 1px `--line` border with a 2px
+  `--tone` left edge, and an 8% `--tone` tint over `--bg-card`. Selecting it
+  opens the change log, where the latest entry is rendered in the full profile.
+  Before the first snapshot, or after an incomplete one, no row is drawn; an
+  agent with no line shows 「未設定」 only when the snapshot was complete
+  ([status line](../inter-agent/status-line.md#dashboard)). The detail view
+  carries the same head in a panel at the top of its scrolling column.
 
 ### Buttons
 
