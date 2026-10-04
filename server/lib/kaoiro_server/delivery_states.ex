@@ -990,14 +990,25 @@ defmodule KaoiroServer.DeliveryStates do
   def handle_call({:message_status, sender, cid, turn}, _from, state) do
     state = prune_stages(state)
 
+    matches =
+      for {_key, by_seq} <- state.stages,
+          {seq, stage} <- by_seq,
+          (is_nil(sender) or stage.sender == sender) and stage.conversation_id == cid and
+            stage.turn_number == turn,
+          do: {seq, stage}
+
+    # A queue item offered more than once has a record per offered sequence:
+    # the one with a yield disposition, else the newest, carries its status.
     record =
-      Enum.find_value(state.stages, fn {_key, by_seq} ->
-        Enum.find_value(by_seq, fn {_seq, stage} ->
-          if (is_nil(sender) or stage.sender == sender) and stage.conversation_id == cid and
-               stage.turn_number == turn,
-             do: stage
-        end)
-      end)
+      case matches do
+        [] ->
+          nil
+
+        _ ->
+          matches
+          |> Enum.max_by(fn {seq, stage} -> {stage[:yield_disposition] != nil, seq} end)
+          |> elem(1)
+      end
 
     {:reply,
      if(record,

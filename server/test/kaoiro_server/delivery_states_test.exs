@@ -288,6 +288,68 @@ defmodule KaoiroServer.DeliveryStatesTest do
              DeliveryStates.message_status("sender", "cid", 2, name)
   end
 
+  test "message_status reads the record with a yield disposition, else the newest", %{
+    name: name
+  } do
+    owner = self()
+
+    for {recipient, disposed} <- [{"recipient-a", 1}, {"recipient-b", 2}, {"recipient-c", nil}] do
+      DeliveryStates.bind_resync(recipient, "generation", owner, name)
+      incarnation = :sys.get_state(name).entries[recipient].incarnation
+
+      # One message offered twice: a record per offered sequence.
+      for seq <- 1..2 do
+        assert ^seq =
+                 DeliveryStates.issue_synthetic(
+                   recipient,
+                   %{sender: recipient <> "-sender", conversation_id: "cid", turn_number: 3},
+                   name
+                 )
+      end
+
+      report = fn seq, extra ->
+        Map.merge(
+          %{
+            "incarnation" => incarnation,
+            "generation" => "generation",
+            "delivery_seq" => seq,
+            "stage" => "queued",
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          },
+          extra
+        )
+      end
+
+      if disposed do
+        disposition = %{"outcome" => "cut", "at" => DateTime.utc_now() |> DateTime.to_iso8601()}
+
+        assert :ok =
+                 DeliveryStates.report_stage(
+                   recipient,
+                   "generation",
+                   owner,
+                   report.(disposed, %{"yield_disposition" => disposition}),
+                   name
+                 )
+
+        assert {:ok, %{yield_disposition: %{"outcome" => "cut"}}} =
+                 DeliveryStates.message_status(recipient <> "-sender", "cid", 3, name)
+      else
+        assert :ok =
+                 DeliveryStates.report_stage(
+                   recipient,
+                   "generation",
+                   owner,
+                   report.(2, %{"stage" => "submitted", "handoff" => "prompt_hook"}),
+                   name
+                 )
+
+        assert {:ok, %{stages: %{"submitted" => _}}} =
+                 DeliveryStates.message_status(recipient <> "-sender", "cid", 3, name)
+      end
+    end
+  end
+
   test "submitted accepts the turn_start_accepted handoff and rejects an unknown one", %{
     name: name
   } do
