@@ -7,12 +7,31 @@
   // `inline` is the agent card's profile: the text sits inside a button, so the
   // output is phrasing content in span wrappers only, and the plain fallback
   // carries no explanatory note.
-  import { renderUntrustedInline, renderUntrustedMarkdown } from "./untrustedMarkdown";
+  import {
+    inlineLineCount,
+    renderUntrustedInline,
+    renderUntrustedMarkdown,
+  } from "./untrustedMarkdown";
 
-  let { text, variant = "full" }: { text: string; variant?: "full" | "inline" } = $props();
+  let {
+    text,
+    variant = "full",
+    lines = $bindable(0),
+  }: {
+    text: string;
+    variant?: "full" | "inline";
+    /** The number of lines the inline variant draws, for a caller that says
+     *  "more" past a limit. It is reported from the one render this component
+     *  does, so the caller never parses the text again. 0 for the full variant. */
+    lines?: number;
+  } = $props();
 
   const inline = $derived(variant === "inline");
   const rendered = $derived(inline ? renderUntrustedInline(text) : renderUntrustedMarkdown(text));
+
+  $effect.pre(() => {
+    lines = inline ? inlineLineCount(rendered, text) : 0;
+  });
 </script>
 
 {#if rendered.kind === "html"}

@@ -24,7 +24,6 @@
   import { settings } from "./settings.svelte";
   import type { StatusLineView } from "./statusLine";
   import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
-  import { inlineLineCount, renderUntrustedInline } from "./untrustedMarkdown";
 
   let {
     envelope,
@@ -174,10 +173,9 @@
   // than that, or one the server cut, says so. Lines are counted as drawn (a
   // blank source line is not one), and the size is the server's, not
   // recomputed here.
+  let statusLineLines = $state(0);
   const statusLineMore = $derived(
-    statusLine.kind === "set" &&
-      (statusLine.truncated ||
-        inlineLineCount(renderUntrustedInline(statusLine.head), statusLine.head) > 3)
+    statusLine.kind === "set" && (statusLine.truncated || statusLineLines > 3)
       ? `…続きあり (${(statusLine.bytes / 1024).toFixed(1)} KB)`
       : null,
   );
@@ -693,7 +691,7 @@
       aria-label="{name} の状況表示の履歴を開く"
     >
       {#if statusLine.kind === "set"}
-        <span class="status-text"><UntrustedMarkdown text={statusLine.head} variant="inline" /></span>
+        <span class="status-text"><UntrustedMarkdown text={statusLine.head} variant="inline" bind:lines={statusLineLines} /></span>
         {#if statusLineMore !== null}
           <span class="status-more">{statusLineMore}</span>
         {/if}

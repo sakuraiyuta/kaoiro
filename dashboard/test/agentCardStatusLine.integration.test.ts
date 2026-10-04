@@ -7,10 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
 import type { Envelope } from "../src/lib/protocol";
 import type { StatusLineView } from "../src/lib/statusLine";
+import { renderUntrustedInline } from "../src/lib/untrustedMarkdown";
+import { reactiveObject } from "./reactiveObject.svelte";
+
+// The real inline renderer, observed: the card must parse a head once per change.
+vi.mock("../src/lib/untrustedMarkdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/untrustedMarkdown")>();
+  return { ...actual, renderUntrustedInline: vi.fn(actual.renderUntrustedInline) };
+});
 
 const mounted: object[] = [];
 
 beforeEach(() => {
+  vi.mocked(renderUntrustedInline).mockClear();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-03T12:30:00Z"));
 });
@@ -114,6 +123,33 @@ describe("AgentCard status line row", () => {
 
     expect(spaced.querySelector(".status-more")).toBeNull();
     expect(four.querySelector(".status-more")).not.toBeNull();
+  });
+
+  it("parses the head once, and again only when it changes", async () => {
+    const state = reactiveObject({ view: setLine({ head: "one\ntwo\nthree\nfour", bytes: 18 }) });
+    const target = document.createElement("div");
+    document.body.append(target);
+    mounted.push(
+      mount(AgentCard, {
+        target,
+        props: {
+          envelope: envelope(),
+          get statusLine() {
+            return state.view;
+          },
+        } as never,
+      }),
+    );
+    await tick();
+
+    expect(vi.mocked(renderUntrustedInline)).toHaveBeenCalledTimes(1);
+    expect(row(target)!.querySelector(".status-more")).not.toBeNull();
+
+    state.view = setLine({ head: "short", bytes: 5 });
+    await tick();
+
+    expect(vi.mocked(renderUntrustedInline)).toHaveBeenCalledTimes(2);
+    expect(row(target)!.querySelector(".status-more")).toBeNull();
   });
 
   it("shows hostile markup literally and makes no image or anchor from it, but draws the markdown", async () => {
