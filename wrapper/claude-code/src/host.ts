@@ -811,7 +811,7 @@ export class AgentHost implements EngineAdapter {
    *  stdin-EOF -> ~2000ms SIGTERM -> ~5000ms SIGKILL escalation
    *  (`ProcessTransport.close()`, measured against
    *  `@anthropic-ai/claude-agent-sdk` 0.3.280's bundle; not remeasured on
-   *  0.3.284); an unhandled `return` of the prompt generator alone
+   *  0.3.289); an unhandled `return` of the prompt generator alone
    *  only closes stdin, with no escalation if the child never exits on its
    *  own. */
   #abort: AbortController | null = null;
@@ -1669,7 +1669,7 @@ export class AgentHost implements EngineAdapter {
     // issue #391: bound the SDK-managed `claude` CLI subprocess. On SDK
     // 0.3.280, returning the prompt generator only closed stdin on the SDK's
     // schedule, with no guarantee the child exited if it ignored EOF; this
-    // was not remeasured on 0.3.284. Aborting triggers the SDK's stdin-EOF ->
+    // was not remeasured on 0.3.289. Aborting triggers the SDK's stdin-EOF ->
     // SIGTERM -> SIGKILL escalation regardless of queue state.
     this.#abort?.abort();
   }
@@ -2897,7 +2897,7 @@ export class AgentHost implements EngineAdapter {
       // rejects the in-flight readMessages() iteration with an AbortError
       // ("Claude Code process aborted by user") as part of that same abort
       // (measured against @anthropic-ai/claude-agent-sdk 0.3.280; not
-      // remeasured on 0.3.284: the
+      // remeasured on 0.3.289: the
       // rejection's constructor is the SDK's own exported `AbortError`).
       // That rejection is an expected SIDE EFFECT of our own close(), not a
       // failure — propagating it would make a runner-initiated SIGTERM
@@ -3396,7 +3396,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Whether `reported` names the same model as the explicit pick #model.
-   *  SDK 0.3.284 reports `claude-opus-5-5[1m]` from init/context usage while
+   *  SDK 0.3.289 reports `claude-opus-5-5[1m]` from init/context usage while
    *  its catalog exposes only the base `opus` alias row. For `[1m]` picks,
    *  require the exact lowercase suffix on both sides, then compare the
    *  suffix-free report with the selected alias row's resolved ID. Without a
@@ -3713,7 +3713,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Resolves a requested model against the measured catalog, with one
-   *  compatibility case for persisted 1M aliases. SDK 0.3.284 can omit a
+   *  compatibility case for persisted 1M aliases. SDK 0.3.289 can omit a
    *  [1m] alias row such as `opus[1m]` from supportedModels() while startup
    *  options and reports retain the suffix; use the exact base alias row for
    *  metadata without rewriting the requested string. Canonical rows do not

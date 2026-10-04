@@ -7,7 +7,7 @@ description: The closed envelope.type enum, each type's payload shape, and the w
 
 # Event types and payloads
 
-### Types and payload (v0 settled)
+## Types and payload (v0 settled)
 
 `type` is a closed enum. The v0 payload for each type is defined below; details
 are refined incrementally ([ADR-0010](../../adr/0010-protocol-precisification.md)).
@@ -27,7 +27,7 @@ are refined incrementally ([ADR-0010](../../adr/0010-protocol-precisification.md
 | `session_boundary` | **settled** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`. Session-lifecycle marker for `/new` and `/clear`. The normal `envelope` path broadcasts it; `/new` appends to existing history and `/clear` reduces that agent's history to one marker row (ADR-0036 F3 restoration, 2026-07-24). `history_reset` is resume-replay-only and neither command emits it. For lazy Codex allocation, `to_session_id: null` is patched in the first envelope. Viewer payload is sanitized to `{ "mode" }`. |
 | `refresh_models_result` | **settled** | `{ request_id: string, ok: boolean, reason?: string, models_count?: number }`. Wrapper completion report for the operator's `refresh_models` ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md) F9 v2). `agent_id` is in the outer envelope and is **not duplicated**. `reason` appears only on failure and shares the engine-catalog probe vocabulary (`auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; non-Claude adapters no-op the control and return `unsupported_engine`). `models_count` is a success-only size signal; the updated catalog is carried by the immediately preceding `state_change.ext.models`. This envelope is transient: the server does not put it into `AgentStates`, and the client special-dispatches it before normal envelope handling. **Operator-only delivery**. |
 
-#### Wrapper-owned stderr error diagnostics
+### Wrapper-owned stderr error diagnostics
 
 When a wrapper writes an error-derived diagnostic to stderr, it applies the
 same `boundErrorDetail` credential-redaction and 16,384-byte head clip as
@@ -40,7 +40,7 @@ The `result` row's payload scope does not exclude this wrapper-owned
 diagnostic sink. In the normal child-error relay path,
 `@openai/codex-sdk` 0.156.1 pipes child stderr into the SDK error message and
 `@anthropic-ai/claude-agent-sdk` 0.3.280 pipes it into its callback or error
-tail (measured on 0.3.280; not remeasured on 0.3.284); Kaoiro does not pass
+tail (measured on 0.3.280; not remeasured on 0.3.289); Kaoiro does not pass
 the Claude callback. SDK-owned debug output, such
 as `DEBUG_CLAUDE_AGENT_SDK`, is outside this sink and its policy.
 

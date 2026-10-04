@@ -50,14 +50,14 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-const sdk0284ModelInfoBytes = readFileSync(
+const sdk0289ModelInfoBytes = readFileSync(
   new URL(
-    "./fixtures/claude-agent-sdk-0.3.284-opus-1m.models.json",
+    "./fixtures/claude-agent-sdk-0.3.289-opus-1m.models.json",
     import.meta.url,
   ),
 );
-const sdk0284ModelInfo = JSON.parse(
-  sdk0284ModelInfoBytes.toString("utf8"),
+const sdk0289ModelInfo = JSON.parse(
+  sdk0289ModelInfoBytes.toString("utf8"),
 ) as ModelInfo[];
 const sdk0284OfflineFallbackModelInfoBytes = readFileSync(
   new URL(
@@ -9138,25 +9138,31 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(h.envs.some((e) => (e.ext?.effective as { model?: unknown } | undefined)?.model === "claude-opus-5[1m]")).toBe(false);
   });
 
-  it("SDK 0.3.284 catalog fixture is measured bytes and distinguishes aliases structurally", () => {
+  it("SDK 0.3.289 catalog fixture is measured bytes and distinguishes aliases structurally", () => {
     expect(
-      createHash("sha256").update(sdk0284ModelInfoBytes).digest("hex"),
-    ).toBe("b1f649a21e14e58e516375b6cbcbc511e574ca19fa084a6725d4bfb9d3b86fe7");
-    expect(sdk0284ModelInfo).toHaveLength(12);
-    expect(sdk0284ModelInfo.some((model) => model.value === "opus[1m]")).toBe(
+      createHash("sha256").update(sdk0289ModelInfoBytes).digest("hex"),
+    ).toBe("ed8f7da0435dd156ad2d9859d17c40bb4b92a9a25aac8e8f4fd92d94d9cce46d");
+    expect(sdk0289ModelInfo).toHaveLength(12);
+    expect(sdk0289ModelInfo.some((model) => model.value === "opus[1m]")).toBe(
       false,
     );
-    const opus = sdk0284ModelInfo.find((model) => model.value === "opus");
+    const opus = sdk0289ModelInfo.find((model) => model.value === "opus");
     expect(opus).toMatchObject({
       value: "opus",
       resolvedModel: "claude-opus-5-5",
       supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
     });
     expect(opus?.value).not.toBe(opus?.resolvedModel);
-    const canonical = sdk0284ModelInfo.find(
+    const canonical = sdk0289ModelInfo.find(
       (model) => model.value === "claude-opus-5",
     );
     expect(canonical?.value).toBe(canonical?.resolvedModel);
+    // 0.3.289 lists Fable 5.1 under the alias `fable`; 0.3.284 used the
+    // canonical id as the row value.
+    expect(sdk0289ModelInfo.find((model) => model.value === "fable")).toMatchObject({
+      resolvedModel: "claude-fable-5-1",
+    });
+    expect(sdk0289ModelInfo.some((model) => model.value === "claude-fable-5-1")).toBe(false);
   });
 
   it("SDK 0.3.284 offline static catalog fixture preserves its exact opus[1m] row", () => {
@@ -9207,7 +9213,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
   });
 
   it("uses the measured base alias effort domain for a suffixed model pick", async () => {
-    const startupCatalog = sdk0284ModelInfo.map((model) => ({
+    const startupCatalog = sdk0289ModelInfo.map((model) => ({
       value: model.value,
       display_name: model.displayName,
       description: model.description,
@@ -9240,8 +9246,8 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     });
   });
 
-  it("SDK 0.3.284 keeps an opus[1m] persisted pin and compares the measured suffixed reports", async () => {
-    // Captured from an SDK 0.3.284 query's init.models with Options.model
+  it("SDK 0.3.289 keeps an opus[1m] persisted pin and compares the measured suffixed reports", async () => {
+    // Captured from an SDK 0.3.289 query's init.models with Options.model
     // set to opus[1m]. Fixture SHA-256 is pinned above; no catalog row was
     // synthesized. The model spelling in init and context usage was observed
     // separately from the real CLI through a loopback-only API stub.
@@ -9250,7 +9256,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       source: "config",
       initModel: "claude-opus-5-5[1m]",
       usageModel: "claude-opus-5-5[1m]",
-      catalog: sdk0284ModelInfo,
+      catalog: sdk0289ModelInfo,
     });
     await h.initConsumed.promise;
     await vi.waitFor(() =>
@@ -9273,12 +9279,12 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     await h.finish();
   });
 
-  it("SDK 0.3.284 still reports a refusal fallback for an opus[1m] pin", async () => {
+  it("SDK 0.3.289 still reports a refusal fallback for an opus[1m] pin", async () => {
     const h = liveHost({
       pin: "opus[1m]",
       source: "config",
       initModel: "claude-opus-5-5[1m]",
-      catalog: sdk0284ModelInfo,
+      catalog: sdk0289ModelInfo,
     });
     await h.initConsumed.promise;
     await vi.waitFor(() =>
@@ -9307,7 +9313,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       source: "config",
       initModel: "claude-opus-5-5",
       usageModel: "claude-opus-5-5",
-      catalog: sdk0284ModelInfo,
+      catalog: sdk0289ModelInfo,
     });
     await h.initConsumed.promise;
     await vi.waitFor(() =>
@@ -9329,7 +9335,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       source: "config",
       initModel: "claude-opus-4-8",
       usageModel: "claude-opus-4-8",
-      catalog: sdk0284ModelInfo,
+      catalog: sdk0289ModelInfo,
     });
     await h.initConsumed.promise;
     await vi.waitFor(() =>
@@ -9351,7 +9357,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       source: "config",
       initModel: "claude-opus-4-8[1m]",
       usageModel: "claude-opus-4-8[1m]",
-      catalog: sdk0284ModelInfo,
+      catalog: sdk0289ModelInfo,
     });
     await h.initConsumed.promise;
     await vi.waitFor(() =>
@@ -9373,7 +9379,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
         pin,
         source: "config",
         initModel: "claude-opus-5-5[1m]",
-        catalog: sdk0284ModelInfo,
+        catalog: sdk0289ModelInfo,
       });
       await h.initConsumed.promise;
       await vi.waitFor(() =>

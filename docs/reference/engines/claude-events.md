@@ -344,7 +344,11 @@ in streaming-input mode. Boundaries settled by a headless live run:
   `initializationResult().commands` and live `system/init` `slash_commands`
   were both 145 entries, equal in order, with no difference either way. 33
   rows carried a colon alias, and 9 rows carried only colon-free aliases and
-  kept `name`. Re-measure this when the SDK is bumped. The probe runs in an
+  kept `name`. Re-measured on SDK 0.3.289 (2026-10-04) against a loopback API
+  with an isolated config (skills and plugins linked, no account-provided
+  skills): 100 entries each, equal in order; no row carried a colon alias, so
+  that branch of the projection was not exercised on 0.3.289. Re-measure this
+  when the SDK is bumped. The probe runs in an
   isolated temporary cwd with no MCP servers, so project-scoped commands and
   MCP-provided commands are expected to be missing until the first live
   turn. This is inferred, not measured. If the probe fails, the list stays
