@@ -21,6 +21,6 @@ admission. See [ADR-0040](../../docs/adr/0040-context-usage-capability.md#addend
 
 The credentialed default-composition gate runs after building core, agent-common
 and codex: `pnpm -C runner exec tsx ../scripts/check-codex-context-meter.mts <output-dir>`.
-It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.159.3 and a local
+It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.160.0 and a local
 Phoenix wire fixture, and injects no host/session/transport factory. Unit suites
 run separately with `env -u CODEX_HOME pnpm -C wrapper/codex test`.

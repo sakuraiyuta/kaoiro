@@ -76,13 +76,13 @@ describe("AppServerRpc server requests", () => {
 // availableDecisions is experimental-schema-only; decline is a stable response.
 // A pin bump must remeasure the request, decline reply and terminal outcome.
 describe("the captured command approval shape on the pinned Codex", () => {
-  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.159.3.jsonl", import.meta.url), "utf8")
+  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.160.0.jsonl", import.meta.url), "utf8")
     .trim().split("\n").map(raw => JSON.parse(raw) as { dir: string; line: string })
     .map(({ dir, line }) => ({ dir, message: JSON.parse(line) as RpcObject }));
 
   it("is measured on the pinned version", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> };
-    expect(pkg.dependencies["@openai/codex"]).toBe("0.159.3");
+    expect(pkg.dependencies["@openai/codex"]).toBe("0.160.0");
   });
 
   it("offers no decline in availableDecisions, and a decline reply leaves the item declined", () => {

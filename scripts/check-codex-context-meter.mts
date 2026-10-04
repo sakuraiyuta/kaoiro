@@ -54,7 +54,7 @@ AppServerRpc.prototype.request = function (method, params, ...args) {
   return ticket;
 };
 const binary = resolveAppServerBinary();
-assert.equal(cp.execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "codex-cli 0.159.3");
+assert.equal(cp.execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), "codex-cli 0.160.0");
 assert.equal(cp.spawnSync(binary, ["login", "status"], { encoding: "utf8" }).status, 0, "credentialed account required");
 const wire = await phoenixLoopback(() => ({ permission_sync: false }));
 const config = { agent_id: `fuji485-gate-${randomUUID()}`, persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" }, display_name: "Fuji context gate",
