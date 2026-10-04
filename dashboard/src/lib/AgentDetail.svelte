@@ -13,6 +13,8 @@
   import { renderMarkdown, renderMermaidIn } from "./markdown";
   import PersonaFace from "./PersonaFace.svelte";
   import TaskRing from "./TaskRing.svelte";
+  import StatusLinePanel from "./StatusLinePanel.svelte";
+  import type { StatusLineView } from "./statusLine";
   import TasklistFloat from "./TasklistFloat.svelte";
   import { settings } from "./settings.svelte";
   import { randomUUID } from "./uuid";
@@ -76,6 +78,8 @@
     tasklist = null,
     deliveryStatus = null,
     wrapperBuildInfo = null,
+    statusLine = { kind: "none" },
+    onOpenStatusLineHistory,
     onClose,
     onSelectAgent,
     onRename,
@@ -119,6 +123,11 @@
     tasklist?: TasklistSnapshot | null;
     deliveryStatus?: InterAgentDeliveryStatus | null;
     wrapperBuildInfo?: WrapperBuildInfo | null;
+    /** What the agent wrote about itself (issue 514), as App's `StatusLines`
+     *  holds it. `none` draws nothing. */
+    statusLine?: StatusLineView;
+    /** Opens the agent's status line change log. Undefined hides the buttons. */
+    onOpenStatusLineHistory?: ((agentId: string) => void) | undefined;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -3035,6 +3044,12 @@
            above stays pinned. (Inner content is intentionally left at its
            original indentation to keep this a 2-line structural wrap.) -->
       <div class="status-scroll">
+      <StatusLinePanel
+        view={statusLine}
+        onOpenHistory={onOpenStatusLineHistory
+          ? () => onOpenStatusLineHistory(envelope.agent_id)
+          : undefined}
+      />
       {#if hasCcStatus}
         <!-- Claude Code status meta (#16): mirrors the local statusline's
              model / ctx / 5h / 7d segments for this agent. -->

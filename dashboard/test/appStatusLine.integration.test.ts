@@ -288,6 +288,75 @@ describe("the change log dialog", () => {
   });
 });
 
+describe("the member detail view", () => {
+  const openDetail = async (agentId: string) => {
+    card(agentId)!.querySelector<HTMLButtonElement>("button.open")!.click();
+    await tick();
+  };
+  const panel = () => document.querySelector<HTMLElement>(".status-line-panel");
+
+  it("shows the agent's line, live, and nothing before the snapshot", async () => {
+    const h = await mountApp();
+    await join(h, ["a.one"]);
+    await openDetail("a.one");
+    expect(panel()).toBeNull();
+
+    h.onStatusLineSnapshot?.({ "a.one": set(1, "2026-10-03T12:00:00.000001Z", "**first**") }, false);
+    await tick();
+    expect(panel()?.querySelector(".body strong")?.textContent).toBe("first");
+    // Below the pinned identity header, inside the scrolling column.
+    expect(panel()?.closest(".status-scroll")).not.toBeNull();
+
+    h.onStatusLine?.("a.one", set(2, "2026-10-03T12:00:09.000000Z", "second"));
+    await tick();
+    expect(panel()?.querySelector(".body")?.textContent?.trim()).toBe("second");
+  });
+
+  it("says 未設定 once a complete snapshot has none, and never for an incomplete one", async () => {
+    const h = await mountApp();
+    await join(h, ["a.one"]);
+    await openDetail("a.one");
+
+    h.onStatusLineSnapshot?.({}, true);
+    await tick();
+    expect(panel()).toBeNull();
+
+    h.onStatusLineSnapshot?.({}, false);
+    await tick();
+    expect(panel()?.querySelector(".unset")?.textContent).toBe("未設定");
+  });
+
+  it("opens the change log of the agent on 続きを読む, for a viewer too", async () => {
+    const calls: string[] = [];
+    captured.fetchStatusLineHistory = async (agentId) => {
+      calls.push(agentId);
+      return [{ seq: 1, text: "# whole text", bytes: 12, updatedAt: "2026-10-03T12:00:00.000001Z" }];
+    };
+    const h = await mountApp();
+    await join(h, ["a.one"], "viewer");
+    h.onStatusLineSnapshot?.(
+      {
+        "a.one": {
+          cleared: false,
+          seq: 1,
+          head: "cut",
+          truncated: true,
+          bytes: 4096,
+          updatedAt: "2026-10-03T12:00:00.000001Z",
+        },
+      },
+      false,
+    );
+    await tick();
+    await openDetail("a.one");
+
+    panel()!.querySelector<HTMLButtonElement>(".read-more")!.click();
+    await vi.waitFor(() => expect(document.querySelector("dialog h1")?.textContent).toBe("whole text"));
+
+    expect(calls).toEqual(["a.one"]);
+  });
+});
+
 describe("the retention control: the client's half of the two-layer gate", () => {
   it("is shown to an operator, with the value in force", async () => {
     const h = await mountApp();
