@@ -201,7 +201,7 @@ describe("Claude CLI credit-v1 root composition", () => {
     expect(stderr).toContain("invariant violation");
   });
 
-  it("another turn starting withdraws the root credit; a rejoin asks for it again", async () => {
+  it("another turn starting withdraws the root credit; a rejoin asks for it again, held or not", async () => {
     const sent: Record<string, unknown>[] = [];
     let lease!: QueueLease;
     let linkOptions!: Record<string, any>;
@@ -256,6 +256,9 @@ describe("Claude CLI credit-v1 root composition", () => {
       await vi.waitFor(() => expect(sent.find((p) => p.op === "withdraw")).toMatchObject({ credit_revision: "1" }));
       linkOptions.onQueueRejoined();
       await vi.waitFor(() => expect(sent.filter((p) => p.op === "credit")).toHaveLength(2));
+      // A join drops a granted credit too; the shared slot must forget it.
+      linkOptions.onQueueRejoined();
+      await vi.waitFor(() => expect(sent.filter((p) => p.op === "credit")).toHaveLength(3));
     } finally {
       finish();
       await running.catch(() => {});
