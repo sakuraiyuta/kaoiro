@@ -467,7 +467,7 @@ describe("Claude CLI credit-v1 root composition", () => {
 
 /** A queued root input the model answers with a waiting send_to_agent; the
  *  peer's reply comes back as a `waiter` offer (credit-v1 W path). */
-async function runWaiterReply() {
+async function runWaiterReply(noReply = false) {
   const sent: Record<string, unknown>[] = [];
   const outers: unknown[] = [];
   const toolResults: string[] = [];
@@ -500,6 +500,10 @@ async function runWaiterReply() {
             }
             return { ...base, credit_revision: String(payload.operation_id) };
           }
+          if (payload.op === "waiter_close") {
+            done();
+            return { ...base, closed: true, claimed: false };
+          }
           if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
           if (payload.op === "return") return { ...base, returned_ranges: [] };
           if (payload.op === "dispose") {
@@ -524,7 +528,7 @@ async function runWaiterReply() {
         sendInterAgent: async (_envelope: Envelope, _generation: number, outer: unknown) => {
           outers.push(outer);
           // The server routes the peer's reply to the registration as W.
-          setImmediate(() => lease.receiveBatch({
+          if (!noReply) setImmediate(() => lease.receiveBatch({
             version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "2", kind: "waiter",
             registration_id: "reg-1",
             items: [{ queue_id: "9", attempt_id: "9.1", delivery_seq: 2, class: "waiter", byte_charge: 1, envelope: peerReply }],
@@ -560,7 +564,7 @@ async function runWaiterReply() {
               }, "waiting-reply", signal);
               transport.onmessage!({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
                 name: "send_to_agent",
-                arguments: { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: 3_000 },
+                arguments: { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: noReply ? 200 : 3_000 },
                 _meta: { "claudecode/toolUseId": "waiting-reply" },
               } });
               await vi.waitFor(() => expect(responses).toHaveLength(1), { timeout: 4_000 });
@@ -578,7 +582,7 @@ async function runWaiterReply() {
   });
 
   try {
-    await vi.waitFor(() => expect(sent.some((p) => p.op === "dispose" &&
+    await vi.waitFor(() => expect(sent.some((p) => noReply ? p.op === "waiter_close" : p.op === "dispose" &&
       (p.items as { queue_id: string }[]).some((i) => i.queue_id === "9"))).toBe(true), { timeout: 5_000 });
     return { sent, outers, toolResults };
   } finally {
@@ -600,6 +604,11 @@ describe("Claude CLI credit-v1 W path composition", () => {
       items: [{ queue_id: "9", outcome: "observed", witness: "tool_result" }],
     });
     expect(toolResults[0]).toContain("peer answer");
+  });
+
+  it("a wait that ends without its reply closes the registration", async () => {
+    const { sent } = await runWaiterReply(true);
+    expect(sent.find((p) => p.op === "waiter_close")).toMatchObject({ registration_id: "reg-1" });
   });
 });
 

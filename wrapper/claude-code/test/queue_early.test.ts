@@ -478,6 +478,13 @@ describe("ClaudeQueueEarly", () => {
       lease!.rollback();
       await settle();
       expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "waiter_abandoned" }] });
+      // Nothing reached the model: offered again, it is injected.
+      const again = await h.input.prepare({
+        leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "waiter", envelope: inbound("c1") as never }],
+        begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+      });
+      expect(again.injected).toHaveLength(1);
+      expect(again.consumed).toEqual([]);
     });
 
     it("goes back to be injected when no tool asks for it in time", async () => {

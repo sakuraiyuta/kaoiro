@@ -27,7 +27,7 @@ function reply(cid: string, turn = 2): Envelope {
 
 function harness(options: {
   queue?: boolean; registrationId?: string; gates?: Record<string, Promise<void>>; refuse?: Record<string, string>;
-  onOp?: (payload: Record<string, unknown>) => void;
+  onOp?: (payload: Record<string, unknown>) => void; replyBasis?: boolean;
 } = {}) {
   const sent: Record<string, unknown>[] = [];
   const outers: Array<{ waiter_registration?: WaiterRegistrationRequest } | undefined> = [];
@@ -70,6 +70,7 @@ function harness(options: {
       closeWaiter: (id: string) => closed.push(id),
       queueHandoff: (envelopes: readonly Envelope[], turn: string) => input.handoff(envelopes, turn),
     }),
+    ...(options.replyBasis === true ? { replyBasisMode: () => "v1" as const } : {}),
     now: () => "2026-10-04T00:00:00Z",
     newId: () => "cnv-new",
   });
@@ -90,9 +91,9 @@ function harness(options: {
     });
   };
   const ops = (op: string) => sent.filter((p) => p.op === op);
-  const wait = (timeout_ms = 1_000) => tool.invoke(
+  const wait = (timeout_ms = 1_000, signal?: AbortSignal) => tool.invoke(
     { to: "peer.agent", body: "please", kind: "request", conversation_id: "cnv-w", wait_for_response: true, timeout_ms },
-    { origin: { token: "tool-turn" } },
+    { origin: { token: "tool-turn", ...(signal === undefined ? {} : { signal }) } },
   );
   return { tool, input, lease, sent, outers, closed, timers, offer, ops, wait, classified: () => classified };
 }
@@ -199,6 +200,22 @@ describe("credit-v1 W offers through the waiting tool", () => {
     expect(again.injected).toHaveLength(1);
     expect(again.consumed).toEqual([]);
     expect(h.classified()).toBe(1);
+  });
+
+  it("a bound result whose turn ended before its return goes back as W", async () => {
+    const h = harness({ replyBasis: true });
+    const turn = new AbortController();
+    // The tool call's turn is a live input with its own end signal.
+    h.tool.beginNotificationReplyInput("tool-turn", turn.signal);
+    const pending = h.wait(1_000);
+    await settle();
+    h.offer(reply("cnv-w"));
+    const result = await pending;
+    expect(JSON.parse(result.content[0]!.text).reply.payload.body).toBe("answer");
+    expect(h.ops("dispose")).toEqual([]);
+    turn.abort();
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "waiter_abandoned" }] });
   });
 
   it("a reply no waiter took (the wait ended first) goes back as W, not injected", async () => {
