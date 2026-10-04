@@ -178,6 +178,51 @@ describe.skipIf(!enabled)("real server: credit-v1 queue round trip", () => {
     });
   }, 60_000);
 
+  it("returns the peer's queued input inline with a stale reply basis refusal (r8 §6.3)", async () => {
+    const suffix = Date.now().toString(36);
+    const recipientId = `real.stale${suffix}`;
+    const senderId = `real.newer${suffix}`;
+    const cid = `real-stale-${suffix}`;
+    let joined = false;
+    const recipient = new ServerLink(server.url, recipientId, {
+      personaId: "default",
+      interAgentQueuePolicy: policy,
+      interAgentReplyBasis: "v1",
+      interAgentInlineRecovery: true,
+      onQueueOffer: () => {},
+      onHydration: () => { joined = true; },
+      onInterAgentQueueRefused: (reason) => { throw new Error(`refused: ${JSON.stringify(reason)}`); },
+    });
+    links.push(recipient);
+    await until(() => (joined ? true : undefined));
+    recipient.send(state(recipientId));
+    const sender = new ServerLink(server.url, senderId, { personaId: "default" });
+    links.push(sender);
+    sender.send(state(senderId));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // The peer's input waits in the recipient's queue, unseen.
+    expect(await sender.sendInterAgent(message(senderId, recipientId, "newer input", cid))).toMatchObject({ kind: "accepted" });
+
+    // The recipient replies on a basis that predates it.
+    const reply = message(recipientId, senderId, "late reply", cid, 2);
+    (reply.payload as Record<string, unknown>).in_reply_to = 0;
+    (reply.payload as Record<string, unknown>).new_conversation = false;
+    const refused = await recipient.sendInterAgent(reply, recipient.replyBasisGeneration());
+    expect(refused).toMatchObject({ kind: "rejected", reason: "stale_reply_basis", details: { expected_peer_turn: 1, supplied_basis: 0 } });
+    const recovery = (refused as { queue_recovery?: QueueOffer }).queue_recovery!;
+    expect(recovery.kind).toBe("recovery");
+    expect(recovery.items).toHaveLength(1);
+    expect(recovery.items[0]!.envelope.payload).toMatchObject({ body: "newer input", turn_number: 1 });
+    expect(recipient.queueLease()!.heldLeaseIds()).toEqual([recovery.leaseId]);
+
+    const permit = await recovery.begin([recovery.items[0]!.queueId], "tool-turn");
+    expect(permit).not.toBeNull();
+    const disposed = await recovery.dispose([{ queue_id: recovery.items[0]!.queueId, outcome: "observed", witness: "tool_result" }]);
+    expect(disposed).toMatchObject({ ok: true, reply: { queue: { queued: 0, offered: 0, native_pending: 0 } } });
+    expect(recipient.queueLease()!.heldLeaseIds()).toEqual([]);
+  }, 60_000);
+
   it("delivers a routed message through credit, permit and disposition", async () => {
     const suffix = Date.now().toString(36);
     const recipientId = `real.recipient${suffix}`;
