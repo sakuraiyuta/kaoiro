@@ -6,7 +6,8 @@
 // every (re)connect and sends a periodic `heartbeat` so the server's
 // HostRegistry keeps the host live.
 
-import { Channel, Socket } from "phoenix";
+import type { Channel, Socket } from "phoenix";
+import { createPhoenixSocket } from "@kaoiro/wrapper-core";
 import type {
   EngineCatalogResult,
   RunnerRegister,
@@ -367,8 +368,7 @@ export class RunnerLink {
     // mislabel the OLD socket's closure with the NEW host id.
     const wiredHostId = hostId;
     const channelTopic = `runner:${hostId}`;
-    const socket = new Socket(serverUrl, {
-      transport: WebSocket,
+    const socket = createPhoenixSocket(serverUrl, {
       params: this.#token === undefined ? {} : { token: this.#token },
       // Surface Phoenix transport / channel state to runner.log so silent
       // reconnect failures (auth reject, vsn mismatch, sleep/wake) stop

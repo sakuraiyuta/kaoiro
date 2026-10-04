@@ -30,6 +30,9 @@ importers:
       '@kaoiro/codex':
         specifier: workspace:*
         version: link:../wrapper/codex
+      '@kaoiro/wrapper-core':
+        specifier: workspace:*
+        version: link:../wrapper/core
       phoenix:
         specifier: ^1.8.7
         version: 1.8.8

@@ -30,6 +30,7 @@
     "@kaoiro/claude-code": "workspace:*",
     "phoenix": "^1.8.7",
     "@kaoiro/codex": "workspace:*",
-    "@kaoiro/antigravity": "workspace:*"
+    "@kaoiro/antigravity": "workspace:*",
+    "@kaoiro/wrapper-core": "workspace:*"
   }
 }

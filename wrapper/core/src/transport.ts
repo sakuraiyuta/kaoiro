@@ -10,7 +10,7 @@
 // inbound pushes (instruction / permission_decision, protocol.md) are
 // validated structurally and forwarded to the handlers.
 
-import { Channel, Socket, type Push } from "phoenix";
+import type { Channel, Push, Socket } from "phoenix";
 import { randomUUID } from "node:crypto";
 import type {
   DirectoryContext,
@@ -62,10 +62,11 @@ import {
 } from "./build_info.js";
 import { writeRedactedStderr } from "./redact.js";
 import { DeliveryRecovery, type DeliveryResyncRequest, type DeliveryResyncReply } from "./delivery_recovery.js";
+import { createPhoenixSocket, type PhoenixSocketOptions } from "./phoenix_socket.js";
 
 type ServerSocketFactory = (
   serverUrl: string,
-  options: ConstructorParameters<typeof Socket>[1],
+  options: PhoenixSocketOptions,
 ) => Socket;
 
 /** A client's permission decision relayed by the server (protocol.md).
@@ -1477,8 +1478,7 @@ export class ServerLink {
     serverUrl: string,
     agentId: string,
     options: ServerLinkOptions,
-    socketFactory: ServerSocketFactory = (url, socketOptions) =>
-      new Socket(url, socketOptions),
+    socketFactory: ServerSocketFactory = createPhoenixSocket,
   ) {
     this.#onReplyBasisMode = options.onReplyBasisMode;
     this.#onNoticeAttributionMode = options.onNoticeAttributionMode;
@@ -1495,7 +1495,6 @@ export class ServerLink {
       this.#resolvePermissionSyncNegotiated = resolve;
     });
     this.#socket = socketFactory(serverUrl, {
-      transport: WebSocket,
       params: options.token === undefined ? {} : { token: options.token },
     });
     this.#socket.connect();

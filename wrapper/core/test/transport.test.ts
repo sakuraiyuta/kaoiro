@@ -88,10 +88,6 @@ vi.mock("phoenix", () => {
   return { Channel, Socket };
 });
 
-// transport.ts reads the global `WebSocket` as the phoenix transport; stub it
-// so the constructor does not depend on the node version's global.
-vi.stubGlobal("WebSocket", class {});
-
 import {
   MAX_ACTIVE_TASK_CACHE_BYTES,
   MAX_ACTIVE_TASK_CACHE_ENTRIES,

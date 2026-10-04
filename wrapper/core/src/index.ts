@@ -42,6 +42,8 @@ export {
   redactCredentials,
   writeRedactedStderr,
 } from "./redact.js";
+export { createPhoenixSocket } from "./phoenix_socket.js";
+export type { PhoenixSocketOptions } from "./phoenix_socket.js";
 export {
   MAX_REPLAY_IA_PUSH_BYTES,
   ServerLink,
