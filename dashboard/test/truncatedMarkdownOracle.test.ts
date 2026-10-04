@@ -17,6 +17,7 @@ import {
   RESIDUAL,
   STRUCTURES,
   SYNTHETIC,
+  TABS,
   graphemeEnds,
   leak,
   randomDocuments,
@@ -89,11 +90,19 @@ describe("strings glued from the tokens of markdown", () => {
   // are not pinned here.
   const docs = [1, 2].flatMap((seed) => tokenDocuments(seed, 150));
 
-  it("never draws a link the full text does not, and needs no fallback", () => {
+  it("never draws a link the full text does not, and needs no fallback but for a tab", () => {
     let fallbacks = 0;
-    const result = tally(docs, trimmed(() => (fallbacks += 1)));
+    let withoutTab = 0;
+    const result = tally(docs, (head) => {
+      let here = 0;
+      const shown = trimIncompleteMarkdown(head, () => (here += 1));
+      fallbacks += here;
+      if (here > 0 && !head.includes("\t")) withoutTab += here;
+      return shown;
+    });
 
-    expect(fallbacks).toBe(0);
+    expect(withoutTab).toBe(0);
+    expect(fallbacks).toBe(234);
     expect(result.notIdempotent).toBe(0);
     expect(result.cuts).toBe(22452);
     for (const profile of PROFILES) expect(result[profile].href ?? 0, profile).toBe(0);
@@ -159,15 +168,75 @@ describe("definitions and their references", () => {
   });
 
   // A reference whose definition comes after the cut, a footnote-style
-  // definition and a table without leading pipes: what a prefix cannot see.
-  // Never an address; the brackets are drawn as text until the rest arrives.
+  // definition, a table without leading pipes and the digits after a bullet that
+  // the full text reads as an ordered marker: what a prefix cannot see. Never an
+  // address; the brackets and digits are drawn as text until the rest arrives.
   it("keeps what a prefix cannot see to text, and pins its size", () => {
     const result = tally(docs, trimmed());
 
-    expect(result.cuts).toBe(573);
-    expect(result.full).toEqual({ ok: 237, text: 252, "delim-extra": 84 });
-    expect(result.inline).toEqual({ ok: 243, text: 246, "delim-extra": 84 });
+    expect(result.cuts).toBe(617);
+    expect(result.full).toEqual({ ok: 279, text: 254, "delim-extra": 84 });
+    expect(result.inline).toEqual({ ok: 287, text: 246, "delim-extra": 84 });
   });
+});
+
+describe("tabs", () => {
+  /** Tabs spread to the next multiple of four columns before the trim, which is
+   *  how CommonMark reads them and `marked` does not. */
+  function spreadTabs(head: string): string {
+    const spread = head
+      .split("\n")
+      .map((line) => {
+        let out = "";
+        let column = 0;
+        for (const ch of line) {
+          const width = ch === "\t" ? 4 - (column % 4) : 1;
+          out += ch === "\t" ? " ".repeat(width) : ch;
+          column += width;
+        }
+        return out;
+      })
+      .join("\n");
+    return trimIncompleteMarkdown(spread);
+  }
+
+  const isSubsequence = (shown: string, head: string): boolean => {
+    let at = 0;
+    for (const ch of head) if (at < shown.length && shown[at] === ch) at++;
+    return at === shown.length;
+  };
+
+  it("draws no link the full text does not, and gives back the head's own characters", () => {
+    let fallbacks = 0;
+    const result = tally(TABS, trimmed(() => (fallbacks += 1)));
+    const foreign: string[] = [];
+    for (const doc of TABS) {
+      for (const end of graphemeEnds(doc)) {
+        const head = doc.slice(0, end);
+        if (end < doc.length && !isSubsequence(trimIncompleteMarkdown(head), head)) foreign.push(head);
+      }
+    }
+
+    expect(foreign).toEqual([]);
+    expect(TABS.length).toBe(99);
+    expect(result.cuts).toBe(4391);
+    expect(result.notIdempotent).toBe(0);
+    expect(fallbacks).toBe(133);
+    for (const profile of PROFILES) expect(result[profile], profile).toEqual({ ok: result.cuts });
+  }, 60_000);
+
+  // The negative controls: the head as cut, and the trim that reads tabs as
+  // columns. The second draws a link to a complete address in a quote where the
+  // lexer reads indented code.
+  it("is red on the untrimmed head and on a trim that reads tabs as columns", () => {
+    expect(tally(TABS, untrimmed, 3).full.href).toBeGreaterThan(0);
+
+    const quoted = TABS.find((doc) => doc.startsWith("> \thttps://example.com/complete-url-here"))!;
+    const head = quoted.slice(0, quoted.indexOf("\n") + 1);
+    expect(leak("full", quoted, spreadTabs(head))).toBe("href");
+    expect(leak("full", quoted, trimIncompleteMarkdown(head))).toBeNull();
+    expect(tally(TABS, spreadTabs).full.href).toBeGreaterThan(0);
+  }, 60_000);
 });
 
 describe("a label defined twice", () => {

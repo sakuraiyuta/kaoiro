@@ -11,9 +11,12 @@
 // address (anything the lexer gives an `href`) that reaches the end of the head
 // is always cut, never unwrapped, because the rest of it is unknown.
 //
-// Carriage returns become line feeds and tabs are expanded to the next multiple
-// of four columns first. The lexer expands the tabs of a list item's text, and
-// the line map below needs the head to say what the text says.
+// Carriage returns become line feeds first, as the lexer does; nothing else in
+// the head is rewritten, so what is returned is the head's own characters. Tabs
+// are read by the lexer alone (it rewrites some after a list marker and treats
+// others as code indent), never by a model of it kept here. Where the lexer's
+// text for a line is not the tail of the head's line, as after a tab in a list
+// item, the head is cut back a line (`onFallback`).
 //
 // Known residuals, none of which draws a link the full text does not draw:
 // - A delimiter the full text shows literally can be hidden here (the unwrap
@@ -22,6 +25,11 @@
 //   autolink, an unclosed code span, an empty fence or only reference
 //   definitions trims to nothing.
 // - A cut bold headline is drawn plain.
+// - The last list item of a head is cut from a line that holds a tab the lexer
+//   rewrites, which can be the whole head.
+// - A bullet followed by digits at the end (`- 1`) draws the digits, which the
+//   full text may read as an ordered marker (`- 1. a`): only one marker is read
+//   as unfinished.
 // - What a prefix cannot see: a reference link whose definition comes after the
 //   head, a footnote-style definition and a table without leading pipes draw
 //   their brackets as text; and a later line that makes the renderers fall back
@@ -135,25 +143,6 @@ function addressesOf(text: string): Set<string> {
   return found;
 }
 
-/** Tabs to the next multiple of four columns, as CommonMark reads them: a tab
- *  after a list marker is two spaces, not an indented code block. */
-function expandTabs(text: string): string {
-  if (!text.includes("\t")) return text;
-  return text
-    .split("\n")
-    .map((line) => {
-      let out = "";
-      let column = 0;
-      for (const ch of line) {
-        const width = ch === "\t" ? 4 - (column % 4) : 1;
-        out += ch === "\t" ? " ".repeat(width) : ch;
-        column += width;
-      }
-      return out;
-    })
-    .join("\n");
-}
-
 /** The head without its last line when that line is a whole reference
  *  definition, else the head. The lexer emits no token for a definition whose
  *  label was defined before and appends the newline after it to the token
@@ -253,7 +242,13 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   for (let p = 0, so = 0; p < k; so += textLines[p].length + 1, p++) {
     const r = lines[firstLine + p].trimEnd();
     const t = textLines[p].trimEnd();
-    const idx = t === "" ? r.length : r.lastIndexOf(t);
+    // The lexer's text for a line is the tail of the line, except that it
+    // rewrites the tabs of a list item and drops a heading's closing hashes.
+    // Anything else that is not found there cannot be mapped.
+    let idx = -1;
+    if (t === "") idx = r.length;
+    else if (r.endsWith(t)) idx = r.length - t.length;
+    else if (deep.type === "heading" && !r.includes("\t")) idx = r.lastIndexOf(t);
     if (idx < 0) return fallback(head);
     textLineStart.push(so);
     headBase.push(lineAt[firstLine + p] + idx);
@@ -480,7 +475,7 @@ function onlyDefinitions(head: string): boolean {
  *  its previous line instead; that is expected never to happen. */
 export function trimIncompleteMarkdown(head: string, onFallback?: () => void): string {
   try {
-    let current = expandTabs(head.replace(/\r\n?/g, "\n"));
+    let current = head.replace(/\r\n?/g, "\n");
     // A step returns its input or a strictly shorter string, so this ends
     // within `current.length` steps.
     for (let left = current.length; left >= 0; left--) {

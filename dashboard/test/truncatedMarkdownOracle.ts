@@ -246,7 +246,43 @@ export const RESIDUAL: Record<string, string> = {
   referenceLink: "参照 [issue 514][i] を見る。\n\n[i]: https://github.com/sakuraiyuta/kaoiro/issues/514",
   footnote: "脚注つきの文[^1] が続く。\n\n[^1]: 脚注の本文",
   pipelessTable: "a | b\n--|--\nc | d\n\n後の文",
+  bulletDigits: "前の文\n- 1. 項目 https://e.example/a と続く\n- 2. 次の項目",
 };
+
+/** Tabs where `marked` reads them: after a quote or list marker, in code, on a
+ *  continuation line, inside a line; one and two, with and without a space.
+ *  `marked` reads them by rules of its own that differ from CommonMark's, so only
+ *  the renderers can judge. */
+export const TABS: readonly string[] = (() => {
+  const url = "https://e.co/abc";
+  const docs: string[] = [];
+  const bodies = [`${url} tail`, `**bold** [l](${url}) tail`, `\`code ${url}\` tail`];
+  for (const lead of ["", ">", "> >", "-", "1.", "> -", "- >"]) {
+    for (const gap of ["\t", " \t", "\t\t", "\t "]) {
+      for (const body of bodies) {
+        docs.push(`${lead}${gap}${body}\n${lead === "" ? "" : `${lead} `}next line`);
+      }
+    }
+  }
+  docs.push(
+    "> \thttps://example.com/complete-url-here\n> 続きの行",
+    `a\tb **bold** [l](${url})\nc\td ${url}`,
+    `- a\tb **bold** [l](${url})\n  c\td ${url}`,
+    `> a\tb **bold** [l](${url})\n> c\td ${url}`,
+    `- a\n\t${url} x\n\t[l](${url})`,
+    `- a\n\t- b ${url}\n\t\t- c [l](${url})`,
+    `para\n\t${url} cont\nmore`,
+    `para\n\n\t${url} code\n\nafter ${url}`,
+    `>\t\`\`\`js\n>\tconst a = "${url}";\n>\t\`\`\`\n> after ${url}`,
+    `-\t\`\`\`\n\tconst a = "${url}";\n\t\`\`\`\n- after ${url}`,
+    `\`\`\`\n\t${url}\n\`\`\`\nafter [l](${url})`,
+    `\`code\t${url}\` and **bo\tld** [l](${url})`,
+    `#\theading ${url} **b**\nbody`,
+    `>\t# heading ${url}\n> body`,
+    `|\ta\t|\tb\t|\n|---|---|\n|\tc\t|\t${url}\t|`,
+  );
+  return docs;
+})();
 
 // ---- a seeded random corpus ----
 

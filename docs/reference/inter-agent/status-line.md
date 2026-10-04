@@ -206,9 +206,13 @@ and the panel read the trimmed head. The note says the text continues.
   there, and the block is cut instead when dropping a delimiter would make the
   text draw a link the full line does not (a `www.` address joined across the
   dropped character, an address in an unfinished link label).
-- Carriage returns become line feeds and tabs go to the next multiple of four
-  columns before the lexer reads the head. A failure inside the trim shows the empty-head sentence below, never
-  the untrimmed head.
+- Carriage returns become line feeds before the lexer reads the head, as the
+  lexer itself does, and nothing else in the head is rewritten: the trim returns
+  the head's own characters, with only unfinished delimiters removed. Tabs are
+  read by the lexer alone. It rewrites some after a list marker and reads others
+  as code indent, so where its text for a line of a list item is not the tail of
+  the head's line, the head is cut back to the line before. A failure inside the
+  trim shows the empty-head sentence below, never the untrimmed head.
 - A head with nothing left to draw (it starts with a table, a bare URL, a link
   destination, an angle-bracket autolink, an unclosed code span, an empty fence,
   or holds only reference definitions) shows the fixed sentence `(冒頭が長いため省略)`, an
@@ -222,9 +226,12 @@ after it: a delimiter that the full line shows as literal text can be hidden
 (counted by the oracle: 1.7% of the cuts of the large fuzz corpus the
 measurements used, 0.3% of the committed one); a reference link whose
 definition follows the head, a footnote-style definition and a table without
-leading pipes draw their brackets as text; and a later line that makes the
-renderers fall back to plain text (nesting deeper than 32) takes the links of
-the head with it. None of these draws a link the full line does not draw.
+leading pipes draw their brackets as text, and digits after a bullet that the
+full line reads as an ordered marker (`- 1. a`) draw as text; the last list item
+of a head is cut from a line that holds a tab the lexer rewrites; and a later
+line that makes the renderers fall back to plain text (nesting deeper than 32)
+takes the links of the head with it. None of these draws a link the full line
+does not draw.
 `truncatedMarkdownOracle.test.ts` judges the trim by the renderers at every
 grapheme cut and is the alarm for a `marked` upgrade.
 

@@ -238,21 +238,56 @@ describe("a head that is complete", () => {
     expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
   });
 
-  // The lexer expands the tabs of a list item's text, so a head with a tab in a
-  // list item would not line up with its own text: four spaces say the same.
+  // The head's own characters come back: a tab is read by the lexer alone.
   it.each([
-    ["a tab in a list item", "- a\t**b", "- a "],
-    ["a tab in an ordered item", "1. a\t**b", "1. a    "],
-    ["a tab on a continuation line", "- a\n  b\t**c", "- a\n  b "],
-    ["a tab before an address", "- x\thttp://a.com/b", "- x "],
-    ["two tabs", "- a\t\t**b", "- a     "],
-    ["a tab in a quote", "> a\t**b", "> a "],
-    ["a tab in a paragraph", "a\t**b", "a   "],
-    // A tab after a marker is two spaces, so the item stays an item and not code.
-    ["a tab after a bullet", "- \tcode **b", "-   code "],
-    ["a tab after a number", "1. \tx **y", "1.  x "],
-  ])("reads %s", (_name, head, shown) => {
+    ["a tab in a paragraph", "a\t**b", "a\t"],
+    ["a tab in a quote", "> a\t**b", "> a\t"],
+    ["a tab in a heading", "# a\t**b", "# a\t"],
+    ["a tab after a bullet", "- \tcode **b", "- \tcode "],
+    ["a tab after a number", "1. \tx **y", "1. \tx "],
+    ["a lazy continuation line", "- a\nb\t**c", "- a\nb\t"],
+  ])("keeps the tab of %s", (_name, head, shown) => {
     expect(trim(head)).toEqual({ shown, fallbacks: 0 });
+  });
+
+  // The lexer rewrites the tabs of a list item (to the next tab stop on its first
+  // line, to four spaces on a continuation line), so its text for the line is
+  // not the tail of the head's line and the line cannot be mapped.
+  it.each([
+    ["a tab in a list item", "- a\t**b", ""],
+    ["a tab in an ordered item", "1. a\t**b", ""],
+    ["two tabs in a list item", "- a\t\t**b", ""],
+    ["a tab before an address in an item", "- x\thttp://a.com/b", ""],
+    ["a tab in a quoted item", "> - a\t**b", ""],
+    ["a tab on a continuation line", "- a\n  b\t**c", "- a\n"],
+    ["a tab at the start of a continuation line", "- a\n\tb **c", "- a\n"],
+    ["a tab in an item after a paragraph", "x\n\n- a\t**b", "x\n\n"],
+  ])("cuts back to the line before %s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 1 });
+  });
+
+  // A heading's closing hashes are the one thing besides a rewritten tab that
+  // makes the lexer's text differ from the line, and a tab next to them breaks
+  // the search for the text in the line.
+  it.each([
+    ["**-   # # > - \t# ", ""],
+    [">\t**# \t[x](http://e.co/a) **# ", ""],
+    ["**# 1. - \t- # http://e.co/b", ""],
+  ])("does not search a heading with a tab for its text: %j", (head, shown) => {
+    const result = trim(head);
+
+    expect(result.shown).toBe(shown);
+    expect(result.fallbacks).toBeGreaterThan(0);
+  });
+
+  // The lexer reads a tab after `>` as the end of the quote marker, so what
+  // follows is indented code, where an address is not a link. Reading the tab as
+  // two spaces would draw a paragraph with a link.
+  it("leaves code in a quote alone", () => {
+    const head = "> \thttps://example.com/complete-url-here\n";
+
+    expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
+    expect(hasLink(head)).toBe(false);
   });
 
   it("gives carriage returns the lexer's reading", () => {
