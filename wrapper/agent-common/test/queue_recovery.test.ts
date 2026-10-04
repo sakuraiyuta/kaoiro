@@ -27,6 +27,7 @@ function peerInput(turn: number, body = "newer input"): Envelope {
 
 function harness(options: { refuse?: Record<string, string>; recovery?: boolean; body?: string } = {}) {
   const sent: Record<string, unknown>[] = [];
+  const legacyClaims: string[] = [];
   const lease = new QueueLease({
     transport: async (payload) => {
       sent.push(payload);
@@ -53,6 +54,7 @@ function harness(options: { refuse?: Record<string, string>; recovery?: boolean;
     getActiveInterAgentTurnToken: () => "tool-turn",
     send: () => {},
     replyBasisMode: () => "v1",
+    claimRecovery: (cid) => { legacyClaims.push(cid); return undefined; },
     sendInterAgent: async () => ({
       kind: "rejected", reason: "stale_reply_basis",
       details: { conversation_id: "cnv-r", expected_peer_turn: 3, supplied_basis: 1 },
@@ -81,7 +83,7 @@ function harness(options: { refuse?: Record<string, string>; recovery?: boolean;
     { origin: { token: "tool-turn" } },
   );
   const ops = (op: string) => sent.filter((p) => p.op === op);
-  return { tool, input, lease, sent, ops, reply };
+  return { tool, input, lease, sent, ops, reply, legacyClaims };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -124,6 +126,8 @@ describe("credit-v1 inline recovery", () => {
     expect(JSON.parse(result.content[0]!.text).recovery).toEqual([]);
     await settle();
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "q1", reason: "turn_abandoned" }] });
+    // The server claimed this conversation's input: the legacy coordinator holds none to add.
+    expect(h.legacyClaims).toEqual([]);
   });
 
   it("a wrapper without the queue recovery wiring releases what the server claimed", async () => {

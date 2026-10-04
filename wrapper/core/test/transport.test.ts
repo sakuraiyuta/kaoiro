@@ -3472,6 +3472,30 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     }
   });
 
+  it("leases no queue_recovery carried by another refusal", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", interAgentQueuePolicy: policy });
+    mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy, inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: false, inter_agent_delivery_incarnation: "inc-1",
+    });
+    try {
+      const pending = link.sendInterAgent({
+        version: "0", agent_id: "a.agent", persona: { id: "ao", name: "ao", sprite_set: "ao" }, display_name: "ao",
+        ts: "2026-10-04T00:00:00Z", type: "inter_agent_message", state: "idle",
+        payload: { to: "b.agent", conversation_id: "cnv", turn_number: 2, kind: "response", body: "late", meta: { done: false, propose_next: "" } },
+      } as unknown as Envelope);
+      mock.lastPush?.receivers.get("error")?.({
+        reason: "unknown_agent",
+        queue_recovery: { lease_id: "6", items: [{ queue_id: "q2", attempt_id: "q2.1", delivery_seq: 8, class: "ordinary", byte_charge: 1, envelope: { type: "inter_agent_message" } }] },
+      });
+      const acceptance = await pending;
+      expect(acceptance).not.toHaveProperty("queue_recovery");
+      expect(link.queueLease()?.heldLeaseIds()).toEqual([]);
+    } finally {
+      link.close();
+    }
+  });
+
   it("needs no echo from a wrapper that declared no queue", () => {
     const { refused, hydration } = link(false);
     mock.joinReceivers.get("ok")!({});
