@@ -10281,4 +10281,60 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       expect(stderr.mock.calls.some(([line]) => String(line).includes('"event":"root_hook_timeout","count":1'))).toBe(true);
     } finally { release.resolve(); host.close(); await running; stderr.mockRestore(); }
   });
+
+  // A regression spins the host on microtasks, which starves every timer, so
+  // the waits below count microtasks: the test then fails instead of hanging.
+  it.each(["watchdog fail-stop", "close"] as const)(
+    "ends the input iterator when a %s leaves a pushed receipt pending with no active turn",
+    async (how) => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const ready = deferred();
+      const oldEnded = deferred();
+      const release = deferred();
+      let now = 0;
+      let inputDone: boolean | undefined;
+      const decisions: string[] = [];
+      const host = new AgentHost(config, {
+        onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+        onTurnEnd: ({ cancellation }) => { if (!cancellation) oldEnded.resolve(); },
+        onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
+        queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+          const input = prompt[Symbol.asyncIterator]();
+          const signal = { signal: new AbortController().signal };
+          await input.next();
+          await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+            hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: "T",
+          } as never, undefined, signal);
+          yield msg({ type: "system", subtype: "init", session_id: "s" });
+          ready.resolve();
+          await input.next();
+          yield result("success", { result: "T finished" });
+          void input.next().then(next => { inputDone = next.done; });
+          await release.promise;
+        })())),
+      });
+      const running = host.run();
+      try {
+        await host.send("T");
+        await ready.promise;
+        await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+        await oldEnded.promise;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(host.hasPendingPushedReceipt()).toBe(true);
+        expect(host.activeInterAgentTurnToken()).toBeNull();
+        if (how === "close") host.close();
+        else expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+        for (let i = 0; i < 1_000 && inputDone === undefined; i++) await Promise.resolve();
+        expect(inputDone).toBe(true);
+        now = 2_001;
+        expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+        if (how === "close") expect(host.state).not.toBe("error");
+        else expect(host.state).toBe("error");
+        release.resolve();
+        await running;
+        expect(decisions).toEqual(["unknown:stream_eof"]);
+      } finally { release.resolve(); host.close(); await running; stderr.mockRestore(); }
+    },
+  );
 });

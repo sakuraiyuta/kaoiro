@@ -209,6 +209,11 @@ deadline. If the root hook remains absent past
 diagnostics count root-hook timeouts and notification clock pauses; folded
 recovery capacity evictions carry a reason and count.
 
+A host that closes while a receipt is pending, by a fail-stop or a stop, stops
+holding: a closed host ignores hooks, so the input iterator returns and the
+root-hook timeout no longer fires. The receipt settles as
+`unknown(stream_eof)` when the SDK stream ends.
+
 The [E1–E4 native measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
 establish the measured running-tool fold, byte-identical hook text, new root
 after a text-only result, and `priority: "now"` cut under isolated settings.

@@ -2434,8 +2434,9 @@ export class AgentHost implements EngineAdapter {
   }
 
   tickPendingReceiptRootTimeout(): boolean {
+    // A closed host ignores hooks, so a missing root hook decides nothing.
     if (this.#pendingRootDeadline === null || this.#nowMs() < this.#pendingRootDeadline ||
-        this.#pendingPushedReceipt === null || this.#admissionFailStopped) return false;
+        this.#pendingPushedReceipt === null || this.#closed) return false;
     const receipt = this.#pendingPushedReceipt;
     this.#receiptTimeoutCount += 1;
     writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "root_hook_timeout", count: this.#receiptTimeoutCount })}\n`);
@@ -4633,8 +4634,11 @@ export class AgentHost implements EngineAdapter {
         continue;
       }
       if (this.#pendingPushedReceipt !== null) {
+        // A closed host ignores hooks, so only stream end settles this
+        // receipt, and the stream ends only once this iterator returns.
+        if (this.#closed) return;
         await new Promise<void>((resolve) => {
-          if (this.#pendingPushedReceipt === null || this.#closed) resolve();
+          if (this.#pendingPushedReceipt === null) resolve();
           else this.#turnBoundaryNotify = resolve;
         });
         continue;
