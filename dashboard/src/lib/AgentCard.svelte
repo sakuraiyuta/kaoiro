@@ -23,6 +23,8 @@
   import { formatRelativeJa } from "./relativeTime";
   import { settings } from "./settings.svelte";
   import type { StatusLineView } from "./statusLine";
+  import UntrustedMarkdown from "./UntrustedMarkdown.svelte";
+  import { inlineLineCount, renderUntrustedInline } from "./untrustedMarkdown";
 
   let {
     envelope,
@@ -168,11 +170,14 @@
   });
   const name = $derived(envelope.display_name ?? envelope.agent_id);
 
-  // The row shows at most three lines of the head; a longer line, or a head the
-  // server cut, says so. The size is the server's, not recomputed here.
+  // The row shows at most three lines of the head; a head that draws more lines
+  // than that, or one the server cut, says so. Lines are counted as drawn (a
+  // blank source line is not one), and the size is the server's, not
+  // recomputed here.
   const statusLineMore = $derived(
     statusLine.kind === "set" &&
-      (statusLine.truncated || statusLine.head.split("\n").length > 3)
+      (statusLine.truncated ||
+        inlineLineCount(renderUntrustedInline(statusLine.head), statusLine.head) > 3)
       ? `…続きあり (${(statusLine.bytes / 1024).toFixed(1)} KB)`
       : null,
   );
@@ -688,7 +693,7 @@
       aria-label="{name} の状況表示の履歴を開く"
     >
       {#if statusLine.kind === "set"}
-        <span class="status-text">{statusLine.head}</span>
+        <span class="status-text"><UntrustedMarkdown text={statusLine.head} variant="inline" /></span>
         {#if statusLineMore !== null}
           <span class="status-more">{statusLineMore}</span>
         {/if}
@@ -1119,20 +1124,24 @@
     color: inherit;
   }
 
-  /* Self-written status line (issue 482). Plain text only: the head the server
-     cut is not complete markdown, and a link inside a button would also
-     trigger it. Nothing here ages or dims the row. */
+  /* Self-written status line (issue 482, 514). The head is drawn as markdown in
+     the inline profile (phrasing content only; a link is underlined text), so
+     nothing pressable sits inside this button. It is the main text of the card,
+     so it takes the foreground colour and the body-small size, with the card's
+     state colour on its left edge and as a faint tint. Nothing here ages or
+     dims the row. */
   .status-line {
     display: block;
     width: 100%;
     margin: 0.6rem 0 0;
-    padding: 0.3rem 0.5rem;
-    border: 1px dashed var(--line);
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--tone);
     border-radius: 0.3rem;
-    background: none;
+    background: color-mix(in srgb, var(--tone) 8%, var(--bg-card));
     font: inherit;
-    font-size: var(--fs-caption);
-    color: var(--fg-dim);
+    font-size: var(--fs-body-sm);
+    color: var(--fg);
     text-align: left;
     white-space: normal;
     cursor: pointer;
@@ -1149,7 +1158,6 @@
     -webkit-line-clamp: 3;
     line-clamp: 3;
     overflow: hidden;
-    white-space: pre-line;
     overflow-wrap: anywhere;
   }
 

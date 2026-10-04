@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// The status line row on an agent card (issue 482): plain text, a sibling of
-// the detail button, never aged or dimmed.
+// The status line row on an agent card (issue 482, 514): the head as inline
+// markdown with no pressable element inside, a sibling of the detail button,
+// never aged or dimmed.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
@@ -71,10 +72,12 @@ describe("AgentCard status line row", () => {
     expect(button?.classList.contains("unset")).toBe(true);
   });
 
-  it("shows the head as text, the clock time, and how long ago in the title", async () => {
-    const button = row(await render(setLine()))!;
+  it("shows the head as markdown, the clock time, and how long ago in the title", async () => {
+    const head = "Reviewing **issue** 482";
+    const button = row(await render(setLine({ head, bytes: head.length })))!;
 
     expect(button.querySelector(".status-text")?.textContent).toBe("Reviewing issue 482");
+    expect(button.querySelector(".status-text strong")?.textContent).toBe("issue");
     expect(button.querySelector(".status-time")?.textContent).toMatch(/^\d{2}:\d{2}$/);
     expect(button.querySelector(".status-time")?.getAttribute("title")).toBe("30 分前");
     expect(button.querySelector(".status-more")).toBeNull();
@@ -95,7 +98,7 @@ describe("AgentCard status line row", () => {
     expect(button.querySelector(".status-more")?.textContent).toBe("…続きあり (2.0 KB)");
   });
 
-  it("says there is more when the head has more than three lines", async () => {
+  it("says there is more when the head draws more than three lines", async () => {
     const four = row(await render(setLine({ head: "a\nb\nc\nd", bytes: 7 })))!;
     const three = row(await render(setLine({ head: "a\nb\nc", bytes: 5 })))!;
 
@@ -103,14 +106,46 @@ describe("AgentCard status line row", () => {
     expect(three.querySelector(".status-more")).toBeNull();
   });
 
-  it("shows hostile markup and markdown literally, with no element made from them", async () => {
-    const head = '<img src=x onerror=alert(1)> [click](https://evil.example/) **bold**';
+  it("counts the lines it draws, not the lines of the source", async () => {
+    // Five source lines, three drawn: everything is visible.
+    const spaced = row(await render(setLine({ head: "a\n\nb\n\nc", bytes: 7 })))!;
+    // Four paragraphs are four drawn lines.
+    const four = row(await render(setLine({ head: "a\n\nb\n\nc\n\nd", bytes: 11 })))!;
+
+    expect(spaced.querySelector(".status-more")).toBeNull();
+    expect(four.querySelector(".status-more")).not.toBeNull();
+  });
+
+  it("shows hostile markup literally and makes no image or anchor from it, but draws the markdown", async () => {
+    const head = "<img src=x onerror=alert(1)> [click](https://evil.example/) **bold**";
     const button = row(await render(setLine({ head, bytes: head.length })))!;
 
     expect(button.querySelector("img")).toBeNull();
     expect(button.querySelector("a")).toBeNull();
-    expect(button.querySelector("strong")).toBeNull();
-    expect(button.querySelector(".status-text")?.textContent).toBe(head);
+    expect(button.querySelector("strong")?.textContent).toBe("bold");
+    expect(button.querySelector("span.md-link")?.textContent).toBe("click");
+    expect(button.querySelector(".status-text")?.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("holds no pressable or block element, whatever markdown the head is", async () => {
+    const head = "# T\n\n- [x] a\n- [ ] b\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> q\n\n```\ncode\n```\n\n[x](https://e.test/) ![i](https://e.test/p.png) <div>d</div> <a href=\"https://e.test/\">raw</a>";
+    const button = row(await render(setLine({ head, bytes: head.length })))!;
+
+    expect(
+      button.querySelector("a, button, input, select, textarea, [tabindex], div, p, h1, h2, ul, ol, li, table, img, pre, blockquote"),
+    ).toBeNull();
+    expect(button.querySelectorAll("[class]").length).toBeGreaterThan(0);
+  });
+
+  it("opens the change log when a link's label is pressed, and goes nowhere", async () => {
+    const onOpenStatusLineHistory = vi.fn();
+    const head = "see [#482](https://github.com/o/r/issues/482)";
+    const target = await render(setLine({ head, bytes: head.length }), { onOpenStatusLineHistory });
+
+    target.querySelector<HTMLElement>("span.md-link")!.click();
+
+    expect(target.querySelector("a")).toBeNull();
+    expect(onOpenStatusLineHistory).toHaveBeenCalledWith("host-a.p");
   });
 
   it("is a sibling of the detail button, not nested in it", async () => {
