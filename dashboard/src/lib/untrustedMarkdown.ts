@@ -42,9 +42,10 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** The escape marked applies to text: `<`, `>` and quotes, and `&` unless it
- *  already begins a character reference, so `&copy;` is drawn as a copyright
- *  sign in both profiles. Text is always escaped with it, never taken as the
+/** The escape marked applies to text, minus quotes (text is only ever element
+ *  content here, where they are inert): `<` and `>`, and `&` unless it already
+ *  begins a character reference, so `&copy;` is drawn as a copyright sign in
+ *  both profiles. Text is always escaped with it, never taken as the
  *  markup it looks like: marked marks the text after an inline `<code>`,
  *  `<kbd>`, `<pre>` or `<script>` tag as already raw (`escaped`), because it
  *  lets the tag itself through, but these renderers show that tag as text. */
@@ -52,9 +53,7 @@ function escapeText(text: string): string {
   return text
     .replace(/&(?!(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/>/g, "&gt;");
 }
 
 /** The href when it is an absolute http(s) URL, else null. Relative and
