@@ -8,6 +8,7 @@ defmodule KaoiroServer.AgentStatusLinesDurabilityTest do
 
   alias KaoiroServer.AgentStatusLines
   alias KaoiroServer.StatusLinesFixture, as: Fixture
+  alias KaoiroServer.TestTimeouts
 
   describe "the file is current when the reply arrives" do
     setup do
@@ -59,7 +60,7 @@ defmodule KaoiroServer.AgentStatusLinesDurabilityTest do
 
     test "nothing is published, broadcast or readable until it returns :ok", %{ctx: ctx} do
       writer = Task.async(fn -> AgentStatusLines.put("a.one", "new", ctx.name) end)
-      assert_receive {:sync_blocked, sync_pid}
+      assert_receive {:sync_blocked, sync_pid}, TestTimeouts.store_step()
 
       # Frequent readers answer at once, with the old state.
       assert {:ok, nil} = AgentStatusLines.read_latest("a.one", ctx.table)
@@ -75,7 +76,9 @@ defmodule KaoiroServer.AgentStatusLinesDurabilityTest do
       assert {:ok, %{status: :set, seq: 1}} = Task.await(writer)
       assert {:ok, [%{seq: 1, text: "new"}]} = Task.await(reader)
       assert {:ok, %{entry: %{text: "new"}}} = AgentStatusLines.read_latest("a.one", ctx.table)
-      assert_receive {:broadcast, "status_line", %{"agent_id" => "a.one", "seq" => 1}}
+
+      assert_receive {:broadcast, "status_line", %{"agent_id" => "a.one", "seq" => 1}},
+                     TestTimeouts.store_step()
     end
   end
 end

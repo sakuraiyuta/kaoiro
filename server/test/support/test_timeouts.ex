@@ -109,4 +109,33 @@ defmodule KaoiroServer.TestTimeouts do
   def durable_reply(base) when is_integer(base) and base > 0 do
     @durable_reply_multiplier * base
   end
+
+  @store_step_multiplier 20
+
+  @doc """
+  Budget for a wait on a DETS-backed store process, running in another
+  process, to reach a step: opening its file and publishing at start, or the
+  sync of a write that a spawned task called. #{@store_step_multiplier}x the
+  base, so 2000 ms locally and 10000 ms under `CI`.
+
+  The waiting test costs nothing when the step is quick, so the budget is
+  sized against the tail under CPU starvation, not the median. Measured on the
+  4-core shared host (2026-10-04) with 150 to 300 starts of an
+  `AgentStatusLines` store on a 4-agent file, timed from the spawn to the first
+  phase-C point:
+
+  | load | p50 | p90 | max |
+  |---|---|---|---|
+  | idle (load average about 4) | 0 ms | 0 ms | 5 ms |
+  | 8 busy loops | 128 ms | 190 ms | 244 ms |
+  | 16 busy loops | 0 ms | 246 ms | 385 ms |
+
+  Under load the default 100 ms was missed in most starts. 2000 ms is 5x the
+  worst of those.
+  """
+  def store_step(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def store_step(base) when is_integer(base) and base > 0 do
+    @store_step_multiplier * base
+  end
 end

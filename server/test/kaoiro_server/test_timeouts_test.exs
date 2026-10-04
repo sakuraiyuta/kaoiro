@@ -15,6 +15,11 @@ defmodule KaoiroServer.TestTimeoutsTest do
     assert TestTimeouts.durable_reply(500) == 2500
   end
 
+  test "the store-step budget is the same multiple of either environment's base" do
+    assert TestTimeouts.store_step(100) == 2000
+    assert TestTimeouts.store_step(500) == 10_000
+  end
+
   test "the purge budget leaves headroom over the base it was derived from" do
     for base <- [100, 500] do
       assert TestTimeouts.purge_reply(base) > base

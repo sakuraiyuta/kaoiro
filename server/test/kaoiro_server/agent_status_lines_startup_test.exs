@@ -10,6 +10,7 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
 
   alias KaoiroServer.AgentStatusLines
   alias KaoiroServer.StatusLinesFixture, as: Fixture
+  alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
 
   defp frozen_clock, do: ~U[2026-10-04 01:02:03Z]
@@ -199,7 +200,7 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
           end
         end)
 
-      assert_receive :opened
+      assert_receive :opened, TestTimeouts.store_step()
 
       assert {:error, :status_line_table_already_open} = refused(ctx)
 
@@ -207,7 +208,7 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
       # gone. A store that had joined it would have kept it alive.
       assert [{{:agent, "a.one"}, [%{text: "kept"}]}] = :dets.lookup(ctx.name, {:agent, "a.one"})
       send(helper, :close)
-      assert_receive {:closed, :ok}
+      assert_receive {:closed, :ok}, TestTimeouts.store_step()
       assert :dets.info(ctx.name) == :undefined
       assert File.read!(ctx.path) == before
     end
@@ -240,7 +241,7 @@ defmodule KaoiroServer.AgentStatusLinesStartupTest do
           end
         end)
 
-      assert_receive :opened
+      assert_receive :opened, TestTimeouts.store_step()
 
       assert {:error, :status_line_table_already_open} = Supervisor.restart_child(sup, :store)
       assert [{{:agent, "a.one"}, [%{text: "kept"}]}] = :dets.lookup(ctx.name, {:agent, "a.one"})

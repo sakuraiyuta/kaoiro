@@ -10,6 +10,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
   alias KaoiroServer.AgentStatusLines
   alias KaoiroServer.StatusLinesFixture, as: Fixture
   alias KaoiroServer.TestTeardown
+  alias KaoiroServer.TestTimeouts
 
   # A stopped store whose file holds `n` agents, ready to be started again.
   defp seeded(n) do
@@ -53,7 +54,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
         end
       end)
 
-    assert_receive {:held, ^name}
+    assert_receive {:held, ^name}, TestTimeouts.store_step()
     on_exit(fn -> send(pid, :stop) end)
     pid
   end
@@ -74,7 +75,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
       start_async(ctx, phase_c_hook: hook)
 
       for point <- [:after_create, :after_half_rows] do
-        assert_receive {:phase_c, ^point, store}
+        assert_receive {:phase_c, ^point, store}, TestTimeouts.store_step()
 
         assert :unavailable = AgentStatusLines.heads(ctx.table)
         assert :unavailable = AgentStatusLines.read_latest("a.1", ctx.table)
@@ -84,7 +85,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
         send(store, :continue)
       end
 
-      assert_receive {:started, {:ok, pid}}
+      assert_receive {:started, {:ok, pid}}, TestTimeouts.store_step()
       on_exit(fn -> TestTeardown.stop_quietly(pid) end)
 
       assert {:ok, ^heads} = AgentStatusLines.heads(ctx.table)
@@ -187,7 +188,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
       end
 
       start_async(ctx, endpoint_up?: endpoint_up?)
-      assert_receive {:phase_d, store}
+      assert_receive {:phase_d, store}, TestTimeouts.store_step()
 
       assert {:ok, ^heads} = AgentStatusLines.heads(ctx.table)
       assert {:ok, heads["a.1"]} == AgentStatusLines.read_latest("a.1", ctx.table)
@@ -200,7 +201,9 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
       end)
 
       send(store, :continue)
-      assert_receive {:started, {:error, {%RuntimeError{message: "phase D failed"}, _stack}}}
+
+      assert_receive {:started, {:error, {%RuntimeError{message: "phase D failed"}, _stack}}},
+                     TestTimeouts.store_step()
 
       assert :unavailable = Task.await(queued)
       Fixture.eventually(fn -> :ets.whereis(ctx.table) == :undefined end)
@@ -218,7 +221,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
 
         ctx = Fixture.start_store(sync_fun: Fixture.blocking_sync(self()))
         writer = Task.async(fn -> AgentStatusLines.put("a.one", "new", ctx.name) end)
-        assert_receive {:sync_blocked, _sync}
+        assert_receive {:sync_blocked, _sync}, TestTimeouts.store_step()
 
         queued = [
           Task.async(fn -> AgentStatusLines.settings(ctx.name) end),
@@ -273,7 +276,7 @@ defmodule KaoiroServer.AgentStatusLinesPublicationTest do
 
   defp report(reader) do
     send(reader, {:report, self()})
-    assert_receive {:seen, seen}
+    assert_receive {:seen, seen}, TestTimeouts.store_step()
     seen
   end
 
