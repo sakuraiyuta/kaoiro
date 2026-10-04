@@ -67,6 +67,17 @@ describe("a table, a fence, a definition", () => {
     ["a fence with no body goes", "前文\n\n```ts\n", "前文\n\n"],
     ["a lone fence run goes", "前文\n\n```", "前文\n\n"],
     ["an empty quote line goes", "> 引用\n> ", "> 引用\n"],
+    ["a list item that holds only an empty bullet goes", "**状況**\n- *", "**状況**\n"],
+    ["an ordered one too", "前文\n\n1. *", "前文\n\n"],
+    ["an empty heading goes", "前文\n\n## ##", "前文\n\n"],
+    ["an empty heading in a list item goes", "- ##", ""],
+    // A closing run shorter than the opener is code until the rest of it arrives.
+    ["a closing run shorter than the opener goes", "前文\n\n````ts\nconst a\n```", "前文\n\n````ts\nconst a\n"],
+    ["so does a tilde run", "前文\n\n~~~~ts\nconst a\n~~~", "前文\n\n~~~~ts\nconst a\n"],
+    ["a closing run as long as the opener ends the block", "前文\n\n````ts\nconst a\n````", "前文\n\n````ts\nconst a\n````"],
+    ["a fence opener typed under a quote line goes", "> a\n> ~~~5", "> a\n"],
+    ["a table delimiter row without pipes at its edge goes", "前文\n\na | b\n--|", "前文\n\n"],
+    ["so does one that is the whole head", "a | b\n--|", ""],
   ])("%s", (_name, head, shown) => {
     expect(trim(head)).toEqual({ shown, fallbacks: 0 });
   });
@@ -246,6 +257,21 @@ describe("a lexer that does not agree with the head", () => {
     expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
   });
 
+  it("cuts back to the previous line when the inline tokens do not add up to the text", () => {
+    vi.spyOn(Lexer, "lexInline").mockReturnValueOnce([{ type: "text", raw: "x", text: "x" }] as never);
+
+    expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
+  });
+
+  it("cuts back to the previous line when an emphasis token does not hold its own text", () => {
+    vi.spyOn(Lexer, "lexInline").mockReturnValueOnce([
+      { type: "text", raw: "前文\n続き ", text: "前文\n続き " },
+      { type: "strong", raw: "**a", text: "a", tokens: [{ type: "text", raw: "zz", text: "zz" }] },
+    ] as never);
+
+    expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
+  });
+
   it("falls back to the head, and says so, when the lexer throws", () => {
     vi.spyOn(untrustedMarked, "lexer").mockImplementation(() => {
       throw new Error("lexer failure");
@@ -275,9 +301,6 @@ describe("what the trim reads of marked", () => {
   it("gives a paragraph and a heading their text and their inline tokens", () => {
     expect(lex("a **b**")[0]).toMatchObject({ type: "paragraph", text: "a **b**" });
     expect(lex("# h")[0]).toMatchObject({ type: "heading", text: "h" });
-    // A setext heading's underline is part of the raw but not of the text.
-    expect(lex("h\n---")[0]).toMatchObject({ type: "heading", text: "h" });
-    expect(lex("h\n---")[0]!.raw.replace(/\n+$/, "").split("\n")).toHaveLength(2);
   });
 
   it("tells a fence from indented code, and a table from a paragraph", () => {

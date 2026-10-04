@@ -193,10 +193,8 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   const s = deep.text;
   const textLines = s.split("\n");
   const k = textLines.length;
-  // A setext heading's underline is a line of the block that its text lacks.
-  const lastLeaf = deep.type === "heading" && lineCount(deep.raw) === k + 1 ? lastNz - 1 : lastNz;
-  if (k > lastLeaf + 1) return fallback(head);
-  const firstLine = lastLeaf - k + 1;
+  if (k > lastNz + 1) return fallback(head);
+  const firstLine = lastNz - k + 1;
   const textLineStart: number[] = [];
   const headBase: number[] = [];
   for (let p = 0, so = 0; p < k; so += textLines[p].length + 1, p++) {
