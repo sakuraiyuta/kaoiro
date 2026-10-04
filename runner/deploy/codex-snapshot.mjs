@@ -7,7 +7,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-locks"];
-// rust-v0.156.1 and rust-v0.159.3: state/src/sqlite.rs, rollout/src,
+// rust-v0.156.1, rust-v0.159.3 and rust-v0.160.0: state/src/sqlite.rs, rollout/src,
 // message-history/src/lib.rs, config/src, skills/src/lib.rs. Extension trees
 // have no copy-all exemption: their classification needs separate review.
 const DBS = ["state_5", "logs_2", "goals_1", "memories_1", "memories_v2_1", "queue_1", "thread_history_1"];
