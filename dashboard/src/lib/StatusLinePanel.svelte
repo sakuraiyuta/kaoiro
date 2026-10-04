@@ -81,11 +81,13 @@
     gap: 0.5rem;
   }
 
+  /* Secondary text is the foreground colour at .75 opacity, as on the card:
+     --fg-dim reaches only 2.96:1 on the panel's tint, below AA. */
   h3 {
     margin: 0;
     font-size: var(--fs-metadata);
     font-weight: 600;
-    color: var(--fg-dim);
+    opacity: 0.75;
   }
 
   .when,
@@ -149,13 +151,14 @@
     padding: 0;
     font: inherit;
     font-size: var(--fs-caption);
-    color: var(--fg-dim);
+    color: var(--fg);
+    opacity: 0.75;
     text-decoration: underline;
     cursor: pointer;
   }
 
   .actions button:hover,
   .actions button:focus-visible {
-    color: var(--fg);
+    opacity: 1;
   }
 </style>

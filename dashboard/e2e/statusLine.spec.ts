@@ -3,7 +3,7 @@
 // or follows any of it is only observable in one. This spec mounts the
 // production dialog with the real renderer (marked + DOMPurify) and feeds it a
 // hostile entry; the only fixture is the history it fetches.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const HISTORY =
   "/e2e/harness/index.html?view=overlay&overlay=status-line-history";
@@ -128,6 +128,44 @@ function contrastBetween(page: Page, fg: string, bg: string): Promise<number> {
   );
 }
 
+/** WCAG contrast of an element's text against the first opaque background above
+ *  it, with the opacity of the element and its ancestors blended into the text
+ *  colour (secondary text is the foreground colour at reduced opacity). */
+function effectiveContrast(locator: Locator): Promise<number> {
+  return locator.evaluate((el) => {
+    const rgb = (css: string): number[] => {
+      const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+      ctx.canvas.width = 1;
+      ctx.canvas.height = 1;
+      ctx.fillStyle = css;
+      ctx.fillRect(0, 0, 1, 1);
+      return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+    };
+    // Opacity counts up to the element that paints the background; above it, an
+    // ancestor dims text and background alike and the ratio does not change.
+    let opacity = 1;
+    let background: number[] | null = null;
+    for (let node: Element | null = el; node !== null && background === null; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      opacity *= parseFloat(style.opacity);
+      const own = rgb(style.backgroundColor);
+      if (own[3] === 255) background = own;
+    }
+    const bg = background ?? rgb(getComputedStyle(document.body).backgroundColor);
+    const fg = rgb(getComputedStyle(el).color);
+    const mixed = [0, 1, 2].map((i) => fg[i]! * opacity + bg[i]! * (1 - opacity));
+    const luminance = (c: number[]) => {
+      const channel = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(c[0]!) + 0.7152 * channel(c[1]!) + 0.0722 * channel(c[2]!);
+    };
+    const [a, b] = [luminance(mixed), luminance(bg)];
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  });
+}
+
 async function watchRequests(page: Page): Promise<string[]> {
   const requested: string[] = [];
   page.on("request", (request) => requested.push(request.url()));
@@ -240,6 +278,14 @@ test.describe("a hostile status line on the agent card (issue 514)", () => {
     expect(await contrastBetween(page, style.color, style.background)).toBeGreaterThanOrEqual(7);
   });
 
+  test("keeps its secondary text readable too: the note and the time reach AA", async ({ page }) => {
+    await page.goto(CARD);
+    const row = rows(page).first();
+
+    expect(await effectiveContrast(row.locator(".status-more"))).toBeGreaterThanOrEqual(4.5);
+    expect(await effectiveContrast(row.locator(".status-time"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("an agent with no line says 未設定 at the same strength", async ({ page }) => {
     await page.goto("/e2e/harness/index.html?view=lobby&role=operator&statusLine=unset");
 
@@ -281,6 +327,15 @@ test.describe("a hostile status line in the member detail view (issue 514)", () 
     await panel(page).getByRole("button", { name: "続きを読む" }).click();
 
     await expect(page.locator("#history-opened")).not.toHaveText("");
+  });
+
+  test("keeps every piece of its text readable: the label, the time, the note and the buttons reach AA", async ({ page }) => {
+    await page.goto(DETAIL);
+
+    for (const selector of ["h3", ".when", ".more", ".read-more", ".history", ".body"]) {
+      const contrast = await effectiveContrast(panel(page).locator(selector).first());
+      expect(contrast, selector).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   test("keeps headings at body size and lets a table scroll inside the panel", async ({ page }) => {
