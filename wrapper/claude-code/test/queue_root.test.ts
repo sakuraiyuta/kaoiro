@@ -246,31 +246,15 @@ describe("ClaudeQueueRoot", () => {
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] });
   });
 
-  it("a consumed root item whose tool result was handed to the model is observed, not a violation", async () => {
-    let h!: ReturnType<typeof harness>;
-    h = harness({
-      classify: async (envelope) => {
-        // The tool result returns while the item is still being classified.
-        h.input.noteHandoff([envelope]);
-        return { consumed: true, inject: false, mode: "reply-owed" };
-      },
-    });
-    h.root.checkReadiness();
-    await settle();
-    h.offer([inbound("c1")]);
-    await settle();
-    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
-    expect(h.lines.join("")).not.toContain("invariant violation");
-  });
-
-  it("a root item consumed by a waiting tool is an invariant violation, disposed unknown", async () => {
+  it("a root item a waiting tool consumed is not begun by the root path; it waits for its tool", async () => {
     const h = harness({ classify: async () => ({ consumed: true, inject: false, mode: "reply-owed" }) });
     h.root.checkReadiness();
     await settle();
     h.offer([inbound("c1")]);
     await settle();
-    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "consumed_outside_waiter" }] });
-    expect(h.lines.join("")).toContain("invariant violation");
+    expect(h.ops("begin_native")).toEqual([]);
+    expect(h.ops("dispose")).toEqual([]);
+    expect(h.sends).toEqual([]);
   });
 
   describe("an idle host without a root always has a credit coming (liveness)", () => {

@@ -2497,6 +2497,22 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     expect(acks).toEqual([[9, 1]]);
   });
 
+  it("sends a waiter registration outside the envelope, keeps it out of the recorded wire, and reads its id", async () => {
+    const recorded: Envelope[] = [];
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+      onInterAgentAck: (envelope) => recorded.push(envelope),
+    });
+    const registration = { token: "a".repeat(32), call_token: "turn-1", expires_in_ms: 5_000 };
+    const pending = link.sendInterAgent(interAgentEnvelope(), undefined, { waiter_registration: registration });
+    expect(mock.lastPush).toMatchObject({ event: "envelope", payload: { waiter_registration: registration } });
+    expect((mock.lastPush!.payload as Record<string, unknown>).payload).not.toHaveProperty("waiter_registration");
+    mock.lastPush?.receivers.get("ok")?.({ ingress_stamp: [9, 3], waiter_registration_id: "reg-1" });
+    await expect(pending).resolves.toMatchObject({ kind: "accepted", waiter_registration_id: "reg-1" });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).not.toHaveProperty("waiter_registration");
+  });
+
   it("decodes advisory fields additively and normalizes unknown mechanisms", async () => {
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
     const pending = link.sendInterAgent(interAgentEnvelope());

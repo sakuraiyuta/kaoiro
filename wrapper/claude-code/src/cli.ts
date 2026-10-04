@@ -745,8 +745,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
     onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
     onInputHandoff: (envelopes, turnToken) => {
-      queueInput.noteHandoff(envelopes);
-      queueEarly.handoff();
       for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
       deliveryStages.submittedEnvelopes(turnToken, envelopes, "tool_result");
     },
@@ -772,9 +770,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
-    sendInterAgent: (envelope, generation) =>
-      link?.sendInterAgent(envelope, generation) ??
+    sendInterAgent: (envelope, generation, outer) =>
+      link?.sendInterAgent(envelope, generation, outer) ??
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
+    queueWaiters: () => (link?.queueLease?.() ?? null) !== null,
+    closeWaiter: (registrationId) => { void link?.queueLease?.()?.waiterClose(registrationId); },
+    queueHandoff: (envelopes, turnToken) => queueInput.handoff(envelopes, turnToken),
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK
     // session has not opened yet either.
@@ -1084,7 +1085,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   >({
     interAgentQueuePolicy: interAgentQueuePolicy(config),
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
-    onQueueOffer: (offer) => void (offer.kind === "early" ? queueEarly.onOffer(offer) : queueRoot.onOffer(offer)),
+    onQueueOffer: (offer) => void (offer.kind === "early" ? queueEarly.onOffer(offer)
+      : offer.kind === "waiter" ? queueInput.acceptWaiter(offer)
+      : queueRoot.onOffer(offer)),
     onQueueRejoined: () => {
       creditSlot.reset();
       queueRoot.rejoined();

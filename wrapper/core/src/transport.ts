@@ -52,6 +52,7 @@ import type {
   DeliveryStatusResult,
   YieldClaimRequest,
   YieldClaimResult,
+  WaiterRegistrationRequest,
 } from "@kaoiro/protocol";
 import {
   isWrapperBuildIdentityValid,
@@ -140,7 +141,7 @@ interface PendingDeliveryStage {
  *  ack: the message may well have been delivered, so the caller must not
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
-  | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult }
+  | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult; waiter_registration_id?: string }
   | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
   | { kind: "unknown"; reason: string };
 
@@ -1196,7 +1197,7 @@ function ingressStampFrom(reply: unknown): [number, number] | null {
   return [stamp[0] as number, stamp[1] as number];
 }
 
-function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAcceptance, { kind: "accepted" }>, "delivery_authority" | "delivery" | "work_control_result"> {
+function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAcceptance, { kind: "accepted" }>, "delivery_authority" | "delivery" | "work_control_result" | "waiter_registration_id"> {
   if (!isObject(reply)) return {};
   const raw = reply as Partial<InterAgentSendReply>;
   const intents = ["normal", "early", "yield"] as const;
@@ -1215,7 +1216,9 @@ function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAccep
   const workResult = isObject(raw.work_control_result) ? raw.work_control_result : null;
   const validResult = workResult !== null && typeof workResult.op === "string" &&
     typeof workResult.operation_id === "string" && workResult.outcome === "applied";
+  const registrationId = (reply as { waiter_registration_id?: unknown }).waiter_registration_id;
   return {
+    ...(typeof registrationId === "string" && registrationId !== "" ? { waiter_registration_id: registrationId } : {}),
     ...(validAuthority ? { delivery_authority: {
       requested: requested as DeliveryAuthority["requested"],
       granted: granted as DeliveryAuthority["granted"],
@@ -2217,7 +2220,11 @@ export class ServerLink {
    *  unchanged and stays on the ack — recording is about durability, this
    *  Promise is about the tool result, and they settle at the same moment
    *  only in the accepted case. */
-  sendInterAgent(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+  sendInterAgent(
+    envelope: Envelope,
+    replyBasisGeneration?: number,
+    outer?: { waiter_registration?: WaiterRegistrationRequest },
+  ): Promise<InterAgentAcceptance> {
     const payload = envelope.type === "inter_agent_message" ? envelope.payload : null;
     if (payload && ((payload.work_control !== undefined || payload.work_id !== undefined) && !this.#workControlSupported)) {
       return Promise.resolve({ kind: "rejected", reason: "work_control_unavailable", send_not_attempted: true });
@@ -2231,7 +2238,11 @@ export class ServerLink {
         this.#replyBasisMode === "pending" || !this.#socket.isConnected() || this.#channel.state !== "joined")) {
       return Promise.resolve({ kind: "rejected", reason: "reply_basis_connection_changed", send_not_attempted: true });
     }
-    const { wire, push } = this.#pushEnvelope(envelope);
+    // The waiter registration rides outside the envelope and is never part
+    // of the recorded wire form (its token is private).
+    const { wire, push } = this.#pushEnvelope(envelope, outer?.waiter_registration === undefined
+      ? undefined
+      : { waiter_registration: outer.waiter_registration });
     return new Promise((resolve) => {
       push
         .receive("ok", (reply: unknown) => {
@@ -2252,7 +2263,7 @@ export class ServerLink {
 
   /** Stamps and pushes one envelope, returning both the wire form (for the
    *  sidecar) and the Push (for whichever ack legs the caller wants). */
-  #pushEnvelope(envelope: Envelope): { wire: Envelope; push: Push } {
+  #pushEnvelope(envelope: Envelope, outer?: Record<string, unknown>): { wire: Envelope; push: Push } {
     // Only state_change / permission_request define the latest state worth
     // re-announcing after a reconnect. log / result are transcript lines
     // the server keeps as history; re-sending them would duplicate it.
@@ -2269,7 +2280,7 @@ export class ServerLink {
       ...(this.#sessionId !== null ? { session_id: this.#sessionId } : {}),
       seq: this.#seq,
     } as Envelope;
-    return { wire, push: this.#channel.push("envelope", wire) };
+    return { wire, push: this.#channel.push("envelope", outer === undefined ? wire : { ...wire, ...outer }) };
   }
 
   /** Stamps wrapper -> server control messages (ADR-0015 stage 2). */

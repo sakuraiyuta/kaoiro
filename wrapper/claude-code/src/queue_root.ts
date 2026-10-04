@@ -177,32 +177,16 @@ export class ClaudeQueueRoot {
       return;
     }
 
+    // Consumed items are held by the classifier for their waiting tool.
     const prepared = await this.#input.prepare(offer);
     const injectIds = prepared.injected.map(({ item }) => item.queueId);
-    const consumedIds = prepared.consumed.map((item) => item.queueId);
-    const ids = [...injectIds, ...consumedIds];
-    if (ids.length === 0) return;
+    if (injectIds.length === 0) return;
 
-    const submit = await offer.begin(ids, token);
+    const submit = await offer.begin(injectIds, token);
     if (submit === null) {
-      offer.release(ids);
+      offer.release(injectIds);
       return;
     }
-    // A root item classified now cannot be consumed: the host is idle. One
-    // consumed under an earlier early offer whose permit was refused comes
-    // back remembered, and its tool-result handoff is its witness.
-    const handedOff = consumedIds.filter((id) => this.#input.handedOff(id));
-    const unseen = consumedIds.filter((id) => !this.#input.handedOff(id));
-    if (handedOff.length > 0) {
-      void offer.dispose(handedOff.map((queue_id) => ({ queue_id, outcome: "observed" as const, witness: "tool_result" as const })))
-        .then((result) => { if (result.ok) this.#input.forget(handedOff); });
-    }
-    if (unseen.length > 0) {
-      this.#deps.log(`[kaoiro] invariant violation: a waiting tool consumed a queue root item: ${unseen.join(",")}\n`);
-      void offer.dispose(unseen.map((queue_id) => ({ queue_id, outcome: "unknown" as const, reason: "consumed_outside_waiter" })))
-        .then((result) => { if (result.ok) this.#input.forget(unseen); });
-    }
-    if (injectIds.length === 0) return;
 
     const envelopes = prepared.injected.map(({ item }) => item.envelope as Envelope);
     const root: RootInput = {

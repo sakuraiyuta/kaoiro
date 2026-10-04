@@ -35,7 +35,9 @@ import type {
   WorkStatusResult,
   DeliveryStatusResult,
   WrapperBuildIdentity,
+  WaiterRegistrationRequest,
 } from "@kaoiro/protocol";
+import type { QueueHandoffLease } from "./queue_input.js";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
@@ -830,6 +832,8 @@ interface ReplyWaiter {
   timeout: ReturnType<typeof setTimeout>;
   peer: string;
   sentTurnNumber: number;
+  /** The server-side registration of this wait (credit-v1). */
+  registrationId?: string;
 }
 
 /** One inbound inter-agent message injected into the SDK as ordinary user
@@ -886,7 +890,19 @@ export interface InterAgentToolOptions {
    *  server took the message — the pre-ADR-0051 behaviour, kept only so
    *  unit tests that exercise payload construction need not model a
    *  transport. */
-  sendInterAgent?: (envelope: Envelope, replyBasisGeneration?: number) => Promise<InterAgentAcceptance>;
+  sendInterAgent?: (
+    envelope: Envelope,
+    replyBasisGeneration?: number,
+    outer?: { waiter_registration?: WaiterRegistrationRequest },
+  ) => Promise<InterAgentAcceptance>;
+  /** credit-v1: a waiting send registers a server-side waiter, so its reply
+   *  is routed to it as W (channels.md `waiter_registration`). */
+  queueWaiters?: () => boolean;
+  /** Closes a waiter registration whose wait ended without its reply. */
+  closeWaiter?: (registrationId: string) => void;
+  /** credit-v1: the permit and witness for queue items a waiting tool
+   *  consumed (`QueueInput.handoff`). */
+  queueHandoff?: (envelopes: readonly Envelope[], turnToken: string) => Promise<QueueHandoffLease | null | undefined>;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
@@ -2203,9 +2219,19 @@ export class InterAgentTool {
           const originError = this.#options.canSendInterAgent?.() === false
             ? "admission_fail_stop"
             : captured && this.replyBasis.beforeSend(captured);
+          const registration: WaiterRegistrationRequest | undefined =
+            waitForResponse && this.#options.queueWaiters?.() === true
+              ? { token: randomBytes(16).toString("hex"), call_token: context?.origin?.token ?? conversationId, expires_in_ms: timeoutMs }
+              : undefined;
           const acceptance: InterAgentAcceptance = originError
             ? { kind: "rejected", reason: originError }
-            : await this.#dispatch(envelope, generation);
+            : await this.#dispatch(envelope, generation, registration && { waiter_registration: registration });
+          if (acceptance.kind === "accepted" && acceptance.waiter_registration_id !== undefined) {
+            // A wait that already settled needs no close: a match consumed
+            // the registration, and an expiry ends it on the server.
+            const waiter = this.#replyWaiters.get(conversationId);
+            if (waiter !== undefined) waiter.registrationId = acceptance.waiter_registration_id;
+          }
 
           // issue #127 / ふじ 30-10 R2: this wrapper stops owing an error
           // notice for the inbound it was injected to answer only once
@@ -2530,16 +2556,25 @@ export class InterAgentTool {
     }
 
     const inbound = settledReply ?? (await reply);
-    if (!inbound) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${sent}; reply_pending=true (timeout_ms=${timeoutMs})` +
-              (Object.keys(sentAck).length === 3 ? "" : `\n${JSON.stringify(sentAck, null, 2)}`),
-          },
-        ],
-      };
+    const replyPending = (): InterAgentToolResult => ({
+      content: [
+        {
+          type: "text",
+          text: `${sent}; reply_pending=true (timeout_ms=${timeoutMs})` +
+            (Object.keys(sentAck).length === 3 ? "" : `\n${JSON.stringify(sentAck, null, 2)}`),
+        },
+      ],
+    });
+    if (!inbound) return replyPending();
+
+    // credit-v1: a queue item this wait consumed is permitted under the
+    // tool's turn before the result goes out (r8 §6.2).
+    let queued: QueueHandoffLease | undefined;
+    const handoffTurn = captured?.origin?.token ?? context?.origin?.token;
+    if (this.#options.queueHandoff !== undefined && handoffTurn !== undefined) {
+      const handed = await this.#options.queueHandoff([inbound], handoffTurn);
+      if (handed === null) return replyPending();
+      queued = handed;
     }
 
     const inboundPayload = inbound.payload as Partial<InterAgentMessagePayload>;
@@ -2577,21 +2612,24 @@ export class InterAgentTool {
       };
       const peerError = (JSON.parse(result.content[0]!.text) as { peer_error: Record<string, unknown> }).peer_error;
       const fields = { sent: sentAck, peer_error: peerError, ...(isStatusNotice ? { status_notice: inbound } : {}), ...(ordinaryPeerInput(inbound) ? { peer_error_envelope: inbound } : {}) };
-      return captured
-        ? this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound])
-        : { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
+      if (captured) return this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound], undefined, queued);
+      // No reply basis, so no return hook: the built result is the witness.
+      queued?.commit();
+      return { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
     }
 
     const fields = isStatusNotice ? { sent: sentAck, status_notice: inbound } : { sent: sentAck, reply: inbound };
-    if (captured) return this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound]);
+    if (captured) return this.#inputResult(captured.origin, conversationId, args.to, fields, [inbound], undefined, queued);
+    queued?.commit();
     return { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
   }
 
-  #inputResult(origin: ReplyOrigin, cid: string, peer: string, fields: Record<string, unknown>, envelopes: readonly Envelope[], lease?: { commit: () => void; rollback: () => void }): InterAgentToolResult {
+  #inputResult(origin: ReplyOrigin, cid: string, peer: string, fields: Record<string, unknown>, envelopes: readonly Envelope[], lease?: { commit: () => void; rollback: () => void }, queued?: QueueHandoffLease): InterAgentToolResult {
     let returned = false;
     const release = () => {
       if (returned) return; returned = true;
       if (lease) lease.rollback();
+      else if (queued) queued.rollback();
       else for (const envelope of envelopes) this.#options.returnInput?.(envelope, this.queuedInboundMode(envelope, "reply-owed"));
     };
     const ordinary = envelopes.filter(ordinaryPeerInput);
@@ -2612,6 +2650,7 @@ export class InterAgentTool {
         if (activated && ticket) this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, origin.token, ordinary);
         if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
         lease?.commit();
+        queued?.commit();
         this.#options.onInputHandoff?.(envelopes, origin.token);
       },
       rollback: () => { origin.signal?.removeEventListener("abort", abort); abort(); },
@@ -2668,13 +2707,17 @@ export class InterAgentTool {
   /** Pushes through the acceptance-aware sink when one is wired, else falls
    *  back to the fire-and-forget sink and assumes acceptance (see
    *  `sendInterAgent` in the options). */
-  #dispatch(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+  #dispatch(
+    envelope: Envelope,
+    replyBasisGeneration?: number,
+    outer?: { waiter_registration?: WaiterRegistrationRequest },
+  ): Promise<InterAgentAcceptance> {
     const sink = this.#options.sendInterAgent;
     if (sink === undefined) {
       this.#options.send(envelope);
       return Promise.resolve({ kind: "accepted", stamp: null });
     }
-    return sink(envelope, replyBasisGeneration);
+    return outer === undefined ? sink(envelope, replyBasisGeneration) : sink(envelope, replyBasisGeneration, outer);
   }
 
   /** Settles a pending `wait_for_response` waiter as "no reply" without
@@ -2684,6 +2727,7 @@ export class InterAgentTool {
     if (waiter === undefined) return;
     clearTimeout(waiter.timeout);
     this.#replyWaiters.delete(conversationId);
+    if (waiter.registrationId !== undefined) this.#options.closeWaiter?.(waiter.registrationId);
     waiter.resolve(undefined);
   }
 
@@ -2695,7 +2739,9 @@ export class InterAgentTool {
   ): Promise<Envelope | undefined> {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
+        const registrationId = this.#replyWaiters.get(conversationId)?.registrationId;
         this.#replyWaiters.delete(conversationId);
+        if (registrationId !== undefined) this.#options.closeWaiter?.(registrationId);
         resolve(undefined);
       }, timeoutMs);
       this.#replyWaiters.set(conversationId, { resolve, timeout, peer, sentTurnNumber });

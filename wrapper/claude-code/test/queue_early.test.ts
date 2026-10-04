@@ -49,6 +49,7 @@ function harness(options: {
   const lines: string[] = [];
   const pushes: Pushed[] = [];
   const timers: Array<{ task: () => void; ms: number }> = [];
+  const inputTimers: Array<{ task: () => void; ms: number }> = [];
   const book: string[] = [];
   const state = { turn: "T" as string | null, canFold: true, foldsLeft: true, receipt: false, pushOk: true };
   const yieldState = {
@@ -85,6 +86,7 @@ function harness(options: {
     reclassify: (_envelope, mode) => mode,
     sendNotice: () => {},
     tracked: () => true,
+    schedule: (task, ms) => { inputTimers.push({ task, ms }); return () => {}; },
   });
   const slot = new CreditSlot();
   const tickets = { activated: 0, discarded: 0, activateOk: true };
@@ -138,7 +140,7 @@ function harness(options: {
   const ops = (op: string) => sent.filter((p) => p.op === op);
   return {
     early, input, slot, lease, sent, lines, pushes, timers, book, state, tickets, offer, ops,
-    yieldState, yields, order, cuts,
+    yieldState, yields, order, cuts, inputTimers,
     classified: () => classified,
   };
 }
@@ -442,44 +444,52 @@ describe("ClaudeQueueEarly", () => {
   describe("an item a waiting tool consumed", () => {
     const consumed: QueueInputDeps["classify"] = async () => ({ consumed: true, inject: false, mode: "reply-owed" });
 
-    it("is observed at the tool-result handoff after its permit", async () => {
+    it("is not begun by the early path; it waits for its tool and asks for credit again", async () => {
       const h = harness({ classify: consumed });
       h.early.check();
       await settle();
       h.offer(inbound("c1"));
       await settle();
-      expect(h.ops("begin_native")).toHaveLength(1);
-      expect(h.ops("dispose")).toEqual([]);
-      h.input.noteHandoff([inbound("c1")]);
-      h.early.handoff();
-      await settle();
-      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
+      expect(h.ops("begin_native")).toEqual([]);
+      expect(h.pushes).toEqual([]);
+      expect(h.ops("credit")).toHaveLength(2);
     });
 
-    it("is observed when the handoff came before the permit", async () => {
-      let open!: () => void;
-      const gate = new Promise<void>((resolve) => { open = resolve; });
-      const h = harness({ classify: consumed, gates: { begin_native: gate } });
-      h.early.check();
-      await settle();
-      h.offer(inbound("c1"));
-      await settle();
-      h.input.noteHandoff([inbound("c1")]);
-      h.early.handoff();
-      open();
-      await settle();
-      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
-    });
-
-    it("is unknown when the turn ends without a handoff", async () => {
+    it("is permitted under its tool's turn and observed at the tool-result return", async () => {
       const h = harness({ classify: consumed });
       h.early.check();
       await settle();
       h.offer(inbound("c1"));
       await settle();
-      h.early.turnEnded("T");
+      const lease = await h.input.handoff([inbound("c1")], "tool-turn");
+      expect(h.ops("begin_native")[0]).toMatchObject({ queue_ids: ["1"], native_turn_token: "tool-turn" });
+      lease!.commit();
       await settle();
-      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "consumed_unhandled" }] });
+      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "tool_result" }] });
+    });
+
+    it("goes back as W when the tool result is not returned", async () => {
+      const h = harness({ classify: consumed });
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1"));
+      await settle();
+      const lease = await h.input.handoff([inbound("c1")], "tool-turn");
+      lease!.rollback();
+      await settle();
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "waiter_abandoned" }] });
+    });
+
+    it("goes back to be injected when no tool asks for it in time", async () => {
+      const h = harness({ classify: consumed });
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1"));
+      await settle();
+      h.inputTimers[0]!.task();
+      await settle();
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
+      expect(await h.input.handoff([inbound("c1")], "tool-turn")).toBeUndefined();
     });
   });
 

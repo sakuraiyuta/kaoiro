@@ -464,3 +464,142 @@ describe("Claude CLI credit-v1 root composition", () => {
     }
   });
 });
+
+/** A queued root input the model answers with a waiting send_to_agent; the
+ *  peer's reply comes back as a `waiter` offer (credit-v1 W path). */
+async function runWaiterReply() {
+  const sent: Record<string, unknown>[] = [];
+  const outers: unknown[] = [];
+  const toolResults: string[] = [];
+  let lease!: QueueLease;
+  let linkOptions!: Record<string, any>;
+  let host!: AgentHost;
+  let done!: () => void;
+  const finished = new Promise<void>((resolve) => { done = resolve; });
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const peerReply = inbound("c-queue");
+  (peerReply.payload as Record<string, unknown>).turn_number = 3;
+  (peerReply.payload as Record<string, unknown>).body = "peer answer";
+
+  const running = runClaudeCli({
+    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    loadConfig: () => ({ ...config }),
+    createServerLink: (_url, _id, options) => {
+      linkOptions = options as unknown as Record<string, any>;
+      lease = new QueueLease({
+        transport: async (payload) => {
+          sent.push(payload);
+          const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
+          if (payload.op === "credit") {
+            if (sent.filter((p) => p.op === "credit").length === 1) {
+              setImmediate(() => lease.receiveBatch({
+                version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "1", kind: "root",
+                credit_revision: "1",
+                items: [{ queue_id: "7", attempt_id: "7.1", delivery_seq: 1, class: "ordinary", byte_charge: 1, envelope: inbound("c-queue") }],
+              }));
+            }
+            return { ...base, credit_revision: String(payload.operation_id) };
+          }
+          if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
+          if (payload.op === "return") return { ...base, returned_ranges: [] };
+          if (payload.op === "dispose") {
+            if ((payload.items as { queue_id: string }[]).some((i) => i.queue_id === "9")) done();
+            return { ...base, disposed: (payload.items as { queue_id: string }[]).map((i) => i.queue_id), resolved_ranges: [], returned_ranges: [] };
+          }
+          return base;
+        },
+        onOffer: (offer) => linkOptions.onQueueOffer(offer),
+      });
+      lease.join({
+        inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
+        inter_agent_queue_epoch: "e1", inter_agent_queue_resume_required: false,
+      }, "i1", "g1");
+      queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+      return {
+        deliveryModes: () => ({ early: "none", yield: "none", stage_reports: true }),
+        deliveryIncarnation: () => "i1", deliveryGeneration: () => "g1",
+        reportDeliveryStage: () => {},
+        acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
+        flushInterAgentRetirements: async () => {},
+        sendInterAgent: async (_envelope: Envelope, _generation: number, outer: unknown) => {
+          outers.push(outer);
+          // The server routes the peer's reply to the registration as W.
+          setImmediate(() => lease.receiveBatch({
+            version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "2", kind: "waiter",
+            registration_id: "reg-1",
+            items: [{ queue_id: "9", attempt_id: "9.1", delivery_seq: 2, class: "waiter", byte_charge: 1, envelope: peerReply }],
+          }));
+          return { kind: "accepted", stamp: null, waiter_registration_id: "reg-1" };
+        },
+        send: () => {}, close: () => {}, currentSessionId: () => null, setSessionId: () => {},
+        reportDisconnectIntent: async () => true,
+        queueLease: () => lease,
+        queueReady: () => Promise.resolve(),
+      } as never;
+    },
+    createHost: (cfg, options) => {
+      host = new AgentHost(cfg, {
+        ...options,
+        queryFn: (({ prompt, options: sdkOptions }: { prompt: AsyncIterable<SDKUserMessage>; options: any }) => {
+          const stream = (async function* (): AsyncGenerator<SDKMessage> {
+            const input = prompt[Symbol.asyncIterator]();
+            const first = (await input.next()).value!;
+            const signal = { signal: new AbortController().signal };
+            await sdkOptions.hooks.UserPromptSubmit.at(-1).hooks[0]({
+              hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "p1", prompt: first.message.content as string,
+            }, undefined, signal);
+            yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+            const mcp = sdkOptions.mcpServers.kaoiro as McpSdkServerConfigWithInstance;
+            type Transport = Parameters<typeof mcp.instance.connect>[0];
+            const responses: Array<Record<string, any>> = [];
+            const transport: Transport = { start: async () => {}, close: async () => {}, send: async (message) => { responses.push(message as Record<string, any>); } };
+            await mcp.instance.connect(transport);
+            try {
+              await sdkOptions.hooks.PreToolUse.at(-1).hooks[0]({
+                hook_event_name: "PreToolUse", session_id: "s", prompt_id: "p1", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: "waiting-reply",
+              }, "waiting-reply", signal);
+              transport.onmessage!({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+                name: "send_to_agent",
+                arguments: { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: 3_000 },
+                _meta: { "claudecode/toolUseId": "waiting-reply" },
+              } });
+              await vi.waitFor(() => expect(responses).toHaveLength(1), { timeout: 4_000 });
+              toolResults.push(JSON.stringify(responses[0]!.result));
+            } finally { await mcp.instance.close(); }
+            yield { type: "result", result_index: resultIndexCounter++, subtype: "success", session_id: "s", result: "ok" } as SDKMessage;
+            await finished;
+          })();
+          return Object.assign(stream, { interrupt: async () => {}, supportedModels: async () => [] }) as unknown as Query;
+        }) as never,
+      });
+      host.probeRateLimits = async () => {};
+      return host;
+    },
+  });
+
+  try {
+    await vi.waitFor(() => expect(sent.some((p) => p.op === "dispose" &&
+      (p.items as { queue_id: string }[]).some((i) => i.queue_id === "9"))).toBe(true), { timeout: 5_000 });
+    return { sent, outers, toolResults };
+  } finally {
+    host?.close();
+    await running.catch(() => {});
+    stderr.mockRestore();
+  }
+}
+
+describe("Claude CLI credit-v1 W path composition", () => {
+  it("a waiting send registers a waiter, and its W reply is permitted under the tool's turn and observed at the result return", async () => {
+    const { sent, outers, toolResults } = await runWaiterReply();
+    const rootToken = sent.find((p) => p.op === "credit")!.native_turn_token;
+    expect(outers[outers.length - 1]).toMatchObject({ waiter_registration: { call_token: rootToken, expires_in_ms: 3_000 } });
+    expect(sent.filter((p) => p.op === "begin_native" && p.lease_id === "2")).toEqual([
+      expect.objectContaining({ queue_ids: ["9"], native_turn_token: rootToken }),
+    ]);
+    expect(sent.find((p) => p.op === "dispose" && p.lease_id === "2")).toMatchObject({
+      items: [{ queue_id: "9", outcome: "observed", witness: "tool_result" }],
+    });
+    expect(toolResults[0]).toContain("peer answer");
+  });
+});
+

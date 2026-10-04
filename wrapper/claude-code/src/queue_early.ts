@@ -129,12 +129,6 @@ interface PushedFold {
   ticket: FoldTicket;
 }
 
-interface ConsumedEarly {
-  offer: QueueOffer;
-  id: string;
-  turn: string;
-}
-
 type Decline = "fold_unavailable" | "conversation_pending" | "oversize";
 
 interface YieldAuthority {
@@ -150,7 +144,6 @@ export class ClaudeQueueEarly {
   /** An early offer is being handled, or its push awaits a decision. */
   #held = 0;
   readonly #pushed = new Map<readonly Envelope[], PushedFold>();
-  readonly #consumed: ConsumedEarly[] = [];
   #retryScheduled = false;
   #retryDelay = RETRY_FIRST_MS;
   /** The turn the backoff belongs to; a new turn starts it over. */
@@ -243,9 +236,8 @@ export class ClaudeQueueEarly {
       return false;
     }
 
+    // Consumed items are held by the classifier for their waiting tool.
     const prepared = await deps.input.prepare(offer);
-    const consumedIds = prepared.consumed.map((item) => item.queueId);
-    if (consumedIds.length > 0) await this.#beginConsumed(offer, consumedIds, turn);
     const injected = prepared.injected.map(({ item }) => item);
     if (injected.length === 0) return false;
     const injectIds = injected.map((item) => item.queueId);
@@ -440,27 +432,6 @@ export class ClaudeQueueEarly {
       ({ queue_id, reason: "early_ineligible" as const, sub_reason: subReason })));
   }
 
-  async #beginConsumed(offer: QueueOffer, ids: readonly string[], turn: string): Promise<void> {
-    const submit = await offer.begin(ids, turn);
-    if (submit === null) {
-      offer.release(ids);
-      return;
-    }
-    for (const id of ids) this.#consumed.push({ offer, id, turn });
-    this.handoff();
-  }
-
-  /** A tool result was returned; consumed items it carried are observed. */
-  handoff(): void {
-    for (let i = this.#consumed.length - 1; i >= 0; i--) {
-      const entry = this.#consumed[i]!;
-      if (!this.#deps.input.handedOff(entry.id)) continue;
-      this.#consumed.splice(i, 1);
-      void entry.offer.dispose([{ queue_id: entry.id, outcome: "observed", witness: "tool_result" }])
-        .then((result) => { if (result.ok) this.#deps.input.forget([entry.id]); });
-    }
-  }
-
   /** The host decided pushed input; returns whether it was an early fold. */
   pushedDecision(decision: {
     kind: "fold" | "root" | "unknown";
@@ -501,18 +472,10 @@ export class ClaudeQueueEarly {
     return true;
   }
 
-  /** Turn `turnToken` ended: its early credit is withdrawn and consumed items
-   *  never handed to the model are unknown. */
+  /** Turn `turnToken` ended: its early credit is withdrawn. */
   turnEnded(turnToken: string | undefined): void {
     if (turnToken === undefined) return;
     if (this.#checking === turnToken) this.#checking = null;
     if (this.#deps.slot.token("early") === turnToken) this.#deps.slot.clear("early", this.#deps.lease());
-    for (let i = this.#consumed.length - 1; i >= 0; i--) {
-      const entry = this.#consumed[i]!;
-      if (entry.turn !== turnToken) continue;
-      this.#consumed.splice(i, 1);
-      void entry.offer.dispose([{ queue_id: entry.id, outcome: "unknown", reason: "consumed_unhandled" }])
-        .then((result) => { if (result.ok) this.#deps.input.forget([entry.id]); });
-    }
   }
 }
