@@ -433,3 +433,39 @@ describe("QueueLease — unknown outcomes", () => {
   });
 });
 
+describe("QueueLease.receiveRecovery (r8 §6.3)", () => {
+  const recovery = (leaseId = "7", ids = ["30"]) => ({
+    lease_id: leaseId,
+    items: ids.map((id, index) => ({ queue_id: id, attempt_id: `${id}.1`, delivery_seq: 40 + index, class: "ordinary", byte_charge: 2, envelope })),
+  });
+
+  it("returns a recovery offer under the current binding, not through onOffer, and feeds its sequences", async () => {
+    const seqs: number[][] = [];
+    const sent: Record<string, unknown>[] = [];
+    const offers: QueueOffer[] = [];
+    const lease = new QueueLease({
+      transport: async (payload) => { sent.push(payload); return defaultReply(payload); },
+      onOffer: (offer) => offers.push(offer),
+      onSequences: (s) => seqs.push([...s]),
+    });
+    lease.join(joinReply, "i1", "g1");
+    const offer = lease.receiveRecovery(recovery());
+    expect(offer).toMatchObject({ leaseId: "7", kind: "recovery", items: [{ queueId: "30", deliverySeq: 40 }] });
+    expect(offers).toEqual([]);
+    expect(seqs).toEqual([[40]]);
+    const submit = await offer!.begin(["30"], "turn-1");
+    expect(sent.at(-1)).toMatchObject({ op: "begin_native", lease_id: "7", queue_ids: ["30"], native_turn_token: "turn-1" });
+    expect(submit).not.toBeNull();
+  });
+
+  it("ignores a malformed, empty or already known recovery, and one without a binding", () => {
+    const { lease } = harness();
+    expect(lease.receiveRecovery({ lease_id: "7" })).toBeUndefined();
+    expect(lease.receiveRecovery(recovery("8", []))).toBeUndefined();
+    expect(lease.receiveRecovery(recovery("9"))).toBeDefined();
+    expect(lease.receiveRecovery(recovery("9"))).toBeUndefined();
+    const unbound = new QueueLease({ transport: async () => ({}), onOffer: () => {} });
+    expect(unbound.receiveRecovery(recovery())).toBeUndefined();
+  });
+});
+

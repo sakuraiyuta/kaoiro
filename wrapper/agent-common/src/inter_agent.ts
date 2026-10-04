@@ -38,7 +38,7 @@ import type {
   WaiterRegistrationRequest,
 } from "@kaoiro/protocol";
 import type { QueueHandoffLease } from "./queue_input.js";
-import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
+import type { InterAgentAcceptance, QueueOffer } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
@@ -903,6 +903,12 @@ export interface InterAgentToolOptions {
   /** credit-v1: the permit and witness for queue items a waiting tool
    *  consumed (`QueueInput.handoff`). */
   queueHandoff?: (envelopes: readonly Envelope[], turnToken: string) => Promise<QueueHandoffLease | null | undefined>;
+  /** credit-v1: inline recovery from the queue (`QueueInput.recover`). */
+  queueRecovery?: (
+    offer: QueueOffer,
+    turnToken: string,
+    fit: (envelopes: readonly Envelope[]) => boolean,
+  ) => Promise<{ envelopes: readonly Envelope[]; lease: QueueHandoffLease } | null>;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
@@ -1969,7 +1975,7 @@ export class InterAgentTool {
         const mode = this.#options.replyBasisMode?.() ?? "legacy";
         if (waited === "closed") return { kind: "peer-error", result: this.#localReplyError("reply_basis_closed") };
         if (mode === "pending" || waited === "pending") return { kind: "peer-error", result: captured
-          ? this.#rejectedReply(captured, { kind: "rejected", reason: "reply_basis_pending", send_not_attempted: true }, "Negotiation did not complete before send.")
+          ? await this.#rejectedReply(captured, { kind: "rejected", reason: "reply_basis_pending", send_not_attempted: true }, "Negotiation did not complete before send.")
           : this.#localReplyError("reply_basis_pending") };
         const generation = this.#options.replyBasisGeneration?.();
         // issue #167 AC10: a conversation this wrapper already knows is
@@ -2470,7 +2476,7 @@ export class InterAgentTool {
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
             if (captured) {
               if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
-              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id) };
+              return { kind: "peer-error", result: await this.#rejectedReply(captured, acceptance, message, workControl?.operation_id) };
             }
             return { kind: "rejected", message, acceptance };
           }
@@ -2662,7 +2668,7 @@ export class InterAgentTool {
     return localReplyError(code, guidance);
   }
 
-  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): InterAgentToolResult {
+  async #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): Promise<InterAgentToolResult> {
     this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
     const isWorkRejection = operationId !== undefined ||
       acceptance.reason === "work_operation_deduplicated" ||
@@ -2679,7 +2685,20 @@ export class InterAgentTool {
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
-      const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit, acceptance.details?.expected_peer_turn);
+      if (acceptance.queue_recovery !== undefined) {
+        // credit-v1: the server claimed the queued input into the refusal.
+        const queued = await this.#options.queueRecovery?.(acceptance.queue_recovery, attempt.origin.token, fit);
+        if (queued) {
+          const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - queued.envelopes.length);
+          return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: queued.envelopes }, queued.envelopes, queued.lease);
+        }
+        if (queued === undefined) {
+          acceptance.queue_recovery.release(acceptance.queue_recovery.items.map((item) => item.queueId));
+        }
+      }
+      const lease = acceptance.queue_recovery === undefined
+        ? this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit, acceptance.details?.expected_peer_turn)
+        : undefined;
       const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - (lease?.envelopes.length ?? 0));
       if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes, ...(lease.foldedEarlier ? { folded_earlier: true } : {}) }, lease.envelopes, lease);
       lease?.rollback();

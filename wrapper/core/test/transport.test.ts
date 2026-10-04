@@ -3437,6 +3437,41 @@ describe("ServerLink — inter-agent queue join (credit-v1)", () => {
     }
   });
 
+  it("declares inline recovery only with the queue, reply basis v1 and the option", () => {
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao", interAgentQueuePolicy: policy, interAgentReplyBasis: "v1", interAgentInlineRecovery: true,
+    });
+    expect(mock.lastChannelParams).toMatchObject({ inter_agent_inline_recovery: "v1" });
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", interAgentQueuePolicy: policy, interAgentReplyBasis: "v1" });
+    expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_inline_recovery");
+    new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", interAgentReplyBasis: "v1", interAgentInlineRecovery: true });
+    expect(mock.lastChannelParams).not.toHaveProperty("inter_agent_inline_recovery");
+  });
+
+  it("hands a stale_reply_basis refusal's queue_recovery to the lease and returns its offer", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao", interAgentQueuePolicy: policy });
+    mock.joinReceivers.get("ok")!({
+      inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy, inter_agent_queue_epoch: "epoch",
+      inter_agent_queue_resume_required: false, inter_agent_delivery_incarnation: "inc-1",
+    });
+    try {
+      const pending = link.sendInterAgent({
+        version: "0", agent_id: "a.agent", persona: { id: "ao", name: "ao", sprite_set: "ao" }, display_name: "ao",
+        ts: "2026-10-04T00:00:00Z", type: "inter_agent_message", state: "idle",
+        payload: { to: "b.agent", conversation_id: "cnv", turn_number: 2, kind: "response", body: "late", meta: { done: false, propose_next: "" } },
+      } as unknown as Envelope);
+      mock.lastPush?.receivers.get("error")?.({
+        reason: "stale_reply_basis", conversation_id: "cnv", expected_peer_turn: 3, supplied_basis: 1,
+        queue_recovery: { lease_id: "5", items: [{ queue_id: "q1", attempt_id: "q1.1", delivery_seq: 7, class: "ordinary", byte_charge: 1, envelope: { type: "inter_agent_message" } }] },
+      });
+      const acceptance = await pending;
+      expect(acceptance).toMatchObject({ kind: "rejected", reason: "stale_reply_basis" });
+      expect((acceptance as { queue_recovery?: QueueOffer }).queue_recovery).toMatchObject({ leaseId: "5", kind: "recovery" });
+    } finally {
+      link.close();
+    }
+  });
+
   it("needs no echo from a wrapper that declared no queue", () => {
     const { refused, hydration } = link(false);
     mock.joinReceivers.get("ok")!({});

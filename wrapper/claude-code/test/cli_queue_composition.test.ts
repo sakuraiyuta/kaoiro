@@ -467,10 +467,11 @@ describe("Claude CLI credit-v1 root composition", () => {
 
 /** A queued root input the model answers with a waiting send_to_agent; the
  *  peer's reply comes back as a `waiter` offer (credit-v1 W path). */
-async function runWaiterReply(noReply = false) {
+async function runWaiterReply(noReply = false, stale = false) {
   const sent: Record<string, unknown>[] = [];
   const outers: unknown[] = [];
   const toolResults: string[] = [];
+  let serverLinkOptions!: Record<string, unknown>;
   let lease!: QueueLease;
   let linkOptions!: Record<string, any>;
   let host!: AgentHost;
@@ -486,6 +487,7 @@ async function runWaiterReply(noReply = false) {
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
+      serverLinkOptions = options as unknown as Record<string, unknown>;
       lease = new QueueLease({
         transport: async (payload) => {
           sent.push(payload);
@@ -507,7 +509,7 @@ async function runWaiterReply(noReply = false) {
           if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
           if (payload.op === "return") return { ...base, returned_ranges: [] };
           if (payload.op === "dispose") {
-            if ((payload.items as { queue_id: string }[]).some((i) => i.queue_id === "9")) done();
+            if ((payload.items as { queue_id: string }[]).some((i) => i.queue_id === "9" || i.queue_id === "q1")) done();
             return { ...base, disposed: (payload.items as { queue_id: string }[]).map((i) => i.queue_id), resolved_ranges: [], returned_ranges: [] };
           }
           return base;
@@ -527,6 +529,17 @@ async function runWaiterReply(noReply = false) {
         flushInterAgentRetirements: async () => {},
         sendInterAgent: async (_envelope: Envelope, _generation: number, outer: unknown) => {
           outers.push(outer);
+          if (stale) {
+            // The peer had newer queued input: the refusal carries it.
+            return {
+              kind: "rejected", reason: "stale_reply_basis",
+              details: { conversation_id: "c-queue", expected_peer_turn: 3, supplied_basis: 1 },
+              queue_recovery: lease.receiveRecovery({
+                lease_id: "3",
+                items: [{ queue_id: "q1", attempt_id: "q1.1", delivery_seq: 2, class: "ordinary", byte_charge: 1, envelope: peerReply }],
+              }),
+            };
+          }
           // The server routes the peer's reply to the registration as W.
           if (!noReply) setImmediate(() => lease.receiveBatch({
             version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "2", kind: "waiter",
@@ -564,7 +577,9 @@ async function runWaiterReply(noReply = false) {
               }, "waiting-reply", signal);
               transport.onmessage!({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
                 name: "send_to_agent",
-                arguments: { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: noReply ? 200 : 3_000 },
+                arguments: stale
+                  ? { to: "peer.agent", conversation_id: "c-queue", kind: "response", body: "late answer" }
+                  : { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: noReply ? 200 : 3_000 },
                 _meta: { "claudecode/toolUseId": "waiting-reply" },
               } });
               await vi.waitFor(() => expect(responses).toHaveLength(1), { timeout: 4_000 });
@@ -583,8 +598,8 @@ async function runWaiterReply(noReply = false) {
 
   try {
     await vi.waitFor(() => expect(sent.some((p) => noReply ? p.op === "waiter_close" : p.op === "dispose" &&
-      (p.items as { queue_id: string }[]).some((i) => i.queue_id === "9"))).toBe(true), { timeout: 5_000 });
-    return { sent, outers, toolResults };
+      (p.items as { queue_id: string }[]).some((i) => i.queue_id === (stale ? "q1" : "9")))).toBe(true), { timeout: 5_000 });
+    return { sent, outers, toolResults, serverLinkOptions };
   } finally {
     host?.close();
     await running.catch(() => {});
@@ -604,6 +619,18 @@ describe("Claude CLI credit-v1 W path composition", () => {
       items: [{ queue_id: "9", outcome: "observed", witness: "tool_result" }],
     });
     expect(toolResults[0]).toContain("peer answer");
+  });
+
+  it("a stale_reply_basis refusal returns the claimed queue input inline, observed at the result return", async () => {
+    const { sent, toolResults, serverLinkOptions } = await runWaiterReply(false, true);
+    expect(serverLinkOptions.interAgentInlineRecovery).toBe(true);
+    const rootToken = sent.find((p) => p.op === "credit")!.native_turn_token;
+    expect(sent.find((p) => p.op === "begin_native" && p.lease_id === "3")).toMatchObject({ queue_ids: ["q1"], native_turn_token: rootToken });
+    expect(sent.find((p) => p.op === "dispose" && p.lease_id === "3")).toMatchObject({
+      items: [{ queue_id: "q1", outcome: "observed", witness: "tool_result" }],
+    });
+    expect(toolResults[0]).toContain("peer answer");
+    expect(toolResults[0]).toContain("stale_reply_basis");
   });
 
   it("a wait that ends without its reply closes the registration", async () => {

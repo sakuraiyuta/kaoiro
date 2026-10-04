@@ -776,6 +776,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     queueWaiters: () => (link?.queueLease?.() ?? null) !== null,
     closeWaiter: (registrationId) => { void link?.queueLease?.()?.waiterClose(registrationId); },
     queueHandoff: (envelopes, turnToken) => queueInput.handoff(envelopes, turnToken),
+    queueRecovery: (offer, turnToken, fit) => queueInput.recover(offer, turnToken, fit),
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK
     // session has not opened yet either.
@@ -1084,6 +1085,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentQueuePolicy: interAgentQueuePolicy(config),
+    interAgentInlineRecovery: true,
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
     onQueueOffer: (offer) => void (offer.kind === "early" ? queueEarly.onOffer(offer)
       : offer.kind === "waiter" ? queueInput.acceptWaiter(offer)

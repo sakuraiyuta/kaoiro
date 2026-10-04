@@ -23,6 +23,7 @@ import type {
   DeliveryQueueControlReply,
   Envelope,
   InterAgentQueueDisposeItem,
+  InterAgentQueueItem,
   InterAgentQueueItemClass,
   InterAgentQueueItemPhase,
   InterAgentQueueJoinReply,
@@ -32,6 +33,7 @@ import {
   parseDeliveryBatchPush,
   parseDeliveryQueueControlError,
   parseDeliveryQueueControlReply,
+  parseInterAgentQueueRecovery,
 } from "./inter_agent_queue_codec.js";
 
 type ControlOp = DeliveryQueueControlReply["op"];
@@ -87,7 +89,8 @@ export interface NativeSubmit {
 
 export interface QueueOffer {
   readonly leaseId: string;
-  readonly kind: DeliveryBatchPush["kind"];
+  /** `recovery`: claimed into a `stale_reply_basis` refusal (r8 §6.3). */
+  readonly kind: DeliveryBatchPush["kind"] | "recovery";
   readonly items: readonly QueueOfferItem[];
   /** Asks the server to permit native submission of `queueIds`. Resolves
    *  `null` when the permit was not granted; may stay pending across a
@@ -236,8 +239,25 @@ export class QueueLease {
       push.generation !== binding.generation || this.#leases.has(push.lease_id)
     ) return false;
 
+    this.#onOffer(this.#offer(push.lease_id, push.kind, this.#lease(push.lease_id, push.items)));
+    return true;
+  }
+
+  /** Accepts the `queue_recovery` of a `stale_reply_basis` refusal as a lease
+   *  under the current binding (r8 §6.3). Its offer goes back to the refused
+   *  tool, not to `onOffer`. */
+  receiveRecovery(raw: unknown): QueueOffer | undefined {
+    const recovery = parseInterAgentQueueRecovery(raw);
+    if (
+      recovery === undefined || recovery.items.length === 0 || this.#binding === null || this.#frozen ||
+      this.#leases.has(recovery.lease_id)
+    ) return undefined;
+    return this.#offer(recovery.lease_id, "recovery", this.#lease(recovery.lease_id, recovery.items));
+  }
+
+  #lease(leaseId: string, offered: readonly InterAgentQueueItem[]): Map<string, LeaseItem> {
     const items = new Map<string, LeaseItem>();
-    for (const item of push.items) {
+    for (const item of offered) {
       items.set(item.queue_id, {
         queueId: item.queue_id,
         deliverySeq: item.delivery_seq,
@@ -247,10 +267,9 @@ export class QueueLease {
         abandoned: false,
       });
     }
-    this.#leases.set(push.lease_id, items);
-    this.#onSequences(push.items.map((item) => item.delivery_seq));
-    this.#onOffer(this.#offer(push.lease_id, push.kind, items));
-    return true;
+    this.#leases.set(leaseId, items);
+    this.#onSequences(offered.map((item) => item.delivery_seq));
+    return items;
   }
 
   credit(kind: "root", nativeTurnToken: string): Promise<QueueControlResult<"credit">>;
@@ -288,7 +307,7 @@ export class QueueLease {
     return this.#control("freeze", { op: "freeze", reason });
   }
 
-  #offer(leaseId: string, kind: DeliveryBatchPush["kind"], items: Map<string, LeaseItem>): QueueOffer {
+  #offer(leaseId: string, kind: QueueOffer["kind"], items: Map<string, LeaseItem>): QueueOffer {
     const current = (): boolean => this.#leases.get(leaseId) === items;
 
     return {

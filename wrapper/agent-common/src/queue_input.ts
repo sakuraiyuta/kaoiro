@@ -229,6 +229,48 @@ export class QueueInput {
     };
   }
 
+  /** The queued input claimed into a `stale_reply_basis` refusal of the
+   *  tool of turn `turnToken` (r8 §6.3). Items another waiter consumed go to
+   *  that waiter; the rest is returned inline when it fits, permitted under
+   *  the turn first. `null`: no inline recovery (unused items go back). */
+  async recover(
+    offer: QueueOffer,
+    turnToken: string,
+    fit: (envelopes: readonly Envelope[]) => boolean,
+  ): Promise<{ envelopes: readonly Envelope[]; lease: QueueHandoffLease } | null> {
+    const prepared = await this.prepare(offer);
+    const ids = prepared.injected.map(({ item }) => item.queueId);
+    if (ids.length === 0) return null;
+    const envelopes = prepared.injected.map(({ item }) => item.envelope as Envelope);
+    if (!fit(envelopes)) {
+      void offer.return(ids.map((queue_id) => ({ queue_id, reason: "recovery_abandoned" as const })));
+      return null;
+    }
+    let cancel = (): void => {};
+    const submit = await Promise.race([
+      offer.begin(ids, turnToken),
+      new Promise<null>((resolve) => { cancel = this.#schedule(() => resolve(null), QUEUE_HANDOFF_PERMIT_WAIT_MS); }),
+    ]);
+    cancel();
+    if (submit === null) {
+      offer.release(ids);
+      return null;
+    }
+    return {
+      envelopes,
+      lease: {
+        commit: () => {
+          submit.invoke(() => {});
+          void offer.dispose(ids.map((queue_id) => ({ queue_id, outcome: "observed" as const, witness: "tool_result" as const })))
+            .then((result) => { if (result.ok) this.forget(ids); });
+        },
+        rollback: () => {
+          void offer.return(ids.map((queue_id) => ({ queue_id, reason: "recovery_abandoned" as const })));
+        },
+      },
+    };
+  }
+
   #awaitTool(offer: QueueOffer, queueId: string): void {
     this.#awaiting.get(queueId)?.cancel();
     const cancel = this.#schedule(() => {

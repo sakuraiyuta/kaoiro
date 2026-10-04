@@ -142,7 +142,10 @@ interface PendingDeliveryStage {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult; waiter_registration_id?: string }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true;
+    /** credit-v1: queued input claimed into a `stale_reply_basis` refusal. */
+    queue_recovery?: QueueOffer;
+    details?: { conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -330,6 +333,10 @@ export interface ServerLinkOptions {
    *  queue echo, is terminal: the link closes and
    *  `onInterAgentQueueRefused` receives the server's reason. */
   interAgentQueuePolicy?: InterAgentQueuePolicy;
+  /** Declares `inter_agent_inline_recovery: "v1"` (with the queue and reply
+   *  basis v1): a `stale_reply_basis` refusal may then carry the refused
+   *  sender's queued input as `queue_recovery`. */
+  interAgentInlineRecovery?: boolean;
   onInterAgentQueueRefused?: (reason: unknown) => void;
   /** Receives each offer the server makes under this link's credit. */
   onQueueOffer?: (offer: QueueOffer) => void;
@@ -1446,6 +1453,9 @@ export class ServerLink {
         }
         : {}),
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
+      ...(options.interAgentQueuePolicy && options.interAgentReplyBasis === "v1" && options.interAgentInlineRecovery === true
+        ? { inter_agent_inline_recovery: "v1" }
+        : {}),
       ...(options.noticeAttribution ? { notice_attribution: options.noticeAttribution } : {}),
       ...(options.interAgentDeliveryModes
         ? { inter_agent_delivery_modes: options.interAgentDeliveryModes }
@@ -2253,7 +2263,11 @@ export class ServerLink {
           });
         })
         .receive("error", (reply: unknown) => {
-          resolve({ kind: "rejected", ...pushRejection(reply) });
+          const rejection = pushRejection(reply);
+          const recovery = rejection.reason === "stale_reply_basis" && isObject(reply)
+            ? this.#queueLease?.receiveRecovery(reply.queue_recovery)
+            : undefined;
+          resolve({ kind: "rejected", ...rejection, ...(recovery === undefined ? {} : { queue_recovery: recovery }) });
         })
         .receive("timeout", () => {
           resolve({ kind: "unknown", reason: "timeout" });
