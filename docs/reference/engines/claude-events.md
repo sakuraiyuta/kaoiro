@@ -212,8 +212,8 @@ recovery capacity evictions carry a reason and count.
 A host that closes while a receipt is pending, by a fail-stop or a stop, stops
 holding: a closed host ignores hooks, so the input iterator returns and the
 root-hook timeout no longer fires. The receipt then settles as `unknown` from
-what the SDK stream still reports (a session change or a foreign root
-interval), and at the latest as `unknown(stream_eof)` when the stream ends.
+what the SDK stream still reports (a session change), and at the latest as
+`unknown(stream_eof)` when the stream ends.
 
 The [E1–E4 native measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
 establish the measured running-tool fold, byte-identical hook text, new root
@@ -256,7 +256,8 @@ restore, or reset rollback). If that launch used `--resume`, the relaunch
 resumes the same session. If it was a fresh launch (a new agent, or a session
 reset in either mode, `new` or `clear`), the runner does not know the session
 the wrapper started afterwards, and the relaunch starts another fresh session:
-the conversation context is not carried over. The new wrapper's session report then replaces the server's session pointer, so a later
+the conversation context is not carried over. The new wrapper's session report
+then replaces the server's session pointer, so a later
 **復帰** resumes the new session as well. The earlier session stays on disk;
 reattach it with a session switch (`resume_session`, relayed to the runner as
 [`switch_session`](../protocol/runner-control.md)). Resuming the live session
@@ -274,7 +275,8 @@ on relaunch is issue #524.
 The procedure: use the dashboard's **終了** action on the affected agent card
 to terminate the wrapper: the runner sends the wrapper SIGTERM, and the
 wrapper's `host.close()` aborts the SDK, which ends the CLI, escalating from
-SIGTERM to SIGKILL if the CLI does not exit. Wait until the card shows `disconnected`; the server rejects restore
+SIGTERM to SIGKILL if the CLI does not exit. Wait until the card shows
+`disconnected`; the server rejects restore
 while that wrapper is still live. Then use the card's **復帰** action, which
 resumes the session in the server's session pointer (a fresh session when the
 pointer holds none). Confirm that the agent

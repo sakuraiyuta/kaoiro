@@ -4634,10 +4634,10 @@ export class AgentHost implements EngineAdapter {
         continue;
       }
       if (this.#pendingPushedReceipt !== null) {
-        // A closed host ignores hooks, so no hook can settle this receipt and
-        // the stream may end only once this iterator returns. Unlike the
-        // active-turn branch, queued roots do not keep it open: the receipt
-        // bars them, and stream end cancels them unstarted.
+        // A closed host ignores hooks, so no hook can settle this receipt, and
+        // after a fail-stop the stream ends only once this iterator returns.
+        // Unlike the active-turn branch, queued roots do not keep it open: the
+        // receipt bars them, and stream end cancels them unstarted.
         if (this.#closed) return;
         await new Promise<void>((resolve) => {
           if (this.#pendingPushedReceipt === null) resolve();
