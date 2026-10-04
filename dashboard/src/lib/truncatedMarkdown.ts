@@ -162,7 +162,7 @@ function deepestLast(block: Tok): Tok {
 }
 
 function step(head: string, onFallback: (() => void) | undefined): string {
-  if (head.trim() === "" || /\n[ \t]*\n[ \t]*$/.test(head)) return head;
+  if (head.trim() === "") return head;
   const dropped = dropMarkerLines(head);
   if (dropped !== head) return dropped;
 
@@ -181,6 +181,10 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   // has to line up: the last block must be the tail of the head.
   if (!head.trimEnd().endsWith(blocks[li].raw.trimEnd())) return fallback(head);
   const deep = deepestLast(blocks[li]);
+  // A blank line ends a paragraph, so what is unfinished in it stays literal in
+  // the full text too. Inside a fence it is part of the code.
+  const inFence = deep.type === "code" && deep.codeBlockStyle !== "indented";
+  if (/\n[ \t]*\n[ \t]*$/.test(head) && !inFence) return head;
 
   const lines = head.split("\n");
   const lineAt: number[] = [];
@@ -198,7 +202,7 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   }
   if (deep.type === "empty") return head.slice(0, lineAt[lastNz]);
   if (deep.type === "table") return head.slice(0, startOfLines(lineCount(deep.raw)));
-  if (deep.type === "code" && deep.codeBlockStyle !== "indented") {
+  if (inFence) {
     const n = lineCount(deep.raw);
     const first = lines[lastNz - n + 1] ?? "";
     const opener = /^ {0,3}(`{3,}|~{3,})/.exec(first.replace(/^[ >]*(?:[-*+] |\d+[.)] )?/, ""));

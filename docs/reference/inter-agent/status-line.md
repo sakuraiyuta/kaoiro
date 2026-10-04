@@ -202,9 +202,16 @@ and the panel read the trimmed head. The note says the text continues.
   never kept: the rest of it is unknown.
 - When nothing precedes the first unfinished construct, its text is kept and its
   markup dropped (a cut bold headline is drawn plain, a link keeps its label).
+  The text ends at an unclosed backtick, because the full line may hold code
+  there, and the block is cut instead when dropping a delimiter would make the
+  text draw a link the full line does not (a `www.` address joined across the
+  dropped character, an address in an unfinished link label).
+- Carriage returns become line feeds and tabs four spaces before the lexer reads
+  the head. A failure inside the trim shows the empty-head sentence below, never
+  the untrimmed head.
 - A head with nothing left to draw (it starts with a table, a bare URL, a link
-  destination, an angle-bracket autolink, an empty fence, or holds only
-  reference definitions) shows the fixed sentence `(冒頭が長いため省略)`, an
+  destination, an angle-bracket autolink, an unclosed code span, an empty fence,
+  or holds only reference definitions) shows the fixed sentence `(冒頭が長いため省略)`, an
   element of the dashboard in its own class (`.omitted` in the panel,
   `.status-omitted` on the card; dim and italic), never passed through the
   markdown path. The server's empty head for a first grapheme larger than 512
@@ -212,7 +219,7 @@ and the panel read the trimmed head. The note says the text continues.
 
 What the trim cannot do, because a start of the text does not hold what comes
 after it: a delimiter that the full line shows as literal text can be hidden
-(counted by the oracle, about 1.7% of cuts on the fuzz corpus); a reference
+(counted by the oracle, about 1.4% of cuts on the fuzz corpus); a reference
 link whose definition follows the head, a footnote-style definition and a table
 without leading pipes draw their brackets as text. None of these draws an
 address. `truncatedMarkdownOracle.test.ts` judges the trim by the renderers at

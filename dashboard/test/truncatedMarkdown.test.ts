@@ -67,6 +67,10 @@ describe("a table, a fence, a definition", () => {
     ["a fence with no body goes", "前文\n\n```ts\n", "前文\n\n"],
     ["a lone fence run goes", "前文\n\n```", "前文\n\n"],
     ["an empty quote line goes", "> 引用\n> ", "> 引用\n"],
+    // A blank line inside a fence is code, so the head is not complete there.
+    ["a fence opener followed only by blank lines goes", "```\n\n", ""],
+    ["so does one with an info string", "前文\n\n```ts\n\n", "前文\n\n"],
+    ["a blank line inside a fence body stays", "前文\n\n```ts\ncode\n\n", "前文\n\n```ts\ncode\n\n"],
     ["a list item that holds only an empty bullet goes", "**状況**\n- *", "**状況**\n"],
     ["an ordered one too", "前文\n\n1. *", "前文\n\n"],
     ["an empty heading goes", "前文\n\n## ##", "前文\n\n"],
@@ -223,6 +227,8 @@ describe("a head that is complete", () => {
     ["ends in a blank line", "前文。\n\n"],
     ["ends in a blank line after markup", "前文 **太字** と [リンク](https://e.example/a) 。\n\n"],
     ["has no unfinished construct", "前文 **太字** と `code` と [a](https://e.example/a) の文"],
+    // A blank line ends the paragraph, so the star stays literal in the full text too.
+    ["ends a paragraph in a blank line, with a delimiter still open", "前文 **a\n\n"],
   ])("is left as it is when it %s", (_name, head) => {
     expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
   });
