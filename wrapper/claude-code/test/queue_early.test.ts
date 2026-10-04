@@ -626,6 +626,14 @@ describe("ClaudeQueueEarly", () => {
       expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", sub_reason: "fold_unavailable" }] });
     });
 
+    it("a live input context that changed during the claim is downgraded, not cut", async () => {
+      // Same turn, but its session or query changed while the claim was in flight.
+      const h = await ready((h) => { h.yieldState.onClaim = () => { h.yieldState.matches = false; }; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
+      expect(h.cuts).toEqual([]);
+      expect(h.pushes).toHaveLength(1);
+    });
+
     it("a cut the host refused is downgraded and definitely unstarted", async () => {
       const h = await ready((h) => { h.yieldState.cutOk = false; });
       expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
