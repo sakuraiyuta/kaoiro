@@ -220,8 +220,9 @@ root-hook timeout.
 ### Recovering a fail-stopped Claude wrapper
 
 A fail-stopped host never admits input again, so recovery always means a new
-wrapper process. Under a runner, that process usually starts without operator
-action.
+wrapper process. (The pushed-root case in the table below freezes only
+inter-agent admission and leaves the host open, but it also needs a new
+process.) Under a runner, that process usually starts without operator action.
 
 **Automatic path.** `AgentHost#failStopAdmission`
 (`wrapper/claude-code/src/host.ts`) closes the host, cancels queued input that
@@ -230,14 +231,14 @@ then returns because the host is closed and its queue is empty, so the SDK
 closes the CLI's input. The CLI finishes the turn it is running, if any, and
 exits. The stream end runs `#finishHost("stream_eof")`, `host.run()` returns,
 and `runClaudeCli` (`wrapper/claude-code/src/cli.ts`) reports the disconnect
-reason `stop` and exits with code 0. The exit waits for the running turn: in
-the case recorded on issue #520 (2026-10-04) it came about six minutes after the
-fail-stop. The runner's `Supervisor#onExit` (`runner/src/supervisor.ts`)
-treats every exit it did not request (no stop, restart or reset in progress) as
-a crash, whatever the exit code, and `#relaunch` starts the wrapper again: up
-to `MAX_RESTARTS` (5) relaunches per `RESTART_WINDOW_MS` (60 s) window. An
-operator launch, or an exit more than 60 s into the window, starts a new
-window. This applies
+reason `stop` and exits with code 0. The exit waits for the running turn,
+which can take minutes. The runner's `Supervisor#onExit`
+(`runner/src/supervisor.ts`) treats every exit it did not request (no stop,
+restart or reset in progress) as a crash, whatever the exit code, and
+`#relaunch` starts the wrapper again: up to `MAX_RESTARTS` (5) relaunches per
+`RESTART_WINDOW_MS` (60 s) window. Any launch other than an automatic relaunch
+(spawn or restore, restart, session switch, session reset, or reset rollback),
+or an exit more than 60 s into the window, starts a new window. This applies
 to the notification, foreign-interval, result-index, session-binding and
 `root_hook_timeout` fail-stops alike. The `root_hook_timeout` fail-stop does
 not exchange the `Query` inside the failed wrapper either: the old `Query`
@@ -249,9 +250,7 @@ restore, or reset rollback). If that launch used `--resume`, the relaunch
 resumes the same session. If it was a fresh launch (a new agent, or a session
 reset in either mode, `new` or `clear`), the runner does not know the session
 the wrapper started afterwards, and the relaunch starts another fresh session:
-the conversation context is not carried over. On 2026-10-04 a relaunched peer
-came back in a new session (`41d133e4…`) instead of `50097f31…`. The new
-wrapper's session report then replaces the server's session pointer, so a later
+the conversation context is not carried over. The new wrapper's session report then replaces the server's session pointer, so a later
 **復帰** resumes the new session as well. The earlier session stays on disk;
 reattach it with a session switch (`resume_session`, relayed to the runner as
 [`switch_session`](../protocol/runner-control.md)). Resuming the live session
@@ -267,8 +266,9 @@ on relaunch is issue #524.
 | Context lost after a fresh relaunch | See the session paragraph above. | Switch the agent back to its earlier session. |
 
 The procedure: use the dashboard's **終了** action on the affected agent card
-to terminate the wrapper (SIGTERM; `host.close()` makes the SDK escalate to
-SIGKILL). Wait until the card shows `disconnected`; the server rejects restore
+to terminate the wrapper: the runner sends the wrapper SIGTERM, and the
+wrapper's `host.close()` aborts the SDK, which ends the CLI, escalating from
+SIGTERM to SIGKILL if the CLI does not exit. Wait until the card shows `disconnected`; the server rejects restore
 while that wrapper is still live. Then use the card's **復帰** action, which
 resumes the session in the server's session pointer (a fresh session when the
 pointer holds none). Confirm that the agent
