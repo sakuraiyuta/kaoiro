@@ -3,8 +3,9 @@
 // data — no Phoenix server, no WebSocket round-trips.
 //
 //   ?view=lobby&role=operator|viewer[&taskRing=N][&sprites=1][&demo=1]
+//     [&statusLine=hostile|unset]
 //   ?view=detail[&pending=permission|question][&attention=1]
-//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
+//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N][&statusLine=hostile|unset]
 //   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
 //     |status-line-history
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
@@ -15,7 +16,7 @@ import DetailHarness from "./DetailHarness.svelte";
 import LobbyHarness from "./LobbyHarness.svelte";
 import OverlayHarness from "./OverlayHarness.svelte";
 import type { DetailScenario } from "./fixtures";
-import { personaSpriteManifest } from "./fixtures";
+import { hostileStatusLineView, personaSpriteManifest } from "./fixtures";
 
 const params = new URLSearchParams(location.search);
 const view = params.get("view") ?? "lobby";
@@ -85,6 +86,8 @@ if (view === "app") {
   const logCount = params.get("logCount");
   if (logCount !== null) scenario.logCount = Number(logCount);
   if (params.get("wrapperBuild") === "1") scenario.wrapperBuildInfo = true;
+  if (params.get("statusLine") === "hostile") scenario.statusLine = hostileStatusLineView();
+  if (params.get("statusLine") === "unset") scenario.statusLine = { kind: "unset" };
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
   const overlayParam = params.get("overlay");
@@ -143,6 +146,12 @@ if (view === "app") {
       manifest:
         params.get("sprites") === "1" ? personaSpriteManifest() : null,
       demo: params.get("demo") === "1",
+      statusLine:
+        params.get("statusLine") === "hostile"
+          ? hostileStatusLineView()
+          : params.get("statusLine") === "unset"
+            ? { kind: "unset" as const }
+            : { kind: "none" as const },
     },
   });
 }

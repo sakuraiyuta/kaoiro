@@ -7,6 +7,7 @@
   import AgentCard from "../../src/lib/AgentCard.svelte";
   import AgentGridShell from "../../src/lib/AgentGridShell.svelte";
   import type { PersonaManifest } from "../../src/lib/protocol";
+  import type { StatusLineView } from "../../src/lib/statusLine";
   import {
     demoLobbyAgents,
     demoLobbyLogs,
@@ -20,13 +21,18 @@
     taskRing = 0,
     manifest = null,
     demo = false,
+    statusLine = { kind: "none" },
   }: {
     operator: boolean;
     pending?: boolean;
     taskRing?: number;
     manifest?: PersonaManifest | null;
     demo?: boolean;
+    statusLine?: StatusLineView;
   } = $props();
+
+  // issue 514: the agent whose change log the status line row asked for.
+  let historyOpened = $state<string | null>(null);
 
   const agents = demo ? demoLobbyAgents(pending) : lobbyAgents(pending);
   const logs = demo ? demoLobbyLogs() : lobbyLogs();
@@ -52,10 +58,13 @@
           {manifest}
           onSelect={() => {}}
           activeTaskCount={taskRing}
+          {statusLine}
+          onOpenStatusLineHistory={(id) => (historyOpened = id)}
         />
       </li>
     {/each}
   </AgentGridShell>
+  <p id="history-opened" data-agent={historyOpened ?? ""}>{historyOpened ?? ""}</p>
 </main>
 
 <style>

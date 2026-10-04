@@ -8,7 +8,7 @@ import type {
   PersonaManifest,
   UserSummary,
 } from "../../src/lib/protocol";
-import type { StatusLineHistoryEntry } from "../../src/lib/statusLine";
+import type { StatusLineHistoryEntry, StatusLineView } from "../../src/lib/statusLine";
 
 function agent(
   agentId: string,
@@ -95,6 +95,8 @@ export interface DetailScenario {
   logCount?: number;
   /** Supply a connected wrapper build identity for the AgentDetail display. */
   wrapperBuildInfo?: boolean;
+  /** issue 514: the agent's status line as the dashboard holds it. */
+  statusLine?: StatusLineView;
 }
 
 /** Manifest with a resolved sprite for the "ao" persona, covering every
@@ -429,4 +431,33 @@ export function hostileStatusLineHistory(): StatusLineHistoryEntry[] {
     statusLineEntry(2, TOO_DEEP_STATUS_LINE),
     statusLineEntry(1, null),
   ];
+}
+
+// issue 514: a status line head (at most 512 bytes, as the server cuts it) that
+// tries every way the card and detail profiles could be broken. The first three
+// lines are the ones a card draws; the rest only exists in the DOM. Nothing here
+// stands in for a renderer: the harness mounts the production card and detail
+// view and the real markdown renderer reads this text.
+const HOSTILE_HEAD = [
+  "**bold** [safe link](https://example.test/ok) `code`",
+  "[run me](javascript:window.__pwned='link') ![tracking pixel](https://evil.test/pixel.png)",
+  '<img src="https://evil.test/raw.png" onerror="window.__pwned = \'onerror\'">',
+  '<script>window.__pwned = "script"</script>',
+  "# heading",
+  "- [x] done",
+  "- [ ] todo",
+  "",
+  "| a | b |",
+  "|---|---|",
+  "| 1 | 2 |",
+].join("\n");
+
+export function hostileStatusLineView(): StatusLineView {
+  return {
+    kind: "set",
+    head: HOSTILE_HEAD,
+    truncated: true,
+    bytes: 4096,
+    updatedAt: "2026-10-04T01:00:00.000000Z",
+  };
 }

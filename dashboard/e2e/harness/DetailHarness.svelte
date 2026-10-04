@@ -16,6 +16,9 @@
 
   let { scenario }: { scenario: DetailScenario } = $props();
 
+  // issue 514: the agent whose change log the detail view's status line asked for.
+  let historyOpened = $state<string | null>(null);
+
   const agents = detailAgents(scenario);
   const manifest = detailManifest(scenario);
   const connection = stubConnection();
@@ -126,8 +129,11 @@
               build_dirty: false,
             }
           : null}
+        statusLine={scenario.statusLine ?? { kind: "none" }}
+        onOpenStatusLineHistory={(id) => (historyOpened = id)}
         onClose={() => (closed = true)}
       />
+      <p id="history-opened" data-agent={historyOpened ?? ""}>{historyOpened ?? ""}</p>
     {:else}
       <p data-testid="detail-pending-mount">detail を開いています…</p>
     {/if}
