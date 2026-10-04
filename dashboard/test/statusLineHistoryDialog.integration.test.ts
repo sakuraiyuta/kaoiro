@@ -3,14 +3,19 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StatusLineHistoryDialog from "../src/lib/StatusLineHistoryDialog.svelte";
 import type { StatusLineHistoryEntry } from "../src/lib/statusLine";
-import { renderUntrustedMarkdown } from "../src/lib/untrustedMarkdown";
+import { renderUntrustedInline, renderUntrustedMarkdown } from "../src/lib/untrustedMarkdown";
 import { reactiveObject } from "./reactiveObject.svelte";
 
-// The real renderer, observed: the dialog must parse markdown for the entries
-// the operator actually looks at, and for no others.
+// The real renderers, observed: the dialog must parse markdown in full for the
+// entries the operator actually looks at, and for no others, and must hand the
+// inline renderer only a short summary of a collapsed entry.
 vi.mock("../src/lib/untrustedMarkdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/untrustedMarkdown")>();
-  return { ...actual, renderUntrustedMarkdown: vi.fn(actual.renderUntrustedMarkdown) };
+  return {
+    ...actual,
+    renderUntrustedMarkdown: vi.fn(actual.renderUntrustedMarkdown),
+    renderUntrustedInline: vi.fn(actual.renderUntrustedInline),
+  };
 });
 
 // jsdom does not implement HTMLDialogElement.showModal/close; the Modal
@@ -29,9 +34,11 @@ if (
 
 const mounted: object[] = [];
 const renderCalls = () => vi.mocked(renderUntrustedMarkdown).mock.calls.length;
+const inlineCalls = () => vi.mocked(renderUntrustedInline).mock.calls.map(([text]) => text);
 
 beforeEach(() => {
   vi.mocked(renderUntrustedMarkdown).mockClear();
+  vi.mocked(renderUntrustedInline).mockClear();
 });
 
 afterEach(async () => {
@@ -86,12 +93,58 @@ describe("StatusLineHistoryDialog", () => {
     expect(items(target)[1]!.querySelector(".toggle")?.textContent).toBe("展開");
   });
 
-  it("parses nothing for 99 collapsed pathological entries", async () => {
+  it("parses nothing in full for 99 collapsed pathological entries", async () => {
     const hostile = ">".repeat(3000);
     const { target } = await open(async () => [entry(100, "# latest"), ...log(99, () => hostile).map((e, i) => ({ ...e, seq: 99 - i }))]);
 
     expect(items(target)).toHaveLength(100);
     expect(renderCalls()).toBe(1);
+  });
+
+  it("draws a collapsed entry's first line as inline markdown, with nothing pressable in it", async () => {
+    const text = (seq: number) => `**bold ${seq}** [issue](https://e.test/${seq}) <img src=x onerror=alert(1)>\nsecond line`;
+    const { target } = await open(async () => log(3, text));
+
+    const collapsed = items(target)[1]!;
+    expect(collapsed.querySelector(".first-line strong")?.textContent).toBe("bold 2");
+    expect(collapsed.querySelector(".first-line span.md-link")?.textContent).toBe("issue");
+    expect(collapsed.querySelector(".first-line")?.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(collapsed.querySelector(".first-line")?.textContent).not.toContain("second line");
+    expect(collapsed.querySelector(".first-line a, .first-line img, .first-line button, .first-line div, .first-line p")).toBeNull();
+    // The unexpanded entries were never parsed in full.
+    expect(renderCalls()).toBe(1);
+  });
+
+  it("switches to the full profile when the entry is expanded, with real links", async () => {
+    const { target } = await open(async () => log(3, (seq) => `**b${seq}** [issue](https://e.test/${seq})`));
+    const second = items(target)[1]!;
+    expect(second.querySelector("a")).toBeNull();
+
+    second.querySelector<HTMLButtonElement>(".toggle")!.click();
+    await tick();
+
+    expect(second.querySelector(".first-line")).toBeNull();
+    const link = second.querySelector<HTMLAnchorElement>("a")!;
+    expect(link.getAttribute("href")).toBe("https://e.test/2");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer nofollow");
+    expect(renderCalls()).toBe(2);
+  });
+
+  it("cuts a long first line before it is parsed", async () => {
+    const longLine = "*a _b".repeat(3000);
+    const { target } = await open(async () => [entry(2, "# latest"), entry(1, longLine)]);
+
+    const summarised = inlineCalls().filter((text) => text !== "");
+    expect(summarised).toHaveLength(1);
+    expect(Array.from(summarised[0]!).length).toBeLessThanOrEqual(161);
+    expect(summarised[0]!.endsWith("…")).toBe(true);
+    expect(items(target)[1]!.querySelector(".first-line")?.textContent?.endsWith("…")).toBe(true);
+  });
+
+  it("shows a first line that draws nothing as the text the author wrote", async () => {
+    const { target } = await open(async () => [entry(2, "# latest"), entry(1, "---\nrest")]);
+
+    expect(items(target)[1]!.querySelector(".first-line")?.textContent?.trim()).toBe("---");
   });
 
   it("renders an older entry only once it is expanded, and not again on collapse", async () => {

@@ -271,13 +271,18 @@ export function renderUntrustedMarkdown(text: string): UntrustedRender {
   }
 }
 
-/** The inline profile for the agent card: phrasing content only, links drawn
- *  as text, or `plain` under the same conditions as `renderUntrustedMarkdown`. */
+/** The inline profile for a one-line or few-line summary (the agent card, a
+ *  collapsed entry of the change log): phrasing content only, links drawn as
+ *  text, or `plain` under the same conditions as `renderUntrustedMarkdown`, and
+ *  also when the source draws nothing. */
 export function renderUntrustedInline(text: string): UntrustedRender {
   try {
     const tokens = inlineMarked.lexer(text);
     if (nestingDepth(tokens) > MAX_NESTING_DEPTH) return { kind: "plain" };
-    return { kind: "html", html: sanitizeUntrustedInlineHtml(finishInline(inlineMarked.parser(tokens))) };
+    const html = sanitizeUntrustedInlineHtml(finishInline(inlineMarked.parser(tokens)));
+    // A source that draws no text (a rule, an empty heading) would leave an
+    // empty summary; show the text the author wrote instead.
+    return html.replace(/<[^>]*>/g, "").trim() === "" ? { kind: "plain" } : { kind: "html", html };
   } catch {
     return { kind: "plain" };
   }

@@ -438,9 +438,18 @@ describe("inline profile: the composed render", () => {
     }
   });
 
+  it("is plain when the source draws nothing, so a summary is never empty", () => {
+    for (const source of ["---", "***", "# ", "[ref]: https://e.test/", "```\n```", "> "]) {
+      expect(renderUntrustedInline(source), source).toEqual({ kind: "plain" });
+    }
+    expect(renderUntrustedInline("a")).toMatchObject({ kind: "html" });
+  });
+
   it("switches exactly at the nesting limit, as the full profile does", () => {
-    expect(renderUntrustedInline(">".repeat(MAX_NESTING_DEPTH))).toMatchObject({ kind: "html" });
-    expect(renderUntrustedInline(">".repeat(MAX_NESTING_DEPTH + 1))).toEqual({ kind: "plain" });
+    const quoted = (depth: number) => `${">".repeat(depth)} text`;
+
+    expect(renderUntrustedInline(quoted(MAX_NESTING_DEPTH))).toMatchObject({ kind: "html" });
+    expect(renderUntrustedInline(quoted(MAX_NESTING_DEPTH + 1))).toEqual({ kind: "plain" });
     expect(renderUntrustedInline(">".repeat(3000))).toEqual({ kind: "plain" });
   });
 

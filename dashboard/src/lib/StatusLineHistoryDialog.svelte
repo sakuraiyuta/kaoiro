@@ -1,9 +1,10 @@
 <script lang="ts">
   // The change log of one agent's self-written status line (issue 482).
-  // Newest first. Only the latest entry is rendered as markdown on open; an
-  // older entry shows its time and first line as plain text and is rendered
-  // only when expanded, so opening the dialog parses one entry however long
-  // the log is. Entries are immutable, and a component instance is kept for as
+  // Newest first. Only the latest entry is rendered in full on open; an older
+  // entry shows its time and its first line, cut short and drawn as inline
+  // markdown like the agent card (issue 514), and is rendered in full only when
+  // expanded, so opening the dialog parses one entry in full however long the
+  // log is. Entries are immutable, and a component instance is kept for as
   // long as its entry stays, so a refetch re-parses nothing that did not
   // change.
   import Modal from "./Modal.svelte";
@@ -36,9 +37,21 @@
     return `${agentId}#${entry.seq}#${entry.updatedAt}`;
   }
 
+  // A collapsed entry is a summary, drawn as inline markdown like the card. A
+  // first line can be a whole 16 KiB text with no newline, and up to 100
+  // entries are summarised at once, so the line is cut before it is parsed.
+  const SUMMARY_MAX_CODE_POINTS = 160;
+
   function firstLine(text: string): string {
     const line = text.split("\n", 1)[0] ?? "";
     return line === "" ? "(空の先頭行)" : line;
+  }
+
+  function summary(text: string): string {
+    const points = Array.from(firstLine(text));
+    return points.length > SUMMARY_MAX_CODE_POINTS
+      ? `${points.slice(0, SUMMARY_MAX_CODE_POINTS).join("")}…`
+      : points.join("");
   }
 
   function clock(iso: string): string {
@@ -124,7 +137,7 @@
               <button type="button" class="toggle" onclick={() => toggle(entry)}>折りたたむ</button>
             {/if}
           {:else}
-            <p class="first-line">{firstLine(entry.text)}</p>
+            <p class="first-line"><UntrustedMarkdown text={summary(entry.text)} variant="inline" /></p>
             <button type="button" class="toggle" onclick={() => toggle(entry)}>展開</button>
           {/if}
         </li>
@@ -191,10 +204,14 @@
     gap: 0.6rem;
   }
 
-  .cleared,
-  .first-line {
+  .cleared {
     margin: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .first-line {
+    margin: 0;
     overflow-wrap: anywhere;
   }
 
