@@ -158,6 +158,13 @@ a separate path from the data path
 [runner-control](../reference/protocol/runner-control.md) for the concrete
 control-message forms.
 
+The runner and the wrappers build their Phoenix sockets through
+`createPhoenixSocket` (`wrapper/core/src/phoenix_socket.ts`), whose transport
+delivers one `close` for every connection attempt and bounds the opening
+handshake at 10 s. Phoenix schedules reconnects only on `close`, and Node 22's
+built-in WebSocket reports a failed handshake with `error` alone, so without
+it a host stops reconnecting after a server restart.
+
 ### Access control
 
 User authentication between client and server uses OAuth + RBAC
