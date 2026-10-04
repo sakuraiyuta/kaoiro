@@ -220,8 +220,8 @@ export class QueueInput {
       return null;
     }
     return {
+      // `dispose` takes the items out of reach of a later release at once.
       commit: () => {
-        submit.invoke(() => {});
         void offer.dispose(own.map((queue_id) => ({ queue_id, outcome: "observed" as const, witness: "tool_result" as const })))
           .then((result) => { if (result.ok) this.forget(own); });
       },
@@ -263,7 +263,6 @@ export class QueueInput {
       envelopes,
       lease: {
         commit: () => {
-          submit.invoke(() => {});
           void offer.dispose(ids.map((queue_id) => ({ queue_id, outcome: "observed" as const, witness: "tool_result" as const })))
             .then((result) => { if (result.ok) this.forget(ids); });
         },
