@@ -271,15 +271,17 @@ The comparison treats `[1m]` as part of model identity: the suffix must be an
 exact lowercase match on both the pin and the engine report before comparing
 their base IDs. A report without the suffix is not considered the same model.
 
-When the catalog endpoint is unreachable, SDK 0.3.284 instead returns a
-six-row static catalog that includes an exact `opus[1m]` row resolving to
+When the catalog endpoint was unreachable at capture time (2026-09-29), SDK
+0.3.284 returned a six-row static catalog that includes an exact `opus[1m]` row resolving to
 `claude-opus-5-5[1m]` and omits the base `opus` row. The host accepts that pin
 through the exact catalog row; the measured fixture is
 [`claude-agent-sdk-0.3.284-offline-fallback.models.json`](../../../wrapper/claude-code/test/fixtures/claude-agent-sdk-0.3.284-offline-fallback.models.json),
 SHA-256 `e6417b97c604aa5d81a66664519b21941691ee2ceedded7c9bf11c4ceaa4f718`.
-The raw run and its hash are listed in the rollout evidence record. This was
-not re-measured on SDK 0.3.289: its capture condition could not be reproduced
-(see the [SDK 0.3.289 review record](../../evidence/claude/sdk-0.3.289-review-2026-10-04.md)).
+The raw run and its hash are listed in the rollout evidence record. On
+2026-10-04 that condition could not be reproduced on either 0.3.284 or 0.3.289
+(fresh-config offline runs returned five rows), so the fixture stays as
+originally captured; see the
+[SDK 0.3.289 review record](../../evidence/claude/sdk-0.3.289-review-2026-10-04.md).
 
 Anthropic's [model configuration reference](https://code.claude.com/docs/en/model-config#extended-context)
 defines `opus[1m]` as Opus with a 1M context window and says Claude Code strips

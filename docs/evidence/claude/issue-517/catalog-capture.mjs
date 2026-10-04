@@ -1,5 +1,7 @@
 // Throwaway (issue 517): init-only SDK query, as wrapper/claude-code/src/probe.ts
-// does, printing init.models. argv: sdkDir [model|-] [offline]
+// does, printing init.models. argv: sdkDir [model|-] [offline|nonessential]
+// Uses the caller's real Claude configuration and credentials against the real
+// catalog endpoint; the prompt never yields, so no model request is sent.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

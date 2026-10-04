@@ -3,9 +3,12 @@
 Issue: [517](https://github.com/sakuraiyuta/kaoiro/issues/517). The wrapper's
 range moves from `^0.3.284` to `^0.3.289` (`latest` and `next` on npm at about
 10:20 UTC; bundled CLI 2.1.289). Probes and raw logs are in
-[`issue-517/`](issue-517/) (`kogane-*` and `kohaku-*`); all of them drive
-`query()` against a loopback Messages API with a placeholder key, so no
-external model request was made.
+[`issue-517/`](issue-517/) (`kogane-*` and `kohaku-*`). The cut and fold,
+command-projection and context probes drive `query()` against a loopback
+Messages API with a placeholder key. `catalog-capture.mjs` and the built
+`probe.ts` instead ran an init-only query with the host's own Claude
+configuration and credentials against the real catalog endpoint; their prompt
+never yields, so no model request was made.
 
 ## Changelog review
 
@@ -56,7 +59,8 @@ measured (issue 520).
   0.3.289 it returns the 12 rows with the same Fable change and no `opus[1m]`
   row. Recorded as `claude-agent-sdk-0.3.289-opus-1m.models.json`
   (`ed8f7da0…`).
-- The offline fallback fixture (six rows, `e6417b97…`) could not be reproduced.
+- The offline fallback fixture (six rows, `e6417b97…`) could not be reproduced
+  on either version.
   An unreachable proxy and a no-network namespace both returned the cached
   12 rows; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` returned five rows,
   identical on both versions; a fresh config directory without network
@@ -68,8 +72,10 @@ measured (issue 520).
 ## Slash-command projection
 
 Projected `initializationResult().commands` against live `system/init`
-`slash_commands`, isolated config (skills and plugins linked, plugins enabled,
-no hooks, no account-provided skills): 99 and 99 on 0.3.284, 100 and 100 on
+`slash_commands`, with a temporary config directory that symlinks the
+operator's `~/.claude/skills` and `~/.claude/plugins` and enables the same
+plugins (their own hooks or MCP servers could load; settings hooks were not
+copied; no account-provided skills): 99 and 99 on 0.3.284, 100 and 100 on
 0.3.289, equal in order on both. No row carried a colon alias, so that branch of
 the projection was not exercised here.
 

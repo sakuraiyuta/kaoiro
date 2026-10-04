@@ -99,6 +99,8 @@ it("steers a turn while its command runs, and the same turn completes with the i
     const completed = await completedTurns(turn, (method, params) => {
       if (method === "item/started" && (params.item as Item | undefined)?.type === "commandExecution" && steered === undefined) {
         steered = steer(session, "host-command", turn.identity.turnId, nonce);
+        // Observed after the loop; keep an early failure from surfacing as unhandled.
+        steered.catch(() => {});
       }
     });
     expect(steered).toBeDefined();
@@ -132,9 +134,13 @@ it("steers a turn while the model is still streaming, and the next request carri
   }, async (session, threadId, bodies) => {
     const turn = await session.startTurn({ threadId, hostTurnToken: "host-stream", input: "start" });
     const completing = completedTurns(turn);
+    completing.catch(() => {});
     await started;
-    await steer(session, "host-stream", turn.identity.turnId, nonce);
-    release();
+    try {
+      await steer(session, "host-stream", turn.identity.turnId, nonce);
+    } finally {
+      release();
+    }
     expect(await completing).toEqual([expect.objectContaining({ id: turn.identity.turnId, status: "completed" })]);
     expect(bodies[0]).not.toContain(nonce);
     expect(bodies.slice(1).some(body => body.includes(nonce))).toBe(true);

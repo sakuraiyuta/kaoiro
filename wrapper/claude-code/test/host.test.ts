@@ -9279,6 +9279,31 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     await h.finish();
   });
 
+  it("SDK 0.3.289 keeps a persisted claude-fable-5-1 pin through the fable alias row", async () => {
+    // 0.3.289 lists Fable 5.1 as value "fable"; the canonical pin matches that
+    // row's resolvedModel, not an exact value, and must not fall to "default".
+    const h = liveHost({
+      pin: "claude-fable-5-1",
+      source: "config",
+      initModel: "claude-fable-5-1",
+      usageModel: "claude-fable-5-1",
+      catalog: sdk0289ModelInfo,
+    });
+    await h.initConsumed.promise;
+    await vi.waitFor(() =>
+      expect(h.host.statusExtSnapshot().models).toHaveLength(12),
+    );
+    expect(h.seenOptions()?.model).toBe("claude-fable-5-1");
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-fable-5-1",
+      model_source: "config",
+      effective: { model: "claude-fable-5-1", model_source: "config" },
+      session_capabilities: { supports_effort_switch: true },
+    });
+    expect(h.host.statusExtSnapshot()).not.toHaveProperty("switch_error");
+    await h.finish();
+  });
+
   it("SDK 0.3.289 still reports a refusal fallback for an opus[1m] pin", async () => {
     const h = liveHost({
       pin: "opus[1m]",

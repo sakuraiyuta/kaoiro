@@ -1,7 +1,10 @@
 // Throwaway (issue 517): compare projected initializationResult().commands with
 // live system/init slash_commands, and record the model spelling an opus[1m]
-// pick reports from init and getContextUsage(). Loopback Messages API, an
-// isolated config dir (skills/plugins linked, plugins enabled, no hooks).
+// pick reports from init and getContextUsage(). Loopback Messages API and a
+// temporary config dir that SYMLINKS the operator's ~/.claude/skills and
+// ~/.claude/plugins and enables the same plugins: plugin hooks or MCP servers
+// can load, and plugin state writes land in ~/.claude/plugins. Settings hooks
+// are not copied.
 import { createServer } from "node:http";
 import { mkdtempSync, symlinkSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
