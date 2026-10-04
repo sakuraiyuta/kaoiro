@@ -3,18 +3,25 @@
   // (untrustedMarkdown.ts). This is the one {@html} site for such text; a
   // failure to render shows the source as plain text through Svelte's own
   // escaping, never as HTML.
-  import { renderUntrustedMarkdown } from "./untrustedMarkdown";
+  //
+  // `inline` is the agent card's profile: the text sits inside a button, so the
+  // output is phrasing content in span wrappers only, and the plain fallback
+  // carries no explanatory note.
+  import { renderUntrustedInline, renderUntrustedMarkdown } from "./untrustedMarkdown";
 
-  let { text }: { text: string } = $props();
+  let { text, variant = "full" }: { text: string; variant?: "full" | "inline" } = $props();
 
-  const rendered = $derived(renderUntrustedMarkdown(text));
+  const inline = $derived(variant === "inline");
+  const rendered = $derived(inline ? renderUntrustedInline(text) : renderUntrustedMarkdown(text));
 </script>
 
 {#if rendered.kind === "html"}
-  <div class="untrusted-markdown">{@html rendered.html}</div>
+  <svelte:element this={inline ? "span" : "div"} class="untrusted-markdown" class:inline>{@html rendered.html}</svelte:element>
 {:else}
-  <p class="untrusted-markdown-note">書式を表示できないため、そのまま表示しています</p>
-  <div class="untrusted-markdown plain">{text}</div>
+  {#if !inline}
+    <p class="untrusted-markdown-note">書式を表示できないため、そのまま表示しています</p>
+  {/if}
+  <svelte:element this={inline ? "span" : "div"} class="untrusted-markdown plain" class:inline>{text}</svelte:element>
 {/if}
 
 <style>
@@ -23,6 +30,13 @@
   }
   .untrusted-markdown.plain {
     white-space: pre-wrap;
+  }
+  /* The card draws breaks itself, and the plain fallback keeps the author's. */
+  .untrusted-markdown.inline {
+    white-space: normal;
+  }
+  .untrusted-markdown.inline.plain {
+    white-space: pre-line;
   }
   .untrusted-markdown-note {
     margin: 0 0 0.25rem;
@@ -33,7 +47,12 @@
   .untrusted-markdown :global(pre) {
     overflow-x: auto;
   }
-  .untrusted-markdown :global(a) {
+  .untrusted-markdown :global(a),
+  .untrusted-markdown :global(.md-link) {
     text-decoration: underline;
+  }
+  .untrusted-markdown.inline :global(code) {
+    font-family: ui-monospace, monospace;
+    font-size: 0.95em;
   }
 </style>
