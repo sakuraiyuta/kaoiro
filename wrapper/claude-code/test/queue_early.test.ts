@@ -457,4 +457,42 @@ describe("ClaudeQueueEarly", () => {
       expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "unknown", reason: "consumed_unhandled" }] });
     });
   });
+
+  it("releases an offer whose classification threw, so it cannot hold the lease slot", async () => {
+    const h = harness({ classify: async () => { throw new Error("classifier down"); } });
+    h.early.check();
+    await settle();
+    h.offer(inbound("c1"));
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
+    expect(h.lines.join("")).toContain("queue early offer failed");
+  });
+
+  it("asks no credit for a turn that ended while it waited for the link", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const h = harness({ deps: { ready: () => gate } });
+    h.early.check();
+    h.state.turn = "T2";
+    h.early.turnEnded("T");
+    open();
+    await settle();
+    expect(h.ops("credit")).toEqual([]);
+    h.early.check();
+    await settle();
+    expect(h.ops("credit")).toEqual([expect.objectContaining({ native_turn_token: "T2" })]);
+  });
+
+  it("starts the backoff over for a new turn", async () => {
+    const h = harness({ refuse: { credit: "queue_unavailable" } });
+    h.early.check();
+    await settle();
+    h.timers[0]!.task();
+    await settle();
+    expect(h.timers.map((t) => t.ms)).toEqual([250, 500]);
+    h.state.turn = "T2";
+    h.timers[1]!.task();
+    await settle();
+    expect(h.timers.map((t) => t.ms)).toEqual([250, 500, 250]);
+  });
 });

@@ -96,7 +96,10 @@ export class QueueInput {
    *  returned with `format_budget`. */
   async prepare(offer: QueueOffer): Promise<PreparedQueueInput> {
     for (const [id, remembered] of this.#remembered) {
-      if (!this.#deps.tracked(remembered.conversationId)) this.#remembered.delete(id);
+      // An entry still being classified may not have its track yet.
+      if (remembered.classified !== undefined && !this.#deps.tracked(remembered.conversationId)) {
+        this.#remembered.delete(id);
+      }
     }
     const injected: QueueInputItem[] = [];
     const consumed: QueueOfferItem[] = [];

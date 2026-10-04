@@ -462,4 +462,14 @@ describe("ClaudeQueueRoot", () => {
       expect(h.ops("credit").map((p) => p.kind)).toEqual(["root", "early", "root"]);
     });
   });
+
+  it("releases an offer whose classification threw, so it cannot hold the lease slot", async () => {
+    const h = harness({ classify: async () => { throw new Error("classifier down"); } });
+    h.root.checkReadiness();
+    await settle();
+    h.offer([inbound("c1")]);
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
+    expect(h.lines.join("")).toContain("queue root offer failed");
+  });
 });

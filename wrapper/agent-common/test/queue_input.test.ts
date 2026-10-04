@@ -136,6 +136,32 @@ describe("QueueInput", () => {
     expect(notices).toHaveLength(1);
   });
 
+  it("keeps an entry still being classified when another offer prunes untracked ones", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const tracked = new Set<string>();
+    const classified: string[] = [];
+    const input = new QueueInput({
+      classify: async (envelope) => {
+        const cid = (envelope.payload as { conversation_id: string }).conversation_id;
+        classified.push(cid);
+        if (cid === "slow") await gate;
+        tracked.add(cid);
+        return { consumed: false, inject: true, mode: "reply-owed" };
+      },
+      reclassify: (_envelope, mode) => mode,
+      sendNotice: () => {},
+      tracked: (cid) => tracked.has(cid),
+    });
+    const slow = input.prepare(offerOf([inbound("slow")], ["1"]).offer);
+    await input.prepare(offerOf([inbound("fast")], ["2"]).offer);
+    open();
+    await slow;
+    const again = await input.prepare(offerOf([inbound("slow")], ["1"]).offer);
+    expect(again.injected).toHaveLength(1);
+    expect(classified).toEqual(["slow", "fast"]);
+  });
+
   it("forgets a skipped item once its disposal is settled", async () => {
     const { input, tool } = harness();
     const classify = vi.spyOn(tool, "receiveInbound");

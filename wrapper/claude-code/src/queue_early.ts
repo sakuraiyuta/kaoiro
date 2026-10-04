@@ -104,6 +104,8 @@ export class ClaudeQueueEarly {
   readonly #consumed: ConsumedEarly[] = [];
   #retryScheduled = false;
   #retryDelay = RETRY_FIRST_MS;
+  /** The turn the backoff belongs to; a new turn starts it over. */
+  #retryTurn: string | null = null;
   #refusals = 0;
 
   constructor(deps: QueueEarlyDeps) {
@@ -117,6 +119,10 @@ export class ClaudeQueueEarly {
     if (!deps.negotiated() || lease === null || lease.frozen) return;
     const turn = deps.activeTurn();
     if (turn === null || !deps.hasFoldsLeft()) return;
+    if (this.#retryTurn !== turn) {
+      this.#retryTurn = turn;
+      this.#retryDelay = RETRY_FIRST_MS;
+    }
     if (this.#held > 0 || this.#checking === turn || deps.slot.token("early") === turn) return;
     if (!deps.canFold()) {
       this.#scheduleRetry();
@@ -163,6 +169,10 @@ export class ClaudeQueueEarly {
     let awaitingDecision = false;
     try {
       awaitingDecision = await this.#onOffer(offer);
+    } catch (error) {
+      // An offer left unsettled would hold the ordinary lease slot.
+      this.#deps.log(`[kaoiro] queue early offer failed; its items go back unsent: ${String(error)}\n`);
+      offer.release(offer.items.map((item) => item.queueId));
     } finally {
       if (!awaitingDecision) this.#held -= 1;
       this.check();

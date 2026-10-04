@@ -141,6 +141,10 @@ export class ClaudeQueueRoot {
   async onOffer(offer: QueueOffer): Promise<void> {
     try {
       await this.#onOffer(offer);
+    } catch (error) {
+      // An offer left unsettled would hold the ordinary lease slot.
+      this.#deps.log(`[kaoiro] queue root offer failed; its items go back unsent: ${String(error)}\n`);
+      offer.release(offer.items.map((item) => item.queueId));
     } finally {
       this.checkReadiness();
     }
