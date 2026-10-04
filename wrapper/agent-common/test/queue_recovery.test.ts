@@ -25,12 +25,17 @@ function peerInput(turn: number, body = "newer input"): Envelope {
   } as Envelope;
 }
 
-function harness(options: { refuse?: Record<string, string>; recovery?: boolean; body?: string; classifyThrows?: boolean } = {}) {
+function harness(options: {
+  refuse?: Record<string, string>; recovery?: boolean; body?: string; classifyThrows?: boolean;
+  gates?: Record<string, Promise<void>>;
+} = {}) {
   const sent: Record<string, unknown>[] = [];
+  const timers: Array<() => void> = [];
   const legacyClaims: string[] = [];
   const lease = new QueueLease({
     transport: async (payload) => {
       sent.push(payload);
+      await options.gates?.[payload.op as string];
       const reason = options.refuse?.[payload.op as string];
       if (reason !== undefined) throw { reason };
       const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
@@ -77,6 +82,7 @@ function harness(options: { refuse?: Record<string, string>; recovery?: boolean;
     reclassify: (envelope, mode) => tool.queuedInboundMode(envelope, mode),
     sendNotice: () => {},
     tracked: (cid) => tool.hasConversationTrack(cid),
+    schedule: (task) => { timers.push(task); return () => {}; },
   });
   // The calling tool's turn is a live input.
   tool.beginNotificationReplyInput("tool-turn", new AbortController().signal);
@@ -86,7 +92,7 @@ function harness(options: { refuse?: Record<string, string>; recovery?: boolean;
     { origin: { token: "tool-turn" } },
   );
   const ops = (op: string) => sent.filter((p) => p.op === op);
-  return { tool, input, lease, sent, ops, reply, legacyClaims };
+  return { tool, input, lease, sent, ops, reply, legacyClaims, timers };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -149,4 +155,34 @@ describe("credit-v1 inline recovery", () => {
     expect(h.ops("begin_native")).toEqual([]);
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "q1", reason: "turn_abandoned" }] });
   });
+
+  it("recover itself settles a recovery whose classification throws (P10): released, nothing held, null", async () => {
+    const h = harness({ classifyThrows: true });
+    const offer = h.lease.receiveRecovery({
+      lease_id: "9",
+      items: [{ queue_id: "q9", attempt_id: "q9.1", delivery_seq: 9, class: "ordinary", byte_charge: 1, envelope: peerInput(3) }],
+    })!;
+    await expect(h.input.recover(offer, "tool-turn", () => true)).resolves.toBeNull();
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ lease_id: "9", items: [{ queue_id: "q9", reason: "turn_abandoned" }] });
+    expect(h.lease.heldLeaseIds()).toEqual([]);
+  });
+
+  it("a recovery permit not granted within the bound gives no inline recovery; a late permit is returned", async () => {
+    let open!: () => void;
+    const late = new Promise<void>((resolve) => { open = resolve; });
+    const h = harness({ gates: { begin_native: late } });
+    const pending = h.reply();
+    await settle();
+    expect(h.ops("begin_native")).toHaveLength(1);
+    h.timers.at(-1)!();
+    const result = await pending;
+    expect(JSON.parse(result.content[0]!.text).recovery).toEqual([]);
+    open();
+    await settle();
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "q1", reason: "turn_abandoned" }] });
+    expect(h.ops("dispose")).toEqual([]);
+  });
 });
+

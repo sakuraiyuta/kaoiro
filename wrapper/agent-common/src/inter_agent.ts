@@ -2687,11 +2687,7 @@ export class InterAgentTool {
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
       if (acceptance.queue_recovery !== undefined) {
         // credit-v1: the server claimed the queued input into the refusal.
-        const recovery = acceptance.queue_recovery;
-        const handle = this.#options.queueRecovery;
-        const queued = handle === undefined
-          ? undefined
-          : await recovery.guard(() => handle(recovery, attempt.origin.token, fit), null);
+        const queued = await this.#options.queueRecovery?.(acceptance.queue_recovery, attempt.origin.token, fit);
         if (queued) {
           const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - queued.envelopes.length);
           return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: queued.envelopes }, queued.envelopes, queued.lease);

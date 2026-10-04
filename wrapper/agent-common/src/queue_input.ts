@@ -235,8 +235,18 @@ export class QueueInput {
   /** The queued input claimed into a `stale_reply_basis` refusal of the
    *  tool of turn `turnToken` (r8 §6.3). Items another waiter consumed go to
    *  that waiter; the rest is returned inline when it fits, permitted under
-   *  the turn first. `null`: no inline recovery (unused items go back). */
-  async recover(
+   *  the turn first. `null`: no inline recovery (unused items go back). It
+   *  runs under the offer's guard: the claim is an ordinary lease, so a throw
+   *  must not leave it unsettled. */
+  recover(
+    offer: QueueOffer,
+    turnToken: string,
+    fit: (envelopes: readonly Envelope[]) => boolean,
+  ): Promise<{ envelopes: readonly Envelope[]; lease: QueueHandoffLease } | null> {
+    return offer.guard(() => this.#recover(offer, turnToken, fit), null);
+  }
+
+  async #recover(
     offer: QueueOffer,
     turnToken: string,
     fit: (envelopes: readonly Envelope[]) => boolean,
