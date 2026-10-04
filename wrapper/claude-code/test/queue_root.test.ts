@@ -60,7 +60,7 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
     tracked: () => true,
     log: (line) => lines.push(line),
     defer: (task) => task(),
-    schedule: (task, ms) => { timers.push({ task, ms }); return () => {}; },
+    schedule: (task, ms) => { timers.push({ task, ms }); },
     ...overrides,
   });
   let leaseId = 0;
@@ -267,6 +267,20 @@ describe("ClaudeQueueRoot", () => {
         await settle();
         expect(h.sends).toHaveLength(1);
       });
+
+    it("starts the backoff over after a granted credit", async () => {
+      const refuse: Record<string, string> = { credit: "queue_unavailable" };
+      const h = harness({}, refuse);
+      h.root.checkReadiness();
+      await settle();
+      delete refuse.credit;
+      h.timers[0]!.task();
+      await settle();
+      refuse.credit = "queue_unavailable";
+      h.root.rejoined();
+      await settle();
+      expect(h.timers.map((t) => t.ms)).toEqual([250, 250]);
+    });
 
     it("does not retry a credit refused because the queue is frozen", async () => {
       const h = harness({}, { credit: "queue_frozen" });

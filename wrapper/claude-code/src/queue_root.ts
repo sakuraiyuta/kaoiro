@@ -37,8 +37,8 @@ export interface QueueRootDeps extends QueueInputDeps {
   log(line: string): void;
   /** Defers a readiness check past the current host callback. */
   defer?(task: () => void): void;
-  /** Runs `task` after `ms`; returns a cancel function. */
-  schedule?(task: () => void, ms: number): () => void;
+  /** Runs `task` after `ms`. */
+  schedule?(task: () => void, ms: number): void;
 }
 
 const RETRY_FIRST_MS = 250;
@@ -62,7 +62,7 @@ export class ClaudeQueueRoot {
   readonly #roots = new Map<string, RootInput>();
   /** The last root credit was withdrawn because another turn started. */
   #withdrawn = false;
-  #cancelRetry: (() => void) | null = null;
+  #retryScheduled = false;
   #retryDelay = RETRY_FIRST_MS;
 
   constructor(deps: QueueRootDeps) {
@@ -74,8 +74,6 @@ export class ClaudeQueueRoot {
   checkReadiness(): void {
     const lease = this.#deps.lease();
     if (lease === null || lease.frozen || this.#creditToken !== null) return;
-    this.#cancelRetry?.();
-    this.#cancelRetry = null;
     const token = randomUUID();
     this.#creditToken = token;
     this.#creditRevision = null;
@@ -114,27 +112,15 @@ export class ClaudeQueueRoot {
     if (revision !== null) void this.#deps.lease()?.withdraw(revision);
   }
 
-  /** Something that kept the host busy settled; root input may be ready. */
-  rearm(): void {
-    (this.#deps.defer ?? ((task) => setImmediate(task)))(() => this.#rearm());
-  }
-
-  #rearm(): void {
-    if (this.#roots.size === 0) this.checkReadiness();
-  }
-
   #scheduleRetry(): void {
-    if (this.#cancelRetry !== null) return;
+    if (this.#retryScheduled) return;
+    this.#retryScheduled = true;
     const delay = this.#retryDelay;
     this.#retryDelay = Math.min(delay * 2, RETRY_MAX_MS);
-    const schedule = this.#deps.schedule ?? ((task, ms) => {
-      const timer = setTimeout(task, ms);
-      timer.unref?.();
-      return () => clearTimeout(timer);
-    });
-    this.#cancelRetry = schedule(() => {
-      this.#cancelRetry = null;
-      this.#rearm();
+    const schedule = this.#deps.schedule ?? ((task, ms) => { setTimeout(task, ms).unref?.(); });
+    schedule(() => {
+      this.#retryScheduled = false;
+      this.checkReadiness();
     }, delay);
   }
 
@@ -148,7 +134,7 @@ export class ClaudeQueueRoot {
     try {
       await this.#onOffer(offer);
     } finally {
-      this.#rearm();
+      this.checkReadiness();
     }
   }
 
@@ -268,6 +254,6 @@ export class ClaudeQueueRoot {
           .then((result) => { if (result.ok) this.#input.forget(root.ids); });
       }
     }
-    this.rearm();
+    (this.#deps.defer ?? ((task) => setImmediate(task)))(() => this.checkReadiness());
   }
 }

@@ -1344,8 +1344,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       attemptYieldCandidates();
     },
     onPushedInputDecision: decision => {
-      // A pending receipt keeps the host from idle; it may outlive the turn.
-      queueRoot.rearm();
       const pushed = pushedBatches.get(decision.envelopes);
       if (pushed === undefined) return;
       pushedBatches.delete(decision.envelopes);
