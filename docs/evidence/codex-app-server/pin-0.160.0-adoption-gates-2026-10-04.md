@@ -29,7 +29,7 @@ The linux-x64 native `codex-cli 0.160.0` has SHA-256
 | A5 | CODEX_HOME classification | of the six upstream files cited by the [classification design](../../plans/issue-468-home-classification.md), five are identical at `rust-v0.160.0` and `core-plugins/src/store.rs` only adds an in-memory manifest cache. A fresh home on 0.160.0 creates no root name that 0.159.3 does not (0.159.3 additionally left `goals_1` and `memories_1` WAL sidecars). | — |
 | A6 | Suites (Node 22.23.3) | see [Suites](#suites) | — |
 | A7 | Pinned approval capture | remeasured on 0.160.0 through a local Responses provider: code-mode `exec` calling `exec_command` with an escalation request, `on-request` approval, `workspace-write`. Request, decline reply, `serverRequest/resolved`, declined item and completed turn keep the 0.159.3 shape (same request keys, same `availableDecisions`); the outside file is absent. Fixture `app_server_approval_decline_0.160.0.jsonl` (`859d1b78…`), scratch prefix normalised. The 0.159.3 capture came from a live model turn; this one does not need credentials. | with the pin bumped and the old capture, the suite's only failure is "is measured on the pinned version" |
-| A8 | Steer on the native | new `app_server_steer.integration.test.ts` (`f8c3393e…`): steer after the command's `item/started`, and while the provider is still streaming; the steer's nonce reaches the provider's next request; the same turn completes. 2 of 2 pass. | with the `turn/steer` write removed and the response faked as accepted, both fail at the nonce assertion |
+| A8 | Steer on the native | new `app_server_steer.integration.test.ts` (`87f4e43f…` at `5e0dddc5`): steer after the command's `item/started`, and while the provider is still streaming; the steer's nonce reaches the provider's next request; the same turn completes. 2 of 2 pass. | with the `turn/steer` write removed and the response faked as accepted, both fail at the nonce assertion, without an unhandled rejection (re-run on `5e0dddc5`) |
 | A9 | Runner artifact | tarball `kaoiro-runner-5b3456ad…-linux-x64.tar.gz` (`939324b3…`, 164 manifest files) built from the clean tree; `verify-release.mjs --require-manifest --hash` (with `--experimental-vm-modules`) exit 0; `nativeIdentity` resolves the 0.160.0 native inside the release | — |
 | A10 | Sandbox enforcement | local provider, code mode, approval `never`, `workspace-write`, scratch outside `/tmp` (which `workspace-write` makes writable): network off, `curl` to a loopback nonce endpoint exits 7 and the endpoint sees no request; network on, one request and exit 0; a write outside the workspace fails with "Read-only file system"; a write inside succeeds. **0.159.3 gives the same five results.** | each allowed variant against its denied pair |
 
@@ -47,7 +47,7 @@ The linux-x64 native `codex-cli 0.160.0` has SHA-256
 
 Node 22.23.3, implementation commit `5b3456ad`, each run under an external
 `timeout`: wrapper build, wrapper typecheck and runner typecheck exit 0.
-`wrapper/core` 455, `agent-common` 539, `claude-code` 794, `antigravity` 481
+`wrapper/core` 455, `agent-common` 539, `claude-code` 794 (795 on `5e0dddc5`, which adds the Fable pin test), `antigravity` 481
 (2 live tests skipped without `KAOIRO_LIVE_AGY=1`), `codex` 1,354 in 90 files,
 `runner` 1,025 in 52 files: every suite exit 0, no unhandled error.
 

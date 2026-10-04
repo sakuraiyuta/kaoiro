@@ -53,7 +53,7 @@ measured (issue 520).
   Fable 5.1 as `value: "fable"` (resolved `claude-fable-5-1`) where 0.3.284 used
   `value: "claude-fable-5-1"`. The wrapper's catalog lookup falls back from the
   exact value to `resolved_model`, so a persisted `claude-fable-5-1` pin still
-  validates.
+  validates. A host test pins this; it fails when that fallback is removed.
 - `Options.model: "opus[1m]"` capture (`catalog-capture.mjs`, init only): on
   0.3.284 it reproduces the existing fixture byte for byte (`b1f649a2…`); on
   0.3.289 it returns the 12 rows with the same Fable change and no `opus[1m]`
@@ -82,7 +82,8 @@ the projection was not exercised here.
 ## Gates
 
 Node 22.23.3: the claude-code suite passes on 0.3.289 before and after the
-fixture change (35 files, 794 tests, exit 0, no unhandled error); the whole
+fixture change (35 files, 794 tests, exit 0, no unhandled error; 795 with the
+Fable pin test added at `5e0dddc5`); the whole
 wrapper and runner results are in the
 [Codex 0.160.0 record](../codex-app-server/pin-0.160.0-adoption-gates-2026-10-04.md#suites).
 
