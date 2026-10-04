@@ -473,7 +473,7 @@ describe("ClaudeQueueRoot", () => {
     expect(h.lines.join("")).toContain("queue root offer failed");
   });
 
-  it("reports a yield-granted item in a root batch downgraded no_work_input, once", async () => {
+  it("reports a yield-granted item downgraded no_work_input when its root turn takes it, once", async () => {
     const yields: Array<{ seq: number; outcome: string; reason: string }> = [];
     const h = harness({ yieldNegotiated: () => true, reportYield: (seq, disposition) => yields.push({ seq, ...disposition }) });
     const envelope = inbound("c1");
@@ -482,11 +482,33 @@ describe("ClaudeQueueRoot", () => {
     await settle();
     h.offer([envelope]);
     await settle();
+    expect(yields).toEqual([]);
+    const first = h.creditToken();
+    h.root.prepareInput(first);
     expect(yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "no_work_input" }]);
-    h.root.turnEnded(h.creditToken(), false);
+    h.root.turnEnded(first, false);
     await settle();
     h.offer([envelope], ["1"]);
     await settle();
+    h.root.prepareInput(h.creditToken());
     expect(yields).toHaveLength(1);
+  });
+
+  it("reports no yield disposition for a root input sent back before its turn", async () => {
+    const yields: unknown[] = [];
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const h = harness({ yieldNegotiated: () => true, reportYield: (...args) => yields.push(args) }, {}, { begin_native: gate });
+    const envelope = inbound("c1");
+    (envelope.payload as Record<string, unknown>).delivery_authority = { requested: "yield", granted: "yield" };
+    h.root.checkReadiness();
+    await settle();
+    h.offer([envelope]);
+    await settle();
+    h.setIdle(false);
+    open();
+    await settle();
+    expect(h.sends).toEqual([]);
+    expect(yields).toEqual([]);
   });
 });

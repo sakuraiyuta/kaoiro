@@ -19,7 +19,7 @@
 // re-checked with backoff, since not every way out of busy ends a turn.
 
 import { randomUUID } from "node:crypto";
-import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
+import type { QueueLease, QueueOffer, QueueOfferItem } from "@kaoiro/wrapper-core";
 import type { QueueInput } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentMessagePayload } from "@kaoiro/agent-common";
 import type { CreditSlot } from "./queue_credit.js";
@@ -59,6 +59,8 @@ const LOG_REFUSAL_AGAIN_AT = 5;
 
 interface RootInput {
   offer: QueueOffer;
+  /** The injected items, for the yield report at the turn's start. */
+  items: QueueOfferItem[];
   ids: string[];
   envelopes: Envelope[];
   text: string;
@@ -176,15 +178,6 @@ export class ClaudeQueueRoot {
     }
 
     const prepared = await this.#input.prepare(offer);
-    if (this.#deps.yieldNegotiated?.() === true) {
-      // A yield-granted item in a root batch is not cut (legacy `no_work_input`).
-      for (const { item } of prepared.injected) {
-        const granted = (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
-        if (granted === "yield" && this.#input.decideYield(item.queueId)) {
-          this.#deps.reportYield?.(item.deliverySeq, { outcome: "downgraded", reason: "no_work_input" });
-        }
-      }
-    }
     const injectIds = prepared.injected.map(({ item }) => item.queueId);
     const consumedIds = prepared.consumed.map((item) => item.queueId);
     const ids = [...injectIds, ...consumedIds];
@@ -214,6 +207,7 @@ export class ClaudeQueueRoot {
     const envelopes = prepared.injected.map(({ item }) => item.envelope as Envelope);
     const root: RootInput = {
       offer,
+      items: prepared.injected.map(({ item }) => item),
       ids: injectIds,
       envelopes,
       text: prepared.text,
@@ -256,6 +250,16 @@ export class ClaudeQueueRoot {
   prepareInput(turnToken: string): { text: string; conversationIds: string[] } | undefined {
     const root = this.#roots.get(turnToken);
     if (root === undefined) return undefined;
+    if (this.#deps.yieldNegotiated?.() === true) {
+      // A yield-granted item that starts a root turn is not cut (legacy
+      // `no_work_input`, reported when the turn takes its input).
+      for (const item of root.items) {
+        const granted = (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
+        if (granted === "yield" && this.#input.decideYield(item.queueId)) {
+          this.#deps.reportYield?.(item.deliverySeq, { outcome: "downgraded", reason: "no_work_input" });
+        }
+      }
+    }
     this.#deps.preparePending(turnToken, root.envelopes);
     return { text: root.text, conversationIds: root.conversationIds };
   }
