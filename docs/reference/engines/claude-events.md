@@ -235,8 +235,9 @@ the case recorded on issue #520 (2026-10-04) it came about six minutes after the
 fail-stop. The runner's `Supervisor#onExit` (`runner/src/supervisor.ts`)
 treats every exit it did not request (no stop, restart or reset in progress) as
 a crash, whatever the exit code, and `#relaunch` starts the wrapper again: up
-to `MAX_RESTARTS` (5) relaunches per `RESTART_WINDOW_MS` (60 s) window, which
-starts again at the first exit more than 60 s after it began. This applies
+to `MAX_RESTARTS` (5) relaunches per `RESTART_WINDOW_MS` (60 s) window. An
+operator launch, or an exit more than 60 s into the window, starts a new
+window. This applies
 to the notification, foreign-interval, result-index, session-binding and
 `root_hook_timeout` fail-stops alike. The `root_hook_timeout` fail-stop does
 not exchange the `Query` inside the failed wrapper either: the old `Query`
