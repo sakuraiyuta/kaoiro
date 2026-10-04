@@ -307,6 +307,22 @@ describe("ClaudeQueueRoot", () => {
       expect(h.lines.filter((line) => line.includes("credit refused"))).toHaveLength(2);
     });
 
+    it("logs a new refusal streak after a granted credit", async () => {
+      const refuse: Record<string, string> = { credit: "queue_unavailable" };
+      const h = harness({}, refuse);
+      h.root.checkReadiness();
+      await settle();
+      h.timers[0]!.task();
+      await settle();
+      delete refuse.credit;
+      h.timers[1]!.task();
+      await settle();
+      refuse.credit = "queue_unavailable";
+      h.root.rejoined();
+      await settle();
+      expect(h.lines.filter((line) => line.includes("credit refused (1 in a row)"))).toHaveLength(2);
+    });
+
     it("does not retry a credit refused because the queue is frozen", async () => {
       const h = harness({}, { credit: "queue_frozen" });
       h.root.checkReadiness();
