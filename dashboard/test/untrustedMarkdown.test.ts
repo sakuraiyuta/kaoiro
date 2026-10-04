@@ -94,6 +94,18 @@ describe("renderUntrustedMarkdown: layer one (marked)", () => {
     expect(root.innerHTML).not.toMatch(/javascript:|data:|mailto:|evil\.example/i);
   });
 
+  describe.each(["<code>", "<kbd>", "<pre>", "<script>"])("after an inline %s tag", (opener) => {
+    it.each([
+      ["a tag marked does not recognise", "<strong/x>bold", "<strong/x>bold"],
+      ["a forged link", "<span/class=md-link>fake link", "<span/class=md-link>fake link"],
+    ])("shows %s as text", (_name, rest, shown) => {
+      const root = htmlOf(`para ${opener} ${rest}`);
+
+      expect(root.querySelector("strong, span, kbd, pre, script, code")).toBeNull();
+      expect(root.textContent).toContain(shown);
+    });
+  });
+
   it("keeps an http(s) link, with the safe-attribute hook applied", () => {
     const [link] = anchors(htmlOf("[issue](https://github.com/o/r/issues/482)"));
 

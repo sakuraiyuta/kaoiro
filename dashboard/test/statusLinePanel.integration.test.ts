@@ -81,6 +81,14 @@ describe("StatusLinePanel", () => {
     expect((window as { __pwned?: unknown }).__pwned).toBeUndefined();
   });
 
+  it("shows raw HTML after an inline code tag as text, not as elements", async () => {
+    const head = "<kbd>k <strong/x>bold <span/class=md-link>fake link";
+    const target = await render(setLine({ head, bytes: head.length }));
+
+    expect(target.querySelector(".body strong, .body span, .body kbd")).toBeNull();
+    expect(target.querySelector(".body")?.textContent).toContain("<span/class=md-link>fake link");
+  });
+
   it("offers 続きを読む and the size only when the server cut the head", async () => {
     const cut = await render(setLine({ truncated: true, bytes: 2048 }), () => {});
     const whole = await render(setLine(), () => {});

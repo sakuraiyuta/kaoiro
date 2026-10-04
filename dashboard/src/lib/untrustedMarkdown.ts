@@ -90,6 +90,12 @@ const marked = new Marked({
     checkbox(token) {
       return token.checked ? "[x] " : "[ ] ";
     },
+    // Text is always escaped; see `escapeText` for why marked's own pass-through
+    // of text it flags as raw is not taken.
+    text(token) {
+      if ("tokens" in token && token.tokens) return this.parser.parseInline(token.tokens);
+      return escapeText(token.text);
+    },
     // Only an http(s) link stays a link; any other keeps just its label.
     link(token) {
       const label = this.parser.parseInline(token.tokens);
