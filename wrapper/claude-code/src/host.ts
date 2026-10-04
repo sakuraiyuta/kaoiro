@@ -1221,11 +1221,12 @@ export class AgentHost implements EngineAdapter {
     return true;
   }
 
-  /** No SDK turn is running or queued and admission is open: the point at
-   *  which root inter-agent input may be requested from the server queue. */
+  /** No SDK turn is running or queued, no foreign root interval is open,
+   *  and admission is open: the point at which root inter-agent input may be
+   *  requested from the server queue. */
   isIdleForInput(): boolean {
     return !this.#closed && !this.#admissionFailStopped && this.#activeTurn === null &&
-      this.#queue.length === 0 && this.#pendingPushedReceipt === null;
+      this.#foreignOccupancy === null && this.#queue.length === 0 && this.#pendingPushedReceipt === null;
   }
 
   hasQueuedInput(turnToken: string): boolean {

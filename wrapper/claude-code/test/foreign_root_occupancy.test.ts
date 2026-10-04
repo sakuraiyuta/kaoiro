@@ -128,6 +128,23 @@ async function* firstTurn(c: Ctx, options: { background?: boolean } = {}): Async
 }
 
 describe("foreign root occupancy (issue #426 stage 1)", () => {
+  it("is not idle for queue input while a foreign root interval is open", async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve));
+    const rig = makeRig(async function* (c) {
+      yield* firstTurn(c);
+      await tick();
+      c.rig.obs.idleBefore = c.rig.host.isIdleForInput();
+      await prompt(c, "F", "hand-back report");
+      c.rig.obs.idleDuring = c.rig.host.isIdleForInput();
+      yield res(1);
+      await tick();
+      c.rig.obs.idleAfter = c.rig.host.isIdleForInput();
+    });
+    await play(rig);
+    expect(rig.obs).toEqual({ idleBefore: true, idleDuring: false, idleAfter: true });
+    expect(rig.freezes).toEqual([]);
+  });
+
   it("holds the next input through an unmatched root interval, grants no token, then drains", async () => {
     const rig = makeRig(async function* (c) {
       yield* firstTurn(c);

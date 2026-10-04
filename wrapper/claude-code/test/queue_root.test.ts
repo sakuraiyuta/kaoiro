@@ -282,6 +282,31 @@ describe("ClaudeQueueRoot", () => {
       expect(h.timers.map((t) => t.ms)).toEqual([250, 250]);
     });
 
+    it("re-checks a busy host with backoff, since busy may end without a turn end", async () => {
+      const h = harness();
+      h.setIdle(false);
+      h.root.checkReadiness();
+      await settle();
+      expect(h.ops("credit")).toEqual([]);
+      expect(h.timers.map((t) => t.ms)).toEqual([250]);
+      h.setIdle(true);
+      h.timers[0]!.task();
+      await settle();
+      expect(h.ops("credit")).toHaveLength(1);
+    });
+
+    it("logs a refusal streak at its start and once near the backoff cap", async () => {
+      const h = harness({}, { credit: "stale_queue_epoch" });
+      h.root.checkReadiness();
+      await settle();
+      for (let i = 0; i < 6; i++) {
+        h.timers[i]!.task();
+        await settle();
+      }
+      expect(h.ops("credit")).toHaveLength(7);
+      expect(h.lines.filter((line) => line.includes("credit refused"))).toHaveLength(2);
+    });
+
     it("does not retry a credit refused because the queue is frozen", async () => {
       const h = harness({}, { credit: "queue_frozen" });
       h.root.checkReadiness();
@@ -327,7 +352,7 @@ describe("ClaudeQueueRoot", () => {
       open();
       await settle();
       expect(h.sends).toEqual([]);
-      expect(h.ops("return")).toEqual([expect.objectContaining({ items: [{ queue_id: "1", reason: "credit_withdrawn" }] })]);
+      expect(h.ops("return")).toEqual([expect.objectContaining({ items: [{ queue_id: "1", reason: "turn_abandoned" }] })]);
       h.setIdle(true);
       h.root.turnEnded("operator-turn", true);
       await settle();

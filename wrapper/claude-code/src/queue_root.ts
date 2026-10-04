@@ -15,7 +15,8 @@
 //
 // Liveness: while the host is idle and holds no root, a root credit is
 // outstanding, requested, or scheduled for a retry. Every exit of a root
-// offer re-arms readiness, and a refused credit is retried with backoff.
+// offer re-arms readiness; a refused credit, and a host found busy, are
+// re-checked with backoff, since not every way out of busy ends a turn.
 
 import { randomUUID } from "node:crypto";
 import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
@@ -43,6 +44,9 @@ export interface QueueRootDeps extends QueueInputDeps {
 
 const RETRY_FIRST_MS = 250;
 const RETRY_MAX_MS = 5_000;
+/** A refusal streak is logged at its start and once more about when the
+ *  backoff reaches its cap. */
+const LOG_REFUSAL_AGAIN_AT = 5;
 
 interface RootInput {
   offer: QueueOffer;
@@ -64,6 +68,7 @@ export class ClaudeQueueRoot {
   #withdrawn = false;
   #retryScheduled = false;
   #retryDelay = RETRY_FIRST_MS;
+  #refusals = 0;
 
   constructor(deps: QueueRootDeps) {
     this.#deps = deps;
@@ -80,20 +85,29 @@ export class ClaudeQueueRoot {
     this.#withdrawn = false;
     void this.#deps.ready().then(async () => {
       if (this.#creditToken !== token) return;
-      // A busy host re-arms at its turn end, a held root at its exit.
-      if (!this.#deps.isIdle() || this.#roots.size > 0) {
+      // A held root re-arms at its exit.
+      if (this.#roots.size > 0) {
         this.#creditToken = null;
+        return;
+      }
+      if (!this.#deps.isIdle()) {
+        this.#creditToken = null;
+        this.#scheduleRetry();
         return;
       }
       const result = await lease.credit("root", token);
       if (!result.ok) {
         if (this.#creditToken !== token) return;
         this.#creditToken = null;
-        this.#deps.log(`[kaoiro] queue root credit refused: ${JSON.stringify(result.error)}\n`);
+        this.#refusals += 1;
+        if (this.#refusals === 1 || this.#refusals === LOG_REFUSAL_AGAIN_AT) {
+          this.#deps.log(`[kaoiro] queue root credit refused (${this.#refusals} in a row): ${JSON.stringify(result.error)}\n`);
+        }
         if (result.error.reason !== "queue_frozen") this.#scheduleRetry();
       } else if (this.#creditToken === token) {
         this.#creditRevision = result.reply.credit_revision;
         this.#retryDelay = RETRY_FIRST_MS;
+        this.#refusals = 0;
       } else {
         // The host left idle while the credit was in flight.
         void lease.withdraw(result.reply.credit_revision);
@@ -196,7 +210,7 @@ export class ClaudeQueueRoot {
         // Another turn got ahead while the permit was in flight; the text
         // was formatted for an idle host, so the items go back unsent.
         this.#roots.delete(token);
-        void offer.return(injectIds.map((queue_id) => ({ queue_id, reason: "credit_withdrawn" as const })));
+        offer.release(injectIds);
         return;
       }
       let sent: Promise<void> | undefined;
