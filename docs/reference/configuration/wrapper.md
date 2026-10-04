@@ -2,13 +2,13 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-10-04
 related: [protocol]
 ---
 
 # Wrapper configuration
 
-### WrapperConfig fields relayed by the runner (issues #181 and #292)
+## WrapperConfig fields relayed by the runner (issues #181 and #292)
 
 `WrapperConfig` (protocol/src/index.ts) is the runner's per-spawn config
 handoff to the wrapper process it launches — a process-boundary data
@@ -63,7 +63,7 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
   "Antigravity configuration" section for the declaration syntax and
   defaulting rules.
 
-### Codex operator steer controls
+## Codex operator steer controls
 
 `KAOIRO_CODEX_OPERATOR_STEER=1` in the Codex wrapper process environment
 enables operator steering for every Codex peer on the app-server backend.
@@ -80,7 +80,7 @@ backend ignores both variables. Every other Codex wrapper declares
 deriving the default from the inter-agent declaration. The wrapper logs `codex: operator_steer=on|off`
 at startup. See [Codex app-server transport](../engines/codex-app-server.md#operator-steering-adr-0058-stage-2).
 
-### Codex inter-agent early delivery
+## Codex inter-agent early delivery
 
 The app-server backend advertises inter-agent `early: "steer"` and
 `yield: "none"` independently of `KAOIRO_CODEX_OPERATOR_STEER`. It uses the
@@ -91,7 +91,7 @@ toggle or live dashboard policy switch; the revisioned per-agent switch is
 tracked by issue #463. A Codex yield request can receive an early downgrade,
 never a tool-boundary interruption.
 
-### Codex approval axis controls
+## Codex approval axis controls
 
 `KAOIRO_CODEX_APPROVAL_AXIS=1` in the Codex wrapper process environment
 makes approval a mutable axis for every Codex peer on the app-server
@@ -110,7 +110,7 @@ above). The exec backend ignores both variables. The wrapper logs
 [Codex app-server transport](../engines/codex-app-server.md#approval-requests-adr-0064)
 and [ADR-0064](../../adr/0064-codex-app-server-approval-requests.md).
 
-### Claude phase-2 delivery controls
+## Claude phase-2 delivery controls
 
 `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` in the Claude wrapper process environment
 enables advertising `early: "fold"` and `yield: "tool_boundary"` at join for
@@ -156,8 +156,10 @@ If the live-turn pre-cut wait expires, the yield is downgraded with
 `receipt_wait_timeout`; the claim and interval remain consumed, and the host
 continues. If the post-result root-hook wait expires, the wrapper records
 `root_hook_timeout`, freezes admission and tool-origin authority, cancels
-queued input, and enters `error`. The operator must then restart it using
-[Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper).
+queued input, and enters `error`. The wrapper then exits once its running turn
+ends, and the runner relaunches it; see
+[Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
+for the session that relaunch uses and for the cases that need the operator.
 See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
 for stage and reply-authority behavior.
 

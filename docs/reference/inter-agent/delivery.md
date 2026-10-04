@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-10-01
+last_updated: 2026-10-04
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -379,8 +379,9 @@ is uncertain. The queued item R is `settled(failed_before_handoff)` because
 it was never handed to the engine; its cancellation kind is
 `receipt_timeout_fail_stop`, and its sender receives a best-effort failure
 notice. The timeout is counted in diagnostics.
-Recovery requires an operator restart of the wrapper; a session reset inside
-the failed host does not restore admission. See [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
+Recovery needs a new wrapper process; a session reset inside the failed host
+does not restore admission. The wrapper exits once its running turn ends and
+the runner relaunches it. See [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
 and [wrapper delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls).
 
 ## Related topics

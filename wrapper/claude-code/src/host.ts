@@ -2443,7 +2443,7 @@ export class AgentHost implements EngineAdapter {
     this.#pushedQueue.length = 0;
     this.#unattributedTerminalFrozen = true;
     this.#failStopAdmission(this.#activeTurn,
-      "pushed input root hook timed out; host admission stopped pending operator recovery",
+      "pushed input root hook timed out; host admission stopped until this wrapper is relaunched",
       "receipt_timeout_fail_stop", () => {
         this.#options.onAdmissionFailStop?.({
           ...(this.#activeTurn === null ? {} : { turnToken: this.#activeTurn.turnToken }),
@@ -2637,10 +2637,10 @@ export class AgentHost implements EngineAdapter {
         // frame or known session at all (a startup error) supplies the
         // binding itself.
         if (this.#foreignOccupancy !== null && id !== null && this.#intervalSession !== null && id !== this.#intervalSession) {
-          this.#failStopLive("session changed under a foreign root interval; host admission stopped pending operator recovery");
+          this.#failStopLive("session changed under a foreign root interval; host admission stopped until this wrapper is relaunched");
         } else if (message.type === "result" && (this.#foreignOccupancy !== null || this.#activeTurn !== null)) {
           if (id === null) {
-            this.#failStopLive("terminal under a live interval lacks its session; host admission stopped pending operator recovery");
+            this.#failStopLive("terminal under a live interval lacks its session; host admission stopped until this wrapper is relaunched");
           }
         }
         this.#noteIntervalSession(id);
@@ -2850,18 +2850,18 @@ export class AgentHost implements EngineAdapter {
           const retired = this.#matchRetiredResult(message);
           if (retired === "duplicate") continue;
           if (retired === "conflict") {
-            this.#failStopLive("a retired result index was reused with a different identity; host admission stopped pending operator recovery");
+            this.#failStopLive("a retired result index was reused with a different identity; host admission stopped until this wrapper is relaunched");
             continue;
           }
           const notificationResult = (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";
           const ownerKind = this.#activeTurn?.kind;
           const liveInterval = this.#foreignOccupancy !== null || this.#activeTurn !== null;
           if (liveInterval && !this.#resultIndexAdvances(message)) {
-            this.#failStopLive("terminal under a live root interval has a missing or regressing result index; host admission stopped pending operator recovery");
+            this.#failStopLive("terminal under a live root interval has a missing or regressing result index; host admission stopped until this wrapper is relaunched");
           } else if (this.#intervalAmbiguous) {
             this.#failStopLive(this.#foreignOccupancy !== null
-              ? "foreign root interval identity ambiguous at its terminal; host admission stopped pending operator recovery"
-              : "notification result ownership ambiguous; host admission stopped pending operator recovery");
+              ? "foreign root interval identity ambiguous at its terminal; host admission stopped until this wrapper is relaunched"
+              : "notification result ownership ambiguous; host admission stopped until this wrapper is relaunched");
           } else if (this.#foreignOccupancy !== null) {
             this.#drainForeignOccupancy(message, result);
           } else if (notificationResult && ownerKind !== "sdk_notification") {
@@ -2871,7 +2871,7 @@ export class AgentHost implements EngineAdapter {
             this.#emitResult(result, sdkMessageToCost(message));
             this.#clearNotificationCandidates();
           } else if (!notificationResult && ownerKind === "sdk_notification") {
-            this.#failStopLive("notification result lacks task-notification ownership; host admission stopped pending operator recovery");
+            this.#failStopLive("notification result lacks task-notification ownership; host admission stopped until this wrapper is relaunched");
           } else if (result.is_error) {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
@@ -4822,7 +4822,7 @@ export class AgentHost implements EngineAdapter {
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     if (this.#foreignOccupancy !== null) {
-      this.#failStopLive("SDK stream ended under a foreign root interval; host admission stopped pending operator recovery");
+      this.#failStopLive("SDK stream ended under a foreign root interval; host admission stopped until this wrapper is relaunched");
     }
     this.#closed = true;
     if (this.#pendingPushedReceipt !== null) {

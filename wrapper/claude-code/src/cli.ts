@@ -1261,7 +1261,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     clearTimeout(timeoutHandle);
   }
 
-  const freezeInterAgentAdmission = (turnToken: string | undefined, attribution: string, reason: string): void => {
+  const freezeInterAgentAdmission = (
+    turnToken: string | undefined,
+    attribution: string,
+    reason: string,
+    recovery: string,
+  ): void => {
     admissionFailStopped = true;
     const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
     const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
@@ -1270,7 +1275,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         `attribution=${attribution}; ` +
         `closed ingress=${pendingIngress}, discarded unstarted ` +
         `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}. ` +
-        "Do not reuse this host. In the dashboard, terminate this wrapper, wait for disconnected, then restore it; see docs/reference/engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper.\n",
+        `${recovery} ` +
+        "See docs/reference/engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper.\n",
     );
   };
 
@@ -1339,7 +1345,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         ticketLease.discard();
         const rootBatch = interAgentTurns.adoptPushedRoot(batch.turnToken, decision.turnToken);
         if (rootBatch === undefined) {
-          freezeInterAgentAdmission(decision.turnToken, "unattributed", "pushed root ownership unavailable");
+          freezeInterAgentAdmission(decision.turnToken, "unattributed", "pushed root ownership unavailable",
+            "Inter-agent input and sends stay closed while this wrapper runs, and it does not exit by itself: " +
+              "terminate it in the dashboard, wait for disconnected, then restore it.");
           return;
         }
         interAgent?.prepareReplyInput(decision.turnToken, decision.envelopes);
@@ -1415,10 +1423,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       }
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
-      freezeInterAgentAdmission(turnToken, attribution, "turn watchdog fail-stop");
+      freezeInterAgentAdmission(turnToken, attribution, "turn watchdog fail-stop",
+        "This host admits no new input. The turn did not answer an interrupt, so this wrapper may not exit " +
+          "by itself: if it stays connected, terminate it in the dashboard, wait for disconnected, then restore it.");
     },
     onAdmissionFailStop: ({ turnToken }) => {
-      freezeInterAgentAdmission(turnToken, "unattributed", "notification result fail-stop");
+      freezeInterAgentAdmission(turnToken, "unattributed", "notification result fail-stop",
+        "This host admits no new input. The wrapper exits once the running turn ends, and the runner relaunches " +
+          "it (a fresh session unless this process was launched with --resume).");
     },
     onHostEnd: ({ error }) => {
       turnWatchdog.dispose();

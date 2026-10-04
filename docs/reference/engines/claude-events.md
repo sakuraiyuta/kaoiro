@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-09-29
+last_updated: 2026-10-04
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -219,19 +219,65 @@ root-hook timeout.
 
 ### Recovering a fail-stopped Claude wrapper
 
-The operator uses the dashboard's **終了** action on the affected agent card to
-terminate its wrapper. Wait until the card shows `disconnected`; the server
-rejects restore while that wrapper is still live. Then use the card's **復帰**
-action. Confirm that the agent reconnects and reports `idle` or
-`waiting_input` with a new live wrapper, and that new input can be accepted.
-The old wrapper's unresolved owner is settled on stream teardown, once, before
-the new wrapper starts. A session reset cannot recover the live `error` state:
-the reset endpoint accepts only `idle` or `waiting_input`. The server's reply
-basis comparison remains in force after restore.
-The `root_hook_timeout` path uses this same operator restart procedure; it
-does not exchange the `Query` automatically. The old `Query` never receives
-the cancelled root. A fresh wrapper generation can admit new input only after
-its own join and reply-basis negotiation succeed.
+A fail-stopped host never admits input again, so recovery always means a new
+wrapper process. Under a runner, that process usually starts without operator
+action.
+
+**Automatic path.** `AgentHost#failStopAdmission`
+(`wrapper/claude-code/src/host.ts`) closes the host, cancels queued input that
+has not reached the SDK, and wakes the input iterator. `AgentHost#input()`
+then returns because the host is closed and its queue is empty, so the SDK
+closes the CLI's input. The CLI finishes the turn it is running, if any, and
+exits. The stream end runs `#finishHost("stream_eof")`, `host.run()` returns,
+and `runClaudeCli` (`wrapper/claude-code/src/cli.ts`) reports the disconnect
+reason `stop` and exits with code 0. The exit waits for the running turn: in
+the case recorded on issue #520 (2026-10-04) it came about six minutes after the
+fail-stop. The runner's `Supervisor#onExit` (`runner/src/supervisor.ts`)
+treats every exit it did not request (no stop, restart or reset in progress) as
+a crash, whatever the exit code, and `#relaunch` starts the wrapper again, at
+most `MAX_RESTARTS` (5) times within `RESTART_WINDOW_MS` (60 s). This applies
+to the notification, foreign-interval, result-index, session-binding and
+`root_hook_timeout` fail-stops alike. The `root_hook_timeout` fail-stop does
+not exchange the `Query` inside the failed wrapper either: the old `Query`
+never receives the cancelled root.
+
+**Session after an automatic relaunch.** `#relaunch` passes the resume session
+the runner recorded when it last launched the agent (spawn, session switch,
+restore, or reset rollback). If that launch used `--resume`, the relaunch
+resumes the same session. If it was a fresh launch (a new agent, or a session
+reset in either mode, `new` or `clear`), the runner does not know the session
+the wrapper started afterwards, and the relaunch starts another fresh session:
+the conversation context is not carried over. On 2026-10-04 a relaunched peer
+came back in a new session (`41d133e4…`) instead of `50097f31…`. The new
+wrapper's session report then replaces the server's session pointer, so a later
+**復帰** resumes the new session as well. The earlier session stays on disk;
+reattach it with a session switch (`resume_session`, relayed to the runner as
+[`switch_session`](../protocol/runner-control.md)). Resuming the live session
+on relaunch is issue #524.
+
+**When the operator must act.**
+
+| Case | Why | Action |
+| --- | --- | --- |
+| Turn watchdog fail-stop | The turn did not answer the interrupt within the grace period, so closing the CLI's input is not expected to end it, and the wrapper may never exit. This is inferred from the code and has not been measured. | Use the procedure below. |
+| Pushed root ownership unavailable | The coordinator could not adopt a pushed root (`InterAgentTurnCoordinator#adoptPushedRoot` found no lease, or the root token already had a batch). `runClaudeCli` freezes only inter-agent admission and sends; the host is not closed, reports no `error`, keeps accepting operator input, and the wrapper does not exit. | Use the procedure below. |
+| Restart cap reached | After 5 exits within 60 s the runner logs `exceeded restart cap; leaving down` and stops relaunching. | Remove the cause, then **復帰**. |
+| Context lost after a fresh relaunch | See the session paragraph above. | Switch the agent back to its earlier session. |
+
+The procedure: use the dashboard's **終了** action on the affected agent card
+to terminate the wrapper (SIGTERM; `host.close()` makes the SDK escalate to
+SIGKILL). Wait until the card shows `disconnected`; the server rejects restore
+while that wrapper is still live. Then use the card's **復帰** action, which
+resumes the session in the server's session pointer. Confirm that the agent
+reconnects and reports `idle` or `waiting_input` with a new live wrapper, and
+that new input can be accepted.
+
+On either path, the old wrapper's unresolved owner is settled on stream
+teardown, once, before the new wrapper starts. A session reset cannot recover
+the live `error` state: the reset endpoint accepts only `idle` or
+`waiting_input`. The server's reply basis comparison remains in force after a
+relaunch or restore, and a new wrapper generation admits input only after its
+own join and reply-basis negotiation succeed.
 
 The dated SDK 0.3.220 observation is preserved in
 [Claude SDK boundary evidence](../../evidence/claude/sdk-boundaries-2026.md#task-notification-terminal-paths).
