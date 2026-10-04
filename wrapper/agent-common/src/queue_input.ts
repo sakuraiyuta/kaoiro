@@ -193,8 +193,11 @@ export class QueueInput {
     const matches = [...this.#remembered].filter(([, remembered]) => identities.has(remembered.identity));
     // The tool can resume before the classification that woke it returns.
     await Promise.all(matches.map(([, remembered]) => remembered.pending));
+    if (matches.length === 0) return undefined;
     const ids = matches.map(([id]) => id).filter((id) => this.#awaiting.has(id));
-    if (ids.length === 0) return undefined;
+    // A queue item no longer held for its tool (given back) arrives later as
+    // input; returning it now as well would deliver it twice.
+    if (ids.length === 0) return null;
     const offer = this.#awaiting.get(ids[0]!)!.offer;
     const own = ids.filter((id) => this.#awaiting.get(id)!.offer === offer);
     for (const id of own) {

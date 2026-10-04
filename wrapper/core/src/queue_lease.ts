@@ -108,11 +108,18 @@ export interface QueueOffer {
   return(items: readonly InterAgentQueueReturnItem[]): Promise<QueueSettlement<"return">>;
   /** Disposes items; kept until the server has it, like `return`. */
   dispose(items: readonly InterAgentQueueDisposeItem[]): Promise<QueueSettlement<"dispose">>;
+  /** Runs the engine's handling of this offer. If it throws, the offer's
+   *  items it left unsettled are released and `fallback` is returned, so an
+   *  offer can never stay offered and hold the lease slot. Every offer
+   *  handler runs under this guard. */
+  guard<T>(task: () => T | Promise<T>, fallback: T): Promise<T>;
 }
 
 export interface QueueLeaseOptions {
   transport: QueueControlTransport;
-  onOffer: (offer: QueueOffer) => void;
+  /** Handles an offer; it runs under `QueueOffer.guard`, which awaits a
+   *  returned promise. */
+  onOffer: (offer: QueueOffer) => unknown;
   /** Receives an accepted batch's sequences before its offer, for the
    *  receipt ledger. */
   onSequences?: (seqs: readonly number[]) => void;
@@ -166,7 +173,7 @@ function stillLeased(phase: ServerPhase | undefined): boolean {
 
 export class QueueLease {
   readonly #transport: QueueControlTransport;
-  readonly #onOffer: (offer: QueueOffer) => void;
+  readonly #onOffer: (offer: QueueOffer) => unknown;
   readonly #onSequences: (seqs: readonly number[]) => void;
   readonly #log: (line: string) => void;
   #binding: Binding | null = null;
@@ -239,7 +246,8 @@ export class QueueLease {
       push.generation !== binding.generation || this.#leases.has(push.lease_id)
     ) return false;
 
-    this.#onOffer(this.#offer(push.lease_id, push.kind, this.#lease(push.lease_id, push.items)));
+    const offer = this.#offer(push.lease_id, push.kind, this.#lease(push.lease_id, push.items));
+    void offer.guard(() => this.#onOffer(offer), undefined);
     return true;
   }
 
@@ -376,20 +384,7 @@ export class QueueLease {
         };
       },
       release: (queueIds) => {
-        if (!current()) return;
-        const unused: string[] = [];
-        for (const id of queueIds) {
-          const item = items.get(id);
-          if (item?.state === "begin_requested") item.abandoned = true;
-          if (item?.state === "offered" || item?.state === "permitted") {
-            item.state = "returning";
-            unused.push(id);
-          }
-        }
-        if (unused.length > 0) {
-          void this.#settleOp("return", leaseId, items,
-            unused.map((id) => ({ queue_id: id, reason: "turn_abandoned" as const })));
-        }
+        if (current()) this.#releaseIds(leaseId, items, queueIds);
       },
       return: async (entries) => {
         const targets = entries.map((entry) => items.get(entry.queue_id));
@@ -403,6 +398,16 @@ export class QueueLease {
         for (const item of targets) item!.state = "returning";
         return this.#settleOp("return", leaseId, items, entries);
       },
+      guard: async (task, fallback) => {
+        try {
+          return await task();
+        } catch (error) {
+          this.#log(`[kaoiro] queue offer handling failed; its unsettled items go back: lease=${leaseId} kind=${kind}: ${String(error)}\n`);
+          // Submitted and settling items are left to their dispositions.
+          if (current()) this.#releaseIds(leaseId, items, [...items.keys()]);
+          return fallback;
+        }
+      },
       dispose: async (entries) => {
         const targets = entries.map((entry) => items.get(entry.queue_id));
         if (
@@ -415,6 +420,24 @@ export class QueueLease {
         return this.#settleOp("dispose", leaseId, items, entries);
       },
     };
+  }
+
+  /** Returns offered and permitted items as `turn_abandoned`; a pending
+   *  `begin` is marked abandoned so a late permit is returned too. */
+  #releaseIds(leaseId: string, items: Map<string, LeaseItem>, queueIds: readonly string[]): void {
+    const unused: string[] = [];
+    for (const id of queueIds) {
+      const item = items.get(id);
+      if (item?.state === "begin_requested") item.abandoned = true;
+      if (item?.state === "offered" || item?.state === "permitted") {
+        item.state = "returning";
+        unused.push(id);
+      }
+    }
+    if (unused.length > 0) {
+      void this.#settleOp("return", leaseId, items,
+        unused.map((id) => ({ queue_id: id, reason: "turn_abandoned" as const })));
+    }
   }
 
   #settle(leaseId: string, items: Map<string, LeaseItem>, queueIds: readonly string[]): void {

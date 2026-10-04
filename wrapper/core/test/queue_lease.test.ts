@@ -469,3 +469,47 @@ describe("QueueLease.receiveRecovery (r8 §6.3)", () => {
   });
 });
 
+describe("QueueOffer.guard: an offer handler that throws never leaves its offer unsettled", () => {
+  function guarded(onOffer: (offer: QueueOffer) => unknown) {
+    const sent: Record<string, unknown>[] = [];
+    const lines: string[] = [];
+    const lease = new QueueLease({
+      transport: async (payload) => { sent.push(payload); return defaultReply(payload); },
+      onOffer,
+      log: (line) => lines.push(line),
+    });
+    lease.join(joinReply, "i1", "g1");
+    return { lease, sent, lines };
+  }
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("releases the items of an offer whose handler throws synchronously", async () => {
+    const h = guarded(() => { throw new Error("boom"); });
+    h.lease.receiveBatch(batch("1", ["10", "11"]));
+    await settle();
+    expect(h.sent.find((p) => p.op === "return")).toMatchObject({ items: [{ queue_id: "10", reason: "turn_abandoned" }, { queue_id: "11", reason: "turn_abandoned" }] });
+    expect(h.lines.join("")).toContain("queue offer handling failed");
+  });
+
+  it("releases the unsettled items of an offer whose handler rejects, leaving submitted ones to their disposition", async () => {
+    const h = guarded(async (offer) => {
+      const submit = await offer.begin(["10"], "turn-1");
+      submit!.invoke(() => {});
+      throw new Error("late failure");
+    });
+    h.lease.receiveBatch(batch("1", ["10", "11"]));
+    await settle();
+    await settle();
+    expect(h.sent.filter((p) => p.op === "return")).toEqual([
+      expect.objectContaining({ items: [{ queue_id: "11", reason: "turn_abandoned" }] }),
+    ]);
+  });
+
+  it("returns the handler's value, or the fallback after a throw", async () => {
+    const h = guarded(() => {});
+    const offer = h.lease.receiveRecovery({ lease_id: "7", items: [{ queue_id: "30", attempt_id: "30.1", delivery_seq: 40, class: "ordinary", byte_charge: 2, envelope }] })!;
+    await expect(offer.guard(() => 5, 0)).resolves.toBe(5);
+    await expect(offer.guard(() => { throw new Error("x"); }, 0)).resolves.toBe(0);
+  });
+});
+

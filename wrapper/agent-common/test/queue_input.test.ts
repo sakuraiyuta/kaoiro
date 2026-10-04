@@ -43,7 +43,8 @@ function offerOf(envelopes: Envelope[], ids = envelopes.map((_, index) => String
     release: () => {},
     return: async (entries) => { returned.push(...entries); return { ok: true }; },
     dispose: async (entries) => { disposed.push(...entries); return { ok: true }; },
-  };
+    guard: async (task) => task(),
+  } as QueueOffer;
   return { offer, returned, disposed };
 }
 

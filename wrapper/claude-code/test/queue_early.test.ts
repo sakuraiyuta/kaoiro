@@ -72,7 +72,8 @@ function harness(options: {
       if (reason !== undefined) throw { reason };
       return reply(payload);
     },
-    onOffer: (offer: QueueOffer) => void early.onOffer(offer),
+    onOffer: (offer: QueueOffer) => early.onOffer(offer),
+    log: (line) => lines.push(line),
   });
   lease.join({
     inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
@@ -330,6 +331,7 @@ describe("ClaudeQueueEarly", () => {
     const prepared = await h.input.prepare({
       leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "ordinary", envelope: inbound("c1") as never }],
       begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+      guard: (async (task: () => unknown) => task()) as never,
     });
     expect(prepared.injected).toHaveLength(1);
     expect(h.classified()).toBe(1);
@@ -482,6 +484,7 @@ describe("ClaudeQueueEarly", () => {
       const again = await h.input.prepare({
         leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "waiter", envelope: inbound("c1") as never }],
         begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+        guard: (async (task: () => unknown) => task()) as never,
       });
       expect(again.injected).toHaveLength(1);
       expect(again.consumed).toEqual([]);
@@ -496,7 +499,15 @@ describe("ClaudeQueueEarly", () => {
       h.inputTimers[0]!.task();
       await settle();
       expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
-      expect(await h.input.handoff([inbound("c1")], "tool-turn")).toBeUndefined();
+      // A tool that asks after the window gets no reply now: the item arrives
+      // once, as input, instead of twice.
+      expect(await h.input.handoff([inbound("c1")], "tool-turn")).toBeNull();
+      const again = await h.input.prepare({
+        leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "waiter", envelope: inbound("c1") as never }],
+        begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+        guard: (async (task: () => unknown) => task()) as never,
+      });
+      expect(again.injected).toHaveLength(1);
     });
   });
 
@@ -507,7 +518,7 @@ describe("ClaudeQueueEarly", () => {
     h.offer(inbound("c1"));
     await settle();
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
-    expect(h.lines.join("")).toContain("queue early offer failed");
+    expect(h.lines.join("")).toContain("queue offer handling failed");
   });
 
   it("asks no credit for a turn that ended while it waited for the link", async () => {
@@ -649,6 +660,15 @@ describe("ClaudeQueueEarly", () => {
       expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
       expect(h.cuts).toEqual([]);
       expect(h.pushes).toHaveLength(1);
+    });
+
+    it("a yield path that throws after the permit is released by the offer guard", async () => {
+      const h = await ready((h) => { h.yieldState.onClaim = () => { throw new Error("claim transport down"); }; });
+      await settle();
+      expect(h.ops("begin_native")).toHaveLength(1);
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
+      expect(h.lines.join("")).toContain("queue offer handling failed");
+      expect(h.cuts).toEqual([]);
     });
 
     it("a cut the host refused is downgraded and definitely unstarted", async () => {

@@ -467,7 +467,7 @@ describe("Claude CLI credit-v1 root composition", () => {
 
 /** A queued root input the model answers with a waiting send_to_agent; the
  *  peer's reply comes back as a `waiter` offer (credit-v1 W path). */
-async function runWaiterReply(noReply = false, stale = false) {
+async function runWaiterReply(noReply = false, stale = false, malformed = false) {
   const sent: Record<string, unknown>[] = [];
   const outers: unknown[] = [];
   const toolResults: string[] = [];
@@ -507,7 +507,10 @@ async function runWaiterReply(noReply = false, stale = false) {
             return { ...base, closed: true, claimed: false };
           }
           if (payload.op === "begin_native") return { ...base, permitted_queue_ids: payload.queue_ids };
-          if (payload.op === "return") return { ...base, returned_ranges: [] };
+          if (payload.op === "return") {
+            if (malformed && payload.lease_id === "2") done();
+            return { ...base, returned_ranges: [] };
+          }
           if (payload.op === "dispose") {
             if ((payload.items as { queue_id: string }[]).some((i) => i.queue_id === "9" || i.queue_id === "q1")) done();
             return { ...base, disposed: (payload.items as { queue_id: string }[]).map((i) => i.queue_id), resolved_ranges: [], returned_ranges: [] };
@@ -544,7 +547,11 @@ async function runWaiterReply(noReply = false, stale = false) {
           if (!noReply) setImmediate(() => lease.receiveBatch({
             version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: "2", kind: "waiter",
             registration_id: "reg-1",
-            items: [{ queue_id: "9", attempt_id: "9.1", delivery_seq: 2, class: "waiter", byte_charge: 1, envelope: peerReply }],
+            items: [{
+              queue_id: "9", attempt_id: "9.1", delivery_seq: 2, class: "waiter", byte_charge: 1,
+              // A body the classifier cannot read makes the W handler throw.
+              envelope: malformed ? { type: "inter_agent_message", agent_id: "peer.agent" } as unknown as Envelope : peerReply,
+            }],
           }));
           return { kind: "accepted", stamp: null, waiter_registration_id: "reg-1" };
         },
@@ -579,7 +586,7 @@ async function runWaiterReply(noReply = false, stale = false) {
                 name: "send_to_agent",
                 arguments: stale
                   ? { to: "peer.agent", conversation_id: "c-queue", kind: "response", body: "late answer" }
-                  : { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: noReply ? 200 : 3_000 },
+                  : { to: "peer.agent", conversation_id: "c-queue", kind: "request", body: "and then?", wait_for_response: true, timeout_ms: noReply || malformed ? 200 : 3_000 },
                 _meta: { "claudecode/toolUseId": "waiting-reply" },
               } });
               await vi.waitFor(() => expect(responses).toHaveLength(1), { timeout: 4_000 });
@@ -597,7 +604,8 @@ async function runWaiterReply(noReply = false, stale = false) {
   });
 
   try {
-    await vi.waitFor(() => expect(sent.some((p) => noReply ? p.op === "waiter_close" : p.op === "dispose" &&
+    await vi.waitFor(() => expect(sent.some((p) => malformed ? p.op === "return" && p.lease_id === "2"
+      : noReply ? p.op === "waiter_close" : p.op === "dispose" &&
       (p.items as { queue_id: string }[]).some((i) => i.queue_id === (stale ? "q1" : "9")))).toBe(true), { timeout: 5_000 });
     return { sent, outers, toolResults, serverLinkOptions };
   } finally {
@@ -631,6 +639,13 @@ describe("Claude CLI credit-v1 W path composition", () => {
     });
     expect(toolResults[0]).toContain("peer answer");
     expect(toolResults[0]).toContain("stale_reply_basis");
+  });
+
+  it("a W offer whose handler throws is released through the CLI's offer handler", async () => {
+    const { sent } = await runWaiterReply(false, false, true);
+    expect(sent.find((p) => p.op === "return" && p.lease_id === "2")).toMatchObject({
+      items: [{ queue_id: "9", reason: "turn_abandoned" }],
+    });
   });
 
   it("a wait that ends without its reply closes the registration", async () => {

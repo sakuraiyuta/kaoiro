@@ -209,12 +209,9 @@ export class ClaudeQueueEarly {
   async onOffer(offer: QueueOffer): Promise<void> {
     this.#held += 1;
     let awaitingDecision = false;
+    // A throw reaches QueueOffer.guard, which releases the unsettled items.
     try {
       awaitingDecision = await this.#onOffer(offer);
-    } catch (error) {
-      // An offer left unsettled would hold the ordinary lease slot.
-      this.#deps.log(`[kaoiro] queue early offer failed; its items go back unsent: ${String(error)}\n`);
-      offer.release(offer.items.map((item) => item.queueId));
     } finally {
       if (!awaitingDecision) this.#held -= 1;
       this.check();

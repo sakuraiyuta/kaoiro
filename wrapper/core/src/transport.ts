@@ -339,7 +339,7 @@ export interface ServerLinkOptions {
   interAgentInlineRecovery?: boolean;
   onInterAgentQueueRefused?: (reason: unknown) => void;
   /** Receives each offer the server makes under this link's credit. */
-  onQueueOffer?: (offer: QueueOffer) => void;
+  onQueueOffer?: (offer: QueueOffer) => unknown;
   /** Called after each join's queue reconciliation: any root credit the
    *  wrapper held before the join is gone, and credit may be requested. */
   onQueueRejoined?: () => void;

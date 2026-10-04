@@ -1087,9 +1087,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     interAgentQueuePolicy: interAgentQueuePolicy(config),
     interAgentInlineRecovery: true,
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
-    onQueueOffer: (offer) => void (offer.kind === "early" ? queueEarly.onOffer(offer)
+    // Runs under QueueOffer.guard: a handler that throws has its offer released.
+    onQueueOffer: (offer) => offer.kind === "early" ? queueEarly.onOffer(offer)
       : offer.kind === "waiter" ? queueInput.acceptWaiter(offer)
-      : queueRoot.onOffer(offer)),
+      : queueRoot.onOffer(offer),
     onQueueRejoined: () => {
       creditSlot.reset();
       queueRoot.rejoined();

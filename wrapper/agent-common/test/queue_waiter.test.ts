@@ -27,12 +27,13 @@ function reply(cid: string, turn = 2): Envelope {
 
 function harness(options: {
   queue?: boolean; registrationId?: string; gates?: Record<string, Promise<void>>; refuse?: Record<string, string>;
-  onOp?: (payload: Record<string, unknown>) => void; replyBasis?: boolean;
+  onOp?: (payload: Record<string, unknown>) => void; replyBasis?: boolean; classifyThrows?: boolean;
 } = {}) {
   const sent: Record<string, unknown>[] = [];
   const outers: Array<{ waiter_registration?: WaiterRegistrationRequest } | undefined> = [];
   const closed: string[] = [];
   const timers: Array<{ task: () => void; ms: number }> = [];
+  const offers: QueueOffer[] = [];
   let classified = 0;
   let input!: QueueInput;
   const lease = new QueueLease({
@@ -50,7 +51,7 @@ function harness(options: {
         default: return base;
       }
     },
-    onOffer: (offer: QueueOffer) => void (offer.kind === "waiter" ? input.acceptWaiter(offer) : input.prepare(offer)),
+    onOffer: (offer: QueueOffer) => { offers.push(offer); return offer.kind === "waiter" ? input.acceptWaiter(offer) : input.prepare(offer); },
   });
   lease.join({
     inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
@@ -75,7 +76,11 @@ function harness(options: {
     newId: () => "cnv-new",
   });
   input = new QueueInput({
-    classify: async (envelope) => { classified++; return tool.receiveInbound(envelope); },
+    classify: async (envelope) => {
+      classified++;
+      if (options.classifyThrows) throw new Error("classifier down");
+      return tool.receiveInbound(envelope);
+    },
     reclassify: (envelope, mode) => tool.queuedInboundMode(envelope, mode),
     sendNotice: () => {},
     tracked: (cid) => tool.hasConversationTrack(cid),
@@ -95,7 +100,7 @@ function harness(options: {
     { to: "peer.agent", body: "please", kind: "request", conversation_id: "cnv-w", wait_for_response: true, timeout_ms },
     { origin: { token: "tool-turn", ...(signal === undefined ? {} : { signal }) } },
   );
-  return { tool, input, lease, sent, outers, closed, timers, offer, ops, wait, classified: () => classified };
+  return { tool, input, lease, sent, outers, closed, timers, offers, offer, ops, wait, classified: () => classified };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -162,6 +167,7 @@ describe("credit-v1 W offers through the waiting tool", () => {
     const again = await h.input.prepare({
       leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "waiter", envelope: reply("cnv-w") as never }],
       begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+      guard: (async (task: () => unknown) => task()) as never,
     });
     expect(again.injected).toHaveLength(1);
     expect(again.consumed).toEqual([]);
@@ -181,6 +187,7 @@ describe("credit-v1 W offers through the waiting tool", () => {
         reoffer = h.input.prepare({
           leaseId: "x", kind: "root", items: [{ queueId: "1", deliverySeq: 9, class: "waiter", envelope: reply("cnv-w") as never }],
           begin: async () => null, release: () => {}, return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+          guard: (async (task: () => unknown) => task()) as never,
         });
       },
     });
@@ -218,6 +225,27 @@ describe("credit-v1 W offers through the waiting tool", () => {
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "waiter_abandoned" }] });
   });
 
+  it("a W offer whose classification throws is released by the offer guard", async () => {
+    const h = harness({ classifyThrows: true });
+    h.offer(reply("cnv-w"));
+    await settle();
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
+  });
+
+  it("a committed result's items are no longer releasable (they were submitted)", async () => {
+    const h = harness();
+    const pending = h.wait();
+    await settle();
+    h.offer(reply("cnv-w"));
+    await pending;
+    // Committed in the unbound path at result build; a late release must not return them.
+    h.offers[0]!.release(["1"]);
+    await settle();
+    expect(h.ops("return")).toEqual([]);
+    expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed" }] });
+  });
+
   it("a reply no waiter took (the wait ended first) goes back as W, not injected", async () => {
     const h = harness();
     h.offer(reply("cnv-other"));
@@ -241,6 +269,7 @@ describe("credit-v1 W offers through the waiting tool", () => {
       leaseId: "1", kind: "waiter", items: [{ queueId: "1", deliverySeq: 1, class: "waiter", envelope: reply("cnv-w") as never }],
       begin: async () => null, release: (ids) => { released.push([...ids]); },
       return: async () => ({ ok: true }) as never, dispose: async () => ({ ok: true }) as never,
+      guard: (async (task: () => unknown) => task()) as never,
     });
     const first = await input.prepare(offerOf());
     expect(first.consumed).toHaveLength(1);

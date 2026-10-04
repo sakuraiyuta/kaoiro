@@ -42,7 +42,8 @@ function harness(overrides: Partial<QueueRootDeps & QueueInputDeps> = {}, refuse
       if (reason !== undefined) throw { reason };
       return reply(payload);
     },
-    onOffer: (offer: QueueOffer) => void root.onOffer(offer),
+    onOffer: (offer: QueueOffer) => root.onOffer(offer),
+    log: (line) => lines.push(line),
   });
   lease.join({
     inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
@@ -454,7 +455,7 @@ describe("ClaudeQueueRoot", () => {
     h.offer([inbound("c1")]);
     await settle();
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
-    expect(h.lines.join("")).toContain("queue root offer failed");
+    expect(h.lines.join("")).toContain("queue offer handling failed");
   });
 
   it("reports a yield-granted item downgraded no_work_input when its root turn takes it, once", async () => {

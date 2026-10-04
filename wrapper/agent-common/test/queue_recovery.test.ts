@@ -25,7 +25,7 @@ function peerInput(turn: number, body = "newer input"): Envelope {
   } as Envelope;
 }
 
-function harness(options: { refuse?: Record<string, string>; recovery?: boolean; body?: string } = {}) {
+function harness(options: { refuse?: Record<string, string>; recovery?: boolean; body?: string; classifyThrows?: boolean } = {}) {
   const sent: Record<string, unknown>[] = [];
   const legacyClaims: string[] = [];
   const lease = new QueueLease({
@@ -70,7 +70,10 @@ function harness(options: { refuse?: Record<string, string>; recovery?: boolean;
     newId: () => "cnv-new",
   });
   input = new QueueInput({
-    classify: (envelope) => tool.receiveInbound(envelope),
+    classify: async (envelope) => {
+      if (options.classifyThrows) throw new Error("classifier down");
+      return tool.receiveInbound(envelope);
+    },
     reclassify: (envelope, mode) => tool.queuedInboundMode(envelope, mode),
     sendNotice: () => {},
     tracked: (cid) => tool.hasConversationTrack(cid),
@@ -128,6 +131,14 @@ describe("credit-v1 inline recovery", () => {
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "q1", reason: "turn_abandoned" }] });
     // The server claimed this conversation's input: the legacy coordinator holds none to add.
     expect(h.legacyClaims).toEqual([]);
+  });
+
+  it("a recovery whose classification throws is released by the offer guard, with no inline recovery", async () => {
+    const h = harness({ classifyThrows: true });
+    const result = await h.reply();
+    expect(JSON.parse(result.content[0]!.text).recovery).toEqual([]);
+    await settle();
+    expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "q1", reason: "turn_abandoned" }] });
   });
 
   it("a wrapper without the queue recovery wiring releases what the server claimed", async () => {
