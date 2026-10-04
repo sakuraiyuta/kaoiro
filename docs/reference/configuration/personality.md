@@ -2,7 +2,7 @@
 title: Personality configuration (common footer)
 description: The operator-changeable scope of the personality prompt -- the common-footer files, their composition order, and when a change takes effect.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-10-04
 related: [protocol]
 ---
 
@@ -39,7 +39,9 @@ footer composition becomes the prompt.
 - A dedicated watcher applies changes (only when `KAOIRO_FOOTER_DIR` is set,
   watching exact matches for the two filenames). Editing triggers a rebuild,
   effective from the snapshot of the next connecting wrapper (live sessions
-  remain unchanged per F9). Every rebuild logs each layer's origin, character
+  remain unchanged per F9). A wrapper that resumes an existing session
+  receives the new text, but the engine may keep the old one; see
+  [When a change reaches the model](#when-a-change-reaches-the-model). Every rebuild logs each layer's origin, character
   count, and short hash at info level (ADR-0045 F5). Reading semantics (UTF-8 /
   regular files only / last known good during a temporary read_error) are in
   ADR-0045 F6.
@@ -51,6 +53,21 @@ footer composition becomes the prompt.
   issue #165). When an operator replaces the built-in default with
   `system-footer.md` in `KAOIRO_FOOTER_DIR`, it also replaces this guidance
   because it is guidance shared by all personas, not persona-specific.
+
+### When a change reaches the model
+
+The wrapper receives the current personality and footer on every launch,
+including a resume. Whether the model sees them depends on the engine
+([ADR-0065](../../adr/0065-footer-changes-on-resumed-sessions.md)):
+
+| Engine | A changed footer reaches the model at |
+|---|---|
+| Claude Code | Compaction or a new session. A resume keeps the system prompt the SDK recorded at the session's first request. |
+| Codex (app-server) | A new thread or compaction. A resumed thread keeps its recorded developer instructions. |
+| Antigravity | The next launch, including a resume. |
+
+To make a footer change take effect sooner, send its gist to the running
+agents as a message, or reset the sessions that should pick it up.
 
 ### Changeable scope
 
