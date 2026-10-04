@@ -159,7 +159,9 @@ jobs:
           export KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS
           # RuntimeConfigTest also reads the repository's scripts/dev.sh and
           # docs/reference/configuration/server.md (the canonical DETS store
-          # list, issue #307); anything a server test reads from outside
+          # list, issue #307), and SessionPointerRecoveryTest reads
+          # docs/operations/session-pointer-recovery.md (issue #515);
+          # anything a server test reads from outside
           # server/ has to be listed in this tar or the test fails only in CI.
           #
           # `-e CI` (issue #282 案a): `docker run` does not inherit the
@@ -170,6 +172,7 @@ jobs:
           # command (no CI var set) leaves it unset inside the container
           # too, matching the local default.
           tar --no-xattrs -cf - server scripts VERSION docs/reference/configuration/server.md \
+            docs/operations/session-pointer-recovery.md \
             protocol/fixtures runner/test/fixtures | docker run --rm -i -w /w \
             -e CI \
             -e KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS \
