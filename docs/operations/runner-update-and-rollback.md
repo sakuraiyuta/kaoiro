@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-05
 related: [deployment]
 ---
 
@@ -297,7 +297,9 @@ the updater never takes its target from inherited `CODEX_HOME`:
 
 Forward backup requires the source runner to be active for live home binding.
 A snapshot failure means a nonzero worker exit, no switch and no start. Inspect
-the journal and private `codex-state/transactions/<uuid>.json`. A post-start
+the journal and private `codex-state/transactions/<uuid>.json`. A forward that
+stopped before its snapshot wrote anything blocks every later update until it
+is [abandoned](#abandoning-a-forward-that-never-wrote-its-snapshot). A post-start
 failure requires state-aware recovery. Directory replacement and code switching
 are separate operations: retain staging/quarantine trees and transaction
 records after interruption, especially if credentials have moved. Do not use a
@@ -450,6 +452,51 @@ reference retired before deleting its named snapshot, and keeps the
 transaction record and its receipt. Releases needed by other references stay
 protected from prune/replacement. Manual deletion of protected releases is
 prohibited.
+
+### Abandoning a forward that never wrote its snapshot
+
+A state-aware update can abort after `prepare` and before its snapshot exists,
+for example when the stopped runner's cgroup still holds a process. The updater
+reports `Codex state preparation failed; runner remains stopped; transaction
+<uuid>`, and every later update refuses before stopping the runner with
+`Recover or accept the previous Codex state transaction first`. When
+`summary <install-root> <uuid>` shows mode `forward` and phase `prepared` or
+`stopped`, the transaction changed nothing but its own record, and `abandon`
+retires it:
+
+1. Remove the cause of the abort. If the runner is still stopped, start it on
+   the current release (`systemctl --user start kaoiro-runner`): the retried
+   forward backup needs it active.
+2. Install, without activating it, a release whose tool has `abandon`; the
+   release you are updating to will do. Installing does not consult
+   unresolved transactions, so the stranded one does not block it.
+3. Abandon the transaction with that release's tool:
+
+   ```sh
+   node --experimental-vm-modules \
+     "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
+     abandon "$install_root" "$transaction_uuid"
+   ```
+
+4. Check that `summary` reports phase `retired`, and that `inspect` shows the
+   `abandonment` entry: the phase it left and whether the owner PID was
+   `absent` or reused by another process (`pid-reused`).
+5. Retry the update with the same tool release.
+
+`abandon` takes the update and links locks, and refuses everything else: a mode
+other than forward, any other phase, a live owner (its PID running with the
+recorded start time), a staging path other than the one `prepare` assigned,
+and an existing snapshot, staging directory or backup reference. Those cases
+may hold state: use the recovery paths above or the fresh setup, and never edit
+or move the record to make it pass.
+
+If `abandon` refuses with `EEXIST` on `.lock.update` or `.lock.links`, an
+updater may have died (SIGKILL, host restart) without releasing the lock.
+Confirm that `kaoiro-runner-update.service` is not running, that no update,
+install or switch you started is still running, and that no process has the
+`owner.pid` recorded in `.lock.update/codex-owner.json`, if that file exists.
+Then remove the lock directory and run `abandon` again. A lock
+directory is not a state record, so removing it does not edit Codex state.
 
 ## See Also
 
