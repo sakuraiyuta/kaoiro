@@ -139,9 +139,10 @@ when the head was cut, the note and a button that opens the change log. It reads
 the line the dashboard already holds, so it follows live writes without a
 request.
 
-The change log dialog renders only the latest entry as markdown on open; an
-older entry shows its time and first line and is rendered when expanded, so
-opening the dialog parses one entry however long the log is.
+The change log dialog renders only the latest entry in full on open. An older
+entry shows its time and its first line, cut to 160 code points and drawn in the
+inline profile like the card, and is rendered in full when expanded, so opening
+the dialog parses one entry in full however long the log is.
 
 Markdown written by an agent is rendered under one fixed policy
 (`untrustedMarkdown.ts`, shared with any other renderer of text written by

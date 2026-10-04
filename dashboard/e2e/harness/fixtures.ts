@@ -413,6 +413,12 @@ const HOSTILE_STATUS_LINE = [
 
 const TOO_DEEP_STATUS_LINE = `${">".repeat(40)} nested past the limit`;
 
+// issue 514: an old entry whose first line a collapsed row summarises.
+const COLLAPSED_STATUS_LINE = [
+  "**bold** [safe](https://example.test/ok) <img src=\"https://evil.test/raw.png\" onerror=\"window.__pwned = 'collapsed'\">",
+  "second line [x](javascript:alert(1))",
+].join("\n");
+
 function statusLineEntry(
   seq: number,
   text: string | null,
@@ -430,6 +436,7 @@ export function hostileStatusLineHistory(): StatusLineHistoryEntry[] {
     statusLineEntry(3, HOSTILE_STATUS_LINE),
     statusLineEntry(2, TOO_DEEP_STATUS_LINE),
     statusLineEntry(1, null),
+    statusLineEntry(0, COLLAPSED_STATUS_LINE),
   ];
 }
 

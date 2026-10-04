@@ -79,11 +79,12 @@ test.describe("status line change log renders untrusted markdown (issue 482)", (
     await openLog(page);
     const deep = page.locator('li[data-seq="2"]');
 
-    await expect(deep.locator(".untrusted-markdown")).toHaveCount(0);
+    // Collapsed, it is a one-line summary; nothing is rendered in full yet.
+    await expect(deep.locator(".untrusted-markdown:not(.inline)")).toHaveCount(0);
     await deep.getByRole("button", { name: "展開" }).click();
 
     await expect(deep.locator(".untrusted-markdown-note")).toBeVisible();
-    await expect(deep.locator(".untrusted-markdown.plain")).toContainText(
+    await expect(deep.locator(".untrusted-markdown.plain:not(.inline)")).toContainText(
       `${">".repeat(40)} nested past the limit`,
     );
     await expect(deep.locator("blockquote")).toHaveCount(0);
@@ -132,6 +133,30 @@ async function watchRequests(page: Page): Promise<string[]> {
   page.on("request", (request) => requested.push(request.url()));
   return requested;
 }
+
+test.describe("a collapsed change log entry (issue 514)", () => {
+  test("shows its first line as inline markdown with nothing pressable, and expanding gives real links", async ({ page }) => {
+    const requested = await openLog(page);
+    const old = page.locator('li[data-seq="0"]');
+    const firstLine = old.locator(".first-line");
+
+    await expect(firstLine.locator("strong")).toHaveText("bold");
+    await expect(firstLine.locator(".md-link")).toHaveText(["safe"]);
+    await expect(firstLine).toContainText('<img src="https://evil.test/raw.png"');
+    await expect(firstLine).not.toContainText("second line");
+    await expect(firstLine.locator("a, img, script, iframe, button, input, div, p")).toHaveCount(0);
+
+    await old.getByRole("button", { name: "展開" }).click();
+    const link = old.locator(".untrusted-markdown a").first();
+    await expect(link).toHaveAttribute("href", "https://example.test/ok");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");
+    await expect(old.locator("script, img, iframe")).toHaveCount(0);
+
+    await page.waitForLoadState("networkidle");
+    expect(await pwned(page)).toBeUndefined();
+    expect(requested.filter((url) => url.includes("evil.test"))).toEqual([]);
+  });
+});
 
 test.describe("a hostile status line on the agent card (issue 514)", () => {
   const rows = (page: Page) => page.locator("button.status-line");
