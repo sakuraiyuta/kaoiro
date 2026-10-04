@@ -15,6 +15,9 @@ export class StatusLines {
   #loaded = $state(false);
   /** The snapshot said it could not vouch for the whole set. */
   #incomplete = $state(false);
+  /** The trim of each agent's last truncated head. A view is built again
+   *  whenever any row changes, and a hostile head takes tens of milliseconds. */
+  #trims = new Map<string, { head: string; shown: string }>();
 
   /** Replaces everything with the join snapshot, including an earlier
    *  incomplete state: a complete snapshot on rejoin clears it. */
@@ -35,6 +38,7 @@ export class StatusLines {
 
   /** `agent_deleted`: the agent and its line are gone. */
   remove(agentId: string): void {
+    this.#trims.delete(agentId);
     if (!(agentId in this.#rows)) return;
     const { [agentId]: _removed, ...rest } = this.#rows;
     this.#rows = rest;
@@ -45,6 +49,15 @@ export class StatusLines {
     this.#rows = {};
     this.#loaded = false;
     this.#incomplete = false;
+    this.#trims.clear();
+  }
+
+  #trimmed(agentId: string, head: string): string {
+    const held = this.#trims.get(agentId);
+    if (held !== undefined && held.head === head) return held.shown;
+    const shown = trimIncompleteMarkdown(head);
+    this.#trims.set(agentId, { head, shown });
+    return shown;
   }
 
   /** The stamp of an agent's held row, for a dialog to notice a new line. */
@@ -62,7 +75,7 @@ export class StatusLines {
             kind: "set",
             // A head the server cut may stop inside markup; a complete line is
             // drawn as written.
-            head: row.truncated ? trimIncompleteMarkdown(row.head) : row.head,
+            head: row.truncated ? this.#trimmed(agentId, row.head) : row.head,
             truncated: row.truncated,
             bytes: row.bytes,
             updatedAt: row.updatedAt,

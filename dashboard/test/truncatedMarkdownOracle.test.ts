@@ -21,6 +21,7 @@ import {
   leak,
   randomDocuments,
   tally,
+  tokenDocuments,
   type Tally,
 } from "./truncatedMarkdownOracle";
 
@@ -55,7 +56,7 @@ describe("the committed corpus, at every grapheme cut", () => {
     expect(fixed.length + random.length).toBe(126);
     expect(result.cuts).toBe(21880);
     expect(fallbacks).toBe(0);
-    expectFaithful(result, 68);
+    expectFaithful(result, 64);
   }, 60_000);
 
   // The negative control: the same oracle on the head as the server cut it.
@@ -78,6 +79,28 @@ describe("the committed corpus, at every grapheme cut", () => {
     // address, clickable in the detail view.
     expect(tally(CUT_ADDRESS, untrimmed, 3).full.href).toBeGreaterThan(0);
     expect(tally(ADDRESSES, untrimmed, 3).full.href).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+describe("strings glued from the tokens of markdown", () => {
+  // The harm the trim exists for is a link the full text does not draw. These
+  // strings put brackets, backticks, stars and addresses next to each other in
+  // every order; the other kinds of difference are the accepted residuals and
+  // are not pinned here.
+  const docs = [1, 2].flatMap((seed) => tokenDocuments(seed, 150));
+
+  it("never draws a link the full text does not, and needs no fallback", () => {
+    let fallbacks = 0;
+    const result = tally(docs, trimmed(() => (fallbacks += 1)));
+
+    expect(fallbacks).toBe(0);
+    expect(result.notIdempotent).toBe(0);
+    expect(result.cuts).toBe(22452);
+    for (const profile of PROFILES) expect(result[profile].href ?? 0, profile).toBe(0);
+  }, 60_000);
+
+  it("is red on the untrimmed head", () => {
+    expect(tally(docs.slice(0, 40), untrimmed, 3).full.href).toBeGreaterThan(0);
   }, 60_000);
 });
 

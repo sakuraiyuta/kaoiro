@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   headOmitted,
   isNewer,
@@ -10,6 +10,12 @@ import {
   type StatusLineRow,
 } from "../src/lib/statusLine";
 import { StatusLines } from "../src/lib/statusLines.svelte";
+import { trimIncompleteMarkdown } from "../src/lib/truncatedMarkdown";
+
+vi.mock("../src/lib/truncatedMarkdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/truncatedMarkdown")>();
+  return { ...actual, trimIncompleteMarkdown: vi.fn(actual.trimIncompleteMarkdown) };
+});
 
 const SET = { seq: 3, head: "# Reviewing", truncated: false, bytes: 11, updated_at: "2026-10-03T12:00:00.000001Z" };
 
@@ -218,6 +224,44 @@ describe("StatusLines", () => {
     });
     expect(lines.view("whole")).toMatchObject({ head, truncated: false });
     expect(lines.view("gone")).toMatchObject({ head: "a", truncated: true });
+  });
+
+  it("trims a head once, however often the view is built, and again only when the head changes", () => {
+    vi.mocked(trimIncompleteMarkdown).mockClear();
+    const lines = new StatusLines();
+    const row = (seq: number, head: string): StatusLineRow => ({
+      cleared: false,
+      seq,
+      head,
+      truncated: true,
+      bytes: 900,
+      updatedAt: `t${seq}`,
+    });
+    lines.applySnapshot({ a: row(1, "前 **太字"), b: row(1, "後 **太字") }, false);
+
+    lines.view("a");
+    lines.view("a");
+    lines.view("b");
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(2);
+
+    lines.applyLive("b", row(2, "後 **太字"));
+    lines.view("a");
+    lines.view("b");
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(2);
+
+    lines.applyLive("a", row(2, "前 **別の太字"));
+    expect(lines.view("a")).toMatchObject({ head: "前 " });
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(3);
+
+    lines.remove("a");
+    lines.applyLive("a", row(3, "前 **別の太字"));
+    lines.view("a");
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(4);
+
+    lines.reset();
+    lines.applySnapshot({ a: row(4, "前 **別の太字") }, false);
+    lines.view("a");
+    expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(5);
   });
 
   it("names the stamp of the held row so a dialog can notice a new line", () => {

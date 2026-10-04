@@ -315,3 +315,25 @@ export function randomDocuments(seed: number, count: number): string[] {
   const next = rng(seed);
   return Array.from({ length: count }, () => randomDocument(next));
 }
+
+// ---- random strings over the tokens of markdown ----
+
+const TOKENS = [
+  "*", "**", "_", "__", "~", "~~", "`", "``", "[", "]", "(", ")", "<", ">", "!", "\\", "&",
+  "&amp", "www.", "http://a.co/x", "https://b.co/y?q=1", "a", "b", "あ", " ", "  ", "\n",
+  "\n\n", "- ", "1. ", "> ", "| ", "|---|", "# ", "```", "~~~", "\t", "[i]: ", "[i]", "x@y.co",
+  "<b>", '"t"', "](", "](http://c.co/z)", "[x]", "<http://d.co/w>", "![", "***",
+];
+
+/** `count` strings glued from the tokens of markdown, with no regard for
+ *  meaning: they reach the places where two constructs meet, which documents
+ *  written to read well never do. */
+export function tokenDocuments(seed: number, count: number): string[] {
+  const next = rng(seed);
+  return Array.from({ length: count }, () => {
+    const length = 8 + Math.floor(next() * 32);
+    let doc = "";
+    for (let i = 0; i < length; i++) doc += TOKENS[Math.floor(next() * TOKENS.length)]!;
+    return doc;
+  });
+}
