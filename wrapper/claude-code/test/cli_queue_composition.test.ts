@@ -161,7 +161,7 @@ function earlyInbound(cid: string): Envelope {
 /** A running operator turn; the server offers one early item under the
  *  wrapper's early credit. With `slowPermit`, the permit for it is held until
  *  the turn has ended and root credit is asked for. */
-async function runEarlyFold(slowPermit: boolean) {
+async function runEarlyFold(slowPermit: boolean, rejoinFirst = false) {
   const sent: Record<string, unknown>[] = [];
   const acknowledged: number[] = [];
   const prompts: string[] = [];
@@ -191,7 +191,8 @@ async function runEarlyFold(slowPermit: boolean) {
           sent.push(payload);
           const base = { op: payload.op, operation_id: payload.operation_id, queue: counts };
           if (payload.op === "credit") {
-            if (payload.kind === "early" && !earlyOffered) {
+            const earlyCredits = sent.filter((p) => p.op === "credit" && p.kind === "early").length;
+            if (payload.kind === "early" && !earlyOffered && (!rejoinFirst || earlyCredits === 2)) {
               earlyOffered = true;
               setImmediate(() => batch("1", "early"));
             }
@@ -252,6 +253,11 @@ async function runEarlyFold(slowPermit: boolean) {
             prompts.push(first.message.content as string);
             await hook("p1", first.message.content as string);
             yield { type: "system", subtype: "init", session_id: "s" } as SDKMessage;
+            if (rejoinFirst) {
+              // A join during the turn drops the early credit on the server.
+              await vi.waitFor(() => expect(sent.some((p) => p.op === "credit" && p.kind === "early")).toBe(true), { timeout: 4_000 });
+              linkOptions.onQueueRejoined();
+            }
             if (!slowPermit) {
               const fold = (await input.next()).value!;
               prompts.push(fold.message.content as string);
@@ -297,6 +303,18 @@ describe("Claude CLI credit-v1 early fold composition", () => {
     expect(prompts[1]).toContain("early hello");
     expect(sent.find((p) => p.op === "dispose")).toMatchObject({ items: [{ queue_id: "8", outcome: "observed", witness: "fold_hook" }] });
     expect(acknowledged).toEqual([]);
+    // The turn can still fold, so early credit is asked for again, and the
+    // turn end withdraws it.
+    const earlyCredits = sent.filter((p) => p.op === "credit" && p.kind === "early");
+    expect(earlyCredits).toHaveLength(2);
+    await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ op: "withdraw", credit_revision: String(earlyCredits[1]!.operation_id) })));
+  });
+
+  it("a rejoin during the turn asks for early credit again", async () => {
+    const { sent } = await runEarlyFold(false, true);
+    // The server offers only under the credit asked for after the rejoin.
+    expect(sent.filter((p) => p.op === "credit" && p.kind === "early").length).toBeGreaterThanOrEqual(2);
+    expect(sent.find((p) => p.op === "dispose")).toMatchObject({ items: [{ queue_id: "8", outcome: "observed", witness: "fold_hook" }] });
   });
 
   it("a permit that arrives after the fold window closed returns the item, which arrives once in the next root batch", async () => {

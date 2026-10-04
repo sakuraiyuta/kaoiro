@@ -85,7 +85,7 @@ function harness(options: {
     negotiated: () => true,
     activeTurn: () => state.turn,
     hasFoldsLeft: () => state.turn !== null && state.foldsLeft,
-    canFold: () => state.turn !== null && state.canFold && !state.receipt,
+    canFold: () => state.turn !== null && state.canFold && state.foldsLeft && !state.receipt,
     receiptPending: () => state.receipt,
     waitForReceipt: async () => true,
     prepareTicket: () => ({
@@ -328,6 +328,19 @@ describe("ClaudeQueueEarly", () => {
       h.early.check();
       await settle();
       expect(h.ops("credit")).toEqual([]);
+      expect(h.timers).toEqual([]);
+    });
+
+    it("schedules no re-check while its own push awaits the host's decision", async () => {
+      const h = harness();
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1"));
+      await settle();
+      expect(h.pushes).toHaveLength(1);
+      h.state.receipt = true;
+      h.early.check();
+      await settle();
       expect(h.timers).toEqual([]);
     });
 

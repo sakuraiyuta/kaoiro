@@ -128,6 +128,24 @@ async function* firstTurn(c: Ctx, options: { background?: boolean } = {}): Async
 }
 
 describe("foreign root occupancy (issue #426 stage 1)", () => {
+  it("a notification turn takes no fold; a wrapper turn has folds left", async () => {
+    const rig = makeRig(async function* (c) {
+      await c.input.next();
+      await prompt(c, "p1", "launch");
+      yield initFrame();
+      c.rig.obs.wrapperTurn = c.rig.host.hasFoldsLeft();
+      yield taskStarted();
+      yield res(0);
+      yield taskNotification();
+      await prompt(c, "N", NOTE_TEXT());
+      c.rig.obs.notificationTurn = c.rig.host.hasFoldsLeft();
+      yield res(1, { origin: { kind: "task-notification" } });
+    });
+    await play(rig);
+    expect(rig.starts.map(({ kind }) => kind)).toEqual([undefined, "sdk_notification"]);
+    expect(rig.obs).toEqual({ wrapperTurn: true, notificationTurn: false });
+  });
+
   it("is not idle for queue input while a foreign root interval is open", async () => {
     const tick = () => new Promise((resolve) => setImmediate(resolve));
     const rig = makeRig(async function* (c) {
