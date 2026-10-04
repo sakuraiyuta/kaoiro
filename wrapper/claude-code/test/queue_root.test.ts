@@ -472,4 +472,21 @@ describe("ClaudeQueueRoot", () => {
     expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", reason: "turn_abandoned" }] });
     expect(h.lines.join("")).toContain("queue root offer failed");
   });
+
+  it("reports a yield-granted item in a root batch downgraded no_work_input, once", async () => {
+    const yields: Array<{ seq: number; outcome: string; reason: string }> = [];
+    const h = harness({ yieldNegotiated: () => true, reportYield: (seq, disposition) => yields.push({ seq, ...disposition }) });
+    const envelope = inbound("c1");
+    (envelope.payload as Record<string, unknown>).delivery_authority = { requested: "yield", granted: "yield" };
+    h.root.checkReadiness();
+    await settle();
+    h.offer([envelope]);
+    await settle();
+    expect(yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "no_work_input" }]);
+    h.root.turnEnded(h.creditToken(), false);
+    await settle();
+    h.offer([envelope], ["1"]);
+    await settle();
+    expect(yields).toHaveLength(1);
+  });
 });

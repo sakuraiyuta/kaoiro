@@ -64,6 +64,9 @@ interface Remembered {
   classified?: Classified;
   /** A waiting tool's result carrying this message was returned. */
   handedOff: boolean;
+  /** Whether this message, if yield-granted, is cut or downgraded is decided
+   *  and reported; a yield disposition is set once. */
+  yieldDecided?: boolean;
 }
 
 function identityOf(envelope: Envelope): string {
@@ -154,6 +157,20 @@ export class QueueInput {
     for (const remembered of this.#remembered.values()) {
       if (identities.has(remembered.identity)) remembered.handedOff = true;
     }
+  }
+
+  /** Records that the yield of the classified item `queueId` is decided.
+   *  Returns true only the first time, when the caller reports it. */
+  decideYield(queueId: string): boolean {
+    const remembered = this.#remembered.get(queueId);
+    if (remembered?.classified === undefined || remembered.yieldDecided === true) return false;
+    remembered.yieldDecided = true;
+    return true;
+  }
+
+  /** Whether the yield of `queueId` is already decided. */
+  yieldDecided(queueId: string): boolean {
+    return this.#remembered.get(queueId)?.yieldDecided === true;
   }
 
   /** Whether the consumed item `queueId` was handed to the model. */

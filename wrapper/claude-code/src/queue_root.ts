@@ -40,6 +40,10 @@ export interface QueueRootDeps {
   send(text: string, conversationIds: readonly string[], turnToken: string, envelopes: readonly Envelope[]): Promise<void>;
   /** Pending-reply and reply-basis bookkeeping for a starting root turn. */
   preparePending(turnToken: string, envelopes: readonly Envelope[]): void;
+  /** Yield delivery was negotiated as `tool_boundary`. */
+  yieldNegotiated?(): boolean;
+  /** Reports an item's yield disposition on its offered sequence. */
+  reportYield?(deliverySeq: number, disposition: { outcome: "downgraded"; reason: string }): void;
   log(line: string): void;
   /** Defers a readiness check past the current host callback. */
   defer?(task: () => void): void;
@@ -172,6 +176,15 @@ export class ClaudeQueueRoot {
     }
 
     const prepared = await this.#input.prepare(offer);
+    if (this.#deps.yieldNegotiated?.() === true) {
+      // A yield-granted item in a root batch is not cut (legacy `no_work_input`).
+      for (const { item } of prepared.injected) {
+        const granted = (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
+        if (granted === "yield" && this.#input.decideYield(item.queueId)) {
+          this.#deps.reportYield?.(item.deliverySeq, { outcome: "downgraded", reason: "no_work_input" });
+        }
+      }
+    }
     const injectIds = prepared.injected.map(({ item }) => item.queueId);
     const consumedIds = prepared.consumed.map((item) => item.queueId);
     const ids = [...injectIds, ...consumedIds];

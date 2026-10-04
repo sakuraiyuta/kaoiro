@@ -8,12 +8,13 @@ const policy = { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes:
 const counts = { queued: 0, offered: 0, native_pending: 0, waiter: 0, control: 0, charged_bytes: 0, policy };
 
 function inbound(cid: string, turn = 1, granted = "early"): Envelope {
+  const yieldFields = granted === "yield" ? { yield_token: "yt", work_id: "w1", authority_epoch: 1 } : {};
   return {
     version: "0", agent_id: "peer.agent", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
     ts: "2026-10-04T00:00:00Z", type: "inter_agent_message", state: "idle",
     payload: {
       to: "self.agent", conversation_id: cid, turn_number: turn, kind: "inform", body: "hi",
-      meta: { done: false, propose_next: "" }, delivery_authority: { requested: granted, granted },
+      meta: { done: false, propose_next: "" }, delivery_authority: { requested: granted, granted, ...yieldFields },
     },
     ext: {},
   } as unknown as Envelope;
@@ -50,11 +51,21 @@ function harness(options: {
   const timers: Array<{ task: () => void; ms: number }> = [];
   const book: string[] = [];
   const state = { turn: "T" as string | null, canFold: true, foldsLeft: true, receipt: false, pushOk: true };
+  const yieldState = {
+    negotiated: false, eligibility: null as string | null, overtake: true, matches: true, fitsCut: true,
+    claim: { granted: true } as { granted: boolean; reason?: string }, cutOk: true,
+    onClaim: undefined as (() => void) | undefined,
+    captured: true,
+  };
+  const yields: Array<{ seq: number; outcome: string; reason?: string }> = [];
+  const order: string[] = [];
+  const cuts: Pushed[] = [];
   let classified = 0;
   let early!: ClaudeQueueEarly;
   const lease = new QueueLease({
     transport: async (payload) => {
       sent.push(payload);
+      order.push(payload.op as string);
       await gates[payload.op as string];
       const reason = refuse[payload.op as string];
       if (reason !== undefined) throw { reason };
@@ -93,11 +104,24 @@ function harness(options: {
       activate: () => { tickets.activated++; return tickets.activateOk; },
       discard: () => { tickets.discarded++; },
     }),
-    fits: () => true,
+    fits: (text) => yieldState.fitsCut || !text.startsWith("[Director yield"),
     push: (pushed) => { pushes.push(pushed); return state.pushOk; },
     folded: (turn) => book.push(`folded:${turn}`),
     adopted: (turn) => book.push(`adopted:${turn}`),
     unknown: (_envelopes, reason) => book.push(`unknown:${reason}`),
+    yieldNegotiated: () => yieldState.negotiated,
+    yield: {
+      eligibility: () => yieldState.eligibility,
+      canOvertake: () => yieldState.overtake,
+      capture: () => (yieldState.captured ? { context: true } : null),
+      matches: () => yieldState.matches && state.turn === "T",
+      canPush: () => state.turn !== null && !state.receipt,
+      claim: async () => { order.push("claim"); yieldState.onClaim?.(); return yieldState.claim; },
+      push: (pushed) => { cuts.push(pushed); return yieldState.cutOk; },
+      receiptTimeoutMs: 2_000,
+      now: () => 0,
+    },
+    reportYield: (seq, disposition) => yields.push({ seq, ...disposition }),
     log: (line) => lines.push(line),
     schedule: (task, ms) => { timers.push({ task, ms }); },
     ...options.deps,
@@ -114,6 +138,7 @@ function harness(options: {
   const ops = (op: string) => sent.filter((p) => p.op === op);
   return {
     early, input, slot, lease, sent, lines, pushes, timers, book, state, tickets, offer, ops,
+    yieldState, yields, order, cuts,
     classified: () => classified,
   };
 }
@@ -143,7 +168,7 @@ describe("ClaudeQueueEarly", () => {
     expect(h.ops("credit")).toHaveLength(2);
   });
 
-  it("folds a yield-granted item like an early one and reports no yield disposition until the yield path exists", async () => {
+  it("folds a yield-granted item like an early one when yield is not negotiated, with no yield disposition", async () => {
     const h = harness();
     h.early.check();
     await settle();
@@ -494,5 +519,134 @@ describe("ClaudeQueueEarly", () => {
     h.timers[1]!.task();
     await settle();
     expect(h.timers.map((t) => t.ms)).toEqual([250, 500, 250]);
+  });
+
+  describe("yield-granted items (yield negotiated)", () => {
+    const ready = async (setup?: (h: ReturnType<typeof harness>) => void) => {
+      const h = harness();
+      h.yieldState.negotiated = true;
+      setup?.(h);
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1", 1, "yield"));
+      await settle();
+      return h;
+    };
+
+    it("cuts the item into the turn after the permit and the claim, and reports cut once", async () => {
+      const h = await ready();
+      expect(h.order.filter((op) => op === "begin_native" || op === "claim")).toEqual(["begin_native", "claim"]);
+      expect(h.cuts).toHaveLength(1);
+      expect(h.cuts[0]!.text("f".repeat(32))).toContain("[Director yield after the running tool]");
+      expect(h.pushes).toEqual([]);
+      expect(h.yields).toEqual([{ seq: 1, outcome: "cut" }]);
+      h.early.pushedDecision({ kind: "fold", turnToken: "T", envelopes: h.cuts[0]!.envelopes });
+      await settle();
+      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "observed", witness: "fold_hook" }] });
+    });
+
+    it("a refused claim is downgraded with its reason and folded under the same permit", async () => {
+      const h = await ready((h) => { h.yieldState.claim = { granted: false, reason: "work_closed" }; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "work_closed" }]);
+      expect(h.ops("begin_native")).toHaveLength(1);
+      expect(h.pushes).toHaveLength(1);
+      expect(h.cuts).toEqual([]);
+    });
+
+    it("an ineligible turn is downgraded before any claim and folded", async () => {
+      const h = await ready((h) => { h.yieldState.eligibility = "mixed_turn"; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "mixed_turn" }]);
+      expect(h.order).not.toContain("claim");
+      expect(h.pushes).toHaveLength(1);
+    });
+
+    it("an exhausted overtake budget is downgraded and folded", async () => {
+      const h = await ready((h) => { h.yieldState.overtake = false; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "overtake_budget" }]);
+      expect(h.pushes).toHaveLength(1);
+    });
+
+    it("a grant without its yield fields is downgraded grant_changed and folded", async () => {
+      const h = harness();
+      h.yieldState.negotiated = true;
+      h.early.check();
+      await settle();
+      const envelope = inbound("c1", 1, "yield");
+      delete (envelope.payload as { delivery_authority: Record<string, unknown> }).delivery_authority.yield_token;
+      h.offer(envelope);
+      await settle();
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "grant_changed" }]);
+      expect(h.order).not.toContain("claim");
+      expect(h.pushes).toHaveLength(1);
+    });
+
+    it("a turn whose live input context cannot be captured is downgraded and folded", async () => {
+      const h = await ready((h) => { h.yieldState.captured = false; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
+      expect(h.order).not.toContain("claim");
+      expect(h.pushes).toHaveLength(1);
+    });
+
+    it("a cut text too large is downgraded and returned, not folded", async () => {
+      const h = await ready((h) => { h.yieldState.fitsCut = false; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "oversized_input" }]);
+      expect(h.ops("begin_native")).toEqual([]);
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", sub_reason: "oversize" }] });
+    });
+
+    it("a refused permit is downgraded and spends no claim", async () => {
+      const h = harness({ refuse: { begin_native: "queue_resume_required" } });
+      h.yieldState.negotiated = true;
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1", 1, "yield"));
+      await settle();
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
+      expect(h.order).not.toContain("claim");
+    });
+
+    it("a receipt still undecided at the bound is downgraded receipt_wait_timeout", async () => {
+      const h = harness({ deps: { waitForReceipt: async () => false } });
+      h.yieldState.negotiated = true;
+      // Another pushed input became pending while the claim was in flight.
+      h.yieldState.onClaim = () => { h.state.receipt = true; };
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1", 1, "yield"));
+      await settle();
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "receipt_wait_timeout" }]);
+      expect(h.cuts).toEqual([]);
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", sub_reason: "fold_unavailable" }] });
+    });
+
+    it("a turn that ended during the claim is downgraded, and the fold path declines", async () => {
+      const h = await ready((h) => { h.yieldState.onClaim = () => { h.state.turn = null; }; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
+      expect(h.cuts).toEqual([]);
+      expect(h.ops("return")[0]).toMatchObject({ items: [{ queue_id: "1", sub_reason: "fold_unavailable" }] });
+    });
+
+    it("a cut the host refused is downgraded and definitely unstarted", async () => {
+      const h = await ready((h) => { h.yieldState.cutOk = false; });
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "eligibility_changed" }]);
+      expect(h.ops("dispose")[0]).toMatchObject({ items: [{ queue_id: "1", outcome: "definitely_unstarted", reason: "cut_refused" }] });
+    });
+
+    it("an item whose yield was decided is folded when offered again, with no second report", async () => {
+      const h = await ready((h) => {
+        h.yieldState.claim = { granted: false, reason: "work_closed" };
+        h.yieldState.onClaim = () => { h.state.canFold = false; };
+      });
+      expect(h.ops("return")).toHaveLength(1);
+      h.state.canFold = true;
+      h.yieldState.claim = { granted: true };
+      h.early.check();
+      await settle();
+      h.offer(inbound("c1", 1, "yield"), "1");
+      await settle();
+      expect(h.pushes).toHaveLength(1);
+      expect(h.cuts).toEqual([]);
+      expect(h.yields).toEqual([{ seq: 1, outcome: "downgraded", reason: "work_closed" }]);
+    });
   });
 });

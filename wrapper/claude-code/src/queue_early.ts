@@ -8,13 +8,18 @@
 // with its typed reason; the server keeps the credit and the item waits for
 // the next root batch.
 //
+// A yield-granted item (yield negotiated as `tool_boundary`) is cut into T at
+// the running tool's boundary instead: after the permit, the server's yield
+// claim and a bounded wait for any pending pushed input. Every way it is not
+// cut reports `downgraded` once and continues as a fold under the same permit.
+//
 // Liveness: while T is active, has folds left and early is negotiated, an
 // early credit is outstanding, requested, or a re-check is scheduled. Every
 // settlement of an early offer re-checks, since only a `return` keeps the
 // server's credit, and a state that blocks folding for now is re-checked
 // with backoff instead of waiting for a callback.
 
-import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
+import type { NativeSubmit, QueueLease, QueueOffer, QueueOfferItem } from "@kaoiro/wrapper-core";
 import type { Envelope, InterAgentMessagePayload, QueueInput } from "@kaoiro/agent-common";
 import type { CreditSlot } from "./queue_credit.js";
 
@@ -59,9 +64,41 @@ export interface QueueEarlyDeps {
   adopted(turn: string, envelopes: readonly Envelope[]): void;
   /** Bookkeeping for pushed input whose fate is unknown. */
   unknown(envelopes: readonly Envelope[], reason: string): void;
+  /** Yield delivery was negotiated as `tool_boundary`. */
+  yieldNegotiated(): boolean;
+  /** Host and server operations of the yield path. */
+  yield: YieldDeps;
+  /** Reports an item's yield disposition on its offered sequence. */
+  reportYield(deliverySeq: number, disposition: { outcome: "cut" | "downgraded"; reason?: string }): void;
   log(line: string): void;
   /** Runs `task` after `ms`. */
   schedule?(task: () => void, ms: number): void;
+}
+
+export interface YieldDeps {
+  /** `host.yieldEligibility(workId)`: null when the turn may be cut for it. */
+  eligibility(workId: string): string | null;
+  /** `host.canReserveYieldOvertake()`. */
+  canOvertake(): boolean;
+  /** `host.captureLiveInputContext(turn)`. */
+  capture(turn: string): unknown;
+  /** `host.matchesLiveInputContext(turn, context)`. */
+  matches(turn: string, context: unknown): boolean;
+  /** `host.canPushLiveInput()`. */
+  canPush(): boolean;
+  /** The server's single-use yield claim, bounded by its timeout. */
+  claim(request: {
+    yield_token: string;
+    conversation_id: string;
+    turn_number: number;
+    work_id: string;
+    authority_epoch: number;
+  }): Promise<{ granted: boolean; reason?: string }>;
+  /** `host.pushLiveInput({kind: "cut", ...})`. */
+  push(input: { text: (foldId: string) => string; envelopes: readonly Envelope[]; conversationIds: readonly string[] }): boolean;
+  /** Bound on the wait for another pushed input's decision. */
+  receiptTimeoutMs: number;
+  now(): number;
 }
 
 /** How long an early offer waits for another pushed input's decision before
@@ -70,6 +107,12 @@ export const FOLD_RECEIPT_WAIT_MS = 2_000;
 const RETRY_FIRST_MS = 250;
 const RETRY_MAX_MS = 5_000;
 const LOG_REFUSAL_AGAIN_AT = 5;
+
+export function cutInputText(foldId: string, text: string): string {
+  return `[Director yield after the running tool]\nfold_id: ${foldId}\n\n${text}`;
+}
+
+const NO_TICKET: FoldTicket = { authorizations: [], activate: () => true, discard: () => {} };
 
 export function foldInputText(foldId: string, text: string, authorizations: readonly unknown[]): string {
   return [
@@ -93,6 +136,12 @@ interface ConsumedEarly {
 }
 
 type Decline = "fold_unavailable" | "conversation_pending" | "oversize";
+
+interface YieldAuthority {
+  yield_token: string;
+  work_id: string;
+  authority_epoch: number;
+}
 
 export class ClaudeQueueEarly {
   readonly #deps: QueueEarlyDeps;
@@ -201,11 +250,34 @@ export class ClaudeQueueEarly {
     if (injected.length === 0) return false;
     const injectIds = injected.map((item) => item.queueId);
     const envelopes = injected.map((item) => item.envelope as Envelope);
+    const conversationIds = [...new Set(envelopes.map((envelope) =>
+      String((envelope.payload as Partial<InterAgentMessagePayload>).conversation_id ?? "")))];
+
+    // Early offers carry one item.
+    const item = injected[0]!;
+    let cut: { authority: YieldAuthority; context: unknown } | null = null;
+    if (this.#yieldCandidate(item)) {
+      const checked = this.#yieldPrecheck(item, turn, prepared.text);
+      if (checked.kind === "downgrade") {
+        this.#downgrade(item, checked.reason);
+        if (!checked.fold) {
+          this.#decline(offer, injectIds, "oversize");
+          return false;
+        }
+      } else {
+        cut = checked;
+      }
+    }
 
     const submit = await offer.begin(injectIds, turn);
     if (submit === null) {
+      if (cut !== null) this.#downgrade(item, "eligibility_changed");
       offer.release(injectIds);
       return false;
+    }
+    if (cut !== null) {
+      const outcome = await this.#cut(offer, item, turn, submit, cut, prepared.text, envelopes, conversationIds);
+      if (outcome !== "fold") return outcome === "pushed";
     }
     // B7: the fold window may have closed while the permit was in flight.
     if (deps.activeTurn() !== turn || !deps.canFold()) {
@@ -228,8 +300,7 @@ export class ClaudeQueueEarly {
         text: (foldId) => foldInputText(foldId, prepared.text, ticket.authorizations),
         envelopes,
         ticketValues: ticket.authorizations.map((auth) => auth.reply_ticket),
-        conversationIds: [...new Set(envelopes.map((envelope) =>
-          String((envelope.payload as Partial<InterAgentMessagePayload>).conversation_id ?? "")))],
+        conversationIds,
       });
     });
     if (!invoked) {
@@ -245,6 +316,112 @@ export class ClaudeQueueEarly {
     }
     this.#pushed.set(envelopes, { offer, ids: injectIds, ticket });
     return true;
+  }
+
+  #yieldCandidate(item: QueueOfferItem): boolean {
+    const payload = item.envelope.payload as Partial<InterAgentMessagePayload>;
+    return this.#deps.yieldNegotiated() && payload.delivery_authority?.granted === "yield" &&
+      !this.#deps.input.yieldDecided(item.queueId);
+  }
+
+  /** Reports the item's yield as downgraded, once. */
+  #downgrade(item: QueueOfferItem, reason: string): void {
+    if (this.#deps.input.decideYield(item.queueId)) {
+      this.#deps.reportYield(item.deliverySeq, { outcome: "downgraded", reason });
+    }
+  }
+
+  /** Legacy's checks before spending the yield claim. */
+  #yieldPrecheck(
+    item: QueueOfferItem,
+    turn: string,
+    text: string,
+  ): { kind: "cut"; authority: YieldAuthority; context: unknown } | { kind: "downgrade"; reason: string; fold: boolean } {
+    const y = this.#deps.yield;
+    const authority = (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority;
+    if (authority?.yield_token === undefined || authority.work_id === undefined ||
+        authority.authority_epoch === undefined) {
+      return { kind: "downgrade", reason: "grant_changed", fold: true };
+    }
+    const eligibility = y.eligibility(authority.work_id);
+    if (eligibility !== null) return { kind: "downgrade", reason: eligibility, fold: true };
+    if (!y.canOvertake()) return { kind: "downgrade", reason: "overtake_budget", fold: true };
+    const context = y.capture(turn);
+    if (context === null) return { kind: "downgrade", reason: "eligibility_changed", fold: true };
+    if (!this.#deps.fits(cutInputText("0".repeat(32), text), 1)) {
+      return { kind: "downgrade", reason: "oversized_input", fold: false };
+    }
+    return {
+      kind: "cut",
+      authority: { yield_token: authority.yield_token, work_id: authority.work_id, authority_epoch: authority.authority_epoch },
+      context,
+    };
+  }
+
+  /** The yield claim, the bounded receipt wait and the cut push, under the
+   *  permit. "fold" means downgraded, and the permit is still unused. */
+  async #cut(
+    offer: QueueOffer,
+    item: QueueOfferItem,
+    turn: string,
+    submit: NativeSubmit,
+    cut: { authority: YieldAuthority; context: unknown },
+    text: string,
+    envelopes: readonly Envelope[],
+    conversationIds: readonly string[],
+  ): Promise<"pushed" | "settled" | "fold"> {
+    const y = this.#deps.yield;
+    const payload = item.envelope.payload as Partial<InterAgentMessagePayload>;
+    const claim = await y.claim({
+      ...cut.authority,
+      conversation_id: String(payload.conversation_id),
+      turn_number: Number(payload.turn_number),
+    });
+    if (!claim.granted) {
+      this.#downgrade(item, claim.reason ?? "claim_timeout");
+      return "fold";
+    }
+    const deadline = y.now() + y.receiptTimeoutMs;
+    // Each pass re-checks synchronously after the last await (r8b B7 for a cut).
+    while (true) {
+      if (!y.matches(turn, cut.context) || y.eligibility(cut.authority.work_id) !== null || !y.canOvertake()) {
+        this.#downgrade(item, "eligibility_changed");
+        return "fold";
+      }
+      if (y.now() >= deadline) {
+        this.#downgrade(item, "receipt_wait_timeout");
+        return "fold";
+      }
+      if (!this.#deps.receiptPending()) {
+        if (y.canPush()) break;
+        this.#downgrade(item, "eligibility_changed");
+        return "fold";
+      }
+      if (!await this.#deps.waitForReceipt(turn, deadline - y.now())) {
+        this.#downgrade(item, y.matches(turn, cut.context) && this.#deps.receiptPending()
+          ? "receipt_wait_timeout" : "eligibility_changed");
+        return "fold";
+      }
+    }
+    let pushed = false;
+    const invoked = submit.invoke(() => {
+      pushed = y.push({ text: (foldId) => cutInputText(foldId, text), envelopes, conversationIds });
+    });
+    if (!invoked) {
+      this.#downgrade(item, "eligibility_changed");
+      offer.release([item.queueId]);
+      return "settled";
+    }
+    if (!pushed) {
+      this.#downgrade(item, "eligibility_changed");
+      void offer.dispose([{ queue_id: item.queueId, outcome: "definitely_unstarted", reason: "cut_refused" }]);
+      return "settled";
+    }
+    if (this.#deps.input.decideYield(item.queueId)) {
+      this.#deps.reportYield(item.deliverySeq, { outcome: "cut" });
+    }
+    this.#pushed.set(envelopes, { offer, ids: [item.queueId], ticket: NO_TICKET });
+    return "pushed";
   }
 
   /** Whether `turn` can take a fold now, waiting a bounded time for another

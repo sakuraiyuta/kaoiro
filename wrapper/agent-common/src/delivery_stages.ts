@@ -172,6 +172,27 @@ export class DeliveryStageReporter {
     if (delivery !== undefined) this.#report(delivery, "queued", { yield_disposition: disposition });
   }
 
+  /** One stage report for a queue item's offered sequence. Queue envelopes
+   *  carry no `delivery_seq` (the sequence is on the offered item), and a
+   *  returned item is offered again under a new sequence, so no record is
+   *  kept for it. */
+  reportQueueStage(
+    deliverySeq: number,
+    stage: DeliveryStageReport["stage"],
+    fields: Pick<DeliveryStageReport, "yield_disposition"> = {},
+  ): void {
+    const identity = this.#observeIdentity();
+    if (identity === null) return;
+    this.#send({
+      incarnation: identity.incarnation,
+      generation: identity.generation,
+      delivery_seq: deliverySeq,
+      stage,
+      ...fields,
+      at: this.#now(),
+    });
+  }
+
   settled(turnToken: string): void {
     this.#observeIdentity();
     for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {

@@ -151,6 +151,14 @@ async function runWithQueue(witness: boolean, fails = false, reply = false, refu
   }
 }
 
+function yieldInbound(cid: string): Envelope {
+  const envelope = earlyInbound(cid);
+  (envelope.payload as Record<string, unknown>).delivery_authority = {
+    requested: "yield", granted: "yield", yield_token: "yt", work_id: "w1", authority_epoch: 1,
+  };
+  return envelope;
+}
+
 function earlyInbound(cid: string): Envelope {
   const envelope = inbound(cid);
   (envelope.payload as Record<string, unknown>).delivery_authority = { requested: "early", granted: "early" };
@@ -161,10 +169,11 @@ function earlyInbound(cid: string): Envelope {
 /** A running operator turn; the server offers one early item under the
  *  wrapper's early credit. With `slowPermit`, the permit for it is held until
  *  the turn has ended and root credit is asked for. */
-async function runEarlyFold(slowPermit: boolean, rejoinFirst = false) {
+async function runEarlyFold(slowPermit: boolean, rejoinFirst = false, yieldGranted = false) {
   const sent: Record<string, unknown>[] = [];
   const acknowledged: number[] = [];
   const prompts: string[] = [];
+  const stages: Record<string, unknown>[] = [];
   let lease!: QueueLease;
   let linkOptions!: Record<string, any>;
   let host!: AgentHost;
@@ -178,7 +187,10 @@ async function runEarlyFold(slowPermit: boolean, rejoinFirst = false) {
   const batch = (leaseId: string, kind: "root" | "early") => lease.receiveBatch({
     version: "0", queue_epoch: "e1", incarnation: "i1", generation: "g1", lease_id: leaseId, kind,
     credit_revision: "1",
-    items: [{ queue_id: "8", attempt_id: `8.${leaseId}`, delivery_seq: Number(leaseId), class: "ordinary", byte_charge: 1, envelope: earlyInbound("c-early") }],
+    items: [{
+      queue_id: "8", attempt_id: `8.${leaseId}`, delivery_seq: Number(leaseId), class: "ordinary", byte_charge: 1,
+      envelope: yieldGranted ? yieldInbound("c-early") : earlyInbound("c-early"),
+    }],
   });
 
   const running = runClaudeCli({
@@ -226,9 +238,9 @@ async function runEarlyFold(slowPermit: boolean, rejoinFirst = false) {
       }, "i1", "g1");
       queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
       return {
-        deliveryModes: () => ({ early: "fold", yield: "none", stage_reports: true }),
+        deliveryModes: () => ({ early: "fold", yield: yieldGranted ? "tool_boundary" : "none", stage_reports: true }),
         deliveryIncarnation: () => "i1", deliveryGeneration: () => "g1",
-        reportDeliveryStage: () => {},
+        reportDeliveryStage: (report: Record<string, unknown>) => stages.push(report),
         acknowledgeInterAgentDelivery: (seq: number) => acknowledged.push(seq),
         retireInterAgentDeliveries: () => true, flushInterAgentRetirements: async () => {},
         sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
@@ -284,7 +296,7 @@ async function runEarlyFold(slowPermit: boolean, rejoinFirst = false) {
 
   try {
     await vi.waitFor(() => expect(sent.some((p) => p.op === "dispose")).toBe(true), { timeout: 4_000 });
-    return { sent, acknowledged, prompts };
+    return { sent, acknowledged, prompts, stages };
   } finally {
     host?.close();
     await running.catch(() => {});
@@ -308,6 +320,16 @@ describe("Claude CLI credit-v1 early fold composition", () => {
     const earlyCredits = sent.filter((p) => p.op === "credit" && p.kind === "early");
     expect(earlyCredits).toHaveLength(2);
     await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ op: "withdraw", credit_revision: String(earlyCredits[1]!.operation_id) })));
+  });
+
+  it("a yield-granted item in a turn with no work input is downgraded on its offered sequence and folded", async () => {
+    const { sent, stages } = await runEarlyFold(false, false, true);
+    // The queue envelope has no delivery_seq: the report names the offer's.
+    expect(stages).toContainEqual(expect.objectContaining({
+      delivery_seq: 1, stage: "queued", incarnation: "i1", generation: "g1",
+      yield_disposition: expect.objectContaining({ outcome: "downgraded", reason: "no_work_input" }),
+    }));
+    expect(sent.find((p) => p.op === "dispose")).toMatchObject({ items: [{ queue_id: "8", outcome: "observed", witness: "fold_hook" }] });
   });
 
   it("a rejoin during the turn asks for early credit again", async () => {

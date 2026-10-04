@@ -375,6 +375,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     lease: () => link?.queueLease?.() ?? null,
     ready: () => link?.queueReady?.() ?? Promise.resolve(),
     isIdle: () => host !== undefined && host.isIdleForInput(),
+    yieldNegotiated,
+    reportYield: (deliverySeq, disposition) => deliveryStages.reportQueueStage(deliverySeq, "queued", {
+      yield_disposition: { ...disposition, at: new Date().toISOString() },
+    }),
     enqueue: (task) => enqueueInstruction(task),
     send: (text, conversationIds, turnToken, envelopes) =>
       host.send(text, undefined, conversationIds, turnToken, { source: "peer", urgent: false, envelopes }),
@@ -415,6 +419,38 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       interAgentTurns.retireFoldedBeforeConfirmed(envelopes);
     },
     unknown: (envelopes, reason) => deliveryStages.unknownEnvelopes(envelopes, reason),
+    yieldNegotiated,
+    yield: {
+      eligibility: (workId) => host?.yieldEligibility(workId) ?? "continuation_turn",
+      canOvertake: () => host?.canReserveYieldOvertake() ?? false,
+      capture: (turn) => host?.captureLiveInputContext(turn) ?? null,
+      matches: (turn, context) =>
+        host?.matchesLiveInputContext(turn, context as Parameters<AgentHost["matchesLiveInputContext"]>[1]) ?? false,
+      canPush: () => host?.canPushLiveInput() ?? false,
+      claim: async (request) => {
+        const identity = deliveryIdentity();
+        if (identity === null) return { granted: false, reason: "claim_timeout" };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            link!.requestYieldClaim({ incarnation: identity.incarnation, generation: identity.generation, ...request }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error("claim_timeout")), yieldClaimTimeoutMs);
+            }),
+          ]);
+        } catch {
+          return { granted: false, reason: "claim_timeout" };
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
+      },
+      push: (input) => host?.pushLiveInput({ kind: "cut", ...input }) ?? false,
+      receiptTimeoutMs: pendingReceiptRootTimeoutMs,
+      now: () => performance.now(),
+    },
+    reportYield: (deliverySeq, disposition) => deliveryStages.reportQueueStage(deliverySeq, "queued", {
+      yield_disposition: { ...disposition, at: new Date().toISOString() },
+    }),
     log: (line) => writeRedactedStderr(line),
   });
 
