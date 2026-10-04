@@ -1,0 +1,15 @@
+[    28] sdk 0.3.284 node 22.23.3 mode cut
+[   810] system init
+[   865] REQ#1 msgs=2 injectInHistory=false last=text("# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /tmp/kohaku517-push-AYW6KR\n - Is a git repository: false\n )
+[   882] assistant tool_use:mcp__probe__slow
+[   894] MCP slow: start
+[  3884] PUSH mode=cut (sleep marker exists=false)
+[  3890] user tool_result:"The tool call was interrupted before a result was received. It may or may not have completed on the server — verify before assuming it succeeded, and retry if  tool_use_result="Error: The tool call was interrupted before a result was received. It may or may not have completed on the server — verify before assuming it succeeded, and re
+[  3895] result#1 subtype=success result="" num_turns=2
+[  3904] system init
+[  3916] REQ#2 msgs=5 injectInHistory=true last=text("<total_tokens>15000000 tokens left</total_tokens>")
+[  3941] assistant text:reply-2
+[  3947] result#2 subtype=success result="reply-2" num_turns=1
+[ 10895] MCP slow: end
+[ 60062] STOP (deadline)
+[ 60084] END results=2 sleep_completed=true requests=2

@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "status": "gate A complete; credentialed checks moved to production acceptance by council decision",
+  "implementation_commit": "5b3456ad3f79d5ded17ae0decdd78d7f376af481",
+  "latest_stable": {
+    "at": "2026-10-04T10:20Z",
+    "packages": { "@openai/codex": "0.160.0", "@openai/codex-sdk": "0.160.0" },
+    "newer_prereleases": ["0.162.0-alpha.12"]
+  },
+  "native": {
+    "version": "codex-cli 0.160.0",
+    "path": "node_modules/.pnpm/@openai+codex@0.160.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "sha256": "12eb3e81114588aca3b7998f4f19e8997b056aca08e57a7ca7c8a3ec8c652aad",
+    "previous_sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479"
+  },
+  "schema_comparison": {
+    "stable": { "old_count": 314, "new_count": 314, "added": 0, "removed": 0, "changed": 0, "manifest_sha256": "905003da446fbeadaa5d6da5243c167187ea5496768f8a7bd80eb7e16d2b3d0e" },
+    "experimental": { "old_count": 440, "new_count": 440, "added": 0, "removed": 0, "changed": 0, "manifest_sha256": "03312a12f17f7a76886bbe39767149ff0418bbd8db7040490a4221cde0b7e333" },
+    "negative": "one changed byte in a copied manifest is reported"
+  },
+  "state_migrations": {
+    "source": "codex-rs/state migrations, goals_, logs_, memory_, queue_, thread_history_ directories identical at rust-v0.159.3 and rust-v0.160.0",
+    "applied": {
+      "0.159.3": { "state_5.sqlite": 58, "thread_history_1.sqlite": 7, "goals_1.sqlite": 2, "logs_2.sqlite": 2, "memories_1.sqlite": 2, "queue_1.sqlite": 2 },
+      "0.160.0": { "state_5.sqlite": 58, "thread_history_1.sqlite": 7, "goals_1.sqlite": 2, "logs_2.sqlite": 2, "memories_1.sqlite": 2, "queue_1.sqlite": 2 }
+    }
+  },
+  "home_roots_0_160_0": [".sandbox_migration", "config.toml", "goals_1.sqlite", "installation_id", "logs_2.sqlite", "memories_1.sqlite", "queue_1.sqlite", "queue_1.sqlite-shm", "queue_1.sqlite-wal", "sessions", "skills", "state_5.sqlite", "state_5.sqlite-shm", "state_5.sqlite-wal", "thread-writer-locks", "thread_history_1.sqlite", "thread_history_1.sqlite-shm", "thread_history_1.sqlite-wal"],
+  "sdk_patch": {
+    "file": "patches/@openai__codex-sdk@0.160.0.patch",
+    "sha256": "faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c",
+    "dist_identical_to_0_159_3": true,
+    "u2028_test": { "patched": { "node-22.23.3": "pass", "node-24.3.0": "pass" }, "unpatched": { "node-22.23.3": "pass", "node-24.3.0": "fail" } },
+    "readline_lines_for_two_line_input": { "node-22.23.3": 2, "node-24.3.0": 4 }
+  },
+  "approval_capture": {
+    "fixture": "wrapper/codex/test/fixtures/app_server_approval_decline_0.160.0.jsonl",
+    "sha256": "859d1b781e89fcacc21402b8e8d55c9516d3ac8daeaa47d017f92741ebe09f35",
+    "method": "local Responses provider, code-mode exec calling exec_command with an escalation request, approval on-request, workspace-write",
+    "negative": "pin bumped with the 0.159.3 capture: only 'is measured on the pinned version' fails"
+  },
+  "steer_test": {
+    "file": "wrapper/codex/test/app_server_steer.integration.test.ts",
+    "sha256": "f8c3393e49bd6dc1da33a8a0beee07e4b6075728eb5d5fe998bb5dabe57aa98a",
+    "result": "2/2 pass",
+    "negative": "turn/steer write removed, response faked as accepted: 2/2 fail at the nonce assertion"
+  },
+  "sandbox": {
+    "0.160.0": { "network_off": "curl exit 7, endpoint not reached", "network_on": "exit 0, one request", "write_outside": "Read-only file system, exit 1, absent", "write_inside": "exit 0, present", "approval_decline": "requested, declined, absent" },
+    "0.159.3": "same five results"
+  },
+  "runner_artifact": {
+    "tarball": "kaoiro-runner-5b3456ad3f79d5ded17ae0decdd78d7f376af481-linux-x64.tar.gz",
+    "sha256": "939324b3d9e7b3eb91c2042f7b47ae07165fb434bfccd1b1c1cd958ad44a97d9",
+    "manifest_files": 164,
+    "verify_release_require_manifest_hash_exit": 0,
+    "native_identity": "0.160.0 inside the release, sha256 matches"
+  },
+  "tests_node_22_23_3": {
+    "wrapper_build_exit": 0,
+    "wrapper_typecheck_exit": 0,
+    "runner_typecheck_exit": 0,
+    "wrapper_core": 455,
+    "agent_common": 539,
+    "claude_code": 794,
+    "antigravity": { "passed": 481, "skipped": 2 },
+    "codex": { "passed": 1354, "files": 90 },
+    "runner": { "passed": 1025, "files": 52 },
+    "all_exit": 0,
+    "unhandled_errors": 0
+  }
+}

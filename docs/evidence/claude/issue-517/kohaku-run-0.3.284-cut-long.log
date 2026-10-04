@@ -1,0 +1,14 @@
+[     7] sdk 0.3.284 node 22.23.3 mode cut
+[   331] system init
+[   386] REQ#1 msgs=2 injectInHistory=false last=text("# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /tmp/kohaku517-push-ax13HT\n - Is a git repository: false\n )
+[   403] assistant tool_use:Bash
+[  3536] system task_started {"type":"system","subtype":"task_started","task_id":"b4eg52qzn","tool_use_id":"toolu_517_1","description":"probe sleep","is_backgrounded":false,"task_type":"local_bash","uuid":"bdd66280-6692-4ca8-813b
+[  8403] PUSH mode=cut (sleep marker exists=false)
+[ 20539] system task_notification {"type":"system","subtype":"task_notification","task_id":"b4eg52qzn","tool_use_id":"toolu_517_1","status":"completed","output_file":"","summary":"probe sleep","uuid":"4bd5923f-aced-42f3-a48f-7f1f08094
+[ 20551] user tool_result:"SLEPT_OK" tool_use_result={"stdout":"SLEPT_OK","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}
+[ 20557] result#1 subtype=success result="" num_turns=2
+[ 20578] system init
+[ 20617] REQ#2 msgs=5 injectInHistory=true last=text("<total_tokens>15000000 tokens left</total_tokens>")
+[ 20660] assistant text:reply-2
+[ 20668] result#2 subtype=success result="reply-2" num_turns=1
+[ 22192] END results=2 sleep_completed=true requests=2
