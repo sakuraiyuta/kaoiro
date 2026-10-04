@@ -464,4 +464,116 @@ else if (args.includes('show')) {
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${C}`);
     expect(readFileSync(calls, "utf8")).toBe(`${before}stop\nstart\n`);
   });
+
+  describe("abandon", () => {
+    const txPath = (uuid: string) => join(root, "codex-state/transactions", `${uuid}.json`);
+    const readTx = (uuid: string) => JSON.parse(readFileSync(txPath(uuid), "utf8"));
+    const rewrite = (uuid: string, edit: (tx: Record<string, unknown>) => void) => {
+      const tx = readTx(uuid); edit(tx); writeFileSync(txPath(uuid), JSON.stringify(tx));
+    };
+    // The operator restarts the runner on the current release after an abort.
+    const restart = () => {
+      expect(spawnSync(ctl, ["--user", "start", "kogane468-test"]).status).toBe(0);
+      return JSON.parse(readFileSync(join(dir, "mainpid"), "utf8")) as { pid: number; start: string };
+    };
+    // Real aborts: remain-active fails the snapshot's stop check with the
+    // transaction still prepared; late-unknown fails its inventory after
+    // `stopped` is saved and before the staging directory exists.
+    const strand = (trigger: "remain-active" | "late-unknown") => {
+      writeFileSync(join(dir, trigger), "trigger");
+      const result = update();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Codex state preparation failed");
+      rmSync(join(dir, trigger));
+      return forwardTransaction();
+    };
+    const retried = (uuid: string) => {
+      const retry = update();
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+      const others = readdirSync(join(root, "codex-state/transactions")).map((f) => f.slice(0, -5)).filter((id) => id !== uuid);
+      expect(others.map((id) => readTx(id))).toEqual([expect.objectContaining({ mode: "forward", order: 2, phase: "awaiting-acceptance" })]);
+    };
+
+    it("abandons a forward stranded at prepared, after which the update retries", () => {
+      const tx = strand("remain-active");
+      expect(tx).toMatchObject({ mode: "forward", phase: "prepared" });
+      restart();
+      const stops = readFileSync(calls, "utf8");
+      const blocked = update();
+      expect(blocked.status).not.toBe(0);
+      expect(blocked.stderr).toContain("Recover or accept the previous Codex state transaction first");
+      expect(readFileSync(calls, "utf8")).toBe(stops);
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ abandoned: tx.uuid, phase: "prepared" });
+      const abandoned = readTx(tx.uuid);
+      expect(abandoned).toEqual({ ...tx, phase: "retired", abandonment: { version: 1, abandoned: expect.any(String), phase: "prepared", owner: expect.stringMatching(/^(absent|pid-reused)$/) } });
+      expect(existsSync(join(root, ".lock.update"))).toBe(false);
+      expect(existsSync(join(root, ".lock.links"))).toBe(false);
+      retried(tx.uuid);
+      expect(readTx(tx.uuid)).toEqual(abandoned);
+    });
+
+    it("abandons a forward stranded at stopped before its snapshot wrote anything", () => {
+      const tx = strand("late-unknown");
+      expect(tx).toMatchObject({ mode: "forward", phase: "stopped" });
+      expect(existsSync(tx.snapshot)).toBe(false);
+      expect(existsSync(tx.staging)).toBe(false);
+      rmSync(join(home, "unknown-token"));
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status, result.stderr).toBe(0);
+      expect(readTx(tx.uuid)).toMatchObject({ phase: "retired", abandonment: { phase: "stopped" } });
+      restart();
+      retried(tx.uuid);
+    });
+
+    it("treats an owner PID reused by another process as gone", () => {
+      const tx = strand("remain-active");
+      const live = restart();
+      rewrite(tx.uuid, (t) => { t.owner = { pid: live.pid, start: `${live.start}0` }; });
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status, result.stderr).toBe(0);
+      expect(readTx(tx.uuid).abandonment).toMatchObject({ owner: "pid-reused" });
+    });
+
+    type Refusal = [string, (tx: { uuid: string; snapshot: string; staging: string }) => void, string];
+    const notForward = "Only a forward that stopped before its snapshot can be abandoned";
+    const refusals: Refusal[] = [
+      ["a live owner", (tx) => { const live = restart(); rewrite(tx.uuid, (t) => { t.owner = live; }); }, "State transaction owner is still running"],
+      ["a malformed owner", (tx) => rewrite(tx.uuid, (t) => { t.owner = { pid: "1188303" }; }), "Malformed state transaction owner"],
+      ...["snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "restored", "retired"].map((phase): Refusal =>
+        [`phase ${phase}`, (tx) => rewrite(tx.uuid, (t) => { t.phase = phase; }), notForward]),
+      ...["restore", "code-recovery"].map((mode): Refusal =>
+        [`mode ${mode}`, (tx) => rewrite(tx.uuid, (t) => { t.mode = mode; t.backupUUID = "00000000-0000-4000-8000-000000000000"; }), notForward]),
+      ["a staging path that is not its own", (tx) => rewrite(tx.uuid, (t) => { t.staging = join(dir, "elsewhere"); }), "Transaction staging path is not its own"],
+      ["an existing snapshot directory", (tx) => mkdirSync(tx.snapshot), "Snapshot or staging exists"],
+      ["a dangling symlink at the snapshot path", (tx) => symlinkSync(join(dir, "nowhere"), tx.snapshot), "Snapshot or staging exists"],
+      ["an existing staging directory", (tx) => mkdirSync(tx.staging), "Snapshot or staging exists"],
+      ["an existing backup reference", (tx) => writeFileSync(join(root, "codex-state/backups", `${tx.uuid}.json`), "{}", { mode: 0o600 }), "Snapshot or staging exists"],
+      ["a legacy record", (tx) => rewrite(tx.uuid, (t) => { delete t.bindingReceiptVersion; }), "Legacy Codex transaction requires operator recovery or retirement"],
+      ["an update lock that is already held", () => mkdirSync(join(root, ".lock.update"), { mode: 0o700 }), "EEXIST"],
+    ];
+    it.each(refusals)("refuses %s and leaves the record unchanged", (_name, setup, message) => {
+      const tx = strand("remain-active");
+      setup(tx);
+      const before = readFileSync(txPath(tx.uuid));
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status).toBe(78);
+      expect(result.stderr).toContain(message);
+      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
+      if (message === "EEXIST") expect(existsSync(join(root, ".lock.update"))).toBe(true);
+    });
+
+    it("refuses an accepted forward", () => {
+      expect(update().status).toBe(0);
+      const tx = forwardTransaction();
+      expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
+      const before = readFileSync(txPath(tx.uuid));
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status).toBe(78);
+      expect(result.stderr).toContain(notForward);
+      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
+    });
+  });
 });

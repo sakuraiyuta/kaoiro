@@ -395,6 +395,34 @@ async function retire(root, uuid, evidenceFile) {
   tx.phase = "retired"; save(root, tx);
   console.log(JSON.stringify({ retired: uuid, removedSnapshot: ref.snapshot, released: [ref.source.id, ref.tool] }));
 }
+// Without the update lock record, only /proc can prove the owner gone.
+function ownerState(owner) {
+  must(exact(owner, ["pid", "start"]) && Number.isSafeInteger(owner.pid) && owner.pid > 1 && typeof owner.start === "string", "Malformed state transaction owner");
+  let stat;
+  try { stat = readFileSync(`/proc/${owner.pid}/stat`, "utf8"); }
+  catch (error) { if (error.code === "ENOENT") return "absent"; throw error; }
+  must(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] !== owner.start, "State transaction owner is still running");
+  return "pid-reused";
+}
+// A forward that never wrote its snapshot changed nothing but its own record.
+// It ends as `retired`, which every released copy of this tool can still read.
+function abandon(root, uuid) {
+  must(process.platform === "linux", "State-aware operation requires Linux");
+  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Abandonment requires both locks");
+  const tx = transaction(root, uuid);
+  requireModern(tx);
+  must(tx.mode === "forward" && ["prepared", "stopped"].includes(tx.phase), "Only a forward that stopped before its snapshot can be abandoned");
+  const owner = ownerState(tx.owner);
+  must(tx.staging === join(dirname(tx.snapshot), `.staging.codex-${uuid}`), "Transaction staging path is not its own");
+  const written = "Snapshot or staging exists; recover instead of abandoning";
+  must(!hasEntry(tx.snapshot), written);
+  must(!hasEntry(tx.staging), written);
+  must(!hasEntry(join(paths(root).backups, `${uuid}.json`)), written);
+  const phase = tx.phase;
+  tx.abandonment = { version: 1, abandoned: new Date().toISOString(), phase, owner };
+  tx.phase = "retired"; save(root, tx);
+  console.log(JSON.stringify({ abandoned: uuid, phase }));
+}
 async function main(argv) {
   const [action, rootArg, ...args] = argv;
   const root = realpathSync(rootArg);
@@ -411,6 +439,7 @@ async function main(argv) {
   else if (action === "target") console.log(transaction(root, args[0]).target.id);
   else if (action === "protected") console.log(protectedReleases(root));
   else if (action === "retire") await retire(root, ...args);
+  else if (action === "abandon") abandon(root, args[0]);
   else if (action === "accept") await accept(root, ...args);
   else if (action === "classify") console.log(JSON.stringify(inventory(root), null, 2));
   else throw new Error("Unknown Codex state action");
@@ -419,7 +448,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(import.met
   const argv = process.argv.slice(2);
   const locked = [];
   try {
-    if (["accept", "retire"].includes(argv[0])) {
+    if (["accept", "retire", "abandon"].includes(argv[0])) {
       for (const name of [".lock.update", ".lock.links"]) {
         const path = join(realpathSync(argv[1]), name);
         mkdirSync(path, { mode: 0o700 }); locked.push(path);
