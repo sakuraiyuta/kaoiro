@@ -479,24 +479,37 @@ retires it:
    ```
 
 4. Check that `summary` reports phase `retired`, and that `inspect` shows the
-   `abandonment` entry: the phase it left and whether the owner PID was
-   `absent` or reused by another process (`pid-reused`).
+   `abandonment` entry: the phase it left and its `ownerStatus`, `absent` or
+   `pid-reused` (the PID now belongs to another process).
 5. Retry the update with the same tool release.
 
 `abandon` takes the update and links locks, and refuses everything else: a mode
 other than forward, any other phase, a live owner (its PID running with the
 recorded start time), a staging path other than the one `prepare` assigned,
 and an existing snapshot, staging directory or backup reference. Those cases
-may hold state: use the recovery paths above or the fresh setup, and never edit
-or move the record to make it pass.
+may hold state and are outside `abandon`; never edit or move the record to make
+it pass. A `stopped` forward whose snapshot copy failed leaves only its staging
+directory: the snapshot reads the home and never writes it, so the home is
+unchanged, but no helper action clears that transaction. Report it to the
+operator, who decides between moving the staging directory, unmodified, to
+private storage and then running `abandon`, and the fresh setup.
 
 If `abandon` refuses with `EEXIST` on `.lock.update` or `.lock.links`, an
 updater may have died (SIGKILL, host restart) without releasing the lock.
-Confirm that `kaoiro-runner-update.service` is not running, that no update,
-install or switch you started is still running, and that no process has the
-`owner.pid` recorded in `.lock.update/codex-owner.json`, if that file exists.
-Then remove the lock directory and run `abandon` again. A lock
-directory is not a state record, so removing it does not edit Codex state.
+Before removing it, confirm that the detached update unit
+(`<service>-update.service`, `kaoiro-runner-update.service` for the default
+service) is not running, that no update, install or switch you started and no
+`kaoiro-runner-codex-state.mjs` process is still running, and that no process
+has the `owner.pid` recorded in `.lock.update/codex-owner.json`, if that file
+exists. Then remove it and run `abandon` again:
+
+```sh
+rm -r "$install_root/.lock.update"   # may still hold codex-owner.json
+rmdir "$install_root/.lock.links"
+```
+
+Remove only the lock that `abandon` reported. A lock directory is not a state
+record, so removing it does not edit Codex state.
 
 ## See Also
 

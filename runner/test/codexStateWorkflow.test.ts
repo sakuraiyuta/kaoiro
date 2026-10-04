@@ -508,7 +508,7 @@ else if (args.includes('show')) {
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ abandoned: tx.uuid, phase: "prepared" });
       const abandoned = readTx(tx.uuid);
-      expect(abandoned).toEqual({ ...tx, phase: "retired", abandonment: { version: 1, abandoned: expect.any(String), phase: "prepared", owner: expect.stringMatching(/^(absent|pid-reused)$/) } });
+      expect(abandoned).toEqual({ ...tx, phase: "retired", abandonment: { version: 1, abandoned: expect.any(String), phase: "prepared", ownerStatus: expect.stringMatching(/^(absent|pid-reused)$/) } });
       expect(existsSync(join(root, ".lock.update"))).toBe(false);
       expect(existsSync(join(root, ".lock.links"))).toBe(false);
       retried(tx.uuid);
@@ -534,7 +534,16 @@ else if (args.includes('show')) {
       rewrite(tx.uuid, (t) => { t.owner = { pid: live.pid, start: `${live.start}0` }; });
       const result = stateAction("abandon", root, tx.uuid);
       expect(result.status, result.stderr).toBe(0);
-      expect(readTx(tx.uuid).abandonment).toMatchObject({ owner: "pid-reused" });
+      expect(readTx(tx.uuid).abandonment).toMatchObject({ ownerStatus: "pid-reused" });
+    });
+
+    it("treats an owner PID with no /proc entry as absent", () => {
+      const tx = strand("remain-active");
+      const pidMax = Number(readFileSync("/proc/sys/kernel/pid_max", "utf8"));
+      rewrite(tx.uuid, (t) => { t.owner = { pid: pidMax + 1, start: "1" }; });
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status, result.stderr).toBe(0);
+      expect(readTx(tx.uuid).abandonment).toMatchObject({ ownerStatus: "absent" });
     });
 
     type Refusal = [string, (tx: { uuid: string; snapshot: string; staging: string }) => void, string];
@@ -552,7 +561,6 @@ else if (args.includes('show')) {
       ["an existing staging directory", (tx) => mkdirSync(tx.staging), "Snapshot or staging exists"],
       ["an existing backup reference", (tx) => writeFileSync(join(root, "codex-state/backups", `${tx.uuid}.json`), "{}", { mode: 0o600 }), "Snapshot or staging exists"],
       ["a legacy record", (tx) => rewrite(tx.uuid, (t) => { delete t.bindingReceiptVersion; }), "Legacy Codex transaction requires operator recovery or retirement"],
-      ["an update lock that is already held", () => mkdirSync(join(root, ".lock.update"), { mode: 0o700 }), "EEXIST"],
     ];
     it.each(refusals)("refuses %s and leaves the record unchanged", (_name, setup, message) => {
       const tx = strand("remain-active");
@@ -562,7 +570,18 @@ else if (args.includes('show')) {
       expect(result.status).toBe(78);
       expect(result.stderr).toContain(message);
       expect(readFileSync(txPath(tx.uuid))).toEqual(before);
-      if (message === "EEXIST") expect(existsSync(join(root, ".lock.update"))).toBe(true);
+    });
+
+    // A lock someone else holds stays; a lock this run took is released.
+    it.each([".lock.update", ".lock.links"])("refuses while %s is already held", (held) => {
+      const tx = strand("remain-active");
+      mkdirSync(join(root, held), { mode: 0o700 });
+      const before = readFileSync(txPath(tx.uuid));
+      const result = stateAction("abandon", root, tx.uuid);
+      expect(result.status).toBe(78);
+      expect(result.stderr).toContain("EEXIST");
+      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
+      for (const lock of [".lock.update", ".lock.links"]) expect(existsSync(join(root, lock))).toBe(lock === held);
     });
 
     it("refuses an accepted forward", () => {

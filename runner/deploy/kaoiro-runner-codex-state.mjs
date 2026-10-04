@@ -412,14 +412,14 @@ function abandon(root, uuid) {
   const tx = transaction(root, uuid);
   requireModern(tx);
   must(tx.mode === "forward" && ["prepared", "stopped"].includes(tx.phase), "Only a forward that stopped before its snapshot can be abandoned");
-  const owner = ownerState(tx.owner);
+  const ownerStatus = ownerState(tx.owner);
   must(tx.staging === join(dirname(tx.snapshot), `.staging.codex-${uuid}`), "Transaction staging path is not its own");
   const written = "Snapshot or staging exists; recover instead of abandoning";
   must(!hasEntry(tx.snapshot), written);
   must(!hasEntry(tx.staging), written);
   must(!hasEntry(join(paths(root).backups, `${uuid}.json`)), written);
   const phase = tx.phase;
-  tx.abandonment = { version: 1, abandoned: new Date().toISOString(), phase, owner };
+  tx.abandonment = { version: 1, abandoned: new Date().toISOString(), phase, ownerStatus };
   tx.phase = "retired"; save(root, tx);
   console.log(JSON.stringify({ abandoned: uuid, phase }));
 }
