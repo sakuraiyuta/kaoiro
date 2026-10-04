@@ -219,7 +219,7 @@ and the panel read the trimmed head. The note says the text continues.
 
 What the trim cannot do, because a start of the text does not hold what comes
 after it: a delimiter that the full line shows as literal text can be hidden
-(counted by the oracle: 1.4% of the cuts of the large fuzz corpus the
+(counted by the oracle: 1.7% of the cuts of the large fuzz corpus the
 measurements used, 0.3% of the committed one); a reference link whose
 definition follows the head, a footnote-style definition and a table without
 leading pipes draw their brackets as text; and a later line that makes the

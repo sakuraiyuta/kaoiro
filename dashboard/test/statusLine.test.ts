@@ -259,11 +259,11 @@ describe("StatusLines", () => {
     expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(4);
 
     lines.reset();
-    lines.applySnapshot({ a: row(4, "前 **別の太字") }, false);
+    lines.applyLive("a", row(4, "前 **別の太字"));
     lines.view("a");
     expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(5);
 
-    lines.applySnapshot({ a: row(4, "前 **別の太字") }, false);
+    lines.applySnapshot({ a: row(5, "前 **別の太字") }, false);
     lines.view("a");
     expect(trimIncompleteMarkdown).toHaveBeenCalledTimes(6);
   });
