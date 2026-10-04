@@ -20,10 +20,15 @@
 
 import { randomUUID } from "node:crypto";
 import type { QueueLease, QueueOffer } from "@kaoiro/wrapper-core";
-import { QueueInput, type QueueInputDeps } from "@kaoiro/agent-common";
+import type { QueueInput } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentMessagePayload } from "@kaoiro/agent-common";
+import type { CreditSlot } from "./queue_credit.js";
 
-export interface QueueRootDeps extends QueueInputDeps {
+export interface QueueRootDeps {
+  /** The classifier shared with the early path. */
+  input: QueueInput;
+  /** The credit record shared with the early path. */
+  slot: CreditSlot;
   lease(): QueueLease | null;
   /** Resolves when the link may take credit after its latest join. */
   ready(): Promise<void>;
@@ -60,9 +65,9 @@ interface RootInput {
 export class ClaudeQueueRoot {
   readonly #deps: QueueRootDeps;
   readonly #input: QueueInput;
-  /** Token of the outstanding root credit, if any. */
-  #creditToken: string | null = null;
-  #creditRevision: string | null = null;
+  readonly #slot: CreditSlot;
+  /** Token of a readiness check waiting for the link, before its request. */
+  #checking: string | null = null;
   readonly #roots = new Map<string, RootInput>();
   /** The last root credit was withdrawn because another turn started. */
   #withdrawn = false;
@@ -72,45 +77,36 @@ export class ClaudeQueueRoot {
 
   constructor(deps: QueueRootDeps) {
     this.#deps = deps;
-    this.#input = new QueueInput(deps);
+    this.#input = deps.input;
+    this.#slot = deps.slot;
   }
 
   /** Requests root credit when the host is ready for root input. */
   checkReadiness(): void {
     const lease = this.#deps.lease();
-    if (lease === null || lease.frozen || this.#creditToken !== null) return;
+    if (lease === null || lease.frozen || this.#checking !== null || this.#slot.token("root") !== null) return;
     const token = randomUUID();
-    this.#creditToken = token;
-    this.#creditRevision = null;
+    this.#checking = token;
     this.#withdrawn = false;
     void this.#deps.ready().then(async () => {
-      if (this.#creditToken !== token) return;
+      if (this.#checking !== token) return;
+      this.#checking = null;
       // A held root re-arms at its exit.
-      if (this.#roots.size > 0) {
-        this.#creditToken = null;
-        return;
-      }
+      if (this.#roots.size > 0) return;
       if (!this.#deps.isIdle()) {
-        this.#creditToken = null;
         this.#scheduleRetry();
         return;
       }
-      const result = await lease.credit("root", token);
-      if (!result.ok) {
-        if (this.#creditToken !== token) return;
-        this.#creditToken = null;
+      const outcome = await this.#slot.request(lease, { kind: "root", token });
+      if (outcome.kind === "refused") {
         this.#refusals += 1;
         if (this.#refusals === 1 || this.#refusals === LOG_REFUSAL_AGAIN_AT) {
-          this.#deps.log(`[kaoiro] queue root credit refused (${this.#refusals} in a row): ${JSON.stringify(result.error)}\n`);
+          this.#deps.log(`[kaoiro] queue root credit refused (${this.#refusals} in a row): ${JSON.stringify(outcome.error)}\n`);
         }
-        if (result.error.reason !== "queue_frozen") this.#scheduleRetry();
-      } else if (this.#creditToken === token) {
-        this.#creditRevision = result.reply.credit_revision;
+        if (outcome.error.reason !== "queue_frozen") this.#scheduleRetry();
+      } else if (outcome.kind === "granted") {
         this.#retryDelay = RETRY_FIRST_MS;
         this.#refusals = 0;
-      } else {
-        // The host left idle while the credit was in flight.
-        void lease.withdraw(result.reply.credit_revision);
       }
     });
   }
@@ -118,12 +114,9 @@ export class ClaudeQueueRoot {
   /** A turn started: the host is no longer idle and an outstanding root
    *  credit is withdrawn. */
   turnStarted(): void {
-    if (this.#creditToken === null) return;
-    const revision = this.#creditRevision;
-    this.#creditToken = null;
-    this.#creditRevision = null;
-    this.#withdrawn = true;
-    if (revision !== null) void this.#deps.lease()?.withdraw(revision);
+    const checking = this.#checking !== null;
+    this.#checking = null;
+    if (this.#slot.clear("root", this.#deps.lease()) || checking) this.#withdrawn = true;
   }
 
   #scheduleRetry(): void {
@@ -138,9 +131,10 @@ export class ClaudeQueueRoot {
     }, delay);
   }
 
-  /** A join dropped any credit the server held for this link. */
+  /** A join dropped any credit the server held for this link; the caller
+   *  has reset the shared slot. */
   rejoined(): void {
-    this.#creditToken = null;
+    this.#checking = null;
     this.checkReadiness();
   }
 
@@ -154,7 +148,7 @@ export class ClaudeQueueRoot {
 
   async #onOffer(offer: QueueOffer): Promise<void> {
     const all = offer.items.map((item) => item.queueId);
-    const token = this.#creditToken;
+    const token = this.#slot.token("root");
     if (offer.kind === "root" && token === null && this.#withdrawn) {
       // The offer crossed the withdrawal at another turn's start.
       this.#withdrawn = false;
@@ -166,8 +160,7 @@ export class ClaudeQueueRoot {
       offer.release(all);
       return;
     }
-    this.#creditToken = null;
-    this.#creditRevision = null;
+    this.#slot.consume("root", token);
     if (!this.#deps.isIdle()) {
       // The offer crossed a withdrawal: return it before classifying.
       void offer.return(all.map((queue_id) => ({ queue_id, reason: "credit_withdrawn" as const })));

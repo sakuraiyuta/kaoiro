@@ -41,6 +41,7 @@ import type {
 } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { ClaudeQueueRoot } from "./queue_root.js";
+import { CreditSlot } from "./queue_credit.js";
 import {
   InterAgentIngressGate,
   InterAgentTurnCoordinator,
@@ -59,7 +60,7 @@ import {
   flagArgument,
   personaOptInSource,
 } from "@kaoiro/agent-common";
-import { writeRedactedStderr } from "@kaoiro/agent-common";
+import { QueueInput, writeRedactedStderr } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import {
@@ -359,7 +360,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const interAgentIngress = new InterAgentIngressGate();
   // Root input from the server-owned queue (credit-v1). The legacy push path
   // above stays as it is for input the server still pushes.
+  const queueInput = new QueueInput({
+    classify: (envelope) => interAgent!.receiveInbound(envelope),
+    reclassify: (envelope, mode) => interAgent?.queuedInboundMode(envelope, mode) ?? mode,
+    sendNotice: (notice) => interAgent?.sendInternalNotice(notice),
+    tracked: (conversationId) => interAgent?.hasConversationTrack(conversationId) ?? false,
+    log: (line) => writeRedactedStderr(line),
+  });
+  const creditSlot = new CreditSlot();
   const queueRoot = new ClaudeQueueRoot({
+    input: queueInput,
+    slot: creditSlot,
     lease: () => link?.queueLease?.() ?? null,
     ready: () => link?.queueReady?.() ?? Promise.resolve(),
     isIdle: () => host !== undefined && host.isIdleForInput(),
@@ -370,10 +381,6 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       for (const envelope of envelopes) interAgent?.notePendingInjection(envelope, turnToken);
       interAgent?.prepareReplyInput(turnToken, envelopes);
     },
-    classify: (envelope) => interAgent!.receiveInbound(envelope),
-    reclassify: (envelope, mode) => interAgent?.queuedInboundMode(envelope, mode) ?? mode,
-    sendNotice: (notice) => interAgent?.sendInternalNotice(notice),
-    tracked: (conversationId) => interAgent?.hasConversationTrack(conversationId) ?? false,
     log: (line) => writeRedactedStderr(line),
   });
 
@@ -1006,7 +1013,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     interAgentQueuePolicy: interAgentQueuePolicy(config),
     onInterAgentQueueRefused: exitOnInterAgentQueueRefusal,
     onQueueOffer: (offer) => void queueRoot.onOffer(offer),
-    onQueueRejoined: () => queueRoot.rejoined(),
+    onQueueRejoined: () => {
+      creditSlot.reset();
+      queueRoot.rejoined();
+    },
     interAgentReplyBasis: "v1",
     noticeAttribution: "v1",
     interAgentDeliveryModes: {

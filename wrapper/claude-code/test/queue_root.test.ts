@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { QueueLease, type QueueOffer } from "@kaoiro/wrapper-core";
-import type { Envelope } from "@kaoiro/agent-common";
+import { QueueInput, type Envelope, type QueueInputDeps } from "@kaoiro/agent-common";
+import { CreditSlot } from "../src/queue_credit.js";
 import { ClaudeQueueRoot, type QueueRootDeps } from "../src/queue_root.js";
 
 const policy = { batch_max_items: 10, backlog_max_items: 100, backlog_max_bytes: 524_288 };
@@ -26,7 +27,7 @@ function reply(payload: Record<string, unknown>): unknown {
   }
 }
 
-function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, string> = {}, gates: Record<string, Promise<void>> = {}) {
+function harness(overrides: Partial<QueueRootDeps & QueueInputDeps> = {}, refuse: Record<string, string> = {}, gates: Record<string, Promise<void>> = {}) {
   const sent: Record<string, unknown>[] = [];
   const lines: string[] = [];
   const sends: Array<{ text: string; token: string }> = [];
@@ -47,18 +48,25 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
     inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
     inter_agent_queue_epoch: "e1", inter_agent_queue_resume_required: false,
   }, "i1", "g1");
+  const log = (line: string) => lines.push(line);
+  const input = new QueueInput({
+    classify: overrides.classify ?? (async () => ({ consumed: false, inject: true, mode: "reply-owed" })),
+    reclassify: (_envelope, mode) => mode,
+    sendNotice: () => {},
+    tracked: () => true,
+    log,
+  });
+  const slot = new CreditSlot();
   root = new ClaudeQueueRoot({
+    input,
+    slot,
     lease: () => lease,
     ready: async () => {},
     isIdle: () => idle,
     enqueue: (task) => task(),
     send: async (text, _cids, token) => { sends.push({ text, token }); },
     preparePending: () => {},
-    classify: async () => ({ consumed: false, inject: true, mode: "reply-owed" }),
-    reclassify: (_envelope, mode) => mode,
-    sendNotice: () => {},
-    tracked: () => true,
-    log: (line) => lines.push(line),
+    log,
     defer: (task) => task(),
     schedule: (task, ms) => { timers.push({ task, ms }); },
     ...overrides,
@@ -74,7 +82,8 @@ function harness(overrides: Partial<QueueRootDeps> = {}, refuse: Record<string, 
   };
   const ops = (op: string) => sent.filter((p) => p.op === op);
   const creditToken = () => ops("credit").at(-1)?.native_turn_token as string;
-  return { root, lease, sent, lines, sends, timers, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
+  const rejoin = () => { slot.reset(); root.rejoined(); };
+  return { root, rejoin, slot, lease, sent, lines, sends, timers, offer, ops, creditToken, setIdle: (value: boolean) => { idle = value; } };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -174,7 +183,7 @@ describe("ClaudeQueueRoot", () => {
     const h = harness();
     h.root.checkReadiness();
     await settle();
-    h.root.rejoined();
+    h.rejoin();
     await settle();
     expect(h.ops("credit")).toHaveLength(2);
   });
@@ -277,7 +286,7 @@ describe("ClaudeQueueRoot", () => {
       h.timers[0]!.task();
       await settle();
       refuse.credit = "queue_unavailable";
-      h.root.rejoined();
+      h.rejoin();
       await settle();
       expect(h.timers.map((t) => t.ms)).toEqual([250, 250]);
     });
@@ -318,7 +327,7 @@ describe("ClaudeQueueRoot", () => {
       h.timers[1]!.task();
       await settle();
       refuse.credit = "queue_unavailable";
-      h.root.rejoined();
+      h.rejoin();
       await settle();
       expect(h.lines.filter((line) => line.includes("credit refused (1 in a row)"))).toHaveLength(2);
     });
@@ -343,7 +352,7 @@ describe("ClaudeQueueRoot", () => {
         inter_agent_queue: "credit-v1", inter_agent_queue_policy: policy,
         inter_agent_queue_epoch: "e1", inter_agent_queue_resume_required: false,
       }, "i1", "g2");
-      h.root.rejoined();
+      h.rejoin();
       await settle();
       expect(h.ops("credit")).toHaveLength(1);
       open();
@@ -404,5 +413,36 @@ describe("ClaudeQueueRoot", () => {
     h.offer([inbound("c1")], ["1"]);
     await settle();
     expect(classified).toBe(2);
+  });
+
+  describe("one credit slot shared with the early path", () => {
+    it("an early request that crosses the turn end does not leave root holding a superseded credit", async () => {
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => { open = resolve; });
+      const h = harness({}, {}, { credit: gate });
+      const early = h.slot.request(h.lease, { kind: "early", token: "turn-T", mechanism: "fold" });
+      h.root.turnEnded("turn-T", true);
+      await settle();
+      expect(h.ops("credit").map((p) => p.kind)).toEqual(["early", "root"]);
+      open();
+      expect(await early).toEqual({ kind: "superseded" });
+      await settle();
+      expect(h.slot.token("root")).toBe(h.creditToken());
+      expect(h.ops("withdraw")).toHaveLength(1);
+      h.offer([inbound("c1")]);
+      await settle();
+      expect(h.sends).toHaveLength(1);
+    });
+
+    it("root asks again at the turn end after an early credit superseded it", async () => {
+      const h = harness();
+      h.root.checkReadiness();
+      await settle();
+      await h.slot.request(h.lease, { kind: "early", token: "turn-T", mechanism: "fold" });
+      expect(h.slot.token("root")).toBeNull();
+      h.root.turnEnded("turn-T", true);
+      await settle();
+      expect(h.ops("credit").map((p) => p.kind)).toEqual(["root", "early", "root"]);
+    });
   });
 });
