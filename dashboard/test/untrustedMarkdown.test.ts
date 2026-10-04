@@ -250,6 +250,12 @@ describe("inline profile: layer one (the string marked emits, before sanitizing)
     ["a blockquote as its content", "> q\n> r", "q<br>r"],
     ["a fenced block as code with breaks", "```js\nl1\nl2\n```", "<code>l1<br>l2</code>"],
     ["a table as rows of cells", "| a | b |\n|:-:|--:|\n| 1 | 2 |", "a | b<br>1 | 2"],
+    ["a nested list on its own line", "- a\n  - b", "・a<br>・b"],
+    ["a loose list without a blank line", "- a\n\n- b", "・a<br>・b"],
+    ["an empty list item as a line of its own", "-\n- b", "・<br>・b"],
+    ["a list followed by a paragraph", "- a\n- b\n\ntext", "・a<br>・b<br>text"],
+    ["a blank line inside a code block as one break", "```\na\n\nb\n```", "<code>a<br>b</code>"],
+    ["an image alt that spans lines as one line", "![a\nb](https://e.test/p.png)", "a b"],
     ["a rule as nothing", "a\n\n---\n\nb", "a<br>b"],
     ["paragraphs as one line each", "a\n\nb\n\nc", "a<br>b<br>c"],
     ["a single newline as a break", "a\nb", "a<br>b"],
@@ -410,6 +416,25 @@ describe("inline profile: the composed render", () => {
         // A generous ceiling: this catches a hang, not a slow machine.
         expect(performance.now() - started, prefix).toBeLessThan(2000);
       }
+    }
+  });
+
+  it("keeps the allowed elements and holds no newline for generated sources", () => {
+    // A fixed generator, so a failure names a source that can be replayed.
+    const pieces = [
+      "a", "b c", "\n", "\n\n", "# ", "- ", "1. ", "3. ", "> ", "```", "```js\n", "    ", "|", "|---|",
+      "| x | y |", "**", "*", "~~", "`", "[l](https://e.test/)", "![i](https://e.test/p.png)", "![a\nb](x)",
+      "<div>", "</div>", "<b>", "<!-- c -->", "---", "- [x] ", "\r\n", "  \n", "\\", "&amp;", "<https://e.test>",
+    ];
+    let seed = 12345;
+    const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    for (let i = 0; i < 1500; i += 1) {
+      let source = "";
+      for (let j = 1 + Math.floor(next() * 14); j > 0; j -= 1) {
+        source += pieces[Math.floor(next() * pieces.length)];
+      }
+      assertAllowed(source);
+      expect(inlineMarkdownToHtml(source), source).not.toMatch(/<br><br>|^<br>|<br>$/);
     }
   });
 

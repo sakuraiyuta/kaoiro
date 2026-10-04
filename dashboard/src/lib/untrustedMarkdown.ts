@@ -97,6 +97,12 @@ function breaks(escaped: string): string {
   return escaped.replace(/\r?\n/g, "<br>");
 }
 
+/** A newline inside inline text (an image's alt text, a trailing hard break
+ *  marked leaves in a text token) is a space. */
+function oneLine(escaped: string): string {
+  return escaped.replace(/\s*\r?\n\s*/g, " ");
+}
+
 const inlineMarked = new Marked({
   async: false,
   breaks: true,
@@ -105,9 +111,15 @@ const inlineMarked = new Marked({
     html(token) {
       return breaks(escapeHtml(token.text));
     },
-    // Never an element and never a URL: the alt text alone.
+    // Never an element and never a URL: the alt text alone, on one line.
     image(token) {
-      return escapeHtml(token.text);
+      return oneLine(escapeHtml(token.text));
+    },
+    // A block of text in a tight list item has tokens and ends the line; an
+    // inline text token is just the text.
+    text(token) {
+      if ("tokens" in token && token.tokens) return `${this.parser.parseInline(token.tokens)}<br>`;
+      return oneLine("escaped" in token && token.escaped ? token.text : escapeHtml(token.text));
     },
     checkbox(token) {
       return token.checked ? "[x] " : "[ ] ";
@@ -129,7 +141,8 @@ const inlineMarked = new Marked({
       return token.items
         .map((item, index) => {
           const marker = token.ordered ? `${first + index}. ` : "・";
-          return `${marker}${this.parser.parse(item.tokens)}<br>`;
+          // Every block of an item ends its own line; an empty item still does.
+          return `${marker}${item.tokens.length === 0 ? "<br>" : this.parser.parse(item.tokens)}`;
         })
         .join("");
     },
@@ -152,16 +165,16 @@ const inlineMarked = new Marked({
 
 /** Layer one of the inline profile on its own: markdown to the HTML the card
  *  would show before sanitizing. Exported so that what marked emits can be
- *  asserted without layer two hiding a regression. It holds no newline. */
+ *  asserted without layer two hiding a regression. It holds no newline: every
+ *  renderer that could carry one turns it into a break or a space. */
 export function inlineMarkdownToHtml(text: string): string {
   return finishInline(inlineMarked.parser(inlineMarked.lexer(text)));
 }
 
+// A run of breaks (a blank line inside a code block, an empty heading) is one
+// break, and the text neither starts nor ends with one.
 function finishInline(html: string): string {
-  return html
-    .replace(/\r?\n/g, " ")
-    .replace(/(?:<br>)+/g, "<br>")
-    .replace(/^<br>|<br>$/g, "");
+  return html.replace(/(?:<br>)+/g, "<br>").replace(/^<br>|<br>$/g, "");
 }
 
 let purifier: ReturnType<typeof createDOMPurify> | null = null;
