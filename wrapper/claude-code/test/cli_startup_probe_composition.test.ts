@@ -10,12 +10,14 @@
 // `queryFn` only records calls: starting the real SDK or the real probe from
 // a unit test would need an account and the network.
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
 import { runClaudeProbe } from "../src/probe-client.js";
+import { projectModel } from "../src/probe.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -107,6 +109,27 @@ describe("Claude CLI startup probe composition (issue #448)", () => {
       // The first idle announcement precedes the probe and carries the seed.
       expect(catalogValues(states[0])).toEqual(["default"]);
       expect(states.at(-1)?.state).toBe("idle");
+      expect(queryFn).not.toHaveBeenCalled();
+    } finally {
+      host.close();
+      await running;
+    }
+  });
+
+  it("publishes the captured 0.3.293 Haiku catalog before a model turn", async () => {
+    const raw = JSON.parse(readFileSync(new URL(
+      "./fixtures/claude-agent-sdk-0.3.293.models.json", import.meta.url,
+    ), "utf8")) as unknown[];
+    const models = raw.map(projectModel);
+    const { sent, queryFn, host, running } = await runIdleCli(
+      JSON.stringify({ ok: true, models, elapsed_ms: 1, source: "init" }),
+    );
+    try {
+      await vi.waitFor(() => expect(sent.at(-1)?.ext?.models).toEqual(models));
+      expect(models.find(model => model?.value === "haiku")).toMatchObject({
+        resolved_model: "claude-haiku-5-5",
+        effort_levels: ["low", "medium", "high", "xhigh", "max"],
+      });
       expect(queryFn).not.toHaveBeenCalled();
     } finally {
       host.close();
