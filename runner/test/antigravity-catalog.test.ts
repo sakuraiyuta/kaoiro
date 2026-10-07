@@ -26,7 +26,7 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
     });
   });
 
-  it("実行失敗時は 1.1.26 snapshot にフォールバックし warn する", async () => {
+  it("実行失敗時は 1.3.1 snapshot にフォールバックし warn する", async () => {
     const stderr = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
@@ -35,17 +35,17 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
         Promise.reject(new Error("ENOENT: agy not found")),
       );
       expect(models[0]).toEqual({ value: "", display_name: "account default" });
-      // Pinned snapshot's non-default entries (catalog.ts SNAPSHOT_1_1_26).
-      expect(models.map((m) => m.value)).toContain("gemini-3.6-flash-high");
+      // Pinned snapshot's non-default entries (catalog.ts SNAPSHOT_1_3_1).
+      expect(models.map((m) => m.value)).toContain("gemini-3.8-flash-high");
       const warning = stderr.mock.calls.flat().join("");
       expect(warning).toContain("agy models` probe failed");
-      expect(warning).toContain("1.1.26 snapshot");
+      expect(warning).toContain("1.3.1 snapshot");
     } finally {
       stderr.mockRestore();
     }
   });
 
-  it("出力が不正な形 (3列以上) のときも 1.1.26 snapshot にフォールバックし warn する", async () => {
+  it("出力が不正な形 (3列以上) のときも 1.3.1 snapshot にフォールバックし warn する", async () => {
     const stderr = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
@@ -61,13 +61,13 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
       expect(models.length).toBeGreaterThan(1);
       const warning = stderr.mock.calls.flat().join("");
       expect(warning).toContain("no parseable models");
-      expect(warning).toContain("1.1.26 snapshot");
+      expect(warning).toContain("1.3.1 snapshot");
     } finally {
       stderr.mockRestore();
     }
   });
 
-  it("空出力時も 1.1.26 snapshot にフォールバックし warn する", async () => {
+  it("空出力時も 1.3.1 snapshot にフォールバックし warn する", async () => {
     const stderr = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);

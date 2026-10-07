@@ -1580,7 +1580,7 @@ if (args[0] === "models") {
         return child;
       },
     });
-    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-3.6-flash-high") === true));
+    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-3.8-flash-high") === true));
     expect(calls).toEqual([["models"]]);
     host.close();
   });
@@ -1591,7 +1591,7 @@ if (args[0] === "models") {
       ...config(),
       antigravity_extra_models: [
         // Overrides a value the live probe itself returns.
-        { value: "claude-sonnet-4-6", display_name: "overridden" },
+        { value: "claude-sonnet-5-5-high", display_name: "overridden" },
         // A value absent from both the snapshot and the live probe result.
         { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
       ],
@@ -1612,7 +1612,7 @@ if (args[0] === "models") {
     await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-4-nova") === true));
     const models = states.at(-1)!.ext!.models as { value: string; display_name: string }[];
     expect(models.map((m) => m.value)).toContain("gemini-4-nova");
-    expect(models.find((m) => m.value === "claude-sonnet-4-6")?.display_name).toBe("overridden");
+    expect(models.find((m) => m.value === "claude-sonnet-5-5-high")?.display_name).toBe("overridden");
     host.close();
   });
 

@@ -18,7 +18,7 @@ agy --print "" \
     --output-format stream-json \
     --print-timeout <duration> \
     [--conversation <conversation_id>] \
-    [--model <slug>] [--effort low|medium|high] \
+    [--model <slug>] [--effort low|medium|high|xhigh|max] \
     --add-dir <agent cwd> --add-dir <per-agent customization dir> \
     [--dangerously-skip-permissions] --disable-slash-commands
 ```
@@ -188,7 +188,7 @@ Observed details:
   anything else. `--model` must receive the slug only (a value containing
   the display name fails with exit 1, measured by the reviewer).
 - `--model <slug>` echoes into `init.model` *(measured)*; `--effort
-  low|medium|high` is accepted *(measured; effect not separately
+  low|medium|high|xhigh|max` is accepted *(measured in 1.3.1; effect not separately
   observable — gemini slugs already encode the tier)*.
 - Slash commands answered without a model turn or quota spend
   *(measured; see [usage-rate-limits evidence](../../evidence/antigravity/usage-rate-limits.md))*:

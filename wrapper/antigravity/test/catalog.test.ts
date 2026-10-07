@@ -12,27 +12,37 @@ const config = (): WrapperConfig => ({
 });
 
 describe("Antigravity catalog and source resolution", () => {
-  it("1.1.26 snapshotはaccount defaultを先頭にし、model列挙を保持する", () => {
+  it("1.3.1 snapshotはaccount defaultを先頭にし、model列挙を保持する", () => {
     expect(antigravityCatalogSnapshot().map((model) => model.value)).toEqual([
       "",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-low",
       "gemini-3.6-flash-high",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-low",
       "gemini-3.1-pro-high",
       "gemini-3.1-pro-low",
-      "claude-sonnet-4-6",
-      "claude-opus-4-6-thinking",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+      "claude-sonnet-5-5-low",
+      "claude-sonnet-5-5-medium",
+      "claude-sonnet-5-5-high",
       "gpt-oss-120b-medium",
     ]);
-    expect(catalogFromAgyModels(["gemini-3.6-flash-low", "gemini-3.6-flash-low", "gpt-oss-120b-medium"]).map((model) => model.value)).toEqual(["", "gemini-3.6-flash-low", "gpt-oss-120b-medium"]);
+    expect(catalogFromAgyModels(["gemini-3.8-flash-low", "gemini-3.8-flash-low", "gpt-oss-120b-medium"]).map((model) => model.value)).toEqual(["", "gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
   });
 
   it("agy modelsのTAB区切り実出力をdisplay name付きで読む", () => {
     const output = readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8");
     expect(parseAgyModelsOutput(output)).toEqual([
       { value: "", display_name: "account default" },
-      { value: "gemini-3.6-flash-high", display_name: "Gemini 3.6 Flash High" },
-      { value: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
+      { value: "gemini-3.8-flash-high", display_name: "Gemini 3.8 Flash (High)" },
+      { value: "claude-sonnet-5-5-high", display_name: "Claude Sonnet 5.5 (High)" },
       { value: "gpt-oss-120b-medium", display_name: "gpt-oss-120b-medium" },
     ]);
     expect(parseAgyModelsOutput("bad slug\tDisplay")).toBeNull();

@@ -1,15 +1,25 @@
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
-const SNAPSHOT_1_1_26: readonly EngineModelInfo[] = [
+const SNAPSHOT_1_3_1: readonly EngineModelInfo[] = [
   { value: "", display_name: "account default" },
-  { value: "gemini-3.6-flash-high", display_name: "Gemini 3.6 Flash High" },
-  { value: "gemini-3.6-flash-medium", display_name: "Gemini 3.6 Flash Medium" },
-  { value: "gemini-3.6-flash-low", display_name: "Gemini 3.6 Flash Low" },
-  { value: "gemini-3.1-pro-high", display_name: "Gemini 3.1 Pro High" },
-  { value: "gemini-3.1-pro-low", display_name: "Gemini 3.1 Pro Low" },
-  { value: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
-  { value: "claude-opus-4-6-thinking", display_name: "Claude Opus 4.6 Thinking" },
-  { value: "gpt-oss-120b-medium", display_name: "GPT-OSS 120B Medium" },
+  { value: "gemini-3.8-flash-high", display_name: "Gemini 3.8 Flash (High)" },
+  { value: "gemini-3.8-flash-medium", display_name: "Gemini 3.8 Flash (Medium)" },
+  { value: "gemini-3.8-flash-low", display_name: "Gemini 3.8 Flash (Low)" },
+  { value: "gemini-3.7-flash-high", display_name: "Gemini 3.7 Flash (High)" },
+  { value: "gemini-3.7-flash-medium", display_name: "Gemini 3.7 Flash (Medium)" },
+  { value: "gemini-3.7-flash-low", display_name: "Gemini 3.7 Flash (Low)" },
+  { value: "gemini-3.6-flash-high", display_name: "Gemini 3.6 Flash (High)" },
+  { value: "gemini-3.6-flash-medium", display_name: "Gemini 3.6 Flash (Medium)" },
+  { value: "gemini-3.6-flash-low", display_name: "Gemini 3.6 Flash (Low)" },
+  { value: "gemini-3.1-pro-high", display_name: "Gemini 3.1 Pro (High)" },
+  { value: "gemini-3.1-pro-low", display_name: "Gemini 3.1 Pro (Low)" },
+  { value: "claude-opus-5-5-low", display_name: "Claude Opus 5.5 (Low)" },
+  { value: "claude-opus-5-5-medium", display_name: "Claude Opus 5.5 (Medium)" },
+  { value: "claude-opus-5-5-high", display_name: "Claude Opus 5.5 (High)" },
+  { value: "claude-sonnet-5-5-low", display_name: "Claude Sonnet 5.5 (Low)" },
+  { value: "claude-sonnet-5-5-medium", display_name: "Claude Sonnet 5.5 (Medium)" },
+  { value: "claude-sonnet-5-5-high", display_name: "Claude Sonnet 5.5 (High)" },
+  { value: "gpt-oss-120b-medium", display_name: "GPT-OSS 120B (Medium)" },
 ];
 
 function copy(entries: readonly EngineModelInfo[]): EngineModelInfo[] {
@@ -17,7 +27,7 @@ function copy(entries: readonly EngineModelInfo[]): EngineModelInfo[] {
 }
 
 export function antigravityCatalogSnapshot(): EngineModelInfo[] {
-  return copy(SNAPSHOT_1_1_26);
+  return copy(SNAPSHOT_1_3_1);
 }
 
 export function catalogFromAgyModels(slugs: readonly string[]): EngineModelInfo[] {
