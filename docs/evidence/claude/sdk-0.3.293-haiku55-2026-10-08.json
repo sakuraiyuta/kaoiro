@@ -1,0 +1,183 @@
+{
+  "sdk_version": "0.3.293",
+  "cli_version": "2.1.293",
+  "runtime_commit": "fece17735613b862b63f3ab45b25b663f467779e",
+  "host_source_sha256": "81d7b0204e7ff517921984715f0656531252edc71c5087de5de9d57df5eb1cfd",
+  "native_test_sha256": "b84b0fc5fab45feefef0b175a1bee1e99089eded5cb0e485637126c175b06c2e",
+  "cases": [
+    {
+      "model": "haiku",
+      "disable1m": false,
+      "requests": [
+        {
+          "model": "claude-haiku-5-5",
+          "max_tokens": 128000,
+          "thinking": {
+            "type": "adaptive",
+            "display": "updates"
+          },
+          "output_config": {
+            "effort": "medium"
+          }
+        }
+      ],
+      "context": {
+        "used_tokens": 2080,
+        "max_tokens": 1000000,
+        "used_percentage": 0
+      },
+      "effortResults": [
+        {
+          "level": "low",
+          "accepted": true
+        },
+        {
+          "level": "medium",
+          "accepted": true
+        },
+        {
+          "level": "high",
+          "accepted": true
+        },
+        {
+          "level": "xhigh",
+          "accepted": true
+        },
+        {
+          "level": "max",
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "disable1m": false,
+      "requests": [
+        {
+          "model": "claude-haiku-5-5",
+          "max_tokens": 128000,
+          "thinking": {
+            "type": "adaptive",
+            "display": "updates"
+          },
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      ],
+      "context": {
+        "used_tokens": 2080,
+        "max_tokens": 1000000,
+        "used_percentage": 0
+      },
+      "effortResults": [
+        {
+          "level": "low",
+          "accepted": true
+        },
+        {
+          "level": "medium",
+          "accepted": true
+        },
+        {
+          "level": "high",
+          "accepted": true
+        },
+        {
+          "level": "xhigh",
+          "accepted": true
+        },
+        {
+          "level": "max",
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "model": "haiku",
+      "disable1m": true,
+      "requests": [
+        {
+          "model": "claude-haiku-5-5",
+          "max_tokens": 128000,
+          "thinking": {
+            "type": "adaptive",
+            "display": "updates"
+          },
+          "output_config": {
+            "effort": "medium"
+          }
+        }
+      ],
+      "context": {
+        "used_tokens": 2080,
+        "max_tokens": 200000,
+        "used_percentage": 1
+      },
+      "effortResults": [
+        {
+          "level": "low",
+          "accepted": true
+        },
+        {
+          "level": "medium",
+          "accepted": true
+        },
+        {
+          "level": "high",
+          "accepted": true
+        },
+        {
+          "level": "xhigh",
+          "accepted": true
+        },
+        {
+          "level": "max",
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "disable1m": false,
+      "requests": [
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 32000,
+          "thinking": {
+            "budget_tokens": 31999,
+            "type": "enabled",
+            "display": "updates"
+          }
+        }
+      ],
+      "context": {
+        "used_tokens": 1631,
+        "max_tokens": 200000,
+        "used_percentage": 1
+      },
+      "effortResults": [
+        {
+          "level": "low",
+          "accepted": false
+        },
+        {
+          "level": "medium",
+          "accepted": false
+        },
+        {
+          "level": "high",
+          "accepted": false
+        },
+        {
+          "level": "xhigh",
+          "accepted": false
+        },
+        {
+          "level": "max",
+          "accepted": false
+        }
+      ]
+    }
+  ]
+}

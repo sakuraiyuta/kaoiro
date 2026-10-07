@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-10-08
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -203,7 +203,7 @@ The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
 field was added.
 
-## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-10-04)
+## The model list ships inside the bundled CLI, not kaoiro (issue #398; probe updated 2026-10-08)
 
 kaoiro declares no Claude model of its own: the bootstrap floor is the single
 `default` row, and both catalog paths read what the Claude Code CLI bundled with
@@ -211,9 +211,9 @@ kaoiro declares no Claude model of its own: the bootstrap floor is the single
 kaoiro through an SDK version bump, not a catalog edit — the same conclusion the
 Fable 5.1 rollout reached.
 
-`wrapper/claude-code/src/probe.ts` was run directly on this host against SDK
-0.3.289 / CLI 2.1.289 on 2026-10-04. It returned `ok: true`,
-`source: "init"`, and these 12 rows:
+The production startup-probe composition was run on this host against SDK
+0.3.293 / CLI 2.1.293 on 2026-10-08. It returned `ok: true`,
+`source: "init"`, and these 13 rows:
 
 | `value` | `resolved_model` | `effort_levels` |
 |---|---|---|
@@ -221,7 +221,8 @@ Fable 5.1 rollout reached.
 | `opus` | `claude-opus-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `fable` | `claude-fable-5-1` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `sonnet` | `claude-sonnet-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `haiku` | `claude-haiku-4-5-20251001` | — |
+| `haiku` | `claude-haiku-5-5` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | — |
 | `claude-sonnet-5` | `claude-sonnet-5` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `claude-opus-5` | `claude-opus-5` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `claude-fable-5` | `claude-fable-5` | `low`, `medium`, `high`, `xhigh`, `max` |
@@ -230,7 +231,27 @@ Fable 5.1 rollout reached.
 | `claude-opus-4-6` | `claude-opus-4-6` | `low`, `medium`, `high`, `max` |
 | `claude-sonnet-4-6` | `claude-sonnet-4-6` | `low`, `medium`, `high`, `max` |
 
-SDK 0.3.284 / CLI 2.1.284 (2026-09-29) returned the same rows, except that the
+Haiku 5.5's canonical API ID is `claude-haiku-5-5`. The CLI alias `haiku`
+resolves to that ID on the Anthropic API. There is no separate canonical row
+for Haiku 5.5 in this capture; the existing `resolved_model` matching retains
+its canonical pin. The old Haiku 4.5 canonical row remains selectable and
+rejects effort switching. The captured SDK rows are preserved in
+[the 0.3.293 fixture](../../../wrapper/claude-code/test/fixtures/claude-agent-sdk-0.3.293.models.json).
+
+Haiku 5.5 has a native 1M context window without a `[1m]` suffix. With
+`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`, the CLI reports 200K instead. The wrapper
+projects `getContextUsage().maxTokens` without inferring capacity from the
+model name. Native SDK/CLI regression tests cover both values, alias and
+canonical pins, all five effort controls, and the retained 200K Haiku 4.5 pin.
+The loopback API responses in these tests do not establish provider generation,
+usage accounting or pricing. See the
+[0.3.293 measurement record](../../evidence/claude/sdk-0.3.293-haiku55-2026-10-08.md)
+and Anthropic's [Haiku 5.5 context reference](https://code.claude.com/docs/en/model-config#haiku-5-5-context-window-and-pricing).
+
+SDK 0.3.289 / CLI 2.1.289 (2026-10-04) returned 12 rows: `haiku` resolved to
+`claude-haiku-4-5-20251001` with no effort levels, and there was no separate
+legacy Haiku row. All other rows in the table were the same. SDK 0.3.284 /
+CLI 2.1.284 (2026-09-29) returned the same 12 rows as 0.3.289, except that the
 Fable 5.1 row's `value` was the canonical `claude-fable-5-1`. A persisted
 `claude-fable-5-1` pin still validates on 0.3.289, through the row's
 `resolved_model`.

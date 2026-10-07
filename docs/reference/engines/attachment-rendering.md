@@ -2,7 +2,7 @@
 title: Attachment rendering by engine
 description: Per-engine SDK content-block mapping and fit-to-SDK size/limit handling for attachments.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-10-08
 related: [protocol, adapter-contract]
 ---
 
@@ -41,19 +41,29 @@ identified by the Phase 7 Stage A spike (IN2):
 - Image content block: **10 MB (after base64, raw ~7.5 MB)** / model-specific
   visual-token limit (8,000 px longest side / automatic downscaling at a
   1,568–2,576 px longest side)
-- Document content block (PDF): **32 MB / 600 pages** (100 pages for 200K
-  context models)
+- Document content block (PDF): **32 MB / 600 pages** for 1M-context
+  requests; **100 pages** below 1M context
 - Text content block: no byte limit (depends on the model's context window)
 - **Request total: 32 MB hard limit** (total of all attachments after base64)
-- All currently active Claude models (Fable 5 / Mythos 5 / Opus 4.x / Sonnet
-  4.6 / Haiku 4.5) support images and documents
+- Haiku 5.5 supports images and documents, as does the retained Haiku 4.5
+  model
 
 | Type | Fit | Reject reason on failure | Library |
 |--|--|--|--|
 | Image | Downsize resolution / quality → within 10 MB / model-specific px limit | `unfittable_image` | sharp (through the `ImageDownsizer` abstraction; replaceable with sharp-wasm32 / jimp when supporting ADR-0018) |
-| PDF | Extract first N pages → within 32 MB / model-specific page limit | `unfittable_pdf` | pdf-lib (pure JS) |
+| PDF | Extract first N pages → within 22 MiB raw / common 100-page limit | `unfittable_pdf` | pdf-lib (pure JS) |
 | Text / code | Truncate to first N MB (marked `truncated`) + validate context window with Anthropic SDK's `countTokens` | `text_too_large` | In-house + `@anthropic-ai/sdk` `countTokens` |
 | Office (docx/xlsx/pptx) | Convert to text → same as text | Same as above | officeparser (pure JS; markitdown has room as an OQ fallback) |
+
+The provider's higher 1M-context PDF allowance does not change the wrapper's
+common cap: `PDF_SDK_PAGE_LIMIT` remains **100 pages**, and
+`PDF_SDK_RAW_LIMIT_BYTES` remains **22 MiB** before base64. This fits the
+retained Haiku 4.5 model and Haiku 5.5 with
+`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`, both of which report 200K context. The
+32 MiB total-request check still applies after fitting. The wrapper does not
+select a PDF cap by model family. See Anthropic's
+[PDF limits](https://platform.claude.com/docs/en/build-with-claude/pdf-support#pdf-support-limitations)
+and the [Haiku 5.5 measurement record](../../evidence/claude/sdk-0.3.293-haiku55-2026-10-08.md).
 
 **Zip-bomb guard**: OOXML is a ZIP container, so its compressed size can pass
 the 128 MB limit yet expand explosively. The wrapper stops conversion when the
