@@ -90,6 +90,14 @@ CID, peer, and peer turn. It authorizes one attempted send and is spent before a
 asynchronous send. A later call cannot obtain authorization merely by guessing
 a future peer turn number.
 
+Every tool result that carries `reply_authorization` also carries
+`reply_authorization_guidance`, one sentence that names `in_reply_to` and
+`reply_ticket`. A Claude session resumed across a wrapper upgrade keeps the tool
+description it recorded
+([ADR-0065](../../adr/0065-footer-changes-on-resumed-sessions.md)), which may not
+list the two properties; the sentence tells such a session which arguments to
+pass. A result without `reply_authorization` never carries it.
+
 Tickets become usable only at complete tool-result handoff. `expires_in_ms:
 300000` is the lifetime from that handoff, not remaining time when the model
 reads the result. Turn retirement and session replacement invalidate tickets.

@@ -35,7 +35,11 @@ interface IssuedTicketHistory {
   readonly tuples: Set<string>;
   saturated: boolean;
 }
-export const REPLY_TICKET_REQUIRED_GUIDANCE = "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried.";
+const COPY_BOTH_FIELDS = "Copy both fields";
+export const REPLY_TICKET_REQUIRED_GUIDANCE = `${COPY_BOTH_FIELDS} from the original reply_authorization; an unspent, unexpired ticket can be retried.`;
+// A resumed Claude session keeps the tool description it recorded, which may
+// predate these two properties, so the result names them.
+export const REPLY_AUTHORIZATION_USAGE_GUIDANCE = `${COPY_BOTH_FIELDS} (in_reply_to and reply_ticket) from this reply_authorization into your next send_to_agent call to reply in this turn, even if the tool description you were shown does not list them.`;
 export type ReplyTicketGuidance =
   | "copy_matching_authorization"
   | "wait_for_matching_authorization"

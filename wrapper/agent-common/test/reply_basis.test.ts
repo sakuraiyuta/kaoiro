@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi } from "vitest";
-import { ReplyBasis, handoffToolResult, discardToolResult } from "../src/reply_basis.js";
+import { ReplyBasis, REPLY_AUTHORIZATION_USAGE_GUIDANCE, REPLY_TICKET_REQUIRED_GUIDANCE, handoffToolResult, discardToolResult } from "../src/reply_basis.js";
 import { ToolOrigins } from "../src/tool_origins.js";
 import { InterAgentTool, classifyInterAgentError } from "../src/inter_agent.js";
 import type { Envelope } from "../src/types.js";
@@ -8,6 +8,17 @@ import type { Envelope } from "../src/types.js";
 const config = { agent_id: "self", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://localhost" };
 function inbound(n: number, cid = "c"): Envelope {
   return { version: "0", agent_id: "peer", persona: config.persona, display_name: "P", ts: "2026-09-26T00:00:00Z", type: "inter_agent_message", state: "thinking", payload: { to: "self", conversation_id: cid, turn_number: n, kind: "response", body: `input ${n}`, meta: { done: false, propose_next: "" }, owner: { kind: "user", id: "operator" }, new_conversation: false }, ext: {} };
+}
+
+// The usage sentence rides with reply_authorization and never appears alone.
+function expectUsageGuidance(parsed: Record<string, unknown>, present: boolean): void {
+  if (present) {
+    expect(parsed).toHaveProperty("reply_authorization");
+    expect(parsed.reply_authorization_guidance).toBe(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
+  } else {
+    expect(parsed).not.toHaveProperty("reply_authorization");
+    expect(parsed).not.toHaveProperty("reply_authorization_guidance");
+  }
 }
 
 describe("input-bound reply tickets", () => {
@@ -436,14 +447,17 @@ describe("actual shared send path", () => {
     const args = { to: "peer", conversation_id: "c", kind: "response" as const, body: "reply" };
     const a = await tool.invoke(args, context);
     const auth = JSON.parse(a.content[0]!.text).reply_authorization;
+    expectUsageGuidance(JSON.parse(a.content[0]!.text), true);
     const b = await tool.invoke({ ...args, in_reply_to: 3 }, context);
     expect(JSON.parse(b.content[0]!.text).send_not_attempted).toBe(true);
+    expectUsageGuidance(JSON.parse(b.content[0]!.text), false);
     expect(envelopes).toHaveLength(1); expect(ack).not.toHaveBeenCalled();
     expect(handoffToolResult(a, () => {})).toBe(true); expect(commit).toHaveBeenCalledOnce(); expect(ack).toHaveBeenCalledOnce();
     reject = "delivery_backlog";
     const c = await tool.invoke({ ...args, ...auth }, context);
     expect(envelopes[1]!.payload.in_reply_to).toBe(3);
     const renewed = JSON.parse(c.content[0]!.text).reply_authorization;
+    expectUsageGuidance(JSON.parse(c.content[0]!.text), true);
     expect(renewed.reply_ticket).not.toBe(auth.reply_ticket);
     handoffToolResult(c, () => {});
     reject = "";
@@ -539,9 +553,11 @@ it.each(["peer_reconnecting_capacity", "delivery_backlog", "reply_basis_connecti
   const first = await tool.invoke({ ...args, wait_for_response: true, timeout_ms: 100 }, context);
   handoffToolResult(first, () => {});
   const authorization = JSON.parse(first.content[0]!.text).reply_authorization;
+  expectUsageGuidance(JSON.parse(first.content[0]!.text), true);
   const rejected = await tool.invoke({ ...args, ...authorization }, context);
   if (reason === "unknown") { expect(JSON.stringify(rejected)).not.toContain("reply_authorization"); expect(count).toBe(2); return; }
   expect(JSON.parse(rejected.content[0]!.text).send_not_attempted).toBe(reason === "reply_basis_connection_changed");
+  expectUsageGuidance(JSON.parse(rejected.content[0]!.text), true);
   const next = JSON.parse(rejected.content[0]!.text).reply_authorization;
   expect(next.reply_ticket).not.toBe(authorization.reply_ticket); handoffToolResult(rejected, () => {});
   expect((await tool.invoke({ ...args, ...next }, context)).isError).toBeUndefined(); expect(count).toBe(3);
@@ -557,6 +573,7 @@ it.each([undefined, "turn_failure"])("waiter peer errors acknowledge at handoff 
   const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "query", body: "question", wait_for_response: true, timeout_ms: 100 }, { origin: { token: "T" } });
   const parsed = JSON.parse(result.content[0]!.text);
   expect(parsed.peer_error.code).toBe("api_error"); expect(Boolean(parsed.reply_authorization)).toBe(notice === undefined);
+  expectUsageGuidance(parsed, notice === undefined);
   expect(ack).not.toHaveBeenCalled(); handoffToolResult(result, () => {}); expect(ack).toHaveBeenCalledOnce();
 });
 
@@ -579,7 +596,7 @@ it.each([
   const parsed = JSON.parse(result.content[0]!.text);
   expect(parsed.status_notice).toEqual(status);
   expect(parsed).not.toHaveProperty("reply");
-  expect(parsed).not.toHaveProperty("reply_authorization");
+  expectUsageGuidance(parsed, false);
   if (error === undefined) expect(parsed).not.toHaveProperty("peer_error");
   else expect(parsed.peer_error).toMatchObject({ code: "delivery_lost", message: "not dispatched", from: "peer" });
   expect(ack).not.toHaveBeenCalled();
@@ -618,6 +635,7 @@ it("oversized recovery stays queued and recovery budgets include the actual resu
   expect(parsed.guidance).toContain("If it arrives as a normal root input, send a normal reply with both in_reply_to and reply_ticket omitted");
   expect(parsed.guidance).toContain("If it arrives in a Claude fold with reply_authorization, copy both fields");
   expect(parsed.guidance).not.toContain("use its reply authorization");
+  expectUsageGuidance(parsed, false);
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(parsed).not.toHaveProperty("unread_remaining");
   expect(parsed).not.toHaveProperty("more_pending");
@@ -637,6 +655,7 @@ it("empty recovery is indeterminate and omits unrelated unread counts", async ()
   expect(parsed.guidance).toContain("when it arrives as a normal root input, reply in this conversation with both in_reply_to and reply_ticket omitted");
   expect(parsed.guidance).toContain("if it arrives in a Claude fold with reply_authorization, copy both fields");
   expect(parsed.guidance).toContain("omit conversation_id");
+  expectUsageGuidance(parsed, false);
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(parsed).not.toHaveProperty("unread_remaining");
   expect(parsed).not.toHaveProperty("more_pending");
@@ -690,6 +709,7 @@ it("a non-empty recovery keeps its handoff authorization and aggregate shape", a
   const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
   const parsed = JSON.parse(result.content[0]!.text);
   expect(parsed).toMatchObject({ recovery: [recovered], unread_remaining: 4, more_pending: true, reply_authorization: { in_reply_to: 3 } });
+  expectUsageGuidance(parsed, true);
   expect(parsed).not.toHaveProperty("guidance");
   expect(parsed).not.toHaveProperty("awaiting_delivery");
   expect(handoffToolResult(result, () => {})).toBe(true);
@@ -708,4 +728,68 @@ it("native ID admission waits within one turn, rejects reuse, and bounds pending
   expect(await origins.resolve("id-0")).toBeUndefined();
   origins.reset(); origins.begin("fresh-session"); origins.observe("id-0");
   expect((await origins.resolve("id-0"))?.token).toBe("fresh-session");
+});
+
+it("shares the leading wording of the retry guidance and names both fields", () => {
+  expect(REPLY_AUTHORIZATION_USAGE_GUIDANCE.startsWith("Copy both fields")).toBe(true);
+  expect(REPLY_TICKET_REQUIRED_GUIDANCE.startsWith("Copy both fields")).toBe(true);
+  expect(REPLY_AUTHORIZATION_USAGE_GUIDANCE).toContain("in_reply_to");
+  expect(REPLY_AUTHORIZATION_USAGE_GUIDANCE).toContain("reply_ticket");
+});
+
+it("a waiter reply for ordinary peer input carries the usage sentence with its authorization", async () => {
+  let tool!: InterAgentTool;
+  tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    sendInterAgent: async () => { queueMicrotask(() => { void tool.receiveInbound(inbound(3)); }); return { kind: "accepted", stamp: null }; } });
+  tool.beginReplyInput("T");
+  const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "query", body: "question", wait_for_response: true, timeout_ms: 100 }, { origin: { token: "T" } });
+  const parsed = JSON.parse(result.content[0]!.text);
+  expect(parsed).toHaveProperty("reply");
+  expectUsageGuidance(parsed, true);
+});
+
+it("a transient rejection of a send that supplied no ticket carries no usage sentence", async () => {
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    sendInterAgent: async () => ({ kind: "rejected", reason: "delivery_backlog" }) });
+  tool.beginReplyInput("T");
+  const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
+  const parsed = JSON.parse(result.content[0]!.text);
+  expect(parsed).toMatchObject({ error: "delivery_backlog" });
+  expectUsageGuidance(parsed, false);
+});
+
+it.each([
+  ["an oversized queued item", { envelopes: [], oversizedPending: true, recoverySource: "handoff_queue" as const }],
+  ["an oversized retained fold", { envelopes: [], oversizedPending: true, foldedEarlier: true as const, recoverySource: "retained_fold" as const }],
+  ["no recoverable input", { envelopes: [] }],
+])("a recovery with %s hands off no ticket and carries no usage sentence", async (_name, lease) => {
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    claimRecovery: () => ({ ...lease, commit: vi.fn(), rollback: vi.fn() }),
+    sendInterAgent: async () => ({ kind: "rejected", reason: "stale_reply_basis" }) });
+  tool.beginReplyInput("T");
+  const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
+  const parsed = JSON.parse(result.content[0]!.text);
+  expect(parsed).toMatchObject({ recovery: [] });
+  expectUsageGuidance(parsed, false);
+});
+
+it("recovery size accounting includes the usage sentence", async () => {
+  const envelope = (length: number): Envelope => { const e = inbound(3); e.payload.body = "x".repeat(length); return e; };
+  let fits!: (envelopes: readonly Envelope[]) => boolean;
+  const probe = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    claimRecovery: (_cid, _peer, fit) => { fits = fit; return { envelopes: [], commit: vi.fn(), rollback: vi.fn() }; },
+    sendInterAgent: async () => ({ kind: "rejected", reason: "stale_reply_basis" }) });
+  probe.beginReplyInput("T");
+  await probe.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
+  let low = 0, high = 16_384;
+  while (low < high) { const mid = Math.ceil((low + high) / 2); if (fits([envelope(mid)])) low = mid; else high = mid - 1; }
+  expect(low).toBeGreaterThan(15_000);
+  expect(fits([envelope(low + 1)])).toBe(false);
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    claimRecovery: () => ({ envelopes: [envelope(low)], commit: vi.fn(), rollback: vi.fn() }),
+    sendInterAgent: async () => ({ kind: "rejected", reason: "stale_reply_basis" }) });
+  tool.beginReplyInput("T");
+  const result = await tool.invoke({ to: "peer", conversation_id: "c", kind: "response", body: "reply" }, { origin: { token: "T" } });
+  expectUsageGuidance(JSON.parse(result.content[0]!.text), true);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(16_384);
 });

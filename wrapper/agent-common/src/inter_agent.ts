@@ -40,7 +40,7 @@ import type {
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
-import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
+import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, REPLY_AUTHORIZATION_USAGE_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import { workToolDescriptors, type WorkToolHandlers } from "./work_tools.js";
@@ -2697,7 +2697,7 @@ export class InterAgentTool {
     try { ticket = basis > 0 ? this.replyBasis.prepare(origin, cid, peer, basis) : undefined; }
     catch { release(); return this.#localReplyError("reply_authorization_unavailable"); }
     if (basis > 0 && !ticket) { release(); return this.#localReplyError("reply_authorization_unavailable"); }
-    const result = { ...(fields.error ? { isError: true } : {}), content: [{ type: "text" as const, text: JSON.stringify({ ...fields, ...(ticket ? { reply_authorization: ticket.authorization } : {}) }) }] };
+    const result = { ...(fields.error ? { isError: true } : {}), content: [{ type: "text" as const, text: JSON.stringify(withReplyAuthorization(fields, ticket?.authorization)) }] };
     if (lease) this.#handoffUnreadAdjustment.set(result, envelopes.length);
     const abort = () => { ticket?.discard(); release(); };
     origin.signal?.addEventListener("abort", abort, { once: true });
@@ -2736,7 +2736,7 @@ export class InterAgentTool {
       ...(workGuidance === undefined ? {} : { guidance: workGuidance }) };
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
-      const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
+      const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify(withReplyAuthorization({ ...recoveryFields, recovery: envelopes }, { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 })) }] }, true)), "utf8") <= 16384;
       const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit, acceptance.details?.expected_peer_turn);
       const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - (lease?.envelopes.length ?? 0));
       if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes, ...(lease.foldedEarlier ? { folded_earlier: true } : {}) }, lease.envelopes, lease);
@@ -2754,7 +2754,7 @@ export class InterAgentTool {
       try { ticket = this.replyBasis.prepare(attempt.origin, attempt.cid, attempt.peer, attempt.basis, true); } catch { /* Preserve the definite server outcome if entropy is unavailable. */ }
       if (ticket) {
         const authorization = ticket;
-        const result = { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ ...fields, reply_authorization: ticket.authorization }) }] };
+        const result = { isError: true, content: [{ type: "text" as const, text: JSON.stringify(withReplyAuthorization(fields, ticket.authorization)) }] };
         return bindToolResultHandoff(result, { live: () => this.replyBasis.live(attempt.origin) === undefined && authorization.valid(),
           commit: () => { authorization.activate(); }, rollback: authorization.discard });
       }
@@ -3016,6 +3016,12 @@ function replyTicketGuidanceText(guidance: ReplyTicketGuidance, basis: number): 
     case "wait_for_history":
       return `Reply authorization history for this turn is saturated, so the wrapper cannot determine whether this tuple was previously authorized. Wait for confirmed input or a handed-off reply_authorization matching in_reply_to=${basis}; do not omit both fields.`;
   }
+}
+
+/** The only place a tool result gains `reply_authorization`; the usage sentence
+ *  travels with it and never appears without it. */
+function withReplyAuthorization(fields: Record<string, unknown>, authorization: ReplyAuthorization | undefined): Record<string, unknown> {
+  return authorization === undefined ? fields : { ...fields, reply_authorization: authorization, reply_authorization_guidance: REPLY_AUTHORIZATION_USAGE_GUIDANCE };
 }
 
 function localReplyError(code: string, guidance?: string): InterAgentToolResult {
