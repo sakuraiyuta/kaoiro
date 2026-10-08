@@ -2464,6 +2464,70 @@ test("a refused admission leaves a resumable transaction, and the flagged resume
   assert.equal(entry.operator_accepted_new_store, true);
 });
 
+// The same refusal-then-resume sequence as above, driven through the real
+// entry point (main, started as a process with --config and argv) so that
+// argv parsing, the flag set and its forwarding into the persistence-path
+// check are exercised together; direct runUpdate calls skip both ends.
+test("the deploy CLI process refuses two unflagged new stores, then resumes the same transaction with two flags", () => {
+  const cli = fileURLToPath(new URL("../kaoiro-server-deploy.mjs", import.meta.url));
+  const configPath = join(root, "cli-config.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      allow_docker_override: true,
+      backup_root: join(root, "kaoiro-deploy"),
+      health_url: "http://fake-server.invalid/api/health",
+      expected_clean_stop_exit_code: 0,
+      expected_clean_stop_oom_killed: false,
+      health_poll_interval_ms: 1,
+      health_poll_timeout_ms: 200,
+      stability_window_ms: 1,
+    }),
+    { mode: 0o600 },
+  );
+  const runCli = (args) =>
+    attemptUpdate("running-clean-stop", () =>
+      withTwoNewStores({}, () =>
+        spawnSync(process.execPath, [cli, "update", "--repo", workDir, "--config", configPath, "--target", headSha, ...args], {
+          encoding: "utf8",
+        })));
+
+  const refused = runCli([]);
+  assert.equal(refused.caught, undefined);
+  assert.equal(refused.result.status, 1, "a refused admission exits non-zero");
+  assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: compose declares"));
+  assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
+  assert.equal(refused.calls.filter(isComposeBuild).length, 1);
+  assert.equal(refused.calls.some(isStatProbe), false);
+  assertNoDestructiveCalls(refused.calls);
+  assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  const dir = join(backupRoot, transactionId);
+  assert.equal(readJournal(dir).phase, PHASE.BUILD_PREPARED);
+
+  rmSync(join(root, "docker-calls.log"), { force: true });
+  const resumed = runCli([
+    "--transaction", transactionId,
+    "--accept-new-store", "KAOIRO_WORK_STORE_PATH",
+    "--accept-new-store", "KAOIRO_SECOND_STORE_PATH",
+    "--maintenance-approved",
+  ]);
+  assert.equal(resumed.caught, undefined);
+  assert.equal(resumed.result.status, 0, resumed.result.stderr);
+  const report = JSON.parse(resumed.result.stdout);
+  assert.equal(report.phase, "done");
+  assert.equal(report.transactionId, transactionId);
+  assert.deepEqual(resumed.calls.filter(isComposeBuild), [], "the prepared image is reused, not rebuilt");
+  assert.equal(resumed.calls.filter(isStatProbe).length, 2, "each flagged store is measured once");
+  const entries = readManifest(dir).env_consistency.entries;
+  for (const envName of ["KAOIRO_WORK_STORE_PATH", "KAOIRO_SECOND_STORE_PATH"]) {
+    assert.equal(entries[envName].match, true, envName);
+    assert.equal(entries[envName].operator_accepted_new_store, true, envName);
+  }
+  assert.equal(readdirSyncNonHidden(backupRoot).length, 1);
+});
+
 // The observation a transaction already recorded at ENV_CONSISTENCY_CHECKED
 // is never re-measured: a later resume writes the final manifest from the
 // journal's own entry. Both shapes must survive that unchanged — a
