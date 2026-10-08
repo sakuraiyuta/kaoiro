@@ -1647,6 +1647,11 @@ export class InterAgentTool {
     return [...new Set(Array.from(this.#steerInjections.get(turnToken)?.values() ?? [], record => record.from))];
   }
 
+  pendingReconciliationPeersForTurn(turnToken: string): string[] {
+    return [...new Set([...this.pendingSteerPeersForTurn(turnToken),
+      ...[...this.#pendingInjections.values()].filter(root => root.turnToken === turnToken).map(root => root.from)])];
+  }
+
   noteSteerAttempt(envelope: Envelope, turnToken: string, batchId: string, identity?: DeliveryIdentity): boolean {
     const payload = envelope.payload as unknown as InterAgentMessagePayload;
     const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;

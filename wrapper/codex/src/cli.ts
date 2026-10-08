@@ -808,10 +808,11 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         terminal = true;
         tickets.discard();
         const fallback = (response.kind === "P" || writeState === "unwritten") && !observed && !conflict;
+        const peers = interAgent.pendingReconciliationPeersForTurn(ownerToken);
         if (fallback) {
           for (const notice of interAgent.abandonSteerAttempt(ownerToken, sequence, identity)) interAgent.sendInternalNotice(notice);
           interAgentTurns.settleSteerReservation(batchId, true);
-          interAgentTurns.dispatchNextForPeer(envelope.agent_id);
+          for (const peer of peers) interAgentTurns.dispatchNextForPeer(peer);
           return;
         }
         interAgentTurns.settleSteerReservation(batchId, false);
@@ -832,20 +833,23 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         for (const notice of interAgent.settleSteerInjection(ownerToken, sequence, corroborated ? "corroborated" : "uncertain", identity)) {
           interAgent.sendInternalNotice(notice);
         }
-        if (!interAgent.hasPendingSteerPeer(envelope.agent_id)) interAgentTurns.dispatchNextForPeer(envelope.agent_id);
+        for (const peer of peers) interAgentTurns.dispatchNextForPeer(peer);
       },
+    };
+    const abandon = (): void => {
+      const peers = interAgent.pendingReconciliationPeersForTurn(token);
+      interAgentTurns.discardSteerReservation(batchId);
+      for (const notice of interAgent.abandonSteerAttempt(token, sequence, identity)) interAgent.sendInternalNotice(notice);
+      tickets.discard();
+      for (const peer of peers) interAgentTurns.dispatchNextForPeer(peer);
     };
     try {
       const result = await host.steerInterAgentInput(text, hooks, batchId);
       if (result.kind === "sent") return true;
-      interAgentTurns.discardSteerReservation(batchId);
-      for (const notice of interAgent.abandonSteerAttempt(token, sequence, identity)) interAgent.sendInternalNotice(notice);
-      tickets.discard();
+      abandon();
       return queued(result.reason);
     } catch (error) {
-      interAgentTurns.discardSteerReservation(batchId);
-      for (const notice of interAgent.abandonSteerAttempt(token, sequence, identity)) interAgent.sendInternalNotice(notice);
-      tickets.discard();
+      abandon();
       writeRedactedStderr(`[kaoiro] inter-agent steer attempt failed: ${String(error)}\n`);
       return false;
     }
@@ -1174,7 +1178,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         return;
       }
       const classified = error ? classifyInterAgentError(error) : undefined;
-      const steerPeers = interAgent?.pendingSteerPeersForTurn(turnToken) ?? [];
+      const steerPeers = interAgent?.pendingReconciliationPeersForTurn(turnToken) ?? [];
       for (const envelope of interAgent?.endSteeredTurn(
         turnToken,
         conversationIds,

@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { expect, it, vi } from "vitest";
@@ -14,8 +17,8 @@ const config: WrapperConfig = {
   codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus",
 };
 
-function inbound(turn: number, seq: number, early = false, cid = "X"): Envelope {
-  return { version: "0", agent_id: "peer", persona: config.persona, display_name: "Peer",
+function inbound(turn: number, seq: number, early = false, cid = "X", peer = "peer"): Envelope {
+  return { version: "0", agent_id: peer, persona: config.persona, display_name: "Peer",
     ts: "2026-10-09T00:00:00Z", type: "inter_agent_message", state: "thinking", ext: {}, delivery_seq: seq,
     payload: { to: "self", conversation_id: cid, turn_number: turn, kind: "request", body: `BODY-${turn}`,
       meta: { done: false, propose_next: "" }, owner: { kind: "user", id: "operator" }, notice_attribution: "v1", new_conversation: false,
@@ -23,9 +26,10 @@ function inbound(turn: number, seq: number, early = false, cid = "X"): Envelope 
     } satisfies InterAgentMessagePayload } as Envelope;
 }
 
-it.each([{ spend: false, cid: "X", late: false }, { spend: true, cid: "X", late: false },
-  { spend: false, cid: "Y", late: false }, { spend: false, cid: "X", late: true }])(
-  "T1/T4b/T8d: real CLI and host preserve k+1 while k+2 steers; $cid, spent=$spend, late=$late", async ({ spend, cid, late }) => {
+it.each([{ spend: false, cid: "X", late: false, peer: "peer" }, { spend: true, cid: "X", late: false, peer: "peer" },
+  { spend: false, cid: "Y", late: false, peer: "peer" }, { spend: false, cid: "X", late: true, peer: "peer" },
+  { spend: false, cid: "Y", late: true, peer: "other" }])(
+  "T1/T4b/T8d: real CLI and host preserve k+1 while k+2 steers; $cid, $peer, spent=$spend, late=$late", async ({ spend, cid, late, peer }) => {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), requests: RpcObject[] = [];
   let turn = 0;
@@ -68,6 +72,9 @@ it.each([{ spend: false, cid: "X", late: false }, { spend: true, cid: "X", late:
     // Ticket issuance and host admission are real. Network admission is tested separately against ConversationStates.
     sendInterAgent: async (envelope: Envelope) => { sent.push(envelope); return { kind: "accepted", stamp: null }; },
   };
+  const scratch = mkdtempSync(join(tmpdir(), "fuji548-t4b-"));
+  vi.stubEnv("HOME", scratch);
+  vi.stubEnv("CODEX_HOME", join(scratch, "codex"));
   const beforeSignals = process.listeners("SIGINT");
   const running = runCodexCli({ backend: "app-server",
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
@@ -92,7 +99,7 @@ it.each([{ spend: false, cid: "X", late: false }, { spend: true, cid: "X", late:
     await vi.waitFor(() => expect(byMethod("turn/start")).toHaveLength(1));
     const owner = host.activeInterAgentTurnToken(); expect(owner).not.toBeNull();
     await callbacks.onInterAgentMessage(inbound(5, 63));
-    await callbacks.onInterAgentMessage(inbound(6, 64, true, cid));
+    await callbacks.onInterAgentMessage(inbound(6, 64, true, cid, peer));
     await vi.waitFor(() => expect(byMethod("turn/steer")).toHaveLength(1));
     expect(byMethod("turn/start")).toHaveLength(1);
     const params = byMethod("turn/steer")[0]!.params as { input: { text: string }[]; clientUserMessageId: string };
@@ -118,9 +125,12 @@ it.each([{ spend: false, cid: "X", late: false }, { spend: true, cid: "X", late:
       releaseSteer!();
     }
     await vi.waitFor(() => expect(byMethod("turn/start")).toHaveLength(2));
-    if (late) expect((sent[0]!.payload as unknown as InterAgentMessagePayload).error).toMatchObject({
-      code: "api_error", affected_deliveries: [{ delivery_seq: 60, peer_turn_number: 4 }, { delivery_seq: 64, peer_turn_number: 6 }],
-    });
+    if (late) {
+      const failures = sent.map(notice => notice.payload as unknown as InterAgentMessagePayload);
+      expect(failures.flatMap(notice => notice.error?.affected_deliveries ?? []).map(entry => entry.delivery_seq).sort((a, b) => a - b)).toEqual([60, 64]);
+      expect(failures).toHaveLength(peer === "peer" ? 1 : 2);
+      expect(failures.every(notice => notice.error!.code === "api_error")).toBe(true);
+    }
     expect((byMethod("turn/start")[1]!.params as { input: { text: string }[] }).input[0]!.text).toContain("BODY-5");
     const result = await sendTool.handler({ to: "peer", conversation_id: "X", kind: "response", body: "NEXT ANSWER" },
       { origin: { token: host.activeInterAgentTurnToken()! } });
@@ -128,5 +138,6 @@ it.each([{ spend: false, cid: "X", late: false }, { spend: true, cid: "X", late:
   } finally {
     host?.close(); await running;
     for (const listener of process.listeners("SIGINT")) if (!beforeSignals.includes(listener)) process.removeListener("SIGINT", listener);
+    vi.unstubAllEnvs(); rmSync(scratch, { recursive: true, force: true });
   }
 }, 15_000);
