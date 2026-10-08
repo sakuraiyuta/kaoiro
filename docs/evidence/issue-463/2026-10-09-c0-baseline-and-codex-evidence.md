@@ -21,8 +21,8 @@ run was executed for it. Production was read only as listed in section 2.
 
 Each claim has a probe on the pinned commit and a control on an input where the
 fact is false, or a second state that must read the other way. A scratch checker
-ran all probes and controls (65 checks, 0 failures). Flipping the expectation of
-any one probe made the checker exit 1 (13 of 13 claims). The checker is not
+ran all probes and controls (69 checks, 0 failures). Flipping the expectation of
+any one probe made the checker exit 1 (14 of 14 claims). The checker is not
 committed.
 
 | ID | Claim | Source at 867696cb | Probe | Control (fact false, or second state) |
@@ -36,10 +36,11 @@ committed.
 | P-7 | The per-agent policy store is not implemented: `delivery_policies`, `set_delivery_policy`, `delivery_policy_applied` and `in_flight_defaults` do not occur outside docs | `git grep` over the tree excluding `docs` and `tmp` | 0 matches | `delivery_modes` and `delivery_ack` are both found |
 | P-8 | The code is unchanged between the plan's pins and the baseline | `git diff --name-only 0bfede23 867696cb -- . ':!docs' ':!tmp'` | `AGENTS.md`, `CLAUDE.md` only | `bf02a928..0bfede23` lists 7 files (all tests, none under a `src` or `lib` path) |
 | P-9 | Production configures `claude_code.phase2_delivery: true`, `codex.operator_steer: true`, `codex.backend: "app-server"` | production runner config, three keys only (section 2) | the three values as stated | an absent key (`codex.no_such_key`) reads as absent |
-| P-10 | Production runs release `bf02a928` with Codex native 0.161.0, the binary recorded in the 0.161.0 evidence | release id, `--version` line, native SHA-256 (section 2) | release id as stated; `codex-cli 0.161.0`; SHA-256 equals the value at AG61:16-18 | comparator only: expecting 0.160.0 fails (a production binary may not be swapped for a control) |
+| P-10 | Production runs release `bf02a928` with Codex native 0.161.0, the binary recorded in the 0.161.0 evidence | release id, `--version` line, native SHA-256 (section 2) | release id as stated; `codex-cli 0.161.0`; SHA-256 equals the value at AG61:13-14 | comparator only: expecting 0.160.0 fails (a production binary may not be swapped for a control) |
 | P-11 | Phase 4 is tracked at issue 567; issues 541, 416 and 412 are open | `gh issue view` states; plan `:456-460` | all four OPEN | issue 346 reads CLOSED in the same run |
-| P-12 | The Claude R3 measurement was taken on SDK 0.3.280 / CLI 2.1.280 and again on CLI 2.1.284; it has not been repeated on the current SDK pin | `docs/evidence/issue-429/2026-09-28-claude-fold-measurements.md:12`, `:22`; `docs/evidence/issue-429/2026-09-29-claude-2-1-284-remeasurement.md:206-209`; lockfile `pnpm-lock.yaml:105` resolves `@anthropic-ai/claude-agent-sdk` to 0.3.293 | no evidence page names 0.3.293 together with R3 or receipt-root | the 09-28 page is found by `0.3.280` plus `R3`; the 09-29 page by `2.1.284` plus `R3` |
+| P-12 | The Claude R3 measurement was taken on SDK 0.3.280 / CLI 2.1.280 and again on CLI 2.1.284; it has not been repeated on the current SDK pin | `docs/evidence/issue-429/2026-09-28-claude-fold-measurements.md:12`, `:22`; `docs/evidence/issue-429/2026-09-29-claude-2-1-284-remeasurement.md:32`, `:206-209`; lockfile `pnpm-lock.yaml:107` at 867696cb resolves `@anthropic-ai/claude-agent-sdk` to 0.3.293 | no evidence page names 0.3.293 together with R3 or receipt-root | the 09-28 page is found by `0.3.280` plus `R3`; the 09-29 page by `2.1.284` plus `R3` |
 | P-13 | Operator decision E3 is recorded in the issue 463 comment of 2026-10-08T15:23:54Z | `gh api repos/sakuraiyuta/kaoiro/issues/463/comments` | comment 6063194859 exists and names `phase2_delivery: true` | the comments of 2026-10-02 do not |
+| P-14 | The issue 539 landing comment reports the wrapper test run quoted in section 3.3.1 | `gh api repos/sakuraiyuta/kaoiro/issues/539/comments`, comment 6052987745 | the comment names `3636 passed, 6 skipped`, `8feca417`, the reviewer `San` and `wrapper test exit 0` | the first comment of the issue does not name `3636 passed` |
 
 The claims that need a different check are P-9 and P-10: they read production, so
 their only control is the comparator, and the configured keys show configuration,
@@ -55,7 +56,7 @@ items below were read.
 | Item | Observation | Artifact |
 |---|---|---|
 | Runner release | `~/.local/share/kaoiro/current` resolves to release `bf02a928b9bd170d94aa3a0c049cd4197c1b0a91` | claim P-10 |
-| Codex native in that release | `codex-cli 0.161.0`; SHA-256 begins `9a820c17865fa825` and equals the full value recorded at AG61:16-18 | claim P-10 |
+| Codex native in that release | `codex-cli 0.161.0`; SHA-256 begins `9a820c17865fa825` and equals the full value recorded at AG61:13-14 | claim P-10 |
 | `claude_code.phase2_delivery` | `true` | `runner.config.json`, last modified 2026-10-03 11:12 JST |
 | `codex.operator_steer` | `true` | same file |
 | `codex.backend` | `"app-server"` | same file |
@@ -146,13 +147,13 @@ that page at 867696cb. The column "0.161.0" is the production artifact (P-10).
 | N9 | A (SB:37 describes the bridge wiring; no live MCP call recorded) | M ST3:56-57 | A | A | A | L app_server_session.integration.test.ts:14 @8feca417; I539, reported, log not retained |
 | N10 | A | A | A | L P3N:34 (watchdog fail-stop); L AG3:116-147 (built state-aware update and restore); NS:1-6, BK2:1-11, BK3:1-8 and HCL:6-12 support the snapshot design | A (AG60:44: snapshot round trip not repeated) | A (AG61:89-96: corrupt-state recovery not measured) |
 | N11 | A (near-misses: BRA:25-26 states that config reload does not replace running children, a design statement; S1C:105-112 is a fixture-config pass-through probe) | A | A | A | A | A |
-| N12 | A | A (model was set explicitly, EV2:256) | A | M GATE5:8-20 (two models on both backends); AG3:48-50 | A (AG60:42: credentialed part not run) | S AG61:73-82 (unauthenticated introspection: default model GPT-6.1 Sol, effort low); signed-in defaults unverified AG61:93-95; P see section 2 |
+| N12 | A | A (model was set explicitly, EV2:256) | A | M GATE5:8-20 (two models on both backends); AG3:48-50 | A (AG60:42: credentialed part not run) | S AG61:73-82 (unauthenticated introspection: default model GPT-6.1 Sol, effort low); signed-in defaults unverified AG61:94-96; P see section 2 |
 | N13 | A | A | A | M I464N:40-43, I464N:57-60 (model-profile hook ran on start and on resume, authenticated) | A | A |
-| N14 | A | A | M (weak) EV2:259 (no authentication or refresh failure in ten turns) | M (weak) GATE5:8-13; AG3:52-54 | A (AG60:3-5: credentialed part not run) | A (AG61:93-95: credentialed checks unverified) |
+| N14 | A | A | M (weak) EV2:258-259 (10 model turns, no authentication or refresh failure) | M (weak) GATE5:8-13; AG3:52-54 | A (AG60:3-5: credentialed part not run) | A (AG61:94-96: credentialed checks unverified) |
 | N15 | A | A | A | M CU1:35 (five turns and one explicit compaction); CU2:34-46 (three compactions, one automatic) | A | A |
 | N16a | L BRA:32-38 (0.153.4, loopback provider) | A | A | A | A | A |
 | N16b | A | A | A | A | A | A |
-| N17 | A | A (non-live gates only, P3L:17-18) | A | M P3N:33-38 (local provider and authenticated; kaoiro source `d575184b`) | A | A, see 3.3.1 |
+| N17 | A | A (non-live gates only, P3L:17-18) | A | M P3N:33-38 (local provider and authenticated; kaoiro source `d575184b`, P3N:16) | A | A, see 3.3.1 |
 
 "M (weak)" in N14 means the record shows the absence of an authentication or
 refresh failure over several live turns; no token refresh was induced.
@@ -230,8 +231,8 @@ companion record follows its Markdown page.
 | AG3 | `pin-0.159.3-adoption-gates-2026-10-01.md` (+ json) | source: N1 to N3, N6 to N8, N10, N12, N14 |
 | GATE5 | `pin-0.159.3-gate5-2026-10-01.md` (+ json) | source: N12, N14 |
 | NS | `pin-0.159.3-native-state-2026-10-01.md` (+ json) | source: N10 (supporting; a historical partial record) |
-| BK2 | `pin-0.159.3-backup-r2-2026-10-01.md` (+ json) | source: N10 (supporting; zero live turns) |
-| BK3 | `pin-0.159.3-backup-r3-2026-10-01.md` (+ json) | source: N10 (supporting; zero live turns) |
+| BK2 | `pin-0.159.3-backup-r2-2026-10-01.md` (+ json) | source: N10 (supporting; zero live turns, BK2:10) |
+| BK3 | `pin-0.159.3-backup-r3-2026-10-01.md` (+ json) | source: N10 (supporting; zero live turns, BK3:8) |
 | HCL | `home-classification-2026-10-01.md` (+ json) | source: N10 (supporting; no model turn) |
 | P3N | `phase3-native-0.159.3-2026-10-01.md` (+ json) | source: N2, N3, N6, N8, N10, N17 |
 | P3L | `phase3-nonlive-gates-2026-10-01.md` | source: N17 (non-live gates on 0.156.1), section 3.5 |
@@ -298,5 +299,12 @@ not a budget request.
 - The matrix cites what each page records. A page's own caveats apply (for example,
   EV2:222-225 and AG3:134-147).
 - `L` cells read from test titles are not assertion audits.
-- No production file other than the three configuration keys, the release path and the
-  packaged native's version and hash was read. No process was enumerated or stopped.
+- A scratch citation checker confirmed that every `key:line` and `path:line` citation
+  resolves in the tree at the named commit, that the cited lines contain the anchor
+  text recorded for that citation, and (in sections 1 and 2) that every version or hash
+  value named next to a citation occurs in the lines it cites. That is a check of line
+  placement; it is not a statement that a claim is true.
+- Production was read only as follows: the three configuration keys and the
+  modification time of the configuration file, the release path, the packaged native's
+  version line and SHA-256, and `list_agents` and `whoami`. No env file was read. No
+  process was enumerated or stopped.
