@@ -2,13 +2,13 @@
 title: Transactions and identity
 description: Build-identity provenance verification for a completed server/runner update -- what proves the running code matches the target commit.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-10-09
 related: [deployment]
 ---
 
 # Transactions and identity
 
-#### Provenance verification (build identity, issue #218, [ADR-0053](../../adr/0053-build-identity.md))
+## Provenance verification (build identity, issue #218, [ADR-0053](../../adr/0053-build-identity.md))
 
 Build identity verifies that “the running JS / image derives from the target
 commit” through a health endpoint returning the **full SHA** and runner
@@ -33,6 +33,23 @@ SHA” check. Signed attestation is outside this issue. A SHA mismatch is not it
 a deploy-rejection condition (ADR-0053)—docs-only commits, backports, and rolling
 windows can legitimately differ; equality is only the **success check for this
 runbook**.
+
+## Delivery policy placement artifact
+
+A prepare targeting the delivery policy store records
+`policy-store-placement.json`, schema version 1, under its transaction.
+The optional `policy_store_placement` path/SHA-256 reference is checkpointed
+in the journal, included in `maintenance_gate_passed.observation`, and copied
+to the final manifest. Readers accept legacy records without this field;
+present references must have valid shape, refer to the same transaction file,
+match its bytes, and name the correct target image when read from a manifest.
+
+The artifact binds target image ID, effective Compose/environment digests,
+the observed target runtime path, the complete normalized mount table, the
+selected named state mount and Docker/Compose versions. Resume rechecks this
+binding and the actual placement before maintenance. The journal phase by
+itself is no evidence of placement for a transaction prepared by an older CLI.
+See [the placement procedure](../../operations/server-update-and-rollback.md#delivery-policy-store-placement).
 
 ## See Also
 

@@ -20,6 +20,7 @@ import {
   ROLLBACK_TAG_RE,
   SHA_RE,
 } from "./kaoiro-deploy-manifest.mjs";
+import { isPlacementReference } from "./kaoiro-delivery-policy-placement.mjs";
 
 export class PhaseError extends Error {}
 
@@ -167,7 +168,8 @@ const OBSERVATION_SCHEMAS = {
   // env_consistency shape (isValidEnvConsistency, imported rather than
   // redefined — see that function's own doc comment).
   [PHASE.ENV_CONSISTENCY_CHECKED]: (obs) => isValidEnvConsistency(obs),
-  [PHASE.MAINTENANCE_GATE_PASSED]: () => true,
+  [PHASE.MAINTENANCE_GATE_PASSED]: obs =>
+    !Object.hasOwn(obs, "policy_store_placement") || isPlacementReference(obs.policy_store_placement),
   // クロエ round 1 review SF-2: a checkpoint written immediately before
   // `compose stop` runs, so a crash between the stop command and the
   // STOPPED checkpoint leaves the journal AT this phase — distinguishable

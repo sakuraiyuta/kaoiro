@@ -12,6 +12,7 @@
 // means a phase transition never has to rewrite (and re-validate) the
 // artifact facts that did not change.
 import { readFileSync } from "node:fs";
+import { isPlacementReference, readPlacementReference } from "./kaoiro-delivery-policy-placement.mjs";
 import { join } from "node:path";
 
 import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
@@ -183,6 +184,7 @@ export function isValidManifestShape(value) {
   }
   if (!isPathSha(value.compose_artifact)) return false;
   if (!isValidEnvConsistency(value.env_consistency)) return false;
+  if (Object.hasOwn(value, "policy_store_placement") && !isPlacementReference(value.policy_store_placement)) return false;
   if (typeof value.image_id !== "string" || !IMAGE_ID_RE.test(value.image_id)) {
     return false;
   }
@@ -267,6 +269,9 @@ export function readManifest(dir) {
   }
   if (!isValidManifestShape(parsed)) {
     fail(`manifest.json at ${target} does not match the expected shape`);
+  }
+  if (parsed.policy_store_placement !== undefined) {
+    readPlacementReference(dir, parsed.policy_store_placement, { transaction_id: parsed.transaction_id, image_id: parsed.image_id });
   }
   return parsed;
 }

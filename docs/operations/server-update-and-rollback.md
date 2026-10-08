@@ -132,6 +132,47 @@ needs to be current.
 A non-dry `update` fetches `origin` inside `runBuild` before its fast-forward
 merge. The dry-run plan includes that future fetch without performing it.
 
+### Delivery policy store placement
+
+When the prepared target declares `delivery_policies`, `update` checks its
+placement after env consistency and before checking `--maintenance-approved`.
+This runs on both matched paths and explicitly accepted new-store mismatches,
+and runs again when resuming an already checked transaction. A dry-run does
+not create a target/probe or claim this check passed.
+
+The target release's actual `DeliveryPolicies.resolved_path()` must equal the
+effective Compose `KAOIRO_DELIVERY_POLICIES_PATH`. Its deepest containing mount
+must be the writable named `/var/lib/kaoiro` volume already used for backups.
+Temporary/outside paths, dot components, symlinks, unreadable components,
+nested bind/tmpfs/different volumes and incomplete inspection refuse the
+update before maintenance or stop. Image VOLUME declarations at or under the
+state target refuse even if Compose would override them; that precedence is
+not inferred from unmeasured cases. A non-shadowing sibling mount is allowed.
+
+The check observes Compose volumes and service `tmpfs:` plus image VOLUME,
+then inspects both `.Mounts` and `HostConfig.Tmpfs` in a uniquely named
+one-shot target container with no network or published ports. Existing mounts
+are read-only; named volumes use `volume-nocopy`. The release is evaluated
+without starting the server/application or opening its DETS store. Only the
+owned probe and its anonymous volumes are removed. Probe/cleanup failures are
+refusals, and a refused prepare restores the old `latest` image tag.
+
+`policy-store-placement.json` binds the transaction, target image, effective
+Compose/environment digests, runtime path, full normalized mount table,
+selected volume and Docker/Compose versions. Its path/hash is checkpointed
+in the prepare journal before returning maintenance-required exit 64, then
+referenced by the maintenance observation and final manifest. Missing or
+tampered evidence refuses resume; changed bindings or mount observations
+require investigation rather than reuse of a previously accepted record.
+Do not edit these files to force a resume.
+
+Targets with neither the new module nor registry entry remain compatible;
+a target with only one refuses. Deploy this CLI guard before or with a
+store-introducing server image. Protocol/store and admission must land
+together so an exposed off policy is enforced. Old servers cannot enforce
+new policy rows; rollback retains the file but does not promise fresh-agent
+opt-outs on an old server.
+
 **Separate prepare (no downtime) from commit (the stop window)** — steps
 (1)/(2) below now run automatically, inside one `update` invocation, ending
 right before the stop window; steps (5)/(6) run automatically inside a second

@@ -22,6 +22,7 @@ import { readJournal } from "../kaoiro-deploy-journal.mjs";
 import { LockError } from "../kaoiro-deploy-lock.mjs";
 import { readManifest } from "../kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS } from "../kaoiro-deploy-phase.mjs";
+import { POLICY_ENV, PLACEMENT_FILE } from "../kaoiro-delivery-policy-placement.mjs";
 import {
   DeployError,
   deploymentLockKey,
@@ -57,6 +58,42 @@ import {
 // OLD_IMAGE_ID must be IMAGE_ID_RE-valid (クロエ round 1 review SF-1) —
 // all-hex, unlike the old "sha256:oldimageid" fixture.
 const OLD_IMAGE_ID = `sha256:${"0".repeat(64)}`;
+const POLICY_DOCKER = String.raw`#!/usr/bin/env node
+const fs = require("node:fs"), cp = require("node:child_process");
+const args = process.argv.slice(2), fixture = JSON.parse(process.env.KAOIRO_TEST_POLICY_FIXTURE);
+const stateFile = process.env.KAOIRO_TEST_POLICY_STATE;
+const probe = args.some(a => a.startsWith("kaoiro-policy-"));
+const handled = args[0] === "create" || args[0] === "version" ||
+  (args[0] === "exec" && fixture.newStore) ||
+  (args[0] === "image" && args[1] === "inspect") || (args[0] === "volume" && args[1] === "inspect") ||
+  (args[0] === "compose" && args[1] === "version") || probe || args.some(a => a.includes("DeliveryPolicies.beam"));
+if (!handled) {
+  const result = cp.spawnSync(process.env.KAOIRO_TEST_POLICY_BASE, args, { encoding: "utf8" });
+  process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status ?? 1);
+}
+if (process.env.KAOIRO_TEST_CALL_LOG) fs.appendFileSync(process.env.KAOIRO_TEST_CALL_LOG, args.join(" ") + "\n");
+const output = value => console.log(typeof value === "string" ? value : JSON.stringify(value));
+if (args[0] === "exec") { console.error("stat: cannot statx '" + args.at(-1) + "': No such file or directory"); process.exit(1); }
+else if (args.some(a => a.includes("DeliveryPolicies.beam"))) output(fixture.presence ?? "present");
+else if (args[0] === "image") output(fixture.imageVolumes ?? null);
+else if (args[0] === "version") output({ Version: "29.8.2", ApiVersion: "1.56" });
+else if (args[0] === "compose") output("5.6.0");
+else if (args[0] === "volume") output(args[2]);
+else if (args[0] === "create") {
+  const path = args.find(a => a.startsWith("KAOIRO_DELIVERY_POLICIES_PATH=")).split("=")[1];
+  fs.writeFileSync(stateFile, JSON.stringify({ path, exited: false })); output("probe-id");
+} else if (args[0] === "inspect") {
+  const state = JSON.parse(fs.readFileSync(stateFile));
+  output([{ Mounts: fixture.mounts ?? [{ Type: "volume", Name: "kaoiro_kaoiro-state", Destination: "/var/lib/kaoiro", RW: false }],
+    HostConfig: fixture.hostConfig ?? {}, State: { Status: state.exited ? "exited" : "created", ExitCode: fixture.exitCode ?? 0 } }]);
+} else if (args[0] === "start") {
+  const state = JSON.parse(fs.readFileSync(stateFile)); state.exited = true; fs.writeFileSync(stateFile, JSON.stringify(state));
+  const path = fixture.runtimePath ?? state.path;
+  const prefixes = ["/", ...path.slice(1).split("/").map((_, i, parts) => "/" + parts.slice(0, i + 1).join("/"))];
+  output({ path, components: prefixes.map(p => ({ path: p, kind: p === fixture.symlink ? "symlink" : p === path ? "missing" : "directory" })) });
+} else if (args[0] === "rm") { if (fixture.cleanupFail) process.exit(1); output("probe-id"); }
+else process.exit(1);
+`;
 const FAKE_DOCKER = `#!/bin/sh
 if [ -n "$KAOIRO_TEST_CALL_LOG" ]; then printf '%s\\n' "$*" >> "$KAOIRO_TEST_CALL_LOG"; fi
 case "$1" in
@@ -583,6 +620,7 @@ case "$1" in
       # DeployError, not skipped, per M5's own fail-closed design.
       # Defaults to "present" for BOTH images, matching every EXISTING
       # test's assumption that the eval call below actually runs.
+      *"DeliveryPolicies.beam"*) printf 'absent\\n' ;;
       *"PersistencePaths.beam"*)
         if [ -n "$KAOIRO_TEST_BEAM_PROBE_EXIT" ]; then
           exit "$KAOIRO_TEST_BEAM_PROBE_EXIT"
@@ -5418,4 +5456,165 @@ test("runRollback (non-destructive) refuses when the retag read-back disagrees w
   // Never advanced to ROLLED_BACK — still wherever it was before rollback.
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "env_consistency_checked");
+});
+
+function withPolicyPlacement(options, fn) {
+  const policyPath = options.policyPath ?? "/var/lib/kaoiro/delivery_policies.dets";
+  const store = { store: "delivery_policies", env: POLICY_ENV, default_file: "delivery_policies.dets", default_path: "/tmp/kaoiro-dets/delivery_policies.dets" };
+  const users = { store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/var/lib/kaoiro/users.dets" };
+  const compose = JSON.parse(composePlanJson("kaoiro"));
+  compose.services.kaoiro.environment[POLICY_ENV] = policyPath;
+  Object.assign(compose.services.kaoiro, options.service ?? {});
+  if (options.volumes) compose.volumes = options.volumes;
+  const oldEnv = [`KAOIRO_USERS_PATH=${users.default_path}`, ...(options.fallbackMatch || options.newStore ? [] : [`${POLICY_ENV}=${policyPath}`])];
+  const base = join(root, "policy-base-docker.sh"), calls = join(root, "policy-calls.log");
+  writeFileSync(base, FAKE_DOCKER, { mode: 0o700 });
+  writeFileSync(bin, POLICY_DOCKER);
+  const variables = { KAOIRO_TEST_POLICY_FIXTURE: JSON.stringify(options), KAOIRO_TEST_POLICY_BASE: base,
+    KAOIRO_TEST_POLICY_STATE: join(root, "policy-state.json"), KAOIRO_TEST_CALL_LOG: calls };
+  const prior = Object.fromEntries(Object.keys(variables).map(key => [key, process.env[key]]));
+  Object.assign(process.env, variables);
+  try {
+    return withComposePlans(JSON.stringify(compose), JSON.stringify(compose), () =>
+      withEnvConsistencyFixture({ evalOutput: JSON.stringify(options.missingRegistration ? [users] : [users, store]),
+        oldEvalOutput: JSON.stringify(options.newStore ? [users] : [users, store]), containerEnvJson: JSON.stringify(oldEnv) }, () =>
+        withScenario("running-clean-stop", () => fn(() => existsSync(calls) ? readFileSync(calls, "utf8") : ""))));
+  } finally {
+    writeFileSync(bin, FAKE_DOCKER);
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+}
+
+function policyTransactionDir() {
+  const backup = join(root, "kaoiro-deploy");
+  return join(backup, readdirSync(backup).find(name => !name.startsWith(".")));
+}
+
+test("policy placement: prepare persists a bound record before maintenance; resume remeasures and references it", () => {
+  withPolicyPlacement({}, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()),
+      err => err instanceof DeployError && err.exitCode === 64);
+    const dir = policyTransactionDir(), prepared = readJournal(dir), bytes = readFileSync(join(dir, PLACEMENT_FILE));
+    assert.equal(prepared.phase, PHASE.ENV_CONSISTENCY_CHECKED);
+    assert.equal(prepared.policy_store_placement.sha256, createHash("sha256").update(bytes).digest("hex"));
+    const record = JSON.parse(bytes);
+    assert.equal(record.effective_path, "/var/lib/kaoiro/delivery_policies.dets");
+    assert.equal(record.selected_mount.source, "kaoiro_kaoiro-state");
+    assert.ok(calls().includes("volume-nocopy"));
+    assert.ok(calls().includes("destination=/var/lib/kaoiro,readonly"));
+    assert.ok(!calls().includes("compose stop"));
+    const result = runUpdate({ repo: workDir, target: headSha, transaction: prepared.transaction_id, maintenanceApproved: true }, configWithCleanStopMeasured());
+    assert.equal(result.phase, PHASE.DONE);
+    const journal = readJournal(dir), manifest = readManifest(dir);
+    assert.deepEqual(manifest.policy_store_placement, prepared.policy_store_placement);
+    assert.deepEqual(journal.history.find(e => e.phase === PHASE.MAINTENANCE_GATE_PASSED).observation.policy_store_placement, prepared.policy_store_placement);
+    assert.equal(calls().split("\n").filter(line => line.startsWith("create --name kaoiro-policy-")).length, 2);
+  });
+});
+
+test("policy placement: a legacy pre-gate resume must observe the store before maintenance", () => {
+  withPolicyPlacement({}, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const dir = policyTransactionDir(), journal = readJournal(dir);
+    delete journal.policy_store_placement;
+    writeFileSync(join(dir, "journal.json"), JSON.stringify(journal));
+    rmSync(join(dir, PLACEMENT_FILE));
+    const firstCreates = calls().split("\n").filter(line => line.startsWith("create ")).length;
+    runUpdate({ repo: workDir, target: headSha, transaction: journal.transaction_id, maintenanceApproved: true }, configWithCleanStopMeasured());
+    assert.equal(calls().split("\n").filter(line => line.startsWith("create ")).length, firstCreates + 1);
+    assert.ok(readManifest(dir).policy_store_placement);
+  });
+});
+
+test("policy placement: matching tmp fallback refuses before the maintenance flag and stop", () => {
+  withPolicyPlacement({ policyPath: "/tmp/kaoiro-dets/delivery_policies.dets", fallbackMatch: true }, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), /policy path is outside/);
+    const journal = readJournal(policyTransactionDir());
+    assert.equal(journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV].match, true);
+    assert.equal(journal.phase, PHASE.ENV_CONSISTENCY_CHECKED);
+    assert.ok(!calls().includes("compose stop"));
+    assert.ok(calls().includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
+  });
+});
+
+test("policy placement: explicitly accepted new-store mismatch also passes the placement gate", () => {
+  withPolicyPlacement({ newStore: true }, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha, acceptNewStores: new Set([POLICY_ENV]) }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const journal = readJournal(policyTransactionDir());
+    const observed = journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV];
+    assert.equal(observed.first_application, "never_existed");
+    assert.equal(observed.operator_accepted_new_store, true);
+    assert.ok(journal.policy_store_placement);
+    assert.ok(calls().includes("create --name kaoiro-policy-"));
+    assert.ok(!calls().includes("compose stop"));
+  });
+});
+
+test("policy placement: a non-shadowing service-key tmpfs is fully observed", () => {
+  withPolicyPlacement({ service: { tmpfs: ["/var/lib/kaoiro/sibling:rw"] }, hostConfig: { Tmpfs: { "/var/lib/kaoiro/sibling": "rw" } } }, () => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const record = JSON.parse(readFileSync(join(policyTransactionDir(), PLACEMENT_FILE)));
+    assert.equal(record.mounts.length, 2);
+    assert.equal(record.mounts.find(m => m.target.endsWith("/sibling")).type, "tmpfs");
+  });
+});
+
+test("policy placement: the CLI process observes the gate and binds its artifact", () => {
+  withPolicyPlacement({}, () => {
+    const configFile = join(root, "policy-cli-config.json");
+    writeFileSync(configFile, JSON.stringify(configWithCleanStopMeasured()), { mode: 0o600 });
+    const cli = fileURLToPath(new URL("../kaoiro-server-deploy.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [cli, "update", "--repo", workDir, "--target", headSha, "--config", configFile], { encoding: "utf8" });
+    assert.equal(result.status, 64, result.stderr);
+    assert.ok(readJournal(policyTransactionDir()).policy_store_placement);
+  });
+});
+
+for (const [name, options, reason] of [
+  ["module without registry entry", { missingRegistration: true }, /registration disagree/],
+  ["registry entry without module", { presence: "absent" }, /registration disagree/],
+  ["unknown module observation", { presence: "unknown" }, /unknown DeliveryPolicies/],
+  ["configured path differs from real target resolver", { runtimePath: "/tmp/kaoiro-dets/delivery_policies.dets" }, /constructor resolves/],
+  ["target resolver selects a different persistent file", { runtimePath: "/var/lib/kaoiro/other.dets" }, /constructor resolves/],
+  ["alias component", { symlink: "/var/lib/kaoiro" }, /symlink/],
+  ["failed contained eval despite JSON output", { exitCode: 1 }, /exit successfully/],
+  ["failed cleanup", { cleanupFail: true }, /failed/],
+  ["image VOLUME at state target even with explicit override", { imageVolumes: { "/var/lib/kaoiro": {} } }, /image VOLUME/],
+  ["image VOLUME below state target", { imageVolumes: { "/var/lib/kaoiro/unrelated": {} },
+    mounts: [{ Type: "volume", Name: "kaoiro_kaoiro-state", Destination: "/var/lib/kaoiro", RW: false },
+      { Type: "volume", Name: "anonymous", Destination: "/var/lib/kaoiro/unrelated", RW: true }] }, /image VOLUME/],
+  ["service-key tmpfs shadows the policy path", { policyPath: "/var/lib/kaoiro/shadow/policy.dets", service: { tmpfs: ["/var/lib/kaoiro/shadow:rw"] },
+    hostConfig: { Tmpfs: { "/var/lib/kaoiro/shadow": "rw" } } }, /longest/],
+  ["declared named state volume differs from the backed-up volume", { volumes: { "kaoiro-state": { name: "unrelated_state" } },
+    mounts: [{ Type: "volume", Name: "unrelated_state", Destination: "/var/lib/kaoiro", RW: false }] }, /longest/],
+  ["read-only declared state volume", { service: { volumes: [{ type: "volume", source: "kaoiro-state", target: "/var/lib/kaoiro", read_only: true }] } }, /longest/],
+]) {
+  test(`policy placement: ${name} refuses without stopping`, () => withPolicyPlacement(options, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()), reason);
+    assert.ok(!calls().includes("compose stop"));
+    assert.equal(readJournal(policyTransactionDir()).phase, PHASE.ENV_CONSISTENCY_CHECKED);
+  }));
+}
+
+for (const damaged of ["missing", "tampered"]) {
+  test(`policy placement: ${damaged} prepare evidence prevents resume`, () => withPolicyPlacement({}, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const dir = policyTransactionDir(), journal = readJournal(dir), artifact = join(dir, PLACEMENT_FILE);
+    if (damaged === "missing") rmSync(artifact); else writeFileSync(artifact, readFileSync(artifact, "utf8") + " ");
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha, transaction: journal.transaction_id, maintenanceApproved: true }, configWithCleanStopMeasured()), /placement artifact/);
+    assert.ok(!calls().includes("compose stop"));
+  }));
+}
+
+test("policy placement: a registration observation from another image cannot authorize resume", () => {
+  withPolicyPlacement({}, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const dir = policyTransactionDir(), journal = readJournal(dir);
+    journal.policy_store_registration.image_id = OLD_IMAGE_ID;
+    writeFileSync(join(dir, "journal.json"), JSON.stringify(journal));
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha, transaction: journal.transaction_id, maintenanceApproved: true }, configWithCleanStopMeasured()), /registration observation is not bound/);
+    assert.ok(!calls().includes("compose stop"));
+  });
 });

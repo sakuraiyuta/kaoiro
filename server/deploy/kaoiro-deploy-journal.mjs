@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
+import { isPlacementReference, isPolicyRegistrationObservation, readPlacementReference } from "./kaoiro-delivery-policy-placement.mjs";
 
 export class JournalError extends Error {}
 
@@ -28,6 +29,8 @@ export function isValidJournalShape(value) {
     return false;
   }
   if (typeof value.phase !== "string" || value.phase === "") return false;
+  if (Object.hasOwn(value, "policy_store_placement") && !isPlacementReference(value.policy_store_placement)) return false;
+  if (Object.hasOwn(value, "policy_store_registration") && !isPolicyRegistrationObservation(value.policy_store_registration)) return false;
   if (!Array.isArray(value.history)) return false;
   for (const entry of value.history) {
     if (
@@ -93,6 +96,9 @@ export function readJournal(dir) {
   }
   if (!isValidJournalShape(parsed)) {
     fail(`journal.json at ${target} does not match the expected shape`);
+  }
+  if (parsed.policy_store_placement !== undefined) {
+    readPlacementReference(dir, parsed.policy_store_placement, { transaction_id: parsed.transaction_id });
   }
   return parsed;
 }

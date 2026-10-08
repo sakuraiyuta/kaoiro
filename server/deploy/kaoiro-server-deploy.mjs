@@ -36,6 +36,7 @@ import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
+import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -2096,6 +2097,9 @@ export function runUpdate(flags, config) {
       let envConsistency;
       try {
         const persistencePaths = queryPersistencePaths(bin, buildResult.imageId);
+        journal = { ...journal, policy_store_registration: { image_id: buildResult.imageId,
+          registered: !persistencePaths.skipped && persistencePaths.paths.some(p => p.store === "delivery_policies" || p.env === "KAOIRO_DELIVERY_POLICIES_PATH") } };
+        writeJournal(dir, journal, validateJournalAgainstStateMachine);
         if (persistencePaths.skipped) {
           envConsistency = { skipped: true, reason: persistencePaths.reason };
         } else {
@@ -2201,6 +2205,26 @@ export function runUpdate(flags, config) {
       );
     }
 
+    try {
+      requirePlanMatch(targetPlan, composePlan(bin, serverDir), "target");
+      const placement = preparePolicyPlacement({ bin, serverDir, imageId: buildResult.imageId,
+        transactionId, dir, targetPlan, queryPaths: () => queryPersistencePaths(bin, buildResult.imageId),
+        expectedStateSource: () => resolveKaoiroLibMount(bin, container), previous: journal.policy_store_placement,
+        knownRegistration: journal.policy_store_registration });
+      if (placement !== undefined) {
+        journal = { ...journal, policy_store_placement: placement };
+        writeJournal(dir, journal, validateJournalAgainstStateMachine);
+      }
+    } catch (err) {
+      try {
+        runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+        if (dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}") !== oldImageId) {
+          err.message += " (also: old latest image could not be restored)";
+        }
+      } catch { err.message += " (also: restoring old latest failed)"; }
+      fail(err.message);
+    }
+
     if (flags.maintenanceApproved !== true) {
       fail(
         `update requires --maintenance-approved before the stop window opens (no-downtime steps are complete); resume with --transaction ${transactionId} --target ${target} --maintenance-approved once the operator has approved the maintenance window`,
@@ -2214,7 +2238,9 @@ export function runUpdate(flags, config) {
       "recovery",
     );
     requirePlanIdentityMatch(recoveryPlan, targetPlan);
-    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED, {}, validateJournalAgainstStateMachine);
+    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED,
+      journal.policy_store_placement === undefined ? {} : { policy_store_placement: journal.policy_store_placement },
+      validateJournalAgainstStateMachine);
 
     // クロエ round 1 review N-5: pulled here, before the stop window
     // opens — not implicitly by the first `docker run alpine ...` the
@@ -2386,6 +2412,7 @@ export function runUpdate(flags, config) {
       recovery_plan: recoveryPlan,
       target_plan: targetPlan,
       env_consistency: journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation,
+      ...(journal.policy_store_placement === undefined ? {} : { policy_store_placement: journal.policy_store_placement }),
       image_id: buildResult.imageId,
       source_sha: oldSha,
       target_sha: target,
