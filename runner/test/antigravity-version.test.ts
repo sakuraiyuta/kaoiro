@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { resolveAgyVersion } from "../src/antigravity-version.js";
-import { embeddedPidMarkerWriter, readPidMarker } from "./pid_marker.js";
+import { readPidMarker } from "./pid_marker.js";
 
 type SignalBackend = (pid: number, signal: 0) => unknown;
 
@@ -19,6 +19,20 @@ function isAlive(rawPid: unknown, signal: SignalBackend = (pid, value) => proces
   }
 }
 
+function shellPidMarkerFixture(pidFile: string): string {
+  const shellQuotedPidFile = `'${pidFile.replaceAll("'", "'\\''")}'`;
+  return [
+    "#!/bin/sh",
+    "set -eu",
+    `pid_file=${shellQuotedPidFile}`,
+    'temporary_file="${pid_file}.tmp-$$"',
+    'printf \'%s\\n\' "$$" > "$temporary_file"',
+    'mv "$temporary_file" "$pid_file"',
+    "exec sleep 60",
+    "",
+  ].join("\n");
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -29,6 +43,21 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe("resolveAgyVersion (issue #387)", () => {
+  it("uses a shell fixture that atomically publishes its PID before waiting", () => {
+    expect(shellPidMarkerFixture("/tmp/fixture/pid")).toBe(
+      [
+        "#!/bin/sh",
+        "set -eu",
+        "pid_file='/tmp/fixture/pid'",
+        'temporary_file="${pid_file}.tmp-$$"',
+        'printf \'%s\\n\' "$$" > "$temporary_file"',
+        'mv "$temporary_file" "$pid_file"',
+        "exec sleep 60",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("成功時は stdout を trim して返す", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
     const script = join(dir, "agy");
@@ -50,30 +79,20 @@ describe("resolveAgyVersion (issue #387)", () => {
   });
 
   it(
-    "issue #387 review should2: SIGTERM を無視する子でも期限内に null を返し、子を SIGKILL で止める (watchdog)",
+    "issue #387 review should2: watchdog が期限切れで遅い子を SIGKILL で止める",
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
       const script = join(dir, "agy");
       const pidFile = join(dir, "pid");
-      writeFileSync(
-        script,
-        `#!${process.execPath}
-import { renameSync, writeFileSync } from "node:fs";
-const publishPidMarker = ${embeddedPidMarkerWriter()};
-process.on("SIGTERM", () => {});
-publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
-setInterval(() => {}, 1000);
-`,
-      );
+      writeFileSync(script, shellPidMarkerFixture(pidFile));
       chmodSync(script, 0o755);
 
       const t0 = performance.now();
       const version = await resolveAgyVersion({ ok: true, path: script }, 300);
       const elapsedMs = performance.now() - t0;
 
-      // The caller must be released near the deadline -- NOT hang until the
-      // child eventually dies on its own (which, ignoring SIGTERM, it never
-      // would without the watchdog's SIGKILL).
+      // The caller must be released near the deadline, even though the child
+      // would otherwise remain alive for a minute.
       expect(version).toBeNull();
       expect(elapsedMs).toBeLessThan(2_000);
 

@@ -328,7 +328,8 @@ describe("default composition (issue #469)", () => {
           /\[kaoiro\] antigravity consumers: pid=(\d+) ([^\n]*)\n/,
         );
         for (const found of [claude, codex, antigravity]) {
-          wrapperPids.add(requirePositiveSafePid(found[1]));
+          const pid = requirePositiveSafePid(found[1]);
+          if (pid > 1) wrapperPids.add(pid);
         }
         expect(claude[2]).toBe(
           "yield_claim_timeout_ms=1500 pending_receipt_root_timeout_ms=2500 " +

@@ -74,8 +74,15 @@ else if (args.includes('show')) {
       child.kill("SIGTERM");
       await new Promise<void>((ok) => child.once("exit", () => ok()));
     }
-    for (const name of readdirSync(join(dir, "owned-pids"))) {
-      const owned = JSON.parse(readFileSync(join(dir, "owned-pids", name), "utf8")) as { pid: number; start: string };
+    const ownedPidDirectory = join(dir, "owned-pids");
+    const markers = readdirSync(ownedPidDirectory).filter((entry) =>
+      entry.endsWith(".json"),
+    );
+    for (const name of markers) {
+      const owned = JSON.parse(readFileSync(join(ownedPidDirectory, name), "utf8")) as {
+        pid: number;
+        start: string;
+      };
       signalPidIfStartMatches(owned.pid, owned.start, requirePositiveSafePid,
         (pid) => readFileSync(`/proc/${pid}/stat`, "utf8"),
         (pid, signal) => process.kill(pid, signal));
