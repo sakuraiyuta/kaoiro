@@ -1,0 +1,247 @@
+{
+  "schema": "kaoiro-issue-548-review-delta-v1",
+  "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+  "reviewed_commit": "f6317be899185003c91731e397511fa3b5defcd7",
+  "wrapper_exit": 0,
+  "wrapper_counts": {
+    "core": {
+      "passed": 485,
+      "skipped": 0
+    },
+    "agent-common": {
+      "passed": 568,
+      "skipped": 0
+    },
+    "antigravity": {
+      "passed": 493,
+      "skipped": 3
+    },
+    "claude-code": {
+      "passed": 807,
+      "skipped": 4
+    },
+    "codex": {
+      "passed": 1384,
+      "skipped": 0
+    }
+  },
+  "wrapper_total_passed": 3737,
+  "wrapper_total_skipped": 7,
+  "typecheck_exit": 0,
+  "build_exit": 0,
+  "footer_exit": 0,
+  "footer_passed": 15,
+  "mutations": [
+    {
+      "mutation": "KA",
+      "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+      "path": "wrapper/agent-common/src/inter_agent.ts",
+      "old": "const key = JSON.stringify([entry.incarnation ?? null, entry.generation ?? null]);",
+      "new": "const key = \"merged\";",
+      "command": [
+        "setsid",
+        "-w",
+        "unshare",
+        "--user",
+        "--map-current-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setsid",
+        "-w",
+        "env",
+        "-u",
+        "CODEX_HOME",
+        "pnpm",
+        "--filter",
+        "@kaoiro/agent-common",
+        "test",
+        "inter_agent_steer_reconciliation.test.ts"
+      ],
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-548/impl-r2-mutation-KA-fuji.log"
+    },
+    {
+      "mutation": "retain-cut",
+      "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+      "path": "wrapper/codex/src/cli.ts",
+      "old": "interAgentTurns.retainSteeredBody([envelope]);",
+      "new": "",
+      "command": [
+        "setsid",
+        "-w",
+        "unshare",
+        "--user",
+        "--map-current-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setsid",
+        "-w",
+        "env",
+        "-u",
+        "CODEX_HOME",
+        "pnpm",
+        "--filter",
+        "@kaoiro/codex",
+        "test",
+        "cli_inter_agent_t4b.test.ts"
+      ],
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-548/impl-r2-mutation-retain-cut-fuji.log"
+    },
+    {
+      "mutation": "retire-inverted",
+      "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+      "path": "wrapper/codex/src/inter_agent_turn_coordinator.ts",
+      "old": "priorPayload.turn_number < payload.turn_number",
+      "new": "priorPayload.turn_number > payload.turn_number",
+      "command": [
+        "setsid",
+        "-w",
+        "unshare",
+        "--user",
+        "--map-current-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setsid",
+        "-w",
+        "env",
+        "-u",
+        "CODEX_HOME",
+        "pnpm",
+        "--filter",
+        "@kaoiro/codex",
+        "test",
+        "cli_inter_agent_t4b.test.ts"
+      ],
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-548/impl-r2-mutation-retire-inverted-fuji.log"
+    },
+    {
+      "mutation": "queue-head-replaced",
+      "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+      "path": "wrapper/codex/src/host.ts",
+      "old": "const turn = this.#queue.shift();",
+      "new": "const turn = this.#queue.pop();",
+      "command": [
+        "setsid",
+        "-w",
+        "unshare",
+        "--user",
+        "--map-current-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setsid",
+        "-w",
+        "env",
+        "-u",
+        "CODEX_HOME",
+        "pnpm",
+        "--filter",
+        "@kaoiro/codex",
+        "test",
+        "host_app_server_steer.test.ts",
+        "-t",
+        "T15d"
+      ],
+      "exit": 1,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-548/impl-r2-mutation-queue-head-replaced-fuji.log"
+    },
+    {
+      "mutation": "footer-dispatch-wording-cut",
+      "source_commit": "5beef394e326e6ef442c5fdd32a5dcc4ed27da34",
+      "path": "server/priv/footers/system-footer.md",
+      "old": "A root of the same sender already dispatched for another turn",
+      "new": "Its sender's queued root",
+      "command": [
+        "setsid",
+        "-w",
+        "unshare",
+        "--user",
+        "--map-current-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "setsid",
+        "-w",
+        "env",
+        "MIX_ENV=test",
+        "mix",
+        "test",
+        "test/kaoiro_server/footer_assets_test.exs"
+      ],
+      "exit": 2,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-548/impl-r2-mutation-footer-dispatch-wording-cut-fuji.log"
+    }
+  ],
+  "native_turns_added": 0,
+  "limits": [
+    "Network stale rejection and retry acceptance are scripted in the CLI composition test.",
+    "Retained-body recovery JSON size margin for 10 KiB bodies is unmeasured."
+  ],
+  "artifacts": [
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-test-diff-fuji.diff",
+      "sha256": "46d912947076a2e5b730d41bd424e66f95a3d52de4144da754a6515afe74886b"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-common-focused-fuji.log",
+      "sha256": "3e982716b0325fec286e2a1b7dafe0c0ea1fdd2cb07d9ca9c45c2633092dd055"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-codex-focused-fuji.log",
+      "sha256": "7a6232ee1ae1ee81a75c2ac2eef40b03e5fabb79635647b0196fd0e3bbe9f411"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-typecheck-fuji.log",
+      "sha256": "3b6130b9f26eb17f88674857d31056c945af712ba9b9756a4ea3ae1a77593d43"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-build-fuji.log",
+      "sha256": "2351b79be7be02e7e2b5755d4206e0a2e397a3247445cedcb520621ec5590589"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-wrapper-full-fuji.log",
+      "sha256": "718ed1408f1c444ce02a651a9fb5daea62a60c6ed14d80b3202c91c2cbab6d0b"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-footer-positive-fuji.log",
+      "sha256": "3f47cb76c9a18b462573f2071d9457e0ee68c918ac266bfaf9e5754783aa10c0"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutations-fuji.json",
+      "sha256": "eb88eb91d80437fd45d7ce3b3003f11938e9332021c77418cd4abcd7e9b8a718"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutations-fuji.py",
+      "sha256": "1e45f827540cf2b7d962c04d1e3b4321a05b24fd5e90733a2b4ecaf8345c88e4"
+    },
+    {
+      "path": "tmp/reviews/issue-548/design-r3b-fuji.md",
+      "sha256": "37be7a32885b0e72bd011ce84fb5746df47fc7e54200998e2a2c7daa3712360e"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutation-KA-fuji.log",
+      "sha256": "c2ddb373de50c91b061e22f5825dc21f8a9a3638a35bb599c3fd7b8b707036b7"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutation-footer-dispatch-wording-cut-fuji.log",
+      "sha256": "0c7d8d75b84ff7da73a814e1e8a7ea4037608dfb6785890f0713ff79e06f1b69"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutation-queue-head-replaced-fuji.log",
+      "sha256": "3f0c40f79351a290e50f21426544cf2c7295a4c23db47f2b85e8eef275685817"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutation-retain-cut-fuji.log",
+      "sha256": "d053d06e03fd5a8fe6637f2bb6f9d7a1a6d536a722ffab3d8c229fac507b6466"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-r2-mutation-retire-inverted-fuji.log",
+      "sha256": "ff4cedb30cb7e2f4f9036c62d90741280d6123c2d437dc99b2ed0e5fa5c8437c"
+    }
+  ]
+}

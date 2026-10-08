@@ -10,6 +10,8 @@ Tracking: [issue 548](https://github.com/sakuraiyuta/kaoiro/issues/548).
 The authenticated Codex scenarios also cover the scheduling measurement in
 [issue 517](https://github.com/sakuraiyuta/kaoiro/issues/517).
 Design: [phase 3 delivery](../../plans/adr-0063-phase3-codex-early-delivery.md).
+The [implementation review delta](issue-548-review-delta-2026-10-09.md)
+records the additional suite tests and controls after these historical gates.
 
 ## Execution boundary
 
