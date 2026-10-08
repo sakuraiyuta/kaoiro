@@ -1732,11 +1732,11 @@ export class InterAgentTool {
       const noticeGroups: Array<{ entries: DeliveryCoverage[]; error: InterAgentErrorPayload }> = attributed
         ? [
             ...(error === null || error === undefined || classified.length === 0 ? [] : [{ entries: classified, error }]),
-            ...(uncertain.length === 0 ? [] : [{ entries: uncertain, error: { code: "timeout", message: "Input may have reached the peer turn; wait and do not retry automatically" } }]),
+            ...(uncertain.length === 0 ? [] : [{ entries: uncertain, error: { code: "timeout", message: messageForCode("timeout") } }]),
           ]
         : !(group.root !== undefined || unresolved.length > 0) ? [] : [{ entries: [...rootEntries, ...unresolved], error: uncertain.length > 0
-            ? { code: "timeout", message: "At least one input may have reached the peer turn; wait and do not retry any input from that turn" }
-            : error ?? { code: "timeout", message: "Unattributed turn failure" } }];
+            ? { code: "timeout", message: messageForCode("timeout") }
+            : error ?? { code: "timeout", message: messageForCode("timeout") } }];
       for (const noticeGroup of noticeGroups) {
         if (!attributed && uncertain.length === 0 && error == null) continue;
         const partitions = new Map<string, DeliveryCoverage[]>();
