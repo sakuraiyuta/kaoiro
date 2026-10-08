@@ -97,6 +97,24 @@ describe("Codex root and steer terminal reconciliation", () => {
 });
 
 describe("delivery identity, wire partitions and exact ticket discharge", () => {
+  it.each(["corroborated", "uncertain"] as const)("partitions ascending sequences across identities for %s", result => {
+    const tool = make(), second = { ...identity, generation: "next" };
+    steer(tool, 3); steer(tool, 5, "X", second);
+    tool.settleSteerInjection("T", 3, result, identity); tool.settleSteerInjection("T", 5, result, second);
+    const notices = payloads(tool.endSteeredTurn("T", [], failed));
+    expect(notices.map(notice => [notice.error!.code, notice.error!.affected_deliveries]))
+      .toEqual([3, 5].map(seq => [result === "corroborated" ? "api_error" : "timeout",
+        [{ delivery_seq: seq, peer_turn_number: seq, batch_id: `steer-${seq}` }]]));
+  });
+  it.each(["corroborated", "uncertain"] as const)("combines ascending sequences within one identity for %s", result => {
+    const tool = make();
+    for (const seq of [3, 5]) { steer(tool, seq); tool.settleSteerInjection("T", seq, result, identity); }
+    const notices = payloads(tool.endSteeredTurn("T", [], failed));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.error!.code).toBe(result === "corroborated" ? "api_error" : "timeout");
+    expect(notices[0]!.error!.affected_deliveries)
+      .toEqual([3, 5].map(seq => ({ delivery_seq: seq, peer_turn_number: seq, batch_id: `steer-${seq}` })));
+  });
   it.each(["corroborated", "uncertain"] as const)("preserves equal sequences across generations for %s", result => {
     const tool = make(), second = { ...identity, generation: "next" };
     steer(tool, 4); steer(tool, 4, "X", second);

@@ -47,6 +47,17 @@ acceptance of basis 6. The accepted design addendum corrects the earlier
 fake-network assumption that an unspent ticket's plain reply would be accepted.
 No server admission rule or ReplyBasis contract was relaxed.
 
+For a corroborated steer, stale-basis recovery can return the retained body
+and a fresh authorization inline; only an empty recovery requires waiting
+for confirmed input. Recovery fits the entire JSON tool result into 16,384
+bytes, whereas steer admission measures formatted text. The margin for
+bodies in the 10 KiB range is **unmeasured**; these gates establish no
+size threshold for successful retained-body recovery.
+
+The host queue's FIFO order and per-token caps protect root progress. The
+two-write cap counts only waiting host-queue peer roots, is a tuning value,
+and bounds steer count rather than turn duration.
+
 A root waits until every steer's result is reconciled, including responses
 arriving after the terminal. A different peer's late steer must also release
 the original root peer; releasing only the steer peer strands its successor.

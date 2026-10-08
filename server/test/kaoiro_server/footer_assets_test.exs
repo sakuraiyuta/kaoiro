@@ -65,6 +65,8 @@ defmodule KaoiroServer.FooterAssetsTest do
     footer = FooterAssets.built_in_system_footer()
     assert footer =~ "sender's running request"
     assert footer =~ "even in the same conversation"
+    assert footer =~ "A root of the same sender already dispatched for another turn"
+    assert footer =~ "While host-queue peer roots wait"
     assert footer =~ "at most 2 IA writes overtake per turn (3 IA overall)"
     assert footer =~ "Ordinary messages follow; replies may need stale-basis recovery"
     assert footer =~ "Interruption stays operator-only"

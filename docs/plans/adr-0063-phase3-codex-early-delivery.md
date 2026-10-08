@@ -83,14 +83,16 @@ RPC acceptance with model inclusion or immediate preemption.
    another token's same-CID root or a legacy root remains blocking.
    Queued operator/synthetic inputs and placeholders block IA. Operator
    steering retains the guard against all queued input. At most two IA
-   writes per token may overtake waiting peer roots; count each write once,
-   only when a peer root waits, without refunds for uncertain/abandoned
+   writes per token may overtake waiting host-queue peer roots; count each write once,
+   only when a host-queue peer root waits, without refunds for uncertain/abandoned
    writes. The common total cap
    is eight steer writes per active turn (the Stage 2 value); at most three
    admitted IA leases may consume it. Remaining inputs keep receive order for
    the next root. Operator inputs cannot reset the IA quota. This admits both
    sources under load without claiming global FIFO across independently
    accepted server deliveries.
+   Progress relies on the host queue's FIFO order and per-token caps; two
+   is a tuning value that limits steer count, not turn duration.
 4. At the synchronous `turn/steer` commit point, check the actual active
    thread/turn/token, matching join echo and delivery generation, effective
    policy, unfinished and unabandoned turn, no pending reset or new model,
@@ -172,8 +174,10 @@ successor root can acquire the CID. A legacy root in another CID gets its
 unscoped error notice in the same reconciliation. An older sender gets
 one conservative CID-wide timeout if any input is uncertain, otherwise
 the classified error. The overtaken ordinary root's default reply can
-be stale if the later early ticket was unused; it must wait for confirmed
-recovery input or a new authorization.
+be stale if the later early ticket was unused. A retained, corroborated
+steer returns its body and a fresh authorization inline in that rejection;
+retry with both authorization fields. Wait for confirmed input only when
+no retained body is returned.
 
 | Same-CID state at reconciliation | Notice and release |
 | --- | --- |

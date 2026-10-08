@@ -124,6 +124,7 @@ it("T15d: the overtake budget belongs to the token and is reset at terminal", as
   await f.host.send("ROOT-2", undefined, ["cid-2"], "root-2");
   for (let index = 0; index < 2; index += 1) await f.host.steerInterAgentInput(`OLD-${index}`, iaHooks(), `old-${index}`);
   f.terminal(); await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")[1]).toBe("ROOT-1");
   for (let index = 0; index < 2; index += 1) {
     expect((await f.host.steerInterAgentInput(`NEW-${index}`, iaHooks(), `new-${index}`)).kind).toBe("sent");
   }

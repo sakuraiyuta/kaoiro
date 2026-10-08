@@ -99,9 +99,11 @@ input can correct its sender's running batch and overtake that sender's
 queued ordinary input, including in the same conversation. Its sender's
 root waiting behind another token, an earlier early fallback, a same-CID
 root owned by another token, or a legacy root without sequenced coverage
-still blocks it. While peer roots wait, at most two IA writes can overtake
+still blocks it. While host-queue peer roots wait, at most two IA writes can overtake
 them per running token. This count is per write, is not refunded for
-uncertain outcomes, and does not charge writes made before a root waited.
+uncertain outcomes, and does not charge writes made before a host-queue root waited.
+The host queue's FIFO order and per-token caps preserve progress; the tuning
+value two limits steer count and gives no bound on turn duration.
 Operator and synthetic entries and placeholders still block IA; operator
 steering retains its guard against all queued input. A rejected steer keeps
 its queue position through a placeholder owned by the IA coordinator. Each
@@ -127,7 +129,7 @@ delivery. The reason is one of:
 | `behind_earlier_early_same_sender` | An earlier early input awaits its fallback root. |
 | `behind_open_root_same_conversation` | A root for the same conversation belongs to another token, including an owner awaiting reconciliation. |
 | `behind_legacy_root_same_conversation` | The running root lacks delivery-sequence coverage. |
-| `overtake_budget` | Two IA writes have already overtaken waiting peer roots in this token. |
+| `overtake_budget` | Two IA writes have already overtaken waiting host-queue peer roots in this token. |
 | `too_large` | The formatted message exceeds 16,384 bytes. |
 | `no_active_turn` | The recipient is idle; the input starts a turn. |
 | `conversation_terminal` | The conversation has closed. |

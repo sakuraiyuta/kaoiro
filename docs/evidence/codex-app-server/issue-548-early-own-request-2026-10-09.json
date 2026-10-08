@@ -14,7 +14,8 @@
     "live_provider_input": "Not directly observable; claims use native item receipts and actual tool replies.",
     "production_deploy": false,
     "production_canaries": "Director-owned; not run here.",
-    "process_isolation": "setsid plus user/PID namespace mapping the current non-root UID"
+    "process_isolation": "setsid plus user/PID namespace mapping the current non-root UID",
+    "retained_recovery_size_margin": "Unmeasured: recovery limits the entire JSON tool result to 16,384 bytes, whereas steer admission limits formatted text; no successful-recovery threshold for bodies in the 10 KiB range is established."
   },
   "designs": [
     {

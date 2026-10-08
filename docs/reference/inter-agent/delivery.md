@@ -256,8 +256,10 @@ current turn runs. The wrapper validates the current turn, ledger identity,
 server grant, negotiated capabilities, permission and reset state, root
 ownership, earlier early fallbacks, and per-turn steer limits before writing.
 It can steer into its sender's running batch and overtake queued ordinary
-peer roots, including in the same conversation. While peer roots wait,
+peer roots, including in the same conversation. While host-queue peer roots wait,
 two IA writes may overtake per token, within the three-IA/eight-total caps.
+Progress follows the host queue's FIFO order and the per-token caps; two is
+a tuning value that limits steer count, not the duration of a running turn.
 Operator, synthetic and placeholder input still block IA, and operator
 steering retains its queue guard. A declined or
 unwritten input enters the root queue. An accepted response reports
@@ -290,8 +292,10 @@ sequence starts another notice. Root-only tokens keep their unscoped
 notices. A reply clears its owning CID root and only the steer named by
 its exact ticket, with the existing possibly-delivered `unknown` behavior.
 An overtaken ordinary root's plain reply may be stale if the later early
-ticket was not used; confirmed recovery input or a new authorization is
-required. The server records a separate lifetime `uncertain_count` and
+ticket was not used. A retained, corroborated steer supplies its body and a
+fresh authorization inline in that rejection; retry with both fields from
+that authorization. Wait for confirmed input only when no retained body is
+returned. The server records a separate lifetime `uncertain_count` and
 `last_uncertain` summary when an eligible unknown resolves a delivery gap. It
 cannot independently verify the wrapper's write observation. Per-message
 stage history expires after its retention window; the summary survives for
@@ -330,7 +334,7 @@ steer response time, because both share the wrapper's instruction chain. A grant
 bypass the same peer's ordinary turn queue to enter its live Claude `Query`;
 Codex follows the same overtaking policy through `turn/steer`. Their caps
 count different boundaries: Claude permits two urgent root overtakes;
-Codex permits two IA writes in a running token while peer roots wait.
+Codex permits two IA writes in a running token while host-queue peer roots wait.
 Ordinary peer batches remain serial. An operator early instruction without
 attachments can also fold, without a peer reply ticket. Synthetic notices
 never request early or yield. With the flag off or without the matching server

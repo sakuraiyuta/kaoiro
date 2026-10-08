@@ -48,17 +48,20 @@ and what the recipient can do. They do not say whether this input steered the
 running turn. A Codex app-server recipient can steer a correction into its
 sender's running request, overtaking queued ordinary messages even in the
 same conversation. Ordinary messages stay queued and arrive afterwards.
-It still queues early input behind its sender's root waiting in the host,
+It still queues early input behind its sender's host-queue root already
+dispatched for another turn,
 an earlier early fallback, another token's same-CID root or a legacy root,
 operator or synthetic input, or placeholders. The per-turn caps also apply:
-three IA writes overall, and at most two while peer roots wait.
+three IA writes overall, and at most two while host-queue peer roots wait.
 The send result does not report the hold; the recipient's wrapper logs the
 reason (see [Codex app-server](../engines/codex-app-server.md#when-an-early-input-is-queued)).
 
 Send an early correction to change the running request. A normal message
 waits for a root or stale-basis recovery. An overtaken ordinary message's
 next root can itself get `stale_reply_basis` if the later early ticket was
-not spent; it waits for confirmed recovery input or a new authorization.
+not spent. A retained, corroborated steer returns its body and a fresh
+authorization inline; retry with both fields from that authorization.
+Wait for confirmed input only when the rejection returns no retained body.
 To stop the work at once, the operator interrupts the turn; hard
 cancellation stays operator-only
 ([ADR-0063](../../adr/0063-layered-delivery-authority-and-continuations.md) D2).

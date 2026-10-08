@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { expect, it, vi } from "vitest";
-import type { Envelope, InterAgentMessagePayload, WrapperConfig } from "@kaoiro/agent-common";
+import { handoffToolResult, type Envelope, type InterAgentMessagePayload, type WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
 import { CodexHost, type CodexHostOptions } from "../src/host.js";
 import { AppServerSession } from "../src/app_server_session.js";
@@ -64,13 +64,19 @@ it.each([{ spend: false, cid: "X", late: false, peer: "peer" }, { spend: true, c
   stdin.on("finish", exit); child.kill = vi.fn(() => { exit(); return true; });
   let callbacks!: Record<string, any>, host!: CodexHost, options!: CodexHostOptions;
   const reports: Record<string, unknown>[] = [], sent: Envelope[] = [];
+  const staleRecovery = !spend && cid === "X" && !late;
   const link = { close: () => {}, send: () => {}, currentSessionId: () => null, setSessionId: () => {},
     permissionSyncPending: () => false,
     deliveryModes: () => ({ version: "v1", early: "steer", yield: "none", stage_reports: true }),
     noticeAttributionMode: () => "v1", deliveryIncarnation: () => "inc", deliveryGeneration: () => "gen",
     reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report), acknowledgeInterAgentDelivery: () => {},
-    // Ticket issuance and host admission are real. Network admission is tested separately against ConversationStates.
-    sendInterAgent: async (envelope: Envelope) => { sent.push(envelope); return { kind: "accepted", stamp: null }; },
+    // The stale rejection is scripted; ConversationStates separately pins the server's admission rule.
+    sendInterAgent: async (envelope: Envelope) => {
+      sent.push(envelope);
+      if (staleRecovery && envelope.payload.in_reply_to !== 6) return { kind: "rejected", reason: "stale_reply_basis",
+        details: { conversation_id: "X", expected_peer_turn: 6, supplied_basis: envelope.payload.in_reply_to } };
+      return { kind: "accepted", stamp: null };
+    },
   };
   const scratch = mkdtempSync(join(tmpdir(), "fuji548-t4b-"));
   vi.stubEnv("HOME", scratch);
@@ -134,7 +140,23 @@ it.each([{ spend: false, cid: "X", late: false, peer: "peer" }, { spend: true, c
     expect((byMethod("turn/start")[1]!.params as { input: { text: string }[] }).input[0]!.text).toContain("BODY-5");
     const result = await sendTool.handler({ to: "peer", conversation_id: "X", kind: "response", body: "NEXT ANSWER" },
       { origin: { token: host.activeInterAgentTurnToken()! } });
-    expect(result.isError).toBeFalsy(); expect(sent.at(-1)!.payload.in_reply_to).toBe(spend ? 6 : 5);
+    expect(sent.at(-1)!.payload.in_reply_to).toBe(spend ? 6 : 5);
+    if (staleRecovery) {
+      expect(result.isError).toBe(true);
+      const recovery = JSON.parse(result.content[0]!.text);
+      expect(recovery.error).toBe("stale_reply_basis");
+      expect(recovery.recovery).toHaveLength(1);
+      expect(recovery.recovery[0]).toMatchObject({ agent_id: "peer",
+        payload: { conversation_id: "X", turn_number: 6, body: "BODY-6" } });
+      expect(recovery.folded_earlier).toBe(true);
+      expect(recovery.reply_authorization.in_reply_to).toBe(6);
+      expect(handoffToolResult(result, () => {})).toBe(true);
+      const retry = await sendTool.handler({ to: "peer", conversation_id: "X", kind: "response", body: "NEXT ANSWER",
+        ...recovery.reply_authorization }, { origin: { token: host.activeInterAgentTurnToken()! } });
+      expect(retry.isError).toBeFalsy();
+      expect(sent.at(-1)!.payload).toMatchObject({ conversation_id: "X", in_reply_to: 6, body: "NEXT ANSWER" });
+      expect(byMethod("turn/start")).toHaveLength(2);
+    } else expect(result.isError).toBeFalsy();
   } finally {
     host?.close(); await running;
     for (const listener of process.listeners("SIGINT")) if (!beforeSignals.includes(listener)) process.removeListener("SIGINT", listener);
