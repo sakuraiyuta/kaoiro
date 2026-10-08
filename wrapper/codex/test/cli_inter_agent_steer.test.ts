@@ -19,15 +19,24 @@ function inbound(granted: "early" | "normal" = "early"): Envelope {
     ext: {} } as Envelope;
 }
 
+interface ComposeExtra {
+  mutate?: (early: any) => void;
+  root?: { agent_id: string; conversation_id: string };
+  idle?: boolean;
+  hostQueued?: string;
+}
+
 type SteerSchedule = "queued-successor" | "terminal-before-settle" | "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
 
 async function compose(backend: "app-server" | "exec", echo: boolean, grant: "early" | "normal" = "early",
-  schedule: SteerSchedule = "included", noticeEcho = echo, otherPeerRoot = false) {
+  schedule: SteerSchedule = "included", noticeEcho = echo, otherPeerRoot = false, extra: ComposeExtra = {}) {
+  const rootSpec = extra.root ?? (otherPeerRoot ? { agent_id: "other.agent", conversation_id: "other-cid" } : undefined);
   let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>;
   const reports: Record<string, unknown>[] = [], acknowledged: number[] = [], notices: Envelope[] = [];
   let activeToken = "active";
   let held: { hooks: Record<string, any>; batchId: string } | undefined;
   const send = vi.fn(async (..._args: unknown[]) => {}), steer = vi.fn(async (text: string, hooks: Record<string, any>, batchId: string) => {
+    if (extra.hostQueued !== undefined) return { kind: "queued" as const, reason: extra.hostQueued };
     expect(hooks.admit(activeToken)).toBe(null);
     hooks.onAdmit(activeToken, batchId);
     if (schedule === "queued-successor" || schedule === "terminal-before-settle") {
@@ -62,41 +71,42 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
     reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
     acknowledgeInterAgentDelivery: (sequence: number) => acknowledged.push(sequence) };
   const replace = vi.fn(() => true);
-  const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => activeToken, send, steerInterAgentInput: steer,
+  const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => extra.idle ? null : activeToken, send, steerInterAgentInput: steer,
     replaceInterAgentPlaceholder: replace,
     createInterAgentPlaceholder: () => true,
     removeInterAgentPlaceholder: () => {},
     run: async () => {
       linkOptions.onReplyBasisMode("v1");
       linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
-      if (otherPeerRoot) {
+      if (rootSpec !== undefined) {
         const root = inbound("normal") as any;
-        root.agent_id = "other.agent"; root.payload.conversation_id = "other-cid";
+        root.agent_id = rootSpec.agent_id; root.payload.conversation_id = rootSpec.conversation_id;
         root.payload.body = "OTHER ROOT"; root.payload.turn_number = 1;
         await linkOptions.onInterAgentMessage(root);
         expect(send).toHaveBeenCalledOnce();
         activeToken = String(send.mock.calls[0]![3]);
         send.mockClear();
       }
-      hostOptions.onTurnStart({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [] });
+      hostOptions.onTurnStart({ turnToken: activeToken, conversationIds: rootSpec !== undefined ? [rootSpec.conversation_id] : [] });
       const early = inbound(grant) as any;
-      if (otherPeerRoot) early.delivery_seq = 2;
+      if (rootSpec !== undefined) early.delivery_seq = 2;
+      extra.mutate?.(early);
       await linkOptions.onInterAgentMessage(early);
       if (schedule === "queued-successor" || schedule === "terminal-before-settle") {
         const next = inbound("normal") as any;
-        next.delivery_seq = otherPeerRoot ? 3 : 2; next.payload.turn_number = 3; next.payload.body = "SUCCESSOR";
+        next.delivery_seq = rootSpec !== undefined ? 3 : 2; next.payload.turn_number = 3; next.payload.body = "SUCCESSOR";
         await linkOptions.onInterAgentMessage(next);
         expect(send).not.toHaveBeenCalled();
         if (schedule === "terminal-before-settle") {
           held!.hooks.onTerminal(activeToken, held!.batchId);
-          hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [], terminal: "turn.completed" });
+          hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: rootSpec !== undefined ? [rootSpec.conversation_id] : [], terminal: "turn.completed" });
           expect(send).not.toHaveBeenCalled();
         }
         if (schedule !== "terminal-before-settle") held!.hooks.onTerminal(activeToken, held!.batchId);
         held!.hooks.onSettle(activeToken, held!.batchId, { kind: "A" }, true, "written", false, "T");
       }
       if (steer.mock.calls.length > 0 && schedule !== "terminal-before-settle") {
-        hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: otherPeerRoot ? ["other-cid"] : [], terminal: "turn.completed" });
+        hostOptions.onTurnEnd({ turnToken: activeToken, conversationIds: rootSpec !== undefined ? [rootSpec.conversation_id] : [], terminal: "turn.completed" });
       }
       await new Promise(resolve => setImmediate(resolve));
     } };
@@ -205,4 +215,73 @@ it.each(["queued-successor", "terminal-before-settle"] as const)(
 it("resumes a steered peer after a different peer's root turn ends", async () => {
   const result = await compose("app-server", true, "early", "queued-successor", true, true);
   expect(result.send).toHaveBeenCalledOnce();
+});
+
+describe("early input that is not steered says why", () => {
+  function captureQueuedLog(fail = false) {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      const line = String(chunk);
+      if (line.includes("inter-agent early input queued")) {
+        if (fail) throw new Error("diagnostic sink unavailable");
+        lines.push(line);
+      }
+      return true;
+    });
+    return { lines, restore: () => spy.mockRestore() };
+  }
+
+  it.each([
+    ["the exec backend", () => compose("exec", true), "steer_not_negotiated"],
+    ["a missing delivery-mode echo", () => compose("app-server", false), "steer_not_negotiated"],
+    ["a missing attribution echo", () => compose("app-server", true, "early", "included", false), "steer_not_negotiated"],
+    ["an earlier input from the same sender", () => compose("app-server", true, "early", "included", true, false,
+      { root: { agent_id: "peer.agent", conversation_id: "earlier-cid" } }), "behind_earlier_input_same_sender"],
+    ["an open root in the same conversation", () => compose("app-server", true, "early", "included", true, false,
+      { root: { agent_id: "other.agent", conversation_id: "cid" } }), "behind_open_root_same_conversation"],
+    ["an oversized message", () => compose("app-server", true, "early", "included", true, false,
+      { mutate: early => { early.payload.body = "x".repeat(20_000); } }), "too_large"],
+    ["a malformed delivery sequence", () => compose("app-server", true, "early", "included", true, false,
+      { mutate: early => { early.delivery_seq = 0; } }), "invalid_delivery_identity"],
+    ["no running turn", () => compose("app-server", true, "early", "included", true, false, { idle: true }), "no_active_turn"],
+  ] as const)("logs one reason line for %s", async (_name, run, reason) => {
+    const log = captureQueuedLog();
+    try {
+      const result = await run();
+      expect(result.steer).not.toHaveBeenCalled();
+      expect(log.lines).toHaveLength(1);
+      expect(log.lines[0]).toMatch(new RegExp(`^\\[kaoiro\\] inter-agent early input queued: ${reason} seq=\\d+ from=peer\\.agent\\n$`));
+    } finally { log.restore(); }
+  });
+
+  it("logs the host's own reason when it declines an early input", async () => {
+    const log = captureQueuedLog();
+    try {
+      const result = await compose("app-server", true, "early", "included", true, false, { hostQueued: "turn_ending" });
+      expect(result.steer).toHaveBeenCalledOnce();
+      expect(result.send).toHaveBeenCalledOnce();
+      expect(log.lines).toEqual(["[kaoiro] inter-agent early input queued: turn_ending seq=1 from=peer.agent\n"]);
+    } finally { log.restore(); }
+  });
+
+  it.each([
+    ["a steered early input", () => compose("app-server", true)],
+    ["a normal input", () => compose("app-server", true, "normal")],
+    ["a normal input without negotiation", () => compose("exec", false, "normal")],
+  ] as const)("logs nothing for %s", async (_name, run) => {
+    const log = captureQueuedLog();
+    try {
+      await run();
+      expect(log.lines).toEqual([]);
+    } finally { log.restore(); }
+  });
+
+  it("still queues the input when the diagnostic sink fails", async () => {
+    const log = captureQueuedLog(true);
+    try {
+      const result = await compose("exec", true);
+      expect(result.send).toHaveBeenCalledOnce();
+      expect(result.reports.map(report => report.stage)).toEqual(["queued"]);
+    } finally { log.restore(); }
+  });
 });
