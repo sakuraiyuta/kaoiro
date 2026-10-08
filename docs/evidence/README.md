@@ -122,3 +122,9 @@ Server channel-test reply budget (issue #479): default `assert_reply` latency an
 claude-code SIGTERM test: exit 143 from the tsx CLI relay (issue #550).
 
 - [sigterm-readiness-2026-10-08.md](issue-550/sigterm-readiness-2026-10-08.md) — the tsx relay window (N1 method), injected-pause controls for the target file, the early-SIGTERM control, and the suite count.
+
+## issue-554/
+
+Channel test store isolation and OAuth watcher budgets (issue #554).
+
+- [channel-isolation-and-watcher-budget-2026-10-09.md](issue-554/channel-isolation-and-watcher-budget-2026-10-09.md) — the repeat-until-failure baseline, the C1 probe gate (exit 1 at the 250 ms threshold, held for D2), and the mutation exit codes.
