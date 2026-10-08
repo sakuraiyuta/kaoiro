@@ -1,0 +1,1584 @@
+{
+  "schema": "kaoiro-issue-548-evidence-v1",
+  "date": "2026-10-09",
+  "branch": "issue-548-early-own-request",
+  "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+  "base_commit": "3c1dd786c9e5c72d9d836e838379e8d7db600da5",
+  "bounds": {
+    "default_constructors": [
+      "runCodexCli",
+      "runClaudeCli"
+    ],
+    "dependency_injection": false,
+    "network_acceptance": "Scripted localhost Phoenix replies; real ConversationStates and admission tested separately.",
+    "live_provider_input": "Not directly observable; claims use native item receipts and actual tool replies.",
+    "production_deploy": false,
+    "production_canaries": "Director-owned; not run here.",
+    "process_isolation": "setsid plus user/PID namespace mapping the current non-root UID"
+  },
+  "designs": [
+    {
+      "path": "tmp/reviews/issue-548/design-r3-kuroe.md",
+      "sha256": "181120a18e833bb359b3e4eb827dd6135054a61a33c54474f3243351ef10b8a2"
+    },
+    {
+      "path": "tmp/reviews/issue-548/design-r3a-fuji.md",
+      "sha256": "8df98ee6528e49ecbde458f21be01b3ebd5ffc10b5a66f4ea5772f972b2fea14"
+    }
+  ],
+  "compiled_modules": [
+    {
+      "path": "wrapper/agent-common/dist/inter_agent.js",
+      "sha256": "86351784c4ad825c65df288f0ad9d26b8ce98ab7b278d0ae3bf826996e43961d"
+    },
+    {
+      "path": "wrapper/codex/dist/cli.js",
+      "sha256": "025335b5de09da0c5d8942ff20e90cb698df0fed0c08c9e7bd878ddba109d518"
+    },
+    {
+      "path": "wrapper/codex/dist/host.js",
+      "sha256": "36aae52433f3c7852f2f3783145308ea640fc91135c01db7582f4d54bab58c64"
+    },
+    {
+      "path": "wrapper/codex/dist/inter_agent_turn_coordinator.js",
+      "sha256": "35e969fbb6d8d4350378fb30d58a763d4e74d5d033cba1442f62df995e33c6cb"
+    },
+    {
+      "path": "wrapper/claude-code/dist/cli.js",
+      "sha256": "86dde339c527b7bfeb9b8f11f5eba2d305049ba5f53ac1a4315cd4d757cd3a87"
+    },
+    {
+      "path": "wrapper/claude-code/dist/host.js",
+      "sha256": "6401e0ff67fd6007a308695644cf856541f72c5e26a14bd2fd6b054843807e89"
+    }
+  ],
+  "baseline_modules": {
+    "path": "tmp/reviews/issue-548/native-baseline-modules-fuji.json",
+    "sha256": "148939f7024811c742100554786b4d735288ecb8fe689210321fc8c4dcd77eee"
+  },
+  "engines": {
+    "codex": {
+      "version": "0.161.0",
+      "binary_sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c",
+      "model": "gpt-6.1-sol",
+      "effort": "low"
+    },
+    "claude": {
+      "sdk_version": "0.3.293",
+      "sdk_sha256": "a980b792353c301eea60d7896704cff21440de7c4aeefc3fe481be079504e203",
+      "native_binary_sha256": "8968405e26db478af44eabc4635ab5ca557057b702a54460a59c13e1b253e978",
+      "model": "haiku",
+      "effort": "low",
+      "binary_observation": {
+        "path": "tmp/reviews/issue-548/claude-preflight-exec-private-fuji.log",
+        "sha256": "3e4826ec1e8df362364119aa6894ba0f2e24efe920eb87d6d0a6a96607731f60"
+      }
+    }
+  },
+  "gates": [
+    {
+      "command": "(cd wrapper && pnpm typecheck)",
+      "exit": 0,
+      "warnings": false,
+      "unhandled_errors": false,
+      "log": {
+        "path": "tmp/reviews/issue-548/impl-typecheck-fuji.log",
+        "sha256": "3b6130b9f26eb17f88674857d31056c945af712ba9b9756a4ea3ae1a77593d43"
+      }
+    },
+    {
+      "command": "(cd wrapper && pnpm build)",
+      "exit": 0,
+      "warnings": false,
+      "unhandled_errors": false,
+      "log": {
+        "path": "tmp/reviews/issue-548/impl-build-fuji.log",
+        "sha256": "2351b79be7be02e7e2b5755d4206e0a2e397a3247445cedcb520621ec5590589"
+      }
+    },
+    {
+      "command": "(cd wrapper && setsid -w unshare --user --map-current-user --pid --fork --mount-proc setsid -w env -u CODEX_HOME pnpm test)",
+      "exit": 0,
+      "counts": {
+        "core": {
+          "passed": 485,
+          "skipped": 0
+        },
+        "agent-common": {
+          "passed": 564,
+          "skipped": 0
+        },
+        "antigravity": {
+          "passed": 493,
+          "skipped": 3
+        },
+        "claude-code": {
+          "passed": 807,
+          "skipped": 4
+        },
+        "codex": {
+          "passed": 1384,
+          "skipped": 0
+        }
+      },
+      "warnings": "Two MaxListenersExceededWarning messages plus expected fault-path logs; no Vitest unhandled-error section.",
+      "log": {
+        "path": "tmp/reviews/issue-548/impl-wrapper-full-fuji.log",
+        "sha256": "3af959299d8dc169311eec9b795e3adb515a9427f94b55e1589a393fea3fb5db"
+      }
+    },
+    {
+      "command": "(cd server && setsid -w unshare --user --map-current-user --pid --fork --mount-proc setsid -w env MIX_ENV=test mix test test/kaoiro_server/conversation_states_test.exs test/kaoiro_server/inter_agent_reply_basis_test.exs test/kaoiro_server/footer_assets_test.exs test/kaoiro_server/footer_watcher_test.exs)",
+      "exit": 0,
+      "passed": 79,
+      "warnings": "Unset auth and cache permissions; expected callback-failure logs.",
+      "log": {
+        "path": "tmp/reviews/issue-548/impl-server-gate-fuji.log",
+        "sha256": "ed951cb8594b7f3ec51ad5765aebae76a141c28593d848dbb86a73b189144c51"
+      }
+    },
+    {
+      "command": "Actual reducer output through real InterAgentReplyBasis.admission/2",
+      "exit": 0,
+      "cases": 7,
+      "notices": 14,
+      "warnings": false,
+      "log": {
+        "path": "tmp/reviews/issue-548/impl-wire-gate-fuji.log",
+        "sha256": "197c5d3f94eb2fd51752d239d4c1acecc4856f938e1737c45da4fd6370dca568"
+      },
+      "fixture": {
+        "path": "tmp/reviews/issue-548/impl-wire-fixtures-fuji.json",
+        "sha256": "e3aa4d9d9cc0ed099564dbbb0a6008abf43b569ecfdc3001fa20fe0533363bf4"
+      }
+    }
+  ],
+  "mutations": {
+    "typescript": [
+      {
+        "mutation": "arrival-blanket-root",
+        "source": "wrapper/codex/src/cli.ts",
+        "exit": 1,
+        "failed_tests": 3,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-arrival-blanket-root-fuji.log",
+          "sha256": "b16ac747d9bce0af45aedef3815a18dd5bb373f3a83050e1f401d799202b7ace"
+        }
+      },
+      {
+        "mutation": "commit-blanket-root",
+        "source": "wrapper/codex/src/cli.ts",
+        "exit": 1,
+        "failed_tests": 3,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-commit-blanket-root-fuji.log",
+          "sha256": "f2d5c3b18f9f4bde42cf1724729f3cd1dd0e2146d01f2cd8e1e304b02fe4e92a"
+        }
+      },
+      {
+        "mutation": "ticket-credit-cut",
+        "source": "wrapper/codex/src/cli.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-ticket-credit-cut-fuji.log",
+          "sha256": "23251b1f546a1b1c52a5ee6f1d73f2541f6bd1ccde1e5fffc5e1adc35a6ded04"
+        }
+      },
+      {
+        "mutation": "held-root-gate-cut",
+        "source": "wrapper/codex/src/cli.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-held-root-gate-cut-fuji.log",
+          "sha256": "02251033e6e32f3ca279c59cfdad319f12637de388e61a6a63444828e8e84a38"
+        }
+      },
+      {
+        "mutation": "held-root-release-cut",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-held-root-release-cut-fuji.log",
+          "sha256": "c0523d762a69a3ff73767620f4311d17606fedaa3a7ac3f3545813d3a8789dac"
+        }
+      },
+      {
+        "mutation": "other-root-owner-accepted",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-other-root-owner-accepted-fuji.log",
+          "sha256": "f49362e0a8a35a313ccbc244553f63660fd4336d66a18eec736b1883067696d3"
+        }
+      },
+      {
+        "mutation": "legacy-root-accepted",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-legacy-root-accepted-fuji.log",
+          "sha256": "3bd82ffc32c715b6742223fcd7646eedd727596cb12b0e51ee4108e0fa53fe38"
+        }
+      },
+      {
+        "mutation": "fallback-guard-cut",
+        "source": "wrapper/codex/src/inter_agent_turn_coordinator.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-fallback-guard-cut-fuji.log",
+          "sha256": "8efddbd64c5f128b66879c48b784a894b144cceb9c54dc706e704cbd00bedcc9"
+        }
+      },
+      {
+        "mutation": "root-resolved-before-steer",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 15,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-root-resolved-before-steer-fuji.log",
+          "sha256": "3072a200e0e3969892208b7a3e386aa4e26de68e84796bdbc5cdacdd50efe90c"
+        }
+      },
+      {
+        "mutation": "sequence-only-ledger",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 6,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-sequence-only-ledger-fuji.log",
+          "sha256": "aa444335ecbac80272c73f967c27a9465cbfb2cb4e728a388458f2464e5244b7"
+        }
+      },
+      {
+        "mutation": "identity-captured-at-activation",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-identity-captured-at-activation-fuji.log",
+          "sha256": "9ce596d4920fd946f5977d1633f2b484589b6e5c850e1b3bdd8341693a902a53"
+        }
+      },
+      {
+        "mutation": "drop-covered-record",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 10,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-drop-covered-record-fuji.log",
+          "sha256": "1a12994a597feb006b69a0b554f266ce29218e9ee475098ad2ab6981fd08b432"
+        }
+      },
+      {
+        "mutation": "drop-chunk-limit",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-drop-chunk-limit-fuji.log",
+          "sha256": "50dbff54fe5e96061b706877aa82e812a344c76700a29097dd4ba791e39dace1"
+        }
+      },
+      {
+        "mutation": "drop-duplicate-split",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-drop-duplicate-split-fuji.log",
+          "sha256": "068c747e093f132741d7a378d2940fb1bb4b763de1dd6c92a2f887865d3f56ad"
+        }
+      },
+      {
+        "mutation": "widen-ticket-discharge",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 3,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-widen-ticket-discharge-fuji.log",
+          "sha256": "9613624f770fbd992a7b5eb856b1c09ebcca06bc7b2c338baaf967754ea1f534"
+        }
+      },
+      {
+        "mutation": "reject-unknown-discharge",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-reject-unknown-discharge-fuji.log",
+          "sha256": "d7f2e68df2b505a7300305b6315ccc40c8b15c0edfb7caf473f40eb47a8cbb09"
+        }
+      },
+      {
+        "mutation": "root-only-merge",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-root-only-merge-fuji.log",
+          "sha256": "e0d0cfdb7e0c8cb8f2b8dc8d295632c1bbb69772ef0bf58dd2b1f55248411fd3"
+        }
+      },
+      {
+        "mutation": "canonical-timeout-cut",
+        "source": "wrapper/agent-common/src/inter_agent.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-canonical-timeout-cut-fuji.log",
+          "sha256": "8427431a1acbf71eb7b0d9895265cb9a363245bb51581d1bf98bbce33d2fec41"
+        }
+      },
+      {
+        "mutation": "queue-guard-cut",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 4,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-queue-guard-cut-fuji.log",
+          "sha256": "91f27fdf866e71f20354ef6e364058e0ee91bc9b4e536463187b7e3259badea0"
+        }
+      },
+      {
+        "mutation": "operator-overtakes-peer-root",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-operator-overtakes-peer-root-fuji.log",
+          "sha256": "7a518b7b54d7dcca053369a24486ab8b027f8b1e00499c7add674f871786337e"
+        }
+      },
+      {
+        "mutation": "overtake-cap-cut",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-overtake-cap-cut-fuji.log",
+          "sha256": "4786456ffda25e8eee5462265fd19f9a434383df9130d764ea65119757a19c7a"
+        }
+      },
+      {
+        "mutation": "charge-per-waiting-root",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-charge-per-waiting-root-fuji.log",
+          "sha256": "682bd0f560e046bc291c96651ce32f042d78f5de3dee9c7cc4b4f8d8f2942efa"
+        }
+      },
+      {
+        "mutation": "charge-before-root-waits",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 2,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-charge-before-root-waits-fuji.log",
+          "sha256": "9bc1194a90576a773b9ce83aa66ae0f71c859c4b69d52f463d3cad8d2546ad27"
+        }
+      },
+      {
+        "mutation": "global-overtake-counter",
+        "source": "wrapper/codex/src/host.ts",
+        "exit": 1,
+        "failed_tests": 1,
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-global-overtake-counter-fuji.log",
+          "sha256": "94256c67eced0c04301fab3b0f6977ca3e344df04fc31511fc00aa005c25aa8c"
+        }
+      }
+    ],
+    "server": [
+      {
+        "mutation": "server-stale-basis-guard",
+        "exit": 2,
+        "summary": [
+          "Result: 52/54 passed",
+          "Failed: 2 tests"
+        ],
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-server-stale-basis-guard-fuji.log",
+          "sha256": "622b2e728a089bb1858d2b6dd1fff68706d3515bbca613cac3f0e26df2e92fc5"
+        }
+      },
+      {
+        "mutation": "built-in-footer-contract",
+        "exit": 2,
+        "summary": [
+          "Result: 14/15 passed",
+          "Failed: 1 test"
+        ],
+        "log": {
+          "path": "tmp/reviews/issue-548/mutation-built-in-footer-contract-fuji.log",
+          "sha256": "731a1cde3897ab80822e65a5bbd297b8dd299bd66c459e71035cc21dfc5e1d7c"
+        }
+      }
+    ],
+    "wire": [
+      {
+        "check": "mutation-wire-build",
+        "exit": 0
+      },
+      {
+        "check": "mutation-wire-capture",
+        "exit": 0
+      },
+      {
+        "check": "mutation-wire-merged-rejected",
+        "exit": 1
+      },
+      {
+        "check": "mutation-wire-validator-weakened",
+        "exit": 0
+      },
+      {
+        "check": "mutation-wire-validator-restored",
+        "exit": 1
+      },
+      {
+        "check": "impl-wire-restored-build",
+        "exit": 0
+      },
+      {
+        "check": "impl-wire-restored-capture",
+        "exit": 0
+      },
+      {
+        "check": "impl-wire-gate",
+        "exit": 0
+      }
+    ],
+    "wire_log": {
+      "path": "tmp/reviews/issue-548/impl-wire-mutations-fuji.log",
+      "sha256": "0b462acf82865af3d534b220611a5621dc4ec92947eab13da34d766099b03460"
+    }
+  },
+  "trace_negative_controls": [
+    {
+      "engine": "codex",
+      "mutation": "Delete the matching completed native userMessage from a copied trace",
+      "exit": 1,
+      "log": {
+        "path": "tmp/reviews/issue-548/native-trace-negative-fuji.log",
+        "sha256": "45575ae696f1294f2b417fef3cede8c03fbfcdd6c29a2142f3e68e135f9642d7"
+      }
+    },
+    {
+      "engine": "claude-code",
+      "mutation": "Change only the native send_to_agent tool reply_ticket in a copied trace",
+      "exit": 1,
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-trace-negative-fuji.log",
+        "sha256": "df17e620a72e4ab0639609a9dc2f5a0d97365a98831333aa9cbdf60162c7d7f5"
+      }
+    }
+  ],
+  "native_codex": [
+    {
+      "name": "native-baseline-S1-fuji",
+      "engine": "codex",
+      "scenario": "BASE-S1",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "3c1dd786c9e5c72d9d836e838379e8d7db600da5",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/cleanup.json",
+          "sha256": "291c29b0b59c050368a2fe4f482a1bec9229d7e40dba5ac85013aaa33fb473dc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/config.json",
+          "sha256": "d04154818d64c9fb1d435302273fd74706adaa49fb092fa0fabf51d91ddf7ebc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/native.json",
+          "sha256": "976b1463a5d3e4d2992e714d23d21a779849e261f802769cbfa50f72824f8379"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/rates.json",
+          "sha256": "c71664649de7cd18d815695b9992da638cb7ba87758ae091334e951f1833d4e2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/requests.json",
+          "sha256": "1255b4323d2ff5f93dfa642a16d59d2e73f03cedc1263a7b6c58e41ac5b31177"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/result.json",
+          "sha256": "185ecd380ecea6225bae999c80d145f805a37954912b8c0ba1c63562086e0bbc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji/wire.json",
+          "sha256": "ba996a22d0e2756fe8aae06ec6056c94de6dd11b6361433eb8489e0847a7b20d"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-baseline-S1-fuji.log",
+        "sha256": "07ebe398cbff1172a4cf32f026de2008288d7bbc4d7b8ae10b7f674e690d5080"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-baseline-S1-fuji-check.log",
+          "sha256": "7ce4878d73663e5cced5bedb034b0a16b191ec908a11ee1ecc899d4d1ede0d26"
+        }
+      }
+    },
+    {
+      "name": "native-baseline-S2-fuji",
+      "engine": "codex",
+      "scenario": "BASE-S2",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "3c1dd786c9e5c72d9d836e838379e8d7db600da5",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/cleanup.json",
+          "sha256": "1291012a68aedc0edfa27cb2c205ec0c763c83f9346079f5a167ab541aa13842"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/config.json",
+          "sha256": "b64d922d7322698da4907079e29708be47b06252e5768f4d449bb4d257020ab4"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/native.json",
+          "sha256": "bcec7d66e100fc79116b9b2e3aeb7d710370a6f8dc26f323efaf862feae04b64"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/rates.json",
+          "sha256": "60a166e3f590275ac9eefa9e5dec847706f973572045386ef3b32bf34a994fd7"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/requests.json",
+          "sha256": "1f86f257ca1dd6e47d86bacceffb193ad386c4ebf7193db733455b3ec0ce78fd"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/result.json",
+          "sha256": "2d5d4910c5361e0aa6a27e3c0c9f5454ff8115109e36ad9abd5ce55d4d18b840"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji/wire.json",
+          "sha256": "fb54d460ed6888d2167bf1c89af77629167e47bbaedc27ea42f535559b42fed1"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-baseline-S2-fuji.log",
+        "sha256": "d9cbd8c374c6d649e74af10ef7dfaa21ceb8bca0664e7e87109f07c940433784"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-baseline-S2-fuji-check.log",
+          "sha256": "5d0eba6cd720959a80f42c098f1b1ae6c5f6eec619244acdac7a53783f14f00d"
+        }
+      }
+    },
+    {
+      "name": "native-S1-r1-fuji",
+      "engine": "codex",
+      "scenario": "S1",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/cleanup.json",
+          "sha256": "c323b8aca93689a88830e16866df30f4259a62de06c204602f63aea461fc7cb7"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/config.json",
+          "sha256": "cbf56b637c23f509b8a4fc7c41ee1beb0144e1d1205c81fcf3a202815676003e"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/meter.json",
+          "sha256": "1fc63257e1ba3bf28c7a84b9941f20eab81b3df4906301b37f15ea87246bfd9e"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/native.json",
+          "sha256": "cf1a14fc9146bb066842664ac2899106ff2141d84d19aa401a48d401140a9d3e"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/rates.json",
+          "sha256": "18368aacebb487ec79d2efd0f252e6192ce8198852276a2d39a4d4d979c4eb7b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/requests.json",
+          "sha256": "bf6d920a4bd881790ae8c7acc63a85cd66016e71b305e4793b4e135ba0602583"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/result.json",
+          "sha256": "14d1fc04b7618754d9770f21cd8018ad7650c9b095d04a168d158c3ee87c5840"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji/wire.json",
+          "sha256": "001fc8e2ea898f14a9889dfddf7d1403853c4f2fbc73b14f065388803be14a4b"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S1-r1-fuji.log",
+        "sha256": "798fdadf64fe564290cf925dac6034760f193da5d583c2c2ed67002ff2606593"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S1-r1-fuji-check.log",
+          "sha256": "254f3104bc8769bcab1d6d1731d87ba39fae4798d2f3c053d4aeafa3e3a95898"
+        }
+      }
+    },
+    {
+      "name": "native-S2-r1-fuji",
+      "engine": "codex",
+      "scenario": "S2",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/cleanup.json",
+          "sha256": "4992a2e54710da8c157242091c50703e8b62ca6366ee3f51b37b141a5ffb07a0"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/config.json",
+          "sha256": "1f85a20009f7a6e1966ea7065de05240b1b05f315d4f805a2c5fd592d13834bf"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/meter.json",
+          "sha256": "8d7263a3ffd70588ac0dd113948edd73784f24c43d710d42eeb23b42ec76d780"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/native.json",
+          "sha256": "15fd8a9e6de64fe8604c225ecc17200d48a5b3ac5e32222413550e8502ea3b9b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/rates.json",
+          "sha256": "fe2f5dc09cf68bd8417ad0bc747e6c64fd291794432047cc872fd39ba8d3052a"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/requests.json",
+          "sha256": "618904be917d8f180b481eafdb2395242f13b0b1a2916df573a14873d967dfd5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/result.json",
+          "sha256": "1bf03b21ced0ddf08dfec6da87f8ac204adfe69e64f95787acf11db29fc29b1b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji/wire.json",
+          "sha256": "8f4c1ae1f166a049014cf3ae8336e1fa00fe1d23fa6361605b96fa3841845cf9"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S2-r1-fuji.log",
+        "sha256": "c7227af3b746494e90dd13022f7567ea1c576ba2c67badb60de09122acbe5a70"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S2-r1-fuji-check.log",
+          "sha256": "4ddb58001c1ad926de7e6dcc98236eb18b24040325c996db91faa3945389f5f8"
+        }
+      }
+    },
+    {
+      "name": "native-S3-r1-fuji",
+      "engine": "codex",
+      "scenario": "S3",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/cleanup.json",
+          "sha256": "74e322e792640b75f1057b1951748aa2e1a65b9013619ed962fdfc51fc98a201"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/config.json",
+          "sha256": "07b947d7fe4903ff6c8b126f1f83c769ac6ede6d502e125a442eed1746874aa2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/meter.json",
+          "sha256": "05843762cc8fe55c297b95fc52b03ff762d2661784f711cd5f97802995bb84b7"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/native.json",
+          "sha256": "753991c8bda1e4fcf6f5479ea4e2a202501a616d8187a5f418b4603222107f34"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/rates.json",
+          "sha256": "db353211cae1f8af7c488c2e0c4a54c2822e41951a3f5bebbe0aca7503e879e2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/requests.json",
+          "sha256": "eeb0a30e7d079c9a599eb9762fa37a6e694597dce98b0d0acf35e290f0f879a0"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/result.json",
+          "sha256": "a90fe79b344516b1d4a0c4315aac94efb2dab41681d7e4629b09612df0f0d4e5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji/wire.json",
+          "sha256": "0bb9c7c0ea8280de944360ad3e430b1ab42c11e81842dbfff4c78217f68351ff"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S3-r1-fuji.log",
+        "sha256": "56edadf8308e5548437f7fb9783ad9fe5907803b4928715552b1b477f1de4728"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S3-r1-fuji-check.log",
+          "sha256": "4e57dd1f17453561a012825f012af51ab38af9cfc32752dc2b59dc87a11c8431"
+        }
+      }
+    },
+    {
+      "name": "native-S4-r1-fuji",
+      "engine": "codex",
+      "scenario": "S4",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/cleanup.json",
+          "sha256": "40c25508fca648be70898cff09ca92ec5a230d2131ba5948ffe94d9d3ccb76f3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/config.json",
+          "sha256": "cd93a65921649aa405e935d4a519bb3bc9b5890377fb52a3d8d636db8dfb19f1"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/meter.json",
+          "sha256": "7f978b7e3503c8d794130ca9034b4c391f0ff0a4e1240c1a42d18117da6987db"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/native.json",
+          "sha256": "5df6074800eca0ba1963764d2cbad62ace38107ceb6ed15bbc5ff9b713818a21"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/rates.json",
+          "sha256": "30688df90de913483d847615e927c9fc17e792f235d78e0179f0968e4a2ab2e8"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/requests.json",
+          "sha256": "569a6acdbc0b45f053242862d728fdfa33055f50164bd51af60f2f37d412583b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/result.json",
+          "sha256": "4dfbf8e85dd81d5e6b466fd0de2f6a9e468a8da899b6370650e0579e0f60da80"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji/wire.json",
+          "sha256": "d5e74dd16bc9be88859a6be029c4bb6aaf61ab685a99f16d25df54a23dfd1ab1"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S4-r1-fuji.log",
+        "sha256": "8292ecccb58279f41893e56f2cb5b2d1b78de90962ec731a387c1b8f6e9ed350"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S4-r1-fuji-check.log",
+          "sha256": "b6902cf433b0acfedca257b828f10359500a5ed479d503a366771eb9dba1f4c1"
+        }
+      }
+    },
+    {
+      "name": "native-S5-r1-fuji",
+      "engine": "codex",
+      "scenario": "S5",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/cleanup.json",
+          "sha256": "d85772125338369510d5b6d77d0baf58063169197b5430823cf695c5a3e82540"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/config.json",
+          "sha256": "c76cf2ba41384267d3af5a483f7be17b0cbe24b07c539adcf7869191fd20fecd"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/meter.json",
+          "sha256": "9398f71e9f62d4895e0b98bd1e921a5b9f46b87d37f473a1e9b91a2ffc0fe483"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/native.json",
+          "sha256": "91d1c83c3c3e67f62abd969b948c5ce17ead08f62e3e7a79fed43eefeb71ff90"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/rates.json",
+          "sha256": "6d3967ee12f70a95c2a20072a42817bdd6ecd849d7c294ac0daa1913f7a761a3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/requests.json",
+          "sha256": "13831ce3d49fefa45416415f3968ae0133fa66237ec7fabb9107b4909df858e1"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/result.json",
+          "sha256": "9987b9e8fc17a058e50e949fecc49ce32a6efd642a2e79687b243b12ee4b2052"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji/wire.json",
+          "sha256": "7544bb392fcbb5f613cb79afa0535b096f0a661629b56ff35a673a5a6509444e"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S5-r1-fuji.log",
+        "sha256": "743379727fe02adfbd6c6f6c5d0195012c355f91de9c3d9c45c7c1f81595636e"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S5-r1-fuji-check.log",
+          "sha256": "91a0868649963bc39a3134a760a717f70a9686965d267b593543319517a7f88f"
+        }
+      }
+    },
+    {
+      "name": "native-S6-r1-fuji",
+      "engine": "codex",
+      "scenario": "S6",
+      "native_turns": 3,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/cleanup.json",
+          "sha256": "74e322e792640b75f1057b1951748aa2e1a65b9013619ed962fdfc51fc98a201"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/config.json",
+          "sha256": "6d5e84f43d5c33cbd7075ec58fb1216d933d73ee28876d16a0e4b6843a0c8b5f"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/meter.json",
+          "sha256": "86fbcdd9b8ffe5094567a2730ec4cb1827f0eb87c7f12c348c6efbfaeeb3ee47"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/native.json",
+          "sha256": "73c23a202fbcaaef86b3f91ffa7ec94bb15ee6ed65ea7192f69fbeec4f0eb3a1"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/rates.json",
+          "sha256": "5eed539e1b829cc6de343a21e1842f0b5fc19258b433f045499073d05a6ed1d2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/requests.json",
+          "sha256": "cca3366a3570485a9e83a21f9a658e361623c2d8dcb126061483f6eb71483e52"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/result.json",
+          "sha256": "6bd70e35bd8fb32f47b2aaf99471ea9ddfba79eb9f54e5b5d3cf327c033a772d"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji/wire.json",
+          "sha256": "35f7d225b93c75a4a89ee5a4b36e74e42eead6d2c48b91dbebde1a19fbf27e98"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S6-r1-fuji.log",
+        "sha256": "9c80dc3920f67a1d83f5b32e7fd1140bd8f83f0405147836eb4e85f897c2e4e4"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S6-r1-fuji-check.log",
+          "sha256": "de0ca75e907411ca5c9ae19cdcd88c053863983397fff85279f9fc5eeb260730"
+        }
+      }
+    },
+    {
+      "name": "native-S1-r2-fuji",
+      "engine": "codex",
+      "scenario": "S1",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/cleanup.json",
+          "sha256": "d85772125338369510d5b6d77d0baf58063169197b5430823cf695c5a3e82540"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/config.json",
+          "sha256": "f80e7ac78ba2a400cebe5c4bf3fc19aa3db7567332ea73b04535320c57c91a6a"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/meter.json",
+          "sha256": "d757ebf8238655fa5b38d219c71bb400dcd2d71dcac41a85c7cd922506043c5d"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/native.json",
+          "sha256": "e4920068478cd9f3677eed95230ae310bd67aa2de01416b79b76d207d068593f"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/rates.json",
+          "sha256": "fef2174c935f3eaf89eed6cb456dd50de171b7788b8ac7434516105cfa27c697"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/requests.json",
+          "sha256": "464f5571ada143cd7ec7df40c72e69024288dd96ede4262abeec8777779f985d"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/result.json",
+          "sha256": "700f7624eb8ee60e5cc1a7627fd4fa70eaf93185306c1ce7f809a1f4ead901b2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji/wire.json",
+          "sha256": "8ad409848835fa6b57e6736158b77211e88c8d4da723c39ce625eaed13392e4f"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S1-r2-fuji.log",
+        "sha256": "907779c07fc7da45a9047e1e46780582de4f4ebc6cbf8710cd4bf95ec5f3ad77"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S1-r2-fuji-check.log",
+          "sha256": "254f3104bc8769bcab1d6d1731d87ba39fae4798d2f3c053d4aeafa3e3a95898"
+        }
+      }
+    },
+    {
+      "name": "native-S2-r2-fuji",
+      "engine": "codex",
+      "scenario": "S2",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/cleanup.json",
+          "sha256": "40c25508fca648be70898cff09ca92ec5a230d2131ba5948ffe94d9d3ccb76f3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/config.json",
+          "sha256": "8b196d34e269260dae5c523dc4ca0a87ac83be702f1fd3d88e6a1bd3e069cea8"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/meter.json",
+          "sha256": "d28153f7d7b39392363d55245abbd5fe7d1c33b86e106bf97329a0cbedd5dbc8"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/native.json",
+          "sha256": "efcc02c05abebabc66787fbee0ad639f3289c8293119875e8dfdf236ef63ce79"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/rates.json",
+          "sha256": "a78ec81227850dce27a8e91c984e1ffcafe55ffd039d7f9726a1d38370a57554"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/requests.json",
+          "sha256": "4f832110c0f93dfdeed3705a96ce6aa689c2bb826f3e7a403b73a119b7266bd5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/result.json",
+          "sha256": "21985b0504a633503def5662807f17399dac2210f7606f5fc47cff74fa9f71fb"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji/wire.json",
+          "sha256": "f43bb305a4c4cdcf8a13377dbf1aacec2ed9b39cca098d99b51f5f6e6a46e1bd"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S2-r2-fuji.log",
+        "sha256": "950e51514bae0b0b27052a1c2b815586bda480fe8fffd84e41b8d0efd02ec385"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S2-r2-fuji-check.log",
+          "sha256": "4ddb58001c1ad926de7e6dcc98236eb18b24040325c996db91faa3945389f5f8"
+        }
+      }
+    },
+    {
+      "name": "native-S3-r2-fuji",
+      "engine": "codex",
+      "scenario": "S3",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/cleanup.json",
+          "sha256": "40c25508fca648be70898cff09ca92ec5a230d2131ba5948ffe94d9d3ccb76f3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/config.json",
+          "sha256": "b8154630ef144faed8ed9b50572c06817c2fd16b5adb7f85218af696dfadd3a5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/meter.json",
+          "sha256": "0c9e8a5d66655dcf0553951a1a2358d7298158460f2271da06dca062b7a25416"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/native.json",
+          "sha256": "7fa0aeff10e705ce926ed52912be164a6e9e76ed2f1132d80d8800a5e4b082c8"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/rates.json",
+          "sha256": "41cb1026b4420666bc5bd9108aeee24e5e442ebb5211a7a45fed4ad9cd7fb887"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/requests.json",
+          "sha256": "df48249808c4343f8165f1ff393a2f9ca239de5f6090f571b3147904df4872bb"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/result.json",
+          "sha256": "434332c3f5c3bf94f1f4fc61de55e197b9ad192ef316dfc006f9c85be825d8a3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji/wire.json",
+          "sha256": "4290131b34d5b1de736f21ba9b647a279a855094655f6815caea6ad7f1437726"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S3-r2-fuji.log",
+        "sha256": "df72adcb990b40e1b364978d57d0f6824b7382a42fbb5ed20e3286ae08c153f1"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S3-r2-fuji-check.log",
+          "sha256": "4e57dd1f17453561a012825f012af51ab38af9cfc32752dc2b59dc87a11c8431"
+        }
+      }
+    },
+    {
+      "name": "native-S4-r2-fuji",
+      "engine": "codex",
+      "scenario": "S4",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/cleanup.json",
+          "sha256": "0dc25b1e80e85b9ea97973187916d4484ac7d4ffba9b059af546c35d09926e2a"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/config.json",
+          "sha256": "a47ce09af35cc24d763d8abff1698e7e39f9f6ef965bd303a8d5f2ce1b8560ed"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/meter.json",
+          "sha256": "da48c801008942b4421f2872341084bdcee341cef31c69560e9c66fe00f6f17a"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/native.json",
+          "sha256": "143d2475485914ac4aaca18fc60f853d29b88065f4c0d4d6130a937307d674fc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/rates.json",
+          "sha256": "5e9297a06e6f144749b41b14eba5e3734c40308a79110c4d4930db7f30be0e5d"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/requests.json",
+          "sha256": "935270310425cd3e1bddf81238b8a3b2e041ab06d2d69990de36c2e0fbf01959"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/result.json",
+          "sha256": "0d1800d8f5f9c63a0e9bbcc3e8196353137a4be25fc0b2e28a64eb9c8d572cfe"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji/wire.json",
+          "sha256": "120a373b885e9e6144545cb8c6a4bd9bfa31cd8b58566bdd13699049ee4fcaf5"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S4-r2-fuji.log",
+        "sha256": "8ed282370c7dbdd6a4b30af674fe6f94c137e59e689351c9eda9eefda01150f7"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S4-r2-fuji-check.log",
+          "sha256": "b6902cf433b0acfedca257b828f10359500a5ed479d503a366771eb9dba1f4c1"
+        }
+      }
+    },
+    {
+      "name": "native-S5-r2-fuji",
+      "engine": "codex",
+      "scenario": "S5",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/cleanup.json",
+          "sha256": "8929414c2ec895caf1c9077dfa059fb8da8a487e9e7420d9d70c03d74d468beb"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/config.json",
+          "sha256": "ad69d03956f197c461d1c85440342e6d767857d36854d9e7c876546c4782beb5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/meter.json",
+          "sha256": "3fd49fc6eda6549245359281b7a83e76bf288e905553cc69df8cd9030f8cf46c"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/native.json",
+          "sha256": "2b6ae92725605c317444cf767396cbd8262d189de0c2f3956bb415ccf7d2fd01"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/rates.json",
+          "sha256": "b8e0022b95d807da17617e0b4f3d19b87c29bc6c4e78f8c9fd6f2aa6a8f407f7"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/requests.json",
+          "sha256": "e03f07062ba2e426e5ce8d9f956a394d1d5eb1f0d096075c128a62e0361e4d76"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/result.json",
+          "sha256": "e1f5dfb76feabee48cb7513b60beeb1165320a80178739615da77afd98be814c"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji/wire.json",
+          "sha256": "9a62db5639adf6dba6502f2ae6c9f4bb5d5b6b56b3e17d403fe834402f6ce03c"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S5-r2-fuji.log",
+        "sha256": "c999e21da6f94578e147ccd694a78d571275c6027daf53775543cf108982152f"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S5-r2-fuji-check.log",
+          "sha256": "91a0868649963bc39a3134a760a717f70a9686965d267b593543319517a7f88f"
+        }
+      }
+    },
+    {
+      "name": "native-S6-r2-fuji",
+      "engine": "codex",
+      "scenario": "S6",
+      "native_turns": 3,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/cleanup.json",
+          "sha256": "40c25508fca648be70898cff09ca92ec5a230d2131ba5948ffe94d9d3ccb76f3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/config.json",
+          "sha256": "d6590ab1b19776c99ecd2dff9f16ee652cc3334896e54849ff3987e59bbeae1b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/meter.json",
+          "sha256": "1732893430fdf73edf28955961b129ac6fc35d18ebf1e1c247c76ffd112b03a6"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/native.json",
+          "sha256": "825d26287e91b44fb7cf0e7dd6379d5b68b1976c8b4eb4fe1d2c6ae126515e96"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/rates.json",
+          "sha256": "ca33274916bcea9b079b22459c42ffe254491fd8c191e06ba9631e7d494cc3a1"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/requests.json",
+          "sha256": "45d592829a062c7d988c98516a6f2804281c47fecc83258fd4f22964c43923e2"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/result.json",
+          "sha256": "ddb9f64b07d2ce7707c9cca3905e78050ef36b38810d1303413ebe4f793fc92c"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji/wire.json",
+          "sha256": "0250fc50307cf38c040c37e5571220fe2d629c8afe7e0e12fba61eede743927b"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-S6-r2-fuji.log",
+        "sha256": "e9d7c86ebd68c4913a9bb2de52f27d37105c195e060ed2f8dbe284337bc25864"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-S6-r2-fuji-check.log",
+          "sha256": "de0ca75e907411ca5c9ae19cdcd88c053863983397fff85279f9fc5eeb260730"
+        }
+      }
+    }
+  ],
+  "native_claude": [
+    {
+      "name": "native-claude-S3-retry-fuji",
+      "engine": "claude-code",
+      "scenario": "S3",
+      "native_turns": 2,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/cleanup.json",
+          "sha256": "ce404fdaa9db2dfa8468ad7350fa1df040c77ceec89bdd2458b11a8f8a915571"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/config.json",
+          "sha256": "7ded0d938365238b4d36c02a549dd6f7ad0714efce564a949a7f1a6b3f885d8b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/meter-1.json",
+          "sha256": "a03821321c6420e7a20b708729df6f428f3388aa56b5e84513117a3975e6d707"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/meter-2.json",
+          "sha256": "89758e1c591644beed63fd50ffd00a4809c400f66f72f97c6e363bfe71a33673"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/native.json",
+          "sha256": "dee959e3adb6e90824546f5a3bf590d190b4214a0173cd594eb596b3d3aa5f8e"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/nativeInputs.json",
+          "sha256": "f60fa1e3e2cd2278c8be66c5fcf2740cbe886fbc7cb3f2780295e1b993a291de"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/result.json",
+          "sha256": "8c3384f383e6d9505c89e7b3782767cf5983c2ffd2c048b869c6ca332b71c137"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji/wire.json",
+          "sha256": "5c3ae42744cad8bc5580adca3a204f10f7d52bdddd3f298f82eff102ee0102ac"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji.log",
+        "sha256": "f81c27642320b5799639788da88796fcf85c7d9ee9cebfe28371b05a38c56979"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-claude-S3-retry-fuji-check.log",
+          "sha256": "03373dad2bcae82b34024f733527717bfb3ac26acd60f791c56bd9311751e465"
+        }
+      }
+    },
+    {
+      "name": "native-claude-S4-fuji",
+      "engine": "claude-code",
+      "scenario": "S4",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/cleanup.json",
+          "sha256": "ce404fdaa9db2dfa8468ad7350fa1df040c77ceec89bdd2458b11a8f8a915571"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/config.json",
+          "sha256": "b5e7ed4d9696aed5c653a4a577eacb3abafa4763d914fa5cc0692f39aac699cc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/meter-1.json",
+          "sha256": "7bc50acbc977987d4726070a3e934fcd1395054d271aa69f8fc19c76bebeffcc"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/native.json",
+          "sha256": "59df7d0afa227708886e02544709d9b0f7b80eb21e5578d3315df6d776704eb7"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/nativeInputs.json",
+          "sha256": "bc75a15ffe33f646f0f105895e4ffa5b4a4536f739f71f20018fca97bdaea995"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/result.json",
+          "sha256": "39819e8bf6164c451c4125e4fab10d816828741e7b6f87ae8e18a4db17ac9319"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji/wire.json",
+          "sha256": "0bfe1cd5f8ab197fb93fedf836848ba9315ac003b13063e1ae824daafdb4d889"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-S4-fuji.log",
+        "sha256": "80b0b74f42988f4a207b555d1091c2b49f93a49079f4cd0575aac8636552eabd"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-claude-S4-fuji-check.log",
+          "sha256": "51eca5e16bff6a2fc15f302aaf3f0763ea79a43e7f48a7b564acaa1eedafbf99"
+        }
+      }
+    },
+    {
+      "name": "native-claude-S2-retry-fuji",
+      "engine": "claude-code",
+      "scenario": "S2",
+      "native_turns": 1,
+      "passed": true,
+      "exit": 0,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/cleanup.json",
+          "sha256": "ce404fdaa9db2dfa8468ad7350fa1df040c77ceec89bdd2458b11a8f8a915571"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/config.json",
+          "sha256": "229353def7d977d50f5d965383007fe31d2a7005e7fe2d0e2570865142921344"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/meter-1.json",
+          "sha256": "d950184651205bf273593100a42d6f347cb8ffb57fb45431834cfa5b733fefa0"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/native.json",
+          "sha256": "4cf0f06644f1d337dc22c0c7025684b139a47989008097f4f92d971f038dd223"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/nativeInputs.json",
+          "sha256": "f9b2e2faeea00672ccf5d700b84dc08ed4e7f6c8aa865a146d6a5d7d2cc72fae"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/result.json",
+          "sha256": "2f4cee917873e99f070c9cef3d55c775d62329eac71f4a7b9d6bd4ab730929a5"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji/wire.json",
+          "sha256": "0f3e9163259ed77269ced9f146012a5618a453905243bc00b7e3bf874b00c8e9"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji.log",
+        "sha256": "5316d637947e8e3b4d467e001b4f6e5de28c06b47fe85255cb8657086493a72b"
+      },
+      "checker": {
+        "exit": 0,
+        "log": {
+          "path": "tmp/reviews/issue-548/native-claude-S2-retry-fuji-check.log",
+          "sha256": "3278a29ce900d4e1c75c1e225fb500e8e727c859a6f7b4deefcf36b2b7da8c26"
+        }
+      }
+    }
+  ],
+  "failed_native_claude": [
+    {
+      "name": "native-claude-S2-fuji",
+      "engine": "claude-code",
+      "scenario": "S2",
+      "native_turns": 1,
+      "passed": false,
+      "exit": 1,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/cleanup.json",
+          "sha256": "0a35e1d4bf307630dc1efa848f38fa03b32bed095cddadd487a697fea621c76f"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/config.json",
+          "sha256": "2542b5a8cc02c7b2b0a1a96f26503bf7d126f641ac9bf7663f2af33199ce7c2b"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/meter-1.json",
+          "sha256": "083ec90add9e53224eedaf5d55dc0e364b036ee0682d45623e3aba9135be2cde"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/native.json",
+          "sha256": "3e342976cdda3ffff43fff13f05feddac68d18e7622ea0fd4b15824da99390c3"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/nativeInputs.json",
+          "sha256": "9fc4439038704af37758af768277b48974bc6d8ce5768b7715e087a0de0b42aa"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/result.json",
+          "sha256": "a369b174096ddfce40c3c2fa25ca948e0fc7f0f09f908af5f000ebd2792c43f6"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S2-fuji/wire.json",
+          "sha256": "3f19ca2bb252354d5436fa2a27a7c1cbd29d23a698f6b700ac3ec3f4680afbdc"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-S2-fuji.log",
+        "sha256": "e8ff312a32c1887400cf05e6e5c565bfe350d3298bfa64b7daa66f90dc984306"
+      }
+    },
+    {
+      "name": "native-claude-S3-fuji",
+      "engine": "claude-code",
+      "scenario": "S3",
+      "native_turns": 3,
+      "passed": false,
+      "exit": 1,
+      "source_commit": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+      "artifacts": [
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/cleanup.json",
+          "sha256": "0a35e1d4bf307630dc1efa848f38fa03b32bed095cddadd487a697fea621c76f"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/config.json",
+          "sha256": "51367abcfb7e66ab64b6c4118d7238c93b58ca91f211676f4e6f8f149ff9655c"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/meter-1.json",
+          "sha256": "1a5fe77aae6dd272ec2882040aafae4fba199754eaec88e98b479f316cab092f"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/meter-2.json",
+          "sha256": "f4baa6d3e0c53688ee3b99a0b479af4ba18cf15e3fa1639f531caf6638ba7d63"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/native.json",
+          "sha256": "4d1b531e988854187e7965c7f12a5cf9575572611ac972d18919883c9dc63461"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/nativeInputs.json",
+          "sha256": "9e186d20681dc648da02bf992bd2ed24fb13385cba118080d1169c74cb48cee9"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/result.json",
+          "sha256": "6ef559ab56814109d22a46d8ac1d851fc7e4b8fd79ea6820ab13a36cba264164"
+        },
+        {
+          "path": "tmp/reviews/issue-548/native-claude-S3-fuji/wire.json",
+          "sha256": "8309cd496adf7d6f8fcec2ef0057e58fae891494bacea0771221e74ef787c29d"
+        }
+      ],
+      "log": {
+        "path": "tmp/reviews/issue-548/native-claude-S3-fuji.log",
+        "sha256": "7aa58bbc02dc733833a4870f7bc7c47b80b6f1f1b43b919d4bacbe1911f5f075"
+      }
+    }
+  ],
+  "budget": {
+    "codex_turns": 23,
+    "codex_seven_day_observed": [
+      0.35,
+      0.36
+    ],
+    "codex_stop": 0.48,
+    "codex_cap": 0.5,
+    "codex_five_hour": "unknown",
+    "claude_turns": 8,
+    "claude_positive_turns": 4,
+    "claude_failed_turns": 4,
+    "claude_seven_day_observed": 0.88,
+    "claude_stop": 0.91,
+    "ledger": {
+      "path": "tmp/reviews/issue-548/native-run-ledger-fuji.jsonl",
+      "sha256": "73b848afd882aefb737bd755f0a5f5862229e95bab63a71297a77f54634a5b38"
+    }
+  },
+  "model_free_guard": {
+    "positive": {
+      "exit": 0,
+      "result": {
+        "path": "tmp/reviews/issue-548/claude-zero-guard-positive-r4-fuji/result.json",
+        "sha256": "71aec99db7711460cfd03a7d49daa4c504cd89b07fd2e56d31c0408155f25a3d"
+      },
+      "log": {
+        "path": "tmp/reviews/issue-548/claude-zero-guard-positive-r4-fuji.log",
+        "sha256": "a5385400b6a114be3b89a3c12101b344fa15ce793eca6b06ab75966baf1f0161"
+      }
+    },
+    "negative": {
+      "child_exit": 1,
+      "specific_failure": "root ended before ordinary input",
+      "result": {
+        "path": "tmp/reviews/issue-548/claude-zero-guard-negative-r4-fuji/result.json",
+        "sha256": "3901a59cdc6e6536ae96f285eda7b4d805b99929b80946a09ed46820268fee78"
+      },
+      "log": {
+        "path": "tmp/reviews/issue-548/claude-zero-guard-negative-r4-fuji.log",
+        "sha256": "1eb52c355d2d1b2e4076fb9c4550d1cc6200bcf3e19e146a7f0a6c359e94dd78"
+      }
+    },
+    "absolute_command_preflight": {
+      "path": "tmp/reviews/issue-548/claude-bash-preflight-absolute-fuji.json",
+      "sha256": "153502fbf10a045a270044c5f5eaab17b9e41c257caee618354796c7c41b8565"
+    },
+    "live_model_turns": 0
+  },
+  "probes": [
+    {
+      "path": "tmp/reviews/issue-548/impl-probe-mts-fuji",
+      "sha256": "a9be3f8a9bc56baa9dc1e952d9e61f2fcd0ad56a5e129e3038d351cb1fdd1581"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-check-mjs-fuji",
+      "sha256": "fc2200397f35eef8499edabc3a597f01049295fa2b881cc7a1211bed6d463c9d"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-claude-probe-mts-fuji",
+      "sha256": "66c2d82fd9b25f1c53a2f6b6488974b93ec6c6692ce8dd106498c92df5a09da7"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-claude-check-mjs-fuji",
+      "sha256": "d6a8296b4f09e6a4ca59a02656c7b83fdddf7d0e9aba7e9b81b00a798a30d904"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-native-run-py-fuji",
+      "sha256": "a59dc78c65b78211d4bc51a7a6a55de32fcd910c166743bca460d2fe237e5830"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-mutate-py-fuji",
+      "sha256": "e6cabd9f4bff727bf9a29a767ff15fd53f3b0183f23daf4f45b80b3dccbadcca"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-server-mutate-py-fuji",
+      "sha256": "c6c2f4b18fdd6eb2b3a32ced1c733d8120397996113bfed5b0ae85196e2da2e9"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-wire-mjs-fuji",
+      "sha256": "12711c980c8aa290874d1d91a6dee035c3e3e36368b1528d0dd544cc3c6c9b25"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-wire-check-exs-fuji",
+      "sha256": "c60f7c48d5ea78c13df16972c5a4b766511eaa75238d29390881dd73b9e59456"
+    },
+    {
+      "path": "tmp/reviews/issue-548/impl-wire-mutate-py-fuji",
+      "sha256": "f0f8340c17573ed16dc3a2072e40eb376cd2d5207670a94ec694e771b311273f"
+    }
+  ],
+  "prose": {
+    "path": "docs/evidence/codex-app-server/issue-548-early-own-request-2026-10-09.md",
+    "sha256": "054b50af635ceb933937ee0251936db53e1aae31299e9270d6213b3895506499"
+  },
+  "retention": "Raw review artifacts and feature worktree retained for peer review; detached baseline and disposable auth homes removed.",
+  "attribution": {
+    "persona": "fuji",
+    "model": "gpt-6.1-sol",
+    "test_commit_missing_trailer": "5cd38d7d81c539ec44408b3db96511843b7f94c6",
+    "resolution": "Record attribution in the evidence commit without rewriting the test commit."
+  }
+}
