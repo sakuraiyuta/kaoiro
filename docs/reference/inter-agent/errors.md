@@ -2,7 +2,7 @@
 title: Inter-agent error notices
 description: Error notices, their sources, stale-turn resynchronization, and server-synthesized reachability rules.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-09
 related: [protocol, inter-agent-messaging]
 ---
 

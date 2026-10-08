@@ -540,12 +540,17 @@ does not prevent — a tool that ran without a gate request has already run.
    creation succeed; then the host clears the visible latch and applies
    `user_send`. A pre-start failure rejects the candidate without replaying
    it; a lifecycle-stale outcome remains a stale/interrupted settlement.
-   Recovery is limited to five attempts in a 60-second window. After a
-   successful probe the host remains on probation until one turn returns a
-   result accepted by `agyEventIsSuccessfulResult`. A new gate fault before
-   that clean result becomes sticky. Customization tampering is sticky
-   immediately. Trip and recovery lifecycle records carry the fault class,
-   sanitized tool name, trip count, probe result, and bounded detail.
+   Recovery is limited to five attempts in a 60-second window. Exhausting the
+   budget makes the fault sticky; an operator restores admission by restarting
+   the wrapper. After a successful probe the host remains on probation until
+   one turn returns a result accepted by `agyEventIsSuccessfulResult`. A new
+   gate fault before that clean result becomes sticky. Customization tampering
+   is sticky immediately. On `gate_fault`, `probe_result: "started"` means an
+   eligible retry is pending a candidate; the `gate_recovery` event with
+   `probe_result: "started"` marks the actual probe. `suppressed_latched`
+   records a distinct fault while a recoverable fault is latched and does not
+   start another probe. Trip and recovery lifecycle records carry the fault
+   class, sanitized tool name, trip count, probe result, and bounded detail.
 
    Scope: tool names in classes where hook firing is measured
    (write, read, shell, subagent, network — `write_to_file`, `view_file`,

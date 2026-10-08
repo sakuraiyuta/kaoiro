@@ -580,6 +580,7 @@ export class AntigravityHost implements EngineAdapter {
   #nextEpochSerial = 1;
   #recoveryCandidate: QueuedTurn | null = null;
   #recoveryPhase: "held" | "probing" | null = null;
+  #rejectingGateBrokenQueue = false;
   #recoveryProbation = false;
   #recoveryFaultDuringDelivery: GateFaultRecord | null = null;
   #recoveryAttemptWindowStartMs: number | null = null;
@@ -773,6 +774,14 @@ export class AntigravityHost implements EngineAdapter {
       });
       return;
     }
+    if (this.#gateBroken && attachmentIds !== undefined && attachmentIds.length > 0) {
+      this.#notifySendRejected({
+        ...(turnToken === undefined ? {} : { turnToken }),
+        ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
+        reason: "gate_broken",
+      });
+      return;
+    }
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
       this.#notifySendRejected({
@@ -783,7 +792,7 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     if (this.#gateBroken) {
-      if (!this.#gateSticky && this.#recoveryCandidate === null) {
+      if (!this.#gateSticky && this.#recoveryCandidate === null && !this.#rejectingGateBrokenQueue) {
         const candidate: QueuedTurn = {
           text,
           ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
@@ -1820,19 +1829,9 @@ export class AntigravityHost implements EngineAdapter {
       } else if (inFlight.epochDeathError !== null) {
         const error = inFlight.epochDeathError;
         const detail = `antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(error.message)}`;
-        if (recoveryCandidate && !this.#turnStartReached) {
-          this.#restoreRecoveryFault();
-          this.#emitRecoveryOutcome("failed", detail);
-          return { kind: "recovery_rejected", detail, probeResult: "failed" };
-        }
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (terminalResult === null) {
         const detail = "agy_exit_without_result";
-        if (recoveryCandidate && !this.#turnStartReached) {
-          this.#restoreRecoveryFault();
-          this.#emitRecoveryOutcome("failed", detail);
-          return { kind: "recovery_rejected", detail, probeResult: "failed" };
-        }
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else {
         return { kind: "result", event: terminalResult, attemptedModel };
@@ -1987,6 +1986,7 @@ export class AntigravityHost implements EngineAdapter {
       this.#activeTermination?.cancel();
       this.#activeTermination = null;
       this.#lastChildExit = { code, signal };
+      epoch.pendingDeliverySettle?.(false);
       if (this.#epoch !== epoch) return;
       this.#epoch = null;
       const epochFaultPrefix = `${epoch.serial}:`;
@@ -2101,7 +2101,7 @@ export class AntigravityHost implements EngineAdapter {
         inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
         const errorDetail = event.step_update.tool_info?.error?.message;
         const boundedDetail = typeof errorDetail === "string" ? boundErrorDetail(errorDetail) : "<missing>";
-        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${boundedDetail}`);
+        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${boundedDetail.slice(0, 320)}`);
         this.#tripGateBroken(
           inFlight.faultClass,
           toolName,
@@ -2956,22 +2956,31 @@ export class AntigravityHost implements EngineAdapter {
       detail: boundedDetail,
     });
     this.#emitState(this.#machine.state);
-        this.#markEpochEnding(faultClass === "customization_tampered" ? "tamper" : "gate_broken");
+    this.#markEpochEnding(faultClass === "customization_tampered" ? "tamper" : "gate_broken");
     this.#armOrShortenTermination(this.#abortGraceMs);
 
+    this.#rejectQueuedGateBrokenTurns();
+    return true;
+  }
+
+  #rejectQueuedGateBrokenTurns(): void {
     const queued = this.#turnQueue.splice(0);
     if (this.#recoveryCandidate !== null && queued.includes(this.#recoveryCandidate)) {
       this.#recoveryCandidate = null;
       this.#recoveryPhase = null;
     }
-    for (const turn of queued) {
-      this.#notifySendRejected({
-        ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
-        ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
-        reason: "gate_broken",
-      });
+    this.#rejectingGateBrokenQueue = true;
+    try {
+      for (const turn of queued) {
+        this.#notifySendRejected({
+          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
+          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+          reason: "gate_broken",
+        });
+      }
+    } finally {
+      this.#rejectingGateBrokenQueue = false;
     }
-    return true;
   }
 
   #faultKey(epochSerial: number, faultClass: GateFaultClass, stepIndex?: number): string {
@@ -3042,6 +3051,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
     this.#markEpochEnding("gate_broken");
     this.#armOrShortenTermination(this.#abortGraceMs);
+    this.#rejectQueuedGateBrokenTurns();
   }
 
   #spawnFailureReason(error: unknown): AgyExecutableFailureReason {

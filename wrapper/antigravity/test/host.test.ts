@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -83,6 +84,7 @@ function hostHarness(options: {
   toolHostListen?: AntigravityHostOptions["toolHostListen"];
   gateServerListen?: AntigravityHostOptions["gateServerListen"];
   permissionBroker?: PermissionBroker;
+  spawn?: AntigravityHostOptions["spawn"];
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
@@ -145,11 +147,11 @@ function hostHarness(options: {
       warnings.push(message);
       options.warn?.(message);
     },
-    spawn: (command, args, spawnOptions) => {
+    spawn: options.spawn ?? ((command, args, spawnOptions) => {
       const child = new FakeAgy();
       calls.push({ command, args, env: spawnOptions.env, child });
       return child as unknown as SpawnedAgy;
-    },
+    }),
   });
   return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections, outOfTurnEvents, epochEnded, gateRecoveryLifecycle, warnings };
 }
@@ -222,6 +224,358 @@ describe("AntigravityHost", () => {
     expect(gateRecoveryLifecycle.map((event) => event.probeResult)).toContain("passed");
     calls[1]!.child.finish();
     host.close();
+  });
+
+  it("re-latching after a failed recovery delivery rejects inputs accepted during the cleared window", async () => {
+    class EpipeAgy extends EventEmitter {
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+      readonly stdin = {
+        write: (_chunk: string, callback: (error?: Error | null) => void): boolean => {
+          queueMicrotask(() => callback(new Error("EPIPE")));
+          return true;
+        },
+        end: (): void => {},
+        on: (): void => {},
+        once: (): void => {},
+      } as unknown as NodeJS.WritableStream;
+      killed: NodeJS.Signals | undefined;
+
+      kill(signal?: NodeJS.Signals): boolean {
+        this.killed = signal;
+        setTimeout(() => this.finish(signal), 0);
+        return true;
+      }
+
+      finish(signal?: NodeJS.Signals): void {
+        this.stdout.end();
+        this.stderr.end();
+        this.emit("exit", signal === undefined ? 0 : null, signal ?? null);
+        this.emit("close", signal === undefined ? 0 : null, signal ?? null);
+      }
+    }
+
+    const spawned: Array<FakeAgy | EpipeAgy> = [];
+    const rejected: Array<{ turnToken?: string; conversationIds?: readonly string[]; reason: string }> = [];
+    const turnEnds: string[] = [];
+    const recoveryEvents: Array<{ event: string; probeResult: string; detail: string }> = [];
+    let hostRef: AntigravityHost | undefined;
+    let acceptedDuringWindow = false;
+    let sentReentrant = false;
+    const cfg = config();
+    const host = createHarnessHost(cfg, {
+      cwd: process.cwd(),
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {},
+      onLog: () => {},
+      onTurnStart: ({ turnToken }) => { turnEnds.push(`start:${turnToken}`); },
+      onTurnEnd: ({ turnToken }) => { turnEnds.push(`end:${turnToken}`); },
+      onSendRejected: (info) => {
+        rejected.push(info);
+        if (info.turnToken === "queued-bad") throw new Error("fixture rejection callback failure");
+        if (info.turnToken === "queued-good" && !sentReentrant) {
+          sentReentrant = true;
+          void hostRef!.send("reentrant during queue rejection", undefined, ["cid-reentrant"], "reentrant-token");
+        }
+      },
+      onGateRecoveryLifecycle: (event) => {
+        recoveryEvents.push(event);
+        if (event.event === "gate_recovery" && event.probeResult === "passed" && !acceptedDuringWindow) {
+          acceptedDuringWindow = true;
+          void hostRef!.send("accepted during recovery delivery", undefined, ["cid-queued-bad"], "queued-bad");
+          void hostRef!.send("second input accepted during recovery delivery", undefined, ["cid-queued-good"], "queued-good");
+        }
+      },
+      runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
+      agyPath: "/test/agy",
+      closeGraceMs: 5,
+      spawn: () => {
+        const child = spawned.length === 1 ? new EpipeAgy() : new FakeAgy();
+        spawned.push(child);
+        return child as unknown as SpawnedAgy;
+      },
+    });
+    hostRef = host;
+
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => spawned.length === 1);
+    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => (spawned[0] as FakeAgy).killed === "SIGTERM");
+    (spawned[0] as FakeAgy).finish();
+    await waitFor(() => turnEnds.includes("end:trip-token"));
+
+    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => rejected.some((item) => item.turnToken === "candidate-token"));
+    expect(rejected).toContainEqual({ turnToken: "queued-bad", conversationIds: ["cid-queued-bad"], reason: "gate_broken" });
+    expect(rejected).toContainEqual({ turnToken: "queued-good", conversationIds: ["cid-queued-good"], reason: "gate_broken" });
+    expect(rejected).toContainEqual({ turnToken: "reentrant-token", conversationIds: ["cid-reentrant"], reason: "gate_broken" });
+    expect(rejected.filter((item) => item.turnToken === "queued-good")).toHaveLength(1);
+    expect(host.state).toBe("error");
+    expect(turnEnds.filter((entry) => entry === "start:queued-bad" || entry === "start:queued-good" || entry === "start:reentrant-token")).toEqual([]);
+    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "failed", detail: "epoch_exit_before_turn" }));
+
+    await host.send("later input must make progress", undefined, ["cid-later"], "later-token");
+    await waitFor(() => spawned.length === 3);
+    expect(turnEnds).toContain("start:later-token");
+    spawned[2]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
+    await waitFor(() => turnEnds.includes("end:later-token"));
+    expect(host.state).toBe("waiting_input");
+    spawned[2]!.finish();
+    host.close();
+  }, 10_000);
+
+  it("rejects a recovery candidate whose replacement epoch dies before its write is acknowledged", async () => {
+    class NoAckAgy extends EventEmitter {
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+      writeCalls = 0;
+      readonly stdin = {
+        write: (_chunk: string, _callback: (error?: Error | null) => void): boolean => {
+          this.writeCalls += 1;
+          return true;
+        },
+        end: (): void => {},
+        on: (): void => {},
+        once: (): void => {},
+      } as unknown as NodeJS.WritableStream;
+
+      kill(): boolean { return true; }
+
+      finish(): void {
+        this.stdout.end();
+        this.stderr.end();
+        this.emit("exit", 1, null);
+        this.emit("close", 1, null);
+      }
+    }
+
+    const spawned: Array<FakeAgy | NoAckAgy> = [];
+    const starts: string[] = [];
+    const rejected: Array<{ turnToken?: string; reason: string }> = [];
+    const recoveryEvents: Array<{ event: string; probeResult: string; detail: string }> = [];
+    const cfg = config();
+    const host = createHarnessHost(cfg, {
+      cwd: process.cwd(),
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {},
+      onLog: () => {},
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: () => {},
+      onSendRejected: (event) => rejected.push(event),
+      onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
+      runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
+      agyPath: "/test/agy",
+      spawn: () => {
+        const child = spawned.length === 0 ? new FakeAgy() : new NoAckAgy();
+        spawned.push(child);
+        return child as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => spawned.length === 1);
+    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => (spawned[0] as FakeAgy).killed === "SIGTERM");
+    (spawned[0] as FakeAgy).finish();
+
+    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => spawned.length === 2 && (spawned[1] as NoAckAgy).writeCalls === 1);
+    (spawned[1] as NoAckAgy).finish();
+    await waitFor(() => rejected.some((event) => event.turnToken === "candidate-token"));
+    expect(rejected.find((event) => event.turnToken === "candidate-token")).toMatchObject({ reason: "gate_broken" });
+    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "failed", detail: "epoch_exit_before_turn" }));
+    expect(starts).not.toContain("candidate-token");
+    expect(host.state).toBe("error");
+    await host.close();
+  });
+
+  it("deduplicates the same fault key and records a distinct fault after recovery", async () => {
+    const starts: string[] = [];
+    const { host, calls, gateRecoveryLifecycle } = hostHarness({ onTurnStart: ({ turnToken }) => starts.push(turnToken) });
+    const duplicate = '{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n';
+    await host.send("trip once");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(duplicate);
+    calls[0]!.child.stdout.write(duplicate);
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")).toHaveLength(1);
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")[0]).toMatchObject({ tripCount: 1 });
+    calls[0]!.child.finish();
+
+    await host.send("recover");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
+    await waitFor(() => gateRecoveryLifecycle.some((event) => event.event === "gate_recovery" && event.probeResult === "passed"));
+    await waitFor(() => host.state === "waiting_input");
+
+    await host.send("distinct fault after recovery", undefined, [], "distinct-token");
+    await waitFor(() => starts.includes("distinct-token"));
+    calls[1]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[1]!.child.killed === "SIGTERM");
+    const faults = gateRecoveryLifecycle.filter((event) => event.event === "gate_fault");
+    expect(faults).toHaveLength(2);
+    expect(faults.map((event) => event.tripCount)).toEqual([1, 2]);
+    calls[1]!.child.finish();
+    await host.close();
+  });
+
+  it("accepts a re-entrant recovery candidate from the tripping turn's end callback", async () => {
+    const events: string[] = [];
+    let hostRef: AntigravityHost | undefined;
+    let candidateQueued = false;
+    const { host, calls, gateRecoveryLifecycle } = hostHarness({
+      onTurnStart: ({ turnToken }) => events.push(`start:${turnToken}`),
+      onTurnEnd: ({ turnToken }) => {
+        events.push(`end:${turnToken}`);
+        if (turnToken === "trip-token" && !candidateQueued) {
+          candidateQueued = true;
+          void hostRef!.send("from turn-end callback", undefined, ["cid-candidate"], "candidate-token");
+        }
+      },
+    });
+    hostRef = host;
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => calls.length === 2);
+    expect(events.indexOf("end:trip-token")).toBeLessThan(events.indexOf("start:candidate-token"));
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
+    await waitFor(() => events.includes("end:candidate-token"));
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "passed")).toHaveLength(1);
+    expect(host.state).toBe("waiting_input");
+    calls[1]!.child.finish();
+    await host.close();
+  });
+
+  it("classifies replacement-child launch failure and rejects the recovery candidate", async () => {
+    const spawned: FakeAgy[] = [];
+    const starts: string[] = [];
+    const ends: string[] = [];
+    const rejected: Array<{ turnToken?: string; reason: string }> = [];
+    const recoveryEvents: Array<{ event: string; probeResult: string }> = [];
+    const cfg = config();
+    const host = createHarnessHost(cfg, {
+      cwd: process.cwd(),
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {},
+      onLog: () => {},
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+      onTurnEnd: ({ turnToken }) => ends.push(turnToken),
+      onSendRejected: (event) => rejected.push(event),
+      onGateRecoveryLifecycle: (event) => recoveryEvents.push(event),
+      runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
+      agyPath: "/test/agy",
+      spawn: () => {
+        if (spawned.length === 1) throw Object.assign(new Error("replacement child missing"), { code: "ENOENT" });
+        const child = new FakeAgy();
+        spawned.push(child);
+        return child as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => spawned.length === 1);
+    spawned[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => spawned[0]!.killed === "SIGTERM");
+    spawned[0]!.finish();
+    await waitFor(() => ends.includes("trip-token"));
+
+    await host.send("replacement must be rejected", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => rejected.some((event) => event.turnToken === "candidate-token"));
+    expect(rejected.find((event) => event.turnToken === "candidate-token")).toMatchObject({ reason: "gate_broken" });
+    expect(recoveryEvents).toContainEqual(expect.objectContaining({ event: "gate_recovery", probeResult: "child_launch_failed" }));
+    expect(spawned).toHaveLength(1);
+    expect(starts).not.toContain("candidate-token");
+    expect(host.state).toBe("error");
+    await host.close();
+  });
+
+  it.each([
+    ["epoch death", "antigravity_cli_spawn_failure: recovery child died"],
+    ["missing result", "agy_exit_without_result"],
+  ])("keeps post-ack %s on the ordinary turn-error path", async (failure, expectedDetail) => {
+    const starts: string[] = [];
+    const { host, calls, turnEnds, sendRejections, gateRecoveryLifecycle } = hostHarness({
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
+
+    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => calls.length === 2 && starts.includes("candidate-token"));
+    if (failure === "epoch death") calls[1]!.child.emit("error", new Error("recovery child died"));
+    calls[1]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "candidate-token"));
+    expect(turnEnds.find((event) => event.turnToken === "candidate-token")?.error).toEqual({ detail: expectedDetail });
+    expect(sendRejections.some((event) => event.turnToken === "candidate-token")).toBe(false);
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "failed")).toHaveLength(0);
+
+    await host.send("later turn", undefined, ["cid-later"], "later-token");
+    await waitFor(() => calls.length === 3 && starts.includes("later-token"));
+    calls[2]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"later turn ran"}}\n');
+    calls[2]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "later-token"));
+    expect(host.state).toBe("waiting_input");
+    await host.close();
+  });
+
+  it("settles a PROBING recovery candidate once when close cancels its smoke test", async () => {
+    let verification = 0;
+    const { host, calls, turnEnds } = hostHarness({
+      verifyGate: async () => {
+        verification += 1;
+        if (verification === 1) return true;
+        return new Promise<boolean>(() => {});
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
+
+    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => verification === 2);
+    await host.close();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "candidate-token"));
+    expect(turnEnds.filter((event) => event.turnToken === "candidate-token")).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps a PROBING candidate from spawning after watchdog fail-stop", async () => {
+    let verification = 0;
+    const { host, calls, turnEnds, sendRejections } = hostHarness({
+      verifyGate: async () => {
+        verification += 1;
+        if (verification === 1) return true;
+        return new Promise<boolean>(() => {});
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
+
+    await host.send("candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => verification === 2);
+    expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+    await host.send("after fail-stop", undefined, ["cid-after"], "after-token");
+    expect(sendRejections.find((event) => event.turnToken === "after-token")).toMatchObject({ reason: "watchdog_fail_stopped" });
+    expect(calls).toHaveLength(1);
+    expect(turnEnds.filter((event) => event.turnToken === "candidate-token")).toHaveLength(0);
   });
 
   it("gate probation survives an is_error result and an epoch restart, making the next fault sticky", async () => {
@@ -1767,20 +2121,24 @@ if (args[0] === "models") {
 
   it.each([
     {
-      provenance: "Action row: fixture-r1-hiiro.md SHA-256 35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300, raw event line 40 (lines 54-55 explain shape); view_file; no hook-silence evidence",
+      evidence: "Action row: fixture-r1-hiiro.md SHA-256 35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300, raw event line 40 (lines 54-55 explain shape); view_file; no hook-silence evidence",
+      fixtureUrl: new URL("./fixtures/gate-invalid-action.jsonl", import.meta.url),
+      fixtureSha256: "55f63f8b2968752b4100669655b5781b67ad2dec2fae319022d44735db6ffee4",
       event: readFileSync(new URL("./fixtures/gate-invalid-action.jsonl", import.meta.url), "utf8").trim(),
       toolName: "view_file",
       stepIndex: 3,
       message: "invalid arguments:\\n- additional properties 'Action' not allowed".replaceAll("\\n", "\n"),
     },
     {
-      provenance: "toolSummary row: fixture-r3-momo.md SHA-256 a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28, lines 14, 18, 20; hook silence only from logging-stub observation lines 24-28, not production GateServer",
+      evidence: "toolSummary row: fixture-r3-momo.md SHA-256 a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28, lines 14, 18, 20; hook silence only from logging-stub observation lines 24-28, not production GateServer",
+      fixtureUrl: new URL("./fixtures/gate-invalid-tool-summary.jsonl", import.meta.url),
+      fixtureSha256: "f39149a1b1ea810f847254672345a33abe47529c8e256cbacca2f576547f7368",
       event: readFileSync(new URL("./fixtures/gate-invalid-tool-summary.jsonl", import.meta.url), "utf8").trim(),
       toolName: "run_command",
       stepIndex: 2,
       message: "invalid arguments:\\n- missing property 'toolSummary'".replaceAll("\\n", "\n"),
     },
-  ])("$provenance", async ({ provenance, event, toolName, stepIndex, message }) => {
+  ])("$evidence", async ({ fixtureUrl, fixtureSha256, event, toolName, stepIndex, message }) => {
     const { host, logs, calls, warnings } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
@@ -1795,7 +2153,7 @@ if (args[0] === "models") {
       tool_name: toolName,
       tool_info: { error: { type: "TOOL_ERROR", message } },
     });
-    expect(provenance).toContain("SHA-256");
+    expect(createHash("sha256").update(readFileSync(fixtureUrl)).digest("hex")).toBe(fixtureSha256);
     child.stdout.write(`${event}\n`);
     child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"invalid arguments"}}\n');
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
@@ -1831,11 +2189,17 @@ if (args[0] === "models") {
   });
 
   it.each([
-    ["wrong error type", { type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" }],
-    ["unmeasured validation wording", { type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" }],
-    ["unmeasured permission-declaration form", { type: "TOOL_ERROR", message: "declaring permissions failed: invalid tool call error (invalid_args)" }],
-    ["anchored suffix violation", { type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" }],
-  ])("fails closed when the unobserved error is %s", async (_label, error) => {
+    { label: "wrong error type", state: "ERROR", type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" },
+    { label: "DONE state", state: "DONE", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'" },
+    { label: "empty property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property ''" },
+    { label: "property name over 128 characters", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- missing property '${"x".repeat(129)}'` },
+    { label: "prefix before grammar", state: "ERROR", type: "TOOL_ERROR", message: "prefix\\ninvalid arguments:\\n- missing property 'toolSummary'" },
+    { label: "quote inside property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'tool'quote'" },
+    { label: "unmeasured validation wording", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" },
+    { label: "unmeasured permission-declaration form", state: "ERROR", type: "TOOL_ERROR", message: "declaring permissions failed: invalid tool call error (invalid_args)" },
+    { label: "anchored suffix violation", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" },
+    { label: "redacts and bounds warning detail", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- missing property 'Authorization: Bearer momo541-secret'; ${"x".repeat(20 * 1024)}tail-marker-momo541` },
+  ])("fails closed when the unobserved error is $label", async ({ state, type, message, label }) => {
     const { host, logs, calls, warnings, gateRecoveryLifecycle } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
@@ -1844,15 +2208,19 @@ if (args[0] === "models") {
       event: "step_update",
       step_update: {
         step_index: 8,
-        state: "ERROR",
+        state,
         step_type: "tool",
         tool_name: "run_command",
-        tool_info: { error: { type: error.type, message: error.message.replaceAll("\\n", "\n") } },
+        tool_info: { error: { type, message: message.replaceAll("\\n", "\n") } },
       },
     })}\n`);
     await waitFor(() => child.killed === "SIGTERM");
     expect(warnings.some((message) => message.includes("unobserved tool completion: tool=run_command"))).toBe(true);
     expect(warnings.at(-1)?.length).toBeLessThanOrEqual(512);
+    if (label === "redacts and bounds warning detail") {
+      expect(warnings.at(-1)).not.toContain("momo541-secret");
+      expect(warnings.at(-1)).not.toContain("tail-marker-momo541");
+    }
     child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
@@ -2477,6 +2845,21 @@ if (args[0] === "models") {
       await host.send("must not start", undefined, [], "turn-2");
       expect(calls).toHaveLength(1);
       expect(sendRejections).toEqual([{ turnToken: "turn-2", reason: "gate_broken" }]);
+      host.close();
+    });
+
+    it("keeps gate-broken rejection ahead of unsupported attachments", async () => {
+      const { host, calls, logs, sendRejections } = hostHarness();
+      await host.send("trip");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      calls[0]!.child.finish();
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+      await host.send("attached input", ["attachment-1"], ["cid-attached"], "attached-token");
+      expect(calls).toHaveLength(1);
+      expect(sendRejections).toContainEqual({ turnToken: "attached-token", conversationIds: ["cid-attached"], reason: "gate_broken" });
       host.close();
     });
 

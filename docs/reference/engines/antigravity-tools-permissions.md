@@ -88,8 +88,8 @@ is held in the host queue until the tripping turn has returned, the gate
 registration smoke test passes, and a replacement child starts. A failed
 attempt is rejected and not replayed. Further peer batches are retired or get
 one immediate legacy `interrupted` notice and can be retried by their sender.
-A sticky fault (customization tampering or a second trip during probation) has
-no recovery candidate.
+A sticky fault (customization tampering, a second trip before a clean result,
+or an exhausted recovery budget) has no recovery candidate.
 
 The first eligible model-bound input may be an operator instruction, a
 `onWorkNotice` delivery (including one queued before host creation), or a
@@ -105,7 +105,12 @@ remains on probation until one dispatched turn returns a normal `SUCCESS`
 result without another gate fault; model/API errors do not confirm recovery.
 The host allows five attempts in a fixed 60-second window starting with the
 first attempt; an attempt at the exact 60-second boundary starts a new window.
-Tampering remains sticky until wrapper restart.
+Exhausting that budget makes the fault sticky, as does customization tampering;
+the operator restores admission by restarting the wrapper. A new
+`gate_fault` record with `probe_result: "started"` means recovery is eligible
+but has not begun; `gate_recovery` records `started` when the probe actually
+begins. `suppressed_latched` records a distinct fault observed while a
+recoverable fault is already latched; it does not start another probe.
 
 For a peer retired through the negotiated server path, notice delivery starts
 immediately when connected and no resync request is in flight. If connected
@@ -237,8 +242,8 @@ reached the `[antigravity-lifecycle]` stream.
   reaches the "interrupted" settlement above. An interrupt with no turn in
   flight (idle) produces neither.
 - **`send()`'s silent non-start paths are now diagnosable.** `send()` on a
-  closed, customization-tampered (`gate_broken`), or watchdog-fail-stopped
-  host resolves without starting a turn and without throwing, so a caller's
+  closed, gate-broken, or watchdog-fail-stopped host resolves without starting
+  a turn and without throwing, so a caller's
   `.catch()` never sees it. That reason, and any other unclassified `send()`
   rejection, is now logged as `send_not_started` (turn token and delivery
   seqs only, never the inbound instruction text) before classification.

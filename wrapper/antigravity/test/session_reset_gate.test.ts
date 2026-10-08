@@ -512,4 +512,39 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.host.state).toBe("waiting_input");
     rig.host.close();
   });
+
+  it("logs a failed tokenless work-notice candidate once and does not replay it", async () => {
+    let verification = 0;
+    const output: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    const rig = await makeRig({}, undefined, async () => ++verification === 1);
+    try {
+      await rig.host.send("trip", undefined, ["cid-trip"], "trip-token");
+      await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+      rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":541,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+      await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+      expect(rig.host.state).toBe("error");
+
+      rig.linkOptions.onWorkNotice({ notice_id: "notice-541", title: "tokenless-541-marker" });
+      await vi.waitFor(() => expect(verification).toBe(2));
+      await vi.waitFor(() => expect(rig.sendRejections.some((event) => event.turnToken === undefined && event.reason === "gate_broken")).toBe(true));
+      const lifecycle = output.join("").split("\n")
+        .filter((line) => line.startsWith("[kaoiro][antigravity-lifecycle] "))
+        .map((line) => JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>);
+      const failedNotice = lifecycle.filter((event) => event.event === "send_not_started" && event.reason === "gate_broken");
+      expect(failedNotice).toHaveLength(1);
+      expect(failedNotice[0]).toMatchObject({ shape: "no_op", reason: "gate_broken" });
+      expect(failedNotice[0]).not.toHaveProperty("turn_token");
+      expect(rig.agyChildren).toHaveLength(1);
+      expect(rig.inputs.join("")).not.toContain("tokenless-541-marker");
+      expect(output.join("")).not.toContain("tokenless-541-marker");
+    } finally {
+      rig.host.close();
+      await rig.done;
+      stderr.mockRestore();
+    }
+  });
 });
