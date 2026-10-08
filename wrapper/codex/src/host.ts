@@ -373,6 +373,7 @@ interface ActiveSteer {
 
 const MAX_STEERS_PER_TURN = 8;
 const MAX_IA_STEERS_PER_TURN = 3;
+const MAX_IA_OVERTAKES_PER_TURN = 2;
 
 export interface CodexInterAgentSteerHooks {
   admit: (turnToken: string, arrival: number) => string | null;
@@ -743,6 +744,7 @@ export class CodexHost implements EngineAdapter {
   readonly #steers = new Map<string, ActiveSteer>();
   readonly #steerWritesByToken = new Map<string, number>();
   readonly #iaSteerWritesByToken = new Map<string, number>();
+  readonly #iaOvertakesByToken = new Map<string, number>();
   readonly #pendingIaPreconditions = new Set<string>();
   readonly #iaPlaceholders = new Map<string, QueuedTurn>();
   readonly #pendingUploads = new Map<string, PendingUpload>();
@@ -2758,7 +2760,10 @@ export class CodexHost implements EngineAdapter {
     if (ia === undefined && this.#options.operatorSteer?.available() !== true) return "operator_steer_unavailable";
     if (ia !== undefined && this.#options.interAgentSteer?.available() !== true) return "inter_agent_steer_unavailable";
     if (this.#pendingIaPreconditions.size > 0) return "behind_earlier_input";
-    if (this.#queue.some(turn => turn.source !== "reset_notice")) return "behind_earlier_input";
+    const isPeerRoot = (turn: QueuedTurn): boolean => turn.source === undefined &&
+      turn.conversationIds !== undefined && turn.placeholder !== true;
+    if (this.#queue.some(turn => turn.source !== "reset_notice" &&
+        (ia === undefined || !isPeerRoot(turn)))) return "behind_earlier_input";
     const permission = this.#permissionState;
     if (this.#modelPending !== null || this.#effortPending !== null || this.#effortResetPending ||
         permission.blocked !== null || this.#options.permissionSyncPending?.() === true ||
@@ -2769,6 +2774,8 @@ export class CodexHost implements EngineAdapter {
     if (this.#options.liveInputBlocked?.() === true || this.#queue.some(turn => turn.source === "reset_notice")) return "reset_pending";
     if ((this.#steerWritesByToken.get(token) ?? 0) >= MAX_STEERS_PER_TURN) return "steer_cap";
     if (ia !== undefined && (this.#iaSteerWritesByToken.get(token) ?? 0) >= MAX_IA_STEERS_PER_TURN) return "inter_agent_steer_cap";
+    const overtakes = ia !== undefined && this.#queue.some(isPeerRoot);
+    if (overtakes && (this.#iaOvertakesByToken.get(token) ?? 0) >= MAX_IA_OVERTAKES_PER_TURN) return "overtake_budget";
     const leaseReason = ia?.admit(token, arrival);
     if (leaseReason !== undefined && leaseReason !== null) return leaseReason;
     const record = new SteerRecord(id, turnId, {
@@ -2778,6 +2785,7 @@ export class CodexHost implements EngineAdapter {
     this.#steers.set(id, { record, token, turnId, text, arrival, ...(ia === undefined ? {} : { ia }) });
     this.#steerWritesByToken.set(token, (this.#steerWritesByToken.get(token) ?? 0) + 1);
     if (ia !== undefined) this.#iaSteerWritesByToken.set(token, (this.#iaSteerWritesByToken.get(token) ?? 0) + 1);
+    if (overtakes) this.#iaOvertakesByToken.set(token, (this.#iaOvertakesByToken.get(token) ?? 0) + 1);
     ia?.onAdmit(token, id);
     return null;
   }
@@ -2851,6 +2859,7 @@ export class CodexHost implements EngineAdapter {
     }
     this.#steerWritesByToken.delete(token);
     this.#iaSteerWritesByToken.delete(token);
+    this.#iaOvertakesByToken.delete(token);
   }
 
   #observeSteer(token: string, event: { clientId: string; phase: "started" | "completed"; text?: string }): void {

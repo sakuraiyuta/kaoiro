@@ -36,6 +36,50 @@ function inbound(deliverySeq: number, turnNumber: number, body = "hello"): Envel
 }
 
 describe("Antigravity CLI delivery composition", () => {
+  it.each([false, true])("keeps the shared root failure contract; accepted reply=%s", async reply => {
+    let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>, token: string | null = null;
+    const notices: Envelope[] = [], sends: Envelope[] = [];
+    let finish!: () => void, ready!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    const started = new Promise<void>(resolve => { ready = resolve; });
+    const link = { close: () => {}, send: (notice: Envelope) => { if (notice.type === "inter_agent_message") notices.push(notice); },
+      noticeAttributionMode: () => "v1", acknowledgeInterAgentDelivery: () => {},
+      sendInterAgent: async (envelope: Envelope) => { sends.push(envelope); return { kind: "accepted", stamp: null }; } };
+    const host = { state: "thinking", statusExtSnapshot: () => ({}), activeInterAgentTurnToken: () => token,
+      run: async () => { ready(); await finished; },
+      send: async (_text: string, _attachments: unknown, conversationIds: readonly string[], turnToken: string) => {
+        token = turnToken; hostOptions.onTurnStart({ turnToken, conversationIds });
+        if (reply) {
+          const descriptor = hostOptions.toolDescriptors.find((tool: { name: string }) => tool.name === "send_to_agent");
+          const result = await descriptor.handler({ to: "peer.agent", conversation_id: conversationIds[0], kind: "response", body: "ANSWER" });
+          expect(result.isError).toBeFalsy();
+        }
+        hostOptions.onTurnEnd({ turnToken, conversationIds, error: { reason: "api_error" } });
+        hostOptions.onTurnBoundary({ turnToken });
+      },
+    };
+    const signals = process.listeners("SIGINT");
+    const running = runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _id, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => options.onPersonaPrompt?.("PERSONA")); return link as never;
+      }, createHost: (_config, options) => { hostOptions = options as unknown as Record<string, any>; return host as never; },
+    });
+    try {
+      await started;
+      await linkOptions.onInterAgentMessage(inbound(1, 1));
+      await vi.waitFor(() => expect(token).not.toBeNull());
+      await vi.waitFor(() => expect(reply ? sends : notices).toHaveLength(1));
+      expect(notices).toHaveLength(reply ? 0 : 1);
+      if (!reply) expect((notices[0]!.payload as any).error).toMatchObject({ code: "api_error" });
+      if (!reply) expect((notices[0]!.payload as any).error.affected_deliveries).toBeUndefined();
+    } finally {
+      finish(); await running;
+      for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
+    }
+  });
+
   it("drains work notices received before host construction through the instruction chain", async () => {
     const sends: string[] = [];
     let linkOptions!: Record<string, any>;

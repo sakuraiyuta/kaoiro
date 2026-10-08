@@ -83,6 +83,68 @@ async function running(f: ReturnType<typeof fixture>) {
 const turnChanged = (_: RpcObject, __: (value: unknown) => void, error: (code: number, message: string) => void) =>
   error(-32600, "no active turn to steer");
 
+const iaHooks = () => ({ admit: () => null, onAdmit: () => {}, onPrecondition: () => false,
+  onResponse: () => {}, onItem: () => {}, onTerminal: () => {}, onSettle: () => {} });
+
+it("T15: IA may overtake peer roots twice; operator steering keeps its queue guard", async () => {
+  const f = fixture(true, { interAgentSteer: { available: () => true } });
+  await running(f);
+  for (let index = 0; index < 3; index += 1) await f.host.send(`ROOT-${index}`, undefined, [`cid-${index}`], `root-${index}`);
+  await f.operator("OPERATOR EARLY");
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(f.system()).toContain("Operator input queued for the next turn (behind_earlier_input).");
+  // The operator fallback is also a real queued operator input, and must block IA.
+  expect(await f.host.steerInterAgentInput("PEER BLOCKED", iaHooks(), "blocked"))
+    .toEqual({ kind: "queued", reason: "behind_earlier_input" });
+});
+
+it("T15b: a write counts once even when three peer roots are waiting", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } }); await running(f);
+  for (let index = 0; index < 3; index += 1) await f.host.send(`ROOT-${index}`, undefined, [`cid-${index}`], `root-${index}`);
+  for (let index = 0; index < 2; index += 1) {
+    expect((await f.host.steerInterAgentInput(`EARLY-${index}`, iaHooks(), `early-${index}`)).kind).toBe("sent");
+  }
+  expect(await f.host.steerInterAgentInput("THIRD", iaHooks(), "third")).toEqual({ kind: "queued", reason: "overtake_budget" });
+  expect(f.byMethod("turn/steer")).toHaveLength(2);
+});
+
+it("T15c: a peer root that starts waiting mid-turn does not charge earlier steers", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } }); await running(f);
+  expect((await f.host.steerInterAgentInput("BEFORE", iaHooks(), "before")).kind).toBe("sent");
+  await f.host.send("ROOT", undefined, ["cid"], "root");
+  for (let index = 0; index < 2; index += 1) {
+    expect((await f.host.steerInterAgentInput(`AFTER-${index}`, iaHooks(), `after-${index}`)).kind).toBe("sent");
+  }
+  expect(f.byMethod("turn/steer")).toHaveLength(3);
+});
+
+it("T15d: the overtake budget belongs to the token and is reset at terminal", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } }); await running(f);
+  await f.host.send("ROOT-1", undefined, ["cid-1"], "root-1");
+  await f.host.send("ROOT-2", undefined, ["cid-2"], "root-2");
+  for (let index = 0; index < 2; index += 1) await f.host.steerInterAgentInput(`OLD-${index}`, iaHooks(), `old-${index}`);
+  f.terminal(); await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  for (let index = 0; index < 2; index += 1) {
+    expect((await f.host.steerInterAgentInput(`NEW-${index}`, iaHooks(), `new-${index}`)).kind).toBe("sent");
+  }
+});
+
+it("T15e: protocol-uncertain writes consume the same overtake budget", async () => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } }); await running(f);
+  await f.host.send("ROOT", undefined, ["cid"], "root");
+  f.onSteer = (_request, reply) => reply({ turnId: "wrong-turn" });
+  for (let index = 0; index < 2; index += 1) await f.host.steerInterAgentInput(`UNCERTAIN-${index}`, iaHooks(), `uncertain-${index}`);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(await f.host.steerInterAgentInput("THIRD", iaHooks(), "third")).toEqual({ kind: "queued", reason: "overtake_budget" });
+});
+
+it.each(["synthetic", "placeholder"] as const)("T12: a queued %s input still blocks IA", async kind => {
+  const f = fixture(false, { interAgentSteer: { available: () => true } }); await running(f);
+  if (kind === "synthetic") await f.host.send("NOTICE");
+  else expect(f.host.createInterAgentPlaceholder("placeholder", 1)).toBe(true);
+  expect(await f.host.steerInterAgentInput("EARLY", iaHooks(), "early")).toEqual({ kind: "queued", reason: "behind_earlier_input" });
+});
+
 it("steers an operator input into the running turn and reports inclusion", async () => {
   const f = fixture();
   await running(f);

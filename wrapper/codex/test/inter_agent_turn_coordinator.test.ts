@@ -27,6 +27,22 @@ function inbound(cid: string): Envelope {
   };
 }
 
+it("G1 distinguishes the running owner, a host-queued root, and an earlier early fallback", () => {
+  const coordinator = new CodexInterAgentTurnCoordinator({ createTurnToken: () => "T", onDispatch: () => {},
+    createPlaceholder: () => true });
+  coordinator.receive(inbound("X"), "reply-owed");
+  coordinator.receive(inbound("X"), "reply-owed");
+  expect(coordinator.blocksEarlyFromPeer("peer.agent", "Q")).toBe("behind_queued_root_same_sender");
+  expect(coordinator.conversationBlocksEarly("X", "Q")).toBe("behind_queued_root_same_sender");
+  expect(coordinator.blocksEarlyFromPeer("peer.agent", "T")).toBeNull();
+  expect(coordinator.conversationBlocksEarly("X", "T")).toBeNull();
+  expect(coordinator.reserveSteer("fallback", inbound("Y"), "reply-owed", 2)).toBe(true);
+  expect(coordinator.attachSteerPlaceholder("fallback")).toBe(true);
+  coordinator.settleSteerReservation("fallback", true);
+  expect(coordinator.blocksEarlyFromPeer("peer.agent", "T")).toBe("behind_earlier_early_same_sender");
+  expect(coordinator.conversationBlocksEarly("Y", "T")).toBe("behind_earlier_early_same_sender");
+});
+
 describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
   it("replaces a host-queued batch with survivors at the final input boundary", () => {
     const dispatched: DispatchedCodexInterAgentBatch[] = [];

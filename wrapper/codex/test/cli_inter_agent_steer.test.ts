@@ -24,6 +24,7 @@ interface ComposeExtra {
   root?: { agent_id: string; conversation_id: string };
   idle?: boolean;
   hostQueued?: string;
+  rootWaiting?: boolean;
 }
 
 type SteerSchedule = "queued-successor" | "terminal-before-settle" | "included" | "ticket-use" | "item-before-response" | "accepted-unobserved" | "unwritten" | "write-failed" | "write-timeout" | "precondition";
@@ -84,7 +85,7 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
         root.payload.body = "OTHER ROOT"; root.payload.turn_number = 1;
         await linkOptions.onInterAgentMessage(root);
         expect(send).toHaveBeenCalledOnce();
-        activeToken = String(send.mock.calls[0]![3]);
+        activeToken = extra.rootWaiting ? "other-running-token" : String(send.mock.calls[0]![3]);
         send.mockClear();
       }
       hostOptions.onTurnStart({ turnToken: activeToken, conversationIds: rootSpec !== undefined ? [rootSpec.conversation_id] : [] });
@@ -235,10 +236,10 @@ describe("early input that is not steered says why", () => {
     ["the exec backend", () => compose("exec", true), "steer_not_negotiated"],
     ["a missing delivery-mode echo", () => compose("app-server", false), "steer_not_negotiated"],
     ["a missing attribution echo", () => compose("app-server", true, "early", "included", false), "steer_not_negotiated"],
-    ["an earlier input from the same sender", () => compose("app-server", true, "early", "included", true, false,
-      { root: { agent_id: "peer.agent", conversation_id: "earlier-cid" } }), "behind_earlier_input_same_sender"],
+    ["a queued root from the same sender", () => compose("app-server", true, "early", "included", true, false,
+      { root: { agent_id: "peer.agent", conversation_id: "earlier-cid" }, rootWaiting: true }), "behind_queued_root_same_sender"],
     ["an open root in the same conversation", () => compose("app-server", true, "early", "included", true, false,
-      { root: { agent_id: "other.agent", conversation_id: "cid" } }), "behind_open_root_same_conversation"],
+      { root: { agent_id: "other.agent", conversation_id: "cid" }, rootWaiting: true }), "behind_open_root_same_conversation"],
     ["an oversized message", () => compose("app-server", true, "early", "included", true, false,
       { mutate: early => { early.payload.body = "x".repeat(20_000); } }), "too_large"],
     ["a malformed delivery sequence", () => compose("app-server", true, "early", "included", true, false,

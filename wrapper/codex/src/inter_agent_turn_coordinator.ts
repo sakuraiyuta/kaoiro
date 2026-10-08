@@ -433,6 +433,23 @@ export class CodexInterAgentTurnCoordinator {
       (this.#pendingFallbacks.get(peer)?.length ?? 0) > 0;
   }
 
+  blocksEarlyFromPeer(peer: string, activeToken: string | null): string | null {
+    const dispatched = this.#activeTokenByPeer.get(peer);
+    if (dispatched !== undefined && dispatched !== activeToken) return "behind_queued_root_same_sender";
+    if ((this.#pendingFallbacks.get(peer)?.length ?? 0) > 0) return "behind_earlier_early_same_sender";
+    return null;
+  }
+
+  conversationBlocksEarly(conversationId: string, activeToken: string | null): string | null {
+    if ([...this.#batchByTurnToken.values()].some(batch => batch.turnToken !== activeToken &&
+        batch.items.some(item => item.envelope.payload.conversation_id === conversationId))) {
+      return "behind_queued_root_same_sender";
+    }
+    if ([...this.#pendingFallbacks.values()].some(reservations => reservations.some(reservation =>
+        reservation.envelope.payload.conversation_id === conversationId))) return "behind_earlier_early_same_sender";
+    return null;
+  }
+
   hasRootConversation(conversationId: string): boolean {
     const has = (items: readonly CodexInterAgentBatchItem[]) => items.some(item =>
       (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id === conversationId);

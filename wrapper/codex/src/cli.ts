@@ -330,7 +330,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   /** Production owner of Codex same-peer batching. Tests instantiate this
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
-    canDispatchPeer: peer => !interAgent?.hasPendingSteerPeer(peer),
+    canDispatchPeer: peer => !interAgent?.hasPendingSteerPeer(peer) && !interAgent?.hasUnreconciledRootPeer(peer),
     createPlaceholder: (id, arrival) => host.createInterAgentPlaceholder(id, arrival),
     removePlaceholder: id => host.removeInterAgentPlaceholder(id),
     retireDiscarded: envelopes => { link?.retireInterAgentDeliveries?.(envelopes); },
@@ -375,7 +375,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       // Register exactly the batch entering the host queue, never a later
       // accepted arrival waiting behind it (issue #211 MF-1).
       for (const item of batch.items) {
-        interAgent?.notePendingInjection(item.envelope, batch.turnToken);
+        const identity = deliveryIdentity();
+        interAgent?.notePendingInjection(item.envelope, batch.turnToken,
+          identity === null ? undefined : { ...identity, batchId: batch.turnToken });
       }
       if (batch.fallbackId !== undefined) return true;
       instructionChain = instructionChain.then(() =>
@@ -737,17 +739,18 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     if (!early) return false;
     if (typeof payload.conversation_id !== "string" ||
         typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0) return queued("invalid_delivery_identity");
-    if (interAgentTurns.hasQueuedForPeer(envelope.agent_id)) return queued("behind_earlier_input_same_sender");
-    if (interAgent.hasPendingRootConversation(payload.conversation_id) || interAgentTurns.hasRootConversation(payload.conversation_id)) {
-      return queued("behind_open_root_same_conversation");
-    }
+    const owner = host.activeInterAgentTurnToken();
+    const blocker = interAgentTurns.blocksEarlyFromPeer(envelope.agent_id, owner) ??
+      interAgent.rootBlocksSteer(payload.conversation_id, owner) ??
+      interAgentTurns.conversationBlocksEarly(payload.conversation_id, owner);
+    if (blocker !== null) return queued(blocker);
     if (Buffer.byteLength(formatInboundMessage(envelope, { mode }), "utf8") > 16_384) return queued("too_large");
     const token = host.activeInterAgentTurnToken();
     if (token === null) return queued("no_active_turn");
     if (interAgent.queuedInboundMode(envelope, mode) === "terminal") return queued("conversation_terminal");
     const identity = deliveryIdentity();
     if (identity === null) return queued("delivery_identity_unavailable");
-    const tickets = interAgent.prepareFoldInput(token, [envelope]);
+    const tickets = interAgent.prepareFoldInput(token, [envelope], identity);
     if (tickets === undefined) return queued("reply_authorization_unavailable");
     const batchId = `kaoiro-ia-steer:${randomUUID()}`;
     const text = [
@@ -769,10 +772,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         if (ownerToken !== token || current?.incarnation !== identity.incarnation || current.generation !== identity.generation) return "stale_delivery_generation";
         if (link?.deliveryModes()?.early !== "steer" || link.noticeAttributionMode() !== "v1" ||
             interAgent.queuedInboundMode(envelope, mode) === "terminal") return "inter_agent_steer_unavailable";
-        if (interAgentTurns.hasQueuedForPeer(envelope.agent_id) || interAgent.hasPendingRootConversation(payload.conversation_id!) ||
-            interAgentTurns.hasRootConversation(payload.conversation_id!)) return "behind_earlier_input";
+        const blocker = interAgentTurns.blocksEarlyFromPeer(envelope.agent_id, ownerToken) ??
+          interAgent.rootBlocksSteer(payload.conversation_id!, ownerToken) ??
+          interAgentTurns.conversationBlocksEarly(payload.conversation_id!, ownerToken);
+        if (blocker !== null) return blocker;
         if (!interAgentTurns.reserveSteer(batchId, envelope, mode, arrival)) return "inter_agent_steer_unavailable";
-        if (!interAgent.noteSteerAttempt(envelope, ownerToken, batchId)) {
+        if (!interAgent.noteSteerAttempt(envelope, ownerToken, batchId, identity)) {
           interAgentTurns.discardSteerReservation(batchId);
           return "behind_earlier_input";
         }
@@ -804,8 +809,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         tickets.discard();
         const fallback = (response.kind === "P" || writeState === "unwritten") && !observed && !conflict;
         if (fallback) {
-          interAgent.abandonSteerAttempt(ownerToken, sequence);
+          for (const notice of interAgent.abandonSteerAttempt(ownerToken, sequence, identity)) interAgent.sendInternalNotice(notice);
           interAgentTurns.settleSteerReservation(batchId, true);
+          interAgentTurns.dispatchNextForPeer(envelope.agent_id);
           return;
         }
         interAgentTurns.settleSteerReservation(batchId, false);
@@ -823,7 +829,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
             deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope);
           }
         }
-        for (const notice of interAgent.settleSteerInjection(ownerToken, sequence, corroborated ? "corroborated" : "uncertain")) {
+        for (const notice of interAgent.settleSteerInjection(ownerToken, sequence, corroborated ? "corroborated" : "uncertain", identity)) {
           interAgent.sendInternalNotice(notice);
         }
         if (!interAgent.hasPendingSteerPeer(envelope.agent_id)) interAgentTurns.dispatchNextForPeer(envelope.agent_id);
@@ -833,12 +839,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       const result = await host.steerInterAgentInput(text, hooks, batchId);
       if (result.kind === "sent") return true;
       interAgentTurns.discardSteerReservation(batchId);
-      interAgent.abandonSteerAttempt(token, sequence);
+      for (const notice of interAgent.abandonSteerAttempt(token, sequence, identity)) interAgent.sendInternalNotice(notice);
       tickets.discard();
       return queued(result.reason);
     } catch (error) {
       interAgentTurns.discardSteerReservation(batchId);
-      interAgent.abandonSteerAttempt(token, sequence);
+      for (const notice of interAgent.abandonSteerAttempt(token, sequence, identity)) interAgent.sendInternalNotice(notice);
       tickets.discard();
       writeRedactedStderr(`[kaoiro] inter-agent steer attempt failed: ${String(error)}\n`);
       return false;
@@ -1154,8 +1160,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         // own peer notices, but never dispatch a successor; the active token
         // is retained for supervisor recovery.
         const classified = error ? classifyInterAgentError(error) : undefined;
-        for (const envelope of interAgent?.steerTurnEnded(turnToken, classified) ?? []) interAgent?.sendInternalNotice(envelope);
-        for (const envelope of interAgent?.resolveTurnEnd(
+        for (const envelope of interAgent?.endSteeredTurn(
           turnToken,
           conversationIds,
           classified,
@@ -1170,8 +1175,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       }
       const classified = error ? classifyInterAgentError(error) : undefined;
       const steerPeers = interAgent?.pendingSteerPeersForTurn(turnToken) ?? [];
-      for (const envelope of interAgent?.steerTurnEnded(turnToken, classified) ?? []) interAgent?.sendInternalNotice(envelope);
-      for (const envelope of interAgent?.resolveTurnEnd(
+      for (const envelope of interAgent?.endSteeredTurn(
         turnToken,
         conversationIds,
         classified,

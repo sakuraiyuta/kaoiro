@@ -863,6 +863,23 @@ interface ReplyWaiter {
 /** One inbound inter-agent message injected into the SDK as ordinary user
  *  input (cli.ts's formatInboundMessage branch), still awaiting an outbound
  *  reply on the same conversation_id (issue #127). */
+interface DeliveryIdentity {
+  incarnation: string;
+  generation: string;
+}
+
+interface DeliveryCoverage {
+  incarnation?: string;
+  generation?: string;
+  deliverySeq: number;
+  peerTurnNumber: number;
+  batchId: string;
+  attributed: boolean;
+}
+
+const steerDeliveryKey = (sequence: number, identity?: DeliveryIdentity): string =>
+  JSON.stringify([identity?.incarnation ?? null, identity?.generation ?? null, sequence]);
+
 interface PendingInjection {
   /** agent_id of the envelope that was injected — the notice's addressee. */
   from: string;
@@ -870,15 +887,12 @@ interface PendingInjection {
    * Conversation IDs may be re-used by a later inbound generation; only this
    * lease may clear or turn a pending entry into a peer_error notice. */
   turnToken: string;
+  coverage?: DeliveryCoverage[];
 }
 
-interface PendingSteerInjection {
+interface PendingSteerInjection extends DeliveryCoverage {
   from: string;
   conversationId: string;
-  peerTurnNumber: number;
-  deliverySeq: number;
-  batchId: string;
-  attributed: boolean;
   result?: "corroborated" | "uncertain";
   replied: boolean;
 }
@@ -989,12 +1003,13 @@ export class InterAgentTool {
     this.replyBasis.begin(token, envelopes, signal, deferInputConfirmation);
   }
   confirmReplyInput(token: string): void { this.replyBasis.confirmInput(token); }
-  prepareFoldInput(token: string, envelopes: readonly Envelope[]): {
+  prepareFoldInput(token: string, envelopes: readonly Envelope[], identity?: DeliveryIdentity): {
     authorizations: readonly ReplyAuthorization[];
     activate: () => boolean;
     discard: () => void;
   } | undefined {
     const origin = { token };
+    const capturedIdentity = identity === undefined ? undefined : { ...identity };
     if (this.replyBasis.live(origin) !== undefined) return undefined;
     const latest = new Map<string, Envelope>();
     for (const envelope of envelopes) {
@@ -1030,7 +1045,8 @@ export class InterAgentTool {
           if (!ticket.activate()) return false;
           const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
           if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {
-            this.#steerTicketCoverage.set(ticket.authorization.reply_ticket, { token, sequence });
+            this.#steerTicketCoverage.set(ticket.authorization.reply_ticket,
+              { token, deliveryKey: steerDeliveryKey(sequence, capturedIdentity) });
           }
           this.#options.onTicketPrepared?.(ticket.authorization.reply_ticket, token, [envelope]);
         }
@@ -1061,9 +1077,10 @@ export class InterAgentTool {
   readonly #conversations = new Map<string, ConversationTrack>();
   readonly #replyWaiters = new Map<string, ReplyWaiter>();
   readonly #pendingInjections = new Map<string, PendingInjection>();
-  readonly #steerInjections = new Map<string, Map<number, PendingSteerInjection>>();
+  readonly #steerInjections = new Map<string, Map<string, PendingSteerInjection>>();
   readonly #steerTerminals = new Map<string, InterAgentErrorPayload | null>();
-  readonly #steerTicketCoverage = new Map<string, { token: string; sequence: number }>();
+  readonly #steeredTurnRoots = new Map<string, readonly string[]>();
+  readonly #steerTicketCoverage = new Map<string, { token: string; deliveryKey: string }>();
   /** Per-conversation_id serialization for `invoke()`'s turn-allocation-
    *  through-acceptance-handling segment (issue #167 review M1). Holds the
    *  tail promise of the current lock chain for a conversation_id; absent
@@ -1573,17 +1590,29 @@ export class InterAgentTool {
    *  dispatch, but no caller may replace an unresolved CID owned by another
    *  token. resolveTurnEnd clears that owner before a later generation can
    *  acquire the CID. */
-  notePendingInjection(envelope: Envelope, turnToken: string): boolean {
+  notePendingInjection(envelope: Envelope, turnToken: string,
+    coverage?: { incarnation: string; generation: string; batchId: string }): boolean {
     const payload = envelope.payload as Partial<InterAgentMessagePayload>;
     if (envelope.agent_id === "server" && payload.turn_number === 0) return false;
     if (typeof payload.conversation_id !== "string") return false;
     const existing = this.#pendingInjections.get(payload.conversation_id);
     // A later input may be queued while the current owner is live. The
     // current owner must resolve first, even when both inputs share a CID.
-    if (existing !== undefined) return existing.turnToken === turnToken;
+    if (existing !== undefined && existing.turnToken !== turnToken) return false;
+    const sequence = (envelope as Envelope & { delivery_seq?: number }).delivery_seq;
+    const entry = coverage !== undefined && Number.isSafeInteger(sequence) && sequence! > 0 &&
+      Number.isSafeInteger(payload.turn_number) && payload.turn_number! > 0
+      ? { ...coverage, deliverySeq: sequence!, peerTurnNumber: payload.turn_number!, attributed: payload.notice_attribution === "v1" }
+      : undefined;
+    if (existing !== undefined) {
+      if (entry === undefined) delete existing.coverage;
+      else if (existing.coverage !== undefined) existing.coverage.push(entry);
+      return true;
+    }
     this.#pendingInjections.set(payload.conversation_id, {
       from: envelope.agent_id,
       turnToken,
+      ...(entry === undefined ? {} : { coverage: [entry] }),
     });
     return true;
   }
@@ -1596,36 +1625,61 @@ export class InterAgentTool {
     return this.#pendingInjections.has(conversationId);
   }
 
+  rootBlocksSteer(conversationId: string, turnToken: string | null): string | null {
+    const root = this.#pendingInjections.get(conversationId);
+    if (root === undefined) return null;
+    if (root.turnToken !== turnToken) return "behind_open_root_same_conversation";
+    return root.coverage === undefined ? "behind_legacy_root_same_conversation" : null;
+  }
+
   hasPendingSteerPeer(peer: string): boolean {
     return [...this.#steerInjections.values()].some(records => [...records.values()].some(record => record.from === peer));
+  }
+
+  hasUnreconciledRootPeer(peer: string): boolean {
+    return [...this.#steeredTurnRoots].some(([token, cids]) => cids.some(cid => {
+      const root = this.#pendingInjections.get(cid);
+      return root?.turnToken === token && root.from === peer;
+    }));
   }
 
   pendingSteerPeersForTurn(turnToken: string): string[] {
     return [...new Set(Array.from(this.#steerInjections.get(turnToken)?.values() ?? [], record => record.from))];
   }
 
-  noteSteerAttempt(envelope: Envelope, turnToken: string, batchId: string): boolean {
+  noteSteerAttempt(envelope: Envelope, turnToken: string, batchId: string, identity?: DeliveryIdentity): boolean {
     const payload = envelope.payload as unknown as InterAgentMessagePayload;
     const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
     if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0 ||
-        typeof payload.conversation_id !== "string" || !Number.isSafeInteger(payload.turn_number) ||
-        this.#pendingInjections.has(payload.conversation_id)) return false;
-    const records = this.#steerInjections.get(turnToken) ?? new Map<number, PendingSteerInjection>();
-    if (records.has(sequence)) return false;
-    records.set(sequence, { from: envelope.agent_id, conversationId: payload.conversation_id,
+        typeof payload.conversation_id !== "string" || !Number.isSafeInteger(payload.turn_number) || payload.turn_number <= 0 ||
+        this.rootBlocksSteer(payload.conversation_id, turnToken) !== null) return false;
+    const records = this.#steerInjections.get(turnToken) ?? new Map<string, PendingSteerInjection>();
+    const deliveryKey = steerDeliveryKey(sequence, identity);
+    if (records.has(deliveryKey)) return false;
+    records.set(deliveryKey, { ...identity, from: envelope.agent_id, conversationId: payload.conversation_id,
       peerTurnNumber: payload.turn_number, deliverySeq: sequence, batchId,
       attributed: payload.notice_attribution === "v1", replied: false });
     this.#steerInjections.set(turnToken, records);
     return true;
   }
 
-  abandonSteerAttempt(turnToken: string, deliverySeq: number): void {
+  abandonSteerAttempt(turnToken: string, deliverySeq: number, identity?: DeliveryIdentity): Envelope[] {
     const records = this.#steerInjections.get(turnToken);
-    records?.delete(deliverySeq);
-    if (records?.size === 0) {
-      this.#steerInjections.delete(turnToken);
-      this.#steerTerminals.delete(turnToken);
+    const deliveryKey = steerDeliveryKey(deliverySeq, identity);
+    records?.delete(deliveryKey);
+    for (const [ticket, coverage] of this.#steerTicketCoverage) {
+      if (coverage.token === turnToken && coverage.deliveryKey === deliveryKey) this.#steerTicketCoverage.delete(ticket);
     }
+    if (records?.size === 0 && !this.#steerTerminals.has(turnToken)) {
+      this.#steerInjections.delete(turnToken);
+    }
+    return this.#resolveSteerNotices(turnToken);
+  }
+
+  endSteeredTurn(turnToken: string, conversationIds: readonly string[], error?: InterAgentErrorPayload): Envelope[] {
+    if (!this.#steerInjections.has(turnToken)) return this.resolveTurnEnd(turnToken, conversationIds, error);
+    this.#steeredTurnRoots.set(turnToken, [...conversationIds]);
+    return this.steerTurnEnded(turnToken, error);
   }
 
   steerTurnEnded(turnToken: string, error?: InterAgentErrorPayload): Envelope[] {
@@ -1634,8 +1688,8 @@ export class InterAgentTool {
     return this.#resolveSteerNotices(turnToken);
   }
 
-  settleSteerInjection(turnToken: string, deliverySeq: number, result: "corroborated" | "uncertain"): Envelope[] {
-    const record = this.#steerInjections.get(turnToken)?.get(deliverySeq);
+  settleSteerInjection(turnToken: string, deliverySeq: number, result: "corroborated" | "uncertain", identity?: DeliveryIdentity): Envelope[] {
+    const record = this.#steerInjections.get(turnToken)?.get(steerDeliveryKey(deliverySeq, identity));
     if (record === undefined || record.result !== undefined) return [];
     record.result = result;
     return this.#resolveSteerNotices(turnToken);
@@ -1649,42 +1703,69 @@ export class InterAgentTool {
     const error = this.#steerTerminals.get(turnToken);
     this.#steerTerminals.delete(turnToken);
     for (const [ticket, coverage] of this.#steerTicketCoverage) if (coverage.token === turnToken) this.#steerTicketCoverage.delete(ticket);
-    const groups = new Map<string, PendingSteerInjection[]>();
+    const groups = new Map<string, { from: string; cid: string; entries: PendingSteerInjection[]; root?: PendingInjection }>();
     for (const record of records.values()) {
       const key = JSON.stringify([record.conversationId, record.from]);
-      const group = groups.get(key) ?? [];
-      group.push(record);
+      const group = groups.get(key) ?? { cid: record.conversationId, from: record.from, entries: [] };
+      group.entries.push(record);
       groups.set(key, group);
     }
+    for (const cid of this.#steeredTurnRoots.get(turnToken) ?? []) {
+      const root = this.#pendingInjections.get(cid);
+      if (root?.turnToken !== turnToken) continue;
+      this.#pendingInjections.delete(cid);
+      const key = JSON.stringify([cid, root.from]);
+      const group = groups.get(key) ?? { cid, from: root.from, entries: [] };
+      group.root = root;
+      groups.set(key, group);
+    }
+    this.#steeredTurnRoots.delete(turnToken);
     const notices: Envelope[] = [];
     for (const group of groups.values()) {
-      const first = group[0]!;
-      const unresolved = group.filter(record => !record.replied);
-      if (!unresolved.length) continue;
-      const attributed = group.every(record => record.attributed) && this.#options.noticeAttributionMode?.() === "v1";
+      const unresolved = group.entries.filter(record => !record.replied);
+      const rootEntries = group.root?.coverage ?? [];
+      const legacyRoot = group.root !== undefined && group.root.coverage === undefined;
+      const attributed = !legacyRoot && [...group.entries, ...rootEntries].every(record => record.attributed) &&
+        this.#options.noticeAttributionMode?.() === "v1";
       const uncertain = unresolved.filter(record => record.result === "uncertain");
-      const classified = unresolved.filter(record => record.result === "corroborated");
-      const noticeGroups: Array<{ entries: PendingSteerInjection[]; error: InterAgentErrorPayload }> = attributed
+      const classified = [...rootEntries, ...unresolved.filter(record => record.result === "corroborated")];
+      const noticeGroups: Array<{ entries: DeliveryCoverage[]; error: InterAgentErrorPayload }> = attributed
         ? [
             ...(error === null || error === undefined || classified.length === 0 ? [] : [{ entries: classified, error }]),
             ...(uncertain.length === 0 ? [] : [{ entries: uncertain, error: { code: "timeout", message: "Input may have reached the peer turn; wait and do not retry automatically" } }]),
           ]
-        : [{ entries: unresolved, error: uncertain.length > 0
+        : !(group.root !== undefined || unresolved.length > 0) ? [] : [{ entries: [...rootEntries, ...unresolved], error: uncertain.length > 0
             ? { code: "timeout", message: "At least one input may have reached the peer turn; wait and do not retry any input from that turn" }
             : error ?? { code: "timeout", message: "Unattributed turn failure" } }];
       for (const noticeGroup of noticeGroups) {
         if (!attributed && uncertain.length === 0 && error == null) continue;
-        const sorted = [...noticeGroup.entries].sort((a, b) => a.deliverySeq - b.deliverySeq);
-        for (let offset = 0; offset < sorted.length; offset += attributed ? 16 : sorted.length) {
-          const slice = sorted.slice(offset, offset + (attributed ? 16 : sorted.length));
+        const partitions = new Map<string, DeliveryCoverage[]>();
+        for (const entry of noticeGroup.entries) {
+          const key = JSON.stringify([entry.incarnation ?? null, entry.generation ?? null]);
+          const partition = partitions.get(key) ?? [];
+          partition.push(entry); partitions.set(key, partition);
+        }
+        const slices: DeliveryCoverage[][] = [];
+        if (!attributed) slices.push(noticeGroup.entries);
+        else for (const partition of partitions.values()) {
+          let slice: DeliveryCoverage[] = [];
+          for (const entry of [...partition].sort((a, b) => a.deliverySeq - b.deliverySeq)) {
+            if (slice.length === 16 || (slice.length > 0 && entry.deliverySeq <= slice.at(-1)!.deliverySeq)) {
+              slices.push(slice); slice = [];
+            }
+            slice.push(entry);
+          }
+          if (slice.length > 0) slices.push(slice);
+        }
+        for (const slice of slices) {
           const noticeError: InterAgentErrorPayload = attributed
             ? { ...noticeGroup.error, affected_deliveries: slice.map(record => ({ delivery_seq: record.deliverySeq,
                 peer_turn_number: record.peerTurnNumber, batch_id: record.batchId })) }
             : noticeGroup.error;
-          const track = this.#getTrack(first.conversationId);
+          const track = this.#getTrack(group.cid);
           track.turnNumber += 1;
           notices.push(makeInterAgentMessage(this.#options.config, this.#options.getState(), this.#now(), {
-            to: first.from, conversation_id: first.conversationId, turn_number: track.turnNumber,
+            to: group.from, conversation_id: group.cid, turn_number: track.turnNumber,
             kind: "inform", body: `peer error (${noticeError.code}): ${noticeError.message}`,
             meta: { done: false, propose_next: "" }, owner: { kind: "user", id: "operator" },
             new_conversation: false,
@@ -2325,7 +2406,7 @@ export class InterAgentTool {
           if (acceptance.kind !== "rejected" && captured?.ticket && args.reply_ticket !== undefined) {
             const coverage = this.#steerTicketCoverage.get(args.reply_ticket);
             if (coverage?.token === captured.origin.token) {
-              const steered = this.#steerInjections.get(coverage.token)?.get(coverage.sequence);
+              const steered = this.#steerInjections.get(coverage.token)?.get(coverage.deliveryKey);
               if (steered?.conversationId === conversationId && steered.from === args.to) steered.replied = true;
             }
           }

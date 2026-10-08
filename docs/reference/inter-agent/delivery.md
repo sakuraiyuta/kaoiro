@@ -253,8 +253,13 @@ operations](work.md#work-authority-and-operations).
 
 The app-server path writes a bounded peer input through `turn/steer` while its
 current turn runs. The wrapper validates the current turn, ledger identity,
-server grant, negotiated capabilities, permission and reset state, older
-same-peer input, and the per-turn steer limits before writing. A declined or
+server grant, negotiated capabilities, permission and reset state, root
+ownership, earlier early fallbacks, and per-turn steer limits before writing.
+It can steer into its sender's running batch and overtake queued ordinary
+peer roots, including in the same conversation. While peer roots wait,
+two IA writes may overtake per token, within the three-IA/eight-total caps.
+Operator, synthetic and placeholder input still block IA, and operator
+steering retains its queue guard. A declined or
 unwritten input enters the root queue. An accepted response reports
 `submitted` with `turn_steer_accepted`; a matching completed user-message item
 can report `submitted` with `turn_steer_item_observed`. The item must carry the
@@ -268,15 +273,25 @@ reports the loss to the sender. A reserved fallback is unavailable to inline
 recovery and is always excluded from the unread advisory. Ordinary queued
 input is counted independently.
 
-The wrapper keeps one delivery obligation per sequence even when several
+The wrapper keeps one delivery obligation per token, incarnation, generation
+and sequence even when several
 steers share a conversation. At terminal, a corroborated input reports
 `settled`; a possibly written input without both facts reports `unknown` and
 is never resent automatically. A completed item before the RPC response is
 retained until that response or a bounded timeout. A valid response after
-terminal can reconcile delivery, but cannot activate a ticket. Failure notices
+terminal can reconcile delivery, but cannot activate a ticket. Root slots
+remain owned until every steer response or bounded timeout is reconciled;
+the token's unresolved roots and steers are then resolved together. Failure notices
 from a negotiated sender identify the affected delivery sequences and peer
 turns; a legacy notice is conservative and does not claim that a particular
-sequence failed. The server records a separate lifetime `uncertain_count` and
+sequence failed. Each notice class is split by incarnation/generation and
+then into at most 16 strictly ascending sequences; a defensive duplicate
+sequence starts another notice. Root-only tokens keep their unscoped
+notices. A reply clears its owning CID root and only the steer named by
+its exact ticket, with the existing possibly-delivered `unknown` behavior.
+An overtaken ordinary root's plain reply may be stale if the later early
+ticket was not used; confirmed recovery input or a new authorization is
+required. The server records a separate lifetime `uncertain_count` and
 `last_uncertain` summary when an eligible unknown resolves a delivery gap. It
 cannot independently verify the wrapper's write observation. Per-message
 stage history expires after its retention window; the summary survives for
@@ -313,7 +328,10 @@ See [Codex app-server transport](../engines/codex-app-server.md#inter-agent-earl
 Operator steering can delay injection of a queued peer batch by at most one
 steer response time, because both share the wrapper's instruction chain. A granted early peer delivery can
 bypass the same peer's ordinary turn queue to enter its live Claude `Query`;
-ordinary peer batches remain serial. An operator early instruction without
+Codex follows the same overtaking policy through `turn/steer`. Their caps
+count different boundaries: Claude permits two urgent root overtakes;
+Codex permits two IA writes in a running token while peer roots wait.
+Ordinary peer batches remain serial. An operator early instruction without
 attachments can also fold, without a peer reply ticket. Synthetic notices
 never request early or yield. With the flag off or without the matching server
 echo, root input retains its arrival order and phase-2 overtaking is disabled.

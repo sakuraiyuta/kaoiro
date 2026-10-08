@@ -91,6 +91,55 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert :ok = send_bound.("a", "b", 6, 5)
   end
 
+  test "an overtaken root basis stays stale until the later early input is credited" do
+    name = start_tracker(:cs_overtaken_root_basis)
+
+    for turn <- [4, 5, 6] do
+      assert :ok =
+               ConversationStates.record_bound_message(
+                 "overtaken",
+                 "peer",
+                 "recipient",
+                 "peer input",
+                 turn,
+                 false,
+                 turn == 4,
+                 0,
+                 name
+               )
+    end
+
+    before = ConversationStates.get("overtaken", name)
+
+    assert {:error, %{reason: "stale_reply_basis", expected_peer_turn: 6, supplied_basis: 5}} =
+             ConversationStates.record_bound_message(
+               "overtaken",
+               "recipient",
+               "peer",
+               "next root reply",
+               7,
+               false,
+               false,
+               5,
+               name
+             )
+
+    assert ConversationStates.get("overtaken", name) == before
+
+    assert :ok =
+             ConversationStates.record_bound_message(
+               "overtaken",
+               "recipient",
+               "peer",
+               "credited early reply",
+               7,
+               false,
+               false,
+               6,
+               name
+             )
+  end
+
   test "通常の record_message は :ok を返しエントリを保持する" do
     name = start_tracker(:cs_basic)
 

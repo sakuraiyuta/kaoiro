@@ -2,7 +2,7 @@
 title: ADR-0063 phase 3 — Codex inter-agent early delivery
 description: Design for attaching independently leased inter-agent input to a running Codex app-server turn through turn/steer.
 status: proposed
-last_updated: 2026-10-01
+last_updated: 2026-10-09
 ---
 
 # ADR-0063 phase 3 — Codex inter-agent early delivery
@@ -77,9 +77,15 @@ RPC acceptance with model inclusion or immediate preemption.
    The server's pending limits remain the outer bound; the wrapper also bounds
    priority bodies and records overflow as a queue downgrade, never a drop.
 3. One host dispatcher serializes operator and IA steer writes, root dispatch,
-   reset, stop and policy changes. Earlier queued input of either source that
-   is waiting for a boundary blocks a later steer; within one peer, a later
-   early item never overtakes an earlier ordinary item. The common total cap
+   reset, stop and policy changes. IA can enter its sender's running batch
+   and overtake queued ordinary peer input, including in the same CID.
+   A dispatched root owned by another token, earlier early fallback,
+   another token's same-CID root or a legacy root remains blocking.
+   Queued operator/synthetic inputs and placeholders block IA. Operator
+   steering retains the guard against all queued input. At most two IA
+   writes per token may overtake waiting peer roots; count each write once,
+   only when a peer root waits, without refunds for uncertain/abandoned
+   writes. The common total cap
    is eight steer writes per active turn (the Stage 2 value); at most three
    admitted IA leases may consume it. Remaining inputs keep receive order for
    the next root. Operator inputs cannot reset the IA quota. This admits both
@@ -96,7 +102,8 @@ RPC acceptance with model inclusion or immediate preemption.
 5. One `turn/steer` contains a bounded same-peer batch with a unique
    `clientUserMessageId`, exact text digest and all its delivery sequences.
    Batch only messages eligible for the same active token and reply policy;
-   never coalesce different peers or overtake an older same-peer item. An
+   never coalesce different peers or pull queued ordinary input into the
+   steer. Ordinary input stays queued and arrives at its next root. An
    explicit precondition rejection installs an order placeholder before a
    later steer can commit, then resolves it into the unchanged root input.
    An arbitrary RPC error is a refusal, not an infinite retry. A possibly
@@ -125,31 +132,34 @@ new admission; it is not a reason to migrate a steered input to another turn.
 | Definite precondition rejection | Queue the original lease at its arrival position, report the rejection reason, and leave its delivery sequence unresolved until a later root handoff or intentional non-injection. |
 | Lost response after a possibly delivered write, mismatched response, or contradictory item | Report `unknown` once, never queue or retry the same body, and retain the exact owner and sequence in the bounded diagnostic record. Do not mark it `failed_before_handoff` or send an ordinary failure notice that invites retry. |
 
-The phase-3 failure ledger extends `notePendingInjection` from one CID slot to
-one record per `(host token, delivery incarnation, generation, delivery_seq)`.
+The root adapter keeps one slot per `(host token, CID)`, with optional
+sequenced coverage entries for Codex; roots without coverage use that
+token-local slot identity and never fabricate a delivery sequence. Steers
+have one record per `(host token, delivery incarnation, generation, delivery_seq)`.
 Each record contains the peer, CID, peer turn, batch ID, handoff evidence,
 reply coverage and final uncertainty class. A second same-CID steer on the
-same token does not overwrite the first record. `pendingConversationIdsForTurn`
-and `resolveTurnEnd` become projections over these records; the old CID map
-alone cannot settle this path. A successful or possibly-delivered reply
-discharges **only** the input sequences named by its captured default basis
-or activated ticket; a rejected reply discharges none. Ticket preparation
-records its exact sequence coverage, not merely its CID. No reply basis
-implicitly covers a later steer. Preserve the existing root
-`notePendingInjection`/`resolveTurnEnd` API through a tagged local-root
-adapter: a legacy or non-negotiated root without incarnation/generation/seq
-gets a token-local ID, not a fabricated server sequence or a shared missing-ID
-key. Its current one-obligation-per-CID, accepted-reply clearing and
+same token does not overwrite the first record. A successful or
+possibly-delivered reply clears the owning root's CID slot. It discharges
+**only** the steer named by its exact activated ticket's captured identity
+and sequence; a rejected reply discharges none. Prefix reply basis never
+discharges earlier steers. Ticket preparation captures identity before
+activation. Preserve the existing root `notePendingInjection`/`resolveTurnEnd`
+API. Its current one-obligation-per-CID, accepted-reply clearing and
 turn-error fan-out semantics remain. Hold a same-CID steer behind such a root
 until its token settles, so scoped and unscoped obligations do not merge.
-Only negotiated phase-3 steers use the sequenced ledger and
-`affected_deliveries`; an unhanded priority lease has no failure obligation.
+Codex `endSteeredTurn` holds roots until every steer has a final response
+or bounded timeout, then reconciles both classes together. A token without
+steers uses the unchanged root adapter. Claude and Antigravity retain
+their existing calls. An unhanded priority lease has no failure obligation.
 
 At captured-token reconciliation, reduce unresolved records by `(peer, CID,
-notice class)` in delivery-sequence order. Send at most one notice for each
-class in a CID on that token, with a bounded `affected_deliveries` list of
-`{delivery_seq, peer_turn_number, batch_id}` in `error`; split an oversized
-list into ordered, non-overlapping chunks. The two classes are `classified`
+notice class)`. Partition each class by incarnation/generation, then sort
+sequences within each identity. Each notice carries at most 16 strictly
+ascending `{delivery_seq, peer_turn_number, batch_id}` entries in
+`affected_deliveries`. A non-increasing sequence starts another notice
+defensively; preserve every record without renumbering. Notice counts
+include identity partitions, capacity chunks and defensive duplicate
+splits. The two classes are `classified`
 (corroborated intake, host turn error) and `uncertain` (possible write or
 accepted-but-unobserved input, `timeout` code). A classified notice carries
 the host's classified error; an uncertain notice always says wait and do not
@@ -158,7 +168,12 @@ but an unresolved uncertain sequence still gets its timeout notice. A reply
 already sent for A cannot discharge B. One batch may own several sequences;
 batch identity never replaces per-sequence accounting. Notice construction
 and exact-token release happen once in the same reconciliation, before any
-successor root can acquire the CID.
+successor root can acquire the CID. A legacy root in another CID gets its
+unscoped error notice in the same reconciliation. An older sender gets
+one conservative CID-wide timeout if any input is uncertain, otherwise
+the classified error. The overtaken ordinary root's default reply can
+be stale if the later early ticket was unused; it must wait for confirmed
+recovery input or a new authorization.
 
 | Same-CID state at reconciliation | Notice and release |
 | --- | --- |

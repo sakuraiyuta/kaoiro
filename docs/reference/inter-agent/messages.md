@@ -45,17 +45,21 @@ See [work authority and operations](work.md#work-authority-and-operations).
 
 `granted: early` and `mechanism` in a send result state what the server granted
 and what the recipient can do. They do not say whether this input steered the
-running turn. A Codex app-server recipient queues an early input instead of
-steering it when, among other reasons, an earlier input from the same sender is
-queued for or running in the recipient (the request being corrected counts), any
-other entry is queued in the host, or a root is open in the same conversation.
+running turn. A Codex app-server recipient can steer a correction into its
+sender's running request, overtaking queued ordinary messages even in the
+same conversation. Ordinary messages stay queued and arrive afterwards.
+It still queues early input behind its sender's root waiting in the host,
+an earlier early fallback, another token's same-CID root or a legacy root,
+operator or synthetic input, or placeholders. The per-turn caps also apply:
+three IA writes overall, and at most two while peer roots wait.
 The send result does not report the hold; the recipient's wrapper logs the
 reason (see [Codex app-server](../engines/codex-app-server.md#when-an-early-input-is-queued)).
 
-To correct a request the recipient is already running, send the correction as a
-normal message in the same conversation. The recipient reads it when its next
-reply there is rejected as stale, which hands over the queued messages, or when
-its turn ends. To stop the work at once, the operator interrupts the turn; hard
+Send an early correction to change the running request. A normal message
+waits for a root or stale-basis recovery. An overtaken ordinary message's
+next root can itself get `stale_reply_basis` if the later early ticket was
+not spent; it waits for confirmed recovery input or a new authorization.
+To stop the work at once, the operator interrupts the turn; hard
 cancellation stays operator-only
 ([ADR-0063](../../adr/0063-layered-delivery-authority-and-continuations.md) D2).
 

@@ -94,8 +94,16 @@ An app-server wrapper advertises `early: "steer", yield: "none"` at join. It
 steers only a server-granted early peer input after both delivery-mode and
 `notice_attribution: "v1"` echoes. The exec backend always queues peer input.
 This path has a distinct per-sequence lease, reply ticket, write-state guard,
-and three-write IA quota within the common eight-steer turn cap. An older
-same-peer root or unresolved steer blocks a successor; a rejected steer keeps
+and three-write IA quota within the common eight-steer turn cap. An early
+input can correct its sender's running batch and overtake that sender's
+queued ordinary input, including in the same conversation. Its sender's
+root waiting behind another token, an earlier early fallback, a same-CID
+root owned by another token, or a legacy root without sequenced coverage
+still blocks it. While peer roots wait, at most two IA writes can overtake
+them per running token. This count is per write, is not refunded for
+uncertain outcomes, and does not charge writes made before a root waited.
+Operator and synthetic entries and placeholders still block IA; operator
+steering retains its guard against all queued input. A rejected steer keeps
 its queue position through a placeholder owned by the IA coordinator. Each
 rejected fallback becomes one ordinary-format root, regardless of the
 coalescing cap, before later same-peer input. Terminal reclassification removes
@@ -115,14 +123,17 @@ delivery. The reason is one of:
 |---|---|
 | `steer_not_negotiated` | The exec backend, or the join lacks the `early: "steer"` echo or `notice_attribution: "v1"`. |
 | `invalid_delivery_identity` | The delivery has no conversation id or no valid delivery sequence. |
-| `behind_earlier_input_same_sender` | An earlier input from the same sender is queued for, or running in, this recipient; the batch the running turn carries counts. |
-| `behind_open_root_same_conversation` | A root for the same conversation is open or pending. |
+| `behind_queued_root_same_sender` | The sender's dispatched root waits behind another running token. |
+| `behind_earlier_early_same_sender` | An earlier early input awaits its fallback root. |
+| `behind_open_root_same_conversation` | A root for the same conversation belongs to another token, including an owner awaiting reconciliation. |
+| `behind_legacy_root_same_conversation` | The running root lacks delivery-sequence coverage. |
+| `overtake_budget` | Two IA writes have already overtaken waiting peer roots in this token. |
 | `too_large` | The formatted message exceeds 16,384 bytes. |
 | `no_active_turn` | The recipient is idle; the input starts a turn. |
 | `conversation_terminal` | The conversation has closed. |
 | `delivery_identity_unavailable` | The wrapper has no delivery incarnation and generation yet. |
 | `reply_authorization_unavailable` | The wrapper could not prepare a reply ticket. |
-| `idle`, `turn_starting`, `behind_earlier_input`, `pending_settings`, `turn_ending`, `reset_pending`, `steer_cap`, `inter_agent_steer_cap`, `inter_agent_steer_unavailable`, `stale_delivery_generation` | The host's admission refused the steer; `behind_earlier_input` includes any other queued entry except a reset notice. |
+| `idle`, `turn_starting`, `behind_earlier_input`, `pending_settings`, `turn_ending`, `reset_pending`, `steer_cap`, `inter_agent_steer_cap`, `inter_agent_steer_unavailable`, `stale_delivery_generation` | The host's admission refused the steer; `behind_earlier_input` includes queued operator or synthetic input, a placeholder, or a pending precondition fallback. |
 
 A steer request's valid response and a completed `userMessage` with matching
 `clientId` and exact text are independent facts. Both must arrive before turn
