@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-10-01
+last_updated: 2026-10-08
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -40,6 +40,24 @@ with a downgrade such as `yield_token_unavailable`, `recipient_legacy`,
 `delivery_authority.granted` and `.downgrade` as the final result; the work
 receipt records the operation result and delivery knowledge, not that downgrade.
 See [work authority and operations](work.md#work-authority-and-operations).
+
+### Early input that waits in the queue
+
+`granted: early` and `mechanism` in a send result state what the server granted
+and what the recipient can do. They do not say whether this input steered the
+running turn. A Codex app-server recipient queues an early input instead of
+steering it when, among other reasons, an earlier input from the same sender is
+queued for or running in the recipient (the request being corrected counts), any
+other entry is queued in the host, or a root is open in the same conversation.
+The send result does not report the hold; the recipient's wrapper logs the
+reason (see [Codex app-server](../engines/codex-app-server.md#when-an-early-input-is-queued)).
+
+To correct a request the recipient is already running, send the correction as a
+normal message in the same conversation. The recipient reads it when its next
+reply there is rejected as stale, which hands over the queued messages, or when
+its turn ends. To stop the work at once, the operator interrupts the turn; hard
+cancellation stays operator-only
+([ADR-0063](../../adr/0063-layered-delivery-authority-and-continuations.md) D2).
 
 ### envelope.type: "inter_agent_message"
 

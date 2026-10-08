@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-10-01
+last_updated: 2026-10-08
 ---
 
 # Codex app-server transport
@@ -103,6 +103,26 @@ the slot; failed replacement retires the unstarted delivery and emits a
 diagnostic. Operator placeholders have separate ownership. An operator steer cannot bypass
 the common pending-settings, approval, reset, foreign-turn, and watchdog
 guards.
+
+### When an early input is queued
+
+A server-granted early peer input that is not steered writes one wrapper stderr
+line, `[kaoiro] inter-agent early input queued: <reason> seq=<n> from=<sender>`.
+An input granted as normal writes none, and a failing sink never changes the
+delivery. The reason is one of:
+
+| Reason | Meaning |
+|---|---|
+| `steer_not_negotiated` | The exec backend, or the join lacks the `early: "steer"` echo or `notice_attribution: "v1"`. |
+| `invalid_delivery_identity` | The delivery has no conversation id or no valid delivery sequence. |
+| `behind_earlier_input_same_sender` | An earlier input from the same sender is queued for, or running in, this recipient; the batch the running turn carries counts. |
+| `behind_open_root_same_conversation` | A root for the same conversation is open or pending. |
+| `too_large` | The formatted message exceeds 16,384 bytes. |
+| `no_active_turn` | The recipient is idle; the input starts a turn. |
+| `conversation_terminal` | The conversation has closed. |
+| `delivery_identity_unavailable` | The wrapper has no delivery incarnation and generation yet. |
+| `reply_authorization_unavailable` | The wrapper could not prepare a reply ticket. |
+| `idle`, `turn_starting`, `behind_earlier_input`, `pending_settings`, `turn_ending`, `reset_pending`, `steer_cap`, `inter_agent_steer_cap`, `inter_agent_steer_unavailable`, `stale_delivery_generation` | The host's admission refused the steer; `behind_earlier_input` includes any other queued entry except a reset notice. |
 
 A steer request's valid response and a completed `userMessage` with matching
 `clientId` and exact text are independent facts. Both must arrive before turn
