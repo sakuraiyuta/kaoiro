@@ -61,6 +61,15 @@ defmodule KaoiroServer.FooterAssetsTest do
     assert footer =~ "空文字で消してよい"
   end
 
+  test "built-in footer states owner-aware Codex steering and its waiting-root budget" do
+    footer = FooterAssets.built_in_system_footer()
+    assert footer =~ "sender's running request"
+    assert footer =~ "even in the same conversation"
+    assert footer =~ "at most 2 IA writes overtake per turn (3 IA overall)"
+    assert footer =~ "Ordinary messages follow; replies may need stale-basis recovery"
+    assert footer =~ "Interruption stays operator-only"
+  end
+
   test "KAOIRO_FOOTER_DIR 未設定ならファイル優先は無効" do
     Application.delete_env(:kaoiro_server, :footer_dir)
     :ok = FooterAssets.rebuild()

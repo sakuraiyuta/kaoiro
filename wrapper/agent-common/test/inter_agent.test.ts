@@ -134,7 +134,7 @@ describe("sequence-scoped steer failure obligations", () => {
     expect(notices).toHaveLength(2);
     expect(notices.map(notice => (notice.payload as unknown as InterAgentMessagePayload).error)).toEqual([
       { code: "api_error", message: "failed", affected_deliveries: [{ delivery_seq: 4, peer_turn_number: 2, batch_id: "batch-a" }] },
-      { code: "timeout", message: expect.stringContaining("wait and do not retry"),
+      { code: "timeout", message: "the peer's turn timed out",
         affected_deliveries: [{ delivery_seq: 5, peer_turn_number: 4, batch_id: "batch-b" }] },
     ]);
     expect(tool.hasPendingSteerPeer("peer.agent")).toBe(false);
@@ -164,6 +164,30 @@ describe("sequence-scoped steer failure obligations", () => {
     expect(notices).toHaveLength(1);
     expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error?.affected_deliveries)
       .toEqual([{ delivery_seq: 5, peer_turn_number: 4, batch_id: "batch-b" }]);
+  });
+
+  it("a later B ticket leaves an earlier uncertain A obligation unresolved", async () => {
+    const tool = new InterAgentTool({ config: configFor("self.agent"), getState: () => "tool_running",
+      noticeAttributionMode: () => "v1", replyBasisMode: () => "v1", send: () => {},
+      sendInterAgent: async () => ({ kind: "accepted", stamp: null }) });
+    const a = steeredEnvelope("cid", 4, 2), b = steeredEnvelope("cid", 5, 4);
+    tool.prepareReplyInput("token", [steeredEnvelope("cid", 3, 1)]);
+    tool.beginReplyInput("token");
+    tool.noteSteerAttempt(a, "token", "batch-a");
+    tool.noteSteerAttempt(b, "token", "batch-b");
+    const foldB = tool.prepareFoldInput("token", [b])!;
+    expect(foldB.activate()).toBe(true);
+    const auth = foldB.authorizations[0]!;
+    const reply = await tool.invoke({ to: "peer.agent", conversation_id: "cid", kind: "response", body: "B reply",
+      in_reply_to: auth.in_reply_to, reply_ticket: auth.reply_ticket }, { origin: { token: "token" } });
+    expect(reply.isError).toBeFalsy();
+    tool.settleSteerInjection("token", 4, "uncertain");
+    tool.settleSteerInjection("token", 5, "corroborated");
+    const notices = tool.steerTurnEnded("token", { code: "api_error", message: "failed" });
+    expect(notices).toHaveLength(1);
+    expect((notices[0]!.payload as unknown as InterAgentMessagePayload).error).toMatchObject({
+      code: "timeout", affected_deliveries: [{ delivery_seq: 4, peer_turn_number: 2, batch_id: "batch-a" }],
+    });
   });
 
   it("uses one conservative CID-wide notice for an older sender", () => {
