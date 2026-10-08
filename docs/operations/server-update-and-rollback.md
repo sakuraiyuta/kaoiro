@@ -75,10 +75,14 @@ Satisfy all of the following before starting.
   truth is the persistence set in 1.2. An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
-- **Know which persistence stores are new in the target image.** A store that
-  never existed before this update is admitted only when you name it with
-  `--accept-new-store <ENV_NAME>` (4.3 (2)); `update` then verifies it is
-  unset and absent in the running container. A store that existed before is
+- **Know which persistence stores are new in the target image.** A new store
+  whose compose path differs from the old container's effective path (the usual
+  case: the old default lies outside the named volume) is admitted only when you
+  name it with `--accept-new-store <ENV_NAME>` (4.3 (2)); a new store whose
+  compose path already equals that effective path passes without the flag. When
+  the old image's manifest is unavailable, that the store never existed before
+  is your assertion: `update` measures only that the old container has the
+  variable unset and no file at the default path. A store that existed before is
   never new: do not name it (4.3 (5-b)).
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
@@ -163,7 +167,7 @@ the build fails.
 
 ```mermaid
 flowchart TD
-  A["update --target sha<br/>(1)+(2): retag old, build, persistence-path check"] -->|env_consistency mismatch| R0["CLI retags latest back to the old image itself (verified);<br/>a store new in the target resumes with --accept-new-store"]
+  A["update --target sha<br/>(1)+(2): retag old, build, persistence-path check"] -->|env_consistency mismatch| R0["CLI retags latest back to the old image itself (verified);<br/>a mismatching new store resumes with --accept-new-store"]
   A -->|ok, exits asking for --maintenance-approved| C["(3) Stop runner"]
   C --> D["(4) Advance local to target<br/>frozen install + build"]
   D -->|failure| R1["Abort cleanup 4.4-0<br/>4.4-2"]
@@ -318,12 +322,14 @@ declaring a required store AT ALL is its own, always-failing case (the #217
 class: a required persistence var missing from compose can silently escape
 backup).
 
-**A store that is new in the target image is admitted only by the operator's
-explicit, per-store flag** (issue #339). A new store's compose path differs
-from the old container's effective path by construction, so the check reads it
-as a mismatch; `update` never waves that mismatch through on its own. Name the
-store with `--accept-new-store <ENV_NAME>` (repeatable, one occurrence per
-store; a flag admits exactly the store it names):
+**A new store whose compose path differs from the old container's effective
+path is admitted only by the operator's explicit, per-store flag** (issue #339).
+A new store usually differs: compose places it under the named volume, while
+the old container's default lies outside it, so the check reads it as a
+mismatch and `update` never waves that mismatch through on its own. (A new store
+whose default path already equals the compose path is not a mismatch and needs
+no flag.) Name the store with `--accept-new-store <ENV_NAME>` (repeatable, one
+occurrence per store; a flag admits exactly the store it names):
 
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
@@ -381,8 +387,12 @@ node server/deploy/kaoiro-server-deploy.mjs update --transaction <transaction-id
   --target <target-sha> --accept-new-store <ENV_NAME> [--maintenance-approved]
 ```
 
-For any other refusal, follow 5-b below before retrying; the flag does not
-apply. **Until #310 lands, the target image lacks this module and the check
+For any other refusal, follow 5-b below; the flag does not apply. Copying a
+store into the volume (5-b) does not by itself make a refused `build_prepared`
+transaction pass on resume: the check compares the compose path with the running
+container's effective path, which the copy does not change, so it refuses again
+([issue #553](https://github.com/sakuraiyuta/kaoiro/issues/553)). Do not use
+`--accept-new-store` to get past it. **Until #310 lands, the target image lacks this module and the check
 reports `{skipped: true, reason: ...}`**; it neither blocks nor verifies
 anything today, and `--accept-new-store` has nothing to act on.
 
@@ -484,15 +494,26 @@ Decide which case a refused store is in before choosing a remedy:
 - **New in the target image, no historical data.** Neither the old image nor
   an earlier version ever had this store, the old container has the variable
   unset, and the default file is absent. There is no old data to evacuate:
-  resume with `--accept-new-store <ENV_NAME>` (step (2)), which re-measures all
-  of that and records `never_existed` with the operator's acknowledgement.
+  resume with `--accept-new-store <ENV_NAME>` (step (2)). The CLI measures the
+  unset variable and the absent file at the exact default path, and, when the old
+  image's manifest is available, that the old image does not list the store. It
+  cannot see an earlier version's history, so that the store never existed is
+  your assertion, most of all when the old manifest is unavailable. It records
+  `never_existed` with your acknowledgement.
 - **Existed before, but its file is missing.** An earlier version had the
   store (the old image lists it, or you know the ledger existed) and the file
   is gone. The ledger is lost or the path is wrong; **do not use
   `--accept-new-store`**, which would record an empty store as new. Investigate
   as in the paragraph above.
 - **File present, or the variable already set.** This is the real migration
-  this section describes. The flag is refused for it.
+  this section describes. The flag is refused for it. The copy above preserves
+  the ledger but does not unblock a refused `build_prepared` transaction: the
+  next check still compares the compose path with the running container's
+  unchanged effective path and refuses with the same migration message, with
+  `latest` restored and nothing stopped or archived. The CLI has no resume path
+  for this case yet
+  ([issue #553](https://github.com/sakuraiyuta/kaoiro/issues/553)); do not
+  record the store as new to get past it.
 
 If the probe says `undetermined`, inspect the recorded reason and restore path
 visibility or the probe command before retrying; it does not authorize an
