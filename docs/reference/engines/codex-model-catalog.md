@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog reference
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-08
 related: [codex-exec-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -37,6 +37,16 @@ resynchronize its metadata.
 
 The advertised set is then filtered by the bundled Codex CLI version: an
 entry whose `minimal_client_version` is newer is not offered.
+
+## Bundled 0.161.0 baseline
+
+The bundled CLI/SDK pin is 0.161.0. The unauthenticated 0.160.0 and 0.161.0
+natives return identical 11-entry model lists (including hidden entries),
+GPT-6.1 Sol as default, and the same declared default effort. The tagged
+`models.json` is byte-identical. kaoiro's curated catalog, minimum versions,
+plan policy and effort policy remain unchanged. These measurements do not
+establish signed-in server defaults or operator entitlement; both remain
+unverified. See [the dated adoption evidence](../../evidence/codex-app-server/pin-0.161.0-adoption-gates-2026-10-08.md).
 
 ## Implications for kaoiro
 

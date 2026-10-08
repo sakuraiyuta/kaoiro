@@ -1,0 +1,328 @@
+{
+  "research_sha256": "ece674ef17193b966a52562f793eb8a8b569af450f8a64626d3c34c878473fb9",
+  "base": "6234bd5e258bb6d7e57aba42767d9ef7bcd02da0",
+  "identity": {
+    "node": "v22.23.3",
+    "cli": {
+      "path": "/home/yuta/git/kaoiro/worktrees/niko-539/node_modules/.pnpm/@openai+codex@0.161.0/node_modules/@openai/codex/package.json",
+      "version": "0.161.0"
+    },
+    "sdk": {
+      "path": "/home/yuta/git/kaoiro/worktrees/niko-539/node_modules/.pnpm/@openai+codex-sdk@0.161.0_patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c/node_modules/@openai/codex-sdk/package.json",
+      "entry": "/home/yuta/git/kaoiro/worktrees/niko-539/node_modules/.pnpm/@openai+codex-sdk@0.161.0_patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c/node_modules/@openai/codex-sdk/dist/index.js",
+      "version": "0.161.0",
+      "sha256": "2597aa3b22fa8a1d7cbd4fa313a0f6a3cba006654f372458daf84aca501749da"
+    },
+    "native": {
+      "path": "/home/yuta/git/kaoiro/worktrees/niko-539/node_modules/.pnpm/@openai+codex@0.161.0/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+      "exec_path": "/home/yuta/git/kaoiro/worktrees/niko-539/node_modules/.pnpm/@openai+codex@0.161.0-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex",
+      "version": "codex-cli 0.161.0",
+      "sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c"
+    },
+    "patch_sha256": "faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c"
+  },
+  "schema_check": {
+    "stable": {
+      "exit_code": 0,
+      "files": 315,
+      "matches_research": true,
+      "negative_control_changed_hash_detected": true,
+      "stderr": ""
+    },
+    "experimental": {
+      "exit_code": 0,
+      "files": 445,
+      "matches_research": true,
+      "negative_control_changed_hash_detected": true,
+      "stderr": ""
+    }
+  },
+  "schema_delta": {
+    "generate-ts-stable": {
+      "counts": [
+        734,
+        737
+      ],
+      "added": [
+        "v2/ThreadGoalMutationOrigin.ts",
+        "v2/ThreadPredictionResult.ts",
+        "v2/ThreadPredictionUpdatedNotification.ts"
+      ],
+      "removed": [],
+      "changed": [
+        "ServerNotification.ts",
+        "ServerNotificationEnvelope.ts",
+        "v2/CodexErrorInfo.ts",
+        "v2/CyberAccessProgram.ts",
+        "v2/McpServerOauthLoginCompletedNotification.ts",
+        "v2/McpServerOauthLoginResponse.ts",
+        "v2/ThreadGoalClearParams.ts",
+        "v2/ThreadGoalSetParams.ts",
+        "v2/index.ts"
+      ]
+    },
+    "generate-ts-experimental": {
+      "counts": [
+        875,
+        882
+      ],
+      "added": [
+        "v2/BedrockCheckGovCloudRequirementsParams.ts",
+        "v2/BedrockCheckGovCloudRequirementsResponse.ts",
+        "v2/ThreadGoalMutationOrigin.ts",
+        "v2/ThreadPredictionRequestParams.ts",
+        "v2/ThreadPredictionRequestResponse.ts",
+        "v2/ThreadPredictionResult.ts",
+        "v2/ThreadPredictionUpdatedNotification.ts"
+      ],
+      "removed": [],
+      "changed": [
+        "ClientRequest.ts",
+        "ServerNotification.ts",
+        "ServerNotificationEnvelope.ts",
+        "v2/CodexErrorInfo.ts",
+        "v2/CyberAccessProgram.ts",
+        "v2/McpServerOauthLoginCompletedNotification.ts",
+        "v2/McpServerOauthLoginResponse.ts",
+        "v2/ThreadGoalClearParams.ts",
+        "v2/ThreadGoalSetParams.ts",
+        "v2/TurnStartParams.ts",
+        "v2/index.ts"
+      ]
+    },
+    "generate-json-schema-stable": {
+      "counts": [
+        314,
+        315
+      ],
+      "added": [
+        "v2/ThreadPredictionUpdatedNotification.json"
+      ],
+      "removed": [],
+      "changed": [
+        "ClientRequest.json",
+        "ServerNotification.json",
+        "codex_app_server_protocol.schemas.json",
+        "codex_app_server_protocol.v2.schemas.json",
+        "v2/ErrorNotification.json",
+        "v2/McpServerOauthLoginCompletedNotification.json",
+        "v2/McpServerOauthLoginResponse.json",
+        "v2/ModelListResponse.json",
+        "v2/ReviewStartResponse.json",
+        "v2/ThreadForkResponse.json",
+        "v2/ThreadGoalClearParams.json",
+        "v2/ThreadGoalSetParams.json",
+        "v2/ThreadListResponse.json",
+        "v2/ThreadMetadataUpdateResponse.json",
+        "v2/ThreadReadResponse.json",
+        "v2/ThreadResumeResponse.json",
+        "v2/ThreadRevertResponse.json",
+        "v2/ThreadStartResponse.json",
+        "v2/ThreadStartedNotification.json",
+        "v2/ThreadTurnsListResponse.json",
+        "v2/ThreadUnarchiveResponse.json",
+        "v2/TurnCompletedNotification.json",
+        "v2/TurnStartParams.json",
+        "v2/TurnStartResponse.json",
+        "v2/TurnStartedNotification.json"
+      ]
+    },
+    "generate-json-schema-experimental": {
+      "counts": [
+        440,
+        445
+      ],
+      "added": [
+        "v2/BedrockCheckGovCloudRequirementsParams.json",
+        "v2/BedrockCheckGovCloudRequirementsResponse.json",
+        "v2/ThreadPredictionRequestParams.json",
+        "v2/ThreadPredictionRequestResponse.json",
+        "v2/ThreadPredictionUpdatedNotification.json"
+      ],
+      "removed": [],
+      "changed": [
+        "ClientRequest.json",
+        "ServerNotification.json",
+        "codex_app_server_protocol.schemas.json",
+        "codex_app_server_protocol.v2.schemas.json",
+        "v2/ErrorNotification.json",
+        "v2/McpServerOauthLoginCompletedNotification.json",
+        "v2/McpServerOauthLoginResponse.json",
+        "v2/ModelListResponse.json",
+        "v2/ReviewStartResponse.json",
+        "v2/ThreadForkResponse.json",
+        "v2/ThreadGoalClearParams.json",
+        "v2/ThreadGoalSetParams.json",
+        "v2/ThreadListResponse.json",
+        "v2/ThreadMetadataUpdateResponse.json",
+        "v2/ThreadQueueStartResponse.json",
+        "v2/ThreadReadResponse.json",
+        "v2/ThreadResumeResponse.json",
+        "v2/ThreadRevertResponse.json",
+        "v2/ThreadSearchResponse.json",
+        "v2/ThreadStartResponse.json",
+        "v2/ThreadStartedNotification.json",
+        "v2/ThreadTimelineListResponse.json",
+        "v2/ThreadTurnsListResponse.json",
+        "v2/ThreadUnarchiveResponse.json",
+        "v2/TurnCompletedNotification.json",
+        "v2/TurnStartParams.json",
+        "v2/TurnStartResponse.json",
+        "v2/TurnStartedNotification.json"
+      ]
+    }
+  },
+  "migration_source_delta": {
+    "codex-rs/state/migrations": {
+      "counts": [
+        58,
+        58
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "codex-rs/state/goals_migrations": {
+      "counts": [
+        2,
+        2
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "codex-rs/state/logs_migrations": {
+      "counts": [
+        2,
+        2
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "codex-rs/state/memory_migrations": {
+      "counts": [
+        2,
+        2
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "codex-rs/state/queue_migrations": {
+      "counts": [
+        2,
+        2
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    },
+    "codex-rs/state/thread_history_migrations": {
+      "counts": [
+        7,
+        7
+      ],
+      "added": [],
+      "removed": [],
+      "changed": []
+    }
+  },
+  "model_measurement": {
+    "exit_code": 0,
+    "account": {
+      "account": null,
+      "requiresOpenaiAuth": true,
+      "workspaceRouting": null
+    },
+    "model_count": 11,
+    "default_rows": [
+      {
+        "id": "gpt-6.1-sol",
+        "model": "gpt-6.1-sol",
+        "upgrade": null,
+        "upgradeInfo": null,
+        "availabilityNux": {
+          "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+        },
+        "displayName": "GPT-6.1-Sol",
+        "description": "Latest workhorse model for coding and everyday work.",
+        "modelSpecialty": null,
+        "hidden": false,
+        "supportedReasoningEfforts": [
+          {
+            "reasoningEffort": "low",
+            "description": "Fast responses with lighter reasoning"
+          },
+          {
+            "reasoningEffort": "medium",
+            "description": "Balances speed and reasoning depth for everyday tasks"
+          },
+          {
+            "reasoningEffort": "high",
+            "description": "Greater reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "xhigh",
+            "description": "Extra high reasoning depth for complex problems"
+          },
+          {
+            "reasoningEffort": "max",
+            "description": "Maximum reasoning depth for the hardest problems"
+          },
+          {
+            "reasoningEffort": "ultra",
+            "description": "Maximum reasoning with automatic task delegation"
+          }
+        ],
+        "defaultReasoningEffort": "low",
+        "inputModalities": [
+          "text",
+          "image"
+        ],
+        "supportsPersonality": false,
+        "multiAgentVersion": "v2",
+        "additionalSpeedTiers": [
+          "fast"
+        ],
+        "serviceTiers": [
+          {
+            "id": "priority",
+            "name": "Fast",
+            "description": "2x speed, increased usage"
+          }
+        ],
+        "defaultServiceTier": null,
+        "availableAccessPrograms": null,
+        "isDefault": true
+      }
+    ],
+    "thread_model": "gpt-6.1-sol",
+    "thread_effort": null,
+    "model_rows_equal_0_160_0": true,
+    "experimental_api": true,
+    "credentialed": false
+  },
+  "fixture": {
+    "version": "0.161.0",
+    "native_version": "codex-cli 0.161.0",
+    "native_sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c",
+    "fixture_sha256": "24807e4636c589683eb4e7981903044202f5bf05b14b2d759d7d5f016caaa879",
+    "initialize": {
+      "userAgent": "niko_539_capture/0.161.0 (Linux Mint 22.3.0; x86_64) unknown (niko_539_capture; 1)",
+      "codexHome": "<scratch>/home",
+      "platformFamily": "unix",
+      "platformOs": "linux"
+    },
+    "capture_command": "python3 capture-approval.py",
+    "experimental_api": true,
+    "outside_file_absent": true,
+    "provider_requests": 2
+  },
+  "models_json_sha256": "fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b",
+  "limits": [
+    "Signed-in server defaults and operator entitlement unverified",
+    "No credentialed context-meter gate or corrupt-state recovery probe",
+    "Native introspection enables experimental API; production composition tests use production settings"
+  ]
+}

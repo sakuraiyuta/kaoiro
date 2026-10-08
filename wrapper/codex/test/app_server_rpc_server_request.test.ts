@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -76,13 +77,29 @@ describe("AppServerRpc server requests", () => {
 // availableDecisions is experimental-schema-only; decline is a stable response.
 // A pin bump must remeasure the request, decline reply and terminal outcome.
 describe("the captured command approval shape on the pinned Codex", () => {
-  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.160.0.jsonl", import.meta.url), "utf8")
+  const lines = readFileSync(new URL("./fixtures/app_server_approval_decline_0.161.0.jsonl", import.meta.url), "utf8")
     .trim().split("\n").map(raw => JSON.parse(raw) as { dir: string; line: string })
     .map(({ dir, line }) => ({ dir, message: JSON.parse(line) as RpcObject }));
 
-  it("is measured on the pinned version", () => {
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> };
-    expect(pkg.dependencies["@openai/codex"]).toBe("0.160.0");
+  const metadata = JSON.parse(readFileSync(new URL("./fixtures/app_server_approval_decline_0.161.0.metadata.json", import.meta.url), "utf8")) as {
+    version: string; native_version: string; native_sha256: string; fixture_sha256: string; initialize: { userAgent: string };
+  };
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> };
+  function validateCapture(candidate: typeof metadata): void {
+    if (candidate.version !== pkg.dependencies["@openai/codex"]) throw new Error("Capture version differs from the installed pin");
+    expect(candidate.native_version).toBe(`codex-cli ${candidate.version}`);
+    expect(candidate.initialize.userAgent).toContain(`/${candidate.version} `);
+    expect(candidate.native_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(candidate.fixture_sha256).toBe(createHash("sha256").update(readFileSync(new URL("./fixtures/app_server_approval_decline_0.161.0.jsonl", import.meta.url))).digest("hex"));
+  }
+
+  it("is measured on the pinned version with an intact capture", () => {
+    expect(pkg.dependencies["@openai/codex-sdk"]).toBe(pkg.dependencies["@openai/codex"]);
+    validateCapture(metadata);
+  });
+
+  it("rejects a stale capture even when the remaining metadata is valid", () => {
+    expect(() => validateCapture({ ...metadata, version: "0.160.0" })).toThrow("Capture version differs from the installed pin");
   });
 
   it("offers no decline in availableDecisions, and a decline reply leaves the item declined", () => {

@@ -21,6 +21,16 @@ admission. See [ADR-0040](../../docs/adr/0040-context-usage-capability.md#addend
 
 The credentialed default-composition gate runs after building core, agent-common
 and codex: `pnpm -C runner exec tsx ../scripts/check-codex-context-meter.mts <output-dir>`.
-It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.160.0 and a local
+It requires an authenticated `CODEX_HOME`, uses pinned Codex 0.161.0 and a local
 Phoenix wire fixture, and injects no host/session/transport factory. Unit suites
 run separately with `env -u CODEX_HOME pnpm -C wrapper/codex test`.
+
+## Pinned SDK compatibility
+
+The CLI and SDK are pinned together at 0.161.0. The SDK retains the LF-only
+stream-reader patch; Node 24 splits literal U+2028/U+2029 with the upstream
+readline reader. Native checks use isolated homes and a loopback provider,
+including `runCodexCli` with its production factories on both backends.
+See [the 0.161.0 evidence](../../docs/evidence/codex-app-server/pin-0.161.0-adoption-gates-2026-10-08.md)
+for fixture provenance, negative controls and remaining limits. Signed-in
+server default-model/default-effort behavior remains unverified.

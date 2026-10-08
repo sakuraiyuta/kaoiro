@@ -1,0 +1,16 @@
+{
+  "version": "0.161.0",
+  "native_version": "codex-cli 0.161.0",
+  "native_sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c",
+  "fixture_sha256": "24807e4636c589683eb4e7981903044202f5bf05b14b2d759d7d5f016caaa879",
+  "initialize": {
+    "userAgent": "niko_539_capture/0.161.0 (Linux Mint 22.3.0; x86_64) unknown (niko_539_capture; 1)",
+    "codexHome": "<scratch>/home",
+    "platformFamily": "unix",
+    "platformOs": "linux"
+  },
+  "capture_command": "python3 capture-approval.py",
+  "experimental_api": true,
+  "outside_file_absent": true,
+  "provider_requests": 2
+}

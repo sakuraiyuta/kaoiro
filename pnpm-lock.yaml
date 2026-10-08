@@ -5,9 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@openai/codex-sdk@0.160.0':
+  '@openai/codex-sdk@0.161.0':
     hash: faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c
-    path: patches/@openai__codex-sdk@0.160.0.patch
+    path: patches/@openai__codex-sdk@0.161.0.patch
 
 importers:
 
@@ -158,11 +158,11 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@openai/codex':
-        specifier: 0.160.0
-        version: 0.160.0
+        specifier: 0.161.0
+        version: 0.161.0
       '@openai/codex-sdk':
-        specifier: 0.160.0
-        version: 0.160.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)
+        specifier: 0.161.0
+        version: 0.161.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)
     devDependencies:
       '@kaoiro/protocol':
         specifier: workspace:*
@@ -797,47 +797,47 @@ packages:
     resolution: {integrity: sha512-xglYA6q3XO5P3BNJYxVZ1IV7DLVjp1Py6nwag88YntrS+3vKHyYcMqXVS4ZztJmwz2uGvz1FWhI/4LgbR5uQDA==}
     engines: {node: '>= 10'}
 
-  '@openai/codex-sdk@0.160.0':
-    resolution: {integrity: sha512-PWmoVvX/YqofBnauvao7IEUSYWzbbbIBmwQfRu3ARb2ZbcwIUeuMaicchEpdBzpE8Bw3KOMyhlPlcSQWeg+EoA==}
+  '@openai/codex-sdk@0.161.0':
+    resolution: {integrity: sha512-o2SJAq6qmZRaPKLsQTT+5kuJ9PO0QTlpdNz3S7gK8F9StU8LqEGkWc9haR24WkL+1OG41MAn5HNDvs3EFFtlow==}
     engines: {node: '>=18'}
 
-  '@openai/codex@0.160.0':
-    resolution: {integrity: sha512-kEtVGzjRAYAMOwJxN39bGcna7LT3IDQgq64NNJ/dDTfu4OzZaocJcyNb5/gGJ/IVF/Vj7oK7E2m3nmTan7lpjg==}
+  '@openai/codex@0.161.0':
+    resolution: {integrity: sha512-+ZnJFGBbQBwYnjUTs+PoacgYVxmNyxMLiadIz6eSJ0AzQW0mRVxuuOQizSbz2qeNAJia9Syxag6j2uGf7guD2Q==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.160.0-darwin-arm64':
-    resolution: {integrity: sha512-aefV6cqZA2REZgR//4McyXlp7zLcTti4CI2v3j9IVgNndPBv2kCeNEcz07qeelXcwOdSFPUKb6roA48vZmDgrQ==}
+  '@openai/codex@0.161.0-darwin-arm64':
+    resolution: {integrity: sha512-arxKLYB3uKjewwOpGFo5/MGe8+4JzNB17KIYBmGfF4k3QU+QC4ieXVUwqHmQX2nXrB1BzNMN0gtAgm1AGBTg8w==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.160.0-darwin-x64':
-    resolution: {integrity: sha512-ir7cdsPrb9VkqNqpTECoTiomv04xws/FQ968mHQzuL+2J5Da0Dkh2Qlxp7sguDDZJab4YpYmNjQvBVMXbTeQaQ==}
+  '@openai/codex@0.161.0-darwin-x64':
+    resolution: {integrity: sha512-svVXwOisMkf/e9BD8Qyp0BQYOTsRnrYErfLq+o7aNMts8Evg06rRsHUfxH6HAiJ99dUgC/4CLr3Rpwh3833TfQ==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.160.0-linux-arm64':
-    resolution: {integrity: sha512-VnVdsS06YlDsL8OwaJjQ3xdqdJNG4i+eBJBV3LytddknzSaF/urijLzVg3ptkwvoj8C7Gn7iWpVE+y8WEaPiCg==}
+  '@openai/codex@0.161.0-linux-arm64':
+    resolution: {integrity: sha512-SBu0n4C1Pby9rGKUNA02yHEg/ScbECgiTIiKiKhbYWiUWqGPV1hY0Br7joEntbz0dyNzSWqNPD8uOqxcOry/Fg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.160.0-linux-x64':
-    resolution: {integrity: sha512-KI/73OqGrHmR18s7ya7E1NqV6rT0y3lxr0s8S1qR2m6zU6QRF/HlR529jALLh5vjdUnsRT4Ahoxt0axb4kY99g==}
+  '@openai/codex@0.161.0-linux-x64':
+    resolution: {integrity: sha512-AVkNzeJWyCHHPyg5vxD8UE6aFsYaOwq0/x6mtmkOKy6LdjvsyxLr7Q7UULlk+Ma3+PnrN8uIxG2/XGPQ936hgA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.160.0-win32-arm64':
-    resolution: {integrity: sha512-tTvK9ZIGuj9WnYaYOAnfjJVSfPV7dKqWtDHqUPLf0Hadp6SgynTxx7S7iMXRieFeXVOI2XH76KxEHSOTOnz3zw==}
+  '@openai/codex@0.161.0-win32-arm64':
+    resolution: {integrity: sha512-tgo++ui5X5pXkaz113Q4/PNVviWXlvUdHH4zY+SoGwHm4720JsRPjuUJcUNZ9WtryEiw3Xpj5nKp8pgCXJUjYA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.160.0-win32-x64':
-    resolution: {integrity: sha512-/gCFcuOmGlQkgGivWCtY8BNEDixh70Pue0HZOk9S8bj2vUIE1GLD9zcNB/KqqDJmn0S+lIttauLpzQnw6HOCHA==}
+  '@openai/codex@0.161.0-win32-x64':
+    resolution: {integrity: sha512-VdNnttGOG3nbwoREvVurVBXci/EJD/kncVJnvtXjpEE+YhC1twvvrVNmtlZcZGEEVi06xLN/ov0d6nxjZ1XLSg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -2076,35 +2076,35 @@ snapshots:
       '@napi-rs/canvas-win32-x64-msvc': 0.1.100
     optional: true
 
-  '@openai/codex-sdk@0.160.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)':
+  '@openai/codex-sdk@0.161.0(patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c)':
     dependencies:
-      '@openai/codex': 0.160.0
+      '@openai/codex': 0.161.0
 
-  '@openai/codex@0.160.0':
+  '@openai/codex@0.161.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.160.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.160.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.160.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.160.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.160.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.160.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.161.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.161.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.161.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.161.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.161.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.161.0-win32-x64'
 
-  '@openai/codex@0.160.0-darwin-arm64':
+  '@openai/codex@0.161.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.160.0-darwin-x64':
+  '@openai/codex@0.161.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.160.0-linux-arm64':
+  '@openai/codex@0.161.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.160.0-linux-x64':
+  '@openai/codex@0.161.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.160.0-win32-arm64':
+  '@openai/codex@0.161.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.160.0-win32-x64':
+  '@openai/codex@0.161.0-win32-x64':
     optional: true
 
   '@pdf-lib/standard-fonts@1.0.0':

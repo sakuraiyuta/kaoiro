@@ -21,8 +21,8 @@
     "@kaoiro/agent-common": "workspace:*",
     "@kaoiro/wrapper-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/codex": "0.160.0",
-    "@openai/codex-sdk": "0.160.0"
+    "@openai/codex": "0.161.0",
+    "@openai/codex-sdk": "0.161.0"
   },
   "devDependencies": {
     "@kaoiro/protocol": "workspace:*",
