@@ -920,9 +920,15 @@ function isUnderStateVolume(path) {
  *  EFFECTIVE path for that store — the container's own env value if set,
  *  else the image's `default_path` for it (what the app itself falls
  *  back to). `match` is `compose === container_effective`, except for a
- *  measured first application whose old image lacks the store, whose old
- *  container lacks its file, and whose compose path is under the named
- *  state volume.
+ *  store the operator named with `--accept-new-store` (issue #339) that is
+ *  measured to be a first application: the old image's manifest, when it
+ *  can answer, does not list it; the old container has the variable unset;
+ *  the old container has no file at the effective path; and the compose
+ *  path is under the named state volume. Every one of those must hold for
+ *  that store, and a flag naming one store never admits another. The
+ *  exception is reached ONLY from a mismatch: a store whose compose path
+ *  and effective path already agree passes as before, with no flag and no
+ *  probe, and a flag naming such a store is not consulted.
  *
  *  WHY EFFECTIVE, NOT THE RAW ENV (A-MF-1's own bug): on the first
  *  application that adds a NEW persistence-path var to compose, the OLD
@@ -967,7 +973,23 @@ function isUnderStateVolume(path) {
  *  can answer at all) is preferred; `assumed_default_source` records
  *  which one actually supplied the value used, so the observation never
  *  silently passes off an assumption as a measurement. */
-function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsByEnv, { bin, container, serverDir }) {
+function checkEnvConsistency(
+  paths,
+  envPath,
+  composeEnv,
+  containerEnv,
+  oldPathsByEnv,
+  { bin, container, serverDir, acceptNewStores },
+) {
+  const accepted = new Set(acceptNewStores ?? []);
+  const known = new Set(paths.map((p) => p.env));
+  for (const name of accepted) {
+    if (!known.has(name)) {
+      fail(
+        `--accept-new-store ${JSON.stringify(name)} does not name a persistence-path var of the target image (${[...known].join(", ")}) — check the spelling`,
+      );
+    }
+  }
   const entries = {};
   for (const { env: envName, default_path: targetDefaultPath } of paths) {
     const declared = readEnvFileValue(envPath, envName);
@@ -980,7 +1002,17 @@ function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsB
     const containerSource = containerRaw !== null ? "env" : "default";
     let match = compose === containerEffective;
     let fileProbe;
-    if (!match && compose !== null && oldPathsByEnv !== null && !oldPathsByEnv.has(envName)) {
+    if (!match && compose !== null && accepted.has(envName)) {
+      if (oldPathsByEnv?.has(envName)) {
+        fail(
+          `${envName}: --accept-new-store refused because the old image's own manifest already lists this store (default ${JSON.stringify(oldPathsByEnv.get(envName))}), so it is not new in the target image — follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
+        );
+      }
+      if (containerRaw !== null) {
+        fail(
+          `${envName}: --accept-new-store refused because the running container already has this variable set to ${JSON.stringify(containerRaw)}, so the store was configured before this update — follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
+        );
+      }
       const stateVolume = resolveNamedVolumeFromCompose(bin, serverDir);
       if (!stateVolume.ok || !isUnderStateVolume(compose)) {
         fail(`${envName}: cannot accept first application because compose does not place ${JSON.stringify(compose)} under the /var/lib/kaoiro named volume${stateVolume.ok ? "" : ` (${stateVolume.reason})`}`);
@@ -998,7 +1030,9 @@ function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsB
       container_source: containerSource,
       assumed_default_source: assumedDefaultSource,
       ...fileProbe,
-      ...(fileProbe?.file_probe_result === "absent" ? { first_application: "never_existed" } : {}),
+      ...(fileProbe?.file_probe_result === "absent"
+        ? { first_application: "never_existed", operator_accepted_new_store: true }
+        : {}),
       match,
     };
   }
@@ -1185,16 +1219,32 @@ const BOOL_FLAGS = new Map([
   ["--initialize", "initialize"],
 ]);
 
+const ACCEPT_NEW_STORE_FLAG = "--accept-new-store";
+
 /** Parses `<command> [flags...]`. A value flag whose value itself starts
  *  with `-` is rejected — the same reasoning as
  *  kaoiro-runner-common.sh's kaoiro_reject_option_like: a missing value
- *  must never silently consume the next flag as its own argument. */
+ *  must never silently consume the next flag as its own argument.
+ *
+ *  `--accept-new-store <ENV_NAME>` (issue #339) is the one repeatable
+ *  flag: each occurrence adds one persistence-path var name to
+ *  `flags.acceptNewStores` (a Set), because the operator acknowledges new
+ *  stores one at a time. */
 export function parseArgs(argv) {
   const [command, ...rest] = argv;
   if (!command) fail("usage: kaoiro-server-deploy <command> [flags...]", 64);
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
+    if (arg === ACCEPT_NEW_STORE_FLAG) {
+      const value = rest[++i];
+      if (value === undefined || value === "" || value.startsWith("-")) {
+        fail(`${arg} needs a persistence-path env var name`, 64);
+      }
+      flags.acceptNewStores ??= new Set();
+      flags.acceptNewStores.add(value);
+      continue;
+    }
     if (VALUE_FLAGS.has(arg)) {
       const value = rest[++i];
       if (value === undefined || value.startsWith("-")) {
@@ -1790,6 +1840,13 @@ function checkCapacity(bin, container, backupRoot, config) {
  *  the old-image-save or build steps, both of which already happened
  *  and are read back from the journal's history instead.
  *
+ *  `--accept-new-store <ENV_NAME>` (repeatable, issue #339) is consulted
+ *  only where the persistence-path check runs: a first invocation, or a
+ *  `--transaction` resume of a transaction still at BUILD_PREPARED (an
+ *  env_consistency refusal leaves it there, with `latest` restored). A
+ *  transaction that already reached ENV_CONSISTENCY_CHECKED keeps its
+ *  recorded observation and the flag is ignored for it.
+ *
  *  CHECKPOINT-BEFORE-MUTATION (S1 item ii, yuta ruling 2026-09-06):
  *  every fact this function learns is written durably via advancePhase()
  *  — which itself calls writeJournal()'s writeFileDurably() (M3) —
@@ -2061,7 +2118,7 @@ export function runUpdate(flags, config) {
             composeDeclaredEnv(bin, serverDir),
             containerEffectiveEnv(bin, container),
             oldPathsByEnv,
-            { bin, container, serverDir },
+            { bin, container, serverDir, acceptNewStores: flags.acceptNewStores },
           );
           envConsistency = { skipped: false, entries };
           if (!Object.values(entries).every((e) => e.match)) {
@@ -2085,6 +2142,16 @@ export function runUpdate(flags, config) {
             // remediations a mismatching entry can need — an operator
             // reading either sentence knows what to actually go do,
             // instead of a single generic "mismatch" naming three fields.
+            // issue #339: a mismatch whose old side could be a store that
+            // never existed (variable unset, no old manifest entry) can be
+            // admitted by the operator, so name the exact resume command;
+            // the refusal left this transaction at BUILD_PREPARED, which a
+            // fresh `update` would refuse to start over.
+            const flagged = new Set(flags.acceptNewStores ?? []);
+            const newStoreHint = (envName, e) =>
+              e.container_source === "default" && e.assumed_default_source === "target_image" && !flagged.has(envName)
+                ? `. If ${envName} is new in the target image and never had data, resume this transaction with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${target} --accept-new-store ${envName} (add --maintenance-approved once the window is approved); the CLI then verifies the old container has the variable unset and no file at the default path`
+                : "";
             const problems = Object.entries(entries)
               .filter(([, e]) => !e.match)
               .map(([envName, e]) =>
@@ -2092,7 +2159,7 @@ export function runUpdate(flags, config) {
                   ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
                   : e.file_probe_result === "undetermined"
                     ? `${envName}: could not probe the running container's path ${JSON.stringify(e.file_probe_path)} (${e.file_probe_reason}); absence is unverified`
-                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
+                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying${newStoreHint(envName, e)}`,
               );
             fail(
               `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,

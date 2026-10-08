@@ -80,12 +80,24 @@ export function isPathSha(value) {
  *  against an env value that structurally cannot exist before the very
  *  deploy this check is gating recreates the container. The three optional
  *  first-application fields bind an absent-file observation to that path;
- *  older persisted entries without them remain valid. */
+ *  older persisted entries without them remain valid.
+ *
+ *  `operator_accepted_new_store` (issue #339) records that the operator
+ *  named this store with `--accept-new-store`. This is the READ boundary:
+ *  it must stay compatible with entries the pre-#339 automatic admission
+ *  persisted (`first_application: "never_existed"` with no such field), so
+ *  absence is valid and a legacy journal or manifest still resumes. Only
+ *  the WRITE boundary (checkEnvConsistency) requires the acknowledgement,
+ *  by always attaching it to the entries it admits. When the field is
+ *  present it must be exactly `true` and sit on a first-application entry —
+ *  an acknowledgement with nothing to acknowledge, or a recorded refusal,
+ *  is not a shape any writer produces. */
 function isEnvConsistencyEntry(value) {
   const probePathPresent = Object.hasOwn(value ?? {}, "file_probe_path");
   const probeResultPresent = Object.hasOwn(value ?? {}, "file_probe_result");
   const probeReasonPresent = Object.hasOwn(value ?? {}, "file_probe_reason");
   const firstApplicationPresent = Object.hasOwn(value ?? {}, "first_application");
+  const acceptancePresent = Object.hasOwn(value ?? {}, "operator_accepted_new_store");
   return (
     typeof value === "object" &&
     value !== null &&
@@ -111,6 +123,7 @@ function isEnvConsistencyEntry(value) {
     (!firstApplicationPresent ||
       (value.first_application === "never_existed" && value.file_probe_result === "absent" && value.match === true)) &&
     (value.file_probe_result !== "absent" || firstApplicationPresent) &&
+    (!acceptancePresent || (value.operator_accepted_new_store === true && firstApplicationPresent)) &&
     typeof value.match === "boolean"
   );
 }

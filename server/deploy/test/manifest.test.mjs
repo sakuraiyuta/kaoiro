@@ -99,6 +99,42 @@ test("isValidManifestShape rejects an unbound first-application observation", ()
   assert.equal(isValidManifestShape(manifest), false);
 });
 
+// issue #339: the acknowledgement is required of what the CLI writes now,
+// not of what it already wrote. The read boundary keeps accepting a
+// first-application entry that carries no acknowledgement field (the shape
+// the earlier automatic admission persisted) so legacy journals and
+// manifests still resume and roll back.
+function firstApplicationEntry(extra = {}) {
+  const manifest = validManifest();
+  const entry = manifest.env_consistency.entries.KAOIRO_CLIENT_TOKENS;
+  entry.file_probe_path = entry.container_effective;
+  entry.file_probe_result = "absent";
+  entry.first_application = "never_existed";
+  Object.assign(entry, extra);
+  return manifest;
+}
+
+test("isValidManifestShape reads a historical never-existed entry that has no acknowledgement field", () => {
+  assert.equal(isValidManifestShape(firstApplicationEntry()), true);
+});
+
+test("isValidManifestShape reads a never-existed entry that records the operator's acknowledgement", () => {
+  assert.equal(isValidManifestShape(firstApplicationEntry({ operator_accepted_new_store: true })), true);
+});
+
+test("isValidManifestShape rejects a recorded refusal, a non-boolean, or an acknowledgement with nothing to acknowledge", () => {
+  for (const value of [false, "true", 1, null]) {
+    assert.equal(
+      isValidManifestShape(firstApplicationEntry({ operator_accepted_new_store: value })),
+      false,
+      `operator_accepted_new_store: ${JSON.stringify(value)}`,
+    );
+  }
+  const plain = validManifest();
+  plain.env_consistency.entries.KAOIRO_CLIENT_TOKENS.operator_accepted_new_store = true;
+  assert.equal(isValidManifestShape(plain), false);
+});
+
 test("isValidManifestShape rejects a bad source_sha", () => {
   const bad = validManifest();
   bad.source_sha = "not-a-sha";

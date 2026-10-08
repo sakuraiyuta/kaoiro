@@ -234,6 +234,49 @@ test("validateJournalAgainstStateMachine accepts an ENV_CONSISTENCY_CHECKED obse
   assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
 });
 
+// issue #339: the same shared reader decides what a journal may carry at
+// ENV_CONSISTENCY_CHECKED, so a transaction that passed the check under the
+// earlier automatic admission still resumes.
+function firstApplicationObservation(extra = {}) {
+  return {
+    skipped: false,
+    entries: {
+      KAOIRO_WORK_STORE_PATH: {
+        declared: null,
+        compose: "/var/lib/kaoiro/work_store.dets",
+        container_effective: "/tmp/kaoiro-dets/work_store.dets",
+        container_source: "default",
+        assumed_default_source: "target_image",
+        file_probe_path: "/tmp/kaoiro-dets/work_store.dets",
+        file_probe_result: "absent",
+        first_application: "never_existed",
+        match: true,
+        ...extra,
+      },
+    },
+  };
+}
+
+test("validateJournalAgainstStateMachine accepts a first-application observation with and without the operator's acknowledgement", () => {
+  for (const extra of [{}, { operator_accepted_new_store: true }]) {
+    const journal = fullJournal();
+    journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(
+      PHASE.ENV_CONSISTENCY_CHECKED,
+      firstApplicationObservation(extra),
+    );
+    assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal), JSON.stringify(extra));
+  }
+});
+
+test("validateJournalAgainstStateMachine rejects a first-application observation carrying a refused acknowledgement", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(
+    PHASE.ENV_CONSISTENCY_CHECKED,
+    firstApplicationObservation({ operator_accepted_new_store: false }),
+  );
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
 test("validateJournalAgainstStateMachine rejects an ENV_CONSISTENCY_CHECKED observation that is neither skipped nor checked", () => {
   const journal = fullJournal();
   journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(PHASE.ENV_CONSISTENCY_CHECKED, {});
