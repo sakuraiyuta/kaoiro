@@ -792,3 +792,4 @@ Antigravity peers need no change
 - [Transactions and identity](../reference/deployment/transactions-and-identity.md).
 - [Server install runbook](server-install.md).
 - [Production deployment manual](production.md).
+- [High-risk change release](high-risk-change-release.md).

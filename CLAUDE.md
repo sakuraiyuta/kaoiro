@@ -24,7 +24,10 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 - [docs/architecture/](docs/architecture/) — 現在の構造と理由(トピック別)
 - [docs/reference/](docs/reference/) — 現行 contract の正本(protocol /
   configuration / engines / inter-agent / security / ui / storage / deployment)
-- [docs/operations/](docs/operations/) — オペレータ向け runbook
+- [docs/operations/](docs/operations/) — オペレータ向け runbook。runner の起動
+  path や wrapper の turn lifecycle を変える前に
+  [high-risk-change-release.md](docs/operations/high-risk-change-release.md)
+  で高リスクか確認する
 - [docs/evidence/](docs/evidence/) — 日付付きの測定記録
 - [docs/contributing/](docs/contributing/) — 変更手順。文書の置き場所は
   [documentation.md](docs/contributing/documentation.md)

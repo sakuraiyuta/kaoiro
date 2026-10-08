@@ -176,6 +176,10 @@ this — [server-update-and-rollback.md](server-update-and-rollback.md#45-verifi
 
 ## 4. Update
 
+If the change can stop the runner from starting or every agent's turns from
+completing, read [High-risk change release](high-risk-change-release.md) first;
+it adds a production-shape start check and a canary stage to this update.
+
 **Server-side, this is a `--dry-run` preview plus two real invocations —
 prepare, then commit — not one call.** `update` deliberately splits the real
 work into a no-downtime *prepare* and an explicitly-approved *commit*,
@@ -334,4 +338,6 @@ class as the reboot issue above; the fix is the same boot-order drop-in.
 - [Codex backend switching and rollback](codex-backend-switch.md) — backend selection, verification, and rollback (release note in [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118))
 - [Codex home for production](codex-home.md) — the dedicated `CODEX_HOME`,
   its operator login, cutover and rollback
+- [High-risk change release](high-risk-change-release.md) — start check, canary
+  stage and all-agents-stopped recovery for changes that can stop the fleet
 - Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)

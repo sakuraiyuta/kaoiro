@@ -18,6 +18,12 @@ self-test verification procedure and its dated measurement are in
 This page covers the runner side; the interleaved server-side steps are in
 [Server update and rollback](server-update-and-rollback.md).
 
+A change that can stop the fleet from starting or every agent's turns from
+completing (the runner's start path, the wrapper's turn lifecycle) follows
+[High-risk change release](high-risk-change-release.md) first: it adds a
+production-shape start check and a canary stage before the steps below, and it
+links back here for the commands.
+
 ## 4.6 Migrate to the release profile and update thereafter (issue #219)
 
 [ADR-0018](../adr/0018-runner-distribution.md) (revised 2026-08-16) defines
@@ -577,3 +583,4 @@ record, so removing it does not edit Codex state.
 - [Server update and rollback](server-update-and-rollback.md).
 - [Runner artifacts](../reference/deployment/runner-artifacts.md).
 - [Runner service verification](runner-service-verification.md).
+- [High-risk change release](high-risk-change-release.md).

@@ -24,3 +24,5 @@ running agents (production launches dist directly, ADR-0018).
 
 - [Runner install and distribution](../operations/runner-install.md).
 - [Multi-host deployment architecture](../architecture/deployment.md).
+- [High-risk change release](../operations/high-risk-change-release.md): read it
+  before changing the runner start path or the wrapper turn lifecycle.

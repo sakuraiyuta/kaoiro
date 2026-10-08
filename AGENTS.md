@@ -10,6 +10,10 @@ kaoiro リポジトリで作業するエージェント向けの入口。
 プロジェクトの構成・コマンド・ブランチ運用は [CLAUDE.md](CLAUDE.md) にある。
 ファイル名は Claude Code 由来だが、内容は engine 非依存なので同じものを読む。
 
+runner の起動 path や wrapper の turn lifecycle を変える前に、
+[docs/operations/high-risk-change-release.md](docs/operations/high-risk-change-release.md)
+で高リスクか確認すること。
+
 正本を開く前でも、次の 6 点だけは先に頭へ置いておくこと。
 
 1. タスクの実スコープを変える食い違いを見つけたら、**実装の前に** dispatch

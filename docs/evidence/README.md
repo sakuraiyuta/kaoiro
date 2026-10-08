@@ -48,6 +48,7 @@ Runner/server deployment measurements.
 
 - [runner-service-isolation.md](deployment/runner-service-isolation.md) — cgroup isolation between a `systemd-run --no-block` caller and its detached worker unit
 - [runner-user-systemd-linger.md](deployment/runner-user-systemd-linger.md) — user-systemd instance restart behavior without `loginctl enable-linger`
+- [high-risk-change-start-gate.md](deployment/high-risk-change-start-gate.md) — production-shape start gate for the runner: strict env grammar controls, release-shim runs and limits
 
 ## issue-407/
 

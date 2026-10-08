@@ -181,7 +181,11 @@ launchctl bootstrap gui/"$(id -u)" \
 
 ### Verification
 
-The launch shim can be tested alone before registering the service. **Set `server_url`
+The launch shim can be tested alone before registering the service. This
+procedure starts the shim from a repo checkout (the checkout-direct form) and does
+not pin the inherited environment; the release layout with a fixed environment
+is in [High-risk change release § 3](high-risk-change-release.md#3-production-shape-start).
+**Set `server_url`
 to an unreachable value and `host_id` to a value that does not collide with the
 production environment**. Why both are required:
 
@@ -381,3 +385,4 @@ Asset upload to Gitea releases is tracked in
 - [Runner update and rollback](runner-update-and-rollback.md).
 - [Runner artifacts](../reference/deployment/runner-artifacts.md).
 - [Runner configuration](../reference/configuration/runner.md).
+- [High-risk change release](high-risk-change-release.md).
