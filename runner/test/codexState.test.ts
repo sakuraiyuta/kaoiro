@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statfsSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -180,7 +180,7 @@ describe("Codex pin activation guard through installed symlinks", () => {
   it.each([["absent barrier directory"], ["absent registry"]].flatMap(([state]) => [[state, "rollback"], [state, "forward switch"]] as const))("refuses a differing native pin through current with %s on %s and zero link mutations", (state, path) => {
     if (state === "absent barrier directory") mkdirSync(join(root, "codex-state/transactions"), { recursive: true, mode: 0o700 });
     writeFileSync(binary(B), "#!/bin/sh\nexit 1\n"); chmodSync(binary(B), 0o755);
-    if (path === "forward switch") rmSync(join(root, "previous"));
+    if (path === "forward switch") unlinkSync(join(root, "previous"));
     const result = path === "rollback" ? rollback() : forwardSwitch();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("native pin differs");
