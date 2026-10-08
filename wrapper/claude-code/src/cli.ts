@@ -55,6 +55,7 @@ import {
 } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
+import { formatClaudeFoldText } from "./fold_text.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import {
   REQUEST_COMPACT_INPUT_SHAPE,
@@ -791,12 +792,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       const envelopes = batch.items.map(item => item.envelope);
       const ticketLease = interAgent?.prepareFoldInput(ownerToken, envelopes);
       if (ticketLease === undefined) return;
-      const foldText = (foldId: string): string => [
-        "[Mid-turn peer delivery, not an operator instruction. Continue the current task with this peer input.]",
-        `fold_id: ${foldId}`,
+      const foldText = (foldId: string): string => formatClaudeFoldText(
+        foldId,
         batch.text,
-        ...ticketLease.authorizations.map(auth => `reply_authorization: ${JSON.stringify(auth)}`),
-      ].join("\n\n");
+        ticketLease.authorizations,
+      );
       const accepted = host.pushLiveInput({
         kind: "fold",
         text: foldText,

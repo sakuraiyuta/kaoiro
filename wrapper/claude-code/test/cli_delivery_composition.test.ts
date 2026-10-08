@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES } from "@kaoiro/agent-common";
+import { formatInboundMessage, handoffToolResult, INTER_AGENT_TOOL_FQN, MAX_COALESCED_BYTES, REPLY_AUTHORIZATION_USAGE_GUIDANCE } from "@kaoiro/agent-common";
 import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
@@ -179,6 +179,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       await running;
       expect(pushedInputs).toHaveLength(1);
       expect(pushedInputs[0]).toContain("Mid-turn peer delivery");
+      expect(pushedInputs[0]).toContain(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
       expect(stages).toContainEqual(expect.objectContaining({ stage: "submitted", handoff: "fold_hook" }));
       expect(acknowledged).toEqual([1, 2]);
       expect(foldedGuidance).toEqual(["Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."]);
