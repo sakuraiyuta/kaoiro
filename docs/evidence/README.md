@@ -103,3 +103,9 @@ Claude Agent SDK 0.3.284 model-catalog rollout.
 ## issue-464/
 
 - [codex-home-isolation-nonlive-2026-10-01.md](issue-464/codex-home-isolation-nonlive-2026-10-01.md) — child-process audit, non-live package gates, and guard mutations; final-pin native resume gate pending.
+
+## issue-479/
+
+Server channel-test reply budget (issue #479): default `assert_reply` latency and the ChannelCase default.
+
+- [channel-reply-budget-2026-10-08.md](issue-479/channel-reply-budget-2026-10-08.md) — per-site latency under 100 ms and 2000 ms budgets, three runs at load 8 to 14, and the negative controls for the ChannelCase default.
