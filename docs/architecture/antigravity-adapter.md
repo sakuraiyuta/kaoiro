@@ -31,6 +31,8 @@ development host. The CLI self-updated from 1.1.8 to 1.1.26 during the
 session, so vendor drift remains a live risk. The target, invocation
 conditions, and unverified vendor claims are recorded in
 [Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).
+The CLI 1.3.1 catalog baseline and effort measurements are recorded in
+[Antigravity CLI 1.3.1 evidence](../evidence/antigravity/agy-1.3.1-models-2026-10-08.md).
 Promote to `accepted` after the phase-34 Stage A dogfood.
 
 ## Why the CLI and not the Python SDK
