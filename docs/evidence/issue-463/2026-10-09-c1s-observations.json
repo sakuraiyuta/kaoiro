@@ -1,0 +1,1220 @@
+{
+  "source_commit": "95ea6524a99b9bf73e3c7930e01dc067f5771f23",
+  "fixture_commit": "502e05c8e4ca122c47cc6ae12f9fb95edc139e8c",
+  "base_commit": "9d9f8ed8dd6aa9ff471a4d198ad5e86895fa65a2",
+  "archive": "/home/yuta/Nextcloud/storage.hktypeb.jp/kaoiro/fuji/2026-10-09-issue-559/implementation",
+  "gates": [
+    {
+      "name": "server mix precommit",
+      "exit_code": 0,
+      "counts": "Result: 2109 passed, 1 excluded",
+      "log": "impl-BC-precommit-r2-final-fuji.log"
+    },
+    {
+      "name": "server/deploy node --test",
+      "exit_code": 0,
+      "counts": "tests 359; pass 359; fail 0; skipped 0",
+      "log": "impl-deploy-final-fuji.log"
+    },
+    {
+      "name": "workspace typecheck",
+      "exit_code": 0,
+      "counts": "Scope: 7 of 8 workspace projects",
+      "log": "impl-ts-final-fuji.log"
+    },
+    {
+      "name": "focused policy/config/AgentStates tests",
+      "exit_code": 0,
+      "counts": "Result: 93 passed",
+      "log": "impl-BC-pre-commit-r4-fuji.log"
+    },
+    {
+      "name": "generated env regression",
+      "exit_code": 0,
+      "counts": "Result: 23 passed",
+      "log": "impl-env-golden-fuji.log"
+    }
+  ],
+  "live_release": {
+    "image_id": "sha256:d9c10b84b6d7fef830a9c5f87c97e393a60c7d13138156359fbb6820e16ec0e4",
+    "results": [
+      {
+        "name": "positive",
+        "verdict": "accepted",
+        "reference": {
+          "path": "/tmp/fuji559-release-0uhc2hps/positive/policy-store-placement.json",
+          "sha256": "c4a3616684104f724e6a4c23fb9fbbb9b421e744102bdbe81ab13b49d40b503b",
+          "archived_path": "2026-10-09-c1s-placement.json"
+        },
+        "record": {
+          "schema_version": 1,
+          "transaction_id": "fuji559-live-positive",
+          "image_id": "sha256:d9c10b84b6d7fef830a9c5f87c97e393a60c7d13138156359fbb6820e16ec0e4",
+          "compose_sha256": "3d54d4cb428952e394fda690b65fd4c1e94229069cdc93db1903b5e07de14cd8",
+          "env_sha256": "3d043772e637fc568cf5fadc6dd8e798a5f8765627d4aeb350c576f0de150630",
+          "verdict": "accepted",
+          "effective_path": "/var/lib/kaoiro/delivery_policies.dets",
+          "mounts": [
+            {
+              "type": "volume",
+              "target": "/var/lib/kaoiro",
+              "source": "fuji559-1f22a4d04767-state",
+              "writable": true,
+              "probe_writable": false
+            },
+            {
+              "type": "tmpfs",
+              "target": "/var/lib/kaoiro/sibling",
+              "source": null,
+              "writable": true,
+              "tmpfs": "rw",
+              "probe_writable": true
+            }
+          ],
+          "selected_mount": {
+            "type": "volume",
+            "target": "/var/lib/kaoiro",
+            "source": "fuji559-1f22a4d04767-state",
+            "writable": true,
+            "probe_writable": false
+          },
+          "docker": {
+            "version": "29.8.2",
+            "api": "1.56"
+          },
+          "compose_version": "5.6.0"
+        }
+      },
+      {
+        "name": "positive",
+        "verdict": "accepted",
+        "reference": {
+          "path": "/tmp/fuji559-release-0uhc2hps/positive/policy-store-placement.json",
+          "sha256": "c4a3616684104f724e6a4c23fb9fbbb9b421e744102bdbe81ab13b49d40b503b",
+          "archived_path": "2026-10-09-c1s-placement.json"
+        },
+        "record": {
+          "schema_version": 1,
+          "transaction_id": "fuji559-live-positive",
+          "image_id": "sha256:d9c10b84b6d7fef830a9c5f87c97e393a60c7d13138156359fbb6820e16ec0e4",
+          "compose_sha256": "3d54d4cb428952e394fda690b65fd4c1e94229069cdc93db1903b5e07de14cd8",
+          "env_sha256": "3d043772e637fc568cf5fadc6dd8e798a5f8765627d4aeb350c576f0de150630",
+          "verdict": "accepted",
+          "effective_path": "/var/lib/kaoiro/delivery_policies.dets",
+          "mounts": [
+            {
+              "type": "volume",
+              "target": "/var/lib/kaoiro",
+              "source": "fuji559-1f22a4d04767-state",
+              "writable": true,
+              "probe_writable": false
+            },
+            {
+              "type": "tmpfs",
+              "target": "/var/lib/kaoiro/sibling",
+              "source": null,
+              "writable": true,
+              "tmpfs": "rw",
+              "probe_writable": true
+            }
+          ],
+          "selected_mount": {
+            "type": "volume",
+            "target": "/var/lib/kaoiro",
+            "source": "fuji559-1f22a4d04767-state",
+            "writable": true,
+            "probe_writable": false
+          },
+          "docker": {
+            "version": "29.8.2",
+            "api": "1.56"
+          },
+          "compose_version": "5.6.0"
+        }
+      },
+      {
+        "name": "tmp-fallback",
+        "verdict": "refused",
+        "reason": "delivery policy placement refused: policy path is outside the state volume"
+      },
+      {
+        "name": "nested-tmpfs",
+        "verdict": "refused",
+        "reason": "delivery policy placement refused: the longest containing mount is not the writable named state volume"
+      },
+      {
+        "name": "symlink",
+        "verdict": "refused",
+        "reason": "delivery policy placement refused: policy path has a symlink, unreadable or invalid component"
+      },
+      {
+        "name": "release-default-constructor",
+        "verdict": "accepted",
+        "record": {
+          "mode": 384,
+          "path": "/var/lib/kaoiro/delivery_policies.dets",
+          "manifest": [
+            {
+              "env": "KAOIRO_SESSION_POINTERS_PATH",
+              "store": "session_pointers",
+              "default_path": "/tmp/kaoiro-dets/session_pointers.dets",
+              "default_file": "session_pointers.dets"
+            },
+            {
+              "env": "KAOIRO_AGENT_DIRECTORY_PATH",
+              "store": "agent_directory",
+              "default_path": "/tmp/kaoiro-dets/agent_directory.dets",
+              "default_file": "agent_directory.dets"
+            },
+            {
+              "env": "KAOIRO_PERMISSION_MODES_PATH",
+              "store": "permission_modes",
+              "default_path": "/tmp/kaoiro-dets/permission_modes.dets",
+              "default_file": "permission_modes.dets"
+            },
+            {
+              "env": "KAOIRO_PERMISSION_SETTINGS_PATH",
+              "store": "permission_settings",
+              "default_path": "/tmp/kaoiro-dets/permission_settings.dets",
+              "default_file": "permission_settings.dets"
+            },
+            {
+              "env": "KAOIRO_DELIVERY_POLICIES_PATH",
+              "store": "delivery_policies",
+              "default_path": "/tmp/kaoiro-dets/delivery_policies.dets",
+              "default_file": "delivery_policies.dets"
+            },
+            {
+              "env": "KAOIRO_CLEAR_WATERMARKS_PATH",
+              "store": "clear_watermarks",
+              "default_path": "/tmp/kaoiro-dets/clear_watermarks.dets",
+              "default_file": "clear_watermarks.dets"
+            },
+            {
+              "env": "KAOIRO_SESSION_STARTS_PATH",
+              "store": "session_starts",
+              "default_path": "/tmp/kaoiro-dets/session_starts.dets",
+              "default_file": "session_starts.dets"
+            },
+            {
+              "env": "KAOIRO_INGRESS_ORDER_PATH",
+              "store": "ingress_order",
+              "default_path": "/tmp/kaoiro-dets/ingress_order.dets",
+              "default_file": "ingress_order.dets"
+            },
+            {
+              "env": "KAOIRO_DELIVERY_STATES_PATH",
+              "store": "delivery_states",
+              "default_path": "/tmp/kaoiro-dets/delivery_states.dets",
+              "default_file": "delivery_states.dets"
+            },
+            {
+              "env": "KAOIRO_WORK_STORE_PATH",
+              "store": "work_store",
+              "default_path": "/tmp/kaoiro-dets/work_store.dets",
+              "default_file": "work_store.dets"
+            },
+            {
+              "env": "KAOIRO_TOKEN_DENYLIST_PATH",
+              "store": "token_denylist",
+              "default_path": "/tmp/kaoiro-dets/token_denylist.dets",
+              "default_file": "token_denylist.dets"
+            },
+            {
+              "env": "KAOIRO_USERS_PATH",
+              "store": "users",
+              "default_path": "/tmp/kaoiro-dets/users.dets",
+              "default_file": "users.dets"
+            },
+            {
+              "env": "KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH",
+              "store": "session_lifecycle_events",
+              "default_path": "/tmp/kaoiro-dets/session_lifecycle_events.dets",
+              "default_file": "session_lifecycle_events.dets"
+            },
+            {
+              "env": "KAOIRO_QUAGMIRE_SETTINGS_PATH",
+              "store": "quagmire_settings",
+              "default_path": "/tmp/kaoiro-dets/quagmire_settings.dets",
+              "default_file": "quagmire_settings.dets"
+            },
+            {
+              "env": "KAOIRO_AGENT_STATUS_LINES_PATH",
+              "store": "agent_status_lines",
+              "default_path": "/tmp/kaoiro-dets/agent_status_lines.dets",
+              "default_file": "agent_status_lines.dets"
+            }
+          ],
+          "row": {
+            "policy": "off",
+            "revision": 2
+          }
+        }
+      },
+      {
+        "name": "release-reopen",
+        "verdict": "accepted",
+        "record": {
+          "path": "/var/lib/kaoiro/delivery_policies.dets",
+          "row": {
+            "policy": "off",
+            "revision": 2
+          }
+        }
+      }
+    ],
+    "source_commit": "95ea6524a99b9bf73e3c7930e01dc067f5771f23"
+  },
+  "crash": [
+    {
+      "boundary": "counter",
+      "seed_exit": 0,
+      "child_exit": -9,
+      "child_pid": 58,
+      "boundary_stdout": "{\"pid\":\"58\",\"stage\":\"counter_synced\"}\n",
+      "recover_exit": 0,
+      "recover_stdout": "{\"next\":\"{:ok, %{policy: :off, revision: 3}}\",\"stage\":\"recovered\",\"row\":\"{:ok, %{policy: :off, revision: 1}}\"}\n",
+      "recover_stderr": "",
+      "records": [
+        {
+          "next": "{:ok, %{policy: :off, revision: 3}}",
+          "stage": "recovered",
+          "row": "{:ok, %{policy: :off, revision: 1}}"
+        }
+      ]
+    },
+    {
+      "boundary": "accepted",
+      "seed_exit": 0,
+      "child_exit": -9,
+      "child_pid": 214,
+      "boundary_stdout": "{\"pid\":\"214\",\"stage\":\"accepted\"}\n",
+      "recover_exit": 0,
+      "recover_stdout": "{\"next\":\"{:ok, %{policy: :off, revision: 3}}\",\"stage\":\"recovered\",\"row\":\"{:ok, %{policy: :off, revision: 2}}\"}\n",
+      "recover_stderr": "",
+      "records": [
+        {
+          "next": "{:ok, %{policy: :off, revision: 3}}",
+          "stage": "recovered",
+          "row": "{:ok, %{policy: :off, revision: 2}}"
+        }
+      ]
+    }
+  ],
+  "mutations": [
+    {
+      "unit": "A",
+      "name": "entry-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0",
+        "        at fail (file:///home/yuta/git/kaoiro/worktrees/fuji-559/server/deploy/kaoiro-server-deploy.mjs:71:15)"
+      ],
+      "log": "impl-A-mutation-entry-cut-fuji.log",
+      "sha256": "4eef92e26059aa46b2cefae43eddc1132f153ebecbb0bd638bfc2a38e0fb7212"
+    },
+    {
+      "unit": "A",
+      "name": "resume-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-resume-cut-fuji.log",
+      "sha256": "27a40d7f4fd0d671dfbdf5f3d349a77f257b11edf23338be496e7ea0d6d777b2"
+    },
+    {
+      "unit": "A",
+      "name": "registration-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-registration-cut-fuji.log",
+      "sha256": "f2121a5e02a0347ee56d6c55310b3a653ec81d0adf9b1ca73d54e80e67368764"
+    },
+    {
+      "unit": "A",
+      "name": "constructor-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-constructor-cut-fuji.log",
+      "sha256": "67448f68946e651949e01344fcca35b6f1d1cec5955096d3523ff5bd10999dba"
+    },
+    {
+      "unit": "A",
+      "name": "longest-reversed",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-longest-reversed-fuji.log",
+      "sha256": "199f88f0031926367277f774643c2aa063e92893728baef084ac0a9ce61ac546"
+    },
+    {
+      "unit": "A",
+      "name": "source-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-source-cut-fuji.log",
+      "sha256": "6c7c7d21eef0f581db0dac3bc61e6e57d8746e93b9d186a947449597654181ff"
+    },
+    {
+      "unit": "A",
+      "name": "tmpfs-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0",
+        "        at fail (file:///home/yuta/git/kaoiro/worktrees/fuji-559/server/deploy/kaoiro-server-deploy.mjs:71:15)"
+      ],
+      "log": "impl-A-mutation-tmpfs-cut-fuji.log",
+      "sha256": "73cd729db64a1e2955a9b6fe776ab6040249b46c0741ce01c550f4c87a4276ab"
+    },
+    {
+      "unit": "A",
+      "name": "image-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 2",
+        "\u2139 pass 0",
+        "\u2139 fail 2",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-image-cut-fuji.log",
+      "sha256": "63d3350d60d020137cbbf75f93a623332cae358799303dbda7e19a49c73fd70c"
+    },
+    {
+      "unit": "A",
+      "name": "alias-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-alias-cut-fuji.log",
+      "sha256": "e2379d2215053ad13a479303b26ebd50cdce66edd8c7eae1d739c256ff617cd9"
+    },
+    {
+      "unit": "A",
+      "name": "digest-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-digest-cut-fuji.log",
+      "sha256": "857493762665caf1a9c0f00c64fe6ff099f76c9976adfd99ec52d5647e437ab1"
+    },
+    {
+      "unit": "A",
+      "name": "binding-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-binding-cut-fuji.log",
+      "sha256": "41f4e6874f3a3c50151c40774315f2a357bc8e254c7049196fabf7e7e0f59f79"
+    },
+    {
+      "unit": "A",
+      "name": "module-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-module-cut-fuji.log",
+      "sha256": "1e98ed5f4878fd4b43c3fd304aa6aca3b9462a2ecfca106c316c3e571cf1dc93"
+    },
+    {
+      "unit": "A",
+      "name": "exit-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-exit-cut-fuji.log",
+      "sha256": "d967b9023dc2c91c1bcf2d86d78a707330bce761a7360d7f41ddcfbe06415aeb"
+    },
+    {
+      "unit": "A",
+      "name": "writable-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-writable-cut-fuji.log",
+      "sha256": "99a726787d3285defc63e23473f3577cf835ed4672c6638be3ce861f883522a7"
+    },
+    {
+      "unit": "A",
+      "name": "legacy-cache-cut",
+      "exit_code": 1,
+      "counts": [
+        "\u2139 tests 1",
+        "\u2139 pass 0",
+        "\u2139 fail 1",
+        "\u2139 skipped 0"
+      ],
+      "log": "impl-A-mutation-legacy-cache-cut-fuji.log",
+      "sha256": "001a26d0f5141479946726b35b5405e5cdbc20481b30c721d36ae7519c55b02b"
+    },
+    {
+      "unit": "B+C",
+      "name": "role-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-role-cut-fuji.log",
+      "sha256": "6821f8cdb0e4992e776f2e9b268af3849d42e3e8a0fc9515b80b3d32eb2f2ff3"
+    },
+    {
+      "unit": "B+C",
+      "name": "queued-role-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-queued-role-cut-fuji.log",
+      "sha256": "2a00dce50840ea9f8fcb612c441b5c2c794edd3aa39dc0be8a1f80fd017b2e5b"
+    },
+    {
+      "unit": "B+C",
+      "name": "known-agent-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-known-agent-cut-fuji.log",
+      "sha256": "acf60172cc229822e72273e73f462a5e2e88d1de18cfb9279dc13f7496b441c2"
+    },
+    {
+      "unit": "B+C",
+      "name": "cas-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-cas-cut-fuji.log",
+      "sha256": "529081f348506b216315e66a424839570356aa039c537da231569861520ce7d1"
+    },
+    {
+      "unit": "B+C",
+      "name": "integer-zero-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-integer-zero-cut-fuji.log",
+      "sha256": "60e1e0e001fb9541b4c065d21c6a9d03918bfd26c5642e8a5204e669778133a5"
+    },
+    {
+      "unit": "B+C",
+      "name": "exhaustion-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-exhaustion-cut-fuji.log",
+      "sha256": "589529a395be0a37e93c4bd4832f65ee507abeb2b4881d425a6bedba2e72d18d"
+    },
+    {
+      "unit": "B+C",
+      "name": "counter-sync-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-counter-sync-cut-fuji.log",
+      "sha256": "89e26cf43cdddf726bfeb43c4d9bcd31abdee2bd8b1018da00d8e0f4fb51599e"
+    },
+    {
+      "unit": "B+C",
+      "name": "row-sync-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-row-sync-cut-fuji.log",
+      "sha256": "b962a7f1d88614df9afbf1e38d5ff2c6956798b5a4f902946ee36521ca5256f9"
+    },
+    {
+      "unit": "B+C",
+      "name": "sync-order-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-sync-order-cut-fuji.log",
+      "sha256": "4c8c130dbb5b6e3961e0a92cb9feded8d1d2fb858941306878f25bcb2a4fb638"
+    },
+    {
+      "unit": "B+C",
+      "name": "notify-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-notify-cut-fuji.log",
+      "sha256": "3ba193e6475bd6a97ab27d412a174ef155a91ed34a572823f5e2ecdded9a6a69"
+    },
+    {
+      "unit": "B+C",
+      "name": "revocation-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-revocation-cut-fuji.log",
+      "sha256": "31b6b284eeaa88a3ded0d84011eb589d345276ce75ee5fa7411cad44cd405f02"
+    },
+    {
+      "unit": "B+C",
+      "name": "delete-counter-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-delete-counter-cut-fuji.log",
+      "sha256": "fd9ce87a350b7e693ced5e604a99fa3b31d5a607e33e01d2f039c5a41413f20b"
+    },
+    {
+      "unit": "B+C",
+      "name": "startup-purge-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-startup-purge-cut-fuji.log",
+      "sha256": "999fc52346facedc6d8b8ae3b4a6aafda57c896af404a85b7e2e7fca024465cf"
+    },
+    {
+      "unit": "B+C",
+      "name": "existing-row-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 28/31 passed",
+        "Failed: 3 tests"
+      ],
+      "log": "impl-BC-mutation-existing-row-cut-fuji.log",
+      "sha256": "04ae14ab0098e920c47baf30201a0e6eef9393122d2b0e29b9b53dac49b81c2f"
+    },
+    {
+      "unit": "B+C",
+      "name": "join-backfill-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 19/31 passed",
+        "Failed: 12 tests"
+      ],
+      "log": "impl-BC-mutation-join-backfill-cut-fuji.log",
+      "sha256": "c56b87f045de605d53d49379277c2957a5f36ea7ee677548a6c2bce70b76d656"
+    },
+    {
+      "unit": "B+C",
+      "name": "spawn-persistence-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-spawn-persistence-cut-fuji.log",
+      "sha256": "870ccb6d8d6cabd82f511037d4353a2341bb2b8c3765dacfe940754d557c00a6"
+    },
+    {
+      "unit": "B+C",
+      "name": "runner-default-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-runner-default-cut-fuji.log",
+      "sha256": "96f6a540dc8f5a924839fdb8e54cb3d506b175c85d17b2c633b308e2a4945558"
+    },
+    {
+      "unit": "B+C",
+      "name": "off-clamp-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 27/31 passed",
+        "Failed: 4 tests"
+      ],
+      "log": "impl-BC-mutation-off-clamp-cut-fuji.log",
+      "sha256": "7cc3540678eb018c41c22d565180108d66163dab0e41dc5ce163f25ac0454328"
+    },
+    {
+      "unit": "B+C",
+      "name": "unconfirmed-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 28/31 passed",
+        "Failed: 3 tests"
+      ],
+      "log": "impl-BC-mutation-unconfirmed-cut-fuji.log",
+      "sha256": "5727cc6f38bb35d8a0b67e62b032d3e280f4d553d6f690693149dcba2dd99eba"
+    },
+    {
+      "unit": "B+C",
+      "name": "operator-none-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-operator-none-cut-fuji.log",
+      "sha256": "8bf5fbe0adbaa2dc484503cc6d4ddcac5b45b7aaffd9168a6ff53fbfd35850eb"
+    },
+    {
+      "unit": "B+C",
+      "name": "ia-clamp-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 28/31 passed",
+        "Failed: 3 tests"
+      ],
+      "log": "impl-BC-mutation-ia-clamp-cut-fuji.log",
+      "sha256": "88bbb519d8ce82dd3c24d1d2bf0cb70f1ce7b8319816b234ee768f5d6bc60a39"
+    },
+    {
+      "unit": "B+C",
+      "name": "ack-current-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-ack-current-cut-fuji.log",
+      "sha256": "2d3a6ff6b3143291501412ba041dbc9a400bc14ebf0b45b9f01dc456569fd534"
+    },
+    {
+      "unit": "B+C",
+      "name": "ack-owner-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-ack-owner-cut-fuji.log",
+      "sha256": "8e587a68b5cb6e29dcb799df6cd2fd1ca8379088f66377131e70f5c6061fafc8"
+    },
+    {
+      "unit": "B+C",
+      "name": "replacement-ack-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-replacement-ack-cut-fuji.log",
+      "sha256": "02e04451f8f05de20675cf0327189ec43b96847040334b88ed8824b0a70fb98e"
+    },
+    {
+      "unit": "B+C",
+      "name": "delete-wiring-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-delete-wiring-cut-fuji.log",
+      "sha256": "3b7ac779098e8cd77e2854e29a148dc8f942d9a6a60791294d8a07e2e2570214"
+    },
+    {
+      "unit": "B+C",
+      "name": "snapshot-refresh-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-snapshot-refresh-cut-fuji.log",
+      "sha256": "abbadfc2543f2dc59721fd511ead4bfd293a94e09ed22b58cea9ee9f4e0c6929"
+    },
+    {
+      "unit": "B+C",
+      "name": "operator-clamp-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 26/31 passed",
+        "Failed: 5 tests"
+      ],
+      "log": "impl-BC-mutation-operator-clamp-cut-fuji.log",
+      "sha256": "ba739ada67c9fb068c5b7513d70b0d72faa3168e5f1b1ca48407cda30d477fd8"
+    },
+    {
+      "unit": "B+C",
+      "name": "same-value-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-same-value-cut-fuji.log",
+      "sha256": "faa00341696dad997c1647f89acc94ec4e9978481f6b40e68fa43e7ac1fa2132"
+    },
+    {
+      "unit": "B+C",
+      "name": "unknown-on-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-unknown-on-cut-fuji.log",
+      "sha256": "e57b07ff65c45686ac46f0ec84d795a7b404b8802ac7c18456ef03b3b1d16338"
+    },
+    {
+      "unit": "B+C",
+      "name": "legacy-exception-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 29/31 passed",
+        "Failed: 2 tests"
+      ],
+      "log": "impl-BC-mutation-legacy-exception-cut-fuji.log",
+      "sha256": "3c42172b1ef34c7fef87ec45fccba319501235262c93d6ff392c90e947c22c8f"
+    },
+    {
+      "unit": "B+C",
+      "name": "ack-view-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 27/31 passed",
+        "Failed: 4 tests"
+      ],
+      "log": "impl-BC-mutation-ack-view-cut-fuji.log",
+      "sha256": "577b3c01f6e8457203cdb3be57b17a3fc327d62d268a01f14a6a1836c5b81e8b"
+    },
+    {
+      "unit": "B+C",
+      "name": "yield-token-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-yield-token-cut-fuji.log",
+      "sha256": "9beae13efd5fedd7cfc104b8cc16138687581503edc8cae72ae769b4fe3fc685"
+    },
+    {
+      "unit": "B+C",
+      "name": "viewer-private-merge-cut",
+      "exit_code": 2,
+      "counts": [
+        "Result: 30/31 passed",
+        "Failed: 1 test"
+      ],
+      "log": "impl-BC-mutation-viewer-private-merge-cut-fuji.log",
+      "sha256": "ae160eb75fc86a016ccb0b1578d7764deb93e846bf73bf06d7d74b7719e8ab00"
+    },
+    {
+      "unit": "types",
+      "name": "unknown-write",
+      "exit_code": 2,
+      "counts": [
+        "src/delivery-policy.type-test.ts(8,1): error TS2578: Unused '@ts-expect-error' directive."
+      ],
+      "log": "impl-types-mutation-unknown-write-fuji.log",
+      "sha256": "120b32c4149f0d44f233a6adb7153d2a04c3fd3466b5772729a60b4cefcfa73b"
+    },
+    {
+      "unit": "types",
+      "name": "engine-alias",
+      "exit_code": 2,
+      "counts": [
+        "src/delivery-policy.type-test.ts(10,1): error TS2578: Unused '@ts-expect-error' directive."
+      ],
+      "log": "impl-types-mutation-engine-alias-fuji.log",
+      "sha256": "f9954c0b672e9f6bf0c614a31d59e6af581c7ba487ee4cfec3e15db31cf808dc"
+    },
+    {
+      "unit": "types",
+      "name": "default-boolean",
+      "exit_code": 2,
+      "counts": [
+        "src/delivery-policy.type-test.ts(12,1): error TS2578: Unused '@ts-expect-error' directive."
+      ],
+      "log": "impl-types-mutation-default-boolean-fuji.log",
+      "sha256": "0e7b95d7e4c21370ed39ebedd5bd176a96cdfb7544135d04847b22d309495bfc"
+    }
+  ],
+  "red_counts": {
+    "A": 15,
+    "B+C": 33,
+    "types": 3
+  },
+  "excluded_mutation_attempts": [
+    {
+      "name": "operator-clamp-cut",
+      "status": "pattern_mismatch",
+      "matches": 0
+    },
+    {
+      "name": "viewer-private-cut",
+      "exit_code": 0,
+      "status": "unpinned",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-559/impl-BC-mutation-viewer-private-cut-fuji.log",
+      "counts": [
+        "Result: 31 passed"
+      ]
+    }
+  ],
+  "files": {
+    "impl-BC-mutation-operator-none-cut-fuji.log": {
+      "sha256": "8bf5fbe0adbaa2dc484503cc6d4ddcac5b45b7aaffd9168a6ff53fbfd35850eb",
+      "bytes": 9049
+    },
+    "impl-BC-mutation-role-cut-fuji.log": {
+      "sha256": "6821f8cdb0e4992e776f2e9b268af3849d42e3e8a0fc9515b80b3d32eb2f2ff3",
+      "bytes": 11269
+    },
+    "impl-BC-mutation-queued-role-cut-fuji.log": {
+      "sha256": "2a00dce50840ea9f8fcb612c441b5c2c794edd3aa39dc0be8a1f80fd017b2e5b",
+      "bytes": 8112
+    },
+    "impl-BC-mutation-known-agent-cut-fuji.log": {
+      "sha256": "acf60172cc229822e72273e73f462a5e2e88d1de18cfb9279dc13f7496b441c2",
+      "bytes": 17651
+    },
+    "impl-A-mutation-exit-cut-fuji.log": {
+      "sha256": "d967b9023dc2c91c1bcf2d86d78a707330bce761a7360d7f41ddcfbe06415aeb",
+      "bytes": 1711
+    },
+    "impl-BC-mutation-row-sync-cut-fuji.log": {
+      "sha256": "b962a7f1d88614df9afbf1e38d5ff2c6956798b5a4f902946ee36521ca5256f9",
+      "bytes": 2111
+    },
+    "impl-BC-mutation-legacy-exception-cut-fuji.log": {
+      "sha256": "3c42172b1ef34c7fef87ec45fccba319501235262c93d6ff392c90e947c22c8f",
+      "bytes": 16119
+    },
+    "impl-plan-fuji.md": {
+      "sha256": "faedee9dc4513be38593be33991fab2b8457e209697a6f48b12f54b5dd5e0b91",
+      "bytes": 7026
+    },
+    "impl-BC-mutation-existing-row-cut-fuji.log": {
+      "sha256": "04ae14ab0098e920c47baf30201a0e6eef9393122d2b0e29b9b53dac49b81c2f",
+      "bytes": 11324
+    },
+    "impl-live-docker-raw-fuji.jsonl": {
+      "sha256": "b3a44c71e5cd6a20c20a0d3e221b6e728ae2b6bc6849667ba3ad60f27cfb1cae",
+      "bytes": 102456
+    },
+    "impl-BC-mutation-join-backfill-cut-fuji.log": {
+      "sha256": "c56b87f045de605d53d49379277c2957a5f36ea7ee677548a6c2bce70b76d656",
+      "bytes": 43796
+    },
+    "impl-BC-mutation-notify-cut-fuji.log": {
+      "sha256": "3ba193e6475bd6a97ab27d412a174ef155a91ed34a572823f5e2ecdded9a6a69",
+      "bytes": 9384
+    },
+    "impl-BC-mutation-ack-view-cut-fuji.log": {
+      "sha256": "577b3c01f6e8457203cdb3be57b17a3fc327d62d268a01f14a6a1836c5b81e8b",
+      "bytes": 22567
+    },
+    "impl-BC-mutation-exhaustion-cut-fuji.log": {
+      "sha256": "589529a395be0a37e93c4bd4832f65ee507abeb2b4881d425a6bedba2e72d18d",
+      "bytes": 2202
+    },
+    "impl-BC-mutation-operator-clamp-cut-fuji.log": {
+      "sha256": "ba739ada67c9fb068c5b7513d70b0d72faa3168e5f1b1ca48407cda30d477fd8",
+      "bytes": 47695
+    },
+    "impl-BC-mutation-viewer-private-cut-fuji.log": {
+      "sha256": "e4f92199917f7017e1908e8a61932fc9c6fc2d059ce67965c5bce7889ab92db4",
+      "bytes": 1380
+    },
+    "impl-BC-mutation-revocation-cut-fuji.log": {
+      "sha256": "31b6b284eeaa88a3ded0d84011eb589d345276ce75ee5fa7411cad44cd405f02",
+      "bytes": 2361
+    },
+    "impl-BC-mutation-yield-token-cut-fuji.log": {
+      "sha256": "9beae13efd5fedd7cfc104b8cc16138687581503edc8cae72ae769b4fe3fc685",
+      "bytes": 2618
+    },
+    "impl-A-mutation-module-cut-fuji.log": {
+      "sha256": "1e98ed5f4878fd4b43c3fd304aa6aca3b9462a2ecfca106c316c3e571cf1dc93",
+      "bytes": 1691
+    },
+    "impl-BC-pre-commit-r4-fuji.log": {
+      "sha256": "af5234aa72efeff9f64b1e78e1a70f4b369edcaf49855dce5d7a0a47409716bc",
+      "bytes": 1862
+    },
+    "impl-BC-mutation-delete-counter-cut-fuji.log": {
+      "sha256": "fd9ce87a350b7e693ced5e604a99fa3b31d5a607e33e01d2f039c5a41413f20b",
+      "bytes": 2341
+    },
+    "impl-env-golden-fuji.log": {
+      "sha256": "86d30f58d24ed554275e1f7e5747b43c7ba144019b722ab6858f6d94137394b6",
+      "bytes": 1228
+    },
+    "impl-live-release-r0-fuji.log": {
+      "sha256": "3b015a89cf16cdd15072a61a03caad18b4ac40b957741e4111eab584a80fecae",
+      "bytes": 3616
+    },
+    "impl-A-mutation-longest-reversed-fuji.log": {
+      "sha256": "199f88f0031926367277f774643c2aa063e92893728baef084ac0a9ce61ac546",
+      "bytes": 1701
+    },
+    "impl-BC-precommit-r2-final-fuji.log": {
+      "sha256": "08a39bfb962b3b65cf591aa5a3f845019e9cf80e5750ee74132c7de411bc1428",
+      "bytes": 101411
+    },
+    "impl-live-release-result-fuji.json": {
+      "sha256": "ea819ec3cbd059a2e5c5227b0bc147647bd16ebb89e6a25ca4c7c1ed35d47cf7",
+      "bytes": 7905
+    },
+    "impl-crash-probe-fuji.json": {
+      "sha256": "2bf2ba5df49eae10a3ed7be04908f9fc7973d21fdda81eedbd945e7f9ec82d1f",
+      "bytes": 1098
+    },
+    "impl-live-release-commands-r0-fuji.json": {
+      "sha256": "27ac4e3ab8634af8ac88e5d0887b99947b48334e005d0918d4f61c24da0a2e87",
+      "bytes": 5885
+    },
+    "impl-A-mutation-registration-cut-fuji.log": {
+      "sha256": "f2121a5e02a0347ee56d6c55310b3a653ec81d0adf9b1ca73d54e80e67368764",
+      "bytes": 1691
+    },
+    "impl-crash-probe-fuji.log": {
+      "sha256": "ac4ead3b96aa4114e8dc719d716186a5ab2ecddab50a2b0fb2413247b004e54d",
+      "bytes": 921
+    },
+    "impl-A-mutation-resume-cut-fuji.log": {
+      "sha256": "27a40d7f4fd0d671dfbdf5f3d349a77f257b11edf23338be496e7ea0d6d777b2",
+      "bytes": 1714
+    },
+    "impl-A-mutation-binding-cut-fuji.log": {
+      "sha256": "41f4e6874f3a3c50151c40774315f2a357bc8e254c7049196fabf7e7e0f59f79",
+      "bytes": 1736
+    },
+    "impl-BC-mutations-verified-fuji.json": {
+      "sha256": "8bb38ff5e82c757511692b68dc83c17cd5a48af7bb354488c0ad0f7694b15960",
+      "bytes": 12486
+    },
+    "impl-BC-mutation-viewer-private-merge-cut-fuji.log": {
+      "sha256": "ae160eb75fc86a016ccb0b1578d7764deb93e846bf73bf06d7d74b7719e8ab00",
+      "bytes": 1857
+    },
+    "impl-types-mutation-default-boolean-fuji.log": {
+      "sha256": "0e7b95d7e4c21370ed39ebedd5bd176a96cdfb7544135d04847b22d309495bfc",
+      "bytes": 347
+    },
+    "impl-A-mutation-alias-cut-fuji.log": {
+      "sha256": "e2379d2215053ad13a479303b26ebd50cdce66edd8c7eae1d739c256ff617cd9",
+      "bytes": 1649
+    },
+    "impl-BC-mutation-counter-sync-cut-fuji.log": {
+      "sha256": "89e26cf43cdddf726bfeb43c4d9bcd31abdee2bd8b1018da00d8e0f4fb51599e",
+      "bytes": 2183
+    },
+    "impl-A-mutation-entry-cut-fuji.log": {
+      "sha256": "4eef92e26059aa46b2cefae43eddc1132f153ebecbb0bd638bfc2a38e0fb7212",
+      "bytes": 3278
+    },
+    "impl-BC-mutation-integer-zero-cut-fuji.log": {
+      "sha256": "60e1e0e001fb9541b4c065d21c6a9d03918bfd26c5642e8a5204e669778133a5",
+      "bytes": 7887
+    },
+    "impl-BC-mutation-ia-clamp-cut-fuji.log": {
+      "sha256": "88bbb519d8ce82dd3c24d1d2bf0cb70f1ce7b8319816b234ee768f5d6bc60a39",
+      "bytes": 55497
+    },
+    "impl-BC-mutation-ack-owner-cut-fuji.log": {
+      "sha256": "8e587a68b5cb6e29dcb799df6cd2fd1ca8379088f66377131e70f5c6061fafc8",
+      "bytes": 1835
+    },
+    "impl-BC-mutation-spawn-persistence-cut-fuji.log": {
+      "sha256": "870ccb6d8d6cabd82f511037d4353a2341bb2b8c3765dacfe940754d557c00a6",
+      "bytes": 10736
+    },
+    "impl-BC-mutation-snapshot-refresh-cut-fuji.log": {
+      "sha256": "abbadfc2543f2dc59721fd511ead4bfd293a94e09ed22b58cea9ee9f4e0c6929",
+      "bytes": 2205
+    },
+    "impl-BC-mutation-sync-order-cut-fuji.log": {
+      "sha256": "4c8c130dbb5b6e3961e0a92cb9feded8d1d2fb858941306878f25bcb2a4fb638",
+      "bytes": 2182
+    },
+    "impl-live-docker-raw-r0-fuji.jsonl": {
+      "sha256": "64d6abd5d807d8f26f7d5514cc0e8f7932cca9ea350e22e20bfd3272fd3bd29f",
+      "bytes": 18150
+    },
+    "impl-A-mutation-writable-cut-fuji.log": {
+      "sha256": "99a726787d3285defc63e23473f3577cf835ed4672c6638be3ce861f883522a7",
+      "bytes": 1681
+    },
+    "impl-BC-mutation-cas-cut-fuji.log": {
+      "sha256": "529081f348506b216315e66a424839570356aa039c537da231569861520ce7d1",
+      "bytes": 10228
+    },
+    "impl-live-policy-store-placement-fuji.json": {
+      "sha256": "c4a3616684104f724e6a4c23fb9fbbb9b421e744102bdbe81ab13b49d40b503b",
+      "bytes": 1052
+    },
+    "impl-BC-mutation-runner-default-cut-fuji.log": {
+      "sha256": "96f6a540dc8f5a924839fdb8e54cb3d506b175c85d17b2c633b308e2a4945558",
+      "bytes": 2578
+    },
+    "impl-BC-mutation-unknown-on-cut-fuji.log": {
+      "sha256": "e57b07ff65c45686ac46f0ec84d795a7b404b8802ac7c18456ef03b3b1d16338",
+      "bytes": 2233
+    },
+    "impl-A-mutation-legacy-cache-cut-r0-fuji.log": {
+      "sha256": "ab946819120ea323177f204e2dacd826768e90af3c3c470045709469f3beed3a",
+      "bytes": 153
+    },
+    "impl-live-release-commands-fuji.json": {
+      "sha256": "6f8a4b4ad5e97e232700ab565b5eaecb6193334b056a87996451089e184a33b3",
+      "bytes": 8754
+    },
+    "impl-evidence-check-fuji.log": {
+      "sha256": "d4198e657744aec19e91d7243fca8098875ae49339c1179c016c78bdd17aecc0",
+      "bytes": 194
+    },
+    "impl-BC-mutation-replacement-ack-cut-fuji.log": {
+      "sha256": "02e04451f8f05de20675cf0327189ec43b96847040334b88ed8824b0a70fb98e",
+      "bytes": 3046
+    },
+    "impl-A-mutation-digest-cut-fuji.log": {
+      "sha256": "857493762665caf1a9c0f00c64fe6ff099f76c9976adfd99ec52d5647e437ab1",
+      "bytes": 1662
+    },
+    "impl-ts-final-fuji.log": {
+      "sha256": "74f7b93343519ea8c6e2a588939ab6ec33d3d6ab93f99176bc329ba758d74797",
+      "bytes": 521
+    },
+    "impl-crash-probe-r0-fuji.log": {
+      "sha256": "12529154fbaeac5c37364f4c571a87ca598ba8f14cfd3dfb1ea10fef1210c243",
+      "bytes": 452
+    },
+    "impl-crash-probe-r1-fuji.log": {
+      "sha256": "e6f14ca9fb52b6666acf5b89a6e8eaadf82b12a9a0f6281d5b57d4b1b078e193",
+      "bytes": 746
+    },
+    "impl-A-mutation-legacy-cache-cut-fuji.log": {
+      "sha256": "001a26d0f5141479946726b35b5405e5cdbc20481b30c721d36ae7519c55b02b",
+      "bytes": 3641
+    },
+    "impl-A-mutation-image-cut-fuji.log": {
+      "sha256": "63d3350d60d020137cbbf75f93a623332cae358799303dbda7e19a49c73fd70c",
+      "bytes": 3286
+    },
+    "impl-BC-mutation-same-value-cut-fuji.log": {
+      "sha256": "faa00341696dad997c1647f89acc94ec4e9978481f6b40e68fa43e7ac1fa2132",
+      "bytes": 8986
+    },
+    "impl-A-mutation-constructor-cut-fuji.log": {
+      "sha256": "67448f68946e651949e01344fcca35b6f1d1cec5955096d3523ff5bd10999dba",
+      "bytes": 1732
+    },
+    "impl-types-mutations-fuji.json": {
+      "sha256": "ee4a6cd39602c7dacc5425d6ee3b07797a1d6f756640f9256519d52b0c6ca27a",
+      "bytes": 859
+    },
+    "impl-BC-mutation-ack-current-cut-fuji.log": {
+      "sha256": "2d3a6ff6b3143291501412ba041dbc9a400bc14ebf0b45b9f01dc456569fd534",
+      "bytes": 14144
+    },
+    "impl-deploy-final-fuji.log": {
+      "sha256": "9f21997a90e40707da401fee6b10539ffdbb8f7e69acbfb7c8548f5b7c7f4d76",
+      "bytes": 38081
+    },
+    "impl-live-release-build-fuji.log": {
+      "sha256": "3577debeb156f42a329805d6eae727cbaa448bd83cac6c8ad5d82b1d9d4f3d3d",
+      "bytes": 4646
+    },
+    "impl-A-mutation-tmpfs-cut-fuji.log": {
+      "sha256": "73cd729db64a1e2955a9b6fe776ab6040249b46c0741ce01c550f4c87a4276ab",
+      "bytes": 2840
+    },
+    "impl-BC-mutation-delete-wiring-cut-fuji.log": {
+      "sha256": "3b7ac779098e8cd77e2854e29a148dc8f942d9a6a60791294d8a07e2e2570214",
+      "bytes": 1943
+    },
+    "impl-types-mutation-engine-alias-fuji.log": {
+      "sha256": "f9954c0b672e9f6bf0c614a31d59e6af581c7ba487ee4cfec3e15db31cf808dc",
+      "bytes": 347
+    },
+    "impl-BC-mutation-off-clamp-cut-fuji.log": {
+      "sha256": "7cc3540678eb018c41c22d565180108d66163dab0e41dc5ce163f25ac0454328",
+      "bytes": 56629
+    },
+    "impl-A-mutations-fuji.json": {
+      "sha256": "8e90171ff085b20fa6463c7c642450df03d29247aeb5eb777473af00320db950",
+      "bytes": 4273
+    },
+    "impl-types-mutation-unknown-write-fuji.log": {
+      "sha256": "120b32c4149f0d44f233a6adb7153d2a04c3fd3466b5772729a60b4cefcfa73b",
+      "bytes": 346
+    },
+    "impl-BC-mutation-unconfirmed-cut-fuji.log": {
+      "sha256": "5727cc6f38bb35d8a0b67e62b032d3e280f4d553d6f690693149dcba2dd99eba",
+      "bytes": 26974
+    },
+    "impl-BC-mutation-startup-purge-cut-fuji.log": {
+      "sha256": "999fc52346facedc6d8b8ae3b4a6aafda57c896af404a85b7e2e7fca024465cf",
+      "bytes": 2077
+    },
+    "impl-A-mutation-source-cut-fuji.log": {
+      "sha256": "6c7c7d21eef0f581db0dac3bc61e6e57d8746e93b9d186a947449597654181ff",
+      "bytes": 1741
+    }
+  },
+  "placement_sha256": "c4a3616684104f724e6a4c23fb9fbbb9b421e744102bdbe81ab13b49d40b503b"
+}

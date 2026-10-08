@@ -156,6 +156,8 @@ are read-only; named volumes use `volume-nocopy`. The release is evaluated
 without starting the server/application or opening its DETS store. Only the
 owned probe and its anonymous volumes are removed. Probe/cleanup failures are
 refusals, and a refused prepare restores the old `latest` image tag.
+Mountpoints for sibling mounts inside the state volume must already exist;
+the read-only probe refuses if Docker would need to create them there.
 
 `policy-store-placement.json` binds the transaction, target image, effective
 Compose/environment digests, runtime path, full normalized mount table,

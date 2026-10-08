@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "transaction_id": "fuji559-live-positive",
+  "image_id": "sha256:d9c10b84b6d7fef830a9c5f87c97e393a60c7d13138156359fbb6820e16ec0e4",
+  "compose_sha256": "3d54d4cb428952e394fda690b65fd4c1e94229069cdc93db1903b5e07de14cd8",
+  "env_sha256": "3d043772e637fc568cf5fadc6dd8e798a5f8765627d4aeb350c576f0de150630",
+  "verdict": "accepted",
+  "effective_path": "/var/lib/kaoiro/delivery_policies.dets",
+  "mounts": [
+    {
+      "type": "volume",
+      "target": "/var/lib/kaoiro",
+      "source": "fuji559-1f22a4d04767-state",
+      "writable": true,
+      "probe_writable": false
+    },
+    {
+      "type": "tmpfs",
+      "target": "/var/lib/kaoiro/sibling",
+      "source": null,
+      "writable": true,
+      "tmpfs": "rw",
+      "probe_writable": true
+    }
+  ],
+  "selected_mount": {
+    "type": "volume",
+    "target": "/var/lib/kaoiro",
+    "source": "fuji559-1f22a4d04767-state",
+    "writable": true,
+    "probe_writable": false
+  },
+  "docker": {
+    "version": "29.8.2",
+    "api": "1.56"
+  },
+  "compose_version": "5.6.0"
+}
