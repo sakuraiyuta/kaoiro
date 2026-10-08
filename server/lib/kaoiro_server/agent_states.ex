@@ -193,6 +193,13 @@ defmodule KaoiroServer.AgentStates do
   practice: `set_permission`'s own handler already required a known
   connected agent before calling this).
   """
+  def overlay_delivery_policy(agent_id, view, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :server, __MODULE__),
+      {:overlay_delivery_policy, agent_id, view}
+    )
+  end
+
   def overlay_permission_control(agent_id, control_wire, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.call(server, {:overlay_permission_control, agent_id, control_wire})
@@ -497,6 +504,25 @@ defmodule KaoiroServer.AgentStates do
     else
       existing = Map.get(agents, agent_id)
       envelope = preserve_newer_permission_control(existing, envelope)
+      prior = if existing, do: get_in(existing.envelope, ["ext", "delivery_policy"])
+
+      envelope =
+        case Map.get(envelope, "ext") do
+          ext when is_map(ext) ->
+            ext = Map.delete(ext, "delivery_policy")
+
+            Map.put(
+              envelope,
+              "ext",
+              if(prior, do: Map.put(ext, "delivery_policy", prior), else: ext)
+            )
+
+          _ when is_map(prior) ->
+            Map.put(envelope, "ext", %{"delivery_policy" => prior})
+
+          _ ->
+            envelope
+        end
 
       entry = %{
         envelope: envelope,
@@ -576,6 +602,23 @@ defmodule KaoiroServer.AgentStates do
 
         updated = %{entry | envelope: derived, disconnect_intents: %{}}
         {:reply, {:ok, derived}, put_agent(state, agent_id, updated)}
+
+      _ ->
+        {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:overlay_delivery_policy, agent_id, view}, _from, state) do
+    case state.agents[agent_id] do
+      %{envelope: envelope} = entry ->
+        updated =
+          Map.put(
+            envelope,
+            "ext",
+            Map.put(Map.get(envelope, "ext", %{}), "delivery_policy", view)
+          )
+
+        {:reply, :ok, put_agent(state, agent_id, %{entry | envelope: updated})}
 
       _ ->
         {:reply, :noop, state}

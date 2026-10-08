@@ -80,6 +80,27 @@ defmodule KaoiroServer.WorkStore do
         {:register_modes, agent_id, owner, modes, work_control?, operator_modes}
       )
 
+  def register_delivery(
+        agent_id,
+        owner,
+        modes,
+        work_control?,
+        operator_modes,
+        support,
+        server \\ __MODULE__
+      ),
+      do:
+        GenServer.call(
+          server,
+          {:register_delivery, agent_id, owner, modes, work_control?, operator_modes, support}
+        )
+
+  def delivery_snapshot(agent_id, server \\ __MODULE__),
+    do: GenServer.call(server, {:delivery_snapshot, agent_id}, 1_000)
+
+  def acknowledge_policy(agent_id, owner, revision, server \\ __MODULE__),
+    do: GenServer.call(server, {:acknowledge_policy, agent_id, owner, revision}, 1_000)
+
   def unregister_modes(agent_id, owner, server \\ __MODULE__),
     do: GenServer.call(server, {:unregister_modes, agent_id, owner})
 
@@ -120,6 +141,7 @@ defmodule KaoiroServer.WorkStore do
         yield_tokens: index_yield_tokens(claim_states),
         modes: %{},
         operator_modes: %{},
+        policies: %{},
         yield_last: index_yield_last(claim_states),
         test_after_apply_sync: after_apply_sync,
         path: path
@@ -145,12 +167,62 @@ defmodule KaoiroServer.WorkStore do
         state
       ),
       do:
+        put_delivery_registration(
+          state,
+          agent_id,
+          owner,
+          modes,
+          work_control?,
+          operator_modes,
+          false
+        )
+
+  def handle_call(
+        {:register_delivery, agent_id, owner, modes, work_control?, operator_modes, support},
+        _from,
+        state
+      ),
+      do:
+        put_delivery_registration(
+          state,
+          agent_id,
+          owner,
+          modes,
+          work_control?,
+          operator_modes,
+          support == true
+        )
+
+  def handle_call({:delivery_snapshot, agent_id}, _from, state) do
+    value =
+      case {state.modes[agent_id], state.operator_modes[agent_id], state.policies[agent_id]} do
+        {{owner, modes, _}, {owner, operator}, {owner, support, applied}} ->
+          %{
+            owner: owner,
+            modes: modes,
+            operator_modes: operator,
+            support: support,
+            applied_revision: applied
+          }
+
+        _ ->
+          nil
+      end
+
+    {:reply, value, state}
+  end
+
+  def handle_call({:acknowledge_policy, agent_id, owner, revision}, _from, state) do
+    case state.policies[agent_id] do
+      {^owner, true, applied}
+      when is_integer(revision) and (is_nil(applied) or revision >= applied) ->
         {:reply, :ok,
-         %{
-           state
-           | modes: Map.put(state.modes, agent_id, {owner, modes, work_control?}),
-             operator_modes: Map.put(state.operator_modes, agent_id, {owner, operator_modes})
-         }}
+         %{state | policies: Map.put(state.policies, agent_id, {owner, true, revision})}}
+
+      _ ->
+        {:reply, {:error, :policy_unconfirmed}, state}
+    end
+  end
 
   def handle_call({:unregister_modes, agent_id, owner}, _from, state) do
     modes =
@@ -165,7 +237,13 @@ defmodule KaoiroServer.WorkStore do
         _ -> state.operator_modes
       end
 
-    {:reply, :ok, %{state | modes: modes, operator_modes: operator_modes}}
+    policies =
+      case state.policies[agent_id] do
+        {^owner, _, _} -> Map.delete(state.policies, agent_id)
+        _ -> state.policies
+      end
+
+    {:reply, :ok, %{state | modes: modes, operator_modes: operator_modes, policies: policies}}
   end
 
   def handle_call({:operator_modes, agent_id}, _from, state) do
@@ -846,5 +924,15 @@ defmodule KaoiroServer.WorkStore do
   defp default_path do
     Application.get_env(:kaoiro_server, :work_store_path) ||
       KaoiroServer.DetsStorePath.default_path("work_store.dets")
+  end
+
+  defp put_delivery_registration(state, id, owner, modes, work?, operator, support) do
+    {:reply, :ok,
+     %{
+       state
+       | modes: Map.put(state.modes, id, {owner, modes, work?}),
+         operator_modes: Map.put(state.operator_modes, id, {owner, operator}),
+         policies: Map.put(state.policies, id, {owner, support, nil})
+     }}
   end
 end

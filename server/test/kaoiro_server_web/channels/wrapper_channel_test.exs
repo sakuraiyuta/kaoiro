@@ -466,7 +466,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     @endpoint.subscribe("agents:lobby")
     socket = join_wrapper(agent_id)
 
-    envelope = envelope(agent_id, "tool_running")
+    envelope =
+      put_in(envelope(agent_id, "tool_running"), ["ext", "delivery_policy"], %{
+        "policy" => "on",
+        "revision" => 1,
+        "confirmed" => true,
+        "pending" => false,
+        "wrapper_support" => false
+      })
+
     ref = push(socket, "envelope", envelope)
 
     assert_reply ref, :ok
@@ -486,7 +494,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     accepted =
       envelope(agent_id, "tool_running")
-      |> Map.put("ext", %{"model" => at_limit, "engine" => "codex"})
+      |> Map.put("ext", %{
+        "model" => at_limit,
+        "engine" => "codex",
+        "delivery_policy" => %{
+          "policy" => "on",
+          "revision" => 1,
+          "confirmed" => true,
+          "pending" => false,
+          "wrapper_support" => false
+        }
+      })
 
     assert_reply push(socket, "envelope", accepted), :ok
     assert_broadcast "envelope", ^accepted
@@ -505,7 +523,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         assert_reply push(socket, "envelope", rejected), :ok
       end)
 
-    expected = put_in(accepted, ["ext"], %{"engine" => "codex"})
+    expected = put_in(accepted, ["ext"], Map.delete(accepted["ext"], "model"))
 
     assert log =~ "directory model dropped for #{agent_id}: exceeds 256 bytes"
     assert_broadcast "envelope", ^expected
@@ -9073,7 +9091,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                    "delivery_authority" => %{
                      requested: "yield",
                      granted: "normal",
-                     downgrade: "yield_token_unavailable"
+                     downgrade: "policy_unknown"
                    }
                  },
                  12 * TestTimeouts.slow_path()

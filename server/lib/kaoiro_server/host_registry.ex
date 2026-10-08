@@ -117,6 +117,7 @@ defmodule KaoiroServer.HostRegistry do
         policy: Map.get(attrs, :policy, :accept_all),
         cwd_allowlist: Map.get(attrs, :cwd_allowlist, []),
         capabilities: Map.get(attrs, :capabilities, []),
+        in_flight_defaults: Map.get(attrs, :in_flight_defaults, %{}),
         # Launch catalog per engine (ADR-0032 F4bc), flows to the operator
         # `hosts` push as-is (public_entry keeps it).
         engines: Map.get(attrs, :engines, []),

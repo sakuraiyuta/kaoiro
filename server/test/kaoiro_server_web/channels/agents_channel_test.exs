@@ -8883,14 +8883,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
     end
 
-    test "T4-7: policy は21種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は28種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 27
+      assert MapSet.size(policy) == 28
       assert MapSet.member?(policy, "quagmire_notice")
       assert MapSet.member?(policy, "quagmire_settings")
 
-      for event <- ~w(status_line_snapshot status_line status_line_settings) do
+      for event <-
+            ~w(status_line_snapshot status_line status_line_settings delivery_policy_changed) do
         assert MapSet.member?(policy, event)
       end
 

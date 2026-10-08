@@ -120,6 +120,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "replay_ia" => :versioned,
     "session_reset_request" => :versioned,
     "session_lifecycle" => :versioned,
+    "delivery_policy_applied" => :versioned,
     "envelope" => :envelope_frame
   }
 
@@ -137,6 +138,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          {:ok, persona_id} <- fetch_persona_id(params),
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
+      _ = KaoiroServer.DeliveryPolicies.ensure(agent_id)
       delivery = bind_delivery(agent_id, params)
 
       modes =
@@ -150,12 +152,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
 
       :ok =
-        WorkStore.register_modes(
+        WorkStore.register_delivery(
           agent_id,
           self(),
           modes,
           params["work_control"] == "v1",
-          operator_modes
+          operator_modes,
+          params["delivery_policy"] == "v1"
         )
 
       KaoiroServer.InterAgentReplyBasis.register(
@@ -163,6 +166,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
         self(),
         params["inter_agent_reply_basis"] == "v1"
       )
+
+      Phoenix.PubSub.subscribe(KaoiroServer.PubSub, "delivery-policy")
 
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
@@ -187,6 +192,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
           if(params["notice_attribution"] == "v1", do: "v1")
         )
         |> maybe_put_optional_field("delivery", delivery)
+        |> maybe_put_optional_field(
+          "delivery_policy",
+          if(params["delivery_policy"] == "v1", do: "v1")
+        )
         |> maybe_put_optional_field(
           "inter_agent_delivery_incarnation",
           if(delivery != nil, do: DeliveryStates.incarnation(agent_id))
@@ -307,6 +316,29 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
+  def handle_info({:delivery_policy_refresh, id}, socket) do
+    if id == socket.assigns.agent_id, do: push_delivery_policy(socket)
+    {:noreply, socket}
+  end
+
+  defp push_delivery_policy(socket) do
+    id = socket.assigns.agent_id
+    state = KaoiroServer.DeliveryPolicyAdmission.refresh(id)
+
+    case {state.row, state.owner} do
+      {%{revision: revision, policy: policy}, %{owner: owner, support: true}}
+      when owner == self() ->
+        push(socket, "delivery_policy", %{
+          "version" => "0",
+          "revision" => revision,
+          "policy" => Atom.to_string(policy)
+        })
+
+      _ ->
+        :ok
+    end
+  end
+
   defp after_join_handshake(socket) do
     agent_id = socket.assigns.agent_id
     transition_id = socket.assigns.transition_id
@@ -366,6 +398,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           :ok
       end
 
+      push_delivery_policy(socket)
       push_permission_sync(socket, agent_id)
 
       push_persona_sync(socket, agent_id)
@@ -576,8 +609,32 @@ defmodule KaoiroServerWeb.WrapperChannel do
     handle_wrapper_in(event, payload, socket)
   end
 
+  defp handle_wrapper_in("delivery_policy_applied", payload, socket) do
+    id = socket.assigns.agent_id
+
+    with %{"version" => "0", "revision" => revision} when map_size(payload) == 2 <- payload,
+         true <- KaoiroServer.DeliveryPolicies.State.revision?(revision),
+         {:ok, %{revision: ^revision}} <- KaoiroServer.DeliveryPolicies.get(id),
+         :ok <- WorkStore.acknowledge_policy(id, self(), revision) do
+      _ = KaoiroServer.DeliveryPolicyAdmission.refresh(id)
+      {:reply, :ok, socket}
+    else
+      _ -> {:reply, {:error, %{reason: "policy_unconfirmed"}}, socket}
+    end
+  end
+
   defp handle_wrapper_in("envelope", envelope, socket) do
     agent_id = socket.assigns.agent_id
+
+    envelope =
+      case envelope do
+        %{"ext" => ext} when is_map(ext) ->
+          Map.put(envelope, "ext", Map.delete(ext, "delivery_policy"))
+
+        _ ->
+          envelope
+      end
+
     {envelope, dropped_model?} = drop_oversized_directory_model(envelope)
 
     if dropped_model? do
@@ -1373,8 +1430,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # except that `inter_agent_message` no longer reaches it (see
   # `accept_inter_agent/6`).
   defp store_and_broadcast(envelope, agent_id, received_at, socket) do
+    envelope =
+      if envelope["type"] in ["state_change", "permission_request", "question_request"] do
+        view = KaoiroServer.DeliveryPolicyAdmission.snapshot(agent_id).view
+        Map.put(envelope, "ext", Map.put(Map.get(envelope, "ext", %{}), "delivery_policy", view))
+      else
+        envelope
+      end
+
     case store(envelope) do
       :ok ->
+        if envelope["type"] in ["state_change", "permission_request", "question_request"],
+          do:
+            AgentStates.overlay_delivery_policy(
+              agent_id,
+              get_in(envelope, ["ext", "delivery_policy"])
+            )
+
         # G1: record only after validate / preflight / store have all
         # accepted the envelope. In particular an orphan reply must not
         # consume an AgentActivity entry merely because it reached the
@@ -3152,14 +3224,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
        ) do
     requested = payload["delivery_intent"] || "normal"
 
-    recipient_modes =
-      try do
-        {:ok, WorkStore.modes(recipient)}
-      catch
-        :exit, _ -> :unavailable
-      end
-
-    modes = if match?({:ok, _}, recipient_modes), do: elem(recipient_modes, 1)
+    policy = KaoiroServer.DeliveryPolicyAdmission.snapshot(recipient)
+    modes = if policy.owner, do: policy.owner.modes
+    recipient_modes = if policy.owner, do: {:ok, modes}, else: :unavailable
 
     base = %{requested: requested, granted: requested}
 
@@ -3213,6 +3280,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
         true ->
           {granted, reason}
       end
+
+    {granted, reason} =
+      if requested != "normal" and policy.denial != nil,
+        do: {"normal", policy.denial},
+        else: {granted, reason}
 
     {granted, reason} =
       if granted == "early" do

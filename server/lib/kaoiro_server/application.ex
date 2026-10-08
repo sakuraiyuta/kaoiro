@@ -109,6 +109,7 @@ defmodule KaoiroServer.Application do
       # Lets operator-driven restore work after a server restart when
       # AgentStates is empty.
       KaoiroServer.AgentDirectory,
+      KaoiroServer.DeliveryPolicies,
       # Restart-surviving user identity ledger — user_id → {kind,
       # display_name} (issue #187, ADR-0050 D1 Phase A). Resolved from
       # OAuth login / shared-token login before either writes its

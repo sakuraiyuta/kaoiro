@@ -191,7 +191,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # pick and is operator-only. `status_line_snapshot` is pushed straight
     # from the join and needs no interception.
     "status_line",
-    "status_line_settings"
+    "status_line_settings",
+    "delivery_policy_changed"
   ])
 
   # Every server -> client event must leave through `push_versioned/3`.
@@ -205,7 +206,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     session_reset_started session_reset_completed session_reset_failed
     work_changed work_scope_overlap
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
-    status_line_snapshot status_line status_line_settings
+    status_line_snapshot status_line status_line_settings delivery_policy_changed
   ))
 
   @join_snapshot_events [
@@ -327,6 +328,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     agents =
       states
       |> Enum.flat_map(fn {id, envelope} ->
+        envelope = policy_snapshot_envelope(id, envelope)
+
         case sanitize_envelope_for(role, envelope) do
           :drop -> []
           {:ok, sanitized} -> [{id, sanitized}]
@@ -544,7 +547,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # envelope. One AgentStates call per viewer per event; this must never move
   # onto a per-envelope path (issues #148, #160). Any other role gets nothing.
   @impl true
-  def handle_out("status_line", %{"agent_id" => agent_id} = payload, socket) do
+  def handle_out(event, %{"agent_id" => agent_id} = payload, socket)
+      when event in ["status_line", "delivery_policy_changed"] do
     visible? =
       case socket.assigns[:role] do
         role when role in @operator_capable_roles ->
@@ -557,7 +561,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
           false
       end
 
-    if visible?, do: push_versioned(socket, "status_line", payload)
+    if visible?, do: push_versioned(socket, event, payload)
     {:noreply, socket}
   end
 
@@ -647,20 +651,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
     with :ok <- reject_reserved_session_command(payload),
          :ok <- guard_against_reset_pending(role, payload),
          :ok <- valid_operator_intent(payload["delivery_intent"]) do
-      payload =
-        if Map.has_key?(payload, "delivery_intent") do
-          payload
-        else
-          Map.put(payload, "delivery_intent", default_operator_intent(payload["agent_id"]))
-        end
-
-      relay(
-        socket,
-        payload,
-        "instruction",
-        [{"text", &valid_instruction_text?/1}],
-        role
-      )
+      with :ok <- require_operator(role, payload, "instruction", "relaying"),
+           {:ok, agent_id} <- fetch_agent_id(payload),
+           :ok <- check_keys(payload, [{"text", &valid_instruction_text?/1}]),
+           {intent, reason} =
+             KaoiroServer.DeliveryPolicyAdmission.operator_intent(
+               agent_id,
+               payload["delivery_intent"]
+             ),
+           relayed =
+             payload
+             |> Map.delete("downgrade_reason")
+             |> Map.put("delivery_intent", intent)
+             |> wrapper_relay_payload(),
+           :ok <- check_relay_size(relayed) do
+        KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "instruction", relayed)
+        reply = %{"delivery_intent" => intent}
+        reply = if reason, do: Map.put(reply, "downgrade_reason", reason), else: reply
+        {:reply, {:ok, reply}, socket}
+      else
+        {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+      end
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
@@ -907,6 +918,51 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("set_delivery_policy", payload, socket) do
+    with :ok <- require_operator(socket, payload, "set_delivery_policy"),
+         :ok <- check_relay_size(payload),
+         %{"version" => "0", "agent_id" => _, "policy" => policy, "expected_revision" => expected}
+         when map_size(payload) == 4 <- payload,
+         true <-
+           policy in ["on", "off"] and KaoiroServer.DeliveryPolicies.State.expected?(expected),
+         {:ok, agent_id} <- known_policy_agent(payload),
+         {:ok, row} <-
+           AgentAcceptance.run(agent_id, :set_delivery_policy, fn ->
+             with :ok <- require_operator_role(current_role(socket)) do
+               KaoiroServer.DeliveryPolicies.compare_and_set(
+                 agent_id,
+                 if(policy == "on", do: :on, else: :off),
+                 expected
+               )
+             end
+           end) do
+      _ = KaoiroServer.DeliveryPolicyAdmission.refresh(agent_id)
+      {:reply, {:ok, %{"revision" => row.revision, "status" => "pending"}}, socket}
+    else
+      {:error, :revision_conflict, row} ->
+        {:reply,
+         {:error,
+          %{
+            "reason" => "revision_conflict",
+            "current_revision" => if(row, do: row.revision, else: 0),
+            "policy" => if(row, do: Atom.to_string(row.policy), else: "unknown")
+          }}, socket}
+
+      {:error, reason}
+      when reason in [
+             :forbidden,
+             :unknown_agent,
+             :policy_unknown,
+             :persistence_failed,
+             :revision_exhausted
+           ] ->
+        {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+
+      _ ->
+        {:reply, {:error, %{reason: "invalid_payload"}}, socket}
     end
   end
 
@@ -1207,6 +1263,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
          {:ok, engine} <- fetch_allowed_engine(host, payload),
          :ok <- validate_antigravity_approval(engine, payload),
+         :ok <- validate_launch_policy(payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
@@ -1238,12 +1295,31 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # push reads a not-yet-committed entry as `nil` — see `record/4`'s
       # own doc.
       AgentDirectory.record(agent_id, persona["id"], display_name)
-      KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
-      # Seed the cwd now so restore works even if the wrapper never reports a
-      # statusline cwd (#22, ADR-0014): the real session_id arrives later and
-      # is preserved alongside this cwd (SessionPointers keeps non-nil fields).
-      SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
-      {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
+
+      explicit =
+        case payload["delivery_policy"] do
+          "on" -> :on
+          "off" -> :off
+          _ -> nil
+        end
+
+      seed =
+        KaoiroServer.DeliveryPolicies.State.seed(
+          explicit,
+          Map.get(host, :in_flight_defaults, %{}),
+          engine || "claude-code"
+        )
+
+      case KaoiroServer.DeliveryPolicies.ensure(agent_id, seed) do
+        {:ok, _} ->
+          KaoiroServerWeb.Endpoint.broadcast("runner:#{host_id}", "spawn", spawn_payload)
+          SessionPointers.record(agent_id, nil, cwd, engine || "claude-code")
+          {:reply, {:ok, %{"agent_id" => agent_id}}, socket}
+
+        {:error, reason} ->
+          _ = AgentActivity.resolve_transition(agent_id, request_id, false)
+          {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+      end
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -1843,6 +1919,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       SessionPointers.delete(agent_id)
       KaoiroServer.PermissionModes.delete(agent_id)
       PermissionSettings.delete(agent_id)
+      _ = KaoiroServer.DeliveryPolicies.delete(agent_id)
       # ADR-0051 D3-5: no IA ledger to purge any more. The deleted
       # agent's own pane goes with its AgentStates entry; a peer's pane
       # keeps its copies, which is that peer's display and its own
@@ -2078,13 +2155,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
     |> Map.put("version", "0")
   end
 
-  # A recipient's operator-input declaration, when present, decides the
-  # default alone; otherwise the inter-agent declaration does.
-  defp default_operator_intent(agent_id) do
-    modes =
-      KaoiroServer.WorkStore.operator_modes(agent_id) || KaoiroServer.WorkStore.modes(agent_id)
+  defp policy_snapshot_envelope(id, envelope) do
+    if is_map(get_in(envelope, ["ext", "delivery_policy"])) do
+      view = KaoiroServer.DeliveryPolicyAdmission.snapshot(id).view
+      Map.put(envelope, "ext", Map.put(envelope["ext"], "delivery_policy", view))
+    else
+      envelope
+    end
+  end
 
-    if modes && modes["early"] != "none", do: "early", else: "normal"
+  defp known_policy_agent(payload) do
+    fetch_restorable_agent_id(payload)
+  catch
+    :exit, _ -> {:error, :policy_unknown}
+  end
+
+  defp validate_launch_policy(payload) do
+    if not Map.has_key?(payload, "delivery_policy") or payload["delivery_policy"] in ["on", "off"],
+      do: :ok,
+      else: {:error, :invalid_payload}
   end
 
   defp valid_operator_intent(nil), do: :ok

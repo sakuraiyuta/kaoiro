@@ -62,6 +62,12 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_PERMISSION_SETTINGS_PATH",
       default_file: "permission_settings.dets"
     },
+    %{
+      store: "delivery_policies",
+      config_key: :delivery_policies_path,
+      env: "KAOIRO_DELIVERY_POLICIES_PATH",
+      default_file: "delivery_policies.dets"
+    },
     # issue #106 visibility data must survive a full container recreation:
     # the cutoff it records is compared against ingress stamps the wrapper
     # hosts replay back after a restart (ADR-0051 D3-4). fsync-gated before

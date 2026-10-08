@@ -241,9 +241,10 @@ defmodule KaoiroServerWeb.RunnerChannel do
        when is_list(cwd_allowlist) do
     with {:ok, policy} <- parse_policy(payload),
          {:ok, capabilities} <- parse_capabilities(payload),
-         {:ok, build_info} <- parse_build_info(payload) do
+         {:ok, build_info} <- parse_build_info(payload),
+         {:ok, defaults} <- parse_in_flight_defaults(payload) do
       attrs =
-        %{policy: policy, cwd_allowlist: cwd_allowlist}
+        %{policy: policy, cwd_allowlist: cwd_allowlist, in_flight_defaults: defaults}
         |> Map.merge(capabilities)
         |> Map.merge(build_info)
         |> Map.merge(antigravity_cli_version_attrs(payload))
@@ -253,6 +254,15 @@ defmodule KaoiroServerWeb.RunnerChannel do
   end
 
   defp parse_register(_payload), do: {:error, :invalid_register}
+
+  defp parse_in_flight_defaults(payload) do
+    value = Map.get(payload, "in_flight_defaults", %{})
+
+    if is_map(value) and
+         Enum.all?(value, fn {engine, enabled} ->
+           engine in ~w(claude-code codex antigravity) and is_boolean(enabled)
+         end), do: {:ok, value}, else: {:error, :invalid_register}
+  end
 
   defp antigravity_cli_version_attrs(payload) do
     case Map.fetch(payload, "antigravity_cli_version") do

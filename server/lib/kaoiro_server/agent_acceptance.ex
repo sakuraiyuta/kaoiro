@@ -91,7 +91,8 @@ defmodule KaoiroServer.AgentAcceptance do
 
   defp via(agent_id), do: {:via, Registry, {@registry, agent_id}}
 
-  @type command :: :set_permission | :session_reset | :session_reset_request
+  @type command ::
+          :set_permission | :set_delivery_policy | :session_reset | :session_reset_request
 
   @doc """
   Runs `fun` (a 0-arity function) to completion on `agent_id`'s own worker
@@ -103,7 +104,12 @@ defmodule KaoiroServer.AgentAcceptance do
   @spec run(String.t(), command(), (-> term())) :: term()
   def run(agent_id, command, fun)
       when is_binary(agent_id) and
-             command in [:set_permission, :session_reset, :session_reset_request] and
+             command in [
+               :set_permission,
+               :set_delivery_policy,
+               :session_reset,
+               :session_reset_request
+             ] and
              is_function(fun, 0) do
     pid = ensure_worker(agent_id)
     GenServer.call(pid, {:run, command, fun}, @run_timeout_ms)
@@ -117,6 +123,7 @@ defmodule KaoiroServer.AgentAcceptance do
       {:error, availability_reason(command)}
   end
 
+  defp availability_reason(:set_delivery_policy), do: :policy_unknown
   defp availability_reason(:set_permission), do: :persistence_failed
   defp availability_reason(:session_reset), do: :timeout
   defp availability_reason(:session_reset_request), do: :agent_busy

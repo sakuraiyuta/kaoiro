@@ -5,7 +5,7 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
   # cwd / model / context / rate_limits / slash_commands and any future
   # additions, all operator-only.
   def sanitize(%{"type" => "state_change"} = envelope) do
-    {:ok, Map.delete(envelope, "ext")}
+    {:ok, policy_only(envelope)}
   end
 
   # `permission_request` carries request_id / tool_name / input — all
@@ -19,7 +19,7 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
      |> Map.put("type", "state_change")
      |> Map.put("state", "waiting_permission")
      |> Map.put("payload", %{})
-     |> Map.delete("ext")}
+     |> policy_only()}
   end
 
   # `question_request` carries the AskUserQuestion questions (operator-only,
@@ -32,7 +32,7 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
      |> Map.put("type", "state_change")
      |> Map.put("state", "waiting_question")
      |> Map.put("payload", %{})
-     |> Map.delete("ext")}
+     |> policy_only()}
   end
 
   # `session_boundary` marker (ADR-0036 F3, phase-17 17-7). Keep the
@@ -56,4 +56,32 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
   def sanitize(%{"type" => "inter_agent_message"}), do: :drop
 
   def sanitize(_envelope), do: :drop
+
+  defp policy_only(envelope) do
+    stripped = Map.delete(envelope, "ext")
+
+    policy =
+      case Map.get(envelope, "ext") do
+        ext when is_map(ext) -> ext["delivery_policy"]
+        _ -> nil
+      end
+
+    case policy do
+      %{
+        "policy" => policy,
+        "confirmed" => confirmed,
+        "pending" => pending,
+        "wrapper_support" => support
+      } = view
+      when policy in ["on", "off", "unknown"] and is_boolean(confirmed) and is_boolean(pending) and
+             is_boolean(support) ->
+        safe =
+          Map.take(view, ~w(policy revision applied_revision confirmed pending wrapper_support))
+
+        Map.put(stripped, "ext", %{"delivery_policy" => safe})
+
+      _ ->
+        stripped
+    end
+  end
 end

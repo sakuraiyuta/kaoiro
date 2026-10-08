@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-10-03
+last_updated: 2026-10-09
 related: [deployment]
 ---
 
@@ -50,7 +50,7 @@ the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_S
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
 `KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
-`KAOIRO_WORK_STORE_PATH` /
+`KAOIRO_WORK_STORE_PATH` / `KAOIRO_DELIVERY_POLICIES_PATH` /
 `KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` / `KAOIRO_QUAGMIRE_SETTINGS_PATH` /
 `KAOIRO_AGENT_STATUS_LINES_PATH` /
 `KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
@@ -100,3 +100,19 @@ not repeated here.
 - [Multi-host deployment architecture](../../architecture/deployment.md).
 - [Server install runbook](../../operations/server-install.md).
 - [Network and login runbook](../../operations/network-and-login.md).
+
+`KAOIRO_DELIVERY_POLICIES_PATH=/var/lib/kaoiro/delivery_policies.dets` is required
+for the per-agent delivery policy store. Its canonical registry entry feeds
+runtime configuration, the sample env and deployment backup checks. The file
+holds deletable policy rows and permanent revision allocators; agent deletion
+revokes first and removes the row while retaining its allocator. Directory and
+file modes are 700/600. A corrupt or unavailable file stays intact and yields
+unknown policy rather than a fresh on row. Restart after correcting the fault
+reopens it and purges revoked rows without removing their counters.
+
+Both matching and explicitly accepted new-store env checks require the
+[placement gate](../../operations/server-update-and-rollback.md#delivery-policy-store-placement)
+before maintenance: the actual constructor's effective path must lie on the
+writable named state volume backed up for this transaction, with no deeper
+mount or symlink. Image VOLUME at or below the state target is refused even
+with an explicit compose override.

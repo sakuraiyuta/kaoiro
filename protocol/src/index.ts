@@ -6,6 +6,8 @@
 // types stay in each wrapper, not here.
 
 export * from "./work.js";
+export * from "./delivery-policy.js";
+import type { DeliveryPolicyView, InFlightDefaults } from "./delivery-policy.js";
 import type { DeliveryAuthority, DeliveryIntent, DeliveryModes, WorkControl, WorkControlResult, WorkStamp } from "./work.js";
 
 /** State set v0 (protocol.md), plus `sending` which a wrapper raises
@@ -1020,6 +1022,7 @@ export interface DisconnectExt {
 export interface EnvelopeExt extends Record<string, unknown> {
   disconnect?: DisconnectExt;
   permission_control?: PermissionControlExt;
+  delivery_policy?: DeliveryPolicyView;
   context_budget?: ContextBudgetExt;
   pending_model?: string;
   pending_effort?: string;
@@ -1449,6 +1452,7 @@ export interface DirectoryResult {
  *    (ADR-0029) owns display metadata. Emits a deprecation warning at the
  *    server; scheduled for removal in the next major release. */
 export interface RunnerRegister {
+  in_flight_defaults?: InFlightDefaults;
   version: "0";
   host_id: string;
   personas?: WirePersona[];

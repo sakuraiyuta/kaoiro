@@ -1,13 +1,13 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-09
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 
 # Channels and directional messages
 
-### Directional message types (v0 settled)
+## Directional message types (v0 settled)
 
 Channel event names and contents. Topics are `wrapper:<agent_id>` for wrappers and
 `agents:lobby` for clients.
@@ -174,3 +174,62 @@ full topic index.
 - [Envelope contract](envelope.md).
 - [Event types and payloads](events.md).
 - [Versioning policy](versioning.md).
+
+## Per-agent delivery policy
+
+`set_delivery_policy` on `agents:lobby` accepts exactly
+`{version: "0", agent_id, policy: "on" | "off", expected_revision}` from a
+server-authenticated operator or admin. The role is checked again inside
+per-agent acceptance; payload roles confer no authority. A known disconnected
+agent may acquire its first row with expected revision 0. Unknown agents and
+malformed, floating-point, negative or unsafe revisions are refused.
+
+Accepted writes return `{revision, status: "pending"}` after counter and row
+sync. A conflict returns `revision_conflict`, `current_revision` and the
+current policy. Other closed write reasons are `forbidden`, `invalid_payload`,
+`unknown_agent`, `policy_unknown`, `persistence_failed` and
+`revision_exhausted`. Setting the same value again still advances revision.
+For a supporting wrapper this temporarily produces `policy_unconfirmed`
+until that incarnation acknowledges the new revision; C2 can show pending.
+An accepted reply does not acknowledge wrapper application.
+
+A wrapper declares `delivery_policy: "v1"` in its join request. Only that exact
+support declaration is echoed. After subscription the server pushes
+`delivery_policy {version: "0", revision, policy}` and repeats the latest
+readable row after a durable change, including a change whose client reply
+was lost. The wrapper replies with `delivery_policy_applied {version: "0",
+revision}` on its authenticated topic. Only the current supporting owner and
+current stored revision can confirm. Rejoin clears the transient ack; no owner
+or applied revision is persisted. Older wrappers get no echo, push or ack
+requirement. A current old owner with stored on is the sole no-ack exception;
+an absent registration is not a legacy owner.
+
+Server-authored `ext.delivery_policy` and the versioned
+`delivery_policy_changed {agent_id, delivery_policy}` event expose policy,
+revision when known, applied revision when known, `confirmed`, `pending` and
+`wrapper_support`. Viewer snapshots retain only this safe ext field; live
+updates use the existing agent-visibility predicate. Wrapper ext cannot author
+this field. C2 owns the UI control and its viewer guard.
+
+Unknown, off and supporting-but-unconfirmed deny non-normal grants with,
+respectively, `policy_unknown`, `recipient_policy_off` and
+`policy_unconfirmed`. Operator instruction replies identify the resulting
+`delivery_intent` and a `downgrade_reason` when clamped to normal. Explicit
+intent obeys both policy and mechanism checks; operator instruction has no
+yield mechanism and queues that intent. An operator declaration of none
+remains authoritative over the IA declaration. IA retains requested intent,
+returns the final normal grant/reason, reserves no early quota on denial and
+drops any unused yield token. Ordinary delivery continues during store outage.
+The ordering and work-authority rules of the fixed implementation base still
+apply after policy permission; policy never authorizes an otherwise refused send.
+
+Fresh spawn optionally accepts `delivery_policy: "on" | "off"`, consumed by
+the server before runner broadcast. The seed precedence is explicit choice,
+registered engine default, then on. Runner register optionally declares
+`in_flight_defaults`, a map from canonical `claude-code`, `codex`,
+`antigravity` keys to strict booleans. Legacy authenticated join backfills on;
+existing rows, including off, survive restore, reset and re-registration.
+The C1W wrapper implementation and C3 producer/flag retirement are separate
+children of [the rollout plan](../../plans/issue-463-default-inflight-delivery.md).
+Server-only enforcement does not retract a grant already delivered to an old
+wrapper. A server rollback cannot enforce policy rows it does not understand.
