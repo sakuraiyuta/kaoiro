@@ -173,20 +173,31 @@ fail() {
   elif [ -n "${probe:-}" ]; then rm -rf -- "$probe"; fi
   exit 1
 }
-# one strict grammar for behaviour-variable lines, used to copy AND to check
-names='KAOIRO_(CLAUDE|CODEX|ANTIGRAVITY)_[A-Z0-9_]+|KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS'
+# Env names, by rows of runner/src/behaviour-settings.ts. Keep these in step with that file.
+# carry: the runner validates them at start with the fixture's capabilities (claude-code only)
+carry='KAOIRO_CLAUDE_[A-Z0-9_]+|KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS|KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS'
+# blind: validated only for an enabled engine, which the fixture does not enable
+blind='KAOIRO_CODEX_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|OPERATOR_STEER|APPROVAL_AXIS)|KAOIRO_ANTIGRAVITY_(TURN_WATCHDOG_(INACTIVITY|ABORT_GRACE)_MS|TOOL_TIMEOUT_MS|EPOCH_IDLE_MS)'
+# paths: would make the shim read other settings than the default directory's
+paths='KAOIRO_RUNNER_(DIR|CONFIG|ENV)'
+# one strict grammar for the carried lines, used to copy AND to check
 val='[A-Za-z0-9._:/+-]*'; dq='"'; sq="'"
-assign="($names)=($val|$dq$val$dq|$sq$val$sq)"
+assign="($carry)=($val|$dq$val$dq|$sq$val$sq)"
+envlines() { grep -Ev '^[[:blank:]]*#' "$prod/runner.env"; }
 # --- preconditions (nothing has started yet)
 printf '%s' "$rev" | grep -Eq '^[0-9a-f]{40}$' || fail "release id is not a clean 40-hex id (-dirty fails)"
 if [ ! -r "$prod/runner.config.json" ] || [ ! -r "$prod/runner.env" ]; then fail "production config/env unreadable"; fi
-unit_env=$(systemctl --user show -p Environment --value "$svc") || fail "cannot read the unit's Environment"
-[ -z "$unit_env" ] || fail "the unit sets Environment=; read it by hand, since it can change the paths and Node this gate assumes"
+unit_env=$(systemctl --user show -p Environment -p EnvironmentFiles -p PassEnvironment --value "$svc") || fail "cannot read the unit's environment properties"
+[ -z "$unit_env" ] || fail "the unit sets Environment=, EnvironmentFile= or PassEnvironment=; read them by hand, since they can change the paths and Node this gate assumes"
 sh -n "$prod/runner.env" 2>/dev/null || fail "production env is not valid shell"
 [ -z "$(ss -ltnH "sport = :$port")" ] || fail "port $port is not free"
-# every non-comment line that names a behaviour variable must be a strict assignment
-loose=$(grep -E "$names" "$prod/runner.env" | grep -Ev '^[[:blank:]]*#' | grep -Evc "^(export +)?$assign\$")
-[ "$loose" -eq 0 ] || fail "$loose production env line(s) name a behaviour variable outside NAME=VALUE (value $val, optionally in one pair of quotes)"
+n=$(envlines | grep -Ec "$paths")
+[ "$n" -eq 0 ] || fail "$n production env line(s) name KAOIRO_RUNNER_DIR/CONFIG/ENV; production does not run the default settings this gate reads"
+n=$(envlines | grep -Ec "$blind")
+[ "$n" -eq 0 ] || fail "$n production env line(s) set a Codex or Antigravity variable that this gate cannot validate (the fixture enables only claude-code); move it to its runner.config.json key, where it is validated"
+# every non-comment line that names a carried variable must be a strict assignment
+n=$(envlines | grep -E "$carry" | grep -Evc "^(export +)?$assign\$")
+[ "$n" -eq 0 ] || fail "$n production env line(s) name a carried variable outside NAME=VALUE (value $val, optionally in one pair of quotes)"
 # production Node: sourced from the user manager's PATH, the way the unit's shim resolves it (prints a path only)
 mgr_path=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
 [ -n "$mgr_path" ] || fail "cannot read PATH from the user manager"
@@ -201,13 +212,13 @@ mkdir "$probe/conf" "$probe/home" "$probe/work"
   Object.assign(c,{host_id:h,server_url:u,cwd_allowlist:[w],capabilities:["claude-code"]});
   fs.writeFileSync(d,JSON.stringify(c),{mode:0o600})' \
   "$prod/runner.config.json" "$probe/conf/runner.config.json" "$host" "$url" "$probe/work" || fail "fixture config"
-# --- fixture env: a dummy token + the strict behaviour assignments (never token/PATH/CODEX_HOME/URL)
+# --- fixture env: a dummy token + the strict carried assignments (never token/PATH/CODEX_HOME/URL)
 { printf 'KAOIRO_RUNNER_TOKEN=dummy\n'
   grep -E "^(export +)?$assign\$" "$prod/runner.env" | sed -E 's/^export +//'; } > "$probe/conf/runner.env"
 chmod 600 "$probe/conf/runner.env"
 if grep -Evq "^(KAOIRO_RUNNER_TOKEN=dummy|$assign)\$" "$probe/conf/runner.env"; then
   fail "fixture env holds a line outside the strict grammar"; fi
-echo "behaviour variables copied (names only):"
+echo "env variables copied and validated by the runner at start (names only):"
 sed -n -E 's/^([A-Z0-9_]+)=.*/  \1/p' "$probe/conf/runner.env" | grep -v '^  KAOIRO_RUNNER_TOKEN$'
 # --- start, with the environment fixed
 env -i HOME="$probe/home" PATH=/usr/bin:/bin KAOIRO_NODE="$node_bin" \
@@ -244,44 +255,66 @@ What the block fixes:
   values at the real entry point (shim, verifier, `cli.js`). The host id is
   random and never collides with a real host, and the server URL points at a
   closed local port, so nothing registers with the real server.
-- **Env.** The fixture env holds a dummy token and the production behaviour
-  variables, copied by name. One strict line grammar is used to copy and to
-  check: `NAME=VALUE` (optionally after `export`), with `VALUE` limited to
-  `[A-Za-z0-9._:/+-]*`, optionally inside one pair of matching quotes. A
-  production line that names a behaviour variable in any other form (a `;`, a
-  `$(...)`, leading blanks, two assignments on one line) stops the gate before
-  the start instead of being copied or dropped silently. The token, `PATH`,
-  `CODEX_HOME` and the URL are never copied. The copied names (never values)
-  are printed.
+- **Env.** The fixture env holds a dummy token and the production env
+  variables of `claude-code` and of the runner itself, copied by name:
+  `KAOIRO_CLAUDE_*`, `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` and
+  `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS`. The runner validates each of them that
+  has a row in `runner/src/behaviour-settings.ts`. One strict line grammar is
+  used to copy and to check: `NAME=VALUE` (optionally after `export`), with
+  `VALUE` limited to `[A-Za-z0-9._:/+-]*`, optionally inside one pair of
+  matching quotes. A production line that names such a variable in any other form (a
+  `;`, a `$(...)`, leading blanks, two assignments on one line) stops the gate
+  before the start instead of being copied or dropped silently. The token,
+  `PATH`, `CODEX_HOME` and the URL are never copied. The copied names (never
+  values) are printed.
+- **Variables the gate cannot check.** The runner validates a Codex or
+  Antigravity behaviour variable only for an enabled engine, and the fixture
+  enables only `claude-code`. A production env line that sets one of them stops
+  the gate, with the advice to move it to its `runner.config.json` key: config
+  blocks are validated for every engine, so the gate does check them there. A
+  line that names `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_CONFIG` or
+  `KAOIRO_RUNNER_ENV` also stops the gate, because production would then read
+  other settings than the default directory's. The three name lists at the top
+  of the block follow the rows of `runner/src/behaviour-settings.ts`; when a row
+  is added or changed there, update them, as with the path list in section 1.
 - **Node.** Resolved the way the shim does after sourcing `runner.env`, from the
   user manager's `PATH` (`systemctl --user show-environment`) rather than the
   operator's shell. If that resolves to a version-managed shim that cannot run
   with an empty `HOME`, the verifier exits 78 and the gate stops; give such a
   host `KAOIRO_NODE` as an absolute path in `runner.env`.
 - **Preconditions.** A clean 40-hex release id, readable production config and
-  env, a unit with no `Environment=` of its own (otherwise the default paths may
-  not be what it runs), a free port, an env file that is valid shell.
+  env, a unit with no `Environment=`, `EnvironmentFile=` or `PassEnvironment=`
+  of its own (any of them can change the default paths or Node that the gate
+  assumes), a free port, an env file that is valid shell.
 - **Checks.** The start must end by `timeout` (exit 124) with exactly one
   `runner: host=<probe host> rev=<id> connecting to <closed port URL>` line. A
   failure keeps the probe's stderr in the throwaway directory (it can quote
   config values) and prints only its location; read it locally and delete the
   directory. Never paste it into a tracker unreviewed.
 
-The guarantee that the start cannot reach a real server comes from the strict
-line grammar and the fixture-content check, before the start. The post-start
-line check is the second layer. `env -i` and the explicit URL are not the
-guarantee: the shim sources the env file, and an assignment there overrides the
-explicit environment.
+Two properties are guarded, by different checks:
 
-What the gate covers: layout, shim, verifier, acceptance of production's config
-and env by the candidate's loader, and Node. What it does not cover:
+- **The start cannot be redirected by a production line.** The strict copy
+  alone is enough: a line such as `NAME=0; KAOIRO_RUNNER_SERVER_URL=...` is not
+  copied. The fixture-content check overlaps it, and the post-start line check
+  is the backstop. `env -i` and the explicit URL are not the guarantee: the
+  shim sources the env file, and an assignment there overrides the explicit
+  environment.
+- **No line the gate claims to check is dropped silently.** Only the
+  production-line checks (the strict-assignment check and the stops under
+  "Variables the gate cannot check") guard this. Without them a near-miss line
+  is not copied and the gate passes without having validated it.
+
+What the gate covers: layout, shim, verifier, every config block, the env
+variables of `claude-code` and of the runner itself (the copied ones above), and
+Node. What it does not cover:
 
 - Native probes (Codex auth, `agy`), skipped on purpose because the fixture
   enables only the `claude-code` capability. The runner neither reads nor
   validates a behaviour variable of an engine that is not in `capabilities`
   ([Behaviour settings](../reference/configuration/runner.md#behaviour-settings)),
-  so the Codex and Antigravity variables are copied but are validated first at
-  step C1 of section 4.
+  which is why such an env variable stops the gate instead of being passed
+  unchecked.
 - Wrapper spawn, a real connection and registration, and any model turn. Those
   are what C2 and C3 check.
 - macOS: the block uses `ss` and `systemctl --user`, and was measured on Linux
@@ -330,9 +363,23 @@ and the restart kills the old wrappers (B7).
   The count must be 0. It matches wrappers launched from a release, not the
   `KAOIRO_WRAPPER_DEV` path. A surviving old wrapper runs the old code under the
   new runner and reconnects to the server, so the premise is broken: stop the
-  canary procedure and report. Also confirm that no agent has come back by
-  itself. This is read-only observation of the unit's own cgroup; do not list
-  and kill host processes.
+  canary procedure and report. The same count also shows whether any agent has
+  come back by itself, since a restored agent's wrapper appears in the unit's
+  cgroup too. Run it once the journal shows the runner's
+  `runner: host=... connecting to ...` line, and again just before C2. Two more
+  observations, both of which must come out clean: the runner has received no
+  `spawn` since this start, and every agent tile is in the offline section of
+  the dashboard.
+
+  ```sh
+  journalctl --user -u kaoiro-runner --no-pager \
+    --since "$(systemctl --user show -p ActiveEnterTimestamp --value kaoiro-runner)" \
+    | grep -c 'phoenix receive:.*spawn'
+  ```
+
+  This must print 0 (the runner logs each `spawn` it receives). These are
+  read-only observations of the unit's own cgroup and journal; do not list and
+  kill host processes.
 - **C2.** Restore the canary persona alone from its offline tile (the
   individual restore of ADR-0030). A change that touches the path of a brand-new
   session also needs one fresh spawn. For a change that affects several engines
