@@ -8,6 +8,10 @@ defmodule KaoiroServerWeb.ChannelCase do
   `assert_receive_timeout`, because many channel replies wait on a DETS
   fsync whose tail passes 100 ms on a loaded host (issues 477 and 479).
   An explicit fourth argument is used as given.
+
+  After each test the process-global stores that channel tests share are
+  reset by `KaoiroServer.TestStores.reset!/0`, so one test's rows cannot be
+  read by the next test that uses the same identity (issue 554).
   """
 
   use ExUnit.CaseTemplate
@@ -76,6 +80,7 @@ defmodule KaoiroServerWeb.ChannelCase do
       Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.TaskStates)
       Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.PlannedDisconnects)
       Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.PlannedDisconnects)
+      KaoiroServer.TestStores.reset!()
     end)
 
     :ok

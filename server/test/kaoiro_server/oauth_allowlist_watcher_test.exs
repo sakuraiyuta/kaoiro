@@ -67,6 +67,22 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
     send(pid, {:file_event, watcher, {path, [:modified]}})
   end
 
+  # Absence checks use an explicit reconcile and a state barrier, not a timed
+  # refute: the reconcile runs inside handle_info, so every broadcast it makes
+  # (including a late one) is in the mailbox once :sys.get_state returns
+  # (issue 554). Timer-path tests keep their own timed checks.
+  defp assert_no_disconnect(pid) do
+    send(pid, :event_reconcile)
+    _ = :sys.get_state(pid)
+    refute_received %Phoenix.Socket.Broadcast{event: "disconnect"}
+  end
+
+  defp assert_no_disconnect(pid, topic) do
+    send(pid, :event_reconcile)
+    _ = :sys.get_state(pid)
+    refute_received %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^topic}
+  end
+
   describe "diff -> targeted disconnect" do
     test "operator -> viewer / 削除 / viewer -> operator が対象 identity topic だけを disconnect する" do
       path =
@@ -91,9 +107,9 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       pid = start_watcher(path: path)
       # First boot: seed only, no live socket could exist yet either way.
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
-      File.write!(path, """
+      rewrite!(path, """
       github:ao:operator
       google:demoted-target@example.com:viewer
       google:bystander@example.com:viewer
@@ -102,9 +118,15 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       send_synthetic_event(pid, path)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^demoted}
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^removed}
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^promoted}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^demoted},
+                     TestTimeouts.out_of_band()
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^removed},
+                     TestTimeouts.out_of_band()
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^promoted},
+                     TestTimeouts.out_of_band()
+
       refute_received %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^bystander}
       refute_received %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^unchanged}
     end
@@ -114,12 +136,12 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       target = subscribe("github", "ao")
 
       pid = start_watcher(path: path)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
-      File.write!(path, "github:ao:operator\n\n# comment changed\n\n\n")
+      rewrite!(path, "github:ao:operator\n\n# comment changed\n\n\n")
       send_synthetic_event(pid, path)
 
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^target}, 100
+      assert_no_disconnect(pid, target)
     end
 
     test "Google は lower-case、GitHub/Nextcloud は大小区別で socket id と一致する" do
@@ -137,9 +159,9 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       nextcloud_target = subscribe("nextcloud", "CaseSensitiveUid")
 
       pid = start_watcher(path: path)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
-      File.write!(path, """
+      rewrite!(path, """
       google:Mixed-Case@Example.com:viewer
       github:CaseSensitive:viewer
       nextcloud:CaseSensitiveUid:viewer
@@ -147,9 +169,14 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       send_synthetic_event(pid, path)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^google_target}
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^github_target}
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^nextcloud_target}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^google_target},
+                     TestTimeouts.out_of_band()
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^github_target},
+                     TestTimeouts.out_of_band()
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^nextcloud_target},
+                     TestTimeouts.out_of_band()
     end
 
     test "shared-token の socket id は対象にならない" do
@@ -158,10 +185,10 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       KaoiroServerWeb.Endpoint.subscribe(token_socket_id)
 
       pid = start_watcher(path: path)
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
       send_synthetic_event(pid, path)
 
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^token_socket_id}, 100
+      assert_no_disconnect(pid, token_socket_id)
     end
   end
 
@@ -171,19 +198,20 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       socket_id = subscribe("github", "ao")
 
       pid = start_watcher(path: path)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
       ref = Process.monitor(pid)
       GenServer.stop(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, TestTimeouts.out_of_band()
 
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
 
       # 同 BEAM 内での再起動(supervisor restart 相当) — :persistent_term
       # の checkpoint は pid の生死と無関係に残っている。
       _pid2 = start_watcher(path: path)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
     end
   end
 
@@ -198,7 +226,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       ref = Process.monitor(pid)
       GenServer.stop(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, TestTimeouts.out_of_band()
 
       refute Process.alive?(fs_pid)
     end
@@ -212,7 +240,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       ref = Process.monitor(pid)
       send(pid, {:file_event, fs_pid, :stop})
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, TestTimeouts.out_of_band()
 
       refute Process.alive?(fs_pid)
     end
@@ -226,7 +254,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       start_watcher(path: path, reconcile_interval_ms: 50)
       refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 30
 
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
 
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
                      TestTimeouts.out_of_band()
@@ -256,9 +284,9 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       # 一致するのでテストとしては両方とも成立する。
       File.mkdir_p!(missing_dir)
       socket_id = subscribe("github", "ao")
-      File.write!(path, "github:ao:operator\n")
+      rewrite!(path, "github:ao:operator\n")
       Process.sleep(80)
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
 
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
                      TestTimeouts.out_of_band()
@@ -282,7 +310,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       _socket_id = subscribe("github", "ao")
 
       pid = start_watcher(path: path, debounce_ms: 60_000, reconcile_interval_ms: 60_000)
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
 
       send_synthetic_event(pid, path)
       %{event_pending: first_ref} = :sys.get_state(pid)
@@ -301,19 +329,21 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       socket_id = subscribe("github", "ao")
 
       pid = start_watcher(path: path)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
       File.rm!(path)
       send(pid, :periodic_reconcile)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
 
       # 同一内容で復旧しても LKG からの黙示復元はせず、nil -> role の
       # addition diff として再度 disconnect する。
-      File.write!(path, "github:ao:operator\n")
+      rewrite!(path, "github:ao:operator\n")
       send(pid, :periodic_reconcile)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
     end
 
     # should-fix (ふじ 2026-08-05): the unreadable-file case above covers
@@ -327,17 +357,19 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       dropped = subscribe("github", "ao")
 
       pid = start_watcher(path: path)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
       # 1 行目 (github:ao:operator) を role フィールドが未知語の malformed
       # 行にする(2 フィールドの `provider:identifier` は role 省略= viewer
       # として有効にパースされてしまうため、malformed にするには role
       # フィールドそのものを不正な値にする必要がある)。2 行目
       # (google:kept) は valid のまま。
-      File.write!(path, "github:ao:not-a-real-role\ngoogle:kept@example.com:viewer\n")
+      rewrite!(path, "github:ao:not-a-real-role\ngoogle:kept@example.com:viewer\n")
       send(pid, :periodic_reconcile)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^dropped}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^dropped},
+                     TestTimeouts.out_of_band()
+
       refute_received %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^kept}
     end
   end
@@ -355,15 +387,15 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       end
 
       pid = start_watcher(path: path, broadcast: failing_once)
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
-      File.write!(path, "github:ao:viewer\n")
+      rewrite!(path, "github:ao:viewer\n")
       send(pid, :periodic_reconcile)
 
-      assert_receive {:broadcast_attempt, ^socket_id}
+      assert_receive {:broadcast_attempt, ^socket_id}, TestTimeouts.out_of_band()
       # The stub never calls the real Endpoint, so no disconnect lands —
       # confirms the broadcast path was actually exercised (not skipped).
-      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
+      assert_no_disconnect(pid)
 
       # Swap in a working broadcast for the retry by pointing the SAME
       # checkpoint at a fresh watcher instance using the real Endpoint —
@@ -375,13 +407,44 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       send(pid, :periodic_reconcile)
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
     end
   end
 
   describe "init/1 fallback" do
     test "path 未設定なら :ignore" do
       assert :ignore = OAuthAllowlistWatcher.init([])
+    end
+  end
+
+  describe "absence barrier and event budget (issue 554)" do
+    test "the barrier catches a late spurious disconnect for a bystander" do
+      path = put_allowlist("github:ao:operator\ngoogle:bystander@example.com:viewer\n")
+      bystander = subscribe("google", "bystander@example.com")
+
+      # Defect under test: the broadcast for the changed identity arrives after
+      # the old 50 ms window, and a bystander is disconnected in the same call.
+      # The sleep is the fault itself, inside the watcher process.
+      late_spurious = fn topic, event, payload ->
+        Process.sleep(150)
+        KaoiroServerWeb.Endpoint.broadcast(topic, event, payload)
+        KaoiroServerWeb.Endpoint.broadcast(bystander, event, payload)
+      end
+
+      pid = start_watcher(path: path, broadcast: late_spurious)
+      rewrite!(path, "github:ao:viewer\ngoogle:bystander@example.com:viewer\n")
+
+      assert_raise ExUnit.AssertionError, fn -> assert_no_disconnect(pid, bystander) end
+    end
+
+    test "an event wait fails with the out_of_band budget in its message" do
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          assert_receive :never, TestTimeouts.out_of_band()
+        end
+
+      assert error.message =~ "no matching message after #{TestTimeouts.out_of_band()}ms"
     end
   end
 end

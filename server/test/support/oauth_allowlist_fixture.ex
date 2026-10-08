@@ -31,4 +31,25 @@ defmodule KaoiroServer.OAuthAllowlistFixture do
 
     path
   end
+
+  @doc """
+  Replaces the allow-list at `path` with `contents` while the watcher may be
+  reading it. The new content goes to a temp file in the same directory,
+  which is then renamed over `path`, so a concurrent reader sees the old or
+  the new file and never a truncated one (issue 554). The temp file is
+  removed if the rename fails.
+  """
+  @spec rewrite!(binary(), binary()) :: :ok
+  def rewrite!(path, contents) do
+    tmp = "#{path}.tmp-#{System.unique_integer([:positive])}"
+
+    try do
+      File.write!(tmp, contents)
+      File.rename!(tmp, path)
+    after
+      _ = File.rm(tmp)
+    end
+
+    :ok
+  end
 end
