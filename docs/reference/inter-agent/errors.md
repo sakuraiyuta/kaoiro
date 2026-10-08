@@ -56,7 +56,7 @@ added later. Treat an unknown code as `api_error`.
 | `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |
 | `timeout` | peer processing timed out (Antigravity: a tool step past the absolute `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` deadline ended the turn with `error_detail: tool_timeout`, [antigravity tools and permissions](../engines/antigravity-tools-permissions.md#tool-children-prompts-disabled-absolute-tool-deadline-issue-350)) | Wait, then retry. |
 | `permission_gate_blocked` | peer reached the permission dispatch deadline before an execution started | Ask the operator to reapply the same sandbox/network values (allocating a new revision), then resend. Never retry automatically. |
-| `interrupted` | peer turn was interrupted | It may be operator-driven; check state before retrying. |
+| `interrupted` | peer turn was interrupted or a queued message was retired before dispatch | It may be operator-driven; check state before retrying. For an Antigravity gate-recovery notice, the queued message was not dispatched; after confirming the peer/conversation state, the sender may retry it. |
 | `reconnecting` | server announced a wrapper restart | Do not escalate; wait for `reconnected`, then retry the same `conversation_id`. |
 | `disconnected` | peer wrapper disconnected; optional `origin` / `reason` identifies the terminal cause | Retry is futile until it returns; escalate. |
 | `stale_turn` | receiver discarded a message whose turn_number was at or below its known maximum (AC9) | Send using a new conversation_id. |

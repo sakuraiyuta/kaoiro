@@ -1,0 +1,1 @@
+{"event":"step_update","step_update":{"step_index":3,"state":"ERROR","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"<scratch>/test.txt"},"error":{"type":"TOOL_ERROR","message":"invalid arguments:\n- additional properties 'Action' not allowed"}}}}

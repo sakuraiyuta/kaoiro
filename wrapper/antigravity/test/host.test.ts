@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
+import { parseAgyStreamLine } from "../src/adapter.js";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
 import { createHarnessHost } from "./host_test_harness.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
@@ -69,6 +70,9 @@ function hostHarness(options: {
   now?: () => string;
   onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
   onTurnStart?: AntigravityHostOptions["onTurnStart"];
+  onSendRejected?: AntigravityHostOptions["onSendRejected"];
+  onGateRecoveryLifecycle?: AntigravityHostOptions["onGateRecoveryLifecycle"];
+  warn?: AntigravityHostOptions["warn"];
   prepareInput?: AntigravityHostOptions["prepareInput"];
   onState?: AntigravityHostOptions["onState"];
   onInterruptSettled?: AntigravityHostOptions["onInterruptSettled"];
@@ -90,6 +94,8 @@ function hostHarness(options: {
   const sendRejections: Array<Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]> = [];
   const outOfTurnEvents: Array<Parameters<NonNullable<AntigravityHostOptions["onOutOfTurnEvent"]>>[0]> = [];
   const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
+  const gateRecoveryLifecycle: Array<Parameters<NonNullable<AntigravityHostOptions["onGateRecoveryLifecycle"]>>[0]> = [];
+  const warnings: string[] = [];
   const cfg = options.config ?? config();
   const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
   const host = createHarnessHost(cfg, {
@@ -125,16 +131,27 @@ function hostHarness(options: {
       interruptSettlements.push(info);
       options.onInterruptSettled?.(info);
     },
-    onSendRejected: (info) => sendRejections.push(info),
+    onSendRejected: (info) => {
+      sendRejections.push(info);
+      options.onSendRejected?.(info);
+    },
+    onGateRecoveryLifecycle: (info) => {
+      gateRecoveryLifecycle.push(info);
+      options.onGateRecoveryLifecycle?.(info);
+    },
     onOutOfTurnEvent: (info) => outOfTurnEvents.push(info),
     onEpochEnded: (info) => epochEnded.push(info),
+    warn: (message) => {
+      warnings.push(message);
+      options.warn?.(message);
+    },
     spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
       calls.push({ command, args, env: spawnOptions.env, child });
       return child as unknown as SpawnedAgy;
     },
   });
-  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections, outOfTurnEvents, epochEnded };
+  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections, outOfTurnEvents, epochEnded, gateRecoveryLifecycle, warnings };
 }
 
 describe("AntigravityHost", () => {
@@ -174,6 +191,248 @@ describe("AntigravityHost", () => {
     calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
     calls[0]!.child.finish();
     await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
+  it("a failed gate smoke probe rejects its candidate, then a later passing probe recovers to waiting_input", async () => {
+    let verification = 0;
+    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
+      verifyGate: async () => ++verification !== 2,
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(host.state).toBe("error");
+
+    await host.send("failed candidate", undefined, ["cid-failed"], "failed-candidate");
+    await waitFor(() => sendRejections.some((item) => item.turnToken === "failed-candidate"));
+    expect(sendRejections.find((item) => item.turnToken === "failed-candidate")).toMatchObject({ reason: "gate_broken", conversationIds: ["cid-failed"] });
+    expect(host.state).toBe("error");
+    expect(calls).toHaveLength(1);
+
+    await host.send("successful candidate", undefined, ["cid-good"], "good-candidate");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"recovered"}}\n');
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
+    expect(host.state).toBe("waiting_input");
+    expect(gateRecoveryLifecycle.map((event) => event.probeResult)).toContain("failed");
+    expect(gateRecoveryLifecycle.map((event) => event.probeResult)).toContain("passed");
+    calls[1]!.child.finish();
+    host.close();
+  });
+
+  it("gate probation survives an is_error result and an epoch restart, making the next fault sticky", async () => {
+    let verification = 0;
+    const { host, logs, calls, gateRecoveryLifecycle } = hostHarness({
+      verifyGate: async () => { verification += 1; return true; },
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+    await host.send("recovery candidate");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"not clean"}}\n');
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
+    expect(host.state).toBe("waiting_input");
+    calls[1]!.child.finish();
+    await waitFor(() => host.state === "waiting_input");
+
+    await host.send("next epoch");
+    await waitFor(() => calls.length === 3);
+    calls[2]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[2]!.child.killed === "SIGTERM");
+    calls[2]!.child.finish();
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 3);
+    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({
+      event: "gate_fault",
+      faultClass: "tool_completion_unobserved",
+      probeResult: "not_run_sticky",
+      tripCount: 2,
+    });
+    expect(verification).toBe(3);
+    await host.send("sticky rejects");
+    expect(host.state).toBe("error");
+    expect(calls).toHaveLength(3);
+    host.close();
+  });
+
+  it("one clean success clears gate probation for a later epoch", async () => {
+    let verification = 0;
+    const { host, logs, calls, gateRecoveryLifecycle } = hostHarness({
+      verifyGate: async () => { verification += 1; return true; },
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+    await host.send("recovery candidate");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"clean"}}\n');
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
+    expect(host.state).toBe("waiting_input");
+    calls[1]!.child.finish();
+    await waitFor(() => host.state === "waiting_input");
+
+    await host.send("next epoch");
+    await waitFor(() => calls.length === 3);
+    calls[2]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":9,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[2]!.child.killed === "SIGTERM");
+    calls[2]!.child.finish();
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 3);
+    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_fault", probeResult: "started", tripCount: 2 });
+
+    await host.send("recovery remains available");
+    await waitFor(() => calls.length === 4);
+    calls[3]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"again"}}\n');
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 4);
+    expect(verification).toBe(4);
+    calls[3]!.child.finish();
+    host.close();
+  });
+
+  it("an interrupt during recovery probing stays stale/interrupted instead of recovery_rejected", async () => {
+    let verification = 0;
+    let releaseProbe!: (passed: boolean) => void;
+    const { host, calls, logs, turnEnds, sendRejections } = hostHarness({
+      verifyGate: async () => {
+        verification += 1;
+        if (verification !== 2) return true;
+        return new Promise<boolean>((resolve) => { releaseProbe = resolve; });
+      },
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+    await host.send("interruptible candidate", undefined, ["cid-probe"], "probe-candidate");
+    await waitFor(() => verification === 2);
+    await host.interrupt();
+    await waitFor(() => turnEnds.some((end) => end.turnToken === "probe-candidate"));
+    expect(turnEnds.find((end) => end.turnToken === "probe-candidate")?.error).toEqual({ reason: "interrupted" });
+    expect(sendRejections.some((item) => item.turnToken === "probe-candidate")).toBe(false);
+    releaseProbe(true);
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
+  it("recovery attempt budget resets at exactly 60,000 ms", async () => {
+    let nowMs = Date.parse("2026-10-09T00:00:00.000Z");
+    let verification = 0;
+    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
+      now: () => new Date(nowMs).toISOString(),
+      verifyGate: async () => { verification += 1; return verification === 1 || verification >= 7; },
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      await host.send(`failed probe ${attempt}`, undefined, [], `failed-${attempt}`);
+      await waitFor(() => sendRejections.some((item) => item.turnToken === `failed-${attempt}`));
+      expect(gateRecoveryLifecycle.at(-1)?.probeResult).toBe("failed");
+    }
+    expect(verification).toBe(6);
+
+    nowMs += 60_000;
+    await host.send("boundary probe", undefined, [], "boundary-candidate");
+    await waitFor(() => calls.length === 2);
+    expect(verification).toBe(7);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"boundary passed"}}\n');
+    await waitFor(() => logs.filter((envelope) => envelope.type === "result").length >= 2);
+    expect(host.state).toBe("waiting_input");
+    calls[1]!.child.finish();
+    host.close();
+  });
+
+  it("blocks a sixth recovery probe inside the same 60-second window", async () => {
+    let verification = 0;
+    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness({
+      verifyGate: async () => { verification += 1; return verification === 1; },
+    });
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      await host.send(`probe ${attempt}`, undefined, [], `budget-${attempt}`);
+      await waitFor(() => sendRejections.some((item) => item.turnToken === `budget-${attempt}`));
+    }
+    expect(verification).toBe(6);
+    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_recovery", probeResult: "budget_exhausted" });
+    expect(host.state).toBe("error");
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
+  it("close settles a HELD candidate once without letting it start", async () => {
+    const { host, calls, sendRejections } = hostHarness();
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    await host.send("held candidate", undefined, ["cid-held"], "held-token");
+    expect(calls).toHaveLength(1);
+
+    const closing = host.close();
+    expect(sendRejections.filter((item) => item.turnToken === "held-token")).toEqual([
+      { turnToken: "held-token", conversationIds: ["cid-held"], reason: "closed" },
+    ]);
+    calls[0]!.child.finish();
+    await closing;
+    expect(calls).toHaveLength(1);
+  });
+
+  it("watchdog fail-stop removes a tokenless HELD candidate and reports its rejection", async () => {
+    const { host, calls, sendRejections, turnEnds } = hostHarness();
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    await host.send("held reset notice");
+    expect(calls).toHaveLength(1);
+
+    expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+    expect(sendRejections).toContainEqual({ reason: "watchdog_fail_stopped" });
+    expect(turnEnds).toHaveLength(0);
+    calls[0]!.child.finish();
+    await host.close();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a throwing queued-turn rejection callback does not strand the later entry", async () => {
+    const { host, calls, sendRejections } = hostHarness({
+      onSendRejected: (info) => {
+        if (info.turnToken === "queued-bad") throw new Error("isolated callback failure");
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    await host.send("queued bad", undefined, ["cid-bad"], "queued-bad");
+    await host.send("queued good", undefined, ["cid-good"], "queued-good");
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    expect(sendRejections.map((item) => item.turnToken)).toEqual(["queued-bad", "queued-good"]);
+    calls[0]!.child.finish();
+    await waitFor(() => host.state === "error");
     host.close();
   });
 
@@ -1485,6 +1744,100 @@ if (args[0] === "models") {
     child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    host.close();
+  });
+
+  it.each([
+    {
+      provenance: "Action row: fixture-r1-hiiro.md SHA-256 35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300, raw event line 40 (lines 54-55 explain shape); view_file; no hook-silence evidence",
+      event: readFileSync(new URL("./fixtures/gate-invalid-action.jsonl", import.meta.url), "utf8").trim(),
+      toolName: "view_file",
+      stepIndex: 3,
+      message: "invalid arguments:\\n- additional properties 'Action' not allowed".replaceAll("\\n", "\n"),
+    },
+    {
+      provenance: "toolSummary row: fixture-r3-momo.md SHA-256 a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28, lines 14, 18, 20; hook silence only from logging-stub observation lines 24-28, not production GateServer",
+      event: readFileSync(new URL("./fixtures/gate-invalid-tool-summary.jsonl", import.meta.url), "utf8").trim(),
+      toolName: "run_command",
+      stepIndex: 2,
+      message: "invalid arguments:\\n- missing property 'toolSummary'".replaceAll("\\n", "\n"),
+    },
+  ])("$provenance", async ({ provenance, event, toolName, stepIndex, message }) => {
+    const { host, logs, calls, warnings } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    const fixtureEvent = parseAgyStreamLine(event);
+    expect(fixtureEvent?.event).toBe("step_update");
+    if (fixtureEvent?.event !== "step_update") throw new Error("invalid classifier fixture");
+    expect(fixtureEvent.step_update).toMatchObject({
+      step_index: stepIndex,
+      state: "ERROR",
+      step_type: "tool",
+      tool_name: toolName,
+      tool_info: { error: { type: "TOOL_ERROR", message } },
+    });
+    expect(provenance).toContain("SHA-256");
+    child.stdout.write(`${event}\n`);
+    child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"invalid arguments"}}\n');
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(host.state).toBe("waiting_input");
+    expect(child.killed).toBeUndefined();
+    expect(warnings.some((warning) => warning.includes("unobserved tool completion"))).toBe(false);
+    host.close();
+  });
+
+  it("accepts the synthetic two-line composition of the measured validation grammar only", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write(`${JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 418,
+        state: "ERROR",
+        step_type: "tool",
+        tool_name: "view_file",
+        tool_info: { error: {
+          type: "TOOL_ERROR",
+          message: "invalid arguments:\\n- missing property 'toolSummary'\\n- additional properties 'Action' not allowed".replaceAll("\\n", "\n"),
+        } },
+      },
+    })}\n`);
+    child.stdout.write('{"event":"result","result":{"status":"ERROR","response":"invalid arguments"}}\n');
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(host.state).toBe("waiting_input");
+    expect(child.killed).toBeUndefined();
+    host.close();
+  });
+
+  it.each([
+    ["wrong error type", { type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" }],
+    ["unmeasured validation wording", { type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" }],
+    ["anchored suffix violation", { type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" }],
+  ])("fails closed when the unobserved error is %s", async (_label, error) => {
+    const { host, logs, calls, warnings, gateRecoveryLifecycle } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write(`${JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 8,
+        state: "ERROR",
+        step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { error: { type: error.type, message: error.message.replaceAll("\\n", "\n") } },
+      },
+    })}\n`);
+    await waitFor(() => child.killed === "SIGTERM");
+    expect(warnings.some((message) => message.includes("unobserved tool completion: tool=run_command"))).toBe(true);
+    expect(warnings.at(-1)?.length).toBeLessThanOrEqual(512);
+    child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_fault")).toHaveLength(1);
     host.close();
   });
 

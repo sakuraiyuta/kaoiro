@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-09
 related: [protocol, antigravity-adapter]
 ---
 
@@ -77,6 +77,58 @@ The hook command receives the tool call on stdin and answers on stdout:
 
 - Hooks are also the only PostToolUse / Stop observation channel; not used
   by the adapter in Stage A.
+
+### Gate fault and recovery (ADR-0057 F4b)
+
+An unmatched completed tool step makes the host visibly `error` and ends the
+current `agy` epoch. The host retires queued peer batches through the ordinary
+settlement path; it does not acknowledge them as model input. Only the sole
+eligible recovery candidate bypasses the gate-broken rejection. That candidate
+is held in the host queue until the tripping turn has returned, the gate
+registration smoke test passes, and a replacement child starts. A failed
+attempt is rejected and not replayed. Further peer batches are retired or get
+one immediate legacy `interrupted` notice and can be retried by their sender.
+A sticky fault (customization tampering or a second trip during probation) has
+no recovery candidate.
+
+The first eligible model-bound input may be an operator instruction, a
+`onWorkNotice` delivery (including one queued before host creation), or a
+session-reset cancellation notice delivered through
+`SessionResetCoordinator.notify`. In particular, cancellation of the
+tripping turn's reset reservation can itself be the recovery candidate; if its
+probe fails it is not replayed, while peer input rejected during that probe
+can be retried by its sender.
+
+After a successful smoke test and child start, the host clears the visible
+fault and applies `user_send` before delivering the candidate. The new epoch
+remains on probation until one dispatched turn returns a normal `SUCCESS`
+result without another gate fault; model/API errors do not confirm recovery.
+The host allows five attempts in a fixed 60-second window starting with the
+first attempt; an attempt at the exact 60-second boundary starts a new window.
+Tampering remains sticky until wrapper restart.
+
+For a peer retired through the negotiated server path, notice delivery starts
+immediately when connected and no resync request is in flight. If connected
+with a resync request in flight, retry is scheduled after 30 seconds. After a
+disconnect, retry resumes on reconnect; there is no fixed upper bound while
+disconnected. The legacy direct `interrupted` fallback is immediate.
+
+The missing-path `view_file` “declaring permissions … invalid tool call
+error (invalid_args)” form remains unmeasured and fail-closed. Hisui owns the
+follow-up recorded in issue comment 6063583273, with at most two probes in a
+disposable hooked environment. Close it only after recording the capture and
+result: if the hook fires, no classifier exception is needed; if the hook is
+silent and this form appears, add only its anchored grammar and a hook-enabled
+negative control. Genuine executed-tool runtime errors and
+`define_subagent` remain unmeasured.
+
+Classifier evidence rows and limits:
+
+| Row | Source | Evidence limit |
+|---|---|---|
+| `additional properties 'Action' not allowed` | `fixture-r1-hiiro.md`, SHA-256 `35dcbdff1b7c475c40e0079d43fe02658d67e082d0046462c79787185ba05300`, raw event line 40; `view_file` | The event shape is observed; this fixture has no hook stub and does not establish hook silence. |
+| `missing property 'toolSummary'` | `fixture-r3-momo.md`, SHA-256 `a27f7eabfe0608cd92e7858528efcfed2903fe9e897eb8db633e7c82b70a1c28`, lines 14, 18, 20; `run_command` | Hook silence comes only from the separate logging-stub observation at lines 24–28, not from production `GateServer`. |
+| Two-line combination | Synthetic grammar-only test | Not observed in a live fixture. |
 
 ### `run_command` Cwd containment
 

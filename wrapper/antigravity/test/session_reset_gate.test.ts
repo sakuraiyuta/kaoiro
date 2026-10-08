@@ -46,6 +46,8 @@ class FakeAgy extends EventEmitter {
 
 interface Rig {
   sent: Envelope[];
+  acknowledged: number[];
+  inputs: string[];
   requests: { mode: string; reason?: string }[];
   requestSnapshots: { sentCount: number; state: string | undefined }[];
   turnEnds: Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0][];
@@ -61,8 +63,11 @@ interface Rig {
 async function makeRig(
   overrides: Partial<WrapperConfig> = {},
   prepareInput?: AntigravityHostOptions["prepareInput"],
+  verifyGate: () => Promise<boolean> = async () => true,
 ): Promise<Rig> {
   const sent: Envelope[] = [];
+  const acknowledged: number[] = [];
+  const inputs: string[] = [];
   const requests: Rig["requests"] = [];
   const requestSnapshots: Rig["requestSnapshots"] = [];
   const turnEnds: Rig["turnEnds"] = [];
@@ -75,6 +80,7 @@ async function makeRig(
   const link = {
     close: () => {},
     send: (envelope: Envelope) => sent.push(envelope),
+    acknowledgeInterAgentDelivery: (sequence: number) => acknowledged.push(sequence),
     requestSessionReset: async (mode: string, reason?: string) => {
       requestSnapshots.push({
         sentCount: sent.length,
@@ -98,7 +104,7 @@ async function makeRig(
       host = createHarnessHost(cfg, {
         ...options,
         runtimeAssetsAvailable: () => true,
-        verifyGate: async () => true,
+        verifyGate,
         agyPath: "/test/agy",
         ...(prepareInput === undefined ? {} : { prepareInput }),
         onTurnEnd: (info) => {
@@ -111,6 +117,7 @@ async function makeRig(
         },
         spawn: () => {
           const child = new FakeAgy();
+          child.stdin.on("data", (chunk: Buffer | string) => inputs.push(String(chunk)));
           agyChildren.push(child);
           return child as unknown as SpawnedAgy;
         },
@@ -121,6 +128,8 @@ async function makeRig(
   await vi.waitFor(() => expect(host).toBeDefined());
   return {
     sent,
+    acknowledged,
+    inputs,
     requests,
     requestSnapshots,
     turnEnds,
@@ -143,6 +152,29 @@ async function makeRig(
 function resetDescriptor(rig: Rig): ToolDescriptor {
   const descriptors = rig.hostOptions.toolDescriptors as ToolDescriptor[];
   return descriptors.find((d) => d.name === "request_session_reset")!;
+}
+
+function peerEnvelope(deliverySeq: number): Envelope {
+  return {
+    version: "0",
+    agent_id: "peer-1",
+    persona: { id: "peer", name: "peer", sprite_set: "peer" },
+    display_name: "peer",
+    ts: "2026-10-09T00:00:00Z",
+    type: "inter_agent_message",
+    state: "thinking",
+    payload: {
+      to: CONFIG.agent_id,
+      conversation_id: "peer-conversation",
+      turn_number: 1,
+      kind: "request",
+      body: "peer batch while probing",
+      meta: { done: false, propose_next: "" },
+      owner: { kind: "user", id: "operator" },
+    },
+    ext: {},
+    delivery_seq: deliverySeq,
+  } as unknown as Envelope;
 }
 
 async function markToolRunning(rig: Rig): Promise<void> {
@@ -432,5 +464,52 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     await vi.waitFor(() => expect(rig.sendRejections).toHaveLength(1));
     expect(rig.sendRejections[0]).toMatchObject({ reason: "watchdog_fail_stopped" });
     expect(rig.requests).toHaveLength(0);
+  });
+
+  it("a session-reset cancellation notice can be the HELD candidate; a peer batch during its probe gets one retryable notice", async () => {
+    let verification = 0;
+    let releaseProbe!: (passed: boolean) => void;
+    const rig = await makeRig({}, undefined, async () => {
+      verification += 1;
+      if (verification !== 2) return true;
+      return new Promise<boolean>((resolve) => { releaseProbe = resolve; });
+    });
+    await rig.host.send("do the thing", undefined, ["cid-owner"], "turn-owner");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const call = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.some((e) => e.type === "permission_request")).toBe(true));
+    const permission = rig.sent.filter((e) => e.type === "permission_request").at(-1)!;
+    rig.linkOptions.onPermissionDecision({
+      request_id: (permission.payload as { request_id: string }).request_id,
+      allow: true,
+    });
+    await call;
+
+    rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":72,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    await vi.waitFor(() => expect(verification).toBe(2));
+    expect(rig.host.state).toBe("error");
+
+    await rig.linkOptions.onInterAgentMessage(peerEnvelope(7));
+    await vi.waitFor(() => expect(rig.sendRejections.length).toBeGreaterThan(0));
+    const notices = rig.sent.filter((envelope) => {
+      const payload = envelope.payload as { to?: string; error?: { code?: string } };
+      return envelope.type === "inter_agent_message" && payload.to === "peer-1" && payload.error?.code === "interrupted";
+    });
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.payload).toMatchObject({ error: { code: "interrupted" } });
+    expect(rig.acknowledged).not.toContain(7);
+
+    releaseProbe(true);
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(2));
+    await vi.waitFor(() => expect(rig.inputs.length).toBeGreaterThan(0));
+    expect(rig.inputs.join("")).toContain("The session reset you reserved");
+    rig.agyChildren[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"notice handled"}}\n');
+    rig.agyChildren[1]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(2));
+    expect(rig.host.state).toBe("waiting_input");
+    rig.host.close();
   });
 });

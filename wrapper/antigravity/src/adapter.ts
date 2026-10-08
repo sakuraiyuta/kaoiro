@@ -24,7 +24,7 @@ export type AgyStreamEvent =
           name?: string;
           parameters?: unknown;
           output?: unknown;
-          error?: { message?: unknown };
+          error?: { type?: string; message?: unknown };
         };
       };
     }

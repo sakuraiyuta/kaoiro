@@ -2,7 +2,7 @@
 title: Antigravity events
 description: Current event, state, session, model, usage, and host contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-10-03
+last_updated: 2026-10-09
 related: [protocol, antigravity-adapter]
 ---
 
@@ -161,6 +161,26 @@ Observed details:
 | `result` `ERROR` | `error` with `result.error` |
 | epoch exit without this turn's own `result` | `error` (`agy_exit_without_result`) |
 | `init` (first turn) | session id = `conversation_id` (SessionPointers) |
+
+The transcript reports the two observed pre-execution argument rejections as
+`INVALID`; the live stream reports tool `step_update` events with
+`state: ERROR`, `tool_info.error.type: TOOL_ERROR`, and either
+`invalid arguments:\n- additional properties 'Action' not allowed` or
+`invalid arguments:\n- missing property 'toolSummary'`. These are the only
+allowlisted forms, and only when the gate server has no matching request. See
+[Antigravity tools and permissions](antigravity-tools-permissions.md#gate-fault-and-recovery-adr-0057-f4b)
+for fixture provenance and evidence limits; a live logging stub is not the
+production `GateServer`.
+
+An ADR-0057 F4b gate fault also exposes `error` and ends the epoch. Queued
+peer batches are settled and retired without acknowledgement as model input.
+The first eligible model-bound input may be held as the sole recovery
+candidate; if the gate smoke test or replacement-child start fails, that input is rejected
+and not replayed. A successful recovery clears the visible error before
+`user_send`, but remains probationary until one dispatched turn returns a
+normal successful result. See
+[Antigravity tools and permissions](antigravity-tools-permissions.md#gate-fault-and-recovery-adr-0057-f4b)
+for candidate sources and notice timing.
 
 ### Session / conversation resume and enumeration
 

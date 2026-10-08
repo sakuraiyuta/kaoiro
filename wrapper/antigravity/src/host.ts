@@ -109,6 +109,7 @@ const EPOCH_STDERR_TERMINATING_PATTERN = /^terminating \d+ background task\(s\) 
 type TurnOutcome =
   | { kind: "stale" }
   | { kind: "skipped" }
+  | { kind: "recovery_rejected"; detail: string; probeResult: "failed" | "child_launch_failed" }
   | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; attemptedModel: string | null | undefined }
   | { kind: "result"; event: AgyStreamEvent; attemptedModel: string | null }
   | {
@@ -117,6 +118,27 @@ type TurnOutcome =
       exit: { code: number | null; signal: NodeJS.Signals | null } | null;
       requestedAt: string | undefined;
     };
+
+type GateFaultClass =
+  | "customization_tampered"
+  | "stream_correlation_unprovable"
+  | "tool_completion_unobserved";
+
+type GateProbeResult = "started" | "passed" | "failed" | "child_launch_failed" | "budget_exhausted" | "not_run_sticky" | "suppressed_latched";
+
+interface GateFaultRecord {
+  faultClass: GateFaultClass;
+  toolName: string;
+  detail: string;
+  faultKey: string;
+  tripCount: number;
+}
+
+interface QueuedTurn {
+  text: string;
+  conversationIds?: readonly string[];
+  turnToken?: string;
+}
 
 interface RateLimitOverlay {
   value: AgyUsageRateLimit;
@@ -138,6 +160,7 @@ interface PendingTerminal429Confirmation {
  *  as opposed to a spontaneous exit (`null`). `resolveDeath` lets `#endEpoch`
  *  await the child's actual closure instead of merely arming a signal. */
 interface EpochRuntime {
+  serial: number;
   child: SpawnedAgy;
   spec: EpochSpec;
   toolHost: ToolHost;
@@ -158,10 +181,13 @@ interface EpochRuntime {
  *  `readableLines`/`#waitForChild` role Stage 1 attached per turn, now
  *  attached once per epoch and keyed off whichever turn is in flight. */
 interface InFlightTurn {
+  epochSerial: number;
   turnToken: string;
   gate: AntigravityGate;
   assistantText: Map<number, string>;
   correlationFailure: string | null;
+  faultClass: GateFaultClass | null;
+  faultKey: string | null;
   epochDeathError: Error | null;
   resolveResult: (event: AgyStreamEvent | null) => void;
 }
@@ -284,11 +310,20 @@ export interface AntigravityHostOptions {
     signal: NodeJS.Signals | null;
     elapsedMs: number;
   }) => void;
+  onGateRecoveryLifecycle?: (info: {
+    event: "gate_fault" | "gate_recovery";
+    faultClass: GateFaultClass;
+    toolName: string;
+    tripCount: number;
+    probeResult: GateProbeResult;
+    detail: string;
+  }) => void;
   /** issue #371 S1: `send()` resolved without starting a turn (closed /
    *  gate-broken / fail-stopped) — the caller's own promise never rejects
    *  for this, so it cannot otherwise learn the reason. */
   onSendRejected?: (info: {
     turnToken?: string;
+    conversationIds?: readonly string[];
     reason: "closed" | "gate_broken" | "watchdog_fail_stopped" | "attachments_unsupported";
   }) => void;
   toolDescriptors?: ToolDescriptor[];
@@ -360,6 +395,20 @@ export interface AntigravityHostOptions {
 
 function validToolName(value: unknown): value is string {
   return typeof value === "string" && value !== "";
+}
+
+const MEASURED_INVALID_ARGUMENTS =
+  /^invalid arguments:(?:\n- (?:additional properties '[^'\n]{1,128}' not allowed|missing property '[^'\n]{1,128}'))+$/;
+
+function isMeasuredPreExecutionInvalidToolCall(
+  step: Extract<AgyStreamEvent, { event: "step_update" }>['step_update'],
+): boolean {
+  const error = step.tool_info?.error;
+  return step.step_type === "tool" &&
+    step.state === "ERROR" &&
+    error?.type === "TOOL_ERROR" &&
+    typeof error.message === "string" &&
+    MEASURED_INVALID_ARGUMENTS.test(error.message);
 }
 
 /** One identity for a tool step: the top-level `tool_name` and
@@ -516,11 +565,7 @@ export class AntigravityHost implements EngineAdapter {
   #closed = false;
   #running: SpawnedAgy | null = null;
   #sessionId: string | null;
-  #turnQueue: Array<{
-    text: string;
-    conversationIds?: readonly string[];
-    turnToken?: string;
-  }> = [];
+  #turnQueue: QueuedTurn[] = [];
   #customization: CustomizationDir | null = null;
   #pendingPermission: PendingPermissionExt | null = null;
   #permissionWaitLeases = new Map<string, { turnToken: string; source: "bridge" | "native" }>();
@@ -528,6 +573,18 @@ export class AntigravityHost implements EngineAdapter {
   #pendingQuestion: PendingQuestionExt | null = null;
   #lastRevision = 0;
   #gateBroken = false;
+  #gateSticky = false;
+  #gateFault: GateFaultRecord | null = null;
+  #gateTripCount = 0;
+  #seenGateFaultKeys = new Set<string>();
+  #nextEpochSerial = 1;
+  #recoveryCandidate: QueuedTurn | null = null;
+  #recoveryPhase: "held" | "probing" | null = null;
+  #recoveryProbation = false;
+  #recoveryFaultDuringDelivery: GateFaultRecord | null = null;
+  #recoveryAttemptWindowStartMs: number | null = null;
+  #recoveryAttemptsInWindow = 0;
+  #turnStartReached = false;
   #turnActive = false;
   #activeTurnToken: string | null = null;
   #activeTurnConversationIds: readonly string[] = [];
@@ -685,7 +742,7 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   get state(): KaoiroState {
-    return this.#machine.state;
+    return this.#gateBroken ? "error" : this.#machine.state;
   }
 
   async run(prompt?: string): Promise<void> {
@@ -706,32 +763,50 @@ export class AntigravityHost implements EngineAdapter {
     conversationIds?: readonly string[],
     turnToken?: string,
   ): Promise<void> {
-    // issue #371 S1: these resolve without starting a turn and without
-    // throwing, so a caller's `.catch()` never sees them — fire the
-    // diagnostic callback so the wrapper can still log the classified
-    // reason (never the inbound text) to the lifecycle stream.
-    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped) {
-      this.#options.onSendRejected?.({
+    if (this.#closed || this.#watchdogFailStopped) {
+      this.#notifySendRejected({
         ...(turnToken === undefined ? {} : { turnToken }),
+        ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
         // Most specific first: a watchdog fail-stop also sets `#closed`, and
         // a customization tamper (`#gateBroken`) can co-occur with either.
-        reason: this.#watchdogFailStopped ? "watchdog_fail_stopped" : this.#gateBroken ? "gate_broken" : "closed",
+        reason: this.#watchdogFailStopped ? "watchdog_fail_stopped" : "closed",
       });
       return;
     }
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
-      this.#options.onSendRejected?.({
+      this.#notifySendRejected({
         ...(turnToken === undefined ? {} : { turnToken }),
+        ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
         reason: "attachments_unsupported",
       });
+      return;
+    }
+    if (this.#gateBroken) {
+      if (!this.#gateSticky && this.#recoveryCandidate === null) {
+        const candidate: QueuedTurn = {
+          text,
+          ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
+          ...(turnToken === undefined ? {} : { turnToken }),
+        };
+        this.#recoveryCandidate = candidate;
+        this.#recoveryPhase = "held";
+        this.#turnQueue.push(candidate);
+        void this.#drainTurns();
+      } else {
+        this.#notifySendRejected({
+          ...(turnToken === undefined ? {} : { turnToken }),
+          ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
+          reason: "gate_broken",
+        });
+      }
       return;
     }
     this.#clearUsageProbeFloorTimer();
     this.#apply({ kind: "user_send" });
     this.#turnQueue.push({
       text,
-      ...(conversationIds === undefined ? {} : { conversationIds }),
+      ...(conversationIds === undefined || conversationIds.length === 0 ? {} : { conversationIds }),
       ...(turnToken === undefined ? {} : { turnToken }),
     });
     void this.#drainTurns();
@@ -895,7 +970,16 @@ export class AntigravityHost implements EngineAdapter {
     this.#clearUsageProbeFloorTimer();
     this.#pendingTerminal429Confirmation = null;
     this.#lifecycleGeneration += 1;
-    this.#turnQueue = [];
+    const queued = this.#turnQueue.splice(0);
+    this.#recoveryCandidate = null;
+    this.#recoveryPhase = null;
+    for (const turn of queued) {
+      this.#notifySendRejected({
+        ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
+        ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+        reason: "closed",
+      });
+    }
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
     this.#clearPendingAfterInterrupt();
@@ -1251,9 +1335,30 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   async #drainTurns(): Promise<void> {
-    if (this.#turnActive || this.#closed || this.#gateBroken || this.#watchdogFailStopped) return;
+    if (this.#turnActive || this.#closed || this.#watchdogFailStopped) return;
+    const head = this.#turnQueue[0];
+    const isRecoveryCandidate =
+      this.#gateBroken &&
+      !this.#gateSticky &&
+      head !== undefined &&
+      head === this.#recoveryCandidate &&
+      this.#recoveryPhase === "held";
+    if (this.#gateBroken && !isRecoveryCandidate) return;
     const turn = this.#turnQueue.shift();
     if (turn === undefined) return;
+    if (isRecoveryCandidate) {
+      this.#recoveryPhase = "probing";
+      if (!this.#beginRecoveryProbe()) {
+        this.#recoveryCandidate = null;
+        this.#recoveryPhase = null;
+        this.#notifySendRejected({
+          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
+          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+          reason: "gate_broken",
+        });
+        return;
+      }
+    }
     this.#turnActive = true;
     const generation = this.#lifecycleGeneration;
     // Every turn gets a token (Codex parity) so the watchdog bounds operator
@@ -1268,17 +1373,31 @@ export class AntigravityHost implements EngineAdapter {
     // would leave the PRIOR turn's attempted model in place; an interrupt
     // landing in that pre-spawn window would then roll back the wrong model.
     this.#currentAttemptedModel = null;
+    this.#turnStartReached = false;
     let outcome: TurnOutcome = { kind: "stale" };
     try {
-      outcome = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
+      outcome = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? [], isRecoveryCandidate);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : String(caught);
       // issue #371 Design v2 M2 (kohaku design review): `attemptedModel:
       // undefined` matches the pre-#371 `#terminalError(detail)` call this
       // replaces -- an unconditional rollback, not a match-gated one.
-      outcome = this.#isCurrent(generation)
-        ? { kind: "error", detail, classify: { detail }, attemptedModel: undefined }
-        : { kind: "stale" };
+      outcome = !this.#isCurrent(generation)
+        ? { kind: "stale" }
+        : isRecoveryCandidate && !this.#turnStartReached
+          ? {
+              kind: "recovery_rejected",
+              detail,
+              probeResult:
+                detail.startsWith("antigravity_cli_") && !detail.startsWith("antigravity_cli_unavailable:")
+                  ? "child_launch_failed"
+                  : "failed",
+            }
+          : { kind: "error", detail, classify: { detail }, attemptedModel: undefined };
+      if (outcome.kind === "recovery_rejected") {
+        this.#restoreRecoveryFault();
+        this.#emitRecoveryOutcome(outcome.probeResult, detail);
+      }
     } finally {
       // issue #377 Stage 2: `#running` is NOT reset here -- it now mirrors
       // the live EPOCH's child (which can outlive this one turn), not a
@@ -1286,6 +1405,11 @@ export class AntigravityHost implements EngineAdapter {
       // only by `#attachEpochWatcher`'s close handler, once the epoch's
       // child actually closes.
       this.#turnActive = false;
+      if (isRecoveryCandidate && outcome.kind !== "recovery_rejected") {
+        this.#recoveryCandidate = null;
+        this.#recoveryPhase = null;
+        this.#recoveryFaultDuringDelivery = null;
+      }
       // issue #371 Design v2: a `stale` outcome (generation mismatch, or
       // closed/fail-stopped) becomes `interrupted` only when the operator's
       // one-shot interrupt record targeted THIS turn and the host is still
@@ -1325,7 +1449,15 @@ export class AntigravityHost implements EngineAdapter {
         this.#activeTurnConversationIds = [];
       }
       if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
-      if (outcome.kind === "skipped") {
+      if (outcome.kind === "recovery_rejected") {
+        this.#recoveryCandidate = null;
+        this.#recoveryPhase = null;
+        this.#notifySendRejected({
+          ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
+          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+          reason: "gate_broken",
+        });
+      } else if (outcome.kind === "skipped") {
         if (this.#turnQueue.length === 0 && !this.#closed) {
           this.#machine = initialMachineState("waiting_input");
           this.#emitState("waiting_input");
@@ -1369,6 +1501,9 @@ export class AntigravityHost implements EngineAdapter {
             }
           }
           const successful = agyEventIsSuccessfulResult(outcome.event);
+          if (successful && !this.#gateBroken && this.#recoveryProbation) {
+            this.#recoveryProbation = false;
+          }
           const hadOverlay = this.#rateLimitOverlay !== null;
           const hadFailures = this.#usageProbeFailureCount > 0;
           const terminal429 = agyEventHasQuotaExhaustionMarker(outcome.event);
@@ -1467,6 +1602,7 @@ export class AntigravityHost implements EngineAdapter {
     generation: number,
     turnToken: string,
     conversationIds: readonly string[],
+    recoveryCandidate = false,
   ): Promise<TurnOutcome> {
     // issue #377 Stage 2 M7: the idle TTL clears at DEQUEUE -- before spec
     // comparison or a possible respawn -- and is re-armed (in the `finally`
@@ -1534,9 +1670,32 @@ export class AntigravityHost implements EngineAdapter {
         if (!spawned.ok) return { kind: "stale" };
       }
       const epoch = this.#epoch!;
+      if (recoveryCandidate) {
+        const fault = this.#gateFault;
+        if (!this.#gateBroken || this.#gateSticky || fault === null) return { kind: "stale" };
+        this.#recoveryFaultDuringDelivery = fault;
+        this.#gateBroken = false;
+        this.#gateFault = null;
+        this.#recoveryProbation = true;
+        this.#recoveryCandidate = null;
+        this.#recoveryPhase = null;
+        this.#emitGateRecoveryLifecycle({
+          event: "gate_recovery",
+          faultClass: fault.faultClass,
+          toolName: fault.toolName,
+          tripCount: fault.tripCount,
+          probeResult: "passed",
+          detail: fault.detail,
+        });
+        this.#emitState(this.#machine.state);
+        this.#apply({ kind: "user_send" });
+      }
       // A skipped input can leave an unused epoch until its ordinary idle TTL.
       const prepared = this.#options.prepareInput?.(turnToken);
-      if (prepared === null) return { kind: "skipped" };
+      if (prepared === null) {
+        if (recoveryCandidate) this.#recoveryFaultDuringDelivery = null;
+        return { kind: "skipped" };
+      }
       if (prepared !== undefined) {
         text = prepared.text;
         conversationIds = prepared.conversationIds;
@@ -1571,10 +1730,13 @@ export class AntigravityHost implements EngineAdapter {
       epoch.gateServer.setGate(gate);
 
       const inFlight: InFlightTurn = {
+        epochSerial: epoch.serial,
         turnToken,
         gate,
         assistantText: new Map(),
         correlationFailure: null,
+        faultClass: null,
+        faultKey: null,
         epochDeathError: null,
         resolveResult: () => {},
       };
@@ -1590,6 +1752,8 @@ export class AntigravityHost implements EngineAdapter {
       // before or during this write never reports a turn as started.
       const delivered = await this.#deliverTurnInput(epoch, text);
       if (delivered) {
+        this.#turnStartReached = true;
+        this.#recoveryFaultDuringDelivery = null;
         this.#options.onTurnStart?.({ turnToken, conversationIds });
       } else {
         // issue #377 Stage 1 M1 (kept for Stage 2): a failed delivery does
@@ -1622,22 +1786,31 @@ export class AntigravityHost implements EngineAdapter {
       // generation for the same reason.
       if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
       if (customization.verify() !== true) {
-        this.#gateBroken = true;
+        const detail = "antigravity_customization_tampered";
+        this.#tripGateBroken(
+          "customization_tampered",
+          "<none>",
+          detail,
+          this.#faultKey(epoch.serial, "customization_tampered"),
+        );
         // issue #377 Stage 2: tamper is detected only after the process has
         // had a chance to run this turn (mirroring Stage 1's post-hoc
         // check), but an epoch persists across turns -- so unlike Stage 1
         // (where the process was already dead by the time this fired) this
         // must actively end the epoch, not just report the error.
         await this.#endEpoch("tamper");
-        const detail = "antigravity_customization_tampered";
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (!this.#isCurrent(generation)) {
         return { kind: "stale" };
       } else if (!delivered) {
         const detail = "epoch_exit_before_turn";
+        if (recoveryCandidate && !this.#turnStartReached) {
+          this.#restoreRecoveryFault();
+          this.#emitRecoveryOutcome("failed", detail);
+          return { kind: "recovery_rejected", detail, probeResult: "failed" };
+        }
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (inFlight.correlationFailure !== null) {
-        this.#gateBroken = true;
         const detail = `antigravity_gate_unobserved_tool:${inFlight.correlationFailure}`;
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (this.#activeTurnToolTimeout !== null) {
@@ -1647,9 +1820,19 @@ export class AntigravityHost implements EngineAdapter {
       } else if (inFlight.epochDeathError !== null) {
         const error = inFlight.epochDeathError;
         const detail = `antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(error.message)}`;
+        if (recoveryCandidate && !this.#turnStartReached) {
+          this.#restoreRecoveryFault();
+          this.#emitRecoveryOutcome("failed", detail);
+          return { kind: "recovery_rejected", detail, probeResult: "failed" };
+        }
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (terminalResult === null) {
         const detail = "agy_exit_without_result";
+        if (recoveryCandidate && !this.#turnStartReached) {
+          this.#restoreRecoveryFault();
+          this.#emitRecoveryOutcome("failed", detail);
+          return { kind: "recovery_rejected", detail, probeResult: "failed" };
+        }
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else {
         return { kind: "result", event: terminalResult, attemptedModel };
@@ -1667,6 +1850,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#pendingTerminal429Confirmation = null;
     this.#lifecycleGeneration += 1;
     const queued = this.#turnQueue.splice(0);
+    this.#recoveryCandidate = null;
+    this.#recoveryPhase = null;
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
     this.#clearPendingAfterInterrupt();
@@ -1687,16 +1872,30 @@ export class AntigravityHost implements EngineAdapter {
         : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
     };
     for (const turn of queued) {
-      if (turn.turnToken === undefined) continue;
-      this.#options.onTurnEnd?.({
-        turnToken: turn.turnToken,
-        conversationIds: turn.conversationIds ?? [],
-        error,
-        cancellation: { kind: "watchdog_fail_stop", started: false },
-        // issue #396: these turns never even started -- agy produced
-        // nothing for them.
-        terminal: false,
-      });
+      if (turn.turnToken === undefined) {
+        this.#notifySendRejected({
+          ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+          reason: "watchdog_fail_stopped",
+        });
+        continue;
+      }
+      try {
+        this.#options.onTurnEnd?.({
+          turnToken: turn.turnToken,
+          conversationIds: turn.conversationIds ?? [],
+          error,
+          cancellation: { kind: "watchdog_fail_stop", started: false },
+          // issue #396: these turns never even started -- agy produced
+          // nothing for them.
+          terminal: false,
+        });
+      } catch (caught) {
+        try {
+          this.#warn(`antigravity: watchdog queued-turn settlement failed: token=${turn.turnToken} detail=${boundErrorDetail(String(caught))}`);
+        } catch {
+          // Continue settling the other queued turns even if diagnostics fail.
+        }
+      }
     }
     this.#options.onWatchdogFailStop?.({
       ...(this.#activeTurnToken === null ? {} : { turnToken: this.#activeTurnToken }),
@@ -1790,6 +1989,10 @@ export class AntigravityHost implements EngineAdapter {
       this.#lastChildExit = { code, signal };
       if (this.#epoch !== epoch) return;
       this.#epoch = null;
+      const epochFaultPrefix = `${epoch.serial}:`;
+      for (const faultKey of this.#seenGateFaultKeys) {
+        if (faultKey.startsWith(epochFaultPrefix)) this.#seenGateFaultKeys.delete(faultKey);
+      }
       if (this.#running === epoch.child) this.#running = null;
       if (this.#gateServer === epoch.gateServer) this.#gateServer = null;
       if (this.#toolHost === epoch.toolHost) this.#toolHost = null;
@@ -1875,13 +2078,15 @@ export class AntigravityHost implements EngineAdapter {
         // An ACTIVE step the deadline cannot key on is as unprovable as a
         // completion the gate cannot correlate: fail closed either way.
         inFlight.correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
+        inFlight.faultClass = "stream_correlation_unprovable";
+        inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
         this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${inFlight.correlationFailure}`);
-        // issue #379: a gate-correlation failure means the safety gate
-        // itself may be compromised, so this kill escalates to SIGKILL
-        // (grace-bounded) rather than trusting a bare SIGTERM.
-        this.#gateBroken = true;
-        this.#markEpochEnding("gate_broken");
-        this.#armOrShortenTermination(this.#abortGraceMs);
+        this.#tripGateBroken(
+          inFlight.faultClass,
+          inFlight.correlationFailure,
+          `tool correlation is unprovable for ${state}`,
+          inFlight.faultKey,
+        );
         return;
       }
       if (state === "ACTIVE") {
@@ -1890,10 +2095,19 @@ export class AntigravityHost implements EngineAdapter {
       }
       this.#options.onToolEnd?.({ turnToken: inFlight.turnToken, stepIndex: stepIndex as number });
       if (!epoch.gateServer.observeCompletedTool(stepIndex as number, toolName)) {
+        if (isMeasuredPreExecutionInvalidToolCall(event.step_update)) return;
         inFlight.correlationFailure = toolName;
-        this.#gateBroken = true;
-        this.#markEpochEnding("gate_broken");
-        this.#armOrShortenTermination(this.#abortGraceMs);
+        inFlight.faultClass = "tool_completion_unobserved";
+        inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
+        const errorDetail = event.step_update.tool_info?.error?.message;
+        const boundedDetail = typeof errorDetail === "string" ? boundErrorDetail(errorDetail) : "<missing>";
+        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${boundedDetail}`);
+        this.#tripGateBroken(
+          inFlight.faultClass,
+          toolName,
+          boundedDetail,
+          inFlight.faultKey,
+        );
       }
     });
   }
@@ -1929,6 +2143,7 @@ export class AntigravityHost implements EngineAdapter {
     customization: CustomizationDir,
     executable: string,
   ): Promise<{ ok: true } | { ok: false; stale: true }> {
+    const serial = this.#nextEpochSerial++;
     customization.rewrite();
     let toolHost: ToolHost | null = null;
     let gateServer: GateServer | null = null;
@@ -2002,6 +2217,7 @@ export class AntigravityHost implements EngineAdapter {
         }
       });
       const epoch: EpochRuntime = {
+        serial,
         child,
         spec,
         toolHost,
@@ -2309,7 +2525,13 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #emitState(state: KaoiroState): void {
-    this.#options.onState(makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt(true)));
+    this.#options.onState(makeStateChange(
+      this.#config,
+      this.#gateBroken ? "error" : state,
+      this.#now(),
+      {},
+      this.#statusExt(true),
+    ));
   }
 
   #emitLog(entry: LogEntry): void {
@@ -2642,6 +2864,184 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     writeRedactedStderr(`${message}\n`);
+  }
+
+  #notifySendRejected(info: Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]): void {
+    try {
+      this.#options.onSendRejected?.(info);
+    } catch (error) {
+      const token = info.turnToken ?? "<tokenless>";
+      try {
+        this.#warn(
+          `antigravity: send rejection callback failed: token=${token} detail=${boundErrorDetail(String(error))}`,
+        );
+      } catch {
+        // A diagnostic callback cannot make a rejected turn escape its boundary.
+      }
+    }
+  }
+
+  #emitGateRecoveryLifecycle(info: {
+    event: "gate_fault" | "gate_recovery";
+    faultClass: GateFaultClass;
+    toolName: string;
+    tripCount: number;
+    probeResult: GateProbeResult;
+    detail: string;
+  }): void {
+    try {
+      this.#options.onGateRecoveryLifecycle?.({
+        ...info,
+        toolName: info.toolName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 64) || "<unknown>",
+        detail: boundErrorDetail(info.detail),
+      });
+    } catch (error) {
+      try {
+        this.#warn(`antigravity: gate lifecycle callback failed: ${boundErrorDetail(String(error))}`);
+      } catch {
+        // A diagnostic callback cannot alter gate recovery.
+      }
+    }
+  }
+
+  #tripGateBroken(
+    faultClass: GateFaultClass,
+    toolName: string,
+    detail: string,
+    faultKey: string,
+  ): boolean {
+    if (this.#seenGateFaultKeys.has(faultKey)) return false;
+    this.#seenGateFaultKeys.add(faultKey);
+    const tripCount = ++this.#gateTripCount;
+    const boundedDetail = boundErrorDetail(detail);
+    const safeToolName = validToolName(toolName) ? toolName.slice(0, 64) : "<unknown>";
+
+    if (this.#gateBroken) {
+      if (faultClass === "customization_tampered") {
+        this.#gateSticky = true;
+        const candidate = this.#recoveryCandidate;
+        if (candidate !== null) {
+          const index = this.#turnQueue.indexOf(candidate);
+          if (index !== -1) this.#turnQueue.splice(index, 1);
+          this.#recoveryCandidate = null;
+          this.#recoveryPhase = null;
+          this.#notifySendRejected({
+            ...(candidate.turnToken === undefined ? {} : { turnToken: candidate.turnToken }),
+            ...(candidate.conversationIds === undefined || candidate.conversationIds.length === 0 ? {} : { conversationIds: candidate.conversationIds }),
+            reason: "gate_broken",
+          });
+        }
+      }
+      this.#emitGateRecoveryLifecycle({
+        event: "gate_fault",
+        faultClass,
+        toolName: safeToolName,
+        tripCount,
+        probeResult: this.#gateSticky ? "not_run_sticky" : "suppressed_latched",
+        detail: boundedDetail,
+      });
+      return false;
+    }
+
+    const sticky = faultClass === "customization_tampered" || this.#recoveryProbation;
+    this.#gateBroken = true;
+    this.#gateSticky = sticky;
+    this.#gateFault = { faultClass, toolName: safeToolName, detail: boundedDetail, faultKey, tripCount };
+    this.#emitGateRecoveryLifecycle({
+      event: "gate_fault",
+      faultClass,
+      toolName: safeToolName,
+      tripCount,
+      probeResult: sticky ? "not_run_sticky" : "started",
+      detail: boundedDetail,
+    });
+    this.#emitState(this.#machine.state);
+        this.#markEpochEnding(faultClass === "customization_tampered" ? "tamper" : "gate_broken");
+    this.#armOrShortenTermination(this.#abortGraceMs);
+
+    const queued = this.#turnQueue.splice(0);
+    if (this.#recoveryCandidate !== null && queued.includes(this.#recoveryCandidate)) {
+      this.#recoveryCandidate = null;
+      this.#recoveryPhase = null;
+    }
+    for (const turn of queued) {
+      this.#notifySendRejected({
+        ...(turn.turnToken === undefined ? {} : { turnToken: turn.turnToken }),
+        ...(turn.conversationIds === undefined || turn.conversationIds.length === 0 ? {} : { conversationIds: turn.conversationIds }),
+        reason: "gate_broken",
+      });
+    }
+    return true;
+  }
+
+  #faultKey(epochSerial: number, faultClass: GateFaultClass, stepIndex?: number): string {
+    return `${epochSerial}:${faultClass}:${Number.isSafeInteger(stepIndex) ? stepIndex : "none"}`;
+  }
+
+  #beginRecoveryProbe(): boolean {
+    const nowMsRaw = Date.parse(this.#now());
+    const nowMs = Number.isFinite(nowMsRaw) ? nowMsRaw : Date.now();
+    if (
+      this.#recoveryAttemptWindowStartMs === null ||
+      nowMs - this.#recoveryAttemptWindowStartMs >= 60_000
+    ) {
+      this.#recoveryAttemptWindowStartMs = nowMs;
+      this.#recoveryAttemptsInWindow = 0;
+    }
+    if (this.#recoveryAttemptsInWindow >= 5) {
+      this.#gateSticky = true;
+      const fault = this.#gateFault;
+      if (fault !== null) {
+        this.#emitGateRecoveryLifecycle({
+          event: "gate_recovery",
+          faultClass: fault.faultClass,
+          toolName: fault.toolName,
+          tripCount: fault.tripCount,
+          probeResult: "budget_exhausted",
+          detail: fault.detail,
+        });
+      }
+      return false;
+    }
+    this.#recoveryAttemptsInWindow += 1;
+    const fault = this.#gateFault;
+    if (fault !== null) {
+      this.#emitGateRecoveryLifecycle({
+        event: "gate_recovery",
+        faultClass: fault.faultClass,
+        toolName: fault.toolName,
+        tripCount: fault.tripCount,
+        probeResult: "started",
+        detail: fault.detail,
+      });
+    }
+    return true;
+  }
+
+  #emitRecoveryOutcome(probeResult: "failed" | "child_launch_failed", detail: string): void {
+    const fault = this.#gateFault ?? this.#recoveryFaultDuringDelivery;
+    if (fault === null) return;
+    this.#emitGateRecoveryLifecycle({
+      event: "gate_recovery",
+      faultClass: fault.faultClass,
+      toolName: fault.toolName,
+      tripCount: fault.tripCount,
+      probeResult,
+      detail,
+    });
+  }
+
+  #restoreRecoveryFault(): void {
+    const fault = this.#recoveryFaultDuringDelivery;
+    if (fault === null || this.#gateBroken) return;
+    this.#gateBroken = true;
+    this.#gateSticky = false;
+    this.#gateFault = fault;
+    this.#recoveryProbation = false;
+    this.#recoveryFaultDuringDelivery = null;
+    this.#emitState(this.#machine.state);
+    this.#markEpochEnding("gate_broken");
+    this.#armOrShortenTermination(this.#abortGraceMs);
   }
 
   #spawnFailureReason(error: unknown): AgyExecutableFailureReason {

@@ -122,4 +122,22 @@ describe("agy stream-json adapter", () => {
     expect(parseAgyStreamLine("not json")).toBeNull();
     expect(parseAgyStreamLine('{"event":"vendor_future"}')).toBeNull();
   });
+
+  it("preserves the measured tool validation error type and message", () => {
+    expect(parseAgyStreamLine(
+      '{"event":"step_update","step_update":{"step_index":417,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"error":{"type":"TOOL_ERROR","message":"invalid arguments:\\n- missing property \'toolSummary\'"}}}}',
+    )).toMatchObject({
+      event: "step_update",
+      step_update: {
+        state: "ERROR",
+        step_type: "tool",
+        tool_info: {
+          error: {
+            type: "TOOL_ERROR",
+            message: "invalid arguments:\n- missing property 'toolSummary'",
+          },
+        },
+      },
+    });
+  });
 });

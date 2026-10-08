@@ -14,7 +14,7 @@ const config: WrapperConfig = {
 
 // Two different peers so the coordinator dispatches both immediately: the
 // first turn goes active in the host, the second lands in the host queue.
-function inbound(peer: string, deliverySeq: number, body: string): Envelope {
+function inbound(peer: string, deliverySeq: number, body: string, turnNumber = 1, conversationId = `c-${peer}`): Envelope {
   return {
     version: "0",
     agent_id: peer,
@@ -25,8 +25,8 @@ function inbound(peer: string, deliverySeq: number, body: string): Envelope {
     state: "thinking",
     payload: {
       to: config.agent_id,
-      conversation_id: `c-${peer}`,
-      turn_number: 1,
+      conversation_id: conversationId,
+      turn_number: turnNumber,
       kind: "request",
       body,
       meta: { done: false, propose_next: "" },
@@ -62,16 +62,22 @@ if (args[0] === "models") {
   const customization = args[args.lastIndexOf("--add-dir") + 1];
   process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
 } else if (args[0] === "--print") {
-  // issue #377 Stage 1: the prompt arrives as one NDJSON line on stdin
-  // (--input-format stream-json), not as an argv positional.
+  // The prompt arrives as one NDJSON line on the live epoch's stdin, not as
+  // an argv positional; stdin stays open between turns.
   let input = "";
   process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => { input += chunk; });
-  process.stdin.on("end", () => {
-    const prompt = JSON.parse(input.trim()).message.content;
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    const boundary = input.indexOf("\\n");
+    if (boundary < 0) return;
+    const prompt = JSON.parse(input.slice(0, boundary)).message.content;
     line({ event: "init", conversation_id: "cid", init: { tools: ["run_command"] } });
     if (prompt.includes("KUROE358_BLOCK")) {
       process.on("SIGTERM", () => process.exit(0));
+      setInterval(() => {}, 1000);
+    } else if (prompt.includes("KUROE541_TRIP")) {
+      process.on("SIGTERM", () => process.exit(0));
+      setTimeout(() => line({ event: "step_update", step_update: { step_index: 513, state: "DONE", step_type: "tool", tool_name: "run_command" } }), 500);
       setInterval(() => {}, 1000);
     } else {
       line({ event: "result", result: { conversation_id: "cid", status: "SUCCESS", response: "second turn ran" } });
@@ -145,4 +151,103 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("retires a queued peer batch once on a gate trip, then dispatches that peer's next batch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-541-"));
+    const { configPath } = writeFixture(root);
+    const acknowledgements: number[] = [];
+    const sent: Envelope[] = [];
+    const retiredSequences: number[] = [];
+    const deliveryEvents: string[] = [];
+    let options!: Record<string, any>;
+    let host: { close(): void } | undefined;
+    const run = runAntigravityCli({
+      parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+      probeSshAgentIdentities: async () => "unknown",
+      onHostCreated: (created) => { host = created; },
+      createServerLink: (_url, _agentId, createdOptions) => {
+        options = createdOptions as unknown as Record<string, any>;
+        queueMicrotask(() => {
+          options.onPersonaPrompt("persona");
+          options.onInterAgentDeliveryStatus({ acked_seq: 0 });
+        });
+        return {
+          close: () => {},
+          setSessionId: () => {},
+          acknowledgeInterAgentDelivery: (sequence: number) => {
+            acknowledgements.push(sequence);
+            deliveryEvents.push(`ack:${sequence}`);
+          },
+          retireInterAgentDeliveries: (envelopes: readonly Envelope[]) => {
+            const sequences = envelopes.map((envelope) => (envelope as Envelope & { delivery_seq?: number }).delivery_seq ?? 0);
+            retiredSequences.push(...sequences);
+            deliveryEvents.push(`retire:${sequences.join(",")}`);
+            options.onInterAgentDeliveryStatus({ acked_seq: 1, skipped_ranges: [[2, 2]] });
+            for (const envelope of envelopes) {
+              const payload = envelope.payload as { conversation_id: string; turn_number: number };
+              sent.push({
+                version: "0",
+                agent_id: "server",
+                persona: { id: "server", name: "server", sprite_set: "server" },
+                display_name: "server",
+                ts: "2026-10-09T00:00:00Z",
+                type: "inter_agent_message",
+                state: "thinking",
+                payload: {
+                  to: envelope.agent_id,
+                  conversation_id: payload.conversation_id,
+                  turn_number: payload.turn_number + 1,
+                  kind: "inform",
+                  body: "peer error (interrupted)",
+                  meta: { done: false, propose_next: "" },
+                  owner: { kind: "user", id: "operator" },
+                  error: { code: "interrupted", peer: "peer2", message: "interrupted" },
+                },
+                ext: {},
+              } as unknown as Envelope);
+            }
+            return true;
+          },
+          send: (envelope: Envelope) => { sent.push(envelope); },
+        } as never;
+      },
+    });
+
+    try {
+      const deliver = (envelope: Envelope) =>
+        (options.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(envelope);
+      await waitFor(() => options?.onInterAgentMessage !== undefined, () => ({}), 4_000);
+      await deliver(inbound("peer1", 1, "KUROE541_TRIP"));
+      await waitFor(() => acknowledgements.includes(1), () => ({ acknowledgements }), 8_000);
+      await deliver(inbound("peer2", 2, "first queued", 1, "c-peer2-first"));
+      await deliver(inbound("peer2", 3, "second queued", 1, "c-peer2-next"));
+
+      await waitFor(
+        () => acknowledgements.includes(3),
+        () => ({ acknowledgements, sent: sent.map((item) => item.type) }),
+        12_000,
+      );
+      const peer2Notices = sent.filter((envelope) => {
+        const payload = envelope.payload as { to?: string; error?: { code?: string }; conversation_id?: string; turn_number?: number };
+        return envelope.type === "inter_agent_message" &&
+          payload.error?.code === "interrupted" &&
+          payload.to === "peer2";
+      });
+      expect(peer2Notices).toHaveLength(1);
+      expect((peer2Notices[0]!.payload as { turn_number: number }).turn_number).toBe(2);
+      expect(acknowledgements).toEqual([1, 2, 3]);
+      expect(retiredSequences).toEqual([2]);
+      expect(deliveryEvents.indexOf("retire:2")).toBeLessThan(deliveryEvents.indexOf("ack:2"));
+      await waitFor(
+        () => sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran")),
+        () => ({ acknowledgements, sent: sent.map((envelope) => envelope.type) }),
+        12_000,
+      );
+      expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran"))).toBe(true);
+    } finally {
+      host?.close();
+      await run;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 25_000);
 });

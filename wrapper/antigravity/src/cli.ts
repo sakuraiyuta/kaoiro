@@ -547,6 +547,18 @@ export async function runAntigravityCli(
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
     },
+    onGateRecoveryLifecycle: (event) => {
+      writeAntigravityLifecycle({
+        event: event.event,
+        details: {
+          fault_class: event.faultClass,
+          tool_name: event.toolName,
+          trip_count: event.tripCount,
+          probe_result: event.probeResult,
+          detail: event.detail,
+        },
+      });
+    },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
       const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
@@ -583,12 +595,36 @@ export async function runAntigravityCli(
     // issue #371 S1: `send()` resolved without starting a turn (closed /
     // gate-broken / fail-stopped) — the caller's own promise never rejects
     // for this, so `instructionChain`'s `.catch()` below cannot see it.
-    onSendRejected: ({ turnToken, reason }) => {
+    onSendRejected: ({ turnToken, conversationIds, reason }) => {
       writeAntigravityLifecycle({
         event: "send_not_started",
         ...(turnToken === undefined ? {} : { turnToken }),
         details: { shape: "no_op", reason },
       });
+      if (reason !== "gate_broken" || turnToken === undefined) return;
+      const envelopes = interAgentTurns.deliveryEnvelopesForTurn(turnToken);
+      if (envelopes.length === 0) return;
+      let retired = false;
+      try {
+        retired = link?.retireInterAgentDeliveries?.([...envelopes]) === true;
+      } catch (error) {
+        writeAntigravityLifecycle({
+          event: "gate_fault_retirement_failed",
+          turnToken,
+          details: { detail: boundErrorDetail(String(error)) },
+        });
+      }
+      for (const notice of interAgent.resolveTurnEnd(
+        turnToken,
+        conversationIds ?? [],
+        retired ? undefined : classifyInterAgentError({ reason: "interrupted" }),
+      )) {
+        link?.send(notice);
+      }
+      const settled = interAgentTurns.settle(turnToken);
+      if (settled !== undefined && !watchdogFailStopped) {
+        interAgentTurns.dispatchNextForPeer(settled.peer);
+      }
     },
     toolDescriptors: [
       ...interAgent.descriptors(),

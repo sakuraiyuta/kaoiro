@@ -5183,6 +5183,94 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn -> Enum.each([to_id, from_id], &DeliveryStates.delete/1) end)
     end
 
+    test "a retired peer message yields one interrupted notice and resolves the ledger" do
+      to_id = "test.delivery-interrupt-recipient"
+      from_id = "test.delivery-interrupt-sender"
+      caps = %{"inter_agent_delivery_ack" => "dispatch-v1", "delivery_resync" => "skip-v1"}
+
+      recipient =
+        join_wrapper(
+          to_id,
+          "default",
+          Map.put(caps, "delivery_generation", "interrupt-process")
+        )
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+
+      sender =
+        join_wrapper(
+          from_id,
+          "default",
+          Map.merge(caps, %{
+            "delivery_generation" => "interrupt-sender-process",
+            "inter_agent_reply_basis" => "v1",
+            "inter_agent_delivery_modes" => %{
+              "version" => "v1",
+              "early" => "fold",
+              "yield" => "none",
+              "stage_reports" => true
+            }
+          })
+        )
+
+      assert_reply push(sender, "envelope", envelope(from_id, "idle")), :ok
+      topic = "wrapper:" <> from_id
+      cid = "interrupt-#{System.unique_integer([:positive])}"
+      outgoing = inter_envelope(from_id, to_id, cid: cid, body: "secret original content")
+
+      assert_reply push(sender, "envelope", put_in(outgoing, ["payload", "in_reply_to"], 0)),
+                   :ok
+
+      assert %{issued_seq: 1, acked_seq: 0, pending_since: pending} = DeliveryStates.get(to_id)
+      assert pending != nil
+
+      request = %{
+        "version" => "0",
+        "generation" => "interrupt-process",
+        "request_id" => "interrupt-request",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]],
+        "reason" => "interrupted"
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{
+          "agent_id" => "server",
+          "payload" =>
+            %{
+              "conversation_id" => ^cid,
+              "kind" => "inform",
+              "error" => %{
+                "code" => "interrupted",
+                "peer" => ^to_id,
+                "loss_id" => _,
+                "message" =>
+                  "the peer did not dispatch the message; confirm its state before retrying"
+              }
+            } = payload
+        }
+      }
+
+      refute inspect(payload) =~ "secret original content"
+      assert %{issued_seq: 1, acked_seq: 1, pending_since: nil} = DeliveryStates.get(to_id)
+
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      refute_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{"payload" => %{"error" => _}}
+      }
+
+      on_exit(fn -> Enum.each([to_id, from_id], &DeliveryStates.delete/1) end)
+    end
+
     test "negotiated recovery retires a dropped route and broadcasts the new prefix" do
       to_id = "test.delivery-recovery"
       from_id = "test.delivery-recovery-from"

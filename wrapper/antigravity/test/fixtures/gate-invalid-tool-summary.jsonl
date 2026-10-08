@@ -1,0 +1,1 @@
+{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"printf TEST_MARKER"},"error":{"type":"TOOL_ERROR","message":"invalid arguments:\n- missing property 'toolSummary'"}}}}

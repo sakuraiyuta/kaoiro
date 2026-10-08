@@ -40,6 +40,8 @@ Revised 2026-09-23 to add the agent-facing `request_session_reset` tool
 and the `onTurnEnd` `terminal` field it required (F5, issue #396).
 Revised 2026-09-26 for the setup wizard's `agy` presence check and the
 register-time `agy --version` report (F6 addendum, issue #387).
+Revised 2026-10-09 for gate-trip recovery and measured pre-execution
+validation errors.
 
 ## Context
 
@@ -486,9 +488,66 @@ does not prevent — a tool that ran without a gate request has already run.
    flight for it, the only case this can arise for (Stage 2: an unowned
    stream event is `out_of_turn_event`, never gate-checked) -- ends the
    epoch (`epoch_ended{reason:"gate_broken"}`) and marks the turn `error`
-   with `antigravity_gate_unobserved_tool` carrying the tool name; the
-   host refuses further turns until item 1 passes again on the next
-   epoch. Scope: tool names in classes where hook firing is measured
+   with `antigravity_gate_unobserved_tool` carrying the tool name. Before
+   tripping, the host recognizes only a `step_update` with `state = ERROR`,
+   `step_type = tool`, `tool_info.error.type = TOOL_ERROR`, and a complete
+   message matching the anchored measured `invalid arguments:` form: one or
+   more lines of either `- additional properties '<name>' not allowed` or
+   `- missing property '<name>'`. This is a pre-execution CLI validation
+   rejection; an observed gate request, a different error type, any other
+   wording, or extra text still follows the fail-closed correlation path.
+   An unmatched error logs the tool name and bounded, redacted detail before
+   the trip.
+
+   The allowlist is consulted only after `observeCompletedTool` finds no
+   matching gate request, and it trusts `tool_info.error` text. A tool that
+   executed but returned the exact allowlisted text could therefore avoid
+   this detector; this is detection of measured vendor validation failures,
+   not a defense against hostile tools.
+
+   The two observed transcript records called these steps `INVALID`: a
+   `view_file` call with an extra `Action` property (step 4710, production
+   report) and a `run_command` call missing `toolSummary` (step 417, issue
+   comment 6060979821). The live stream representation is `step_update`
+   `ERROR` with `tool_info.error.type = TOOL_ERROR`; these are issue reports,
+   not a production reproduction by this change. Fixture hashes, event rows,
+   and the limits of the scratch logging stub are recorded in the Antigravity
+   permissions reference.
+
+   A missing-path `view_file` failure described as “declaring permissions …
+   invalid tool call error (invalid_args)” remains unmeasured and outside the
+   allowlist. Hisui owns the follow-up recorded in issue comment 6063583273,
+   capped at two probes in a disposable hooked environment. Close it only
+   after recording the capture and result: if the hook fires, no exception is
+   needed; if the hook is silent and this form appears, add only its anchored
+   grammar and a hook-enabled negative control. Genuine executed-tool runtime
+   errors and `define_subagent` remain unmeasured.
+
+   A gate trip makes the host visibly `error`, ends the current epoch, and
+   retires every already-queued batch through the same settlement path as an
+   interrupted turn. A negotiated retirement is used when available; without
+   it, the sender receives one `interrupted` notice. Those batches are never
+   acknowledged as model input. Each queued entry is isolated so a callback
+   failure cannot strand later entries. Further input is rejected except for
+   the single recovery candidate: the first eligible model-bound input is
+   held in the host queue, and arrivals during a probe are rejected and may
+   be retried by their senders. Candidate sources are operator instructions,
+   work notices (including notices queued before host creation), and a
+   session-reset cancellation notice from the turn that tripped the gate.
+
+   After the tripping turn returns, the host runs item 1 for a fresh epoch.
+   The candidate is delivered only after both the smoke test and child
+   creation succeed; then the host clears the visible latch and applies
+   `user_send`. A pre-start failure rejects the candidate without replaying
+   it; a lifecycle-stale outcome remains a stale/interrupted settlement.
+   Recovery is limited to five attempts in a 60-second window. After a
+   successful probe the host remains on probation until one turn returns a
+   result accepted by `agyEventIsSuccessfulResult`. A new gate fault before
+   that clean result becomes sticky. Customization tampering is sticky
+   immediately. Trip and recovery lifecycle records carry the fault class,
+   sanitized tool name, trip count, probe result, and bounded detail.
+
+   Scope: tool names in classes where hook firing is measured
    (write, read, shell, subagent, network — `write_to_file`, `view_file`,
    `list_dir`, `run_command`, `define_subagent`, `manage_task`,
    `search_web` fired; `wait_5_seconds` and `finish` did not appear as
