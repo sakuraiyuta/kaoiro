@@ -32,7 +32,14 @@ defmodule KaoiroServer.TestStores do
   defp reset_dets!(store) do
     # The running store holds its table open under its own name. Read the file
     # name from that table instead of re-deriving the configured path.
-    path = :dets.info(store, :filename)
+    # `:undefined` means the table is not open, and open_file/2 would then
+    # create a file named "undefined" in the working directory. Fail instead.
+    path =
+      case :dets.info(store, :filename) do
+        :undefined -> raise "#{inspect(store)} is not open; its rows cannot be reset"
+        file -> file
+      end
+
     :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, store)
     {:ok, ^store} = :dets.open_file(store, file: path)
     :ok = :dets.delete_all_objects(store)
