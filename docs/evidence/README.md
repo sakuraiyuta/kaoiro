@@ -109,3 +109,9 @@ Claude Agent SDK 0.3.284 model-catalog rollout.
 Server channel-test reply budget (issue #479): default `assert_reply` latency and the ChannelCase default.
 
 - [channel-reply-budget-2026-10-08.md](issue-479/channel-reply-budget-2026-10-08.md) — per-site latency under 100 ms and 2000 ms budgets, three runs at load 8 to 14, and the negative controls for the ChannelCase default.
+
+## issue-550/
+
+claude-code SIGTERM test: exit 143 from the tsx CLI relay (issue #550).
+
+- [sigterm-readiness-2026-10-08.md](issue-550/sigterm-readiness-2026-10-08.md) — the tsx relay window (N1 method), injected-pause controls for the target file, the early-SIGTERM control, and the suite count.
