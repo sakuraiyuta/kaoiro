@@ -22,6 +22,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
 import { runAntigravityCli } from "../src/cli.js";
 
 const isLinux = process.platform === "linux";
@@ -33,9 +35,13 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-function isAlive(pid: number): boolean {
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     // The namespace init may not reap an orphaned grandchild immediately;
     // kill(pid, 0) still succeeds for that zombie even though it has exited.
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -55,10 +61,11 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
+function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  if (rawPid === undefined) return;
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, "SIGKILL");
+    signal(pid, "SIGKILL");
   } catch {
     // Already gone -- fine.
   }
@@ -89,7 +96,8 @@ setInterval(() => {}, 1_000);
   const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
   writeFileSync(executable, `#!${process.execPath}
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 const args = process.argv.slice(2);
 const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 if (args[0] === "models") {
@@ -100,8 +108,8 @@ if (args[0] === "models") {
 } else if (args[0] === "--print") {
   line({ event: "init", conversation_id: "cid-cli-sigterm", init: { tools: [] } });
   const grandchild = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(grandchildScript)}], { stdio: "ignore" });
-  writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid));
-  writeFileSync(${JSON.stringify(selfPidFile)}, String(process.pid));
+  publishPidMarker(${JSON.stringify(grandchildPidFile)}, grandchild.pid, { writeFileSync, renameSync });
+  publishPidMarker(${JSON.stringify(selfPidFile)}, process.pid, { writeFileSync, renameSync });
   // Ignores SIGTERM itself too, so only the grace-bounded SIGKILL ends it.
   process.on("SIGTERM", () => {});
   setInterval(() => line({ event: "step_update", step_update: { conversation_id: "cid-cli-sigterm", step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "." } }), 50);
@@ -183,11 +191,9 @@ describe.skipIf(!isLinux)("Antigravity CLI SIGTERM subtree termination (issue #3
       },
     });
     try {
-      await waitFor(() => existsSync(selfPidFile), 5_000);
-      await waitFor(() => existsSync(grandchildPidFile), 5_000);
+      selfPid = await readPidMarker(selfPidFile, 5_000);
+      grandchildPid = await readPidMarker(grandchildPidFile, 5_000);
       await waitFor(() => existsSync(grandchildReadyFile), 5_000);
-      selfPid = Number(readFileSync(selfPidFile, "utf8").trim());
-      grandchildPid = Number(readFileSync(grandchildPidFile, "utf8").trim());
       expect(isAlive(selfPid)).toBe(true);
       expect(isAlive(grandchildPid)).toBe(true);
 
@@ -210,4 +216,23 @@ describe.skipIf(!isLinux)("Antigravity CLI SIGTERM subtree termination (issue #3
       rmSync(root, { force: true, recursive: true });
     }
   }, 15_000);
+});
+
+describe("PID signal helpers", () => {
+  it("rejects invalid observed PIDs before either signal backend is called", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(() => forceKill(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    // Use this process only as an observed PID: the injected backend records
+    // calls and never sends an OS signal.
+    expect(isAlive(process.pid, fakeSignal)).toBe(true);
+    forceKill(process.pid, fakeSignal);
+    expect(calls).toEqual([[process.pid, 0], [process.pid, "SIGKILL"]]);
+    expect(() => forceKill(undefined, fakeSignal)).not.toThrow();
+    expect(calls).toHaveLength(2);
+  });
 });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
 import { ToolHost } from "../src/toolhost.js";
 
@@ -15,6 +16,14 @@ function config(): WrapperConfig {
     display_name: "Momo",
     server_url: "ws://localhost:4000",
   };
+}
+
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function stopSshAgent(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  const pid = requirePositiveSafePid(rawPid);
+  signal(pid, "SIGTERM");
 }
 
 describe("Antigravity CLI", () => {
@@ -420,8 +429,21 @@ if (args[0] === "models") {
         }
         expect(stderr).toContainEqual(expect.stringContaining("SSH_AUTH_SOCK has no identities; SSH Git operations will fail in BatchMode"));
       } finally {
-        process.kill(Number(pid), "SIGTERM");
+        stopSshAgent(pid);
       }
     });
+  });
+});
+
+describe("SSH-agent PID signal helper", () => {
+  it("rejects invalid parsed PIDs before calling the signal backend", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => stopSshAgent(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    stopSshAgent("42", fakeSignal);
+    expect(calls).toEqual([[42, "SIGTERM"]]);
   });
 });

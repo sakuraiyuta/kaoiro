@@ -1,13 +1,18 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { resolveAgyVersion } from "../src/antigravity-version.js";
+import { embeddedPidMarkerWriter, readPidMarker } from "./pid_marker.js";
 
-function isAlive(pid: number): boolean {
+type SignalBackend = (pid: number, signal: 0) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     return true;
   } catch {
     return false;
@@ -52,10 +57,12 @@ describe("resolveAgyVersion (issue #387)", () => {
       const pidFile = join(dir, "pid");
       writeFileSync(
         script,
-        `#!/bin/sh
-trap '' TERM
-echo $$ > ${JSON.stringify(pidFile)}
-while :; do sleep 1; done
+        `#!${process.execPath}
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
+process.on("SIGTERM", () => {});
+publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
+setInterval(() => {}, 1000);
 `,
       );
       chmodSync(script, 0o755);
@@ -70,10 +77,26 @@ while :; do sleep 1; done
       expect(version).toBeNull();
       expect(elapsedMs).toBeLessThan(2_000);
 
-      await waitFor(() => existsSync(pidFile), 2_000);
-      const pid = Number(readFileSync(pidFile, "utf8").trim());
-      await waitFor(() => !isAlive(pid), 3_000);
+      try {
+        const pid = await readPidMarker(pidFile, 2_000);
+        await waitFor(() => !isAlive(pid), 3_000);
+      } finally {
+        rmSync(dir, { force: true, recursive: true });
+      }
     },
     10_000,
   );
+});
+
+describe("Antigravity PID liveness helper", () => {
+  it("rejects invalid observed PIDs before the signal-0 backend is called", () => {
+    const calls: Array<[number, 0]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(isAlive("42", fakeSignal)).toBe(true);
+    expect(calls).toEqual([[42, 0]]);
+  });
 });

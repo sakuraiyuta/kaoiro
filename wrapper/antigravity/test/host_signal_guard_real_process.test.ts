@@ -1,8 +1,10 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
 import { AntigravityHost } from "../src/host.js";
 
 const isLinux = process.platform === "linux";
@@ -25,16 +27,17 @@ function writeProbeExecutable(root: string, hangModels: boolean): { executable: 
   const gatePid = join(root, "gate.pid");
   const gateExited = join(root, "gate.exited");
   writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 const args = process.argv.slice(2);
 const isModels = args[0] === "models";
 const pidFile = isModels ? ${JSON.stringify(modelsPid)} : ${JSON.stringify(gatePid)};
 const exitFile = isModels ? ${JSON.stringify(modelsExited)} : ${JSON.stringify(gateExited)};
 process.on("SIGTERM", () => {
-  writeFileSync(exitFile, String(process.pid));
+  publishPidMarker(exitFile, process.pid, { writeFileSync, renameSync });
   process.exit(0);
 });
-writeFileSync(pidFile, String(process.pid));
+publishPidMarker(pidFile, process.pid, { writeFileSync, renameSync });
 if (isModels && ${hangModels ? "true" : "false"}) {
   setInterval(() => {}, 1000);
 } else if (isModels) {
@@ -48,30 +51,30 @@ if (isModels && ${hangModels ? "true" : "false"}) {
   return { executable, modelsPid, modelsExited, gatePid, gateExited };
 }
 
-async function waitForFile(path: string, timeoutMs = 3_000): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  while (performance.now() < deadline) {
-    if (existsSync(path)) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`timed out waiting for ${path}`);
-}
-
-function readPid(path: string): number {
-  const pid = Number(readFileSync(path, "utf8"));
+async function readPid(path: string, timeoutMs = 3_000): Promise<number> {
+  const pid = await readPidMarker(path, timeoutMs);
   if (!Number.isInteger(pid) || pid < 2 || pid === process.pid) throw new Error(`unsafe fixture PID in ${path}`);
   return pid;
 }
 
-function stopOwnChild(path: string): void {
-  if (!existsSync(path)) return;
-  const pid = readPid(path);
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function stopOwnPid(rawPid: unknown | undefined, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  if (rawPid === undefined) return;
+  const pid = requirePositiveSafePid(rawPid);
+  if (pid < 2 || pid === process.pid) throw new Error("unsafe fixture PID");
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
   } catch {
     return;
   }
-  process.kill(pid, "SIGKILL");
+  signal(pid, "SIGKILL");
+}
+
+async function stopOwnChild(path: string, signal: SignalBackend = (pid, value) => process.kill(pid, value)): Promise<void> {
+  if (!existsSync(path)) return;
+  stopOwnPid(await readPid(path), signal);
 }
 
 describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
@@ -86,12 +89,12 @@ describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
       onState: () => {},
     });
     try {
-      await waitForFile(fixture.modelsPid);
-      await waitForFile(fixture.modelsExited);
-      expect(readPid(fixture.modelsExited)).toBe(readPid(fixture.modelsPid));
+      const modelsPid = await readPid(fixture.modelsPid);
+      const exitedPid = await readPid(fixture.modelsExited);
+      expect(exitedPid).toBe(modelsPid);
     } finally {
       host.close();
-      stopOwnChild(fixture.modelsPid);
+      await stopOwnChild(fixture.modelsPid);
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -108,14 +111,14 @@ describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
     });
     const send = host.send("start the gate probe");
     try {
-      await waitForFile(fixture.gatePid);
-      await waitForFile(fixture.gateExited);
-      expect(readPid(fixture.gateExited)).toBe(readPid(fixture.gatePid));
+      const gatePid = await readPid(fixture.gatePid);
+      const exitedPid = await readPid(fixture.gateExited);
+      expect(exitedPid).toBe(gatePid);
       await send;
     } finally {
       host.close();
-      stopOwnChild(fixture.modelsPid);
-      stopOwnChild(fixture.gatePid);
+      await stopOwnChild(fixture.modelsPid);
+      await stopOwnChild(fixture.gatePid);
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -132,18 +135,32 @@ describe.skipIf(!isLinux)("AntigravityHost default probe signal guard", () => {
     });
     const send = host.send("start the gate probe");
     try {
-      await waitForFile(fixture.gatePid);
-      const gatePid = readPid(fixture.gatePid);
+      const gatePid = await readPid(fixture.gatePid);
       if (reason === "close") host.close();
       else await host.interrupt();
-      await waitForFile(fixture.gateExited);
-      expect(readPid(fixture.gateExited)).toBe(gatePid);
+      expect(await readPid(fixture.gateExited)).toBe(gatePid);
       await send;
     } finally {
       host.close();
-      stopOwnChild(fixture.modelsPid);
-      stopOwnChild(fixture.gatePid);
+      await stopOwnChild(fixture.modelsPid);
+      await stopOwnChild(fixture.gatePid);
       rmSync(root, { force: true, recursive: true });
     }
+  });
+});
+
+describe("PID signal helper", () => {
+  it("rejects unsafe PIDs before signaling and preserves init/self exclusions", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", 0, -1, 1.5, Number.NaN]) {
+      expect(() => stopOwnPid(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(() => stopOwnPid(1, fakeSignal)).toThrow("unsafe fixture PID");
+    expect(() => stopOwnPid(process.pid, fakeSignal)).toThrow("unsafe fixture PID");
+    expect(calls).toEqual([]);
+    stopOwnPid(42, fakeSignal);
+    expect(calls).toEqual([[42, 0], [42, "SIGKILL"]]);
   });
 });

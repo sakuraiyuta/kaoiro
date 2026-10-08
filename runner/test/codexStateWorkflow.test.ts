@@ -1,11 +1,16 @@
 import { cgroupFixture } from "./codexCgroupFixture.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { makeReleaseTarball, revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
+import { publishPidMarker, signalPidIfStartMatches } from "./pid_marker.js";
+
+const wrapperCorePidHelper = fileURLToPath(new URL("../../wrapper/core/dist/pid.js", import.meta.url));
 
 describe.skipIf(process.platform !== "linux")("state-aware updater control flow", () => {
   let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string, nodeOptions: string;
@@ -26,34 +31,40 @@ describe.skipIf(process.platform !== "linux")("state-aware updater control flow"
     mkdirSync(join(dir, "tarball")); archive = makeReleaseTarball(join(dir, "tarball"), B);
     child = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { env: { PATH: process.env.PATH!, HOME: ordinary, CODEX_HOME: home }, stdio: "ignore" });
     await new Promise<void>((ok, fail) => { child.once("spawn", ok); child.once("error", fail); });
-    const procStat = readFileSync(`/proc/${child.pid}/stat`, "utf8");
+    const childPid = requirePositiveSafePid(child.pid);
+    const procStat = readFileSync(`/proc/${childPid}/stat`, "utf8");
     const sourceStart = procStat.slice(procStat.lastIndexOf(")") + 2).split(" ")[19];
-    writeFileSync(join(dir, "mainpid"), JSON.stringify({ pid: child.pid, start: sourceStart }));
-    writeFileSync(join(dir, "owned-pids"), "");
+    publishPidMarker(join(dir, "mainpid"), childPid, { writeFileSync, renameSync }, JSON.stringify({ pid: childPid, start: sourceStart }));
+    mkdirSync(join(dir, "owned-pids"));
     writeFileSync(join(dir, "active"), "active"); calls = join(dir, "calls");
-    ctl = join(dir, "systemctl");
+    ctl = join(dir, "systemctl.mjs");
     writeFileSync(ctl, `#!${process.execPath}
-const fs = require('node:fs');
+import * as fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { requirePositiveSafePid } from ${JSON.stringify(wrapperCorePidHelper)};
 const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.stringify(root)};
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
+const signalPidIfStartMatches = ${signalPidIfStartMatches.toString()};
+const publishPidMarker = ${publishPidMarker.toString()};
 const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
+const ownerPid = requirePositiveSafePid(owner.pid);
+if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { signalPidIfStartMatches(ownerPid, owner.start, requirePositiveSafePid, pid=>fs.readFileSync('/proc/'+pid+'/stat','utf8'), (pid, value)=>process.kill(pid, value)); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
 else if (args.includes('start')) {
  fs.appendFileSync(dir+'/calls','start\\n');
- const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
+ const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
  child.on('spawn',()=>{
   const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
   const record={pid:child.pid,start:stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]};
-  fs.writeFileSync(dir+'/mainpid',JSON.stringify(record));
-  fs.appendFileSync(dir+'/owned-pids',JSON.stringify(record)+'\\n');
+  publishPidMarker(dir+'/mainpid',record.pid,fs,JSON.stringify(record));
+  publishPidMarker(dir+'/owned-pids/'+record.pid+'.json',record.pid,fs,JSON.stringify(record));
   fs.writeFileSync(dir+'/active','active'); child.unref();
  });
 }
 else if (args.includes('show-environment')) { console.log('HOME='+${JSON.stringify(ordinary)}+'\\nKAOIRO_RUNNER_DIR='+${JSON.stringify(conf)}); if(fs.existsSync(dir+'/manager-extra')) console.log(fs.readFileSync(dir+'/manager-extra','utf8')); }
 else if (args.includes('show')) {
  const shim=root+'/current/deploy/kaoiro-runner-launch.sh';
- const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(owner.pid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
+ const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(ownerPid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
  console.log(values[prop || 'ExecStart'] || '');
 }
 `, { mode: 0o755 });
@@ -63,12 +74,11 @@ else if (args.includes('show')) {
       child.kill("SIGTERM");
       await new Promise<void>((ok) => child.once("exit", () => ok()));
     }
-    for (const line of readFileSync(join(dir, "owned-pids"), "utf8").split("\n").filter(Boolean)) {
-      const owned = JSON.parse(line) as { pid: number; start: string };
-      try {
-        const st = readFileSync(`/proc/${owned.pid}/stat`, "utf8");
-        if (st.slice(st.lastIndexOf(")") + 2).split(" ")[19] === owned.start) process.kill(owned.pid, "SIGTERM");
-      } catch (error) { if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+    for (const name of readdirSync(join(dir, "owned-pids"))) {
+      const owned = JSON.parse(readFileSync(join(dir, "owned-pids", name), "utf8")) as { pid: number; start: string };
+      signalPidIfStartMatches(owned.pid, owned.start, requirePositiveSafePid,
+        (pid) => readFileSync(`/proc/${pid}/stat`, "utf8"),
+        (pid, signal) => process.kill(pid, signal));
     }
     rmSync(dir, { recursive: true, force: true });
   });
@@ -304,7 +314,7 @@ else if (args.includes('show')) {
       expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     } finally { closeSync(fd); }
   });
-  it("refuses a service still active after stop with no switch or start", () => {
+  it("refuses a service still active after stop with no switch or start", async () => {
     writeFileSync(join(dir, "remain-active"), "trigger");
     const result = update();
     expect(result.status).not.toBe(0);
@@ -312,6 +322,9 @@ else if (args.includes('show')) {
     expect(readFileSync(calls, "utf8")).toBe("stop\n");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
   });
   it.each(["before-move", "after-move", "start-attempted", "recovery-failure"])("handles switch failure %s without starting the candidate", (mode) => {
     const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");

@@ -1,8 +1,15 @@
 import { execFile, execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { SSH_AGENT_PROBE_TIMEOUT_MS, probeSshAgentIdentities } from "../src/ssh_agent_probe.js";
 
 type ExecFileCallback = (error: (Error & { code?: unknown; killed?: boolean }) | null, stdout: string, stderr: string) => void;
+type SignalBackend = (pid: number, signal: NodeJS.Signals) => unknown;
+
+function stopSshAgent(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  const pid = requirePositiveSafePid(rawPid);
+  signal(pid, "SIGTERM");
+}
 
 function fakeExecFile(outcome: { error: (Error & { code?: unknown; killed?: boolean }) | null; stdout?: string; stderr?: string }) {
   const calls: Array<{ file: string; args: readonly string[]; env: NodeJS.ProcessEnv | undefined; timeout: number | undefined }> = [];
@@ -70,7 +77,20 @@ describe("probeSshAgentIdentities (issue #350)", () => {
     try {
       await expect(probeSshAgentIdentities({ env: { ...process.env, SSH_AUTH_SOCK: socket } })).resolves.toBe("no_identities");
     } finally {
-      process.kill(Number(pid), "SIGTERM");
+      stopSshAgent(pid);
     }
+  });
+});
+
+describe("SSH-agent PID signal helper", () => {
+  it("rejects invalid parsed PIDs before calling the signal backend", () => {
+    const calls: Array<[number, NodeJS.Signals]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => stopSshAgent(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    stopSshAgent("42", fakeSignal);
+    expect(calls).toEqual([[42, "SIGTERM"]]);
   });
 });

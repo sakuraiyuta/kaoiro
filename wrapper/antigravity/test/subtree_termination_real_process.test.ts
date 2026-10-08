@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PermissionBroker, type WrapperConfig } from "@kaoiro/agent-common";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
 import { AntigravityHost, type AntigravityHostOptions } from "../src/host.js";
 import { signalTarget } from "../src/subtree_termination.js";
 
@@ -33,9 +35,13 @@ function config(overrides: Partial<WrapperConfig> = {}): WrapperConfig {
   };
 }
 
-function isAlive(pid: number): boolean {
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     // The namespace init may not reap an orphaned grandchild immediately;
     // kill(pid, 0) still succeeds for that zombie even though it has exited.
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -59,14 +65,15 @@ async function waitForFile(path: string): Promise<void> {
   await waitFor(() => existsSync(path), 2_000);
 }
 
-function readPidFile(path: string): number {
-  return Number(readFileSync(path, "utf8").trim());
+function readPidFile(path: string, timeoutMs = 2_000): Promise<number> {
+  return readPidMarker(path, timeoutMs);
 }
 
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
+function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  if (rawPid === undefined) return;
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, "SIGKILL");
+    signal(pid, "SIGKILL");
   } catch {
     // Already gone -- fine.
   }
@@ -102,7 +109,8 @@ setInterval(() => {}, 1_000);
   chmodSync(grandchildScript, 0o755);
   writeFileSync(executable, `#!${process.execPath}
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 const args = process.argv.slice(2);
 const line = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 if (args[0] === "models") {
@@ -110,8 +118,8 @@ if (args[0] === "models") {
 } else if (args[0] === "--print") {
   line({ event: "init", conversation_id: "cid-subtree", init: { tools: ["run_command"] } });
   const grandchild = spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(grandchildScript)}], { stdio: "ignore" });
-  writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid));
-  writeFileSync(${JSON.stringify(selfPidFile)}, String(process.pid));
+  publishPidMarker(${JSON.stringify(grandchildPidFile)}, grandchild.pid, { writeFileSync, renameSync });
+  publishPidMarker(${JSON.stringify(selfPidFile)}, process.pid, { writeFileSync, renameSync });
   ${options.ignoreOwnSigterm ? "process.on('SIGTERM', () => {});" : ""}
   // issue #379 pin 5 / #377: a run_command tool step that stays ACTIVE
   // forever, exactly like a promoted background task whose completion the
@@ -160,11 +168,9 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     let grandchildPid: number | undefined;
     try {
       void host.send("run the fixture");
-      await waitForFile(selfPidFile);
-      await waitForFile(grandchildPidFile);
       await waitForFile(grandchildReadyFile);
-      selfPid = readPidFile(selfPidFile);
-      grandchildPid = readPidFile(grandchildPidFile);
+      selfPid = await readPidFile(selfPidFile);
+      grandchildPid = await readPidFile(grandchildPidFile);
       expect(isAlive(selfPid)).toBe(true);
       expect(isAlive(grandchildPid)).toBe(true);
 
@@ -199,11 +205,9 @@ describe.skipIf(!isLinux)("Antigravity subtree termination against real processe
     let grandchildPid: number | undefined;
     try {
       void host.send("run the fixture");
-      await waitForFile(selfPidFile);
-      await waitForFile(grandchildPidFile);
       await waitForFile(grandchildReadyFile);
-      selfPid = readPidFile(selfPidFile);
-      grandchildPid = readPidFile(grandchildPidFile);
+      selfPid = await readPidFile(selfPidFile);
+      grandchildPid = await readPidFile(grandchildPidFile);
 
       await host.interrupt();
       // The leader accepts a plain SIGTERM here (ignoreOwnSigterm: false),
@@ -264,4 +268,24 @@ if (args[0] === "models") {
       rmSync(root, { force: true, recursive: true });
     }
   }, 10_000);
+});
+
+describe("PID signal helpers", () => {
+  it("rejects invalid observed PIDs before either signal backend is called", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => {
+      calls.push([pid, signal]);
+      if (signal === 0) throw Object.assign(new Error("missing"), { code: "ESRCH" });
+    };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(() => forceKill(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(isAlive(42, fakeSignal)).toBe(false);
+    forceKill(42, fakeSignal);
+    expect(calls).toEqual([[42, 0], [42, "SIGKILL"]]);
+    expect(() => forceKill(undefined, fakeSignal)).not.toThrow();
+    expect(calls).toHaveLength(2);
+  });
 });

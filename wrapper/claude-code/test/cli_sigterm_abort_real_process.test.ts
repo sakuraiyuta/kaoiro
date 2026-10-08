@@ -19,13 +19,15 @@
 // The fixture is spawned via `queryOptions.pathToClaudeCodeExecutable`, the
 // SDK's own documented seam for swapping the `claude` binary — this drives
 // the real `@anthropic-ai/claude-agent-sdk` code path, not a substitute.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/agent-common";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
 
@@ -38,9 +40,13 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-function isAlive(pid: number): boolean {
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, signal) => process.kill(pid, signal)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     return true;
   } catch {
     return false;
@@ -60,10 +66,11 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
+function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  if (rawPid === undefined) return;
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, "SIGKILL");
+    signal(pid, "SIGKILL");
   } catch {
     // Already gone -- fine.
   }
@@ -75,9 +82,10 @@ function writeFixture(root: string): { executable: string; pidFile: string } {
   const executable = join(root, "claude-fixture.mjs");
   const pidFile = join(root, "fixture.pid");
   writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 process.on("SIGTERM", () => {});
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
 setInterval(() => {}, 1_000);
 `);
   chmodSync(executable, 0o755);
@@ -92,8 +100,9 @@ function writeSigtermCooperativeFixture(
   const executable = join(root, "claude-fixture-cooperative.mjs");
   const pidFile = join(root, "fixture-cooperative.pid");
   writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
+publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
 setInterval(() => {}, 1_000);
 `);
   chmodSync(executable, 0o755);
@@ -139,8 +148,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     // still awaits the original promise and propagates its rejection.
     void run.catch(() => {});
     try {
-      await waitFor(() => existsSync(pidFile), 10_000);
-      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      fixturePid = await readPidMarker(pidFile, 10_000);
       expect(isAlive(fixturePid)).toBe(true);
 
       // The SIGTERM handler this test exists to cover is registered on the
@@ -193,8 +201,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     });
     void run.catch(() => {});
     try {
-      await waitFor(() => existsSync(pidFile), 10_000);
-      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      fixturePid = await readPidMarker(pidFile, 10_000);
       process.emit("SIGTERM" as never);
       await new Promise((resolve) => setTimeout(resolve, 5_200));
       expect(isAlive(fixturePid)).toBe(true);
@@ -244,8 +251,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     });
     void run.catch(() => {});
     try {
-      await waitFor(() => existsSync(pidFile), 10_000);
-      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      fixturePid = await readPidMarker(pidFile, 10_000);
       expect(isAlive(fixturePid)).toBe(true);
 
       // host.ts's close() takes a different branch (does not call
@@ -314,8 +320,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     });
     void run.catch(() => {});
     try {
-      await waitFor(() => existsSync(pidFile), 10_000);
-      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      fixturePid = await readPidMarker(pidFile, 10_000);
       expect(isAlive(fixturePid)).toBe(true);
 
       const t0 = performance.now();
@@ -344,4 +349,21 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
       rmSync(root, { force: true, recursive: true });
     }
   }, 10_000);
+});
+
+describe("PID signal helpers", () => {
+  it("rejects invalid observed PIDs before either signal backend is called", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(() => forceKill(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(isAlive(42, fakeSignal)).toBe(true);
+    forceKill(42, fakeSignal);
+    expect(calls).toEqual([[42, 0], [42, "SIGKILL"]]);
+    expect(() => forceKill(undefined, fakeSignal)).not.toThrow();
+    expect(calls).toHaveLength(2);
+  });
 });

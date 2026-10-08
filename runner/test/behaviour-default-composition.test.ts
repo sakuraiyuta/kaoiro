@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 
 // Default-composition gate for issue #469 (design: docs/plans/
 // issue-469-runner-config-migration.md, section 3). It injects nothing: the
@@ -153,12 +154,29 @@ function waitFor(
   });
 }
 
-function isAlive(pid: number): boolean {
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     return true;
   } catch {
     return false;
+  }
+}
+
+function signalPid(
+  rawPid: unknown,
+  signalValue: NodeJS.Signals,
+  signal: SignalBackend = (pid, value) => process.kill(pid, value),
+): void {
+  const pid = requirePositiveSafePid(rawPid);
+  try {
+    signal(pid, signalValue);
+  } catch {
+    // The wrapper can exit between the liveness check and cleanup signal.
   }
 }
 
@@ -196,19 +214,15 @@ async function stopRunner(
  *  test started, named by their own startup lines) and awaited. */
 async function verifyWrappersGone(pids: Set<number>): Promise<string[]> {
   const failures: string[] = [];
-  await waitUntil(() => ![...pids].some(isAlive), 10_000);
-  const alive = [...pids].filter(isAlive);
+  await waitUntil(() => ![...pids].some((pid) => isAlive(pid)), 10_000);
+  const alive = [...pids].filter((pid) => isAlive(pid));
   if (alive.length === 0) return failures;
   failures.push(`wrapper pids outlived the runner: ${alive.join(",")}`);
   for (const pid of alive) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // gone between the check and the signal
-    }
+    signalPid(pid, "SIGKILL");
   }
-  if (!(await waitUntil(() => !alive.some(isAlive), 5_000))) {
-    failures.push(`wrapper pids survived SIGKILL: ${alive.filter(isAlive).join(",")}`);
+  if (!(await waitUntil(() => !alive.some((pid) => isAlive(pid)), 5_000))) {
+    failures.push(`wrapper pids survived SIGKILL: ${alive.filter((pid) => isAlive(pid)).join(",")}`);
   }
   return failures;
 }
@@ -314,7 +328,7 @@ describe("default composition (issue #469)", () => {
           /\[kaoiro\] antigravity consumers: pid=(\d+) ([^\n]*)\n/,
         );
         for (const found of [claude, codex, antigravity]) {
-          wrapperPids.add(Number(found[1]));
+          wrapperPids.add(requirePositiveSafePid(found[1]));
         }
         expect(claude[2]).toBe(
           "yield_claim_timeout_ms=1500 pending_receipt_root_timeout_ms=2500 " +
@@ -371,8 +385,8 @@ describe("default composition (issue #469)", () => {
       for (const match of output.matchAll(
         /\[kaoiro\] (?:claude|codex|antigravity) (?:behaviour|consumers): pid=(\d+) /g,
       )) {
-        const pid = Number(match[1]);
-        if (Number.isInteger(pid) && pid > 1) wrapperPids.add(pid);
+        const pid = requirePositiveSafePid(match[1]);
+        if (pid > 1) wrapperPids.add(pid);
       }
       failures.push(...(await verifyWrappersGone(wrapperPids)));
       for (const socket of endpoint.sockets) socket.destroy();
@@ -398,4 +412,19 @@ describe("default composition (issue #469)", () => {
     },
     180_000,
   );
+});
+
+describe("PID signal helpers", () => {
+  it("rejects invalid observed PIDs before a signal backend is called", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(() => signalPid(invalid, "SIGKILL", fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(isAlive("42", fakeSignal)).toBe(true);
+    signalPid("42", "SIGKILL", fakeSignal);
+    expect(calls).toEqual([[42, 0], [42, "SIGKILL"]]);
+  });
 });

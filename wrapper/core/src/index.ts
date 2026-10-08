@@ -11,6 +11,7 @@ export {
   parseClaudeSchedulerNumber,
 } from "./claude_scheduler.js";
 export { formatConsumerSettingsLine } from "./consumer_settings.js";
+export { requirePositiveSafePid } from "./pid.js";
 export {
   PERMISSION_TIMEOUT_ENV,
   isPermissionTimeoutEnvSet,

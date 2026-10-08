@@ -23,12 +23,14 @@
 // the exit path drains the link's own teardown (flushInterAgentRetirements,
 // reportDisconnectIntent, socket close), not just the SDK child.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
+import { embeddedPidMarkerWriter, readPidMarker } from "../../core/test/pid_marker.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const isLinux = process.platform === "linux";
@@ -37,9 +39,13 @@ const tsxBin = join(testDir, "..", "node_modules", ".bin", "tsx");
 const cliSrcPath = join(testDir, "..", "src", "cli.ts");
 const hostSrcPath = join(testDir, "..", "src", "host.ts");
 
-function isAlive(pid: number): boolean {
+type Signal = 0 | NodeJS.Signals;
+type SignalBackend = (pid: number, signal: Signal) => unknown;
+
+function isAlive(rawPid: unknown, signal: SignalBackend = (pid, signal) => process.kill(pid, signal)): boolean {
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, 0);
+    signal(pid, 0);
     return true;
   } catch {
     return false;
@@ -59,10 +65,11 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
-function forceKill(pid: number | undefined): void {
-  if (pid === undefined) return;
+function forceKill(rawPid: unknown, signal: SignalBackend = (pid, value) => process.kill(pid, value)): void {
+  if (rawPid === undefined) return;
+  const pid = requirePositiveSafePid(rawPid);
   try {
-    process.kill(pid, "SIGKILL");
+    signal(pid, "SIGKILL");
   } catch {
     // Already gone -- fine.
   }
@@ -74,9 +81,10 @@ function writeFixture(root: string): { executable: string; pidFile: string } {
   const executable = join(root, "claude-fixture.mjs");
   const pidFile = join(root, "fixture.pid");
   writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 process.on("SIGTERM", () => process.exit(0));
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
 setInterval(() => {}, 1_000);
 `);
   chmodSync(executable, 0o755);
@@ -87,9 +95,10 @@ function writeIgnoringFixture(root: string): { executable: string; pidFile: stri
   const executable = join(root, "claude-ignoring-fixture.mjs");
   const pidFile = join(root, "ignoring-fixture.pid");
   writeFileSync(executable, `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const publishPidMarker = ${embeddedPidMarkerWriter()};
 process.on("SIGTERM", () => {});
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+publishPidMarker(${JSON.stringify(pidFile)}, process.pid, { writeFileSync, renameSync });
 setInterval(() => {}, 1_000);
 `);
   chmodSync(executable, 0o755);
@@ -161,8 +170,7 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
       // for the fixture pid, in that order.
       await waitFor(() => wire.joins >= 1, 15_000);
       wire.push("persona_prompt", { prompt: "system prompt" });
-      await waitFor(() => existsSync(fixturePidFile), 15_000);
-      fixturePid = Number(readFileSync(fixturePidFile, "utf8").trim());
+      fixturePid = await readPidMarker(fixturePidFile, 15_000);
       expect(isAlive(fixturePid)).toBe(true);
       expect(child.exitCode).toBeNull();
 
@@ -220,8 +228,7 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
     try {
       await waitFor(() => wire.joins >= 1, 15_000);
       wire.push("persona_prompt", { prompt: "system prompt" });
-      await waitFor(() => existsSync(pidFile), 15_000);
-      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      fixturePid = await readPidMarker(pidFile, 15_000);
       expect(isAlive(fixturePid)).toBe(true);
 
       const t0 = performance.now();
@@ -245,4 +252,21 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
       rmSync(root, { force: true, recursive: true });
     }
   }, 20_000);
+});
+
+describe("PID signal helpers", () => {
+  it("rejects invalid observed PIDs before either signal backend is called", () => {
+    const calls: Array<[number, Signal]> = [];
+    const fakeSignal: SignalBackend = (pid, signal) => { calls.push([pid, signal]); };
+    for (const invalid of ["", "  ", "0", "-1", "1.5", "NaN", "Infinity", "1e3", "9007199254740992", 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => isAlive(invalid, fakeSignal)).toThrow(RangeError);
+      expect(() => forceKill(invalid, fakeSignal)).toThrow(RangeError);
+      expect(calls).toEqual([]);
+    }
+    expect(isAlive(42, fakeSignal)).toBe(true);
+    forceKill(42, fakeSignal);
+    expect(calls).toEqual([[42, 0], [42, "SIGKILL"]]);
+    expect(() => forceKill(undefined, fakeSignal)).not.toThrow();
+    expect(calls).toHaveLength(2);
+  });
 });
