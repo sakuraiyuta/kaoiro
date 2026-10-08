@@ -98,8 +98,10 @@ describe("the captured command approval shape on the pinned Codex", () => {
     validateCapture(metadata);
   });
 
-  it("rejects a stale capture even when the remaining metadata is valid", () => {
-    expect(() => validateCapture({ ...metadata, version: "0.160.0" })).toThrow("Capture version differs from the installed pin");
+  it("rejects an internally consistent version claim for another pin", () => {
+    const stale = { ...metadata, version: "0.160.0", native_version: "codex-cli 0.160.0",
+      initialize: { ...metadata.initialize, userAgent: metadata.initialize.userAgent.replace("/0.161.0 ", "/0.160.0 ") } };
+    expect(() => validateCapture(stale)).toThrow("Capture version differs from the installed pin");
   });
 
   it("offers no decline in availableDecisions, and a decline reply leaves the item declined", () => {
