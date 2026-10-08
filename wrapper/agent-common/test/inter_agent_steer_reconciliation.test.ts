@@ -55,6 +55,7 @@ describe("Codex root and steer terminal reconciliation", () => {
     const notices = tool.endSteeredTurn("T", ["X"]);
     expect(coverage(notices).map(entry => entry.delivery_seq)).toEqual([2]);
     expect(payloads(notices)[0]!.error!.code).toBe("timeout");
+    expect(payloads(notices)[0]!.error!.message).toBe("the peer's turn timed out");
     expect(tool.hasPendingRootConversation("X")).toBe(false);
   });
 
@@ -90,6 +91,7 @@ describe("Codex root and steer terminal reconciliation", () => {
     tool.settleSteerInjection("T", 2, "corroborated", identity); tool.settleSteerInjection("T", 3, "uncertain", identity);
     const notices = payloads(tool.endSteeredTurn("T", ["X"], failed));
     expect(notices).toHaveLength(1); expect(notices[0]!.error!.code).toBe("timeout");
+    expect(notices[0]!.error!.message).toBe("the peer's turn timed out");
     expect(notices[0]!.error!.affected_deliveries).toBeUndefined();
   });
 });
