@@ -30,9 +30,8 @@ Source defaults and configured production behavior are separate:
 | Codex exec | queue / queue | Still the omitted backend in wrapper and runner code; no mid-turn mechanism | Remains an explicit backend fallback. Stage 4b changes the omitted-setting default, rather than switching the already-configured production peers for the first time. |
 | Antigravity | queue / queue | Join omits delivery-mode declarations; no measured later-turn mid-flight delivery seam | Keep its ceiling false and the UI unsupported. Phase 4 measurement and later activation remain separate work. |
 
-The production column records the operator decision and Ao's observation,
-not a new live probe by this author. No production configuration was read
-or changed here, and no native delivery experiment was run.
+The production column records [the E3 operator decision](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859)
+and Ao's inventory.
 
 Prerequisites and baseline facts:
 
@@ -46,8 +45,8 @@ Prerequisites and baseline facts:
   open for other groups, but the three flag keys landed in `5b78697d`,
   an ancestor of this baseline. Stage 3 needs that shipped registry,
   not the closure of the whole issue. A set legacy environment variable
-  wins over the file. Config reload affects subsequent spawns; it does
-  not require the old environment-only, host-wide runner restart story.
+  wins over the file. Config reload affects subsequent spawns without a
+  host-wide runner restart.
   Existing wrapper declarations remain fixed for their process lifetime.
 - There is still no `delivery_policies` store, `set_delivery_policy`,
   `delivery_policy_applied`, or `in_flight_defaults` in the relevant
@@ -55,7 +54,7 @@ Prerequisites and baseline facts:
   The per-agent opt-out remains proposed work.
 - Correct `delivery.md` to describe Antigravity's omission and honest
   queue fallback, rather than claiming it declares two explicit `none`
-  fields. Existing Claude/Codex behavior is no longer an ao-only canary.
+  fields.
 - The `in_flight_delivery` engine keys remain the plan's canonical engine
   names: `claude-code`, `codex`, `antigravity`. The old config block
   `claude_code` is a different spelling. The runner registry supplies the
@@ -287,6 +286,7 @@ issue anticipates: there is no rejoin and no change to the join echo.
   the mechanism appears only when the operator sets the ceiling to `true`,
   as its own default flip (stage 4d) with evidence and review. Stored
   per-agent policies apply from that point. C4D tracks later-turn delivery
+  after [issue 541](https://github.com/sakuraiyuta/kaoiro/issues/541) lands,
   alongside issue 416 and the issue 412 boundary, without duplicating their
   turn-identity work. It does not block Claude/Codex policy integration.
 
@@ -317,22 +317,21 @@ coordinates shared writers without prescribing a landing order with 548.
 
 ## Prerequisites for retirement and remaining defaults
 
-**Claude 4c.** E3 treats the old first-flip prerequisites as satisfied and
-removes them: production yield disposition, fold/overtake limit exercise,
+**Claude 4c.** E3 treats the enablement prerequisites as satisfied:
+production yield disposition, fold/overtake limit exercise,
 oversized downgrade, receipt-root timeout, an `opus[1m]` canary, and the
 `lost_count` zero window. Do not reproduce them as blockers in stage 0,
 stage 4c, a child issue, or an operator decision still waiting to be made.
-This is the operator's accepted production decision; it is not a claim
-that this author measured those six cases. Tests and native negative
-controls for the **new policy/fence implementation** remain required.
+Tests and native negative controls for the **new policy/fence
+implementation** remain required.
 
 **Codex 4a.** Audit the recorded ADR-0058 steering evidence, including
 thinking/tool-running probes, review/compact fallback, resume and
 interruption, against their actual artifact/pin. Retain the existing
 0.159.3 evidence as evidence for that pin; do not silently treat it as
 a measurement of a later artifact. Fill genuinely missing or invalidated
-rows through separately approved native runs. Frame this as migration
-evidence, not a request to approve October 3's already-intended enablement.
+rows through separately approved native runs. These rows establish the
+backend migration requirements.
 
 **Codex 4b.** Retain ADR-0058's configuration capture, account/model
 defaults, hooks, credential-refresh and compaction requirements for the
@@ -454,8 +453,11 @@ Real native claims require their own approved, exact-pin evidence;
 these deterministic tests establish routing
 and the runbook gate only.
 
-**Antigravity 4d.** E3 does not waive phase 4. Track native later-turn
-measurement alongside [issue 416](https://github.com/sakuraiyuta/kaoiro/issues/416)
+**Antigravity 4d.** E3 does not waive phase 4. Require
+[issue 541](https://github.com/sakuraiyuta/kaoiro/issues/541) to land before
+native later-turn measurement or activation; an unavailable wrapper must
+not be mistaken for a delivery failure. Track measurement alongside
+[issue 416](https://github.com/sakuraiyuta/kaoiro/issues/416)
 and the [issue 412](https://github.com/sakuraiyuta/kaoiro/issues/412)
 PreInvocation boundary. First-invocation success alone does not establish
 delivery into a running later turn. Keep queue behavior and the false
@@ -475,8 +477,7 @@ ceiling until the separate implementation/evidence/activation review.
 | 4d | Separate Antigravity phase-4 implementation and reviewed activation | Future mechanism change after measurement; until then queue/unsupported/ceiling false | Ceiling false next spawn; retain this unresolved scope on the parent |
 | 5 | Remove retired in-flight flag/list readers after the warning window | No change for configs migrated to the new keys | Coordinate removal with 469; reintroducing a reader must not discard stored opt-outs |
 
-Keep the October 2 ordering: 4b lands immediately before 4c in the
-retirement series. It no longer means an initial production flip.
+Stage 4b lands immediately before 4c in the retirement series.
 The independent 4d activation is outside that adjacent pair; stage 5
 waits for the released deprecation window rather than elapsed wall time.
 
@@ -687,8 +688,8 @@ and exit codes from logs. Bind results to their final commits/artifacts.
   explicit per-agent on may work; ceiling false prohibits the mechanism
   even for a stored on. Mutate the ceiling check and the seed-only
   assignment separately; corresponding tests must fail.
-- **Mixed versions:** retain all four combinations and the r2 mutation
-  that removes the old-wrapper no-ack exception. Mutate stale-ack owner
+- **Mixed versions:** retain all four combinations; removing the
+  old-wrapper no-ack exception must make its compatibility test fail. Mutate stale-ack owner
   binding and old-server fence retention separately. Supporting-wrapper
   on cannot grant before its ack; off refuses before an ack arrives.
 - **Admission and commit:** mutate the server explicit-intent clamp,
@@ -781,10 +782,9 @@ grant and actual outcome.
 
 Latest accepted decision: **E3 = A**, [issue 463 comment 6063194859](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859),
 2026-10-08. Full production enablement since October 3 was intentional.
-Stages 4a–4c retire opt-ins and normalize defaults; they do not request an
-initial production flip. E3 treats the former six Claude 4c conditions as
-satisfied and removes them as prerequisites, including from C0 and C4C.
-This is operator authority, not new measurements of those six cases.
+Stages 4a–4c retire opt-ins and normalize defaults. E3 treats the six Claude
+4c enablement conditions as satisfied; they are excluded from the C0 and
+C4C prerequisites.
 
 The still-current decisions from [October 2](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-5946655166)
 are host ceiling/default as separate keys, host-wide explicit exec opt-out,
@@ -848,7 +848,7 @@ boundary owned by the director.
 | C4B: Make app-server the omitted-setting Codex backend | 4b, all default-adapter sites | C0 ADR-0058 backend evidence and C4A | Full default sweep, default production composition; independent runner/entry/replay/getter/status mutations; legacy exec sessions including those created while pinned; host pin before restore and fresh inventory/nil-pointer boundary at pin removal; explicit exec fallback and consistent reported/history backend; pin evidence; land adjacent before C4C |
 | C4C: Retire Claude phase-2 opt-ins in favor of delivery policy | 4c, legacy gate retirement | C1S/C1W, C2, C3; C4B immediately preceding | Supported/on by default; stored off/ceiling respected; warnings; new fence controls. No six-case first-flip checklist |
 | C5: Remove deprecated in-flight environment/list readers | 5, coordinated parser/docs cleanup | C4A/C4C plus one released version with warnings; coordinate 469 | Reader/config/example sweep; only in-flight flags removed; approval-axis controls preserved; opt-out and explicit exec behavior retained |
-| C4D: Measure and implement Antigravity phase-4 delivery, then activate | 4d, separate measured engine work | 416 and the 412 boundary; its own reviewed native evidence/implementation design | Later-turn delivery and negative controls measured before activation; until then queue/unsupported/ceiling false; later activation has its own review and operator-controlled timing |
+| C4D: Measure and implement Antigravity phase-4 delivery, then activate | 4d, separate measured engine work | 541 landed; 416 and the 412 boundary; its own reviewed native evidence/implementation design | Later-turn delivery and negative controls measured before activation; until then queue/unsupported/ceiling false; later activation has its own review and operator-controlled timing |
 
 C0/C3 can proceed with coordinated contract ownership once reviewed;
 code landing order still respects the stages and mixed-version matrix.
