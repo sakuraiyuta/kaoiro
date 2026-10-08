@@ -13,4 +13,24 @@ describe("Claude fold text", () => {
     expect(withoutAuthorization).not.toContain(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
     expect(withoutAuthorization).not.toContain("reply_authorization:");
   });
+
+  it("includes guidance once after the batch and before multiple authorization lines", () => {
+    const authorizations = [
+      { in_reply_to: 4, reply_ticket: "ticket-4", expires_in_ms: 30_000 },
+      { in_reply_to: 8, reply_ticket: "ticket-8", expires_in_ms: 30_000 },
+    ];
+    const text = formatClaudeFoldText("fold-2", "peer input", authorizations);
+    const firstAuthorizationLine = text.indexOf(
+      `reply_authorization: ${JSON.stringify(authorizations[0])}`,
+    );
+    const secondAuthorizationLine = text.indexOf(
+      `reply_authorization: ${JSON.stringify(authorizations[1])}`,
+    );
+    const guidance = text.indexOf(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
+
+    expect(text.split(REPLY_AUTHORIZATION_USAGE_GUIDANCE)).toHaveLength(2);
+    expect(text.indexOf("peer input")).toBeLessThan(guidance);
+    expect(guidance).toBeLessThan(firstAuthorizationLine);
+    expect(firstAuthorizationLine).toBeLessThan(secondAuthorizationLine);
+  });
 });

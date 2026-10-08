@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-10-01
+last_updated: 2026-10-08
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -97,6 +97,9 @@ description it recorded
 ([ADR-0065](../../adr/0065-footer-changes-on-resumed-sessions.md)), which may not
 list the two properties; the sentence tells such a session which arguments to
 pass. A result without `reply_authorization` never carries it.
+A Claude fold with at least one provisional `reply_authorization` includes the
+same sentence once before its authorization lines; see
+[Claude recipient handoff](delivery.md#claude-recipient-handoff).
 
 Tickets become usable only at complete tool-result handoff. `expires_in_ms:
 300000` is the lifetime from that handoff, not remaining time when the model

@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-10-04
+last_updated: 2026-10-08
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -307,8 +307,10 @@ echo, root input retains its arrival order and phase-2 overtaking is disabled.
 
 For a fold, the wrapper reserves a fold slot for the live turn,
 then pushes text containing a correlation `fold_id`, a peer-input preamble,
-and provisional `reply_authorization` tickets for the latest ordinary turn
-from each conversation and peer. A trusted `UserPromptSubmit` hook activates
+provisional `reply_authorization` tickets for the latest ordinary turn from
+each conversation and peer, and, when at least one ticket is present, one
+reply-authorization guidance sentence immediately before the ticket lines. A
+trusted `UserPromptSubmit` hook activates
 the one-use receipt only when its session, host generation, `Query`, entire
 text digest, and still-live eligible owner all match. That hook reports
 `submitted` with `handoff: "fold_hook"`; the push itself does not. A matching
@@ -358,11 +360,15 @@ The deadline is not extended by another fold. Expiry reports
 interval remain consumed. A changed owner or eligibility downgrades the
 yield. One pushed text is limited to ten peer
 messages and 16,384 UTF-8 bytes, counting its full SDK user-message text,
-including the preamble, `fold_id`, and ticket lines. Oversized text stays in
-the root queue; the attempted fold does not consume a turn slot or activate
-its tickets. The final cut text is checked before `yield_claim`; when it is
-oversized, the wrapper leaves the urgent item at its arrival position in the
-root queue, makes no claim or early fallback, and reports
+including the preamble, `fold_id`, any reply-authorization guidance sentence,
+and ticket lines. The sentence and its two-byte separator add 200 UTF-8 bytes
+when at least one ticket is present; a fold with fewer than 200 bytes of
+headroom can therefore exceed the limit. Oversized text stays in the root
+queue; the attempted fold does not consume a turn slot or activate its tickets.
+The final cut text is checked
+before `yield_claim`; when it is oversized, the wrapper leaves the urgent item
+at its arrival position in the root queue, makes no claim or early fallback,
+and reports
 `yield_disposition: {outcome: "downgraded", reason: "oversized_input"}`.
 `queued`, `submitted`, `included`, `settled`, and `unknown` are
 separate stage reports. `delivery_ack` advances the recipient's delivery
