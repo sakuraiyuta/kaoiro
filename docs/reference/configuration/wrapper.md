@@ -2,7 +2,7 @@
 title: Wrapper configuration
 description: Runner-relayed WrapperConfig fields and engine-local delivery controls.
 status: accepted
-last_updated: 2026-10-04
+last_updated: 2026-10-09
 related: [protocol]
 ---
 
@@ -131,10 +131,17 @@ opt-in (a set `KAOIRO_CLAUDE_PHASE2_DELIVERY` wins over it, so `0` turns it off;
 Claude and Antigravity wrapper environments. A runner-managed single-peer
 canary therefore sets only the persona list in `runner.env` and restarts the
 runner; setting the global flag to `1` enables every Claude peer. The server
-must also echo delivery modes v1 before the wrapper uses either mode. Keep
-phase 2 off until the production-settings native R3 measurement has
-established the result-to-root-hook delay for the deployed Claude settings.
-The existing normal stage reports remain available when phase 2 is off.
+must also echo delivery modes v1 before the wrapper uses either mode. The
+result-to-root-hook delay with production settings (R3) was measured on SDK
+0.3.280 / CLI 2.1.280 (7, 6 and 8 ms; one tool-free schedule, scripted local
+model) and again on CLI 2.1.284 (6 to 7 ms); see
+[the fold measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
+and [the 2.1.284 remeasurement](../../evidence/issue-429/2026-09-29-claude-2-1-284-remeasurement.md).
+It has not been repeated on the current SDK pin. Production runs with phase 2
+enabled by operator decision E3
+([issue 463 comment](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859)),
+not by a repeated R3. The existing normal stage reports remain available when
+phase 2 is off.
 
 The following optional `WrapperConfig` fields control the Claude input
 scheduler. They are read when that wrapper starts; changing them requires a

@@ -292,6 +292,21 @@ remain until the separate Stage 3 approval decision is accepted.
   The comparison result for 0.154.0 does not substitute for the selected
   production artifact or establish compatibility with a future upgrade.
 
+## Amendment (2026-10-09, backend default and evidence inventory)
+
+- **Production.** Production selects the app-server backend with operator steering
+  on (operator decision E3,
+  [issue #463 comment](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859)).
+  The code default for an omitted `codex.backend` is still exec; the switch is
+  stage 4b of issue #463, tracked at
+  [issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564).
+- **Evidence.** The measurements this ADR requires before a default-adapter switch,
+  and the live steering, review/compact, resume and interruption probes, are
+  inventoried per artifact in the
+  [C0 evidence record](../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md#3-codex-evidence-inventory).
+  The production artifact (0.161.0) has no live steering measurement of its own;
+  the records of earlier pins stay with those pins.
+
 ## Appendix A — Production 0.153.4 live spike, 2026-09-14 JST
 
 Moved to the [preserved evidence](../evidence/codex-app-server/transport-spikes-2026-09-14.md#appendix-a--production-01534-live-spike-2026-09-14-jst).

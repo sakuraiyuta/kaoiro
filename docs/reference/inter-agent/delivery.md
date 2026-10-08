@@ -1,7 +1,7 @@
 ---
 title: Inter-agent delivery
 status: provisional
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 description: Inter-agent delivery contracts and compatibility.
 ---
 
@@ -283,17 +283,30 @@ stage history expires after its retention window; the summary survives for
 the recipient ledger's lifetime and resets when that ledger is deleted.
 
 `yield` is downgraded to early steering when eligible; Codex has no measured
-tool-boundary cut. The app-server backend remains an explicit launch choice
-until the backend switch tracked by issue #463. Live per-agent policy toggles
-need a revisioned server acknowledgement and are outside this phase.
+tool-boundary cut. The code default for an omitted Codex backend is exec; the
+app-server backend is chosen by the runner's `codex.backend`. Production selects
+app-server (operator decision E3); the default switch is tracked by
+[issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564), and the dated
+observation is in the
+[C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md). Live per-agent policy
+toggles need a revisioned server acknowledgement and are outside this phase.
 
 ### Claude recipient handoff
 
 The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` only
-when `KAOIRO_CLAUDE_PHASE2_DELIVERY=1` is set; it uses those modes only after
-the server echoes delivery modes v1. The flag is off by default. A Codex
-app-server wrapper advertises `early: "steer", yield: "none"`; Codex exec and
-Antigravity advertise `early: "none", yield: "none"`. The Codex app-server
+when phase 2 is enabled: by `KAOIRO_CLAUDE_PHASE2_DELIVERY=1`, by a persona in
+`KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, or by `claude_code.phase2_delivery` in
+`runner.config.json` (see
+[Claude phase-2 delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls)).
+It uses those modes only after the server echoes delivery modes v1. With none of
+the three set, the modes are not advertised; that is the code default, and the
+configured production behavior is recorded separately in the
+[C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md).
+A Codex app-server wrapper advertises `early: "steer", yield: "none"`; Codex exec
+advertises `early: "none", yield: "none"`. An Antigravity wrapper declares no
+delivery modes at join: the server sends no `inter_agent_delivery_modes` echo,
+the wrapper treats the link as `legacy`, and messages queue (phase 4 is tracked by
+[issue 567](https://github.com/sakuraiyuta/kaoiro/issues/567)). The Codex app-server
 uses early peer steering only after the server echoes both delivery modes v1
 and `notice_attribution: "v1"`, and only for a server-granted early input.
 See [Codex app-server transport](../engines/codex-app-server.md#inter-agent-early-steering-adr-0063-phase-3).

@@ -197,3 +197,22 @@ Operator decision on 2026-10-01. Tracking:
   flip (issue #441), D2 (hard cancellation stays operator-only) and D9. Each
   default flip lands through the normal design and review flow with
   evidence.
+
+## Amendment (2026-10-09, operator decision E3)
+
+Operator decision E3 (2026-10-08,
+[issue #463 comment](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859))
+records that the production enablement of 2026-10-03 was intended: the Claude
+phase-2 flag, the Codex operator-steer flag and `backend: app-server` have been on
+for all peers since then.
+
+- **Stages 4a to 4c.** They retire the existing opt-ins in favor of the
+  `in_flight_delivery` default instead of flipping them for the first time.
+- **Claude canary.** E3 dropped the stage 4c flip criteria, which include the
+  canary named in the "Unchanged" item of the 2026-10-01 Amendment (issue #441).
+  That canary is therefore not a gate for stage 4c. The rest of the item (the
+  phasing order, D2, D9, and review with evidence for each default flip) is
+  unchanged.
+- **Antigravity.** Phase 4 is not waived. It is tracked at
+  [issue #567](https://github.com/sakuraiyuta/kaoiro/issues/567), which waits for
+  issue #541 and is coordinated with issues #416 and #412.

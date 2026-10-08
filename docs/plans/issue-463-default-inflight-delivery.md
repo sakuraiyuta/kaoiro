@@ -13,13 +13,13 @@ Issue [#463](https://github.com/sakuraiyuta/kaoiro/issues/463); end state in
 ("Default backend"). This is the approved design and remaining
 implementation plan. The revised design has independent approval; implementation children require their own
 design and implementation reviews. Production operations and native runs
-require their own authorization and budget. The ten child drafts below
-are proposals, not created issues.
+require their own authorization and budget. The ten children below are filed
+as issues 558 to 567 ([mapping](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6066094342)).
 
 "In-flight delivery" means: operator early input (Claude fold, Codex
 `turn/steer`) and inter-agent early / yield delivery into a running turn.
 
-## Current state (develop `0bfede23`; production decision E3)
+## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 
 Source defaults and configured production behavior are separate:
 
@@ -61,9 +61,12 @@ Prerequisites and baseline facts:
   mapping; do not create a second relay path.
 
 Source claims use `bf02a928`, whose relevant source paths are unchanged at
-`0bfede23`. Production configuration is recorded from the operator decision,
-not a new live measurement. The policy described below remains unimplemented
-at this base.
+`0bfede23`, and at `867696cb` (only `AGENTS.md`, `CLAUDE.md` and docs differ
+from `0bfede23`).
+Production configuration is recorded from the operator decision; the
+[C0 record](../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md) adds a dated read-only observation
+of the three configuration keys and the effective delivery modes. The policy
+described below remains unimplemented at this base.
 
 ## Design
 
@@ -331,7 +334,8 @@ interruption, against their actual artifact/pin. Retain the existing
 0.159.3 evidence as evidence for that pin; do not silently treat it as
 a measurement of a later artifact. Fill genuinely missing or invalidated
 rows through separately approved native runs. These rows establish the
-backend migration requirements.
+backend migration requirements. The C0 inventory of this evidence is the
+[C0 record](../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md#3-codex-evidence-inventory).
 
 **Codex 4b.** Retain ADR-0058's configuration capture, account/model
 defaults, hooks, credential-refresh and compaction requirements for the
@@ -467,7 +471,7 @@ ceiling until the separate implementation/evidence/activation review.
 
 | Stage | Remaining content | Behavior relative to the current production baseline | Rollback / completion boundary |
 |---|---|---|---|
-| 0 | Pin current state; audit remaining Codex evidence; fix delivery docs; track phase-4 measurement; note 489 and 469 prerequisites already shipped | None; Claude's retired first-flip checklist is excluded | Documentation/evidence only; no production operations in this design task |
+| 0 | Pin current state; audit remaining Codex evidence; fix delivery docs; track phase-4 measurement; note 489 and 469 prerequisites already shipped ([C0 record](../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md)) | None; Claude's retired first-flip checklist is excluded | Documentation/evidence only; no production operations in this design task |
 | 1 | Store, protocol, server clamps/admission and Claude/Codex local fences | Preserve enabled mechanisms and old-wrapper on; supporting wrappers have the stated join-to-ack queue window | Old image ignores the new file; retain the mixed-version/rollback limitations above |
 | 2 | Launch checkbox and live detail control | Adds the operator's per-agent opt-out and honest pending/unsupported states | Hiding UI retains rows; server rollback cannot preserve policy for newly spawned old-server agents |
 | 3 | Runner ceiling/default keys, single registry relay and re-register | Unchanged settings preserve behavior; explicit ceiling/default edits affect their documented next-spawn/new-agent paths | Remove new host keys only with their documented fallback; keep server rows |
@@ -829,8 +833,8 @@ origin blocks that host's migration until launch evidence is obtained.
 
 ## Proposed child issues
 
-These are proposed titles and acceptance boundaries, not created issue
-numbers or assigned writers. Hisui is the decision owner for partition
+These titles and acceptance boundaries are filed as issues 558 to 567
+([mapping](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6066094342)); the table assigns no writers. Hisui is the decision owner for partition
 and landing. Each eventual mutable artifact has one named writer; each
 code child receives its own design and independent implementation review.
 Stage 1 is split because the server/persistence contract and native

@@ -101,6 +101,12 @@ Claude Agent SDK 0.3.284 model-catalog rollout.
 
 - [2026-09-29-agent-sdk-0.3.284.md](claude/issue-427/2026-09-29-agent-sdk-0.3.284.md) — catalog, model-report, request-header, AGENTS-only input, and scripted state-projection observations.
 
+## issue-463/
+
+Default in-flight delivery (issue #463), stage 0.
+
+- [2026-10-09-c0-baseline-and-codex-evidence.md](issue-463/2026-10-09-c0-baseline-and-codex-evidence.md) — baseline claims with controls, dated production observations, and the per-artifact Codex evidence inventory with its gaps
+
 ## issue-464/
 
 - [codex-home-isolation-nonlive-2026-10-01.md](issue-464/codex-home-isolation-nonlive-2026-10-01.md) — child-process audit, non-live package gates, and guard mutations; final-pin native resume gate pending.
