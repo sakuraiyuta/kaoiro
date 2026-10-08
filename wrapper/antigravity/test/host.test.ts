@@ -430,7 +430,10 @@ describe("AntigravityHost", () => {
     await host.send("queued good", undefined, ["cid-good"], "queued-good");
     calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
     await waitFor(() => calls[0]!.child.killed === "SIGTERM");
-    expect(sendRejections.map((item) => item.turnToken)).toEqual(["queued-bad", "queued-good"]);
+    expect(sendRejections).toEqual([
+      { turnToken: "queued-bad", conversationIds: ["cid-bad"], reason: "gate_broken" },
+      { turnToken: "queued-good", conversationIds: ["cid-good"], reason: "gate_broken" },
+    ]);
     calls[0]!.child.finish();
     await waitFor(() => host.state === "error");
     host.close();
