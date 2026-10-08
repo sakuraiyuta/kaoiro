@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-09-29
+last_updated: 2026-10-08
 related: [deployment]
 ---
 
@@ -75,6 +75,11 @@ Satisfy all of the following before starting.
   truth is the persistence set in 1.2. An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
+- **Know which persistence stores are new in the target image.** A store that
+  never existed before this update is admitted only when you name it with
+  `--accept-new-store <ENV_NAME>` (4.3 (2)); `update` then verifies it is
+  unset and absent in the running container. A store that existed before is
+  never new: do not name it (4.3 (5-b)).
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
   persisted, so in-progress exchanges are lost.
@@ -158,7 +163,7 @@ the build fails.
 
 ```mermaid
 flowchart TD
-  A["update --target sha<br/>(1)+(2): retag old, build, persistence-path check"] -->|env_consistency mismatch| R0["CLI retags latest back to the<br/>old image itself (verified) — nothing else to do"]
+  A["update --target sha<br/>(1)+(2): retag old, build, persistence-path check"] -->|env_consistency mismatch| R0["CLI retags latest back to the old image itself (verified);<br/>a store new in the target resumes with --accept-new-store"]
   A -->|ok, exits asking for --maintenance-approved| C["(3) Stop runner"]
   C --> D["(4) Advance local to target<br/>frozen install + build"]
   D -->|failure| R1["Abort cleanup 4.4-0<br/>4.4-2"]
@@ -195,8 +200,8 @@ continuing. Recorded in the transaction's `journal.json`
 old image ID, rollback tag, old SHA, compose artifact SHA. Nothing to run
 manually.
 
-**The old SHA comes from the old image's own `/app/build-info.json` (issue
-#322 S2), never `git rev-parse HEAD` in the local checkout or the running
+**The old SHA comes from the old image's own `/app/build-info.json` (issue #322
+S2), never `git rev-parse HEAD` in the local checkout or the running
 container's health endpoint.** `update` reads it without networking:
 
 ```sh
@@ -313,26 +318,73 @@ declaring a required store AT ALL is its own, always-failing case (the #217
 class: a required persistence var missing from compose can silently escape
 backup).
 
-A newly added store has a narrower `never_existed` outcome. The OLD image
-must answer its manifest probe and omit that store; `docker exec` runs the
-container's Debian `stat` with `LC_ALL=C` and must report `No such file or
-directory` for that exact old effective path; and the resolved compose
-declaration must put the new path under the `/var/lib/kaoiro` named volume.
-Only then does `update` accept the mismatch and record
-`first_application: "never_existed"`, `file_probe_path`, and
-`file_probe_result: "absent"` in that store's `env_consistency` entry. A
-present file still requires 5-b; an old image that cannot answer its manifest
-does not qualify. Permission denied, command failure, or an unrecognized probe
-answer records `file_probe_result: "undetermined"` with `file_probe_reason` in
-the error detail and aborts before the stop window; it never proves absence.
-This exception does not change the existing path-equality check for stores
-already at the compose location.
+**A store that is new in the target image is admitted only by the operator's
+explicit, per-store flag** (issue #339). A new store's compose path differs
+from the old container's effective path by construction, so the check reads it
+as a mismatch; `update` never waves that mismatch through on its own. Name the
+store with `--accept-new-store <ENV_NAME>` (repeatable, one occurrence per
+store; a flag admits exactly the store it names):
 
-Either failure aborts before the stop window: `latest` is retagged back to
-the old image and the retag verified by read-back automatically — nothing to
-do manually for this specific case. **Until #310 lands, the target image
-lacks this module and the check reports `{skipped: true, reason: ...}`**; it
-neither blocks nor verifies anything today.
+```sh
+node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
+  --accept-new-store KAOIRO_WORK_STORE_PATH
+```
+
+The flag is consulted only for a mismatch. A store whose compose path and
+effective path already agree passes with no flag and no probe, and a flag
+naming such a store changes nothing. With the flag, `update` still measures
+every condition itself and admits the store only if all of them hold:
+
+- the target image's manifest lists `<ENV_NAME>` (a name it does not list is
+  refused as a likely misspelling);
+- the OLD image, when it can answer its manifest probe, does not list the
+  store; an old image that cannot answer (a pre-#310 image, the case behind
+  the 2026-09-07 update) is allowed here, and the entry records
+  `assumed_default_source: "target_image"`. That is an operator-approved
+  uncertainty, not proof that the old image never had the store; the stat
+  probe below is what stands in for it;
+- the OLD container has the variable unset (a variable that was set means the
+  store was configured before this update);
+- `docker exec` runs the container's Debian `stat` with `LC_ALL=C` and reports
+  `No such file or directory` for that exact old effective path;
+- the resolved compose declaration puts the new path under the
+  `/var/lib/kaoiro` named volume, and compose resolves that mount to a named
+  volume.
+
+Only then does `update` accept the mismatch and record
+`first_application: "never_existed"`, `operator_accepted_new_store: true`,
+`file_probe_path`, and `file_probe_result: "absent"` in that store's
+`env_consistency` entry. A present file still requires 5-b. Permission denied,
+command failure, or an unrecognized probe answer records
+`file_probe_result: "undetermined"` with `file_probe_reason` in the error
+detail and aborts before the stop window; it never proves absence. Without the
+flag the same store aborts with the 5-b message.
+
+Records written before this flag existed (an entry with
+`first_application: "never_existed"` and no `operator_accepted_new_store`) stay
+valid: journals and manifests that carry one still resume and roll back, and a
+transaction that already reached `env_consistency_checked` keeps its recorded
+observation (a resume does not re-measure it, and `--accept-new-store` is
+ignored for it). Only entries written by the current CLI carry the
+acknowledgement.
+
+Any `env_consistency` failure aborts before the stop window: `latest` is
+retagged back to the old image and the retag verified by read-back
+automatically, and no container is stopped, archived, or restarted. The
+transaction stays at `build_prepared` (a fresh `update` is refused while it is
+unfinished). When the refusal is for a store that is new in the target image,
+resume that transaction with the flag; the prepared image is reused, nothing is
+rebuilt, and the check runs again:
+
+```sh
+node server/deploy/kaoiro-server-deploy.mjs update --transaction <transaction-id> \
+  --target <target-sha> --accept-new-store <ENV_NAME> [--maintenance-approved]
+```
+
+For any other refusal, follow 5-b below before retrying; the flag does not
+apply. **Until #310 lands, the target image lacks this module and the check
+reports `{skipped: true, reason: ...}`**; it neither blocks nor verifies
+anything today, and `--accept-new-store` has nothing to act on.
 
 `update` then exits non-zero, naming the transaction and requiring
 `--maintenance-approved`:
@@ -425,11 +477,24 @@ docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets
 **A successful copy alone does not guarantee bit identity with the authority.**
 Always compare SHA-256. **If this existing user ledger's source file is
 absent, the ledger is already lost.** Record this and let the operator decide;
-**do not silently create an empty ledger**. For a newly introduced store, an
-absent file is `never_existed` only after all three observations in step (2)
-are recorded. Such a store has no old data to evacuate; a present file or an
-old image that lists the store still needs migration or investigation. If the
-probe says `undetermined`, inspect the recorded reason and restore path
+**do not silently create an empty ledger**.
+
+Decide which case a refused store is in before choosing a remedy:
+
+- **New in the target image, no historical data.** Neither the old image nor
+  an earlier version ever had this store, the old container has the variable
+  unset, and the default file is absent. There is no old data to evacuate:
+  resume with `--accept-new-store <ENV_NAME>` (step (2)), which re-measures all
+  of that and records `never_existed` with the operator's acknowledgement.
+- **Existed before, but its file is missing.** An earlier version had the
+  store (the old image lists it, or you know the ledger existed) and the file
+  is gone. The ledger is lost or the path is wrong; **do not use
+  `--accept-new-store`**, which would record an empty store as new. Investigate
+  as in the paragraph above.
+- **File present, or the variable already set.** This is the real migration
+  this section describes. The flag is refused for it.
+
+If the probe says `undetermined`, inspect the recorded reason and restore path
 visibility or the probe command before retrying; it does not authorize an
 empty store or a 5-b copy.
 
