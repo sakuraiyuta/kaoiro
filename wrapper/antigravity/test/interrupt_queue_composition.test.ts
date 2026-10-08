@@ -154,6 +154,11 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
 
   it("retires a queued peer batch once on a gate trip, then dispatches that peer's next batch", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-541-"));
+    const lifecycleOutput: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      lifecycleOutput.push(String(chunk));
+      return true;
+    });
     const { configPath } = writeFixture(root);
     const acknowledgements: number[] = [];
     const sent: Envelope[] = [];
@@ -244,9 +249,28 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
         12_000,
       );
       expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran"))).toBe(true);
+
+      const lifecycle = lifecycleOutput.join("").split("\n")
+        .filter((line) => line.startsWith("[kaoiro][antigravity-lifecycle] "))
+        .map((line) => JSON.parse(line.slice(line.indexOf("{") )) as Record<string, unknown> & { event: string });
+      expect(lifecycle).toContainEqual(expect.objectContaining({
+        event: "gate_fault",
+        fault_class: "tool_completion_unobserved",
+        tool_name: "run_command",
+        trip_count: 1,
+        probe_result: "started",
+      }));
+      expect(lifecycle).toContainEqual(expect.objectContaining({
+        event: "gate_recovery",
+        fault_class: "tool_completion_unobserved",
+        tool_name: "run_command",
+        trip_count: 1,
+        probe_result: "passed",
+      }));
     } finally {
       host?.close();
       await run;
+      stderr.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
   }, 25_000);

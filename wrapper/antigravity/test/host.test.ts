@@ -263,6 +263,21 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("a latched gate fault remains publicly visible across an unrelated state publication", async () => {
+    const { host, calls, states } = hostHarness();
+    await host.send("trip");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => host.state === "error");
+
+    host.renameDisplayName("renamed while latched", 1);
+    expect(host.state).toBe("error");
+    expect(states.at(-1)?.state).toBe("error");
+    host.close();
+  });
+
   it("one clean success clears gate probation for a later epoch", async () => {
     let verification = 0;
     const { host, logs, calls, gateRecoveryLifecycle } = hostHarness({
@@ -1846,7 +1861,7 @@ if (args[0] === "models") {
   });
 
   it("turn後にcustomizationが改ざんされるとsessionをerrorにする", async () => {
-    const { host, logs, calls } = hostHarness();
+    const { host, logs, calls, sendRejections, gateRecoveryLifecycle } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     const customizationDir = calls[0]!.args.at(-1)!;
@@ -1855,6 +1870,11 @@ if (args[0] === "models") {
     calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect([...logs].reverse().find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
+    expect(host.state).toBe("error");
+    await host.send("tampering stays sticky", undefined, ["cid-tamper"], "tamper-follow-up");
+    expect(calls).toHaveLength(1);
+    expect(sendRejections).toContainEqual({ turnToken: "tamper-follow-up", conversationIds: ["cid-tamper"], reason: "gate_broken" });
+    expect(gateRecoveryLifecycle.at(-1)).toMatchObject({ event: "gate_fault", faultClass: "customization_tampered", probeResult: "not_run_sticky" });
     host.close();
   });
 
