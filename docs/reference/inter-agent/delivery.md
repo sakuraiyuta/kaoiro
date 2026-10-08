@@ -310,9 +310,9 @@ then pushes text containing a correlation `fold_id`, a peer-input preamble,
 provisional `reply_authorization` tickets for the latest ordinary turn from
 each conversation and peer, and, when at least one ticket is present, one
 reply-authorization guidance sentence immediately before the ticket lines. A
-trusted `UserPromptSubmit` hook activates
-the one-use receipt only when its session, host generation, `Query`, entire
-text digest, and still-live eligible owner all match. That hook reports
+trusted `UserPromptSubmit` hook activates the one-use receipt only when its
+session, host generation, `Query`, entire text digest, and still-live eligible
+owner all match. That hook reports
 `submitted` with `handoff: "fold_hook"`; the push itself does not. A matching
 hook that instead starts a new root creates that root's input snapshot and
 reports `handoff: "prompt_hook"`. Other combinations become `unknown` and
@@ -365,10 +365,9 @@ and ticket lines. The sentence and its two-byte separator add 200 UTF-8 bytes
 when at least one ticket is present; a fold with fewer than 200 bytes of
 headroom can therefore exceed the limit. Oversized text stays in the root
 queue; the attempted fold does not consume a turn slot or activate its tickets.
-The final cut text is checked
-before `yield_claim`; when it is oversized, the wrapper leaves the urgent item
-at its arrival position in the root queue, makes no claim or early fallback,
-and reports
+The final cut text is checked before `yield_claim`; when it is oversized, the
+wrapper leaves the urgent item at its arrival position in the root queue, makes
+no claim or early fallback, and reports
 `yield_disposition: {outcome: "downgraded", reason: "oversized_input"}`.
 `queued`, `submitted`, `included`, `settled`, and `unknown` are
 separate stage reports. `delivery_ack` advances the recipient's delivery

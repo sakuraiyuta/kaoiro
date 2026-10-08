@@ -19,7 +19,9 @@ describe("Claude fold text", () => {
       { in_reply_to: 4, reply_ticket: "ticket-4", expires_in_ms: 30_000 },
       { in_reply_to: 8, reply_ticket: "ticket-8", expires_in_ms: 30_000 },
     ];
-    const text = formatClaudeFoldText("fold-2", "peer input", authorizations);
+    // "peer input" would also match the fixed preamble, which ends "with this
+    // peer input.", so the batch text must be a string the preamble lacks.
+    const text = formatClaudeFoldText("fold-2", "batch body", authorizations);
     const firstAuthorizationLine = text.indexOf(
       `reply_authorization: ${JSON.stringify(authorizations[0])}`,
     );
@@ -29,7 +31,9 @@ describe("Claude fold text", () => {
     const guidance = text.indexOf(REPLY_AUTHORIZATION_USAGE_GUIDANCE);
 
     expect(text.split(REPLY_AUTHORIZATION_USAGE_GUIDANCE)).toHaveLength(2);
-    expect(text.indexOf("peer input")).toBeLessThan(guidance);
+    expect(text).toContain(
+      `batch body\n\n${REPLY_AUTHORIZATION_USAGE_GUIDANCE}\n\nreply_authorization: ${JSON.stringify(authorizations[0])}`,
+    );
     expect(guidance).toBeLessThan(firstAuthorizationLine);
     expect(firstAuthorizationLine).toBeLessThan(secondAuthorizationLine);
   });
