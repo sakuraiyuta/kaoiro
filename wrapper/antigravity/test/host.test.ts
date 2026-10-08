@@ -529,6 +529,30 @@ describe("AntigravityHost", () => {
     await host.close();
   });
 
+  it("keeps a thrown post-ack onTurnStart callback on the ordinary turn-error path", async () => {
+    const starts: string[] = [];
+    const { host, calls, turnEnds, sendRejections, gateRecoveryLifecycle } = hostHarness({
+      onTurnStart: ({ turnToken }) => {
+        starts.push(turnToken);
+        if (turnToken === "candidate-token") throw new Error("onTurnStart boom");
+      },
+    });
+    await host.send("trip", undefined, ["cid-trip"], "trip-token");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":8,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.some((event) => event.turnToken === "trip-token"));
+
+    await host.send("recovery candidate", undefined, ["cid-candidate"], "candidate-token");
+    await waitFor(() => starts.includes("candidate-token") && turnEnds.some((event) => event.turnToken === "candidate-token"));
+    expect(turnEnds.find((event) => event.turnToken === "candidate-token")?.error).toEqual({ detail: "onTurnStart boom" });
+    expect(sendRejections.some((event) => event.turnToken === "candidate-token")).toBe(false);
+    expect(gateRecoveryLifecycle.filter((event) => event.event === "gate_recovery" && event.probeResult === "failed")).toHaveLength(0);
+    calls[1]!.child.finish();
+    await host.close();
+  });
+
   it("settles a PROBING recovery candidate once when close cancels its smoke test", async () => {
     let verification = 0;
     const { host, calls, turnEnds } = hostHarness({
@@ -2192,9 +2216,12 @@ if (args[0] === "models") {
     { label: "wrong error type", state: "ERROR", type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" },
     { label: "DONE state", state: "DONE", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'" },
     { label: "empty property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property ''" },
+    { label: "empty additional property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- additional properties '' not allowed" },
     { label: "property name over 128 characters", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- missing property '${"x".repeat(129)}'` },
+    { label: "additional property name over 128 characters", state: "ERROR", type: "TOOL_ERROR", message: `invalid arguments:\\n- additional properties '${"x".repeat(129)}' not allowed` },
     { label: "prefix before grammar", state: "ERROR", type: "TOOL_ERROR", message: "prefix\\ninvalid arguments:\\n- missing property 'toolSummary'" },
     { label: "quote inside property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'tool'quote'" },
+    { label: "quote inside additional property name", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- additional properties 'tool'quote' not allowed" },
     { label: "unmeasured validation wording", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" },
     { label: "unmeasured permission-declaration form", state: "ERROR", type: "TOOL_ERROR", message: "declaring permissions failed: invalid tool call error (invalid_args)" },
     { label: "anchored suffix violation", state: "ERROR", type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" },

@@ -1813,7 +1813,7 @@ export class AntigravityHost implements EngineAdapter {
         return { kind: "stale" };
       } else if (!delivered) {
         const detail = "epoch_exit_before_turn";
-        if (recoveryCandidate && !this.#turnStartReached) {
+        if (recoveryCandidate) {
           this.#restoreRecoveryFault();
           this.#emitRecoveryOutcome("failed", detail);
           return { kind: "recovery_rejected", detail, probeResult: "failed" };
@@ -2965,10 +2965,6 @@ export class AntigravityHost implements EngineAdapter {
 
   #rejectQueuedGateBrokenTurns(): void {
     const queued = this.#turnQueue.splice(0);
-    if (this.#recoveryCandidate !== null && queued.includes(this.#recoveryCandidate)) {
-      this.#recoveryCandidate = null;
-      this.#recoveryPhase = null;
-    }
     this.#rejectingGateBrokenQueue = true;
     try {
       for (const turn of queued) {
