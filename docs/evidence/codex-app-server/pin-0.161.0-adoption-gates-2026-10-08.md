@@ -101,3 +101,29 @@ The approved research SHA-256 is
 `ece674ef17193b966a52562f793eb8a8b569af450f8a64626d3c34c878473fb9`.
 Implementation mutation and final gate results are recorded after the checkpoint
 commit, and final native evidence must be retaken after the last code change.
+
+## Committed mutation controls
+
+Both controls were measured after checkpoint commit
+`eaf5db2c9ff0caa9ffa35394d98032bbc582e3c9`, with no runtime/catalog change.
+Only the owned worktree SDK link or the owned test guard was changed;
+shared pnpm-store files were never edited. Each was restored byte-for-byte.
+
+| Control | Exit | Result | Restored result |
+|---|---|---|---|
+| Unpatched 0.161.0 SDK, Node 24.3.0 | 1 | Reader source check, synthetic SDK Unicode case and default exec CLI case fail; app-server passes (3 failed, 1 passed, 133 filtered skips) | Exit 0: 4 passed, 133 filtered skips |
+| Remove capture-version guard only, Node 22.23.3 | 1 | Coherent metadata claiming the older pin is accepted; its expected-rejection test fails (1 failed, 8 passed) | Exit 0: 9 passed |
+
+The initial negative metadata mixed version claims, so another check still
+rejected it when the pin guard was removed. That control was insufficient
+and is superseded by the internally consistent older-version input above.
+The fresh schema comparer also rejects a copied manifest with one changed
+file hash (exit 1), then passes restored stable/experimental manifests.
+
+An initial full runner run on `88a403ae` exited 1 with 1046 passed and
+2 failures in behaviour-relay-wiring.test.ts (a 5-second timeout and a missing
+second warning). The unchanged file's focused repeat exited 0 with 8 passed;
+the cause remains unverified. The saved initial log remains available for
+review. Required final gates and native acceptance are repeated on the final
+artifact; their report must include actual commands, exit codes, counts,
+warnings and skipped checks, rather than treating this initial run as green.

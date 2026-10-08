@@ -324,5 +324,39 @@
     "Signed-in server defaults and operator entitlement unverified",
     "No credentialed context-meter gate or corrupt-state recovery probe",
     "Native introspection enables experimental API; production composition tests use production settings"
-  ]
+  ],
+  "mutation_controls": {
+    "reader": {
+      "checkpoint": "eaf5db2c9ff0caa9ffa35394d98032bbc582e3c9",
+      "old_link": "../../../../node_modules/.pnpm/@openai+codex-sdk@0.161.0_patch_hash=faafbd6188ec0466bd5d3dfd02ed642304b5e09be1986b58533577b8456dbd0c/node_modules/@openai/codex-sdk",
+      "patched_sha256": "2597aa3b22fa8a1d7cbd4fa313a0f6a3cba006654f372458daf84aca501749da",
+      "unpatched_sha256": "340f42940ffd5c7b31e6e11a159517339c048d30577d88cafeac976cd620f6a4",
+      "exit_code": 1,
+      "scope": "owned worktree SDK symlink only; shared pnpm store not edited"
+    },
+    "capture": {
+      "checkpoint": "eaf5db2c9ff0caa9ffa35394d98032bbc582e3c9",
+      "removed": "candidate.version != installed CLI pin guard only",
+      "exit_code": 1,
+      "original_sha256": "61995f8b24dcb70be22f47a4cea72295133f8cd4fdca6a12ab4252be456d7fa0"
+    },
+    "reader_restored": {
+      "label": "restored-node24",
+      "node": "24.3.0",
+      "command": "(cd wrapper/codex && pnpm exec vitest run test/sdk_stream_patch.test.ts test/host.test.ts test/cli_sdk_native.integration.test.ts -t \"resolves the patched|finishes a real SDK|production factories\")",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/niko-539",
+      "exit_code": 0,
+      "elapsed_seconds": 4.748,
+      "log": "/home/yuta/Nextcloud/storage.hktypeb.jp/kaoiro/niko/2026-10-08-sdk-codex-0161/implementation-539/restored-node24.log"
+    },
+    "capture_restored": {
+      "label": "restored-capture",
+      "node": "22.23.3",
+      "command": "(cd wrapper/codex && pnpm exec vitest run test/app_server_rpc_server_request.test.ts)",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/niko-539",
+      "exit_code": 0,
+      "elapsed_seconds": 1.876,
+      "log": "/home/yuta/Nextcloud/storage.hktypeb.jp/kaoiro/niko/2026-10-08-sdk-codex-0161/implementation-539/restored-capture.log"
+    }
+  }
 }
