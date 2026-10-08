@@ -10,6 +10,7 @@ describe.skipIf(process.platform !== "linux")("foreign UID state-aware update", 
   let dir: string, root: string, home: string, conf: string, group: string, ctl: string, archive: string, nodeOptions: string;
   const A = revisionOf("fuji528-source"), B = revisionOf("fuji528-target");
   const main = 900001, foreign = 900002;
+  const foreignUid = process.getuid?.() === 0 ? 1 : 0;
   const write = (path: string, value: string) => writeFileSync(path, value, { mode: 0o600 });
   const proc = (pid: number, uid: number, member = "/kaoiro-test") => {
     const base = join(dir, "fake-proc", String(pid)); mkdirSync(base, { recursive: true });
@@ -48,6 +49,10 @@ describe.skipIf(process.platform !== "linux")("foreign UID state-aware update", 
       expect(changed).not.toBe(original); extraFiles[name] = changed;
     };
     if (mutation === "gate") change("deploy/kaoiro-runner-codex-state.mjs", (s) => s.replaceAll("  assertOwnedCgroup(service);\n", ""));
+    if (mutation === "restore-gate") change("deploy/kaoiro-runner-codex-state.mjs", (s) => {
+      const start = s.indexOf("async function prepareRollback(");
+      return s.slice(0, start) + s.slice(start).replace("  assertOwnedCgroup(service);\n", "");
+    });
     if (mutation === "restart") change("deploy/kaoiro-runner-update.sh", (s) => s.replace('abort_before_switch "Codex state preparation failed" 78', 'kaoiro_die "Codex state preparation failed" 78'));
     if (mutation === "phase") change("deploy/kaoiro-runner-codex-state.mjs", (s) => s.split("\n").filter((line) => !line.includes('must((tx.mode === "forward"')).join("\n"));
     if (mutation === "binding") change("deploy/kaoiro-runner-codex-state.mjs", (s) => {
@@ -57,7 +62,7 @@ describe.skipIf(process.platform !== "linux")("foreign UID state-aware update", 
     if (mutation === "populated") change("deploy/codex-service.mjs", (s) => s.split("\n").filter((line) => !line.includes("must(/^populated 0$/m.test(")).join("\n"));
     if (mutation === "running") change("deploy/kaoiro-runner-codex-state.mjs", (s) => s.replace('  if (running) must(activity === "active", "Source restart did not reach an active runner");\n', ""));
     if (mutation === "activity") change("deploy/kaoiro-runner-update.sh", (s) => s.replace('*) kaoiro_die "Source activity is transitional or unknown before stop; transaction $codex_transaction" 78 ;;', '*) : ;;'));
-    if (mutation) expect(["gate", "restart", "phase", "binding", "populated", "running", "activity"]).toContain(mutation);
+    if (mutation) expect(["gate", "restore-gate", "restart", "phase", "binding", "populated", "running", "activity"]).toContain(mutation);
     writeReleaseTree(join(root, "releases", B), B, { extraFiles });
     symlinkSync(`releases/${A}`, join(root, "current"));
     mkdirSync(join(dir, "tarball")); archive = makeReleaseTarball(join(dir, "tarball"), B, { extraFiles });
@@ -137,15 +142,15 @@ else if(args.includes('show')) {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
   it.each(["direct", "nested"])("refuses a %s foreign UID before stop and publication", (location) => {
     const member = location === "nested" ? "/kaoiro-test/child" : "/kaoiro-test";
-    proc(foreign, 0, member);
+    proc(foreign, foreignUid, member);
     const path = location === "nested" ? join(group, "child") : group;
     if (location === "nested") { mkdirSync(path); write(join(path, "cgroup.type"), "domain\n"); }
     appendFileSync(join(path, "cgroup.procs"), `${foreign}\n`);
     const result = update(); noStop(result);
-    expect(result.stderr).toContain(`PID ${foreign} UID 0/0/0/0 Name apt-helper`);
+    expect(result.stderr).toContain(`PID ${foreign} UID ${Array(4).fill(foreignUid).join("/")} Name apt-helper`);
   });
   it("preserves a pre-existing owner record when helper preflight refuses", () => {
-    proc(foreign, 0); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`);
+    proc(foreign, foreignUid); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`);
     mkdirSync(join(root, ".lock.update"), { mode: 0o700 });
     const owner = join(root, ".lock.update/codex-owner.json"); write(owner, "pre-existing-owner");
     const result = state("prepare", root, B, home, join(dir, "backup"), "fuji528", B, "123");
@@ -155,7 +160,7 @@ else if(args.includes('show')) {
   it.each(["duplicate", "empty", "outside", "nested"])("admits a clean %s table through the shipped path", (mode) => {
     if (mode === "duplicate") appendFileSync(join(group, "cgroup.procs"), `${main}\n`);
     if (mode === "empty") write(join(group, "cgroup.procs"), "");
-    if (mode === "outside") { proc(foreign, 0, "/other-service"); trigger("unreadable"); }
+    if (mode === "outside") { proc(foreign, foreignUid, "/other-service"); trigger("unreadable"); }
     if (mode === "nested") {
       const path = join(group, "child"); mkdirSync(path); write(join(path, "cgroup.type"), "domain\n");
       proc(foreign, process.getuid!(), "/kaoiro-test/child"); write(join(path, "cgroup.procs"), `${foreign}\n${foreign}\n`);
@@ -167,12 +172,12 @@ else if(args.includes('show')) {
     proc(foreign, process.getuid!()); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`);
     if (["unreadable", "reuse"].includes(mode)) trigger(mode);
     if (mode === "malformed") write(join(dir, "fake-proc", String(foreign), "status"), "Uid: broken\n");
-    if (mode === "mixed") write(join(dir, "fake-proc", String(foreign), "status"), `Name: mixed\nUid: ${process.getuid!()} 0 0 0\n`);
+    if (mode === "mixed") write(join(dir, "fake-proc", String(foreign), "status"), `Name: mixed\nUid: ${process.getuid!()} ${foreignUid} ${foreignUid} ${foreignUid}\n`);
     if (mode === "membership") write(join(dir, "fake-proc", String(foreign), "cgroup"), "0::/other-service\n");
     const result = update(); noStop(result); expect(result.stderr).toContain(`PID ${foreign}`);
   });
   it("ignores a vanished PID only after the fake membership reread", () => {
-    proc(foreign, 0); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`); trigger("disappear");
+    proc(foreign, foreignUid); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`); trigger("disappear");
     const result = update(); expect(result.status, result.stderr).toBe(0);
   });
   it.each(["0", "-1", "1.5", "9007199254740992"])("refuses invalid PID text %s", (pid) => {
@@ -185,7 +190,7 @@ else if(args.includes('show')) {
     noStop(update());
   });
   it("retains the post-stop population guard and resumes unchanged source", () => {
-    proc(foreign, 0); trigger("late-foreign"); const inode = statSync(home).ino;
+    proc(foreign, foreignUid); trigger("late-foreign"); const inode = statSync(home).ino;
     const result = update(); expect(result.status, result.stderr).toBe(78); expect(result.stderr).toContain("Runner descendants remain");
     expect(result.stderr).toContain("unchanged source was resumed"); expect(calls()).toBe("stop\nstart\n");
     expect(readFileSync(join(dir, "active"), "utf8")).toBe("active"); expect(statSync(home).ino).toBe(inode);
@@ -228,7 +233,7 @@ else if(args.includes('show')) {
   });
   it.each(["active", "inactive"])("resumes a failed restore only when source began %s", (activity) => {
     const forward = update(); expect(forward.status, forward.stderr).toBe(0);
-    write(join(dir, "active"), activity); proc(foreign, 0); trigger("late-foreign");
+    write(join(dir, "active"), activity); proc(foreign, foreignUid); trigger("late-foreign");
     const inode = statSync(home).ino;
     const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "fuji528", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status, result.stderr).toBe(78);
@@ -237,5 +242,15 @@ else if(args.includes('show')) {
     expect(statSync(home).ino).toBe(inode); expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("TOKEN");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     expect(transactions().find((t) => t.mode === "restore").phase).toBe("restore-prepared");
+  });
+  it("refuses a known foreign UID at restore admission before stop and publication", () => {
+    const forward = update(); expect(forward.status, forward.stderr).toBe(0);
+    proc(foreign, foreignUid); appendFileSync(join(group, "cgroup.procs"), `${foreign}\n`);
+    const inode = statSync(home).ino;
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "fuji528", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
+    expect(result.status, result.stderr).toBe(78); expect(result.stderr).toContain(`PID ${foreign}`);
+    expect(calls()).toBe("stop\nstart\n"); expect(transactions()).toHaveLength(1);
+    expect(existsSync(join(root, ".lock.update/codex-owner.json"))).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`); expect(statSync(home).ino).toBe(inode);
   });
 });
