@@ -68,6 +68,11 @@ const handled = args[0] === "create" || args[0] === "version" ||
   (args[0] === "image" && args[1] === "inspect") || (args[0] === "volume" && args[1] === "inspect") ||
   (args[0] === "compose" && args[1] === "version") || probe || args.some(a => a.includes("DeliveryPolicies.beam"));
 if (!handled) {
+  if (fixture.refuseSecondRegistry && args[0] === "run" && args.some(a => a.includes("PersistencePaths.manifest()")) && !args.includes("sha256:" + "0".repeat(64))) {
+    const count = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile)).registryCount : 0;
+    fs.writeFileSync(stateFile, JSON.stringify({ registryCount: count + 1 }));
+    if (count > 0) { console.error("legacy canonical registry queried again"); process.exit(1); }
+  }
   const result = cp.spawnSync(process.env.KAOIRO_TEST_POLICY_BASE, args, { encoding: "utf8" });
   process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status ?? 1);
 }
@@ -5615,6 +5620,19 @@ test("policy placement: a registration observation from another image cannot aut
     journal.policy_store_registration.image_id = OLD_IMAGE_ID;
     writeFileSync(join(dir, "journal.json"), JSON.stringify(journal));
     assert.throws(() => runUpdate({ repo: workDir, target: headSha, transaction: journal.transaction_id, maintenanceApproved: true }, configWithCleanStopMeasured()), /registration observation is not bound/);
+    assert.ok(!calls().includes("compose stop"));
+  });
+});
+
+
+test("policy placement: legacy image-bound absence preserves resume without repeating canonical env inspection", () => {
+  withPolicyPlacement({ presence: "absent", missingRegistration: true, refuseSecondRegistry: true }, calls => {
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    const journal = readJournal(policyTransactionDir());
+    assert.equal(journal.policy_store_registration.registered, false);
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha, transaction: journal.transaction_id }, configWithCleanStopMeasured()), err => err.exitCode === 64);
+    assert.equal(JSON.parse(readFileSync(process.env.KAOIRO_TEST_POLICY_STATE)).registryCount, 1);
+    assert.equal(calls().split("\n").filter(line => line.includes("DeliveryPolicies.beam")).length, 2);
     assert.ok(!calls().includes("compose stop"));
   });
 });
