@@ -251,7 +251,7 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
       expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran"))).toBe(true);
 
       const resultsBeforeNextPeer2Batch = sent.filter((envelope) => envelope.type === "result").length;
-      await deliver(inbound("peer2", 4, "third peer2 batch after retirement", 1, "c-peer2-after-retire"));
+      await deliver(inbound("peer2", 4, "third peer2 batch after retirement", 3, "c-peer2-first"));
       await waitFor(
         () => acknowledgements.includes(4) && sent.filter((envelope) => envelope.type === "result").length >= resultsBeforeNextPeer2Batch + 1,
         () => ({ acknowledgements, sent: sent.map((envelope) => envelope.type) }),
