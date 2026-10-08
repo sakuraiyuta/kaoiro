@@ -87,3 +87,11 @@ to commit `c301a5a9`. The file was removed.
   Not measured: whether extending the reset to these stores clears all three.
 - Full suite on the same commit: 2086 passed, 1 excluded, exit 0
   (`scripts/mix-test.sh --seed 554`, 157.9 s).
+
+## Widened reset (commit 2d48d704)
+
+- Repeat gate, `wrapper_channel_test.exs --repeat-until-failure 2 --seed 554`: three runs, each 242 passed, exit 0 (log: tmp/measure-554/impl-repeat2-1.log, not committed).
+- Full suite, `scripts/mix-test.sh --seed 554`: 2090 passed, 1 excluded, exit 0, 182.2 s (25.0 s async, 157.2 s sync).
+- Baseline at 0bfede23, same seed: 2077 passed, 1 excluded, exit 0, 143.5 s.
+- `DeliveryLossDispatcher terminating` (noproc from `DeliveryStates.pending_losses`): 0 at the baseline, 4 at 2d48d704. The dispatcher polls DeliveryStates every second, and the reset stops DeliveryStates while it runs. The supervisor restarts the dispatcher, so tests pass, but the crash is a side effect of this change. Proposed fix (not applied): stop the dispatcher before the DeliveryStates step and restart it after (test-only). Product-side handling of noproc is a follow-up.
+- Mutant table: not run at the time of this record.
