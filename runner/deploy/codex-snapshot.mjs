@@ -7,13 +7,16 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-locks"];
-// rust-v0.156.1, rust-v0.159.3 and rust-v0.160.0: state/src/sqlite.rs, rollout/src,
-// message-history/src/lib.rs, config/src, skills/src/lib.rs. Extension trees
-// have no copy-all exemption: their classification needs separate review.
+// Prior references (rust-v0.156.1, rust-v0.159.3, rust-v0.160.0): state/src/sqlite.rs,
+// rollout/src, message-history/src/lib.rs, config/src, skills/src/lib.rs.
+// Lock/cache review (rust-v0.160.0, rust-v0.161.0): state/src/runtime/reclamation.rs;
+// cloud-config/src/cache.rs (excluded). The 0.161.0 root-writer review covers the
+// Rust delta, not every runtime path. Extension trees have no copy-all exemption;
+// their classification needs separate review.
 const DBS = ["state_5", "logs_2", "goals_1", "memories_1", "memories_v2_1", "queue_1", "thread_history_1"];
 const STATE_DIRS = new Set(["sessions", "archived_sessions", "db-backups", "memories", "memories_v2", "memories_extensions", "rules", "skills", "agents", "hooks", "model-profiles", "plugins"]);
 const STATE_FILES = new Set(["config.toml", "managed_config.toml", "AGENTS.md", "AGENTS.override.md", "history.jsonl", "session_index.jsonl", "installation_id", "hooks.json", ".sandbox_migration"]);
-const DISPOSABLE = new Set(["tmp", ".tmp", "thread-writer-locks", "log", "shell_snapshots", "models_cache.json", "version.json", "cache"]);
+const DISPOSABLE = new Set(["tmp", ".tmp", "thread-writer-locks", "log", "shell_snapshots", "models_cache.json", "version.json", "cache", ".sqlite-maintenance.lock"]);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const inside = (root, path) => { const rel = relative(root, path); return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)); };
 export function must(condition, message) { if (!condition) throw new Error(message); }

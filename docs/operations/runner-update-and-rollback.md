@@ -317,6 +317,38 @@ The disposable home-root cache is not restored; connector/plugin catalog lists
 may remain empty until re-fetch completes (especially offline). Check installed
 plugin state separately and do not infer history loss from an empty catalog.
 
+The exact home-root name `.sqlite-maintenance.lock` is disposable, alongside
+`thread-writer-locks`. Codex uses it to elect one background reclamation worker
+per SQLite home (`sqlite_home`, which defaults to `CODEX_HOME`); this classification
+applies only to the name at the Codex home root. Both
+[0.160.0](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/state/src/runtime/reclamation.rs#L115-L130)
+and [0.161.0](https://github.com/openai/codex/blob/rust-v0.161.0/codex-rs/state/src/runtime/reclamation.rs#L26-L78)
+create the file as needed and retain a kernel lock after acquiring ownership,
+without using its contents as persisted state. Snapshots omit it from both
+manifest and payload. Forward backup leaves its inode/content intact; full
+restore leaves it in quarantine, and Codex recreates it in the restored home
+at its next ownership attempt. Replacing an active lock's inode can admit
+competing reclamation workers: do not delete or rename it to bypass refusal.
+
+Use the recorded physical tool release whose classifier recognizes this lock
+for every state-aware operation, including rollback. Helpers without that
+classification refuse a lock-bearing home; switching back to older application
+code does not justify switching to an older, incompatible state helper or
+removing the lock.
+
+`cloud-config-bundle-cache.json` and random home-root `.tmp` staging files remain
+unclassified. This exclusion assumes stored ChatGPT-token authentication with
+an ineligible workspace, without `CODEX_ACCESS_TOKEN`, workload identity, PAT,
+or agent identity overrides. Before logging into a Business/Edu/Enterprise
+workspace, migrating organizations, or selecting alternate authentication that
+could enable the cloud cache, complete a separate source-based classification
+review and install its compatible tool release. The
+[cache eligibility predicate](https://github.com/openai/codex/blob/rust-v0.161.0/codex-rs/cloud-config/src/service.rs#L52-L60)
+guards both startup and background refresh. An unclassified cache can refuse
+the next update at preflight **and full state restore** when the current home is
+inventoried before promotion. Unknown temporary names also remain fail closed;
+neither their prefix nor zero-byte contents authorize disposal.
+
 Successful runner startup leaves the transaction `awaiting-acceptance`.
 Perform actual Codex startup and applicable pre-existing history checks, or
 explicitly verify a new session after accepting history loss. Record their

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,14 +10,15 @@ import { createCodexHomeFixture, HOME_ROOT_NAMES, protectInstructionTargets } fr
 const deploy = fileURLToPath(new URL("../deploy/", import.meta.url));
 const snapshotModule = join(deploy, "codex-snapshot.mjs");
 const stateCLI = join(deploy, "kaoiro-runner-codex-state.mjs");
+const sqliteLock = ".sqlite-maintenance.lock";
 
 describe("production-shaped Codex home classification", () => {
   let dir: string, fixture: ReturnType<typeof createCodexHomeFixture>;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "kogane468-classify-"));
+    dir = mkdtempSync(join(tmpdir(), "niko542-classify-"));
     fixture = createCodexHomeFixture(dir);
     expect(readdirSync(fixture.home).sort()).toEqual([...HOME_ROOT_NAMES].sort());
-    expect(HOME_ROOT_NAMES).toHaveLength(33);
+    expect(HOME_ROOT_NAMES).toHaveLength(34);
   });
   afterEach(() => {
     if (fixture) protectInstructionTargets(fixture.links, 0o700);
@@ -25,7 +26,7 @@ describe("production-shaped Codex home classification", () => {
   });
   const run = (args: string[]) => spawnSync(process.execPath, args, { encoding: "utf8" });
 
-  it("classifies the exact 33-name home through the actual CLI without following instruction links", () => {
+  it("classifies the exact 34-name home through the actual CLI without following instruction links", () => {
     protectInstructionTargets(fixture.links, 0);
     const result = run([stateCLI, "classify", fixture.home]);
     expect(result.status, result.stderr).toBe(0);
@@ -41,21 +42,34 @@ describe("production-shaped Codex home classification", () => {
     expect(entries).toContainEqual(expect.objectContaining({ path: "plugins/.remote-plugin-install-staging/partial/bundle.json", category: "state" }));
     expect(entries).toContainEqual(expect.objectContaining({ path: `${fixture.plugin}/.codex-plugin/plugin.json`, category: "state" }));
     expect(entries).toContainEqual(expect.objectContaining({ path: "cache", category: "disposable" }));
+    expect(entries).toContainEqual(expect.objectContaining({ path: sqliteLock, category: "disposable", type: "file", size: 0 }));
     expect(entries).toContainEqual(expect.objectContaining({ path: "auth.json", category: "credential" }));
     expect(existsSync(join(dir, "backup"))).toBe(false);
   });
 
-  it("restores instruction symlinks and plugin state but omits root cache and keeps current credentials", () => {
-    const before = Object.fromEntries(readdirSync(fixture.home).filter((name) => name.includes(".sqlite")).map((name) => [name, createHash("sha256").update(readFileSync(join(fixture.home, name))).digest("hex")]));
+  it("classifies a nonempty SQLite lock as disposable through the actual CLI", () => {
+    writeFileSync(join(fixture.home, sqliteLock), "IGNORED_LOCK_CONTENT");
+    const result = run([stateCLI, "classify", fixture.home]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toContainEqual(expect.objectContaining({ path: sqliteLock, category: "disposable", type: "file", size: 20 }));
+  });
+
+  it("restores instruction symlinks and plugin state but omits root cache and SQLite lock and keeps current credentials", () => {
+    const before = Object.fromEntries(readdirSync(fixture.home).filter((name) => /\.sqlite(?:-(?:shm|wal|journal))?$/.test(name)).map((name) => [name, createHash("sha256").update(readFileSync(join(fixture.home, name))).digest("hex")]));
+    writeFileSync(join(fixture.home, sqliteLock), "IGNORED_LOCK_CONTENT");
     protectInstructionTargets(fixture.links, 0);
     const result = run(["--input-type=module", "-e", `
       import * as fs from 'node:fs';
       import { join } from 'node:path';
       const snap=await import(process.argv[1]);
       const home=process.argv[2],dir=process.argv[3];
+      const lock=join(home,'.sqlite-maintenance.lock');
+      const lockBefore=fs.lstatSync(lock);
       const before=snap.inventory(home,true);
       const result=await snap.snapshot(home,join(dir,'backup'),{uuid:'fixture',staging:join(dir,'.staging.codex-fixture')});
       const after=snap.inventory(home,true);
+      const lockAfter=fs.lstatSync(lock);
+      const lockUnchanged={dev:lockAfter.dev,ino:lockAfter.ino,content:fs.readFileSync(lock,'utf8')};
       fs.writeFileSync(join(home,'auth.json'),'REFRESHED_AUTH');
       fs.writeFileSync(join(home,'sessions/old.jsonl'),'AFTER_SNAPSHOT');
       for(const name of ['AGENTS.md','agents','hooks','model-profiles']) {
@@ -63,11 +77,16 @@ describe("production-shaped Codex home classification", () => {
       }
       snap.prepareRestore(join(dir,'backup'),result.sha256,home,join(dir,'restore'));
       snap.promoteRestore(home,join(dir,'restore'),join(dir,'quarantine'),()=>{});
-      console.log(JSON.stringify({before,after,manifest:result.manifest}));
+      console.log(JSON.stringify({before,after,manifest:result.manifest,lockBefore:{dev:lockBefore.dev,ino:lockBefore.ino},lockUnchanged}));
     `, snapshotModule, fixture.home, dir]);
     expect(result.status, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout);
     expect(output.after).toEqual(output.before);
+    expect(output.lockUnchanged).toEqual({ ...output.lockBefore, content: "IGNORED_LOCK_CONTENT" });
+    expect.soft(output.manifest.entries, "snapshot manifest must omit the disposable SQLite lock").not.toContainEqual(expect.objectContaining({ path: sqliteLock }));
+    expect.soft(existsSync(join(dir, "backup/state", sqliteLock)), "snapshot payload must omit the disposable SQLite lock").toBe(false);
+    expect.soft(existsSync(join(fixture.home, sqliteLock)), "restored home must omit the disposable SQLite lock").toBe(false);
+    expect(readFileSync(join(dir, "quarantine", sqliteLock), "utf8")).toBe("IGNORED_LOCK_CONTENT");
     expect(Object.keys(output.manifest.migrationLevels)).toHaveLength(6);
     for (const rows of Object.values(output.manifest.migrationLevels)) expect(rows).toEqual([{ version: 1, success: 1 }]);
     for (const [name, hash] of Object.entries(before)) {
@@ -94,7 +113,7 @@ describe("production-shaped Codex home classification", () => {
     for (const name of ["agents", "hooks", "model-profiles"]) expect(readFileSync(join(fixture.links[name]!, "private.txt"), "utf8")).toBe("EXTERNAL_NOT_SNAPSHOTTED");
   });
 
-  it.each(["unclassified", "plugins-extra", "auth.json.tmp"])("refuses unknown root %s before creating snapshot staging", (name) => {
+  it.each(["unclassified", "plugins-extra", "auth.json.tmp", ".sqlite-maintenance.lock.extra", "cloud-config-bundle-cache.json", ".tmpAb12Cd"])("refuses unknown root %s before creating snapshot staging", (name) => {
     writeFileSync(join(fixture.home, name), "DO_NOT_COPY");
     const result = run([stateCLI, "classify", fixture.home]);
     expect(result.status).toBe(78);
@@ -107,5 +126,16 @@ describe("production-shaped Codex home classification", () => {
     expect(snapshot.stderr).toContain(`Unclassified Codex home entry: ${name}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
     expect(existsSync(join(dir, ".staging.codex-fixture"))).toBe(false);
+  });
+
+  it("refuses a symlink at the SQLite lock name through the actual CLI", () => {
+    unlinkSync(join(fixture.home, sqliteLock));
+    const target = join(dir, "external-lock");
+    writeFileSync(target, "DO_NOT_FOLLOW");
+    symlinkSync(target, join(fixture.home, sqliteLock));
+    const result = run([stateCLI, "classify", fixture.home]);
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("External database/session storage is unsupported");
+    expect(readFileSync(target, "utf8")).toBe("DO_NOT_FOLLOW");
   });
 });

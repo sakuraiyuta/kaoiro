@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const HOME_ROOT_NAMES = [
-  ".sandbox_migration", "AGENTS.md", "agents", "auth.json", "cache", "config.toml",
+  ".sandbox_migration", ".sqlite-maintenance.lock", "AGENTS.md", "agents", "auth.json", "cache", "config.toml",
   "goals_1.sqlite", "goals_1.sqlite-shm", "goals_1.sqlite-wal", "hooks",
   "installation_id", "log", "logs_2.sqlite", "logs_2.sqlite-shm", "logs_2.sqlite-wal",
   "memories_1.sqlite", "model-profiles", "models_cache.json", "plugins",
@@ -36,6 +36,7 @@ export function createCodexHomeFixture(dir: string) {
   put("config.toml", 'model = "fixture-model"\n');
   put("installation_id", "FIXTURE_INSTALLATION");
   put(".sandbox_migration", "v1\n");
+  put(".sqlite-maintenance.lock", "");
   put("models_cache.json", "{}");
   put("sessions/old.jsonl", "OLD_HISTORY\n");
   put("skills/sample/SKILL.md", "LOCAL_SKILL\n");
