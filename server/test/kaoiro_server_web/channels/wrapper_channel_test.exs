@@ -17,6 +17,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.TaskStates
+  alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
