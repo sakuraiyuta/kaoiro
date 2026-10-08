@@ -79,6 +79,8 @@ if (args[0] === "models") {
       process.on("SIGTERM", () => process.exit(0));
       setTimeout(() => line({ event: "step_update", step_update: { step_index: 513, state: "DONE", step_type: "tool", tool_name: "run_command" } }), 500);
       setInterval(() => {}, 1000);
+    } else if (prompt.includes("KUROE541_FAIL")) {
+      process.exit(0);
     } else {
       line({ event: "result", result: { conversation_id: "cid", status: "SUCCESS", response: "second turn ran" } });
       process.exit(0);
@@ -250,15 +252,24 @@ describe("Antigravity ordinary interrupt preserves the queued peer turn (issue #
       );
       expect(sent.some((envelope) => envelope.type === "result" && JSON.stringify(envelope.payload).includes("second turn ran"))).toBe(true);
 
-      const resultsBeforeNextPeer2Batch = sent.filter((envelope) => envelope.type === "result").length;
-      await deliver(inbound("peer2", 4, "third peer2 batch after retirement", 3, "c-peer2-first"));
+      await deliver(inbound("peer2", 4, "KUROE541_FAIL", 3, "c-peer2-first"));
       await waitFor(
-        () => acknowledgements.includes(4) && sent.filter((envelope) => envelope.type === "result").length >= resultsBeforeNextPeer2Batch + 1,
+        () => acknowledgements.includes(4) && sent.some((envelope) => {
+          const payload = envelope.payload as { to?: string; conversation_id?: string; turn_number?: number; error?: { code?: string } };
+          return envelope.type === "inter_agent_message" && payload.to === "peer2" &&
+            payload.conversation_id === "c-peer2-first" && payload.turn_number === 4 &&
+            payload.error?.code === "api_error";
+        }),
         () => ({ acknowledgements, sent: sent.map((envelope) => envelope.type) }),
         12_000,
       );
       expect(acknowledgements).toEqual([1, 2, 3, 4]);
-      expect(sent.filter((envelope) => envelope.type === "result")).toHaveLength(resultsBeforeNextPeer2Batch + 1);
+      expect(sent.filter((envelope) => {
+        const payload = envelope.payload as { to?: string; conversation_id?: string; turn_number?: number; error?: { code?: string } };
+        return envelope.type === "inter_agent_message" && payload.to === "peer2" &&
+          payload.conversation_id === "c-peer2-first" && payload.turn_number === 4 &&
+          payload.error?.code === "api_error";
+      })).toHaveLength(1);
 
       const lifecycle = lifecycleOutput.join("").split("\n")
         .filter((line) => line.startsWith("[kaoiro][antigravity-lifecycle] "))
