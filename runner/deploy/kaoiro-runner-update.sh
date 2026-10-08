@@ -351,17 +351,62 @@ fi
 install_args=""
 [ "$allow_dirty" = no ] || install_args="--allow-dirty"
 
-# --- commit: from here on the service is down.
+# --- commit: from here on a stop may interrupt the source.
+
+source_was_active=no
+if [ -n "$codex_transaction" ]; then
+  source_state=$("$systemctl_bin" --user show --property=ActiveState --value "$service") ||
+    kaoiro_die "Cannot read source activity before stop; transaction $codex_transaction" 78
+  case "$source_state" in
+    active) source_was_active=yes ;;
+    inactive|failed) ;;
+    *) kaoiro_die "Source activity is transitional or unknown before stop; transaction $codex_transaction" 78 ;;
+  esac
+fi
+abort_before_switch() {
+  reason=$1
+  abort_status=$2
+  kaoiro_codex_state summary "$root" "$codex_transaction" >&2 || true
+  if [ "$source_was_active" = yes ]; then
+    mkdir "$links_lock" 2>/dev/null ||
+      kaoiro_die "$reason; source recovery refused: links lock unavailable; transaction $codex_transaction" "$abort_status"
+    links_held=yes
+    source_id=$(kaoiro_codex_state restart-source-check "$root" "$codex_transaction") ||
+      kaoiro_die "$reason; source recovery refused; transaction $codex_transaction" "$abort_status"
+    source_state=$("$systemctl_bin" --user show --property=ActiveState --value "$service") ||
+      kaoiro_die "$reason; source recovery refused: activity unreadable; transaction $codex_transaction" "$abort_status"
+    case "$source_state" in
+      active) recovery_message="unchanged source remains running" ;;
+      inactive|failed)
+        "$systemctl_bin" --user start "$service" ||
+          kaoiro_die "$reason; source restart failed; transaction $codex_transaction" "$abort_status"
+        recovery_message="unchanged source was resumed"
+        ;;
+      *) kaoiro_die "$reason; source recovery refused: transitional service; transaction $codex_transaction" "$abort_status" ;;
+    esac
+    kaoiro_codex_state restart-source-verify "$root" "$codex_transaction" >/dev/null ||
+      kaoiro_die "$reason; source restart verification failed; transaction $codex_transaction" "$abort_status"
+    source_running=$("$root/current/deploy/kaoiro-runner-launch.sh" --version 2>/dev/null || true)
+    kaoiro_identity_attests_revision "$source_running" "${source_id%-dirty}" ||
+      kaoiro_die "$reason; source identity verification failed; transaction $codex_transaction" "$abort_status"
+    kaoiro_die "$reason; $recovery_message; transaction $codex_transaction" "$abort_status"
+  fi
+  kaoiro_die "$reason; source was already stopped; transaction $codex_transaction" "$abort_status"
+}
 
 printf '%s: stopping %s\n' "$prog" "$service" >&2
-"$systemctl_bin" --user stop "$service"
+stop_status=0
+"$systemctl_bin" --user stop "$service" || stop_status=$?
+if [ "$stop_status" -ne 0 ]; then
+  [ -z "$codex_transaction" ] || abort_before_switch "Runner stop failed" "$stop_status"
+  exit "$stop_status"
+fi
 
 if [ -n "$codex_transaction" ]; then
   state_action=snapshot
   [ -z "$codex_restore" ] || state_action=restore
   if ! kaoiro_codex_state "$state_action" "$root" "$codex_transaction"; then
-    kaoiro_codex_state summary "$root" "$codex_transaction" >&2 || true
-    kaoiro_die "Codex state preparation failed; runner remains stopped; transaction $codex_transaction" 78
+    abort_before_switch "Codex state preparation failed" 78
   fi
 fi
 

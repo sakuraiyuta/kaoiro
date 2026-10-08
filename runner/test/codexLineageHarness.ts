@@ -1,3 +1,4 @@
+import { cgroupFixture } from "./codexCgroupFixture.js";
 // Shared fixture for the Codex state lineage tests (issue 498). Not a test
 // file itself. It drives the REAL deploy scripts and state helper against a
 // synthetic installation: the service manager is a scripted systemctl whose
@@ -76,6 +77,8 @@ export interface LineageOptions {
 /** A, B and C ship different native bytes, so pin comparison is real. */
 export async function createLineage(options: LineageOptions = {}): Promise<Lineage> {
   const dir = mkdtempSync(join(tmpdir(), "ao498-lineage-"));
+  const { preload } = cgroupFixture(dir);
+  const nodeOptions = (process.env.NODE_OPTIONS || "") + " --import=" + preload;
   const root = join(dir, "install"), home = join(dir, "codex"), ordinary = join(dir, "ordinary"), conf = join(dir, "config");
   for (const path of [root, home, ordinary, conf]) mkdirSync(path, { mode: 0o700 });
   mkdirSync(join(home, "sessions"));
@@ -129,7 +132,7 @@ else if (args.includes('show-environment')) { console.log('HOME='+${JSON.stringi
 else if (args.includes('show')) {
  const shim=root+'/current/deploy/kaoiro-runner-launch.sh';
  const unit=fs.existsSync(dir+'/unit-id')?fs.readFileSync(dir+'/unit-id','utf8').trim():'ao498-test.service';
- const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(owner.pid):'0', ActiveState:active?'active':'inactive', Id:unit, FragmentPath:dir+'/unit' };
+ const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(owner.pid):'0', ActiveState:active?'active':'inactive', Id:unit, FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
  console.log(values[prop || 'ExecStart'] || '');
 }
 `, { mode: 0o755 });
@@ -139,7 +142,7 @@ else if (args.includes('show')) {
   const script = () => join(root, "releases", current(), "deploy/kaoiro-runner-update.sh");
   const helper = () => join(root, "releases", current(), "deploy/kaoiro-runner-codex-state.mjs");
   const spawnState = (env: Record<string, string>, pre: string[], args: string[]) =>
-    spawnSync(process.execPath, ["--experimental-vm-modules", ...pre, helper(), ...args], { env: { ...process.env, KAOIRO_SYSTEMCTL: ctl, ...env }, encoding: "utf8" });
+    spawnSync(process.execPath, ["--experimental-vm-modules", ...pre, helper(), ...args], { env: { ...process.env, KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions, ...env }, encoding: "utf8" });
   const txFile = (uuid: string) => join(root, "codex-state/transactions", `${uuid}.json`);
   const refFile = (uuid: string) => join(root, "codex-state/backups", `${uuid}.json`);
   const read = (path: string): Tx => JSON.parse(readFileSync(path, "utf8"));
@@ -147,8 +150,8 @@ else if (args.includes('show')) {
 
   const lineage: Lineage = {
     dir, root, home, conf, calls, ids,
-    update: (to, backup, extra = []) => runScript(script(), ["--install-dir", root, "--service", "ao498-test", "--tarball", archives[to]!, "--codex-home", home, "--codex-backup-dir", join(dir, backup), ...extra], { KAOIRO_SYSTEMCTL: ctl }),
-    restore: (backup, extra = []) => runScript(script(), ["--install-dir", root, "--service", "ao498-test", "--restore-codex-backup", join(dir, backup), "--codex-home", home, ...extra], { KAOIRO_SYSTEMCTL: ctl }),
+    update: (to, backup, extra = []) => runScript(script(), ["--install-dir", root, "--service", "ao498-test", "--tarball", archives[to]!, "--codex-home", home, "--codex-backup-dir", join(dir, backup), ...extra], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions }),
+    restore: (backup, extra = []) => runScript(script(), ["--install-dir", root, "--service", "ao498-test", "--restore-codex-backup", join(dir, backup), "--codex-home", home, ...extra], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions }),
     state: (...args) => spawnState({}, [], args),
     faultState: (fault, ...args) => spawnState({ KAOIRO_TEST_FAULT: JSON.stringify(fault) }, ["--import", `file://${join(dir, "fault.mjs")}`], args),
     accept: (uuid, mutate, fault) => {

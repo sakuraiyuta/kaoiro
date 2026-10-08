@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { digest, hasEntry, identity, must } from "./codex-snapshot.mjs";
 
@@ -133,6 +133,67 @@ export function checkBinding(root, service, binding, restored = false) {
   delete expected.live;
   if (restored) current.home = { ...current.home, dev: expected.home.dev, ino: expected.home.ino };
   must(JSON.stringify(current) === JSON.stringify(expected), "Service/home configuration changed after binding");
+}
+export function runnerActivity(service) {
+  const state = prop(service, "ActiveState"), pid = prop(service, "MainPID");
+  if (state === "active" && /^[1-9][0-9]*$/.test(pid) && Number.isSafeInteger(Number(pid))) return "active";
+  must(["inactive", "failed"].includes(state) && pid === "0", "Runner activity is transitional or unknown");
+  return "inactive";
+}
+export function assertOwnedCgroup(service) {
+  must(process.platform === "linux" && hasEntry("/sys/fs/cgroup/cgroup.controllers"), "State-aware operation requires unified cgroup v2");
+  const activity = runnerActivity(service), group = prop(service, "ControlGroup");
+  if (!group) { must(activity === "inactive", "Active runner has no cgroup"); return; }
+  must(group.startsWith("/") && group !== "/" && !/[\0\r\n]/.test(group) && group.slice(1).split("/").every((p) => p && p !== "." && p !== ".."), "Invalid runner cgroup path");
+  const base = "/sys/fs/cgroup", selected = join(base, group);
+  must(realpathSync(base) === base, "Unexpected cgroup root symlink");
+  if (!hasEntry(selected)) { must(activity === "inactive", "Active runner cgroup is missing"); return; }
+  const members = () => {
+    const rows = new Map(), pending = [selected];
+    while (pending.length) {
+      const path = pending.pop();
+      must(lstatSync(path).isDirectory() && realpathSync(path) === path, "Unexpected runner cgroup symlink");
+      must(readFileSync(join(path, "cgroup.type"), "utf8").trim() === "domain", "Unsupported threaded runner cgroup");
+      for (const text of readFileSync(join(path, "cgroup.procs"), "utf8").split(/\s+/).filter(Boolean)) {
+        const pid = Number(text);
+        must(/^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(pid), "Invalid runner cgroup PID");
+        if (!rows.has(pid)) rows.set(pid, new Set());
+        rows.get(pid).add(path.slice(base.length));
+      }
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        must(!entry.isSymbolicLink(), "Unexpected runner cgroup symlink");
+        if (entry.isDirectory()) pending.push(join(path, entry.name));
+      }
+    }
+    return rows;
+  };
+  const listed = members(), failures = [];
+  const membership = (pid) => {
+    const text = readFileSync(`/proc/${pid}/cgroup`, "utf8");
+    const lines = text.trim().split("\n");
+    must(lines.length === 1 && lines[0].startsWith("0::"), "Unknown process cgroup membership");
+    return lines[0].slice(3);
+  };
+  for (const [pid, groups] of [...listed].sort(([a], [b]) => a - b)) {
+    let uid = "unknown", name = "unknown";
+    try {
+      const before = pidIdentity(pid), member = membership(pid);
+      must(typeof before === "string" && /^[0-9]+$/.test(before) && groups.has(member), "Process identity/membership changed");
+      const status = readFileSync(`/proc/${pid}/status`, "utf8");
+      name = (/^Name:\s*(.*)$/m.exec(status)?.[1] || name).replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 128);
+      const row = /^Uid:\s*([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s*$/m.exec(status);
+      must(row && row.slice(1).every((v) => Number.isSafeInteger(Number(v))), "Unreadable or malformed process UID");
+      uid = row.slice(1).join("/");
+      // Start time and membership bracket UID observation; a recycled PID cannot authorize stop.
+      must(pidIdentity(pid) === before && membership(pid) === member, "Process identity/membership changed");
+      must(row.slice(1).every((v) => Number(v) === process.getuid()), "Foreign process UID");
+    } catch (error) {
+      if (["ENOENT", "ESRCH"].includes(error.code) && !members().has(pid)) continue;
+      failures.push(`PID ${pid} UID ${uid} Name ${name}`);
+    }
+  }
+  must(!failures.length, `Runner cgroup contains foreign or unverified processes: ${failures.join("; ")}`);
+  must([...members().keys()].every((pid) => listed.has(pid)) && prop(service, "ControlGroup") === group && runnerActivity(service) === activity, "Runner cgroup changed during inspection; retry during maintenance");
 }
 export function assertStopped(service, home) {
   must(["inactive", "failed"].includes(prop(service, "ActiveState")) && prop(service, "MainPID") === "0", "Runner is not fully stopped");

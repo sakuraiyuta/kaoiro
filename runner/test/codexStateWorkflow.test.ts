@@ -1,3 +1,4 @@
+import { cgroupFixture } from "./codexCgroupFixture.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,10 +8,12 @@ import { tmpdir } from "node:os";
 import { makeReleaseTarball, revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
 
 describe.skipIf(process.platform !== "linux")("state-aware updater control flow", () => {
-  let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string;
+  let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string, nodeOptions: string;
   const A = revisionOf("state-workflow-a"), B = revisionOf("state-workflow-b");
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), "kogane468-workflow-"));
+    const { preload } = cgroupFixture(dir);
+    nodeOptions = (process.env.NODE_OPTIONS || "") + " --import=" + preload;
     root = join(dir, "install"); home = join(dir, "codex"); ordinary = join(dir, "ordinary"); conf = join(dir, "config");
     for (const path of [root, home, ordinary, conf]) mkdirSync(path, { mode: 0o700 });
     mkdirSync(join(home, "sessions")); writeFileSync(join(home, "sessions/old.jsonl"), "HISTORY");
@@ -35,7 +38,7 @@ const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
 const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
+if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { const st=fs.readFileSync('/proc/'+owner.pid+'/stat','utf8'); if(st.slice(st.lastIndexOf(')')+2).split(' ')[19]===owner.start) process.kill(owner.pid, 'SIGTERM'); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); }
 else if (args.includes('start')) {
  fs.appendFileSync(dir+'/calls','start\\n');
  const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
@@ -50,7 +53,7 @@ else if (args.includes('start')) {
 else if (args.includes('show-environment')) { console.log('HOME='+${JSON.stringify(ordinary)}+'\\nKAOIRO_RUNNER_DIR='+${JSON.stringify(conf)}); if(fs.existsSync(dir+'/manager-extra')) console.log(fs.readFileSync(dir+'/manager-extra','utf8')); }
 else if (args.includes('show')) {
  const shim=root+'/current/deploy/kaoiro-runner-launch.sh';
- const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(owner.pid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit' };
+ const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(owner.pid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
  console.log(values[prop || 'ExecStart'] || '');
 }
 `, { mode: 0o755 });
@@ -69,7 +72,7 @@ else if (args.includes('show')) {
     }
     rmSync(dir, { recursive: true, force: true });
   });
-  const update = (extra: string[] = []) => runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive, "--codex-home", home, "--codex-backup-dir", join(dir, "backup"), ...extra], { KAOIRO_SYSTEMCTL: ctl });
+  const update = (extra: string[] = []) => runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive, "--codex-home", home, "--codex-backup-dir", join(dir, "backup"), ...extra], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
   it("runs the shipped helper between stop and switch/start", () => {
     const result = update();
     expect(result.status, result.stderr).toBe(0);
@@ -90,7 +93,7 @@ else if (args.includes('show')) {
     writeFileSync(join(dir, "late-unknown"), "trigger");
     const result = update();
     expect(result.status).not.toBe(0);
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
     expect(result.stderr).toContain("Codex state preparation failed");
@@ -105,14 +108,14 @@ else if (args.includes('show')) {
     writeFileSync(join(dir, "active"), "inactive");
     writeFileSync(join(home, "sessions/old.jsonl"), "NEW_HISTORY");
     writeFileSync(join(home, "auth.json"), "REFRESHED_TOKEN");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status, result.stderr).toBe(0);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
     expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("REFRESHED_TOKEN");
     expect(readFileSync(calls, "utf8")).toBe("stop\nstart\nstop\nstart\n");
   });
-  const stateAction = (...args: string[]) => spawnSync(process.execPath, ["--experimental-vm-modules", join(root, "releases", B, "deploy/kaoiro-runner-codex-state.mjs"), ...args], { env: { ...process.env, KAOIRO_SYSTEMCTL: ctl }, encoding: "utf8" });
+  const stateAction = (...args: string[]) => spawnSync(process.execPath, ["--experimental-vm-modules", join(root, "releases", B, "deploy/kaoiro-runner-codex-state.mjs"), ...args], { env: { ...process.env, KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions }, encoding: "utf8" });
   const forwardTransaction = () => {
     const file = readdirSync(join(root, "codex-state/transactions"))[0]!;
     return JSON.parse(readFileSync(join(root, "codex-state/transactions", file), "utf8"));
@@ -204,7 +207,7 @@ else if (args.includes('show')) {
     const second = readdirSync(join(root, "codex-state/transactions")).map((file) => JSON.parse(readFileSync(join(root, "codex-state/transactions", file), "utf8"))).find((tx) => tx.uuid !== first.uuid)!;
     expect(stateAction("accept", root, second.uuid, acceptance(second)).status).toBe(0);
     const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Non-latest restore refused");
     expect(readFileSync(calls, "utf8")).toBe(before);
@@ -214,7 +217,7 @@ else if (args.includes('show')) {
     expect(update().status).toBe(0);
     const before = readFileSync(calls, "utf8");
     writeFileSync(join(dir, "backup/state/sessions/old.jsonl"), "CORRUPTION");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status).not.toBe(0);
     expect(readFileSync(calls, "utf8")).toBe(before);
     expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
@@ -232,7 +235,7 @@ else if (args.includes('show')) {
     ref.manifestHash = createHash("sha256").update(readFileSync(path)).digest("hex");
     writeFileSync(refPath, JSON.stringify(ref));
     const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("release/home binding differs");
     expect(readFileSync(calls, "utf8")).toBe(before);
@@ -346,7 +349,7 @@ else if (args.includes('show')) {
     const result = update();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("requires unified cgroup v2");
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
+    expect(existsSync(calls)).toBe(false);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     expect(existsSync(join(dir, "backup"))).toBe(false);
   });
@@ -429,7 +432,7 @@ else if (args.includes('show')) {
     writeReleaseTree(join(root, "releases", B), B, { extraFiles });
     mkdirSync(join(dir, "pin-tarball"));
     archive = makeReleaseTarball(join(dir, "pin-tarball"), B, { extraFiles });
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Codex pin transition requires an explicit state backup");
     expect(existsSync(calls)).toBe(false);
@@ -459,7 +462,7 @@ else if (args.includes('show')) {
     mkdirSync(join(dir, "code-only-tarball"));
     const codeOnly = makeReleaseTarball(join(dir, "code-only-tarball"), C);
     const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", codeOnly], { KAOIRO_SYSTEMCTL: ctl });
+    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", codeOnly], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
     expect(result.status, result.stderr).toBe(0);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${C}`);
     expect(readFileSync(calls, "utf8")).toBe(`${before}stop\nstart\n`);
@@ -473,7 +476,7 @@ else if (args.includes('show')) {
     };
     // The operator restarts the runner on the current release after an abort.
     const restart = () => {
-      expect(spawnSync(ctl, ["--user", "start", "kogane468-test"]).status).toBe(0);
+      if (readFileSync(join(dir, "active"), "utf8") !== "active") expect(spawnSync(ctl, ["--user", "start", "kogane468-test"]).status).toBe(0);
       return JSON.parse(readFileSync(join(dir, "mainpid"), "utf8")) as { pid: number; start: string };
     };
     // Real aborts: remain-active fails the snapshot's stop check with the

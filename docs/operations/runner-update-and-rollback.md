@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-10-05
+last_updated: 2026-10-08
 related: [deployment]
 ---
 
@@ -278,7 +278,7 @@ contents. Any classification refusal aborts the update before stopping the
 runner. Unknown entries require a separately reviewed classification before
 retrying; do not delete or rename files merely to make the check pass. Only the
 managed runner and its service descendants are checked for stop completion. External processes are
-not scanned; an unreadable process or another writer does not itself refuse
+not scanned; an unreadable process outside the service or another external writer does not itself refuse
 the update. Each state-aware invocation warns that external writes can make
 snapshot recovery fail. Detected copy/verification errors still stop the update
 before switching or starting.
@@ -295,8 +295,33 @@ the updater never takes its target from inherited `CODEX_HOME`:
   --codex-backup-dir "$new_snapshot_dir" --detach
 ```
 
+Before publishing a state transaction or its owner record, the helper reads the
+unit's `ControlGroup` and walks only that cgroup subtree. It reads `cgroup.procs`
+and the listed PIDs' UID, command name, start time and membership. All four UID
+fields must match the updater's UID. Foreign or unverified members refuse with
+exit 78 before stop, naming the PID, UID and command without argv or environment.
+Unsupported topology, paths and identity changes also refuse. Keep apt,
+add-apt-repository and other root operations outside the runner's cgroup. Inspect
+the named unit and listed PIDs read-only; do not use pattern-based kill pipelines
+or automatic sudo cleanup. The observation does not prevent later descendants,
+so keep the maintenance interval free of competing operations. The post-stop
+cgroup-empty check remains required before snapshot or state replacement.
+
 Forward backup requires the source runner to be active for live home binding.
-A snapshot failure means a nonzero worker exit, no switch and no start. Inspect
+A snapshot failure means a nonzero worker exit and no switch. If this worker
+stopped an active source and the transaction is still `prepared`, `stopped`, or
+`restore-prepared`, it attempts to resume that unchanged source under the update
+and links locks. Restart requires the original current link, verified release,
+home identity and service/environment binding. The worker verifies active state,
+MainPID, live home binding and release identity after start. A successful recovery
+still fails the update and reports `unchanged source was resumed`; a stop failure
+with the source still running reports `unchanged source remains running` without
+a duplicate start. A restore that began stopped is not started on an abort.
+Recovery refusal, failed start or failed verification requires operator inspection;
+it is never reported as successful recovery. After restore intent, home or
+credential replacement, switch authorization or possible target startup, use the
+existing state-aware recovery procedure instead of ordinary source restart.
+Inspect
 the journal and private `codex-state/transactions/<uuid>.json`. A forward that
 stopped before its snapshot wrote anything blocks every later update until it
 is [abandoned](#abandoning-a-forward-that-never-wrote-its-snapshot). A post-start
@@ -489,16 +514,19 @@ prohibited.
 
 A state-aware update can abort after `prepare` and before its snapshot exists,
 for example when the stopped runner's cgroup still holds a process. The updater
-reports `Codex state preparation failed; runner remains stopped; transaction
-<uuid>`, and every later update refuses before stopping the runner with
+reports a failed update and whether the unchanged source was resumed, remains
+running, or could not safely be restarted. Every later update refuses before stopping the runner with
 `Recover or accept the previous Codex state transaction first`. When
 `summary <install-root> <uuid>` shows mode `forward` and phase `prepared` or
 `stopped`, the transaction changed nothing but its own record, and `abandon`
 retires it:
 
-1. Remove the cause of the abort. If the runner is still stopped, start it on
-   the current release (`systemctl --user start kaoiro-runner`): the retried
-   forward backup needs it active.
+1. Inspect the worker journal, transaction and source service status, then remove
+   the cause of the abort. If the worker already verified source recovery, no
+   manual start is needed. If it remains stopped, establish that the current
+   release, home and configuration are unchanged and no state replacement or
+   target startup was attempted before starting the source manually
+   (`systemctl --user start kaoiro-runner`). The retried forward backup needs it active.
 2. Install, without activating it, a release whose tool has `abandon`; the
    release you are updating to will do. Installing does not consult
    unresolved transactions, so the stranded one does not block it.

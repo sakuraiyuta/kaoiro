@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
 import { atomicJSON, capacity, digest, hasEntry, identity, inside, inventory, must, prepareRestore, promoteRestore, sameState, snapshot, throughputEstimate, verifySnapshot } from "./codex-snapshot.mjs";
-import { assertStopped, captureBinding, checkBinding, staticBinding } from "./codex-service.mjs";
+import { assertOwnedCgroup, assertStopped, captureBinding, checkBinding, runnerActivity, staticBinding } from "./codex-service.mjs";
 
 const ID = /^[a-f0-9]{40}(?:-dirty)?$|^unknown$/;
 const UUID = /^[a-f0-9-]{36}$/;
@@ -235,6 +235,7 @@ async function prepare(root, target, home, destination, service, tool, owner) {
   const entries = inventory(home);
   const estimate = { backup: capacity(dirname(destination), entries, true), restore: capacity(dirname(home), entries), throughput: throughputEstimate(dirname(destination), entries) };
   if (entries.some((e) => e.path.endsWith(".sqlite"))) await import("node:sqlite");
+  assertOwnedCgroup(service);
   const p = init(root);
   const uuid = randomUUID();
   const tx = { schema: 1, bindingReceiptVersion: 1, uuid, root, mode: "forward", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target: candidate, tool, binding, service, snapshot: destination, staging: join(dirname(destination), `.staging.codex-${uuid}`), estimate, created: new Date().toISOString(), phase: "prepared" };
@@ -306,11 +307,27 @@ async function prepareRollback(root, snapshotPath, home, service, tool, owner, n
   const target = await releaseIdentity(root, old.source.id);
   must(target.sha256 === old.source.sha256, "Backup source native changed");
   capacity(dirname(home), original.entries);
+  assertOwnedCgroup(service);
   const uuid = randomUUID();
   const tx = { schema: 1, bindingReceiptVersion: 1, uuid, root, mode: neverStartedUUID ? "code-recovery" : "restore", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target, tool, binding: { ...binding, live: old.binding.live }, service, backupUUID: old.uuid, snapshot: snapshotPath, staging: join(dirname(home), `.restore.codex-${uuid}`), quarantine: join(dirname(home), `.failed.codex-${uuid}`), phase: neverStartedUUID ? "code-recovery-prepared" : "restore-prepared", created: new Date().toISOString() };
   atomicJSON(join(root, ".lock.update", "codex-owner.json"), { schema: 1, uuid, owner: tx.owner });
   save(root, tx);
   return uuid;
+}
+async function restartSource(root, uuid, running = false) {
+  must(hasEntry(join(root, ".lock.links")), "Source restart requires the links lock");
+  const tx = transaction(root, uuid);
+  requireModern(tx);
+  ownPending(root, tx);
+  lockOwner(root, tx);
+  must((tx.mode === "forward" && ["prepared", "stopped"].includes(tx.phase)) || (tx.mode === "restore" && tx.phase === "restore-prepared"), "Source restart is unsafe after state preparation or target authorization");
+  must(currentRelease(root) === tx.source.id, "Source link changed before restart");
+  must(canon(await releaseIdentity(root, tx.source.id)) === canon(tx.source), "Source release changed before restart");
+  checkBinding(root, tx.service, tx.binding);
+  const activity = runnerActivity(tx.service);
+  if (running) must(activity === "active", "Source restart did not reach an active runner");
+  if (activity === "active") captureBinding(root, tx.service, tx.binding.home.path);
+  return tx.source.id;
 }
 function restore(root, uuid) {
   const tx = transaction(root, uuid);
@@ -435,6 +452,7 @@ async function main(argv) {
   else if (action === "summary") { const { uuid, mode, phase } = transaction(root, args[0]); console.log(JSON.stringify({ uuid, mode, phase })); }
   else if (action === "prepare-restore") console.log(await prepareRollback(root, ...args));
   else if (action === "restore") restore(root, args[0]);
+  else if (action === "restart-source-check" || action === "restart-source-verify") console.log(await restartSource(root, args[0], action === "restart-source-verify"));
   else if (action === "inspect") console.log(JSON.stringify(transaction(root, args[0]), null, 2));
   else if (action === "target") console.log(transaction(root, args[0]).target.id);
   else if (action === "protected") console.log(protectedReleases(root));
