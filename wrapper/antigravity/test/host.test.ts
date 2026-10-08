@@ -1815,6 +1815,7 @@ if (args[0] === "models") {
   it.each([
     ["wrong error type", { type: "OTHER", message: "invalid arguments:\\n- missing property 'toolSummary'" }],
     ["unmeasured validation wording", { type: "TOOL_ERROR", message: "invalid arguments: missing property 'toolSummary'" }],
+    ["unmeasured permission-declaration form", { type: "TOOL_ERROR", message: "declaring permissions failed: invalid tool call error (invalid_args)" }],
     ["anchored suffix violation", { type: "TOOL_ERROR", message: "invalid arguments:\\n- missing property 'toolSummary'\\nextra" }],
   ])("fails closed when the unobserved error is %s", async (_label, error) => {
     const { host, logs, calls, warnings, gateRecoveryLifecycle } = hostHarness();
