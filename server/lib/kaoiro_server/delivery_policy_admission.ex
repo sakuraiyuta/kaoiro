@@ -31,6 +31,8 @@ defmodule KaoiroServer.DeliveryPolicyAdmission do
     state
   end
 
+  def operator_intent(_id, "normal"), do: {"normal", nil}
+
   def operator_intent(id, requested) do
     state = snapshot(id)
     modes = if state.owner, do: state.owner.operator_modes || state.owner.modes

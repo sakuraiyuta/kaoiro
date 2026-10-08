@@ -21,9 +21,10 @@ A: `962f457e` and `4719a4a7`. Integrated B+C:
 `95ea6524a99b9bf73e3c7930e01dc067f5771f23`. Generated-env fixture correction:
 `502e05c8e4ca122c47cc6ae12f9fb95edc139e8c`.
 A may land first; B and C must land together. The image below was built from
-the clean B+C commit. Later changes affect only an excluded test fixture and
-documentation; product source, runtime/deploy configuration and the Dockerfile
-are byte-identical to the measured commit.
+the clean B+C commit. At the original gate commit, later changes affected only
+an excluded test fixture and documentation. The pre-landing channel correction
+below changes channel/AgentStates source; the release observations remain bound
+to the measured commit and the unchanged store, placement and Docker source.
 
 [Observations and file hashes](2026-10-09-c1s-observations.json) bind the gate
 outputs, 51 individual mutations, image, live cases and crash results.
@@ -85,8 +86,10 @@ not match the formatted source, and removing the earlier viewer `ext` strip
 stayed green because the policy branch replaces the entire extension map.
 The actual instruction call and the policy branch's private-field merge
 were then mutated separately; they fail five and one tests respectively.
-The initial legacy-cache attempt in A also stayed green; a production-resume
-test was committed in `4719a4a7`, and the intended cut then failed that test.
+The initial legacy-cache attempt in A was an unpinned, non-equivalent cut,
+rather than an equivalent mutant. The production-resume test committed in
+`4719a4a7` kills the intended cut; that final red result is included in the
+15 placement controls. It is not an outstanding survivor.
 
 The initial mutation result classifier expected a different ExUnit failure
 spelling. The final checker reads actual `Failed: N tests` output and hashes

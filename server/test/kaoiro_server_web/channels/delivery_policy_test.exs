@@ -39,7 +39,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
   defp modes(early \\ "steer"),
     do: %{"version" => "v1", "early" => early, "yield" => "none", "stage_reports" => true}
 
-  defp wrapper(id, options \\ %{}) do
+  defp wrapper(id, options \\ %{}, seed_state? \\ true) do
     params =
       Map.merge(
         %{
@@ -58,7 +58,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
       |> socket(nil, %{})
       |> subscribe_and_join(WrapperChannel, "wrapper:" <> id, params)
 
-    assert_reply push(socket, "envelope", state(id)), :ok
+    if seed_state?, do: assert_reply(push(socket, "envelope", state(id)), :ok)
     {reply, socket}
   end
 
@@ -76,6 +76,178 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
 
   defp request(id, policy, expected),
     do: %{"version" => "0", "agent_id" => id, "policy" => policy, "expected_revision" => expected}
+
+  defp with_suspended(name, fun) do
+    pid = Process.whereis(name)
+    assert is_pid(pid)
+    :ok = :sys.suspend(pid)
+
+    try do
+      fun.()
+    after
+      :sys.resume(pid)
+    end
+  end
+
+  defp notification(id, "permission_request") do
+    %{
+      state(id)
+      | "type" => "permission_request",
+        "state" => "waiting_permission",
+        "payload" => %{"request_id" => id <> "-permission", "tool_name" => "Bash", "input" => %{}}
+    }
+  end
+
+  defp notification(id, "question_request") do
+    %{
+      state(id)
+      | "type" => "question_request",
+        "state" => "waiting_question",
+        "payload" => %{
+          "request_id" => id <> "-question",
+          "questions" => [
+            %{
+              "question" => "Choice?",
+              "header" => "Choice",
+              "multiSelect" => false,
+              "options" => [%{"label" => "A", "description" => "a"}]
+            }
+          ]
+        }
+    }
+  end
+
+  defp notification(id, "state_change"), do: state(id)
+
+  test "viewer unknown-agent write is forbidden before existence lookup", %{id: id} do
+    viewer = client(:viewer)
+
+    assert_reply push(viewer, "set_delivery_policy", request(id, "on", 0)), :error, %{
+      reason: "forbidden"
+    }
+
+    assert {:ok, nil} = DeliveryPolicies.get(id)
+    assert :dets.lookup(DeliveryPolicies, {:counter, id}) == []
+    refute Map.has_key?(AgentDirectory.all(), id)
+  end
+
+  for ack? <- [false, true] do
+    test "first state uses the join/ack view with WorkStore suspended: ack=#{ack?}", %{id: id} do
+      {_, socket} = wrapper(id, %{"delivery_policy" => "v1"}, false)
+      assert_push "delivery_policy", %{"revision" => 1, "policy" => "on"}
+
+      if unquote(ack?) do
+        assert_reply push(socket, "delivery_policy_applied", %{"version" => "0", "revision" => 1}),
+                     :ok
+      end
+
+      _ = :sys.get_state(socket.channel_pid)
+      @endpoint.subscribe("agents:lobby")
+
+      with_suspended(WorkStore, fn ->
+        started = System.monotonic_time(:microsecond)
+        assert_reply push(socket, "envelope", state(id)), :ok, %{}, 250
+        elapsed = System.monotonic_time(:microsecond) - started
+        IO.puts("559 availability first-state ack=#{unquote(ack?)}: #{elapsed} us")
+        assert_broadcast "envelope", %{"agent_id" => ^id} = live
+        assert live == AgentStates.get_envelope(id)
+        view = get_in(live, ["ext", "delivery_policy"])
+        assert view["policy"] == "on"
+        assert view["revision"] == 1
+        assert view["confirmed"] == unquote(ack?)
+      end)
+    end
+  end
+
+  for type <- ["state_change", "permission_request", "question_request"] do
+    test "#{type} keeps cached off and broadcasts without WorkStore", %{id: id} do
+      {_, socket} = wrapper(id, %{"delivery_policy" => "v1"})
+      assert_push "delivery_policy", %{"revision" => 1}
+      assert {:ok, _} = DeliveryPolicies.compare_and_set(id, :off, 1)
+      assert_push "delivery_policy", %{"revision" => 2, "policy" => "off"}
+      _ = :sys.get_state(socket.channel_pid)
+      cached = get_in(AgentStates.get_envelope(id), ["ext", "delivery_policy"])
+      @endpoint.subscribe("agents:lobby")
+
+      forged =
+        put_in(notification(id, unquote(type)), ["ext", "delivery_policy"], %{
+          "policy" => "on",
+          "revision" => 900
+        })
+
+      with_suspended(WorkStore, fn ->
+        started = System.monotonic_time(:microsecond)
+        assert_reply push(socket, "envelope", forged), :ok, %{}, 250
+        elapsed = System.monotonic_time(:microsecond) - started
+        IO.puts("559 availability #{unquote(type)}: #{elapsed} us")
+        assert_broadcast "envelope", %{"agent_id" => ^id, "type" => unquote(type)} = live
+        assert live == AgentStates.get_envelope(id)
+        assert get_in(live, ["ext", "delivery_policy"]) == cached
+        assert cached["policy"] == "off"
+        assert cached["revision"] == 2
+      end)
+    end
+  end
+
+  test "explicit-normal operator input bypasses suspended DeliveryPolicies", %{id: id} do
+    {_, _} = wrapper(id)
+    operator = client(:operator)
+    @endpoint.subscribe("wrapper:" <> id)
+
+    with_suspended(DeliveryPolicies, fn ->
+      assert_reply push(operator, "instruction", %{
+                     "version" => "0",
+                     "agent_id" => id,
+                     "text" => "ordinary",
+                     "delivery_intent" => "normal"
+                   }),
+                   :ok,
+                   %{"delivery_intent" => "normal"},
+                   250
+
+      assert_broadcast "instruction", %{"text" => "ordinary", "delivery_intent" => "normal"}
+    end)
+  end
+
+  for intent <- [nil, "normal"] do
+    test "ordinary IA bypasses suspended DeliveryPolicies: intent=#{inspect(intent)}", %{id: id} do
+      from = id <> "-sender"
+      {_, sender} = wrapper(from)
+      {_, _} = wrapper(id)
+      @endpoint.subscribe("wrapper:" <> id)
+
+      payload = %{
+        "to" => id,
+        "conversation_id" => id <> "-ordinary",
+        "turn_number" => 1,
+        "kind" => "inform",
+        "body" => "ordinary",
+        "meta" => %{"done" => false, "propose_next" => ""},
+        "owner" => %{"kind" => "user", "id" => "operator"},
+        "new_conversation" => true,
+        "in_reply_to" => 0
+      }
+
+      payload =
+        if unquote(intent),
+          do: Map.put(payload, "delivery_intent", unquote(intent)),
+          else: payload
+
+      envelope = %{state(from) | "type" => "inter_agent_message", "payload" => payload}
+
+      with_suspended(DeliveryPolicies, fn ->
+        assert_reply push(sender, "envelope", envelope),
+                     :ok,
+                     %{"delivery_authority" => %{requested: "normal", granted: "normal"}},
+                     250
+
+        assert_broadcast "envelope", %{
+          "type" => "inter_agent_message",
+          "payload" => %{"body" => "ordinary", "delivery_authority" => %{granted: "normal"}}
+        }
+      end)
+    end
+  end
 
   defp instruction(client, id, intent, expected, reason \\ nil) do
     payload = %{"version" => "0", "agent_id" => id, "text" => "policy test"}

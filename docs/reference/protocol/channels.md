@@ -211,6 +211,14 @@ revision when known, applied revision when known, `confirmed`, `pending` and
 updates use the existing agent-visibility predicate. Wrapper ext cannot author
 this field. C2 owns the UI control and its viewer guard.
 
+State, permission and question envelopes retain the AgentStates policy view
+without a policy-store read. The initial envelope uses the view already read
+by the join handshake or current ack. Storage selects an existing view ahead
+of that initial seed and returns the same envelope for broadcast; wrapper
+policy fields are discarded. This display cache can lag a policy change or
+store outage. Fresh snapshots and non-normal admission read the current store
+and owner state; a cached on view never grants delivery permission.
+
 Unknown, off and supporting-but-unconfirmed deny non-normal grants with,
 respectively, `policy_unknown`, `recipient_policy_off` and
 `policy_unconfirmed`. Operator instruction replies identify the resulting
@@ -220,8 +228,21 @@ yield mechanism and queues that intent. An operator declaration of none
 remains authoritative over the IA declaration. IA retains requested intent,
 returns the final normal grant/reason, reserves no early quota on denial and
 drops any unused yield token. Ordinary delivery continues during store outage.
+Explicit-normal operator input and omitted/normal IA intent do not read the
+policy store. IA still performs its existing work-authority checks and work
+stamp; this is not independence from WorkStore.
 The ordering and work-authority rules of the fixed implementation base still
 apply after policy permission; policy never authorizes an otherwise refused send.
+
+An accepted `instruction` reply is an object `{delivery_intent}` with an
+optional `downgrade_reason`, rather than a bare success. Reserved commands,
+reset requirements and intent syntax are checked first, followed by server
+role, agent existence and text fields. The server resolves the intent, strips
+client downgrade metadata and adds the version before checking the final
+relayed payload's size. Error precedence can therefore differ from checking
+the original payload first. C2 must use policy-write replies and authoritative
+policy events/snapshots for policy state; an instruction reply neither applies
+nor acknowledges a delivery-policy revision.
 
 Fresh spawn optionally accepts `delivery_policy: "on" | "off"`, consumed by
 the server before runner broadcast. The seed precedence is explicit choice,

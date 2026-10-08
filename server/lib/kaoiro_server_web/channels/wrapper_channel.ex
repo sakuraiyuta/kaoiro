@@ -311,13 +311,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
     else
       case after_join_handshake(socket) do
         result when result in [:deleted, :duplicate_waiter] -> {:stop, :shutdown, socket}
-        :ok -> {:noreply, socket}
+        {:ok, socket} -> {:noreply, socket}
       end
     end
   end
 
   def handle_info({:delivery_policy_refresh, id}, socket) do
-    if id == socket.assigns.agent_id, do: push_delivery_policy(socket)
+    socket = if id == socket.assigns.agent_id, do: push_delivery_policy(socket), else: socket
     {:noreply, socket}
   end
 
@@ -337,6 +337,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
       _ ->
         :ok
     end
+
+    assign(socket, :delivery_policy_view, state.view)
   end
 
   defp after_join_handshake(socket) do
@@ -398,7 +400,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           :ok
       end
 
-      push_delivery_policy(socket)
+      socket = push_delivery_policy(socket)
       push_permission_sync(socket, agent_id)
 
       push_persona_sync(socket, agent_id)
@@ -433,7 +435,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         end
       end
 
-      :ok
+      {:ok, socket}
     end
   end
 
@@ -616,8 +618,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
          true <- KaoiroServer.DeliveryPolicies.State.revision?(revision),
          {:ok, %{revision: ^revision}} <- KaoiroServer.DeliveryPolicies.get(id),
          :ok <- WorkStore.acknowledge_policy(id, self(), revision) do
-      _ = KaoiroServer.DeliveryPolicyAdmission.refresh(id)
-      {:reply, :ok, socket}
+      state = KaoiroServer.DeliveryPolicyAdmission.refresh(id)
+      {:reply, :ok, assign(socket, :delivery_policy_view, state.view)}
     else
       _ -> {:reply, {:error, %{reason: "policy_unconfirmed"}}, socket}
     end
@@ -1430,23 +1432,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # except that `inter_agent_message` no longer reaches it (see
   # `accept_inter_agent/6`).
   defp store_and_broadcast(envelope, agent_id, received_at, socket) do
-    envelope =
+    stored =
       if envelope["type"] in ["state_change", "permission_request", "question_request"] do
-        view = KaoiroServer.DeliveryPolicyAdmission.snapshot(agent_id).view
-        Map.put(envelope, "ext", Map.put(Map.get(envelope, "ext", %{}), "delivery_policy", view))
+        AgentStates.put_with_delivery_policy(envelope, socket.assigns[:delivery_policy_view],
+          owner: self()
+        )
       else
-        envelope
+        case store(envelope) do
+          :ok -> {:ok, envelope}
+          result -> result
+        end
       end
 
-    case store(envelope) do
-      :ok ->
-        if envelope["type"] in ["state_change", "permission_request", "question_request"],
-          do:
-            AgentStates.overlay_delivery_policy(
-              agent_id,
-              get_in(envelope, ["ext", "delivery_policy"])
-            )
-
+    case stored do
+      {:ok, envelope} ->
         # G1: record only after validate / preflight / store have all
         # accepted the envelope. In particular an orphan reply must not
         # consume an AgentActivity entry merely because it reached the
@@ -3224,9 +3223,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
        ) do
     requested = payload["delivery_intent"] || "normal"
 
-    policy = KaoiroServer.DeliveryPolicyAdmission.snapshot(recipient)
-    modes = if policy.owner, do: policy.owner.modes
-    recipient_modes = if policy.owner, do: {:ok, modes}, else: :unavailable
+    policy =
+      if requested != "normal", do: KaoiroServer.DeliveryPolicyAdmission.snapshot(recipient)
+
+    modes = if policy && policy.owner, do: policy.owner.modes
+    recipient_modes = if policy && policy.owner, do: {:ok, modes}, else: :unavailable
 
     base = %{requested: requested, granted: requested}
 

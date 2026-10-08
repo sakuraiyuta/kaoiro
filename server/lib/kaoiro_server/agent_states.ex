@@ -130,6 +130,13 @@ defmodule KaoiroServer.AgentStates do
     GenServer.call(server, {:put, agent_id, envelope, owner})
   end
 
+  @doc false
+  def put_with_delivery_policy(%{"agent_id" => agent_id} = envelope, initial_view, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    owner = Keyword.get(opts, :owner)
+    GenServer.call(server, {:put, agent_id, envelope, owner, initial_view, :envelope})
+  end
+
   @doc """
   Appends `envelope` (a `log` / `result` transcript line) to the agent's
   history ring buffer without touching its latest state. `:ok` when the
@@ -496,7 +503,11 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @impl true
-  def handle_call({:put, agent_id, envelope, owner}, _from, state) do
+  def handle_call({:put, agent_id, envelope, owner}, from, state) do
+    handle_call({:put, agent_id, envelope, owner, nil, :ok}, from, state)
+  end
+
+  def handle_call({:put, agent_id, envelope, owner, initial_view, result}, _from, state) do
     agents = state.agents
 
     if map_size(agents) >= @max_agents and not Map.has_key?(agents, agent_id) do
@@ -505,6 +516,13 @@ defmodule KaoiroServer.AgentStates do
       existing = Map.get(agents, agent_id)
       envelope = preserve_newer_permission_control(existing, envelope)
       prior = if existing, do: get_in(existing.envelope, ["ext", "delivery_policy"])
+
+      # Choose inside the store call so an earlier policy refresh wins over
+      # the channel's join seed; the returned broadcast uses that same view.
+      prior =
+        if result == :envelope,
+          do: prior || initial_view || KaoiroServer.DeliveryPolicies.State.view(nil, nil),
+          else: prior
 
       envelope =
         case Map.get(envelope, "ext") do
@@ -537,7 +555,8 @@ defmodule KaoiroServer.AgentStates do
         disconnect_intents: preserve_owner_intents(existing, owner)
       }
 
-      {:reply, :ok, put_agent(state, agent_id, entry)}
+      reply = if result == :envelope, do: {:ok, envelope}, else: :ok
+      {:reply, reply, put_agent(state, agent_id, entry)}
     end
   end
 

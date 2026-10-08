@@ -4,6 +4,44 @@ defmodule KaoiroServer.AgentStatesTest do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.TransportLimits
 
+  test "policy-aware store uses the initial seed and ignores wrapper policy" do
+    store = start_supervised!({AgentStates, name: :agent_states_policy_seed_test})
+    seed = KaoiroServer.DeliveryPolicies.State.view(%{policy: :on, revision: 1}, nil)
+
+    forged =
+      envelope("policy-seed", %{
+        "ext" => %{"delivery_policy" => %{"policy" => "off"}, "other" => 1}
+      })
+
+    assert {:ok, stored} = AgentStates.put_with_delivery_policy(forged, seed, server: store)
+    assert stored["ext"] == %{"delivery_policy" => seed, "other" => 1}
+    assert stored == AgentStates.get_envelope("policy-seed", server: store)
+  end
+
+  test "policy-aware store returns a newer cached view instead of its stale seed" do
+    store = start_supervised!({AgentStates, name: :agent_states_policy_cache_test})
+    seed = KaoiroServer.DeliveryPolicies.State.view(%{policy: :on, revision: 1}, nil)
+    newer = KaoiroServer.DeliveryPolicies.State.view(%{policy: :off, revision: 2}, nil)
+
+    assert {:ok, _} =
+             AgentStates.put_with_delivery_policy(envelope("policy-cache"), seed, server: store)
+
+    assert :ok = AgentStates.overlay_delivery_policy("policy-cache", newer, server: store)
+
+    assert {:ok, stored} =
+             AgentStates.put_with_delivery_policy(envelope("policy-cache"), seed, server: store)
+
+    assert stored["ext"]["delivery_policy"] == newer
+    assert stored == AgentStates.get_envelope("policy-cache", server: store)
+  end
+
+  test "policy-aware store without a seed returns unknown rather than wrapper policy" do
+    store = start_supervised!({AgentStates, name: :agent_states_policy_unknown_test})
+    forged = envelope("policy-unknown", %{"ext" => %{"delivery_policy" => %{"policy" => "on"}}})
+    assert {:ok, stored} = AgentStates.put_with_delivery_policy(forged, nil, server: store)
+    assert stored["ext"]["delivery_policy"] == KaoiroServer.DeliveryPolicies.State.view(nil, nil)
+  end
+
   defp envelope(agent_id, extra \\ %{}) do
     Map.merge(%{"agent_id" => agent_id, "state" => "idle"}, extra)
   end
