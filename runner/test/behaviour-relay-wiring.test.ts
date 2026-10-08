@@ -156,9 +156,16 @@ describe("behaviour settings relay (issue #469)", () => {
         const agy = join(root, "agy");
         writeFileSync(agy, "#!/bin/sh\nexit 0\n");
         chmodSync(agy, 0o755);
-        const identity = block === "codex" ? { auth_mode: "chatgpt" } : { cli_path: agy };
+        // Antigravity is enabled for both parameters, so startup probes agy;
+        // every parameter must point that probe at the stub, not host PATH.
+        const relay = { turn_watchdog_inactivity_ms: 90_000 };
         h.writeConfig(
-          { [block]: { ...identity, turn_watchdog_inactivity_ms: 90_000 } },
+          block === "codex"
+            ? {
+                codex: { auth_mode: "chatgpt", ...relay },
+                antigravity: { cli_path: agy },
+              }
+            : { antigravity: { cli_path: agy, ...relay } },
           capabilities,
         );
         const runtime = await runRunnerCli(h.dependencies, [configPath]);
