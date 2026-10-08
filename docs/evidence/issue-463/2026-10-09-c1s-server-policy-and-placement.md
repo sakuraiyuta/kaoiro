@@ -8,8 +8,9 @@ last_updated: 2026-10-09
 
 Tracking: [issue 559](https://github.com/sakuraiyuta/kaoiro/issues/559), C1S of
 [the delivery rollout plan](../../plans/issue-463-default-inflight-delivery.md).
-This records implementation measurements on an unmerged branch; independent
-implementation review and landing are pending. It authorizes no deployment.
+This records implementation measurements on an unmerged branch. Independent
+r1 review approved the original implementation; the pre-landing correction
+awaits delta review and landing. It authorizes no deployment.
 The current contracts are in [channels](../../reference/protocol/channels.md#per-agent-delivery-policy),
 [server configuration](../../reference/configuration/server.md) and the
 [update runbook](../../operations/server-update-and-rollback.md).
@@ -38,7 +39,7 @@ The non-secret logs and raw Docker inspections are stored at
 The observations file lists every archived filename, byte count and SHA-256.
 Working copies remain in `tmp/reviews/issue-559/` for review.
 
-## Gates
+## Original gates
 
 Commands run in `setsid -w`; Node deploy process tests and owned-child crash
 measurements additionally run in a fresh user/PID namespace with its own
@@ -61,7 +62,7 @@ the image build compiles the actual dashboard. Dashboard uses its own protocol
 mirror and has no import of this changed shared package. Wrapper/runner runtime
 implementations and their full suites were not changed or rerun by C1S.
 
-## Independent mutations
+## Original independent mutations
 
 Each product fix was committed before mutation; each mutant ran separately,
 then its original bytes were restored. The final positive gates ran after
@@ -158,3 +159,63 @@ review and a later operator rollout remain required.
 Owned disposable containers, volume, private image tags and large temporary
 probe directories were removed. The feature worktree and archived evidence
 remain available for review and landing.
+
+## Pre-landing availability correction
+
+Independent r1 review observed a 1001 ms state-change reply at `943e93f4`
+with WorkStore suspended, versus 0 ms at base `9d9f8ed8`. These are Ao's
+measurements, not a repeated base probe by Fuji. The correction is
+`8c59412d98c8374215387ecaba871ed8edeaf9d3`; the final receive-budget test
+correction is `8ca1dcd49b4e09f9864b345a66257534c89de0a6`.
+
+State/permission/question ingestion now selects and returns AgentStates'
+cached server view atomically. The initial envelope uses the join/ack view,
+and a newer stored view wins over that seed. Retention and broadcast use
+the same result. Omitted/normal IA and explicit-normal operator commands
+skip policy reads; default operator intent and non-normal admission remain
+fresh. Twelve added tests include an authenticated viewer's well-formed
+unknown-agent command returning forbidden without a row or counter.
+
+| Final correction gate | Output from log | Exit |
+| --- | --- | --- |
+| `mix precommit` | `Result: 2121 passed, 1 excluded` | 0 |
+| Focused policy/AgentStates/receive convention | `Result: 101 passed` | 0 |
+| Same focused tests with `CI=1` | `Result: 101 passed` | 0 |
+| Deploy, `LC_ALL=C node --test test/*.test.mjs` | tests 359; pass 359; fail 0; skipped 0 | 0 |
+
+The final full-suite log records suspended-WorkStore replies of 138 us for
+the initial unconfirmed state, 146 us after a pre-state ack, 94 us for a
+subsequent state, 113 us for a permission request, and 273 us for a question.
+The receive wait uses the shared CI-scaled budget; a separate monotonic
+duration check requires less than 250 ms. The first full attempt found four
+literal receive budgets and failed only the existing convention test. They
+were corrected without relaxing the duration check; the table uses the
+final rerun. Initial attempts remain archived and supply no final gate.
+
+Eleven single changes were replayed against the final tests, all exit 2:
+restore ingestion snapshot (5 failing tests), remove initial seed (4), prefer
+seed to newer cache (1), make missing seed on (1), remove join seed (2),
+remove ack seed (1), restore normal IA snapshot (2), restore explicit-normal
+operator snapshot (1), remove viewer entry guard (2), broadcast the original
+wrapper envelope instead of the retained result (5), and trust wrapper
+policy before server view (2). Three additional `CI=1` runs repeat ingestion,
+normal IA and explicit-normal operator cuts: respectively 5, 2 and 1 failures.
+The CI ingestion cut fails the measured duration check at 1000333–1010982 us;
+the blocked policy-owner cuts miss the 2500 ms receive wait. No surviving cut
+is counted as red. Every cut was restored before the final positive gate.
+
+Logs, exact changes and hashes for this delta are archived in
+`/home/yuta/Nextcloud/storage.hktypeb.jp/kaoiro/fuji/2026-10-09-issue-559/implementation-r2/`.
+All new test processes use `setsid` inside an owned user/PID namespace.
+Suspend/resume targets are captured PIDs in that test application's BEAM;
+there is no host process enumeration or signal, production deployment,
+Docker probe or native model turn.
+
+This fixes the extra per-envelope dependency, not every channel wait.
+Join, ack and queued policy refresh still read policy/owner state, and an IA
+send retains its pre-existing WorkStore work-stamp dependency. A cached view
+can lag changes or outages and is display-only; fresh snapshots and admission
+never grant permission from it. Previous Docker/store/placement observations
+remain limited to their recorded source; the changed channel was not rebuilt
+into that measured image. C1W's wire contract and the fixed-base ordering
+rules are unchanged. Delta review remains required before landing.
