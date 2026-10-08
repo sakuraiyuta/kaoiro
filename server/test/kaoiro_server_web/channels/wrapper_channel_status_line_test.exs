@@ -7,9 +7,6 @@ defmodule KaoiroServerWeb.WrapperChannelStatusLineTest do
 
   import ExUnit.CaptureLog
 
-  import Phoenix.ChannelTest,
-    except: [assert_reply: 2, assert_reply: 3, assert_reply: 4]
-
   require Phoenix.ChannelTest
 
   alias KaoiroServer.{
@@ -23,24 +20,6 @@ defmodule KaoiroServerWeb.WrapperChannelStatusLineTest do
 
   alias KaoiroServer.StatusLinesFixture, as: Fixture
   alias KaoiroServerWeb.DirectoryEligibility
-
-  # Replies here follow a DETS fsync, whose tail passes ExUnit's default budget
-  # on a loaded host.
-  defmacrop assert_reply(
-              ref,
-              status,
-              payload \\ Macro.escape(%{}),
-              timeout \\ TestTimeouts.durable_reply()
-            ) do
-    quote do
-      Phoenix.ChannelTest.assert_reply(
-        unquote(ref),
-        unquote(status),
-        unquote(payload),
-        unquote(timeout)
-      )
-    end
-  end
 
   setup do
     # Entries other modules left in the suite-wide AgentDirectory flow into the

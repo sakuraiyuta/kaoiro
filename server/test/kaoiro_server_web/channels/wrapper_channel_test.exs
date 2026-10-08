@@ -17,35 +17,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.TaskStates
-  alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.WrapperChannel
 
-  # assert_reply in this module waits TestTimeouts.durable_reply/0 by default,
-  # not ExUnit's assert_receive_timeout: many handlers reply only after a DETS
-  # fsync, whose tail passes 100 ms on a loaded host (issue #477).
-  import Phoenix.ChannelTest,
-    except: [assert_reply: 2, assert_reply: 3, assert_reply: 4]
-
   require Phoenix.ChannelTest
-
-  defmacrop assert_reply(
-              ref,
-              status,
-              payload \\ Macro.escape(%{}),
-              timeout \\ TestTimeouts.durable_reply()
-            ) do
-    quote do
-      Phoenix.ChannelTest.assert_reply(
-        unquote(ref),
-        unquote(status),
-        unquote(payload),
-        unquote(timeout)
-      )
-    end
-  end
 
   # Source: wrapper/core/src/transport.ts SESSION_RESET_ERROR_REASONS. This
   # is the complete reply vocabulary, not the broader lifecycle vocabulary.
@@ -134,16 +111,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       )
 
     {reply, socket}
-  end
-
-  # The wait is for a reply that never comes, so the budget is read off the
-  # failure itself rather than inferred from how long a real reply took.
-  test "assert_reply waits the durable-write budget by default" do
-    ref = make_ref()
-
-    error = assert_raise ExUnit.AssertionError, fn -> assert_reply ref, :ok end
-
-    assert error.message =~ "no matching message after #{TestTimeouts.durable_reply()}ms"
   end
 
   test "delivery join echoes current incarnation after same-generation reconnect" do

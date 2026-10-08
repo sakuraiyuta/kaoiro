@@ -96,13 +96,22 @@ defmodule KaoiroServer.TestTimeouts do
   Budget for a channel reply that waits on a durable write: the handler
   replies only after a `GenServer.call` that ends in `:dets.sync/1` (an
   fsync). #{@durable_reply_multiplier}x the base, so 500 ms locally and
-  2500 ms under `CI`.
+  2500 ms under `CI`. This is the default `assert_reply` budget of
+  `KaoiroServerWeb.ChannelCase`; it is the single knob for heavy-load
+  adjustment, so change the multiplier here, not per site.
 
   Sized against the tail of one such fsync, measured on a shared host
   (issue #477, 2026-10-01): p50 18 ms, and in one 300-call window 7 calls
   exceeded 100 ms (p99 161 ms, max 333 ms). Locally 500 ms is only 1.5x that
   maximum, so a longer stall still misses it: this narrows the flake, it does
   not remove it.
+
+  That host had load average 25 on 24 cores. Issue #479's run on a 4-core
+  host (2026-10-08) timed out 4 of 358 agents-channel calls at 100 ms under
+  1-minute load about 14, and its uncensored run (budget 2000 ms, load about
+  8) had a maximum of 73.8 ms over 471 calls. Load per core on the 4-core
+  host was about 3.5, against about 1.04 on the 24-core host, so its tail
+  may be longer than 333 ms. This is an inference; it was not measured.
   """
   def durable_reply(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
 

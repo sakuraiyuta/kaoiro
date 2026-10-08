@@ -9,9 +9,6 @@ defmodule KaoiroServerWeb.StatusLineChannelTest do
 
   import ExUnit.CaptureLog
 
-  import Phoenix.ChannelTest,
-    except: [assert_reply: 2, assert_reply: 3, assert_reply: 4]
-
   require Phoenix.ChannelTest
 
   alias KaoiroServer.{
@@ -19,28 +16,11 @@ defmodule KaoiroServerWeb.StatusLineChannelTest do
     AgentStates,
     AgentStatusLines,
     StatusLineWire,
-    TestTimeouts,
     TokenDenylist
   }
 
   alias KaoiroServer.StatusLinesFixture, as: Fixture
   alias KaoiroServerWeb.StatusLineSnapshot
-
-  defmacrop assert_reply(
-              ref,
-              status,
-              payload \\ Macro.escape(%{}),
-              timeout \\ TestTimeouts.durable_reply()
-            ) do
-    quote do
-      Phoenix.ChannelTest.assert_reply(
-        unquote(ref),
-        unquote(status),
-        unquote(payload),
-        unquote(timeout)
-      )
-    end
-  end
 
   setup do
     Application.put_env(
