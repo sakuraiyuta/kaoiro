@@ -3,6 +3,9 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
   alias KaoiroServer.{AgentAcceptance, AgentDirectory, AgentStates, DeliveryPolicies, WorkStore}
   alias KaoiroServerWeb.{AgentsChannel, ClientSocket, WrapperChannel, WrapperSocket}
 
+  # CI scales receive budgets; the elapsed-time assertions still reject the
+  # policy owner's one-second stall even if its reply arrives within that budget.
+
   setup do
     previous = Application.get_env(:kaoiro_server, :client_tokens)
 
@@ -146,8 +149,9 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
 
       with_suspended(WorkStore, fn ->
         started = System.monotonic_time(:microsecond)
-        assert_reply push(socket, "envelope", state(id)), :ok, %{}, 250
+        assert_reply push(socket, "envelope", state(id)), :ok
         elapsed = System.monotonic_time(:microsecond) - started
+        assert elapsed < 250_000
         IO.puts("559 availability first-state ack=#{unquote(ack?)}: #{elapsed} us")
         assert_broadcast "envelope", %{"agent_id" => ^id} = live
         assert live == AgentStates.get_envelope(id)
@@ -177,8 +181,9 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
 
       with_suspended(WorkStore, fn ->
         started = System.monotonic_time(:microsecond)
-        assert_reply push(socket, "envelope", forged), :ok, %{}, 250
+        assert_reply push(socket, "envelope", forged), :ok
         elapsed = System.monotonic_time(:microsecond) - started
+        assert elapsed < 250_000
         IO.puts("559 availability #{unquote(type)}: #{elapsed} us")
         assert_broadcast "envelope", %{"agent_id" => ^id, "type" => unquote(type)} = live
         assert live == AgentStates.get_envelope(id)
@@ -195,6 +200,8 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     @endpoint.subscribe("wrapper:" <> id)
 
     with_suspended(DeliveryPolicies, fn ->
+      started = System.monotonic_time(:microsecond)
+
       assert_reply push(operator, "instruction", %{
                      "version" => "0",
                      "agent_id" => id,
@@ -202,8 +209,9 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
                      "delivery_intent" => "normal"
                    }),
                    :ok,
-                   %{"delivery_intent" => "normal"},
-                   250
+                   %{"delivery_intent" => "normal"}
+
+      assert System.monotonic_time(:microsecond) - started < 250_000
 
       assert_broadcast "instruction", %{"text" => "ordinary", "delivery_intent" => "normal"}
     end)
@@ -236,10 +244,13 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
       envelope = %{state(from) | "type" => "inter_agent_message", "payload" => payload}
 
       with_suspended(DeliveryPolicies, fn ->
+        started = System.monotonic_time(:microsecond)
+
         assert_reply push(sender, "envelope", envelope),
                      :ok,
-                     %{"delivery_authority" => %{requested: "normal", granted: "normal"}},
-                     250
+                     %{"delivery_authority" => %{requested: "normal", granted: "normal"}}
+
+        assert System.monotonic_time(:microsecond) - started < 250_000
 
         assert_broadcast "envelope", %{
           "type" => "inter_agent_message",
