@@ -24,6 +24,7 @@ function shellPidMarkerFixture(pidFile: string): string {
   return [
     "#!/bin/sh",
     "set -eu",
+    "trap '' TERM",
     `pid_file=${shellQuotedPidFile}`,
     'temporary_file="${pid_file}.tmp-$$"',
     'printf \'%s\\n\' "$$" > "$temporary_file"',
@@ -48,6 +49,7 @@ describe("resolveAgyVersion (issue #387)", () => {
       [
         "#!/bin/sh",
         "set -eu",
+        "trap '' TERM",
         "pid_file='/tmp/fixture/pid'",
         'temporary_file="${pid_file}.tmp-$$"',
         'printf \'%s\\n\' "$$" > "$temporary_file"',
@@ -79,7 +81,7 @@ describe("resolveAgyVersion (issue #387)", () => {
   });
 
   it(
-    "issue #387 review should2: watchdog が期限切れで遅い子を SIGKILL で止める",
+    "issue #387 review should2: watchdog が期限切れで SIGTERM を無視する子を SIGKILL で止める",
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
       const script = join(dir, "agy");
@@ -91,8 +93,8 @@ describe("resolveAgyVersion (issue #387)", () => {
       const version = await resolveAgyVersion({ ok: true, path: script }, 300);
       const elapsedMs = performance.now() - t0;
 
-      // The caller must be released near the deadline, even though the child
-      // would otherwise remain alive for a minute.
+      // The caller must be released near the deadline, and the child that
+      // ignores SIGTERM must still be killed instead of lingering.
       expect(version).toBeNull();
       expect(elapsedMs).toBeLessThan(2_000);
 
