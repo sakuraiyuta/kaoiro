@@ -3,7 +3,7 @@
 // default host factory and production tool assembly) against the real local
 // `agy` 1.3.1 binary.
 // Gated behind KAOIRO_LIVE_AGY=1 (default skip) since it performs a real provider turn.
-// Run with:
+// Run live with:
 //   KAOIRO_LIVE_AGY=1 PATH="/usr/bin:$PATH" pnpm exec vitest run test/agy131_native.test.ts
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -16,6 +16,73 @@ import type { AntigravityHost } from "../src/host.js";
 
 const LIVE = process.env.KAOIRO_LIVE_AGY === "1";
 
+export interface TurnOutcome {
+  statusLineCalls: string[];
+  recordedEnvelopes: Envelope[];
+  stateHistory: string[];
+}
+
+/**
+ * Validates that an Antigravity turn achieved genuine success:
+ * 1. The kaoiro tool stub received exactly 1 call with the exact expected text.
+ * 2. A non-error `result` envelope was produced.
+ * 3. The state sequence transitioned through `done` before settling in `waiting_input`.
+ */
+export function verifyTurnSuccess(outcome: TurnOutcome): {
+  toolCalled: boolean;
+  toolArg: string;
+  finalState: string;
+  turnCompleted: boolean;
+} {
+  // 1. Tool invocation assertion: exactly 1 call with expected argument
+  expect(outcome.statusLineCalls.length).toBe(1);
+  const toolArg = outcome.statusLineCalls[0];
+  expect(toolArg).toBe("verified-1.3.1");
+
+  // 2. Result envelope assertion: must exist and indicate success
+  const resultEnvelope = outcome.recordedEnvelopes.find((e) => e.type === "result");
+  expect(resultEnvelope).toBeDefined();
+  const payload = resultEnvelope?.payload as Record<string, unknown> | undefined;
+  expect(payload?.is_error).not.toBe(true);
+  if (typeof payload?.status === "string") {
+    expect(payload.status).not.toBe("error");
+  }
+
+  // 3. State transition sequence assertion: done -> waiting_input
+  const doneIndex = outcome.stateHistory.lastIndexOf("done");
+  const waitingInputIndex = outcome.stateHistory.lastIndexOf("waiting_input");
+  expect(doneIndex).toBeGreaterThanOrEqual(0);
+  expect(waitingInputIndex).toBeGreaterThan(doneIndex);
+
+  const finalState = outcome.stateHistory[outcome.stateHistory.length - 1];
+  expect(finalState).toBe("waiting_input");
+
+  if (!toolArg || !finalState) {
+    throw new Error("Turn outcome missing tool argument or final state");
+  }
+
+  return {
+    toolCalled: true,
+    toolArg,
+    finalState,
+    turnCompleted: true,
+  };
+}
+
+function createMockResultEnvelope(payload: Record<string, unknown>): Envelope {
+  return {
+    type: "result",
+    version: "0",
+    agent_id: "test",
+    display_name: "test",
+    persona: { id: "p", name: "P", sprite_set: "p" },
+    ts: new Date().toISOString(),
+    state: "done",
+    payload,
+    ext: {},
+  };
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs = 250): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -24,6 +91,65 @@ async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs =
   }
   throw new Error(`Timed out after ${timeoutMs}ms`);
 }
+
+describe("Antigravity 1.3.1 native acceptance verification logic (deterministic negative controls)", () => {
+  it("accepts a genuinely successful turn outcome", () => {
+    const outcome: TurnOutcome = {
+      statusLineCalls: ["verified-1.3.1"],
+      recordedEnvelopes: [createMockResultEnvelope({ text: "All done", is_error: false })],
+      stateHistory: ["idle", "sending", "thinking", "tool_running", "thinking", "done", "waiting_input"],
+    };
+    const verified = verifyTurnSuccess(outcome);
+    expect(verified.toolCalled).toBe(true);
+    expect(verified.toolArg).toBe("verified-1.3.1");
+    expect(verified.finalState).toBe("waiting_input");
+  });
+
+  it("negative control: rejects when kaoiro tool was not called", () => {
+    const outcome: TurnOutcome = {
+      statusLineCalls: [],
+      recordedEnvelopes: [createMockResultEnvelope({ text: "Done without tool", is_error: false })],
+      stateHistory: ["idle", "sending", "done", "waiting_input"],
+    };
+    expect(() => verifyTurnSuccess(outcome)).toThrow();
+  });
+
+  it("negative control: rejects when tool argument does not match expected value", () => {
+    const outcome: TurnOutcome = {
+      statusLineCalls: ["unexpected-arg"],
+      recordedEnvelopes: [createMockResultEnvelope({ text: "All done", is_error: false })],
+      stateHistory: ["idle", "sending", "tool_running", "done", "waiting_input"],
+    };
+    expect(() => verifyTurnSuccess(outcome)).toThrow();
+  });
+
+  it("negative control: rejects when tool was called but turn ended in error", () => {
+    // Case A: payload.is_error is true
+    const outcomeA: TurnOutcome = {
+      statusLineCalls: ["verified-1.3.1"],
+      recordedEnvelopes: [createMockResultEnvelope({ text: "Turn failed", is_error: true })],
+      stateHistory: ["idle", "sending", "tool_running", "done", "waiting_input"],
+    };
+    expect(() => verifyTurnSuccess(outcomeA)).toThrow();
+
+    // Case B: state transitioned through error -> waiting_input without done
+    const outcomeB: TurnOutcome = {
+      statusLineCalls: ["verified-1.3.1"],
+      recordedEnvelopes: [createMockResultEnvelope({ text: "Turn failed", is_error: false })],
+      stateHistory: ["idle", "sending", "tool_running", "error", "waiting_input"],
+    };
+    expect(() => verifyTurnSuccess(outcomeB)).toThrow();
+  });
+
+  it("negative control: rejects when result envelope is missing", () => {
+    const outcome: TurnOutcome = {
+      statusLineCalls: ["verified-1.3.1"],
+      recordedEnvelopes: [],
+      stateHistory: ["idle", "sending", "tool_running", "done", "waiting_input"],
+    };
+    expect(() => verifyTurnSuccess(outcome)).toThrow();
+  });
+});
 
 describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptance (issue #534, KAOIRO_LIVE_AGY=1)", () => {
   it("completes a native turn, calls kaoiro tool via PreToolUse bridge, and reaches waiting_input", async () => {
@@ -44,11 +170,12 @@ describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptanc
 
     const recordedEnvelopes: Envelope[] = [];
     const stateChanges: Array<{ state: string; at: string }> = [];
-    let statusLineCalled = false;
-    let statusLineArg = "";
+    const statusLineCalls: string[] = [];
 
     let linkCallbacks: any;
-    const observationLink = {
+    // Server boundary recording stub: captures tool invocations delivered
+    // through the bridge and ToolHost to the ServerLink interface.
+    const recordingServerLinkStub = {
       close: () => {},
       send: (envelope: Envelope) => {
         recordedEnvelopes.push(envelope);
@@ -56,19 +183,13 @@ describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptanc
           const state = (envelope as any).state;
           if (state) {
             stateChanges.push({ state, at: new Date().toISOString() });
-            process.stderr.write(`[harness state_change] ${state}\n`);
           }
-        }
-        if (envelope.type === "result") {
-          process.stderr.write(`[harness result] received\n`);
         }
       },
       setSessionId: (_sessionId: string) => {},
       reportPermissionLifecycle: () => {},
       setStatusLine: async (text: string) => {
-        statusLineCalled = true;
-        statusLineArg = text;
-        process.stderr.write(`[harness tool called] set_status_line text=${JSON.stringify(text)}\n`);
+        statusLineCalls.push(text);
         return {
           kind: "ok" as const,
           status_line: {
@@ -108,7 +229,7 @@ describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptanc
               "Do not do anything else, just call set_status_line and reply 'All done'."
             );
           });
-          return observationLink as any;
+          return recordingServerLinkStub as any;
         },
         onHostCreated: (host) => {
           hostInstance = host;
@@ -124,30 +245,29 @@ describe.skipIf(!LIVE)("Antigravity 1.3.1 native production entrypoint acceptanc
 
       // 3. Wait for tool invocation and turn completion
       await waitFor(
-        () => statusLineCalled && stateChanges.some((s) => s.state === "waiting_input"),
+        () => statusLineCalls.length > 0 && stateChanges.some((s) => s.state === "waiting_input"),
         240_000,
       );
 
       const elapsedMs = performance.now() - startedAt;
-      const resultEnvelope = recordedEnvelopes.find((e) => e.type === "result");
-      const finalState = stateChanges[stateChanges.length - 1]?.state;
 
-      // Verification assertions
-      expect(statusLineCalled).toBe(true);
-      expect(statusLineArg).toBe("verified-1.3.1");
-      expect(resultEnvelope).toBeDefined();
-      expect(finalState).toBe("waiting_input");
+      // 4. Validate turn outcome through strict verification logic
+      const verified = verifyTurnSuccess({
+        statusLineCalls,
+        recordedEnvelopes,
+        stateHistory: stateChanges.map((s) => s.state),
+      });
 
       // Console output for capture in verification records
       // eslint-disable-next-line no-console
       console.log(JSON.stringify({
         cli_version: "1.3.1",
         elapsed_ms: elapsedMs,
-        tool_called: statusLineCalled,
-        tool_arg: statusLineArg,
+        tool_called: verified.toolCalled,
+        tool_arg: verified.toolArg,
         state_history: stateChanges.map((s) => s.state),
-        final_state: finalState,
-        turn_completed: resultEnvelope !== undefined,
+        final_state: verified.finalState,
+        turn_completed: verified.turnCompleted,
       }, null, 2));
     } finally {
       process.chdir(origCwd);

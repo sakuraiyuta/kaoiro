@@ -44,15 +44,16 @@ Raw captured stdout (18 rows) is recorded in [`agy-1.3.1-models.stdout`](agy-1.3
 
 Historical catalog baseline notes:
 - The historical measurements from 1.1.26 (captured in `docs/architecture/antigravity-adapter.md` and `docs/reference/engines/antigravity-events.md`) remain preserved as historical records of that earlier release.
-- Compared with 1.1.26, obsolete model offerings (such as legacy `gemini-2.5-*` and older experimental tiers) have rolled off, and current generation offerings (`gemini-3.8-*`, `claude-*-5-5-*`) are now native offerings.
 
 ## 2. Relationship with the static fallback snapshot
 
-In `wrapper/antigravity/src/catalog_snapshot.ts`, `antigravityCatalogSnapshot` provides the offline fallback catalog used when `agy models` cannot be invoked at runtime:
+In `wrapper/antigravity/src/catalog.ts`, `antigravityCatalogSnapshot` provides the offline fallback catalog used when `agy models` cannot be invoked at runtime:
 
-1. **Account default row**: The first entry is the fixed synthetic entry `{ value: "antigravity-default", display_name: "Antigravity (Account default)" }`.
-2. **Parsed CLI models**: The remaining 18 entries are identical in value, display name, and order to the output of `parseAgyModelsOutput` on the raw 18-row output of `agy models` above (total 19 entries in `antigravityCatalogSnapshot`).
-3. **Verification**: `wrapper/antigravity/test/catalog.test.ts` and `runner/test/config.test.ts` assert this exact 19-entry structure and ordering.
+1. **Account default row**: The first entry is the fixed synthetic entry `{ value: "", display_name: "account default" }`.
+2. **Parsed CLI models**: The remaining 18 entries correspond in value, display name, and order to the output of `parseAgyModelsOutput` on the raw 18-row output of `agy models` above (total 19 entries in `antigravityCatalogSnapshot`).
+3. **Verification and test boundaries**:
+   - `wrapper/antigravity/test/catalog.test.ts` asserts that `antigravityCatalogSnapshot().map(m => m.value)` matches the expected 19-element slug sequence (including `""` at the head), and tests `parseAgyModelsOutput` on a minimal 3-row sample fixture (`fixtures/agy-models.stdout`).
+   - Complete byte-for-byte equality across all 18 parsed CLI output entries and the snapshot was verified via live inspection during implementation review round 1.
 
 ## 3. CLI effort flag: advertised options vs effective behavior
 

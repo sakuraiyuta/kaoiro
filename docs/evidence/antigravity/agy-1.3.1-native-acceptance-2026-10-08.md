@@ -16,9 +16,13 @@ The installed CLI executable (`/home/yuta/.local/bin/agy`) reports `1.3.1`.
 The measurement executed against the production `runAntigravityCli` entrypoint
 using the default host factory (`new AntigravityHost`) and production tool
 assembly (`interAgent.descriptors()`, `askUserQuestionDescriptor`, etc.).
-Observation seams forward without altering runtime control.
+Observation uses a recording stub at the server boundary (`createServerLink`).
+This verifies that invocations traverse the PreToolUse hook bridge and ToolHost
+to reach the ServerLink interface; it does not verify delivery or acceptance by a
+live Phoenix server daemon.
 
 - Test harness source: [`wrapper/antigravity/test/agy131_native.test.ts`](../../../wrapper/antigravity/test/agy131_native.test.ts)
+- Deterministic negative controls: 4 test cases verifying rejection on missing tool calls, mismatched arguments, error outcomes, and missing result envelopes.
 - Reproducible run command:
   ```bash
   (cd wrapper/antigravity && KAOIRO_LIVE_AGY=1 PATH="/usr/bin:$PATH" pnpm exec vitest run test/agy131_native.test.ts)
@@ -30,18 +34,18 @@ Observation seams forward without altering runtime control.
 |---|---|---|
 | CLI version | `1.3.1` | Pass |
 | Production entrypoint | `runAntigravityCli` with default host factory & tool assembly | Pass |
-| Turn execution | Completed in 78.3s | Pass |
+| Turn execution | Completed in 24.8s | Pass |
 | kaoiro tool invocation | `set_status_line` called via PreToolUse hook bridge with arg `"verified-1.3.1"` | Pass |
 | State transition history | `idle` → `sending` → `thinking` → `tool_running` → `thinking` → `done` → `waiting_input` | Pass |
 | Terminal state | `waiting_input` (per issue #534 director ruling) | Pass |
-| Engine transcript | Session `093319c3-08fc-421c-8ce5-db826078285d` | Recorded |
+| Engine transcript | Session `a27cfcc4-5fc8-44bf-9f9a-3363616ccb19` | Recorded |
 
 ## 3. Detailed observation JSON
 
 ```json
 {
   "cli_version": "1.3.1",
-  "elapsed_ms": 78318.263488,
+  "elapsed_ms": 24806.742488,
   "tool_called": true,
   "tool_arg": "verified-1.3.1",
   "state_history": [
@@ -50,6 +54,7 @@ Observation seams forward without altering runtime control.
     "sending",
     "thinking",
     "tool_running",
+    "thinking",
     "thinking",
     "thinking",
     "done",
