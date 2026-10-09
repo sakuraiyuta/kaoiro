@@ -57,6 +57,7 @@ export function validateIncident(dir, value, kind, records) {
 export function activityFor(records, plan, { now = Date.now(), freshnessMs = 300_000, requireFresh = false } = {}) {
   if (!plan) return { state: "unknown", events: [] };
   const latest = [];
+  let state = "idle";
   for (const alias of plan.host_ids) {
     const events = Object.entries(records).filter(([name]) => name.startsWith(`runner-activity-${alias}-`))
       .map(([, item]) => ({ ...item.value, sha256: item.sha256 })).sort((a, b) => a.sequence - b.sequence);
@@ -72,15 +73,16 @@ export function activityFor(records, plan, { now = Date.now(), freshnessMs = 300
     }
     const event = events.at(-1);
     if (!event) {
-      if (requireFresh) return { state: "unknown", events: latest };
+      if (requireFresh) state = "unknown";
       continue;
     }
     latest.push(event);
     if (event.state !== "idle" || (requireFresh && (now - Date.parse(event.observed_at) > freshnessMs || Date.parse(event.observed_at) > now))) {
-      return { state: event.state === "unknown" ? "unknown" : "active", events: latest };
+      if (event.state === "unknown" || requireFresh && (now - Date.parse(event.observed_at) > freshnessMs || Date.parse(event.observed_at) > now)) state = "unknown";
+      else if (state !== "unknown") state = "active";
     }
   }
-  return { state: "idle", events: latest };
+  return { state, events: latest };
 }
 
 export function readReleaseAttempt(dir) {
@@ -185,6 +187,7 @@ export function projectReleaseHistory(history) {
       plan: row.plan ? projectReleasePlan(row.plan) : null,
       status: row.state.id, disposition: row.state.disposition,
       completion: row.completion,
+      activity_heads: row.activity.events.map(({ alias, sequence, sha256, state }) => ({ alias, sequence, sha256, state })),
     })),
   };
 }

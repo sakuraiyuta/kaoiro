@@ -78,10 +78,10 @@ export function validateLandingRecord(record, repositoryId = BUILD_REPOSITORY_ID
   return record;
 }
 
-export function readLandingTag(cwd, tag, repositoryId = BUILD_REPOSITORY_ID) {
-  const object = gitOutput(["rev-parse", "--verify", `refs/tags/${tag}`], cwd);
-  if (!object || gitOutput(["cat-file", "-t", object], cwd) !== "tag") throw new Error("landing tag must be annotated");
-  const raw = gitOutput(["cat-file", "-p", object], cwd);
+export function readLandingTag(cwd, tag, repositoryId = BUILD_REPOSITORY_ID, { gitReader = gitOutput } = {}) {
+  const object = gitReader(["rev-parse", "--verify", `refs/tags/${tag}`], cwd);
+  if (!object || gitReader(["cat-file", "-t", object], cwd) !== "tag") throw new Error("landing tag must be annotated");
+  const raw = gitReader(["cat-file", "-p", object], cwd);
   const separator = raw?.indexOf("\n\n") ?? -1;
   if (separator < 0 || Buffer.byteLength(raw) > 4_096) throw new Error("invalid landing tag object");
   const header = raw.slice(0, separator).split("\n");
@@ -89,8 +89,8 @@ export function readLandingTag(cwd, tag, repositoryId = BUILD_REPOSITORY_ID) {
   const publicName = `v${record.version}`;
   if (header[0] !== `object ${record.revision}` || header[1] !== "type commit" ||
       header[2] !== `tag ${publicName}` ||
-      gitOutput(["rev-parse", "--verify", `refs/tags/${publicName}`], cwd) !== object ||
-      gitOutput(["rev-parse", "--verify", `refs/tags/identity/landing/${record.revision}`], cwd) !== object) {
+      gitReader(["rev-parse", "--verify", `refs/tags/${publicName}`], cwd) !== object ||
+      gitReader(["rev-parse", "--verify", `refs/tags/identity/landing/${record.revision}`], cwd) !== object) {
     throw new Error("landing public tag, claim and annotation disagree");
   }
   return { record, object, tag: publicName };
