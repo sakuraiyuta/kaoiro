@@ -13,6 +13,8 @@ export interface DeliveryPolicyView {
   wrapper_support: boolean;
   mechanisms?: DeliveryMechanisms | undefined;
 }
+// Client mirror: keep independent of @kaoiro/protocol (ADR-0007).
+// Cross-check the contract through the shared fixture planned in issue 562.
 export interface LaunchDeliveryPolicy {
   version: "v1";
   ceiling: boolean;
