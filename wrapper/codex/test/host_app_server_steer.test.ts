@@ -194,6 +194,22 @@ it.each(["operator", "peer"] as const)("fences %s at the final commit after turn
   f.inputItem(f.clientId(0)); f.terminal();
 });
 
+it.each([["IA", 3, "inter_agent_steer_cap"], ["overtake", 2, "overtake_budget"]] as const)(
+  "keeps the %s write budget across off and a later on", async (kind, limit, reason) => {
+    const policy = supportingPolicy();
+    const f = fixture(false, { deliveryPolicy: policy.controller, interAgentSteer: { available: () => true } });
+    await running(f);
+    if (kind === "overtake") await f.host.send("ROOT", undefined, ["cid"], "root");
+    for (let index = 0; index < limit; index++) {
+      expect((await f.host.steerInterAgentInput(`EARLY-${index}`, iaHooks(), `early-${index}`)).kind).toBe("sent");
+    }
+    policy.off(); policy.on();
+    expect(await f.host.steerInterAgentInput("AFTER ON", iaHooks(), "after-on"))
+      .toEqual({ kind: "queued", reason });
+    expect(f.byMethod("turn/steer")).toHaveLength(limit);
+  },
+);
+
 it("keeps an already started peer RPC owned across off, including late corroboration", async () => {
   const policy = supportingPolicy();
   const f = fixture(false, { deliveryPolicy: policy.controller, interAgentSteer: { available: () => true } });

@@ -21,6 +21,7 @@ function inbound(granted: "early" | "normal" = "early"): Envelope {
 
 interface ComposeExtra {
   policyOff?: boolean;
+  offAfterWrite?: boolean;
   mutate?: (early: any) => void;
   root?: { agent_id: string; conversation_id: string };
   idle?: boolean;
@@ -36,11 +37,13 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
   let linkOptions!: Record<string, any>, hostOptions!: Record<string, any>;
   const reports: Record<string, unknown>[] = [], acknowledged: number[] = [], notices: Envelope[] = [];
   let activeToken = "active";
+  let policyJoin = 0;
   let held: { hooks: Record<string, any>; batchId: string } | undefined;
   const send = vi.fn(async (..._args: unknown[]) => {}), steer = vi.fn(async (text: string, hooks: Record<string, any>, batchId: string) => {
     if (extra.hostQueued !== undefined) return { kind: "queued" as const, reason: extra.hostQueued };
     expect(hooks.admit(activeToken)).toBe(null);
     hooks.onAdmit(activeToken, batchId);
+    if (extra.offAfterWrite) hostOptions.deliveryPolicy.apply({ revision: 2, policy: "off" }, policyJoin);
     if (schedule === "queued-successor" || schedule === "terminal-before-settle") {
       hooks.onResponse(activeToken, batchId, { kind: "A" }); hooks.onItem(activeToken, batchId);
       held = { hooks, batchId };
@@ -119,6 +122,12 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
       options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
+      if (extra.offAfterWrite) {
+        const policy = options.deliveryPolicy!;
+        policyJoin = policy.beginJoin();
+        policy.acceptJoin({ delivery_policy: "v1" }, policyJoin);
+        policy.apply({ revision: 1, policy: "on" }, policyJoin);
+      }
       if (extra.policyOff) {
         const policy = options.deliveryPolicy!;
         const join = policy.beginJoin();
@@ -133,10 +142,27 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
   }); } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
   }
-  return { reports, acknowledged, notices, send, steer, replace, linkOptions };
+  return { reports, acknowledged, notices, send, steer, replace, linkOptions,
+    policy: hostOptions.deliveryPolicy.decision() };
 }
 
 describe("production Codex IA steer composition", () => {
+  it.each(["unwritten", "write-failed", "write-timeout", "precondition", "accepted-unobserved"] as const)(
+    "preserves one started %s outcome across off", async schedule => {
+      const result = await compose("app-server", true, "early", schedule, true, false, { offAfterWrite: true });
+      expect(result.policy).toMatchObject({ allowed: false, policy: "off", revision: 2 });
+      expect(result.steer).toHaveBeenCalledOnce();
+      const fallback = schedule === "unwritten" || schedule === "precondition";
+      const uncertain = schedule === "write-timeout" || schedule === "accepted-unobserved";
+      expect(result.send).not.toHaveBeenCalled();
+      expect(result.replace).toHaveBeenCalledTimes(fallback ? 1 : 0);
+      expect(result.acknowledged).toEqual(uncertain ? [1] : []);
+      expect(result.reports.filter(report => report.stage === "unknown")).toHaveLength(uncertain ? 1 : 0);
+      expect(result.reports.filter(report => report.stage === "submitted")).toHaveLength(schedule === "accepted-unobserved" ? 1 : 0);
+      expect(result.reports.some(report => report.reason === "local_policy_disabled")).toBe(false);
+    },
+  );
+
   it.each(["classification", "final commit"] as const)("keeps one normal root and no acknowledgement after %s policy refusal", async boundary => {
     const result = await compose("app-server", true, "early", "included", true, false,
       boundary === "classification" ? { policyOff: true } : { hostQueued: "local_policy_disabled" });
