@@ -33,9 +33,11 @@ const near = { ...rawMaximum, engines: rawMaximum.engines.map(entry => ({ ...ent
 const short = { ...minimal, engines: ids.map(id => ({ id, models: Array.from({ length: 32 }, () => ({ value: "v", display_name: "d" })) })) };
 const noWarnings = () => {};
 const size = value => ({ json_bytes: deliveryJsonBytes(value), estimate: registerSizeEstimate(value) });
-process.stdout.write(JSON.stringify({ actual, disabled, oversized, rawMaximum, ordinary,
-  ordinarySent: preflightDeliveryRegister(ordinary, noWarnings), maximumSent: preflightDeliveryRegister(rawMaximum, noWarnings),
-  near, nearSent: preflightDeliveryRegister(near, noWarnings), short,
+const ordinarySent = preflightDeliveryRegister(ordinary, noWarnings);
+const maximumSent = preflightDeliveryRegister(rawMaximum, noWarnings);
+const nearSent = preflightDeliveryRegister(near, noWarnings);
+process.stdout.write(JSON.stringify({ actual, disabled, oversized, rawMaximum, ordinary, ordinarySent, maximumSent, near, nearSent, short,
+  sentMeasurements: Object.fromEntries(Object.entries({ actual, rawMaximum, ordinarySent, maximumSent, nearSent, short }).map(([key, value]) => [key, size(value)])),
   measurements: Object.fromEntries(Object.entries({ actual, rawMaximum, ordinary, near, short }).map(([key, value]) => [key, size(value)])),
   ratio: REGISTER_EXTERNAL_JSON_RATIO, multiplier: REGISTER_ESTIMATE_MULTIPLIER,
 }));

@@ -131,7 +131,8 @@ defmodule KaoiroServerWeb.DeliveryLaunchAcceptance do
       assert_reply push(runner, "register", payload), :ok
       assert external <= 65536
       assert external / json <= f["ratio"]
-      assert json * f["ratio"] * f["multiplier"] + 4096 >= 2 * external + 4096
+      assert f["sentMeasurements"][key]["json_bytes"] == json
+      assert f["sentMeasurements"][key]["estimate"] >= 2 * external + 4096
       IO.puts("C3 size #{key}: json=#{json} external=#{external} ratio=#{external / json}")
     end
 
