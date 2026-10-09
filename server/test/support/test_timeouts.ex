@@ -147,4 +147,20 @@ defmodule KaoiroServer.TestTimeouts do
   def store_step(base) when is_integer(base) and base > 0 do
     @store_step_multiplier * base
   end
+
+  @doc """
+  Budget for the wait between writing an allow-list file and the watcher's
+  file event reaching the test (debounce, then reconcile, then broadcast).
+  Two `out_of_band/0` budgets: 1000 ms locally and 5000 ms under `CI`.
+
+  Two times the out_of_band budget, because the largest probe sample on a
+  4-core host under load was 285 ms over 30 runs (issue 554). The rule is
+  that the budget is at least twice the largest observed sample. In-process
+  waits (`:DOWN` after `GenServer.stop/1`) stay on `out_of_band/0`.
+  """
+  def file_event(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def file_event(base) when is_integer(base) and base > 0 do
+    2 * out_of_band(base)
+  end
 end

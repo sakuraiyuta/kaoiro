@@ -14,6 +14,19 @@ defmodule KaoiroServer.OAuthAllowlistWatcherBudgetGuardTest do
     assert [] == violations()
   end
 
+  # The file-driven waits (a file written, then the watcher's event) use the
+  # file_event budget, and the in-process waits (`:DOWN`, the :never pin) stay
+  # on out_of_band. Counting the uses pins that split: moving any one of them
+  # to the other budget changes a count.
+  test "file-driven waits use file_event/0, in-process waits stay on out_of_band/0" do
+    text = File.read!(@source)
+
+    assert count(text, ~r/TestTimeouts\.file_event\(\)/) == 14
+    assert count(text, ~r/TestTimeouts\.out_of_band\(\)/) == 5
+  end
+
+  defp count(text, pattern), do: length(Regex.scan(pattern, text))
+
   defp violations do
     ast = @source |> File.read!() |> Code.string_to_quoted!()
 

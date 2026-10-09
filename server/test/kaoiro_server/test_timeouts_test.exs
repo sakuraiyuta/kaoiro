@@ -20,6 +20,12 @@ defmodule KaoiroServer.TestTimeoutsTest do
     assert TestTimeouts.store_step(500) == 10_000
   end
 
+  test "the file-event budget is two out_of_band budgets in either environment" do
+    assert TestTimeouts.file_event(100) == 1000
+    assert TestTimeouts.file_event(500) == 5000
+    assert TestTimeouts.file_event(100) == 2 * TestTimeouts.out_of_band(100)
+  end
+
   test "the purge budget leaves headroom over the base it was derived from" do
     for base <- [100, 500] do
       assert TestTimeouts.purge_reply(base) > base
