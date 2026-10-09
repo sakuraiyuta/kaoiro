@@ -602,6 +602,10 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
     tools,
   );
+  const fixedNode = join(root, "pinned-node"), nodeCalls = join(root, "node-calls");
+  writeFileSync(fixedNode,
+    `#!/bin/sh\nprintf '%s\\n' "$1" >> '${nodeCalls}'\nexec '${process.execPath}' "$@"\n`,
+    { mode: 0o755 });
   const descriptor = {
     schema: 1,
     install_root: server,
@@ -611,7 +615,7 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     tool_sha256: manifest.sha256,
     exporter_path: join(tools, "scripts/production-release-launcher.mjs"),
     node_major: Number(process.versions.node.split(".")[0]),
-    node_path: process.execPath,
+    node_path: fixedNode,
   };
   writeFileSync(
     join(server, ".kaoiro-release-authority.json"),
@@ -653,6 +657,7 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     ),
   );
   assert.ok(card.command.endsWith(card.verification));
+  assert.ok(card.landing_audit.startsWith(`'${fixedNode}' `));
   const landingFixture = repairFixture();
   try {
     const pendingCard = productionDispatchCard({ dir, cwd: landingFixture.repo, repository: "fixture/repo" });
@@ -661,6 +666,8 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     });
     assert.equal(pending.status, 78, pending.stderr);
     assert.equal(existsSync(landingFixture.marker), false, "pending landing must stop the generated card before dispatch");
+    assert.equal(readFileSync(nodeCalls, "utf8").trim(),
+      join(landingFixture.repo, "scripts/landing-repair.mjs"));
   } finally { landingFixture.dispose(); }
   const { status } = spawnSync("sh", ["-c", card.verification], {
     encoding: "utf8",
