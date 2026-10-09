@@ -10,7 +10,7 @@ const require = (condition, message) => {
 export { originalPushRecord, validateOriginalObservation, validateOriginalRecord, listLandingPushRuns } from "./landing-backlog.mjs";
 function gitAuthentication() {
   require(process.env.GH_TOKEN, "publisher token unavailable");
-
+  return childEnvironment("ci-git");
 }
 
 export function repairDiagnostic(identity, control) {
@@ -46,9 +46,9 @@ async function main() {
   const boundary = api(`repos/${repository}/actions/runs/${process.env.KAOIRO_LANDING_FIRST_RUN_ID}`);
   const context = validateLandingContext({ repository, repositoryId, workflowId: current.workflow_id,
     boundary, env: process.env, head });
-  gitAuthentication();
+  const gitEnv = gitAuthentication();
   const scope = current.event === "push" ? { runs: [current] } : {};
-  const before = auditLandingBacklog(context, { ...scope, through: current.created_at });
+  const before = auditLandingBacklog(context, { ...scope, through: current.created_at, gitEnv });
   let denied;
   for (const row of before.rows) {
     if (row.status === "resolved") continue;
@@ -56,14 +56,14 @@ async function main() {
     try {
       await allocateLanding({ cwd: process.cwd(), remote: "origin", target: original.target,
         originalRunId: original.originalRunId, createdAt: original.createdAt, repositoryId,
-        gitEnv: childEnvironment("ci-git") });
+        gitEnv });
     } catch (error) {
       if (!(error instanceof LandingRepairRequired)) throw error;
       denied = repairDiagnostic({ ...error.identity, repository }, head);
       break;
     }
   }
-  const after = auditLandingBacklog(context, { ...(denied ? {} : scope), through: current.created_at }).report;
+  const after = auditLandingBacklog(context, { ...(denied ? {} : scope), through: current.created_at, gitEnv }).report;
   if (denied) {
     for (const identity of after.identities) if (identity.target === denied.target)
       identity.status = "operator_repair_required";

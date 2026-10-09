@@ -64,10 +64,34 @@ test("existing authority and new repair SSH launches both exclude ambient secret
 test("coverage check rejects separate existing and new bypasses and its own disabled guard", () => {
   const green = checkReleaseChildEnvironments(root);
   assert.equal(green.files, 17); assert.ok(green.calls >= 25);
+  assert.equal(green.unchanged_legacy_calls, 13);
   for (const target of ["scripts/production-release-authority.mjs", "scripts/landing-repair-ssh.mjs"]) {
     assert.throws(() => checkReleaseChildEnvironments(root, (path, encoding) => {
       const source = readFileSync(path, encoding);
       return path.endsWith(target) ? source + "\nspawnSync('unsafe', []);\n" : source;
     }), /unmanaged child process/);
   }
+});
+
+test("coverage pins import-only, spawn/fork, exact legacy count and both scope-presence checks", () => {
+  const mutate = (target, transform) => () => checkReleaseChildEnvironments(root, (path, encoding) => {
+    const source = readFileSync(path, encoding);
+    return path.endsWith(target) ? transform(source) : source;
+  });
+  for (const extra of ["import cp from 'node:child_process';", "spawn('unsafe', []);", "fork('unsafe');"]) {
+    assert.throws(mutate("scripts/landing-repair-ssh.mjs", source => source + "\n" + extra), /unmanaged/);
+  }
+  assert.throws(mutate("runner/deploy/codex-service.mjs", source => source + "\nexecFileSync('unsafe', []);"), /unmanaged/);
+  assert.throws(mutate("scripts/landing-repair-ssh.mjs", source => source.replace("child-process-environment.mjs", "missing-helper.mjs")), /helper import missing/);
+  assert.throws(mutate("scripts/landing-repair-ssh.mjs", source => source.replaceAll("spawnChildSync", "unusedChild")), /no checked call/);
+});
+
+test("gh keyring session values reach a real child without SSH or loader authority", () => {
+  const env = { ...hostile, DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus", XDG_RUNTIME_DIR: "/fixture/runtime", SSH_AUTH_SOCK: "/fixture/ssh" };
+  const actual = JSON.parse(execChildSync("gh", process.execPath, ["-e", "console.log(JSON.stringify(process.env))"], { encoding: "utf8", env }));
+  assert.equal(actual.DBUS_SESSION_BUS_ADDRESS, env.DBUS_SESSION_BUS_ADDRESS);
+  assert.equal(actual.XDG_RUNTIME_DIR, env.XDG_RUNTIME_DIR);
+  assert.equal(actual.SSH_AUTH_SOCK, undefined);
+  assert.equal(actual.LD_PRELOAD, undefined);
+  assert.equal(actual.GIT_DIR, undefined);
 });

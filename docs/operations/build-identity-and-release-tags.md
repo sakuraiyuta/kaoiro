@@ -605,6 +605,12 @@ client log level suppresses local missing-default-key diagnostics; remote
 extra output still fails the exact greeting check. Only the fixed
 GitHub host/user/port and validated repository can be used. The push uses the
 existing paired allocator, original target and original UTC clock.
+Explicit Git environments must be prepared by that builder; copying them loses
+its profile and is refused. The CI allocation and both inventory audits share
+one prepared authenticated Git environment. GH alone carries the session bus
+and runtime-directory values needed for Secret Service; SSH credentials are not
+added to that profile.
+
 
 The command writes local Git blobs and compare-and-create refs before and
 after publication:

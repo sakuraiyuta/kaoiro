@@ -11,12 +11,16 @@ const BUILD = ["CI", "SOURCE_DATE_EPOCH", "COREPACK_ENABLE_DOWNLOAD_PROMPT", "PN
 const RUNNER = ["KAOIRO_NODE", "KAOIRO_RUNNER_DIR", "KAOIRO_RELEASE_RETAINED_UNIT", "INVOCATION_ID"];
 const PROFILES = {
   git: SESSION, "ci-git": SESSION, "ssh-git": [...SESSION, "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_ALLOW_PROTOCOL"],
-  gh: ["GH_TOKEN", "GITHUB_TOKEN"], ssh: ["SSH_AUTH_SOCK"],
+  gh: ["GH_TOKEN", "GITHUB_TOKEN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"], ssh: ["SSH_AUTH_SOCK"],
   systemd: SESSION, authority: [], runner: [...SESSION, ...RUNNER], build: [...SESSION, ...BUILD],
 };
 const prepared = new WeakMap();
 
-export const childEnvironmentProfile = (environment) => prepared.get(environment) ?? "git";
+export function childEnvironmentProfile(environment) {
+  const profile = prepared.get(environment);
+  if (!profile) throw new Error("unprepared child environment refused");
+  return profile;
+}
 
 export function childEnvironment(profile, source = process.env) {
   if (!Object.hasOwn(PROFILES, profile)) throw new Error("unknown child environment profile");

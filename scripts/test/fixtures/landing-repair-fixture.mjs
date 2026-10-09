@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { childEnvironment } from "../../child-process-environment.mjs";
 import { installChildFixture } from "./child-process-fixture.mjs";
 import { stageReleaseTools } from "../../production-release-tools.mjs";
 import { BUILD_REPOSITORY_ID } from "../../build-identity.mjs";
@@ -31,8 +32,8 @@ export function repairFixture() {
     KAOIRO_LANDING_CONTROL_SHA: control, KAOIRO_IDENTITY_GATES_SHA: control,
     KAOIRO_IDENTITY_V9: "true", KAOIRO_IDENTITY_V10: "true", KAOIRO_RELEASE_ACTORS: '["OperatorOne"]' };
   const records = pushes.map(run => originalPushRecord({ after: run.head_sha, ref: "refs/heads/develop", forced: false, deleted: false }, run, BUILD_REPOSITORY_ID));
-  const dataPath = join(root, "api.json"), log = join(root, "git.jsonl"), marker = join(root, "dispatch");
-  const data = { pushes, current, variables, records, control, actor: "OperatorOne", remote, log, marker };
+  const dataPath = join(root, "api.json"), log = join(root, "git.jsonl"), environmentLog = join(root, "git-environments.jsonl"), marker = join(root, "dispatch");
+  const data = { pushes, current, variables, records, control, actor: "OperatorOne", remote, log, environmentLog, marker };
   const save = () => writeFileSync(dataPath, JSON.stringify(data)); save();
   const readApi = path => {
     if (path === "user") return { type: "User", login: data.actor };
@@ -52,7 +53,7 @@ export function repairFixture() {
   };
   // The IPC reader is deliberately fake; refs, blobs, CAS and atomic pushes use real local Git.
   writeFileSync(join(bin, "gh"), `#!${process.execPath}\nconst fs=require('node:fs'),d=JSON.parse(fs.readFileSync(${JSON.stringify(dataPath)})),a=process.argv.slice(2);if(a[0]==='workflow'){fs.writeFileSync(d.marker,'dispatch');process.exit(1);}if(a[0]==='run'){const i=d.pushes.findIndex(r=>r.id===Number(a[2]));fs.writeFileSync(require('node:path').join(a[a.indexOf('--dir')+1],'original-event.json'),JSON.stringify(d.records[i]));process.exit(0);}const p=a[1];let v;if(p==='user')v={type:'User',login:d.actor};else if(p==='repos/fixture/repo')v={id:${BUILD_REPOSITORY_ID},full_name:'fixture/repo',permissions:{push:true}};else if(p.includes('/variables?'))v={total_count:Object.keys(d.variables).length,variables:Object.entries(d.variables).map(([name,value])=>({name,value}))};else if(p.endsWith('/workflows/develop-landing.yml'))v={id:1,path:'.github/workflows/develop-landing.yml'};else if(p.includes('/workflows/1/runs?')){const q=new URL('https://fixture.invalid/'+p).searchParams,[l,u]=q.get('created').split('..').map(Date.parse),r=d.pushes.filter(x=>Date.parse(x.created_at)>=l&&Date.parse(x.created_at)<=u),n=Number(q.get('page'));v={total_count:r.length,workflow_runs:r.slice((n-1)*100,n*100)}}else if(p.endsWith('/999'))v=d.current;else v=d.pushes.find(r=>p.endsWith('/actions/runs/'+r.id));if(!v)process.exit(1);console.log(JSON.stringify(v));\n`, { mode: 0o755 });
-  writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process'),d=JSON.parse(fs.readFileSync(${JSON.stringify(dataPath)}));let a=process.argv.slice(2);fs.appendFileSync(d.log,JSON.stringify(a)+'\\n');a=a.map(x=>x==='git@github.com:fixture/repo.git'?d.remote:x);if(a[0]==='remote'&&a[1]==='add'&&a[3]===d.remote){}if(a[0]==='update-ref'&&process.env.FUJI_FAIL_REF&&a[1].endsWith('/'+process.env.FUJI_FAIL_REF))process.exit(1);if(a[0]==='push'&&a.includes('--atomic')&&process.env.FUJI_REFUSAL){for(const spec of a.slice(-2)){const [obj,ref]=spec.split(':');console.error(' ! [remote rejected] '+obj+' -> '+ref.slice(10)+' ('+(process.env.FUJI_REFUSAL==='workflow'?\"refusing to allow a GitHub App to create or update workflow \\x60.github/workflows/production-release.yml\\x60 without \\x60workflows\\x60 permission\":'permission denied')+')');}process.exit(1);}const r=cp.spawnSync('/usr/bin/git',a,{stdio:'inherit',env:{...process.env,GIT_ALLOW_PROTOCOL:'file'}});process.exit(r.status??1);\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "git"), `#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process'),d=JSON.parse(fs.readFileSync(${JSON.stringify(dataPath)}));let a=process.argv.slice(2);fs.appendFileSync(d.log,JSON.stringify(a)+'\\n');fs.appendFileSync(d.environmentLog,JSON.stringify({args:a,env:process.env})+'\\n');a=a.map(x=>x==='git@github.com:fixture/repo.git'?d.remote:x);if(a[0]==='remote'&&a[1]==='add'&&a[3]===d.remote){}if(a[0]==='update-ref'&&process.env.FUJI_FAIL_REF&&a[1].endsWith('/'+process.env.FUJI_FAIL_REF))process.exit(1);if(a[0]==='push'&&a.includes('--atomic')&&process.env.FUJI_REFUSAL){for(const spec of a.slice(-2)){const [obj,ref]=spec.split(':');console.error(' ! [remote rejected] '+obj+' -> '+ref.slice(10)+' ('+(process.env.FUJI_REFUSAL==='workflow'?\"refusing to allow a GitHub App to create or update workflow \\x60.github/workflows/production-release.yml\\x60 without \\x60workflows\\x60 permission\":'permission denied')+')');}process.exit(1);}const r=cp.spawnSync('/usr/bin/git',a,{stdio:'inherit',env:{...process.env,GIT_ALLOW_PROTOCOL:'file'}});process.exit(r.status??1);\n`, { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, GH_TOKEN: "inert-fixture-token",
     GITHUB_REPOSITORY: "fixture/repo", GITHUB_REPOSITORY_ID: String(BUILD_REPOSITORY_ID), GITHUB_RUN_ID: "999", ...variables };
   const readArtifact = (_repository, run) => {
@@ -63,10 +64,11 @@ export function repairFixture() {
   const preload = join(root, "preload.mjs");
   env.NODE_OPTIONS = `--import=${preload}`;
   writeFileSync(preload, `import { installChildFixture } from ${JSON.stringify(new URL("./child-process-fixture.mjs", import.meta.url).href)}; installChildFixture(${JSON.stringify(bin)}, ${JSON.stringify(env)});`);
-  const dependencies = { cwd: repo, readApi, readArtifact, sshSnapshot: () => ({ configurationSha256: "f".repeat(64), gitEnv: env }) };
+  const dependencies = { cwd: repo, readApi, readArtifact, sshSnapshot: () => ({ configurationSha256: "f".repeat(64), gitEnv: childEnvironment("ssh-git", { ...env, GIT_SSH_COMMAND: "fixture ssh", GIT_ALLOW_PROTOCOL: "ssh" }) }) };
   const cli = (script, args, extra = {}) => spawnSync(process.execPath, ["--import", preload, join(repo, "scripts", script), ...args], { cwd: repo, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
   const calls = () => { try { return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse); } catch { return []; } };
+  const environments = () => readFileSync(environmentLog, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
   const args = (index = 0) => ["--git-transport", "ssh", "--repository", "fixture/repo", "--original-run", String(index + 1), "--expected-target", pushes[index].head_sha];
-  return { root, repo, remote, bin, env, control, second, data, save, git, log, marker, cli, calls, args, dependencies,
+  return { root, repo, remote, bin, env, control, second, data, save, git, log, marker, cli, calls, environments, args, dependencies,
     dispose: () => { restoreChildren(); rmSync(root, { recursive: true, force: true }); } };
 }

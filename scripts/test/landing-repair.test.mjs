@@ -7,7 +7,8 @@ import { test } from "node:test";
 import { runLandingRepair, operatorLandingContext, AlreadyRepaired, ReceiptRecoveryRequired } from "../landing-repair.mjs";
 import { landingCandidates, auditLandingBacklog, originalPushRecord } from "../landing-backlog.mjs";
 import { repairRefs, readLocalRepairRecord, writeLocalRepairRecord, validateRepairReceipt } from "../landing-repair-records.mjs";
-import { allocateLanding } from "../landing-tags.mjs";
+import { childEnvironment, childEnvironmentProfile } from "../child-process-environment.mjs";
+import { allocateLanding, readLandingInventory } from "../landing-tags.mjs";
 import { repairDiagnostic } from "../landing-workflow.mjs";
 import { sshGreetingActor, operatorSshSnapshot } from "../landing-repair-ssh.mjs";
 import { workflowPermissionRefusal } from "../landing-tags.mjs";
@@ -56,6 +57,46 @@ test("SSH snapshot fixes one destination and reuses its key/environment selectio
     assert.throws(() => operatorSshSnapshot("OperatorOne", { readConfig: () => ({ status: 0, stdout: config + suffix }),
       probe: () => ({ status: 1, stderr: greeting("OperatorOne") }) }), /fixed GitHub destination required/);
 });
+
+test("snapshot profile reaches inventory and allocation, and unbranded clones refuse", async () => withFixture(async f => {
+  const snapshot = operatorSshSnapshot("OperatorOne", {
+    env: f.env, readConfig: () => ({ status: 0, stdout: config }),
+    probe: () => ({ status: 1, stderr: greeting("OperatorOne") }),
+  });
+  assert.equal(childEnvironmentProfile(snapshot.gitEnv), "ssh-git");
+  assert.throws(() => childEnvironmentProfile({ ...snapshot.gitEnv }), /unprepared/);
+  assert.throws(() => readLandingInventory({ cwd: f.repo, remote: f.remote, gitEnv: { ...snapshot.gitEnv } }), /unprepared/);
+  readLandingInventory({ cwd: f.repo, remote: f.remote, gitEnv: snapshot.gitEnv });
+  allocateLanding({ cwd: f.repo, remote: f.remote, target: f.control, originalRunId: 1,
+    createdAt: "2026-10-09T00:00:00Z", gitEnv: snapshot.gitEnv });
+  const calls = f.environments().filter(row => ["fetch", "push"].includes(row.args[0]));
+  assert.ok(calls.some(row => row.args[0] === "fetch"));
+  assert.ok(calls.some(row => row.args[0] === "push"));
+  for (const { env } of calls) {
+    assert.equal(env.GIT_SSH_COMMAND, snapshot.gitEnv.GIT_SSH_COMMAND);
+    assert.equal(env.GIT_ALLOW_PROTOCOL, "ssh");
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
+    assert.equal(env.GIT_CONFIG_GLOBAL, "/dev/null");
+    assert.equal(env.GIT_CONFIG_SYSTEM, "/dev/null");
+    assert.equal(env.GIT_CONFIG_COUNT, undefined);
+  }
+}));
+
+test("CI workflow gives the same authorization header to allocation and both backlog audits", async () => withFixture(async f => {
+  const result = f.cli("landing-workflow.mjs", ["allocate"]);
+  assert.equal(result.status, 0, result.stderr);
+  const calls = f.environments().filter(row => ["fetch", "push"].includes(row.args[0]));
+  assert.ok(calls.filter(row => row.args[0] === "fetch").length >= 3);
+  assert.ok(calls.some(row => row.args[0] === "push"));
+  for (const { env } of calls) {
+    assert.equal(env.GIT_CONFIG_COUNT, "1");
+    assert.equal(env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+    assert.equal(env.GIT_CONFIG_VALUE_0, "AUTHORIZATION: basic " + Buffer.from("x-access-token:inert-fixture-token").toString("base64"));
+    assert.equal(env.GIT_CONFIG_GLOBAL, "/dev/null");
+    assert.equal(env.GIT_CONFIG_SYSTEM, "/dev/null");
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
+  }
+}));
 
 test("correct greeting with exit 255 or case-only actor mismatch causes no Git push", async () => withFixture(async f => {
   for (const result of [{ status: 255, stderr: greeting("OperatorOne") }, { status: 1, stderr: greeting("operatorone") }]) {
@@ -138,6 +179,17 @@ test("receipt schema binds the intent object, original tuple, operator and contr
   f.git("update-ref", result.receipt_ref, result.receipt_object);
   f.git("update-ref", "-d", result.intent_ref);
   await assert.rejects(runLandingRepair("repair", f.args(), f.dependencies), /receipt exists without local repair intent/);
+}));
+
+test("existing receipt validation remains on the repair flow before exit 73", async () => withFixture(async f => {
+  const result = await runLandingRepair("repair", f.args(), f.dependencies);
+  const receipt = readLocalRepairRecord(f.repo, result.receipt_ref).value;
+  for (const delta of [{ intent_object: "a".repeat(40) }, { operator: "OtherActor" }, { control_sha: f.second }]) {
+    replaceBlob(f, result.receipt_ref, { ...receipt, ...delta });
+    await assert.rejects(runLandingRepair("repair", f.args(), f.dependencies), /receipt schema rejected/);
+  }
+  f.git("update-ref", result.receipt_ref, result.receipt_object);
+  await assert.rejects(runLandingRepair("repair", f.args(), f.dependencies), error => error instanceof AlreadyRepaired && error.exitCode === 73);
 }));
 
 test("record-existing needs a pair and resume binds unchanged artifact, operator and control", async () => withFixture(async f => {
