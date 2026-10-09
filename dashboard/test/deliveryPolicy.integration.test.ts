@@ -7,7 +7,7 @@ import type { Envelope, KaoiroConnection } from "../src/lib/protocol";
 
 import { launchDeliveryContract } from "./fixtures/launchDeliveryContract";
 
-export const modes = launchDeliveryContract.launch_delivery_policy.mechanisms;
+export const modes = { operator_early: "none", inter_agent_early: "steer", inter_agent_yield: "none" } as const;
 const view = (revision = 1, policy: "on" | "off" = "on"): DeliveryPolicyView => ({ policy, revision,
   applied_revision: revision, confirmed: true, pending: false, wrapper_support: true, mechanisms: modes });
 const envelope = (id = "a", policy = view()): Envelope => ({ version: "0", agent_id: id, ts: "T",

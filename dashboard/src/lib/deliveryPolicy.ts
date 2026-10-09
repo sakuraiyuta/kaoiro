@@ -14,7 +14,7 @@ export interface DeliveryPolicyView {
   mechanisms?: DeliveryMechanisms | undefined;
 }
 // Client mirror: keep independent of @kaoiro/protocol (ADR-0007).
-// Cross-check the contract through the shared fixture planned in issue 562.
+// Conformance tests cross-check protocol/fixtures/launch-delivery-policy.json.
 export interface LaunchDeliveryPolicy {
   version: "v1";
   ceiling: boolean;
