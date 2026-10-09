@@ -148,4 +148,12 @@ describe("policy projection and asynchronous control", () => {
     expect(store.notices.a).toBe(""); expect(store.views.b?.policy).toBe("on");
   });
 
+  it("deleting an agent clears pending flags and rejects a late read even after the ID reappears", async () => {
+    const { store, read } = setup(); const result = deferred<DeliveryPolicyView>(); read.mockReturnValue(result.promise);
+    const pending = store.refresh("a"); store.saving.a = true; store.remove("a");
+    expect(store.reading.a).toBeUndefined(); expect(store.saving.a).toBeUndefined();
+    store.seed(envelope()); result.resolve(view(9, "off")); await pending;
+    expect(store.views.a?.revision).toBe(1); expect(store.reading.a).toBeUndefined();
+  });
+
 });

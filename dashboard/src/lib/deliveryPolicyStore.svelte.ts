@@ -15,6 +15,7 @@ export class DeliveryPolicyStore {
   private floors = new Map<string, number>();
   private noticeEpochs = new Map<string, number>();
   private requests = new Map<string, symbol>();
+  private reads = new Map<string, symbol>();
 
   constructor(private access: () => { connection: KaoiroConnection | null; operator: boolean; connected: boolean }) {}
 
@@ -23,13 +24,13 @@ export class DeliveryPolicyStore {
     this.available = false;
     this.ready = false;
     this.views = {}; this.notices = {}; this.saving = {}; this.reading = {};
-    this.buffered.clear(); this.versions.clear(); this.floors.clear(); this.requests.clear(); this.noticeEpochs.clear();
+    this.buffered.clear(); this.versions.clear(); this.floors.clear(); this.requests.clear(); this.reads.clear(); this.noticeEpochs.clear();
   }
   disconnect(): void {
     this.generation++;
     this.available = false;
     this.saving = {}; this.reading = {};
-    this.requests.clear();
+    this.requests.clear(); this.reads.clear();
   }
   snapshot(agents: Record<string, Envelope>): void {
     this.views = Object.fromEntries(Object.entries(agents).map(([id, envelope]) =>
@@ -62,6 +63,9 @@ export class DeliveryPolicyStore {
     const { [id]: _view, ...views } = this.views; this.views = views;
     const { [id]: _notice, ...notices } = this.notices; this.notices = notices;
     this.buffered.delete(id); this.versions.delete(id); this.floors.delete(id); this.requests.delete(id);
+    this.reads.delete(id); this.noticeEpochs.delete(id);
+    const { [id]: _saving, ...saving } = this.saving; this.saving = saving;
+    const { [id]: _reading, ...reading } = this.reading; this.reading = reading;
   }
   clearNotice(id: string): void {
     this.noticeEpochs.set(id, (this.noticeEpochs.get(id) ?? 0) + 1);
@@ -77,16 +81,18 @@ export class DeliveryPolicyStore {
     const generation = this.generation;
     const noticeEpoch = this.noticeEpochs.get(id) ?? 0;
     const version = this.versions.get(id) ?? 0;
+    const token = Symbol(); this.reads.set(id, token);
+    const current = () => generation === this.generation && this.reads.get(id) === token;
     this.reading = { ...this.reading, [id]: true };
     try {
       const view = await connection.getDeliveryPolicy(id);
-      if (generation !== this.generation || !this.authorized() || !Object.hasOwn(this.views, id) ||
+      if (!current() || !this.authorized() || !Object.hasOwn(this.views, id) ||
           version !== (this.versions.get(id) ?? 0)) return;
       this.observe(id, view);
     } catch {
-      if (reportFailure && generation === this.generation && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: this.notices[id] === "保存結果未確認" ? "保存結果未確認・状態を再取得できませんでした" : "状態を再取得できませんでした" };
+      if (reportFailure && current() && noticeEpoch === (this.noticeEpochs.get(id) ?? 0)) this.notices = { ...this.notices, [id]: this.notices[id] === "保存結果未確認" ? "保存結果未確認・状態を再取得できませんでした" : "状態を再取得できませんでした" };
     } finally {
-      if (generation === this.generation) this.reading = { ...this.reading, [id]: false };
+      if (current()) { this.reads.delete(id); this.reading = { ...this.reading, [id]: false }; }
     }
   }
   async set(id: string, policy: DeliveryPolicy, ownerConnected: boolean): Promise<void> {

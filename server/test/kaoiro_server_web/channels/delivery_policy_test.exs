@@ -878,6 +878,55 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     assert KaoiroServer.DeliveryStates.pending_early(from, id) == {0, 0}
   end
 
+  test "real register and operator hosts preserve launch metadata and defaults independently", %{
+    id: id
+  } do
+    {:ok, _, runner} =
+      KaoiroServerWeb.RunnerSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(KaoiroServerWeb.RunnerChannel, "runner:" <> id)
+
+    client(:operator)
+
+    none = %{
+      "operator_early" => "none",
+      "inter_agent_early" => "none",
+      "inter_agent_yield" => "none"
+    }
+
+    peer = %{none | "inter_agent_early" => "steer"}
+    defaults = %{"claude-code" => true, "codex" => true, "antigravity" => false}
+
+    engines =
+      for engine <- ["claude-code", "codex", "antigravity"] do
+        %{
+          "id" => engine,
+          "models" => [],
+          "launch_delivery_policy" => %{
+            "version" => "v1",
+            "ceiling" => true,
+            "mechanisms" => if(engine == "antigravity", do: none, else: peer),
+            "persona_overrides" => %{"disabled-persona" => none}
+          }
+        }
+      end
+
+    for catalogs <- [engines, Enum.map(engines, &Map.delete(&1, "launch_delivery_policy"))] do
+      assert_reply push(runner, "register", %{
+                     "version" => "0",
+                     "cwd_allowlist" => ["/test"],
+                     "capabilities" => Map.keys(defaults),
+                     "engines" => catalogs,
+                     "in_flight_defaults" => defaults
+                   }),
+                   :ok
+
+      assert_push "hosts", %{
+        "hosts" => %{^id => %{"engines" => ^catalogs, "in_flight_defaults" => ^defaults}}
+      }
+    end
+  end
+
   test "runner defaults are strict and spawn consumes explicit policy before broadcast", %{id: id} do
     {:ok, _, runner} =
       KaoiroServerWeb.RunnerSocket
