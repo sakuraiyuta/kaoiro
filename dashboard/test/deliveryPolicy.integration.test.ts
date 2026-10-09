@@ -5,7 +5,9 @@ import { DeliveryPolicyError, deliveryPolicyLabel, parseDeliveryPolicy, parseLau
 import { DeliveryPolicyStore } from "../src/lib/deliveryPolicyStore.svelte";
 import type { Envelope, KaoiroConnection } from "../src/lib/protocol";
 
-export const modes = { operator_early: "none", inter_agent_early: "steer", inter_agent_yield: "none" } as const;
+import { launchDeliveryContract } from "./fixtures/launchDeliveryContract";
+
+export const modes = launchDeliveryContract.launch_delivery_policy.mechanisms;
 const view = (revision = 1, policy: "on" | "off" = "on"): DeliveryPolicyView => ({ policy, revision,
   applied_revision: revision, confirmed: true, pending: false, wrapper_support: true, mechanisms: modes });
 const envelope = (id = "a", policy = view()): Envelope => ({ version: "0", agent_id: id, ts: "T",
@@ -37,7 +39,7 @@ describe("delivery policy decoding and current-owner display", () => {
     expect(parseDeliveryPolicy({ ...view(), mechanisms: { ...modes, operator_early: ["steer"] } }).mechanisms).toBeUndefined();
   });
   it("decodes complete metadata, exact overrides, and independent defaults fail closed", () => {
-    const raw = { version: "v1", ceiling: true, mechanisms: modes,
+    const raw = { ...launchDeliveryContract.launch_delivery_policy,
       persona_overrides: JSON.parse('{"__proto__":{"operator_early":"fold","inter_agent_early":"fold","inter_agent_yield":"tool_boundary"}}') };
     const parsed = parseLaunchDeliveryPolicy(raw)!;
     expect(Object.hasOwn(parsed.persona_overrides!, "__proto__")).toBe(true);
@@ -47,12 +49,12 @@ describe("delivery policy decoding and current-owner display", () => {
       { ...raw, persona_overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`p${i}`, modes])) },
       { ...raw, extra: "é".repeat(4096) }]) expect(parseLaunchDeliveryPolicy(invalid)).toBeUndefined();
     expect(launchDeliveryDefault(undefined, "codex")).toEqual({ policy: "on", source: "fallback" });
-    expect(launchDeliveryDefault({ codex: false }, "codex")).toEqual({ policy: "off", source: "host" });
+    expect(launchDeliveryDefault(launchDeliveryContract.in_flight_defaults, "codex")).toEqual({ policy: "off", source: "host" });
     expect(launchDeliveryDefault({ codex: "false" }, "codex").source).toBe("unknown");
     expect(launchDeliveryDefault(null, "codex").source).toBe("unknown");
   });
   it("keeps both exact metadata boundaries independently", () => {
-    const raw = { version: "v1", ceiling: true, mechanisms: modes,
+    const raw = { ...launchDeliveryContract.launch_delivery_policy,
       persona_overrides: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`p${i}`, modes])) };
     const size = () => new TextEncoder().encode(JSON.stringify(raw)).length;
     const key = "p0" + "x".repeat(8192 - size());

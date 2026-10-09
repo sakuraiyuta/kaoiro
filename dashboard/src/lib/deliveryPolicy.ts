@@ -13,7 +13,6 @@ export interface DeliveryPolicyView {
   wrapper_support: boolean;
   mechanisms?: DeliveryMechanisms | undefined;
 }
-// Replace with the shared C3 type when issue 562 lands; see the runner-control contract.
 export interface LaunchDeliveryPolicy {
   version: "v1";
   ceiling: boolean;

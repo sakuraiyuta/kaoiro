@@ -4,14 +4,15 @@ export const { WebSocket: LoopbackWebSocket, WebSocketServer } = createRequire(i
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { once } from "node:events";
-export const deliveryModes = { operator_early: "none", inter_agent_early: "steer", inter_agent_yield: "none" };
+import { launchDeliveryContract } from "./fixtures/launchDeliveryContract";
+export const deliveryModes = { ...launchDeliveryContract.launch_delivery_policy.mechanisms } as { operator_early: string; inter_agent_early: string; inter_agent_yield: string };
 export const deliveryView = { policy: "on", revision: 1, applied_revision: 1, confirmed: true, pending: false,
   wrapper_support: true, mechanisms: deliveryModes };
 export const deliveryAgent = { version: "0", agent_id: "host.p", persona: { id: "p", name: "Policy", sprite_set: "p" },
   ts: "2026-10-09T00:00:00Z", type: "state_change", state: "idle", payload: {}, ext: { engine: "codex", delivery_policy: deliveryView } };
 export const deliveryHosts = { host: { personas: [deliveryAgent.persona], cwd_allowlist: ["/test"], capabilities: ["codex"],
-  in_flight_defaults: { codex: false }, engines: [{ id: "codex", models: [{ value: "sample", display_name: "Sample" }],
-    launch_delivery_policy: { version: "v1", ceiling: true, mechanisms: deliveryModes } }] } };
+  in_flight_defaults: { ...launchDeliveryContract.in_flight_defaults }, engines: [{ id: "codex", models: [{ value: "sample", display_name: "Sample" }],
+    launch_delivery_policy: { ...launchDeliveryContract.launch_delivery_policy, mechanisms: deliveryModes } }] } };
 export async function deliveryLoopback(staticRoot?: string) {
   const server = createServer(async (req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
