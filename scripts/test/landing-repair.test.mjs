@@ -46,7 +46,8 @@ test("SSH snapshot fixes one destination and reuses its key/environment selectio
   assert.equal(snapshot.gitEnv.GIT_CONFIG_COUNT, undefined);
   assert.equal(snapshot.gitEnv.GIT_CONFIG_GLOBAL, "/dev/null");
   for (const suffix of ["proxycommand arbitrary\n", "port 443\n", "hostname attacker.invalid\n"])
-    assert.throws(() => operatorSshSnapshot("OperatorOne", { readConfig: () => ({ status: 0, stdout: config + suffix }), probe: () => assert.fail("no probe") }));
+    assert.throws(() => operatorSshSnapshot("OperatorOne", { readConfig: () => ({ status: 0, stdout: config + suffix }),
+      probe: () => ({ status: 1, stderr: greeting("OperatorOne") }) }), /fixed GitHub destination required/);
 });
 
 test("correct greeting with exit 255 or case-only actor mismatch causes no Git push", async () => withFixture(async f => {
