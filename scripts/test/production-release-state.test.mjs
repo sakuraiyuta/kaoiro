@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -329,6 +330,32 @@ test("ordinary abandonment refuses each applied/live/activity condition", async 
   assert.equal(retired.kind, "deployed_uncompleted");
   assert.equal(readReleaseAttempt(f.dir).state.id, "deployed_uncompleted");
 });
+
+test("lock grammar rejects an unescaped separator independently for every lock class", () => {
+  for (const rule of ROOT_LAYOUT.filter(rule => rule.id.endsWith("lock"))) {
+    const valid = rule.scope === "root" ? `.lock.${rule.id.replace(/-lock$/, "")}`
+      : rule.id === "queue-lock" ? ".lock.queue-worker-a"
+      : rule.id === "legacy-completion-lock" ? ".lock.completion" : ".lock.record";
+    assert.equal(rule.pattern.test(valid), true);
+    assert.equal(rule.pattern.test(valid.replace(".lock.", ".lockX")), false);
+  }
+});
+
+for (const leg of ["server", "runner"]) {
+  test(`retire-deployed refuses when the ${leg} leg remains at the target`, async () => {
+    const f = fixture();
+    writePrivateRecord(f.dir, "runner-after-worker-a.json", {}, { kind: "runner-fact" });
+    await assert.rejects(
+      terminate(f, "retire-deployed", {
+        inspectionProvider: async () => inspection(leg === "server"
+          ? { server_revision: f.identity.revision }
+          : { runner_revisions: [{ alias: "worker-a", revision: f.identity.revision }] }),
+      }),
+      /all plan legs must leave the target/,
+    );
+    assert.equal(existsSync(join(f.dir, "retirement.json")), false);
+  });
+}
 
 test("unused idle attempt abandons; terminal bytes are immutable and archivable", async () => {
   const f = fixture();

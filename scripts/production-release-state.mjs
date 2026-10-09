@@ -49,7 +49,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "root",
     "history-lock",
-    "\\.lock.history",
+    "\\.lock\\.history",
     "directory",
     "diagnostic",
     "release or recover-lock",
@@ -57,7 +57,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "root",
     "maintenance-lock",
-    "\\.lock.maintenance",
+    "\\.lock\\.maintenance",
     "directory",
     "diagnostic",
     "release or recover-lock with release writers stopped",
@@ -65,7 +65,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "root",
     "server-lock",
-    "\\.lock.server",
+    "\\.lock\\.server",
     "directory",
     "diagnostic",
     "release or recover-lock",
@@ -99,7 +99,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "attempt",
     "record-lock",
-    "\\.lock.record",
+    "\\.lock\\.record",
     "directory",
     "diagnostic",
     "release or recover-lock",
@@ -107,7 +107,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "attempt",
     "queue-lock",
-    `\\.lock.queue-${ALIAS_SOURCE}`,
+    `\\.lock\\.queue-${ALIAS_SOURCE}`,
     "directory",
     "diagnostic",
     "release or recover-lock",
@@ -115,7 +115,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry(
     "attempt",
     "legacy-completion-lock",
-    "\\.lock.completion",
+    "\\.lock\\.completion",
     "directory",
     "diagnostic",
     "recover-lock",
@@ -431,7 +431,7 @@ export function validateReleaseSkip(csv, reason) {
   return values;
 }
 
-export function parseReleaseOptions(args, allowed) {
+export function parseReleaseOptions(args, allowed, { valueBounds = {} } = {}) {
   if (args.length % 2 !== 0 || args.length > 32)
     throw new Error("bounded option/value pairs required");
   const flags = {};
@@ -445,7 +445,7 @@ export function parseReleaseOptions(args, allowed) {
       typeof value !== "string" ||
       !value ||
       value.startsWith("-") ||
-      Buffer.byteLength(value) > 4096 ||
+      Buffer.byteLength(value) > (valueBounds[key.slice(2)] ?? 4096) ||
       /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
     ) {
       throw new Error(`invalid or repeated release option: ${key}`);
