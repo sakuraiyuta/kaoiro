@@ -22,7 +22,19 @@ export interface DeliveryPolicyJoin {
   delivery_policy?: "v1";
 }
 
+export interface DeliveryMechanisms {
+  operator_early: "fold" | "steer" | "hook" | "none";
+  inter_agent_early: "fold" | "steer" | "hook" | "none";
+  inter_agent_yield: "tool_boundary" | "none";
+}
+
+export interface GetDeliveryPolicyRequest {
+  version: "0";
+  agent_id: string;
+}
+
 export interface DeliveryPolicyView {
+  mechanisms?: DeliveryMechanisms;
   policy: DeliveryPolicy | "unknown";
   revision?: number;
   applied_revision?: number;

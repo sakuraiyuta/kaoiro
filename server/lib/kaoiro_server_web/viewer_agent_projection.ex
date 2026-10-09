@@ -77,6 +77,7 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
              is_boolean(support) ->
         safe =
           Map.take(view, ~w(policy revision applied_revision confirmed pending wrapper_support))
+          |> put_mechanisms(view["mechanisms"])
 
         Map.put(stripped, "ext", %{"delivery_policy" => safe})
 
@@ -84,4 +85,21 @@ defmodule KaoiroServerWeb.ViewerAgentProjection do
         stripped
     end
   end
+
+  defp put_mechanisms(view, %{
+         "operator_early" => operator,
+         "inter_agent_early" => peer,
+         "inter_agent_yield" => yield
+       })
+       when operator in ["fold", "steer", "hook", "none"] and
+              peer in ["fold", "steer", "hook", "none"] and
+              yield in ["tool_boundary", "none"] do
+    Map.put(view, "mechanisms", %{
+      "operator_early" => operator,
+      "inter_agent_early" => peer,
+      "inter_agent_yield" => yield
+    })
+  end
+
+  defp put_mechanisms(view, _), do: view
 end

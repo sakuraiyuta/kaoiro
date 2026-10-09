@@ -48,7 +48,25 @@ defmodule KaoiroServer.DeliveryPolicies.State do
     }
     |> optional("revision", if(known, do: row.revision))
     |> optional("applied_revision", applied)
+    |> optional("mechanisms", mechanisms(snapshot))
   end
+
+  defp mechanisms(nil), do: nil
+
+  defp mechanisms(snapshot) do
+    peer = snapshot.modes || %{}
+    operator = snapshot.operator_modes || peer
+
+    %{
+      "operator_early" => early(operator["early"]),
+      "inter_agent_early" => early(peer["early"]),
+      "inter_agent_yield" =>
+        if(peer["yield"] == "tool_boundary", do: "tool_boundary", else: "none")
+    }
+  end
+
+  defp early(mode) when mode in ["fold", "steer", "hook"], do: mode
+  defp early(_), do: "none"
 
   def denial(nil, _snapshot), do: "policy_unknown"
   def denial(%{policy: :off}, _snapshot), do: "recipient_policy_off"

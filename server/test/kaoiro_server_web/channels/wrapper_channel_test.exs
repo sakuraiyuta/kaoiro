@@ -472,7 +472,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "revision" => 1,
         "confirmed" => true,
         "pending" => false,
-        "wrapper_support" => false
+        "wrapper_support" => false,
+        "mechanisms" => %{
+          "operator_early" => "none",
+          "inter_agent_early" => "none",
+          "inter_agent_yield" => "none"
+        }
       })
 
     ref = push(socket, "envelope", envelope)
@@ -502,7 +507,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "revision" => 1,
           "confirmed" => true,
           "pending" => false,
-          "wrapper_support" => false
+          "wrapper_support" => false,
+          "mechanisms" => %{
+            "operator_early" => "none",
+            "inter_agent_early" => "none",
+            "inter_agent_yield" => "none"
+          }
         }
       })
 

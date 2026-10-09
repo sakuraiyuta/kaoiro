@@ -122,6 +122,144 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
 
   defp notification(id, "state_change"), do: state(id)
 
+  test "lobby declares policy controls and read is role-first, exact and side-effect free", %{
+    id: id
+  } do
+    AgentDirectory.record(id, "default", "Policy")
+    viewer = client(:viewer)
+    operator = client(:operator)
+    @endpoint.subscribe("wrapper:" <> id)
+    read = %{"version" => "0", "agent_id" => id}
+
+    for target <- [id, id <> "-unknown"] do
+      assert_reply push(viewer, "get_delivery_policy", %{read | "agent_id" => target}), :error, %{
+        reason: "forbidden"
+      }
+    end
+
+    assert_reply push(operator, "get_delivery_policy", read), :ok, %{
+      "agent_id" => ^id,
+      "delivery_policy" => %{"policy" => "unknown"}
+    }
+
+    assert {:ok, nil} = DeliveryPolicies.get(id)
+    assert :dets.lookup(DeliveryPolicies, {:counter, id}) == []
+    refute_broadcast "delivery_policy", _
+
+    for bad <- [Map.put(read, "extra", true), Map.delete(read, "version")] do
+      assert_reply push(operator, "get_delivery_policy", bad), :error, %{
+        reason: "invalid_payload"
+      }
+    end
+
+    assert_reply push(operator, "get_delivery_policy", %{read | "agent_id" => id <> "-unknown"}),
+                 :error,
+                 %{reason: "unknown_agent"}
+
+    assert {:ok, %{delivery_policy_control: "v1"}, _} =
+             ClientSocket
+             |> socket(nil, %{
+               role: :operator,
+               credential: {:token_fingerprint, KaoiroServer.Auth.socket_id("dp-operator")},
+               socket_id: KaoiroServer.Auth.socket_id("dp-operator")
+             })
+             |> subscribe_and_join(AgentsChannel, "agents:lobby")
+  end
+
+  test "fresh read, event and viewer projection use only current-owner mechanisms", %{id: id} do
+    {_, a} = wrapper(id, %{"delivery_policy" => "v1"})
+    operator = client(:operator)
+    read = %{"version" => "0", "agent_id" => id}
+
+    assert_reply push(operator, "get_delivery_policy", read), :ok, %{
+      "delivery_policy" => %{"mechanisms" => %{"operator_early" => "steer"}}
+    }
+
+    replacement =
+      start_supervised!(
+        {Task,
+         fn ->
+           receive do
+             :stop -> :ok
+           end
+         end}
+      )
+
+    on_exit(fn -> WorkStore.unregister_modes(id, replacement) end)
+
+    for declared <- [modes("none"), nil] do
+      :ok =
+        WorkStore.register_delivery(id, replacement, declared, false, %{"early" => "none"}, true)
+
+      :ok = WorkStore.unregister_modes(id, a.channel_pid)
+      assert {:error, :policy_unconfirmed} = WorkStore.acknowledge_policy(id, a.channel_pid, 1)
+
+      assert_reply push(operator, "get_delivery_policy", read), :ok, %{
+        "delivery_policy" => %{
+          "mechanisms" => %{
+            "operator_early" => "none",
+            "inter_agent_early" => "none",
+            "inter_agent_yield" => "none"
+          }
+        }
+      }
+
+      view = KaoiroServer.DeliveryPolicyAdmission.refresh(id).view
+      assert view["mechanisms"]["inter_agent_early"] == "none"
+      assert_push "delivery_policy_changed", %{"agent_id" => ^id, "delivery_policy" => ^view}
+
+      assert {:ok, sanitized} =
+               KaoiroServerWeb.ViewerAgentProjection.sanitize(%{
+                 state(id)
+                 | "ext" => %{"delivery_policy" => view}
+               })
+
+      assert sanitized["ext"]["delivery_policy"]["mechanisms"] == view["mechanisms"]
+    end
+
+    :ok = WorkStore.unregister_modes(id, replacement)
+
+    assert_reply push(operator, "get_delivery_policy", read), :ok, %{
+      "delivery_policy" => disconnected
+    }
+
+    refute Map.has_key?(disconnected, "mechanisms")
+  end
+
+  test "operator none does not fall back and viewer mechanisms expose only valid enums", %{id: id} do
+    {_, _} = wrapper(id, %{"operator_input_modes" => %{"version" => "v1", "early" => "none"}})
+    operator = client(:operator)
+
+    assert_reply push(operator, "get_delivery_policy", %{"version" => "0", "agent_id" => id}),
+                 :ok,
+                 %{"delivery_policy" => view}
+
+    assert view["mechanisms"] == %{
+             "operator_early" => "none",
+             "inter_agent_early" => "steer",
+             "inter_agent_yield" => "none"
+           }
+
+    dirty = Map.put(view, "mechanisms", Map.put(view["mechanisms"], "token", "private"))
+
+    assert {:ok, safe} =
+             KaoiroServerWeb.ViewerAgentProjection.sanitize(%{
+               state(id)
+               | "ext" => %{"delivery_policy" => dirty, "cwd" => "/private"}
+             })
+
+    assert safe["ext"] == %{"delivery_policy" => view}
+    malformed = put_in(dirty, ["mechanisms", "operator_early"], "invented")
+
+    assert {:ok, safe} =
+             KaoiroServerWeb.ViewerAgentProjection.sanitize(%{
+               state(id)
+               | "ext" => %{"delivery_policy" => malformed}
+             })
+
+    refute Map.has_key?(safe["ext"]["delivery_policy"], "mechanisms")
+  end
+
   test "viewer unknown-agent write is forbidden before existence lookup", %{id: id} do
     viewer = client(:viewer)
 

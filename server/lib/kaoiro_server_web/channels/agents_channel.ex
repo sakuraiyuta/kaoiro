@@ -313,7 +313,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # broadcast racing the snapshot is then delivered twice at worst
       # (idempotent: last write per agent_id wins), never lost.
       send(self(), :after_join)
-      {:ok, socket}
+      {:ok, %{delivery_policy_control: "v1"}, socket}
     else
       {:error, %{reason: safe_reason(:forbidden)}}
     end
@@ -918,6 +918,22 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("get_delivery_policy", payload, socket) do
+    with :ok <- require_operator(socket, payload, "get_delivery_policy"),
+         :ok <- check_relay_size(payload),
+         %{"version" => "0", "agent_id" => _} when map_size(payload) == 2 <- payload,
+         {:ok, agent_id} <- known_policy_agent(payload) do
+      view = KaoiroServer.DeliveryPolicyAdmission.snapshot(agent_id).view
+      {:reply, {:ok, %{"agent_id" => agent_id, "delivery_policy" => view}}, socket}
+    else
+      {:error, reason} when reason in [:forbidden, :unknown_agent, :policy_unknown] ->
+        {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+
+      _ ->
+        {:reply, {:error, %{reason: "invalid_payload"}}, socket}
     end
   end
 
