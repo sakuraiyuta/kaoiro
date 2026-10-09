@@ -265,6 +265,18 @@ bypass actor (HTTP 422). The operator therefore selected write-role creation
 (operator decision, 2026-10-09): a separate creation ruleset allows
 RepositoryRole write, while the update/deletion prohibition has no bypass.
 Creation permission never grants permission to move or delete existing refs.
+Use these exact selectors in both rulesets; a shallow `identity/**` selector
+must not stand in for the nested claim paths:
+
+| Namespace | Ruleset ref selector |
+|---|---|
+| Landing public tag | `refs/tags/v*` |
+| Landing claim | `refs/tags/identity/landing/*` |
+| Production claim | `refs/tags/identity/release/production/*` |
+| Production public tag | `refs/tags/release/*` |
+
+Require live update and deletion refusals for all four paths before activation.
+
 Hand-made public tags without their claims, or conflicting claim objects,
 degrade build identity and are reported by the full inventory audit. Workflow
 reconciliation audits that inventory even when all known runs already have
