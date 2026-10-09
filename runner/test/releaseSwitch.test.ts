@@ -236,6 +236,18 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
       expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     });
 
+    it("requires a landing tag for production activation while allowing explicit development activation", () => {
+      seed(A);
+      writeReleaseTree(join(root, "releases", B), B, {buildVersion:"untagged",buildBranch:"develop"});
+      symlinkSync(`releases/${A}`, join(root, "current"));
+      const refused = run(B);
+      expect(refused.status).toBe(78);
+      expect(refused.stderr).toContain("completed landing tag");
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+      expect(run(B,"--allow-dirty").status).toBe(0);
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    });
+
     it("rollback には gate をかけない (previous は一度 activate 済み)", () => {
       // Refusing to restore a release that was already live would strand a
       // host on a broken one for a reason that has stopped applying.

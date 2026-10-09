@@ -181,7 +181,7 @@ kaoiro_preflight_build_format() (
     set +a
   fi
   "$(kaoiro_node)" "$deploy_dir/preflight-build-format.mjs" "$_format_root" \
-    "${KAOIRO_RUNNER_CONFIG:-$_format_conf_dir/runner.config.json}"
+    "${KAOIRO_RUNNER_CONFIG:-$_format_conf_dir/runner.config.json}" "${2:-no}"
 )
 
 kaoiro_identity_attests_revision() {

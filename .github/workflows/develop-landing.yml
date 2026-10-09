@@ -1,0 +1,73 @@
+name: Develop landing identity
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: kaoiro-immutable-tags
+  cancel-in-progress: false
+  queue: max
+jobs:
+  original-event:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Freeze original push record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/landing-workflow.mjs record original-event.json
+      - name: Preserve the first artifact on rerun
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts | any(.name == "landing-event-v1" and .expired == false)')
+          echo "new=$([ "$existing" = true ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: steps.artifact.outputs.new == 'true'
+        with:
+          name: landing-event-v1
+          path: original-event.json
+  publish:
+    needs: original-event
+    if: >-
+      always() && vars.KAOIRO_LANDING_ENABLED == 'true' &&
+      vars.KAOIRO_LANDING_CONTROL_SHA != '' &&
+      vars.KAOIRO_IDENTITY_GATES_SHA == vars.KAOIRO_LANDING_CONTROL_SHA &&
+      vars.KAOIRO_IDENTITY_V9 == 'true' && vars.KAOIRO_IDENTITY_V10 == 'true' &&
+      vars.KAOIRO_LANDING_FIRST_RUN_ID != '' &&
+      (github.event_name != 'push' || needs.original-event.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.KAOIRO_LANDING_CONTROL_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish or reconcile from reviewed control code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KAOIRO_LANDING_FIRST_RUN_ID: ${{ vars.KAOIRO_LANDING_FIRST_RUN_ID }}
+          KAOIRO_LANDING_ENABLED: ${{ vars.KAOIRO_LANDING_ENABLED }}
+          KAOIRO_LANDING_CONTROL_SHA: ${{ vars.KAOIRO_LANDING_CONTROL_SHA }}
+          KAOIRO_IDENTITY_GATES_SHA: ${{ vars.KAOIRO_IDENTITY_GATES_SHA }}
+          KAOIRO_IDENTITY_V9: ${{ vars.KAOIRO_IDENTITY_V9 }}
+          KAOIRO_IDENTITY_V10: ${{ vars.KAOIRO_IDENTITY_V10 }}
+        run: node scripts/landing-workflow.mjs allocate

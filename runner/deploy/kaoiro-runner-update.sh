@@ -300,10 +300,12 @@ if [ -n "$repo" ]; then
   mkdir -p "$build_dir"
 
   printf '%s: building a tarball from %s\n' "$prog" "$repo" >&2
+  tagged_arg=
+  [ "$allow_dirty" = yes ] || tagged_arg=--require-tagged
   if [ -n "$build_target" ]; then
-    "$builder" --target "$build_target" --out "$build_dir" >&2
+    "$builder" $tagged_arg --target "$build_target" --out "$build_dir" >&2
   else
-    "$builder" --out "$build_dir" >&2
+    "$builder" $tagged_arg --out "$build_dir" >&2
   fi
 
   tarball=
@@ -351,7 +353,7 @@ fi
 install_args=""
 [ "$allow_dirty" = no ] || install_args="--allow-dirty"
 
-kaoiro_preflight_build_format "$root/releases/$id" ||
+kaoiro_preflight_build_format "$root/releases/$id" "$allow_dirty" ||
   kaoiro_die "Target build format refused before stopping the runner" 78
 
 # --- commit: from here on a stop may interrupt the source.

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { createLineage, forwardAccepted, restoreAccepted, type Lineage, type Tx } from "./codexLineageHarness.js";
 
 const RECEIPT = "Malformed accepted binding receipt";
@@ -70,6 +71,8 @@ describe.skipIf(process.platform !== "linux")("accepted binding receipts at rest
     expect(L.transaction(f2.uuid)).toMatchObject({ phase: "restored", sequence: 2 });
     expect(L.transaction(f2.uuid).acceptance.version).toBe(1);
   });
+
+
 
   it("refuses a receipt without its accepted binding", () => refuses(RECEIPT, () => edit(r2.uuid, (tx) => { delete tx.acceptance.binding; })));
   it("refuses a restore receipt whose observed home identity is not a number", () => refuses(RECEIPT, () => edit(r2.uuid, (tx) => { tx.acceptance.binding.home.ino = "abc"; })));
@@ -160,6 +163,22 @@ describe.skipIf(process.platform !== "linux")("accepted binding receipts at rest
     L.restoreState();
   });
 });
+
+it.skipIf(process.platform !== "linux")("exposes only a completed forward acceptance as a production completion fact", async () => {
+  const L = await createLineage();
+  try {
+    const module = new URL("../deploy/kaoiro-runner-codex-state.mjs", import.meta.url);
+    const invoke = (uuid:string,revision:string) => execFileSync(process.execPath,["--input-type=module","-e",
+      `const {acceptedForwardTransaction}=await import(${JSON.stringify(module.href)});console.log(JSON.stringify(acceptedForwardTransaction(...process.argv.slice(1))))`,L.root,uuid,revision],{encoding:"utf8",stdio:"pipe"});
+    const forward = forwardAccepted(L,"B","completion-forward");
+    expect(JSON.parse(invoke(forward.uuid,L.ids.B))).toEqual({transaction_id:forward.uuid,
+      evidence_sha256:forward.acceptance.evidenceHash,accepted_at:forward.acceptance.accepted});
+    expect(()=>invoke(forward.uuid,L.ids.C)).toThrow();
+    const restored = restoreAccepted(L,"completion-forward");
+    expect(()=>invoke(restored.uuid,L.ids.A)).toThrow();
+    expect(()=>invoke(forward.uuid,L.ids.B)).toThrow();
+  } finally { await L.teardown(); }
+}, 60_000);
 
 describe.skipIf(process.platform !== "linux")("a retired forward as the latest accepted event", { timeout: 300_000 }, () => {
   let L: Lineage, f3: Tx;

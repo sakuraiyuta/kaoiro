@@ -149,6 +149,11 @@ switch_to() {
   [ "$KAOIRO_VERIFIED_IDENTITY" = "$_id" ] ||
     kaoiro_die "release directory $_id carries identity $KAOIRO_VERIFIED_IDENTITY — refusing to activate a name that does not match its contents" 70
 
+  if [ "$rollback" = no ] && [ "$allow_dirty" = no ]; then
+    "$(kaoiro_node)" -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1]));if(i.version==="untagged")process.exit(78)' "$_target/dist/build-info.json" ||
+      kaoiro_die "production activation requires a completed landing tag; --allow-dirty is development only" 78
+  fi
+
   _old=""
   if [ -L "$root/current" ]; then
     _old=$(readlink "$root/current")

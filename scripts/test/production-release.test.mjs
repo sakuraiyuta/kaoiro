@@ -1,0 +1,115 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+import { BUILD_REPOSITORY_ID, artifactBuildIdentity } from "../build-identity.mjs";
+import { completeReleaseAttempt, receiptDigest, startReleaseAttempt, validateProductionReceipt } from "../production-release-record.mjs";
+import { publishProductionRelease } from "../production-release-tags.mjs";
+import { originalPushRecord, validateOriginalRecord } from "../landing-workflow.mjs";
+import { validateDispatch } from "../production-release-workflow.mjs";
+import { validateAutomationGate } from "../release-automation-gate.mjs";
+import { acknowledgeReleaseAttempt, collectRunnerCompletion, collectServerCompletion } from "../collect-production-release.mjs";
+const scratch=[]; afterEach(()=>{for(const dir of scratch.splice(0))rmSync(dir,{recursive:true,force:true});});
+const make=()=>{const dir=mkdtempSync(join(tmpdir(),"fuji571-receipt-test-"));scratch.push(dir);return dir;};
+function receipt(revision="a".repeat(40), uuid="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", date=Date.now()+10) {
+  const time=offset=>new Date(date+offset).toISOString();
+  return {schema:1,kind:"production_completion",environment:"production",publication_mode:"by_landing",repository_id:BUILD_REPOSITORY_ID,
+    attempt_uuid:uuid,revision,version:"2026.10.09.1",branch:"develop",completed_at:time(3),host_ids:["homeguard"],
+    server:{transaction_id:"20261009T000000Z",image_id:`sha256:${"a".repeat(64)}`,container_id:"server",health_revision:revision,
+      health_dirty:false,stability_passed:true,journal_sha256:"b".repeat(64),manifest_sha256:"c".repeat(64)},
+    runners:[{host_id:"homeguard",revision,version:"2026.10.09.1",branch:"develop",dirty:false,unit:"kaoiro-runner",
+      update_invocation_id:"d".repeat(32),service_active:true,worker_exit:0,worker_started_at:time(0),worker_finished_at:time(1),
+      artifact_sha256:"e".repeat(64),codex:{transaction_id:uuid,evidence_sha256:"f".repeat(64),accepted_at:time(2)}}],
+    canary:{passed:true,operator:"operator",revision,completed_at:time(2),evidence_sha256:"0".repeat(64)}};
+}
+const options={allowedHosts:["homeguard"]};
+test("activation binds both mandatory gates to the actual reviewed control commit",()=>{
+  const head="a".repeat(40);
+  for(const kind of ["landing","release"]) {
+    const prefix=kind==="landing" ? "KAOIRO_LANDING" : "KAOIRO_RELEASE";
+    const env={[`${prefix}_ENABLED`]:"true",[`${prefix}_CONTROL_SHA`]:head,KAOIRO_IDENTITY_GATES_SHA:head,KAOIRO_IDENTITY_V9:"true",KAOIRO_IDENTITY_V10:"true"};
+    validateAutomationGate(env,head,kind);
+    for(const field of Object.keys(env))assert.throws(()=>validateAutomationGate({...env,[field]:"false"},head,kind));
+    assert.throws(()=>validateAutomationGate(env,"b".repeat(40),kind));
+  }
+});
+test("a bounded completion requires all independently completed legs",()=>{
+  const r=receipt();assert.equal(validateProductionReceipt(r,options),r);
+  const mutations=[v=>v.server.stability_passed=false,v=>v.server.health_revision="a".repeat(7)+"b".repeat(33),
+    v=>v.runners=[],v=>v.runners[0].worker_exit=1,v=>v.runners[0].service_active=false,v=>v.runners[0].codex=null,
+    v=>v.canary.passed=false,v=>v.host_ids=["other"],v=>v.environment="test",v=>v.runners[0].phase="queued",
+    v=>v.canary.secret="unbounded",v=>v.runners[0].dirty=true,v=>v.runners[0].branch="main"];
+  for(const mutate of mutations){const bad=structuredClone(r);mutate(bad);assert.throws(()=>validateProductionReceipt(bad,options));}
+});
+test("stable attempts publish once outside ordinary transaction retention",()=>{
+  const root=make(),revision="a".repeat(40);
+  const identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",
+    landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
+  const {dir,plan}=startReleaseAttempt(root,identity,["homeguard"]);
+  const r=receipt(revision,plan.attempt_uuid,Date.parse(plan.created_at)+10);
+  assert.equal(completeReleaseAttempt(dir,r,options).reused,false);
+  assert.equal(completeReleaseAttempt(dir,r,options).reused,true);
+  const altered=structuredClone(r);altered.canary.evidence_sha256="1".repeat(64);
+  assert.throws(()=>completeReleaseAttempt(dir,altered,options),/immutable/);
+  assert.equal(receiptDigest(JSON.parse(readFileSync(join(dir,"completion.json")))),receiptDigest(r));
+  assert.throws(()=>startReleaseAttempt(root,{...identity,version:"untagged"},["homeguard"]),/tagged clean/);
+});
+function remote() {
+  const root=make(),source=join(root,"source"),bare=join(root,"remote.git");mkdirSync(source);
+  const git=(cwd,...args)=>execFileSync("git",args,{cwd,encoding:"utf8",stdio:"pipe"}).trim();
+  git(source,"init","-q","-b","develop");git(source,"config","user.name","Test");git(source,"config","user.email","test@example.com");
+  writeFileSync(join(source,"source"),"x");git(source,"add",".");git(source,"commit","-qm","fixture");
+  const revision=git(source,"rev-parse","HEAD");
+  const landing={schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"};
+  git(source,"tag","-a","v2026.10.09.1","-m",JSON.stringify(landing));
+  git(source,"update-ref",`refs/tags/identity/landing/${revision}`,git(source,"rev-parse","refs/tags/v2026.10.09.1"));
+  git(root,"clone","--bare","-q",source,bare);git(source,"remote","add","origin",bare);
+  return {root,source,bare,revision,git};
+}
+test("a redeploy with a new UUID reuses the immutable first release tag",()=>{
+  const {source,revision,git}=remote();const first=receipt(revision);
+  const result=publishProductionRelease({cwd:source,receipt:first,...options});assert.equal(result.reused,false);
+  const second=receipt(revision,"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");second.runners[0].artifact_sha256="1".repeat(64);
+  const repeated=publishProductionRelease({cwd:source,receipt:second,...options});assert.equal(repeated.reused,true);
+  assert.equal(repeated.object,result.object);assert.equal(repeated.record.first_receipt_sha256,receiptDigest(first));
+  assert.equal(git(source,"rev-parse",`refs/tags/${result.claim}`),git(source,"rev-parse",`refs/tags/${result.tag}`));
+});
+test("only remote tag and claim read-back acknowledges a durable completed attempt",()=>{
+  const {root,source,revision}=remote();
+  const identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",
+    landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
+  const {dir,plan}=startReleaseAttempt(join(root,"attempts"),identity,["homeguard"]);
+  const r=receipt(revision,plan.attempt_uuid,Date.parse(plan.created_at)+10);
+  completeReleaseAttempt(dir,r,options);
+  assert.throws(()=>acknowledgeReleaseAttempt(dir,{cwd:source}),/not been acknowledged/);
+  const published=publishProductionRelease({cwd:source,receipt:r,...options});
+  const ack=acknowledgeReleaseAttempt(dir,{cwd:source});
+  assert.equal(ack.object,published.object);assert.equal(ack.attempt_uuid,plan.attempt_uuid);
+  assert.deepEqual(acknowledgeReleaseAttempt(dir,{cwd:source}),ack);
+  assert.equal(readFileSync(join(dir,"tag-ack.json"),"utf8"),`${JSON.stringify(ack)}\n`);
+});
+test("an atomic release publication cannot leave only its public tag",()=>{
+  const {source,bare,revision,git}=remote();
+  writeFileSync(join(bare,"hooks/update"),'#!/bin/sh\ncase "$1" in refs/tags/identity/release/*) exit 1;; esac\n',{mode:0o755});
+  assert.throws(()=>publishProductionRelease({cwd:source,receipt:receipt(revision),retries:1,...options}));
+  assert.equal(git(source,"ls-remote","--refs","--tags","origin","refs/tags/release/*"),"");
+});
+test("forced/deleted and untrusted origins never become original landing records",()=>{
+  const run={id:2,created_at:"2026-10-09T23:59:59Z",event:"push",head_branch:"develop",head_sha:"a".repeat(40),repository:{id:BUILD_REPOSITORY_ID},head_repository:{id:BUILD_REPOSITORY_ID}};
+  const event={after:run.head_sha,ref:"refs/heads/develop",forced:false,deleted:false};
+  const record=originalPushRecord(event,run,BUILD_REPOSITORY_ID);assert.equal(validateOriginalRecord(record,run,BUILD_REPOSITORY_ID),record);
+  assert.equal(record.createdAt,"2026-10-09T23:59:59Z");
+  for(const field of ["forced","deleted"])assert.throws(()=>validateOriginalRecord({...record,[field]:true},run,BUILD_REPOSITORY_ID));
+  assert.throws(()=>originalPushRecord(event,{...run,head_repository:{id:1}},BUILD_REPOSITORY_ID));
+});
+test("receiver authorization covers original and rerun actors",()=>{
+  const run={event:"workflow_dispatch",head_branch:"develop",repository:{id:BUILD_REPOSITORY_ID},head_repository:{id:BUILD_REPOSITORY_ID},actor:{login:"operator"},triggering_actor:{login:"operator"}};
+  const options={repositoryId:BUILD_REPOSITORY_ID,allowedActors:["operator"]};validateDispatch(run,options);
+  for(const bad of [{...run,event:"pull_request"},{...run,head_branch:"main"},{...run,triggering_actor:{login:"other"}}])assert.throws(()=>validateDispatch(bad,options));
+});
+test("fake dependencies cannot record a production completion",async()=>{
+  assert.throws(()=>collectRunnerCompletion({attempt_uuid:"x",host_ids:["homeguard"]},{attempt_uuid:"x",host_id:"homeguard",simulation:true},{systemctlBin:"fake"}),/fake service/);
+  await assert.rejects(collectServerCompletion({}, {dockerBin:"fake"}),/fake Docker/);
+});

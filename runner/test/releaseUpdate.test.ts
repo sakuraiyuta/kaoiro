@@ -192,6 +192,15 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     }
   });
 
+  it("refuses an untagged production target before stopping the runner", () => {
+    const archive = makeReleaseTarball(work, B, {buildVersion:"untagged",buildBranch:"develop"});
+    const result = runUpdate(["--tarball",archive], {KAOIRO_SYSTEMCTL:systemctlStub({execStart:goodExecStart()})});
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain("completed landing tag");
+    expect(readCalls().some(line=>line.includes(" stop "))).toBe(false);
+    expect(readlinkSync(join(root,"current"))).toBe(`releases/${A}`);
+  });
+
   describe("--detach の systemd-run 起動契約", () => {
     it("caller から独立させる引数で queue し、自分では作業しない", () => {
       const log = join(dir, "systemd-run-argv");

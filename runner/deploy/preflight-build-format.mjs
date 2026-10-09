@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export async function checkBuildFormat(root, configPath, env = process.env) {
+export async function checkBuildFormat(root, configPath, env = process.env, allowUntagged = false) {
   const identity = JSON.parse(readFileSync(join(root, "dist/build-info.json"), "utf8"));
+  if (identity.version === "untagged" && !allowUntagged) throw new Error("production activation requires a completed landing tag; use --allow-dirty only for development");
   if (identity.version !== "untagged" && !/^\d{4}\.\d{2}\.\d{2}\.[1-9][0-9]{0,5}$/.test(identity.version)) return;
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const serverUrl = env.KAOIRO_RUNNER_SERVER_URL || config.server_url;
@@ -35,7 +36,7 @@ export async function checkBuildFormat(root, configPath, env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    await checkBuildFormat(process.argv[2], process.argv[3]);
+    await checkBuildFormat(process.argv[2], process.argv[3], process.env, process.argv[4] === "yes");
   } catch (error) {
     console.error(`kaoiro-runner: build format preflight refused: ${error.message}`);
     process.exitCode = 78;

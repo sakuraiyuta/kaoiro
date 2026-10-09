@@ -1,0 +1,77 @@
+name: Production release identity
+on:
+  workflow_dispatch:
+    inputs:
+      receipt:
+        description: Validated schema-1 completed production receipt
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: kaoiro-immutable-tags
+  cancel-in-progress: false
+  queue: max
+jobs:
+  authorize:
+    if: >-
+      vars.KAOIRO_RELEASE_ENABLED == 'true' && vars.KAOIRO_RELEASE_CONTROL_SHA != '' &&
+      vars.KAOIRO_IDENTITY_GATES_SHA == vars.KAOIRO_RELEASE_CONTROL_SHA &&
+      vars.KAOIRO_IDENTITY_V9 == 'true' && vars.KAOIRO_IDENTITY_V10 == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.KAOIRO_RELEASE_CONTROL_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate actor, environment, inventory and completion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KAOIRO_RELEASE_ACTORS: ${{ vars.KAOIRO_RELEASE_ACTORS }}
+          KAOIRO_RELEASE_HOST_IDS: ${{ vars.KAOIRO_RELEASE_HOST_IDS }}
+          KAOIRO_RELEASE_RECEIPT: ${{ inputs.receipt }}
+          KAOIRO_RELEASE_ENABLED: ${{ vars.KAOIRO_RELEASE_ENABLED }}
+          KAOIRO_RELEASE_CONTROL_SHA: ${{ vars.KAOIRO_RELEASE_CONTROL_SHA }}
+          KAOIRO_IDENTITY_GATES_SHA: ${{ vars.KAOIRO_IDENTITY_GATES_SHA }}
+          KAOIRO_IDENTITY_V9: ${{ vars.KAOIRO_IDENTITY_V9 }}
+          KAOIRO_IDENTITY_V10: ${{ vars.KAOIRO_IDENTITY_V10 }}
+        run: node scripts/production-release-workflow.mjs validate completion.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-completion-v1
+          overwrite: true
+          path: completion.json
+  publish:
+    needs: authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ vars.KAOIRO_RELEASE_CONTROL_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-completion-v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish from reviewed control code and explicit receipt target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KAOIRO_RELEASE_ACTORS: ${{ vars.KAOIRO_RELEASE_ACTORS }}
+          KAOIRO_RELEASE_HOST_IDS: ${{ vars.KAOIRO_RELEASE_HOST_IDS }}
+          KAOIRO_RELEASE_ENABLED: ${{ vars.KAOIRO_RELEASE_ENABLED }}
+          KAOIRO_RELEASE_CONTROL_SHA: ${{ vars.KAOIRO_RELEASE_CONTROL_SHA }}
+          KAOIRO_IDENTITY_GATES_SHA: ${{ vars.KAOIRO_IDENTITY_GATES_SHA }}
+          KAOIRO_IDENTITY_V9: ${{ vars.KAOIRO_IDENTITY_V9 }}
+          KAOIRO_IDENTITY_V10: ${{ vars.KAOIRO_IDENTITY_V10 }}
+        run: node scripts/production-release-workflow.mjs publish completion.json >> "$GITHUB_STEP_SUMMARY"

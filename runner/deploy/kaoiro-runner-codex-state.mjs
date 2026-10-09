@@ -136,6 +136,13 @@ function transaction(root, uuid) {
   must(tx.root === root && tx.uuid === uuid, "Transaction belongs to another installation");
   return tx;
 }
+export function acceptedForwardTransaction(root, uuid, expectedRevision) {
+  const tx = transaction(root, uuid);
+  must(tx.mode === "forward" && tx.phase === "completed" && tx.target.id === expectedRevision && tx.bindingReceiptVersion === 1,
+    "Forward Codex acceptance is incomplete or targets another revision");
+  validateReceipt(tx);
+  return { transaction_id: tx.uuid, evidence_sha256: tx.acceptance.evidenceHash, accepted_at: tx.acceptance.accepted };
+}
 function reference(root, tx) {
   const ref = readJSON(join(paths(root).backups, `${tx.uuid}.json`));
   validateRecord(ref, root, "backups", `${tx.uuid}.json`);
