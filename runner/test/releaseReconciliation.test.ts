@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,15 +36,17 @@ function fixture(onStop = ":", withAttempt = false) {
   writeFileSync(join(configDir, "runner.config.json"), json({ host_id: "private-runner-marker" }), { mode: 0o600 });
   const calls = join(base, "service-calls"), systemctl = join(base, "systemctl");
   writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\ncase "$*" in\n*"show -p ExecStart"*) printf '{ path=${root}/current/deploy/kaoiro-runner-launch.sh ; argv[]=${root}/current/deploy/kaoiro-runner-launch.sh ; }\\n' ;;\n*" stop "*) ${onStop.replaceAll("@@EXPORTER@@", descriptor.exporter_path)} ;;\nesac\nexit 0\n`, { mode: 0o755 });
+  const systemdRun = join(base, "systemd-run");
+  writeFileSync(systemdRun, `#!/bin/sh\nprintf 'QUEUE %s\\n' "$*" >> '${calls}'\nexit 0\n`, { mode: 0o755 });
   const archive = makeReleaseTarball(join(base, "archive"), target);
-  const env = { KAOIRO_RUNNER_DIR: configDir, KAOIRO_SYSTEMCTL: systemctl, KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_RUNNER_ENV: join(base, "absent.env") };
+  const env = { KAOIRO_RUNNER_DIR: configDir, KAOIRO_SYSTEMCTL: systemctl, KAOIRO_SYSTEMD_RUN: systemdRun, KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_RUNNER_ENV: join(base, "absent.env") };
   const pending = () => {
     const result = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e",
       `import {startReleaseAttempt} from ${JSON.stringify(join(repo, "scripts/production-release-record.mjs"))};
        import {artifactBuildIdentity,BUILD_REPOSITORY_ID} from ${JSON.stringify(join(repo, "scripts/build-identity.mjs"))};
        const identity=artifactBuildIdentity({revision:${JSON.stringify(target)},dirty:false,version:'2026.10.09.1',branch:'develop',channel:'dev',landing:{schema:1,kind:'landing',repository_id:BUILD_REPOSITORY_ID,revision:${JSON.stringify(target)},branch:'develop',version:'2026.10.09.1',original_run_id:1,created_at:'2026-10-09T00:00:00Z'}});
        console.log(JSON.stringify(startReleaseAttempt(${JSON.stringify(history)},identity,['worker-a'],[],{runtime_hosts:[{alias:'worker-a',runtime_host_id:'private-runner-marker'}],authority:{server:{root:${JSON.stringify(root)},sha256:${JSON.stringify(digest(authority))}},runners:[{alias:'worker-a',root:${JSON.stringify(root)},sha256:${JSON.stringify(digest(authority))}}]}})));`], { encoding: "utf8" })) as { dir: string; plan: { attempt_uuid: string } };
-    return { uuid: result.plan.attempt_uuid, sha: digest(readFileSync(join(result.dir, "attempt.json"))) };
+    return { dir: result.dir, uuid: result.plan.attempt_uuid, sha: digest(readFileSync(join(result.dir, "attempt.json"))) };
   };
   const context = withAttempt ? pending() : undefined;
   const contextArgs = context ? ["--release-attempt", context.uuid, "--release-plan-sha256", context.sha, "--release-target", target] : [];
@@ -82,6 +84,20 @@ it("an enrolled updater exempts its own X and refuses a different in-progress Y 
     expect(f.seen()).toBe("");
     expect(readlinkSync(join(f.root, "current"))).toBe(`releases/${f.source}`);
   }
+});
+
+it("the actual worker repeats its audit under the update lock before preparing an archive", () => {
+  const f = fixture(":", true), y = f.pending(), staged = join(f.base, "staged-y");
+  renameSync(y.dir, staged);
+  const bin = join(f.base, "bin");
+  mkdirSync(bin);
+  const realMkdir = execFileSync("/bin/sh", ["-c", "command -v mkdir"], { encoding: "utf8" }).trim();
+  writeFileSync(join(bin, "mkdir"), `#!/bin/sh\nif [ "$#" -eq 3 ] && [ "$3" = '${f.root}/.lock.update' ]; then mv '${staged}' '${y.dir}'; fi\nexec '${realMkdir}' "$@"\n`, { mode: 0o755 });
+  const result = runScript(join(f.deploy, "kaoiro-runner-update.sh"), ["--install-dir", f.root, "--tarball", f.archive, ...f.contextArgs], { ...f.env, PATH: `${bin}:${process.env.PATH}` });
+  expect(result.status, result.stderr).toBe(78);
+  expect(result.stderr).toContain("Executed worker reconciliation refused before prepare");
+  expect(existsSync(join(f.root, "releases", f.target))).toBe(false);
+  expect(f.seen()).toBe("");
 });
 
 it("a late proof refusal restarts the unchanged source", () => {
