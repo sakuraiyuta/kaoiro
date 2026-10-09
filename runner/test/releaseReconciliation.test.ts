@@ -85,7 +85,7 @@ it("an enrolled updater exempts its own X and refuses a different in-progress Y 
   const f = fixture(":", true);
   f.pending();
   for (const args of [[], ["--detach"]]) {
-    const result = f.update(args);
+    const result = f.update([...args, "--skip-release-reconciliation", f.context!.uuid, "--skip-reason", "operator deferred only X"]);
     expect(result.status, result.stderr).toBe(78);
     expect(result.stderr).toContain("unresolved attempts");
     expect(f.seen()).toBe("");
@@ -100,7 +100,7 @@ it("the actual worker repeats its audit under the update lock before preparing a
   mkdirSync(bin);
   const realMkdir = execFileSync("/bin/sh", ["-c", "command -v mkdir"], { encoding: "utf8" }).trim();
   writeFileSync(join(bin, "mkdir"), `#!/bin/sh\nif [ "$#" -eq 3 ] && [ "$3" = '${f.root}/.lock.update' ]; then mv '${staged}' '${y.dir}'; fi\nexec '${realMkdir}' "$@"\n`, { mode: 0o755 });
-  const result = runScript(join(f.deploy, "kaoiro-runner-update.sh"), ["--install-dir", f.root, "--tarball", f.archive, ...f.contextArgs], { ...f.env, PATH: `${bin}:${process.env.PATH}` });
+  const result = runScript(join(f.deploy, "kaoiro-runner-update.sh"), ["--install-dir", f.root, "--tarball", f.archive, ...f.contextArgs, "--skip-release-reconciliation", f.context!.uuid, "--skip-reason", "operator deferred only X"], { ...f.env, PATH: `${bin}:${process.env.PATH}` });
   expect(result.status, result.stderr).toBe(78);
   expect(result.stderr).toContain("Executed worker reconciliation refused before prepare");
   expect(existsSync(join(f.root, "releases", f.target))).toBe(false);
@@ -132,4 +132,18 @@ it("a late proof refusal restarts the unchanged source", () => {
   expect(result.status, result.stderr).toBe(70);
   expect(f.seen()).toContain("--user start kaoiro-runner");
   expect(readlinkSync(join(f.root, "current"))).toBe(`releases/${f.source}`);
+});
+
+
+it("a direct enrolled switch cannot use an exact UUID skip for A to cover unfinished B", () => {
+  const f = fixture(":", true);
+  f.pending();
+  writeReleaseTree(join(f.root, "releases", f.target), f.target);
+  const result = runScript(join(f.deploy, "kaoiro-runner-switch.sh"), [f.target,
+    "--install-dir", f.root, "--skip-release-reconciliation", f.context!.uuid,
+    "--skip-reason", "operator deferred only A"], f.env);
+  expect(result.status, result.stderr).toBe(78);
+  expect(result.stderr).toContain("unresolved attempts");
+  expect(readlinkSync(join(f.root, "current"))).toBe(`releases/${f.source}`);
+  expect(f.seen()).toBe("");
 });
