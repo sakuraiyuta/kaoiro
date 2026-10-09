@@ -1,14 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { readReleaseAuthority } from "../../scripts/production-release-authority.mjs";
 import { attemptDirectory, readPrivateJson, releaseBytesDigest, readPrivateBytes,
   withReleaseLock, writePrivateRecord } from "../../scripts/production-release-files.mjs";
 import { validateReleaseContext, validateReleaseSkip } from "../../scripts/production-release-state.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`server release gate refused: ${message}`); };
-const cli = fileURLToPath(new URL("../../scripts/production-release-reconciliation.mjs", import.meta.url));
 
 export function auditServerRelease(flags, serverDir, repo) {
   const context = validateReleaseContext(flags.releaseAttempt, flags.releasePlanSha256);
@@ -18,12 +16,14 @@ export function auditServerRelease(flags, serverDir, repo) {
     must(!context && !flags.skipReleaseReconciliation, "unenrolled installation cannot assert release context");
     return { schema: 1, status: "generic", pass: true, role: "server" };
   }
-  const args = [cli, "--install-root", realpathSync(serverDir), "--role", "server", "--repo", realpathSync(repo),
+  must(authority.descriptor.transport === "local", "server must use its canonical local authority");
+  const args = [authority.descriptor.exporter_path, "audit", authority.descriptor.tool_sha256,
+    "--install-root", realpathSync(serverDir), "--role", "server", "--repo", realpathSync(repo),
     "--target-sha", flags.target, "--expected-authority-sha256", authority.sha256];
   for (const [key, value] of [["release-attempt", context?.attempt_uuid], ["release-plan-sha256", context?.plan_sha256],
     ["skip-release-reconciliation", flags.skipReleaseReconciliation], ["skip-reason", flags.skipReason],
     ["dry-run", flags.dryRun ? "true" : undefined]]) if (value) args.push(`--${key}`, value);
-  const raw = execFileSync(process.execPath, args, { timeout: 125_000, encoding: "utf8", maxBuffer: 65_536,
+  const raw = execFileSync(authority.descriptor.node_path, args, { timeout: 125_000, encoding: "utf8", maxBuffer: 524_288,
     stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
   const audit = JSON.parse(raw);
   must(audit.pass === true && audit.status === "enrolled" && audit.authority_sha256 === authority.sha256 &&

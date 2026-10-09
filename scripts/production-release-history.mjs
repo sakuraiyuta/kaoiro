@@ -1,10 +1,10 @@
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, opendirSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { hostname } from "node:os";
-import { classifyReleaseState, releaseName, RELEASE_UUID, RELEASE_DIGEST } from "./production-release-state.mjs";
+import { classifyReleaseState, releaseName, RELEASE_UUID, RELEASE_DIGEST, validateReleaseReason } from "./production-release-state.mjs";
 import { readPrivateBytes, readPrivateJson, releaseBytesDigest, releaseEntryInventory,
   releaseJsonBytes, requirePrivateDirectory } from "./production-release-files.mjs";
-import { validateReleasePlan, projectReleasePlan } from "./production-release-plan.mjs";
+import { validateEnrollmentInventory, validateReleasePlan, projectReleasePlan } from "./production-release-plan.mjs";
 import { validateProductionReceipt } from "./production-release-record.mjs";
 
 const terminalFiles = ["abandonment.json", "quarantine.json", "retirement.json"];
@@ -69,6 +69,12 @@ export function activityFor(records, plan, { now = Date.now(), freshnessMs = 300
           event.sequence !== index + 1 || event.previous_sha256 !== previous || !timestamp(event.observed_at) ||
           !["intent", "queued", "running", "idle", "unknown"].includes(event.state) ||
           !RELEASE_UUID.test(event.event_uuid ?? "") || event.simulation !== false) return { state: "unknown", events: latest };
+      if (plan.authority) {
+        const expected = plan.authority.runners.find(owner => owner.alias === alias);
+        if (!expected || event.root !== expected.root || event.authority_sha256 !== expected.sha256 ||
+          event.plan_sha256 !== releaseBytesDigest(releaseJsonBytes(plan)) ||
+          event.unit !== `kaoiro-release-${plan.attempt_uuid}-${alias}.service`) return { state: "unknown", events: latest };
+      }
       previous = event.sha256;
     }
     const event = events.at(-1);
@@ -100,12 +106,11 @@ export function readReleaseAttempt(dir) {
     else if (entry.name === "incident-evidence") releaseEntryInventory(join(dir, entry.name), "incident");
   }
   const rawPlan = records["attempt.json"]?.value;
-  let identityKnown = !records["attempt.json"] || rawPlan?.attempt_uuid === uuid;
+  let identityKnown = !rawPlan || rawPlan.attempt_uuid === undefined || rawPlan.attempt_uuid === uuid;
   let plan = null;
   let completion = null;
   let invalid = false;
   try { plan = validateReleasePlan(rawPlan, uuid); } catch { invalid = true; }
-  if (records["attempt.json"] && !rawPlan) identityKnown = false;
   if (records["completion.json"]) {
     try {
       must(plan, "completion without valid plan");
@@ -181,14 +186,42 @@ export function readReleaseHistory(root, { recordingHostname = hostname() } = {}
   if (JSON.stringify(releaseEntryInventory(root, "root")) !== JSON.stringify(before)) throw new Error("snapshot_changed");
   return {
     schema: 1, recording_hostname: recordingHostname, root: resolve(root),
-    rows, diagnostics, warning: attempts.length >= 900 ? "archive before 1000 active attempts" : null,
+    rows, diagnostics, archived_incidents: readArchivedReleaseIncidents(root), warning: attempts.length >= 900 ? "archive before 1000 active attempts" : null,
   };
 }
 
+export function readArchivedReleaseIncidents(root) {
+  const archive = `${resolve(root)}-archive`;
+  if (!existsSync(archive)) return [];
+  requirePrivateDirectory(archive);
+  const incidents = [], names = new Set(), started = performance.now();
+  const iterator = opendirSync(archive);
+  try {
+    for (;;) {
+      const entry = iterator.readSync();
+      if (!entry) break;
+      must(performance.now() - started < 15_000 && names.size < 100_000, "archive audit bound; restore/maintain verified history");
+      must(RELEASE_UUID.test(entry.name) && entry.isDirectory() && !entry.isSymbolicLink() && !names.has(entry.name), "unknown archived entry; repair-history required");
+      names.add(entry.name);
+      const row = readReleaseAttempt(join(archive, entry.name));
+      must(row.completion || ["abandoned", "invalid_quarantined", "deployed_uncompleted"].includes(row.state.id), "archive contains unresolved or damaged history");
+      if (row.state.disposition === "terminal-incident") {
+        const terminal = row.records[row.state.id === "invalid_quarantined" ? "quarantine.json" : "retirement.json"].value;
+        validateReleaseReason(terminal.reason);
+        incidents.push({ attempt_uuid: entry.name, status: row.state.id, reason: terminal.reason, evidence_sha256: terminal.evidence_sha256 });
+        must(Buffer.byteLength(JSON.stringify(incidents)) <= 8 * 1024 * 1024, "archive incident response bound");
+      }
+    }
+  } finally { iterator.closeSync(); }
+  return incidents.sort((a, b) => a.attempt_uuid.localeCompare(b.attempt_uuid));
+}
+
 export function projectReleaseHistory(history) {
+  const inventoryPath = `${history.root}-inventory.json`;
+  const inventory = existsSync(inventoryPath) ? validateEnrollmentInventory(readPrivateJson(inventoryPath, { privateParent: false })) : null;
   return {
     schema: history.schema, recording_hostname: history.recording_hostname, root: history.root,
-    diagnostics: history.diagnostics, warning: history.warning,
+    diagnostics: history.diagnostics, warning: history.warning, inventory, archived_incidents: history.archived_incidents,
     rows: history.rows.map(row => ({
       attempt_uuid: row.attempt_uuid, plan_sha256: row.plan_sha256, row_sha256: row.row_sha256,
       plan: row.plan ? projectReleasePlan(row.plan) : null,

@@ -5,18 +5,27 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { activityFor, readReleaseAttempt } from "./production-release-history.mjs";
 import { attemptDirectory, createPrivateDirectory, readPrivateBytes, readPrivateJson, releaseBytesDigest,
-  releaseJsonBytes, requirePrivateDirectory, syncDirectory, withAsyncReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
+  recoverReleaseResidue, releaseEntryInventory, releaseJsonBytes, requirePrivateDirectory, syncDirectory, withAsyncReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
 import { RELEASE_SHA, parseReleaseOptions, validateReleaseReason } from "./production-release-state.mjs";
-import { validateRuntimeHosts } from "./production-release-plan.mjs";
+import { validateEnrollmentInventory, validateRuntimeHosts } from "./production-release-plan.mjs";
 import { readPublishedProductionRelease } from "./production-release-tags.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`release lifecycle refused: ${message}`); };
 const TERMINALS = new Set(["published", "abandoned", "invalid_quarantined", "deployed_uncompleted"]);
 
 export async function readLifecycleInspection(row, { healthUrl, inventory, now = Date.now() }) {
-  const aliases = row.plan?.host_ids ?? validateRuntimeHosts(inventory).map(pair => pair.alias);
+  const pairs = Array.isArray(inventory) ? validateRuntimeHosts(inventory) : inventory && validateEnrollmentInventory(inventory).runtime_hosts;
+  const aliases = row.plan?.host_ids ?? pairs.map(pair => pair.alias);
   const activity = activityFor(row.records, row.plan ?? { attempt_uuid: row.attempt_uuid, host_ids: aliases }, { now, requireFresh: true });
   must(activity.state === "idle" && activity.events.length === aliases.length, "queued/running/unknown activity; collect fresh native activity for all enrolled legs");
+  if (!row.plan) {
+    const digest = releaseBytesDigest(releaseJsonBytes(validateEnrollmentInventory(inventory)));
+    must(activity.events.every(event => {
+      const expected = inventory.authority.runners.find(owner => owner.alias === event.alias);
+      return expected && event.inventory_sha256 === digest && event.root === expected.root &&
+        event.authority_sha256 === expected.sha256 && event.plan_sha256 === row.plan_sha256;
+    }), "planless lifecycle evidence differs from fixed enrollment inventory");
+  }
   must(typeof healthUrl === "string", "recording-server health URL required");
   const url = new URL(healthUrl);
   must(["http:", "https:"].includes(url.protocol), "health URL scheme");
@@ -35,7 +44,7 @@ export async function readLifecycleInspection(row, { healthUrl, inventory, now =
   return { observed_at: new Date(now).toISOString(), simulation: false, activity: "idle",
     server_revision: health.build_revision, runner_revisions: activity.events.map(event => ({ alias: event.alias, revision: event.current_revision })),
     activity_sha256: releaseBytesDigest(releaseJsonBytes(activity.events)),
-    inventory_sha256: inventory ? releaseBytesDigest(releaseJsonBytes(validateRuntimeHosts(inventory))) : null };
+    inventory_sha256: inventory ? releaseBytesDigest(releaseJsonBytes(inventory)) : null };
 }
 
 function guardInspection(inspection, aliases, now) {
@@ -71,7 +80,7 @@ export async function terminateReleaseAttempt({ root, uuid, command, reason, hea
     const row = readReleaseAttempt(dir);
     must(row.state.id !== "unknown_identity", "unknown identity cannot terminate; repair-history required");
     must(!TERMINALS.has(row.state.id), "valid terminal record is immutable");
-    const aliases = row.plan?.host_ids ?? validateRuntimeHosts(inventory).map(pair => pair.alias);
+    const aliases = row.plan?.host_ids ?? (Array.isArray(inventory) ? validateRuntimeHosts(inventory) : validateEnrollmentInventory(inventory).runtime_hosts).map(pair => pair.alias);
     if (row.plan) must(row.activity.state === "idle", "canonical queued/running/unknown activity must be closed first");
     const inspection = await inspectionProvider(row);
     const checkedAt = now ?? Date.now();
@@ -128,16 +137,35 @@ export async function archiveReleaseAttempt({ root, uuid, cwd, remote = "origin"
   }, "root");
 }
 
-async function main() {
-  const [command, ...args] = process.argv.slice(2);
-  const flags = parseReleaseOptions(args, ["root", "uuid", "reason", "repo", "health-url", "inventory"]);
+export async function runLifecycleCli(argv) {
+  const [command, ...args] = argv;
+  const flags = parseReleaseOptions(args, ["root", "uuid", "reason", "repo", "health-url", "entry", "observed-digest", "writers-stopped"]);
+  if (["inspect-residue", "recover-lock", "recover-staging"].includes(command)) {
+    const dir = flags.uuid ? attemptDirectory(flags.root, flags.uuid) : flags.root;
+    const scope = flags.uuid ? "attempt" : "root";
+    const inventory = releaseEntryInventory(dir, scope);
+    must(inventory.some(item => item.name === flags.entry), "registered residue is absent");
+    const path = join(dir, flags.entry);
+    if (command === "inspect-residue") return { entry: flags.entry, scope,
+      observed_sha256: releaseBytesDigest(lstatSync(path).isDirectory() ? Buffer.from(JSON.stringify(releaseEntryInventory(path, "administrative"))) :
+        readPrivateBytes(path, { legacyMode: true })) };
+    must(command === "recover-lock" ? flags.entry.startsWith(".lock.") : flags.entry.startsWith(".start-") || flags.entry.startsWith(".write-") || flags.entry.includes(".tmp."), "recovery command does not match residue type");
+    must(!flags["writers-stopped"] || flags["writers-stopped"] === "confirmed", "explicit stopped-writer confirmation must be confirmed");
+    const recover = () => recoverReleaseResidue({ root: dir, entry: flags.entry,
+      scope, observedDigest: flags["observed-digest"], reason: flags.reason, writersStopped: flags["writers-stopped"] === "confirmed" });
+    if (scope === "root" && flags.entry === ".lock.maintenance") {
+      must(flags["writers-stopped"] === "confirmed", "maintenance lock recovery requires confirmed stopped writers");
+      return recover();
+    }
+    return withAsyncReleaseLock(flags.root, "maintenance", recover, "root");
+  }
   if (command === "archive") return archiveReleaseAttempt({ root: flags.root, uuid: flags.uuid, cwd: flags.repo });
   if (!["abandon", "quarantine", "retire-deployed"].includes(command)) throw new Error("unknown lifecycle command");
-  const inventory = flags.inventory ? readPrivateJson(flags.inventory, { privateParent: false }) : undefined;
+  const inventory = validateEnrollmentInventory(readPrivateJson(`${resolve(flags.root)}-inventory.json`, { privateParent: false }));
   return terminateReleaseAttempt({ root: flags.root, uuid: flags.uuid, command, reason: flags.reason, healthUrl: flags["health-url"], inventory });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { console.log(JSON.stringify(await main())); }
+  try { console.log(JSON.stringify(await runLifecycleCli(process.argv.slice(2)))); }
   catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 78; }
 }

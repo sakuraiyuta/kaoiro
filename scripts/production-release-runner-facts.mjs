@@ -5,7 +5,7 @@ import { readReleaseAuthority, releaseAuthorityRequest } from "./production-rele
 import { releaseRequest } from "./production-release-endpoint.mjs";
 import { createPrivateDirectory, namedProcessIdentity, readPrivateBytes, readPrivateJson, releaseBytesDigest,
   requirePrivateDirectory, syncDirectory, withReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
-import { validateReleasePlan, validateRuntimeHosts } from "./production-release-plan.mjs";
+import { validateEnrollmentInventory, validateReleasePlan, validateRuntimeHosts } from "./production-release-plan.mjs";
 import { validateReleaseSnapshot } from "./production-release-reconciliation.mjs";
 import { RELEASE_ALIAS, RELEASE_UUID } from "./production-release-state.mjs";
 import { unitSnapshot, unitCommandSnapshot, verifyRetainedUnitCommand } from "./production-release-unit.mjs";
@@ -36,10 +36,37 @@ export function validateRunnerReleaseContext({ root, dir, alias, configPath }) {
 export function canonicalRunnerReleaseRow(context) {
   const snapshot = validateReleaseSnapshot(releaseAuthorityRequest(context.authority, releaseRequest(context.authority.descriptor)));
   const row = snapshot.rows.find(row => row.attempt_uuid === context.plan.attempt_uuid);
+  if (context.lifecycle) {
+    const inventory = validateEnrollmentInventory(snapshot.inventory);
+    must(row && !row.plan && row.status === "invalid_completion" &&
+      row.plan_sha256 === context.plan_sha256 && releaseBytesDigest(Buffer.from(`${JSON.stringify(inventory)}\n`)) === context.inventory_sha256,
+      "canonical invalid row/enrollment inventory changed");
+    return row;
+  }
   must(row?.plan && row.plan_sha256 === context.plan_sha256 &&
     row.plan.identity.revision === context.plan.identity.revision && row.plan.authority?.runners.some(owner =>
       owner.alias === context.alias && owner.sha256 === context.authority.sha256), "canonical plan/digest/authority changed");
   return row;
+}
+
+export function validateRunnerLifecycleContext({ root, uuid, alias, configPath }) {
+  must(RELEASE_UUID.test(uuid ?? "") && RELEASE_ALIAS.test(alias ?? ""), "lifecycle UUID/alias required");
+  root = realpathSync(root);
+  const authority = readReleaseAuthority(root);
+  const snapshot = validateReleaseSnapshot(releaseAuthorityRequest(authority, releaseRequest(authority.descriptor)));
+  const row = snapshot.rows.find(row => row.attempt_uuid === uuid);
+  must(row && row.disposition === "unresolved" && !row.completion, "unfinished canonical UUID required");
+  if (row.plan) return validateRunnerReleaseContext({ root, dir: join(root, "production-attempts", uuid), alias, configPath });
+  const inventory = validateEnrollmentInventory(snapshot.inventory);
+  const expected = inventory.authority.runners.find(owner => owner.alias === alias);
+  must(expected?.root === root && expected.sha256 === authority.sha256, "fixed lifecycle inventory authority differs");
+  const config = readPrivateJson(configPath, { legacyMode: true, privateParent: false });
+  const local = validateRuntimeHosts(readPrivateJson(join(root, "release-host-aliases.json"), { privateParent: false }));
+  const pair = inventory.runtime_hosts.find(pair => pair.alias === alias);
+  must(pair && local.some(item => item.alias === alias && item.runtime_host_id === pair.runtime_host_id) &&
+    config.host_id === pair.runtime_host_id, "fixed lifecycle inventory/live config differs");
+  return { root, dir: null, alias, plan: { attempt_uuid: uuid }, plan_sha256: row.plan_sha256,
+    authority, lifecycle: true, inventory_sha256: releaseBytesDigest(Buffer.from(`${JSON.stringify(inventory)}\n`)) };
 }
 
 export function recordExecutedRunnerRelease(context, owner, audit) {
@@ -88,9 +115,9 @@ export function recordRunnerReleaseActivity(context, { state, unit, invocationId
   const previous = row.activity_heads.find(head => head.alias === context.alias);
   const fact = runnerReleaseFact(context, { event_uuid: randomUUID(), sequence: (previous?.sequence ?? 0) + 1,
     previous_sha256: previous?.sha256 ?? null, state, observed_at: new Date().toISOString(),
-    current_revision: currentRevision, unit, invocation_id: invocationId, inventory_sha256: null });
-  const imported = importRunnerReleaseFact(context, "activity", fact, row);
-  writePrivateRecord(context.dir, `runner-activity-${context.alias}-${fact.event_uuid}.json`, fact, { kind: "activity" });
+    current_revision: currentRevision, unit, invocation_id: invocationId, inventory_sha256: context.inventory_sha256 ?? null });
+  const imported = importRunnerReleaseFact(context, context.lifecycle ? "lifecycle-activity" : "activity", fact, row);
+  if (context.dir) writePrivateRecord(context.dir, `runner-activity-${context.alias}-${fact.event_uuid}.json`, fact, { kind: "activity" });
   return { fact, sha256: imported.sha256 };
 }
 

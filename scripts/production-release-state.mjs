@@ -26,6 +26,7 @@ export const ROOT_LAYOUT = Object.freeze([
   entry("root", "attempt", UUID_SOURCE, "directory", "classify", "attempt lifecycle"),
   entry("root", "start", `\\.start-${UUID_SOURCE}`, "directory", "diagnostic", "recover-staging"),
   entry("root", "history-lock", "\\.lock.history", "directory", "diagnostic", "release or recover-lock"),
+  entry("root", "maintenance-lock", "\\.lock.maintenance", "directory", "diagnostic", "release or recover-lock with release writers stopped"),
   ...fixedRecords.map(name => entry("attempt", name, escape(name), "file", "classify", "attempt lifecycle")),
   entry("attempt", "runner-fact", `runner-(?:baseline|before|after)-${ALIAS_SOURCE}\\.json`, "file", "classify", "attempt lifecycle"),
   entry("attempt", "activity", `runner-activity-${ALIAS_SOURCE}-${UUID_SOURCE}\\.json`, "file", "classify", "attempt lifecycle"),
@@ -39,6 +40,7 @@ export const ROOT_LAYOUT = Object.freeze([
   ...["release-owner.json", "release-audit.json", "release-switch-proof.json"].map(name =>
     entry("update-lock", name, escape(name), "file", "classify", "owner cleanup or verified dead-owner recovery")),
   ...["owner.json", "recovery.json"].map(name => entry("administrative", name, escape(name), "file", "diagnostic", "recover-lock or recover-staging")),
+  entry("administrative", "recovered-bytes", "residue\\.raw", "file", "diagnostic", "preserved recovery evidence; verified repair"),
   entry("administrative", "staged-plan", "attempt\\.json", "file", "diagnostic", "commit start or recover-staging"),
   ...["root", "attempt", "administrative", "incident", "update-lock"].map(scope => entry(scope, "write", `\\.write-(?:${Object.keys(RECORD_KINDS).join("|")}|runner-fact|activity|owner|recovery|incident-manifest|incident-bytes)-${UUID_SOURCE}`, "file", "diagnostic", "recover-staging")),
   entry("attempt", "legacy-temporary", `(?:${fixedRecords.map(escape).join("|")}|runner-baseline-[0-9a-f]{16}\\.json)\\.tmp\\.[1-9][0-9]*`, "file", "diagnostic", "recover-staging"),

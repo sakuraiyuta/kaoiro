@@ -5,7 +5,7 @@ import { RELEASE_ALIAS, RELEASE_DIGEST, RELEASE_SHA, RELEASE_UUID } from "./prod
 import { readReleaseHistory, readReleaseAttempt, projectReleaseHistory } from "./production-release-history.mjs";
 import { attemptDirectory, readPrivateJson, releaseBytesDigest, releaseJsonBytes, withAsyncReleaseLock,
   writePrivateRecord } from "./production-release-files.mjs";
-import { validateRuntimeHosts } from "./production-release-plan.mjs";
+import { validateEnrollmentInventory } from "./production-release-plan.mjs";
 import { validateProductionRunner } from "./production-release-record.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`release endpoint refused: ${message}`); };
@@ -21,7 +21,7 @@ export function validateReleaseRequest(value, expectedTool, operation) {
     value.recording_hostname === hostname(), "root or kernel recording-host role");
   if (operation === "import") {
     must(RELEASE_UUID.test(value.attempt_uuid ?? "") && RELEASE_ALIAS.test(value.alias ?? "") &&
-      ["baseline", "before", "after", "activity"].includes(value.kind) &&
+      ["baseline", "before", "after", "activity", "lifecycle-activity"].includes(value.kind) &&
       (value.plan_sha256 === null || RELEASE_DIGEST.test(value.plan_sha256 ?? "")) && RELEASE_DIGEST.test(value.row_sha256 ?? ""), "import UUID/alias/kind/binding");
   }
   return value;
@@ -36,11 +36,12 @@ const FACT_FIELDS = {
   after: ["runner", "executed_audit", "config_host_verified"],
   activity: ["event_uuid", "sequence", "previous_sha256", "state", "observed_at", "current_revision", "unit", "invocation_id", "inventory_sha256"],
 };
+FACT_FIELDS["lifecycle-activity"] = FACT_FIELDS.activity;
 
 function validateNativeRunnerFact(fact, kind, plan) {
   must(exact(fact, [...COMMON_FACT, ...FACT_FIELDS[kind]]), "complete private fact fields required");
   const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-  if (kind === "activity") {
+  if (kind === "activity" || kind === "lifecycle-activity") {
     must(timestamp(fact.observed_at) && RELEASE_SHA.test(fact.current_revision ?? "") &&
       fact.unit === `kaoiro-release-${fact.attempt_uuid}-${fact.alias}.service` &&
       (fact.invocation_id === null || /^[0-9a-f]{32}$/.test(fact.invocation_id ?? "")), "bound native activity observation required");
@@ -83,17 +84,20 @@ export async function importReleaseFact(request, fact) {
       fact.simulation === false && RELEASE_DIGEST.test(fact.tool_sha256 ?? ""), "private fact schema/binding");
     let expected;
     if (row.plan?.authority) {
+      must(request.kind !== "lifecycle-activity", "valid plans use ordinary activity");
       expected = row.plan.authority.runners.find(owner => owner.alias === request.alias);
       must(expected && fact.root === expected.root && fact.authority_sha256 === expected.sha256, "fact does not attest expected enrolled root");
       validateNativeRunnerFact(fact, request.kind, row.plan);
     } else {
-      must(request.kind === "activity" && !row.plan, "valid production plan with expected authority required");
-      const inventory = validateRuntimeHosts(readPrivateJson(`${request.root}-inventory.json`, { privateParent: false }));
-      must(inventory.some(pair => pair.alias === request.alias) &&
+      must(request.kind === "lifecycle-activity" && !row.plan, "valid production plan with expected authority required");
+      const inventory = validateEnrollmentInventory(readPrivateJson(`${request.root}-inventory.json`, { privateParent: false }));
+      const owner = inventory.authority.runners.find(owner => owner.alias === request.alias);
+      must(owner && fact.root === owner.root && fact.authority_sha256 === owner.sha256 &&
         fact.inventory_sha256 === releaseBytesDigest(releaseJsonBytes(inventory)), "planless lifecycle inventory binding");
+      validateNativeRunnerFact(fact, request.kind);
     }
     let filename = `runner-${request.kind}-${request.alias}.json`;
-    if (request.kind === "activity") {
+    if (request.kind === "activity" || request.kind === "lifecycle-activity") {
       must(RELEASE_UUID.test(fact.event_uuid ?? "") && Number.isInteger(fact.sequence) && fact.sequence >= 1 && fact.sequence <= 64 &&
         ["intent", "queued", "running", "idle", "unknown"].includes(fact.state), "activity event bounds/state");
       const events = Object.entries(row.records).filter(([name]) => name.startsWith(`runner-activity-${request.alias}-`))
@@ -103,7 +107,7 @@ export async function importReleaseFact(request, fact) {
       if (!row.records[filename]) must(fact.sequence === events.length + 1 && fact.previous_sha256 === (previous?.[1].sha256 ?? null), "activity sequence/previous digest changed");
     }
     if (!row.records[filename]) must(row.row_sha256 === request.row_sha256, "canonical row changed");
-    const result = writePrivateRecord(dir, filename, fact, { kind: request.kind === "activity" ? "activity" : "runner-fact" });
+    const result = writePrivateRecord(dir, filename, fact, { kind: request.kind.endsWith("activity") ? "activity" : "runner-fact" });
     return { imported: true, attempt_uuid: request.attempt_uuid, alias: request.alias, kind: request.kind,
       sha256: result.sha256, reused: result.reused };
   });

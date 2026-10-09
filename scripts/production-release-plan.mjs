@@ -37,6 +37,14 @@ export function validatePlanAuthority(authority, hostIds) {
   return authority;
 }
 
+export function validateEnrollmentInventory(value) {
+  must(exact(value, ["schema", "runtime_hosts", "authority"]) && value.schema === 1,
+    "fixed enrollment inventory schema");
+  validateRuntimeHosts(value.runtime_hosts);
+  validatePlanAuthority(value.authority, value.runtime_hosts.map(pair => pair.alias));
+  return value;
+}
+
 export function validateReleasePlan(plan, uuid) {
   must(plan?.schema === 1 && RELEASE_UUID.test(uuid ?? "") && plan.attempt_uuid === uuid, "attempt UUID binding");
   validateFrozenBuildIdentity(plan.identity);

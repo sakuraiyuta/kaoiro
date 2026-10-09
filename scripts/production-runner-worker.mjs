@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -8,10 +8,10 @@ import { collectRunnerBaseline, unitSnapshot } from "./collect-production-releas
 import { validateProductionReceipt } from "./production-release-record.mjs";
 import { validateFrozenBuildIdentity } from "./build-identity.mjs";
 import { validateReleasePlan } from "./production-release-plan.mjs";
-import { RELEASE_ALIAS, parseReleaseOptions } from "./production-release-state.mjs";
+import { RELEASE_ALIAS, RELEASE_SHA, parseReleaseOptions } from "./production-release-state.mjs";
 import { readPrivateJson, withAsyncReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
 import { canonicalRunnerReleaseRow, importRunnerReleaseFact, recordRunnerReleaseActivity,
-  validateRunnerReleaseContext } from "./production-release-runner-facts.mjs";
+  validateRunnerReleaseContext, validateRunnerLifecycleContext } from "./production-release-runner-facts.mjs";
 import { reconcileProductionReleases } from "./production-release-reconciliation.mjs";
 import { unitCommandSnapshot, verifyRetainedUnitCommand } from "./production-release-unit.mjs";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -127,6 +127,38 @@ export function cleanupProductionRunner({dir,host,runnerRoot=dirname(dirname(res
   for(const name of names)must(unitSnapshot(name,systemctlBin).LoadState==="not-found","retained worker was not removed");
   return {cleaned:true,unit,reused:false};
 }
+
+export async function inspectProductionRunnerActivity({ runnerRoot, uuid, host, configPath, cancel = false }) {
+  configPath ??= join(process.env.KAOIRO_RUNNER_DIR ?? join(homedir(), ".config/kaoiro"), "runner.config.json");
+  const context = validateRunnerLifecycleContext({ root: runnerRoot, uuid, alias: host, configPath });
+  const unit = runnerWorkerUnit(uuid, host), timer = unit.replace(/\.service$/, ".timer");
+  const inspect = () => {
+    const service = unitSnapshot(unit), scheduled = unitSnapshot(timer);
+    must([service, scheduled].every(value => value.LoadState === "not-found" || value.LoadState === "loaded"), "native unit state unavailable");
+    return { service, scheduled };
+  };
+  const run = () => {
+    let { service, scheduled } = inspect();
+    if (cancel) {
+      must((service.LoadState === "not-found" || service.ActiveState === "inactive") &&
+        !service.InvocationID && (!service.MainPID || service.MainPID === "0"), "only a never-started dedicated timer may be cancelled");
+      if (scheduled.LoadState !== "not-found") execFileSync("systemctl", ["--user", "stop", "--", timer], { stdio: "pipe", timeout: 5000 });
+      ({ service, scheduled } = inspect());
+    }
+    const scheduledActive = ["active", "activating", "deactivating"].includes(scheduled.ActiveState);
+    const serviceActive = ["activating", "deactivating"].includes(service.ActiveState) ||
+      service.ActiveState === "active" && service.SubState !== "exited" || Number(service.MainPID ?? 0) > 0;
+    must(!serviceActive && !scheduledActive, "dedicated rollout is queued/running; wait or cancel a never-started timer");
+    const current = realpathSync(join(context.root, "current"));
+    const revision = basename(current);
+    must(RELEASE_SHA.test(revision) && current === join(context.root, "releases", revision), "physical current runner revision required");
+    const result = recordRunnerReleaseActivity(context, { state: "idle", unit,
+      invocationId: /^[0-9a-f]{32}$/.test(service.InvocationID ?? "") ? service.InvocationID : null, currentRevision: revision });
+    return { idle: true, cancelled: cancel, attempt_uuid: uuid, alias: host, sha256: result.sha256 };
+  };
+  // The same local lock closes the intent-before-systemd-run inspection window.
+  return context.dir ? withAsyncReleaseLock(context.dir, `queue-${hostKey(host)}`, run) : run();
+}
 export function listRetainedProductionRunners(root,{systemctlBin="systemctl"}={}) {
   const rows=[];
   if(!existsSync(root))return rows;
@@ -144,15 +176,17 @@ export function listRetainedProductionRunners(root,{systemctlBin="systemctl"}={}
   }
   return rows;
 }
-async function main() {
-  const [command,...argv]=process.argv.slice(2),flags=parseReleaseOptions(argv,
-    ["attempt", "host", "runner-root", "config", "service", "update-args", "delay", "root"]);
-  if(command==="queue")console.log(JSON.stringify(await queueProductionRunner({dir:flags.attempt,host:flags.host,runnerRoot:flags["runner-root"],configPath:flags.config,
-    service:flags.service,updateArgs:JSON.parse(flags["update-args"]),delaySeconds:flags.delay===undefined?180:Number(flags.delay)})));
-  else if(command==="cleanup")console.log(JSON.stringify(cleanupProductionRunner({dir:flags.attempt,host:flags.host})));
-  else if(command==="list")console.log(JSON.stringify(listRetainedProductionRunners(flags.root)));
+export async function runWorkerCli(argv) {
+  const [command,...args]=argv,flags=parseReleaseOptions(args,
+    ["attempt", "uuid", "host", "runner-root", "config", "service", "update-args", "delay", "root"]);
+  if(command==="queue")return queueProductionRunner({dir:flags.attempt,host:flags.host,runnerRoot:flags["runner-root"],configPath:flags.config,
+    service:flags.service,updateArgs:JSON.parse(flags["update-args"]),delaySeconds:flags.delay===undefined?180:Number(flags.delay)});
+  else if(command==="cleanup")return cleanupProductionRunner({dir:flags.attempt,host:flags.host,runnerRoot:flags["runner-root"],configPath:flags.config});
+  else if(command==="inspect" || command==="cancel")return inspectProductionRunnerActivity({runnerRoot:flags["runner-root"],uuid:flags.uuid,
+    host:flags.host,configPath:flags.config,cancel:command==="cancel"});
+  else if(command==="list")return listRetainedProductionRunners(flags.root);
   else throw new Error("unknown worker command");
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
-  try{await main();}catch(error){process.stderr.write(`${error.message}\n`);process.exitCode=1;}
+  try{console.log(JSON.stringify(await runWorkerCli(process.argv.slice(2))));}catch(error){process.stderr.write(`${error.message}\n`);process.exitCode=78;}
 }

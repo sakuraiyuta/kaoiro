@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import { artifactBuildIdentity, BUILD_REPOSITORY_ID } from "../build-identity.mjs";
 import { startReleaseAttempt } from "../production-release-record.mjs";
-import { cleanupProductionRunner, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
-import { collectRunnerCompletion } from "../collect-production-release.mjs";
+import { cleanupProductionRunner, inspectProductionRunnerActivity, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
+import { collectRunnerCompletion, runCollectionCli } from "../collect-production-release.mjs";
 import { readReleaseAuthority } from "../production-release-authority.mjs";
 import { stageReleaseTools } from "../production-release-tools.mjs";
 import { releaseBytesDigest, releaseJsonBytes } from "../production-release-files.mjs";
@@ -113,4 +113,83 @@ test("the real plan-transfer constructor commits only bytes that match the canon
   assert.throws(()=>installRunnerReleasePlan({root:f.runner,raw:releaseJsonBytes({...f.plan,created_at:new Date(0).toISOString()}),alias:"worker-a",configPath:f.configPath}),/canonical/);
   writeFileSync(f.configPath,releaseJsonBytes({host_id:"another-private-host"}));
   assert.throws(()=>installRunnerReleasePlan({root:f.runner,raw,alias:"worker-a",configPath:f.configPath}),/live config/);
+});
+
+test("the collection CLI freezes the fixed enrollment and refuses arbitrary output paths",async()=>{
+  const f=fixture(),server=join(f.root,"server");mkdirSync(server,{mode:0o700});
+  const descriptor={...f.authority.descriptor,install_root:server};
+  writeFileSync(join(server,".kaoiro-release-authority.json"),releaseJsonBytes(descriptor),{mode:0o600});
+  const serverAuthority=readReleaseAuthority(server,{role:"server"});
+  const inventory={schema:1,runtime_hosts:f.plan.runtime_hosts,authority:{...f.plan.authority,server:{root:server,sha256:serverAuthority.sha256}}};
+  writeFileSync(`${f.history}-inventory.json`,releaseJsonBytes(inventory),{mode:0o600});
+  const identityFile=join(f.root,"identity.json");writeFileSync(identityFile,releaseJsonBytes(f.identity),{mode:0o600});
+  const args=["start","--server-dir",server,"--identity",identityFile,"--codex-hosts","[]"];
+  const result=await runCollectionCli(args);
+  assert.deepEqual(result.plan.authority,inventory.authority);
+  assert.deepEqual(result.plan.runtime_hosts,inventory.runtime_hosts);
+  const saved=JSON.parse(readFileSync(join(result.dir,"attempt.json")));
+  assert.deepEqual(saved,result.plan);
+  await assert.rejects(runCollectionCli([...args,"--hosts","[]"]),/cannot narrow/);
+  await assert.rejects(runCollectionCli([...args,"--output",join(f.root,"victim")]),/invalid or repeated/);
+  await assert.rejects(runCollectionCli([...args,"--root",f.runner]),/cannot substitute/);
+  writeFileSync(join(server,".kaoiro-release-authority.json"),releaseJsonBytes({...descriptor,node_major:descriptor.node_major===22?24:22}));
+  await assert.rejects(runCollectionCli(args),/inventory differs/);
+});
+
+test("native activity inspection closes uncertain intent only after exact units are idle",async()=>{
+  const f=fixture();await f.queue();
+  f.state({[f.unit.replace(/\.service$/,".timer")]:{LoadState:"loaded",ActiveState:"active"}});
+  await assert.rejects(inspectProductionRunnerActivity({runnerRoot:f.runner,uuid:f.plan.attempt_uuid,host:"worker-a",configPath:f.configPath}),/queued\/running/);
+  const idle=await inspectProductionRunnerActivity({runnerRoot:f.runner,uuid:f.plan.attempt_uuid,host:"worker-a",configPath:f.configPath,cancel:true});
+  assert.equal(idle.idle,true);
+  const stops=f.calls().filter(call=>call.args[1]==="stop");
+  assert.deepEqual(stops.map(call=>call.args.slice(3)),[[f.unit.replace(/\.service$/,".timer")]]);
+  const states=readdirSync(f.canonical).filter(name=>name.startsWith("runner-activity-")).map(name=>JSON.parse(readFileSync(join(f.canonical,name))));
+  assert.equal(states.sort((a,b)=>a.sequence-b.sequence).at(-1).state,"idle");
+  f.state({[f.unit]:{LoadState:"loaded",ActiveState:"activating",SubState:"start",MainPID:"123",InvocationID:"e".repeat(32)}});
+  await assert.rejects(inspectProductionRunnerActivity({runnerRoot:f.runner,uuid:f.plan.attempt_uuid,host:"worker-a",configPath:f.configPath,cancel:true}),/never-started/);
+  assert.equal(f.calls().filter(call=>call.args[1]==="stop").length,1);
+});
+
+test("a planless lifecycle event uses the full fixed enrollment instead of a damaged plan",async()=>{
+  const f=fixture();
+  const inventory={schema:1,...f.planOptions};
+  writeFileSync(`${f.history}-inventory.json`,releaseJsonBytes(inventory),{mode:0o600});
+  writeFileSync(join(f.canonical,"attempt.json"),"broken-plan",{mode:0o600});
+  const result=await inspectProductionRunnerActivity({runnerRoot:f.runner,uuid:f.plan.attempt_uuid,host:"worker-a",configPath:f.configPath});
+  assert.equal(result.idle,true);
+  const filename=readdirSync(f.canonical).find(name=>name.startsWith("runner-activity-"));
+  const fact=JSON.parse(readFileSync(join(f.canonical,filename)));
+  assert.equal(fact.inventory_sha256,releaseBytesDigest(releaseJsonBytes(inventory)));
+  assert.equal(fact.plan_sha256,releaseBytesDigest(Buffer.from("broken-plan")));
+  writeFileSync(f.configPath,releaseJsonBytes({host_id:"different-machine"}));
+  await assert.rejects(inspectProductionRunnerActivity({runnerRoot:f.runner,uuid:f.plan.attempt_uuid,host:"worker-a",configPath:f.configPath}),/inventory\/live config differs/);
+});
+
+test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-terminal records through native inventory evidence",async()=>{
+  const {createServer}=await import("node:http");
+  const {runLifecycleCli}=await import("../production-release-lifecycle.mjs");
+  const {readReleaseAttempt}=await import("../production-release-history.mjs");
+  const f=fixture(),inventory={schema:1,...f.planOptions};
+  writeFileSync(`${f.history}-inventory.json`,releaseJsonBytes(inventory),{mode:0o600});
+  const health=createServer((_request,response)=>{response.setHeader("Content-Type","application/json");response.end(JSON.stringify({build_revision:"b".repeat(40)}));});
+  await new Promise(resolve=>health.listen(0,"127.0.0.1",resolve));
+  try {
+    const url=`http://127.0.0.1:${health.address().port}/health`;
+    for(const damage of ["empty","plan","terminal"]){
+      const attempt=startReleaseAttempt(f.history,f.identity,["worker-a"],[],f.planOptions),uuid=attempt.plan.attempt_uuid;
+      if(damage==="empty")rmSync(join(attempt.dir,"attempt.json"));
+      else if(damage==="plan")writeFileSync(join(attempt.dir,"attempt.json"),"broken-plan",{mode:0o600});
+      else {
+        installRunnerReleasePlan({root:f.runner,raw:readFileSync(join(attempt.dir,"attempt.json")),alias:"worker-a",configPath:f.configPath});
+        writeFileSync(join(attempt.dir,"quarantine.json"),"broken-terminal",{mode:0o600});
+      }
+      const args=["quarantine","--root",f.history,"--uuid",uuid,"--reason","operator preserved corrupt history","--health-url",url];
+      await assert.rejects(runLifecycleCli(args),/activity/);
+      await inspectProductionRunnerActivity({runnerRoot:f.runner,uuid,host:"worker-a",configPath:f.configPath});
+      const result=await runLifecycleCli(args);
+      assert.equal(result.kind,"invalid_quarantined");
+      assert.equal(readReleaseAttempt(attempt.dir).state.id,"invalid_quarantined");
+    }
+  } finally {await new Promise(resolve=>health.close(resolve));}
 });

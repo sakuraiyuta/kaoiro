@@ -2,15 +2,13 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFrozenBuildIdentity } from "./build-identity.mjs";
-import { completeReleaseAttempt, startReleaseAttempt } from "./production-release-record.mjs";
+import { completeReleaseAttempt, startReleaseAttempt, validateProductionReceipt } from "./production-release-record.mjs";
 import { readJournal } from "../server/deploy/kaoiro-deploy-journal.mjs";
 import { readManifest } from "../server/deploy/kaoiro-deploy-manifest.mjs";
 import { PHASE, validateJournalAgainstStateMachine } from "../server/deploy/kaoiro-deploy-phase.mjs";
-import { writeFileDurably } from "../server/deploy/kaoiro-deploy-atomic-write.mjs";
 import { runDocker } from "../server/deploy/kaoiro-deploy-docker.mjs";
 import { FLEET_RPC, FLEET_RPC_TIMEOUT_MS, validateFleet } from "../server/deploy/kaoiro-build-compatibility.mjs";
 import { acceptedForwardTransaction } from "../runner/deploy/kaoiro-runner-codex-state.mjs";
@@ -19,9 +17,11 @@ import { readPublishedProductionRelease } from "./production-release-tags.mjs";
 import { receiptDigest } from "./production-release-record.mjs";
 import { unitSnapshot, unitCommandSnapshot, verifyRetainedUnitCommand } from "./production-release-unit.mjs";
 import { verifyReleaseToolClosure } from "./production-release-tools.mjs";
-import { readPrivateJson, releaseBytesDigest } from "./production-release-files.mjs";
-import { runnerReleaseFact } from "./production-release-runner-facts.mjs";
-import { RELEASE_UUID } from "./production-release-state.mjs";
+import { attemptDirectory, readPrivateBytes, readPrivateJson, releaseBytesDigest, writePrivateRecord } from "./production-release-files.mjs";
+import { importRunnerReleaseFact, installRunnerReleasePlan, runnerReleaseFact, validateRunnerReleaseContext } from "./production-release-runner-facts.mjs";
+import { readReleaseAuthority } from "./production-release-authority.mjs";
+import { validateEnrollmentInventory, validateReleasePlan } from "./production-release-plan.mjs";
+import { RELEASE_UUID, parseReleaseOptions } from "./production-release-state.mjs";
 export { unitSnapshot } from "./production-release-unit.mjs";
 const sha256 = file => createHash("sha256").update(readFileSync(file)).digest("hex");
 const read = file => { const raw = readFileSync(file); if (raw.length > 524_288) throw new Error("input exceeds bound"); return JSON.parse(raw); };
@@ -116,6 +116,8 @@ export async function collectServerCompletion(plan, {transactionDir, healthUrl, 
   const manifest = readManifest(transactionDir), journal = readJournal(transactionDir);
   validateJournalAgainstStateMachine(journal);
   must(journal.phase === PHASE.DONE && manifest.target_sha === plan.identity.revision, "server transaction has not completed this target");
+  must(journal.release_context?.attempt_uuid === plan.attempt_uuid &&
+    journal.release_context.plan_sha256 === receiptDigest(plan), "server transaction lacks the enrolled attempt binding");
   const up = [...journal.history].reverse().find(entry => entry.phase === PHASE.UP)?.observation;
   must(up?.container_id, "server DONE lacks its activated container");
   const args = ["inspect", up.container_id, "--format", "{{json .}}"];
@@ -141,7 +143,7 @@ export async function collectServerCompletion(plan, {transactionDir, healthUrl, 
 }
 
 export function acknowledgeReleaseAttempt(dir, { cwd, remote = "origin" }) {
-  const plan = read(join(dir,"attempt.json")), receipt = read(join(dir,"completion.json"));
+  const plan = readPrivateJson(join(dir,"attempt.json")), receipt = readPrivateJson(join(dir,"completion.json"));
   must(receipt.attempt_uuid === plan.attempt_uuid && equal({...receipt,dirty:false},plan.identity), "acknowledgment attempt binding");
   const pair = readPublishedProductionRelease({cwd,receipt,remote,repositoryId:receipt.repository_id,allowedHosts:plan.host_ids});
   const result = {schema:1,attempt_uuid:receipt.attempt_uuid,revision:receipt.revision,version:receipt.version,
@@ -154,38 +156,71 @@ export function acknowledgeReleaseAttempt(dir, { cwd, remote = "origin" }) {
     must(JSON.stringify(previous) === JSON.stringify(result), "tag acknowledgment changed");
     return previous;
   } catch(error) { if(error.code !== "ENOENT") throw error; }
-  writeFileDurably(file,`${JSON.stringify(result)}\n`);
+  writePrivateRecord(dir,"tag-ack.json",result);
   return result;
 }
 
-async function main() {
-  const [command,...argv]=process.argv.slice(2), flags={};
-  for(let i=0;i<argv.length;i+=2) { must(argv[i]?.startsWith("--") && argv[i+1], "option/value pairs required"); flags[argv[i].slice(2)]=argv[i+1]; }
-  if(command==="start") {
-    const result=startReleaseAttempt(flags.root ?? join(homedir(),"kaoiro-deploy/production-releases"),readFrozenBuildIdentity(flags.identity),JSON.parse(flags.hosts),
-      flags["codex-hosts"] === undefined ? undefined : JSON.parse(flags["codex-hosts"]));
-    console.log(JSON.stringify(result)); return;
+export function enrolledCollectionContext(serverRoot, dir) {
+  const authority = readReleaseAuthority(serverRoot, { role: "server" });
+  must(authority.status === "enrolled" && authority.descriptor.transport === "local", "canonical recording-server enrollment required");
+  const root = realpathSync(authority.descriptor.root);
+  const inventory = validateEnrollmentInventory(readPrivateJson(`${root}-inventory.json`, { privateParent: false }));
+  must(inventory.authority.server.root === authority.root && inventory.authority.server.sha256 === authority.sha256,
+    "fixed enrollment inventory differs from current server authority");
+  if (dir) must(resolve(dir) === attemptDirectory(root, basename(dir)), "canonical attempt path required");
+  return { authority, root, inventory };
+}
+
+export async function runCollectionCli(argv) {
+  const [command, ...args] = argv;
+  const flags = parseReleaseOptions(args, ["root", "server-dir", "identity", "hosts", "codex-hosts", "attempt", "repo",
+    "runner-root", "host", "config", "plan", "codex-transaction", "server-transaction", "health-url", "canary"]);
+  if (command === "install-plan") {
+    const context = installRunnerReleasePlan({ root: flags["runner-root"], raw: readPrivateBytes(flags.plan, { privateParent: false }),
+      alias: flags.host, configPath: flags.config });
+    return { installed: true, dir: context.dir, attempt_uuid: context.plan.attempt_uuid, plan_sha256: context.plan_sha256 };
   }
-  const plan=read(join(flags.attempt,"attempt.json"));
-  if(command==="ack") { console.log(JSON.stringify(acknowledgeReleaseAttempt(flags.attempt,{cwd:flags.repo}))); return; }
-  if(command==="runner-before") {
-    const baseline=collectRunnerBaseline(plan,flags.host,flags.service ?? "kaoiro-runner",flags["runner-root"]);
-    writeFileDurably(flags.output,`${JSON.stringify(baseline)}\n`); return;
+  if (command === "runner-after") {
+    const context = validateRunnerReleaseContext({ root: flags["runner-root"], dir: flags.attempt, alias: flags.host, configPath: flags.config });
+    const baseline = readPrivateJson(join(context.dir, `runner-baseline-${context.alias}.json`));
+    const runner = collectRunnerCompletion(context.plan, baseline, { runnerRoot: context.root,
+      configPath: flags.config, codexTransaction: flags["codex-transaction"] });
+    const executedAudit = collectExecutedRunnerAudit(context.plan, baseline, context.root, runner.update_invocation_id);
+    const fact = runnerReleaseFact(context, { runner, executed_audit: executedAudit, config_host_verified: true });
+    const imported = importRunnerReleaseFact(context, "after", fact);
+    writePrivateRecord(context.dir, `runner-after-${context.alias}.json`, fact, { kind: "runner-fact" });
+    return { imported: true, attempt_uuid: context.plan.attempt_uuid, alias: context.alias, sha256: imported.sha256 };
   }
-  if(command==="runner-after") {
-    const result=collectRunnerCompletion(plan,read(flags.baseline),{runnerRoot:flags["runner-root"],configPath:flags.config,codexTransaction:flags["codex-transaction"]});
-    writeFileDurably(flags.output,`${JSON.stringify(result)}\n`); return;
+  const enrolled = enrolledCollectionContext(flags["server-dir"], flags.attempt);
+  must(!flags.root || realpathSync(flags.root) === enrolled.root, "--root cannot substitute canonical history");
+  if (command === "start") {
+    const hosts = enrolled.inventory.runtime_hosts.map(pair => pair.alias).sort();
+    must(!flags.hosts || JSON.stringify([...JSON.parse(flags.hosts)].sort()) === JSON.stringify(hosts), "start cannot narrow the fixed inventory");
+    return startReleaseAttempt(enrolled.root, readFrozenBuildIdentity(flags.identity), hosts,
+      flags["codex-hosts"] === undefined ? hosts : JSON.parse(flags["codex-hosts"]), enrolled.inventory);
   }
-  if(command==="complete") {
-    const server=await collectServerCompletion(plan,{transactionDir:flags["server-transaction"],healthUrl:flags["health-url"]});
-    const receipt={schema:1,kind:"production_completion",environment:"production",publication_mode:"by_landing",
-      repository_id:plan.identity.landing.repository_id,attempt_uuid:plan.attempt_uuid,revision:plan.identity.revision,
-      version:plan.identity.version,branch:plan.identity.branch,completed_at:new Date().toISOString(),host_ids:plan.host_ids,codex_host_ids:plan.codex_host_ids,
-      server,runners:JSON.parse(flags.runners).map(read),canary:read(flags.canary)};
-    console.log(JSON.stringify(completeReleaseAttempt(flags.attempt,receipt,{allowedHosts:plan.host_ids}))); return;
+  const plan = validateReleasePlan(readPrivateJson(join(flags.attempt, "attempt.json")), flags.attempt.split("/").at(-1));
+  must(plan.authority?.server.sha256 === enrolled.authority.sha256 && plan.authority.server.root === enrolled.authority.root,
+    "attempt server authority differs from current enrollment");
+  if (command === "ack") return acknowledgeReleaseAttempt(flags.attempt, { cwd: flags.repo });
+  if (command === "complete") {
+    const audit = readPrivateJson(join(flags.attempt, "server-audit.json"));
+    must(!flags["server-transaction"] || realpathSync(flags["server-transaction"]) === realpathSync(audit.transaction_dir),
+      "completion cannot select another server transaction");
+    const server = await collectServerCompletion(plan, { transactionDir: audit.transaction_dir, healthUrl: flags["health-url"] });
+    const runners = plan.host_ids.map(alias => readPrivateJson(join(flags.attempt, `runner-after-${alias}.json`)).runner);
+    const canary = readPrivateJson(flags.canary, { privateParent: false });
+    const receipt = { schema: 1, kind: "production_completion", environment: "production", publication_mode: "by_landing",
+      repository_id: plan.identity.landing.repository_id, attempt_uuid: plan.attempt_uuid, revision: plan.identity.revision,
+      version: plan.identity.version, branch: plan.identity.branch, completed_at: new Date().toISOString(), host_ids: plan.host_ids,
+      codex_host_ids: plan.codex_host_ids, server, runners, canary };
+    validateProductionReceipt(receipt, { allowedHosts: plan.host_ids });
+    writePrivateRecord(flags.attempt, "canary.json", canary);
+    return completeReleaseAttempt(flags.attempt, receipt, { allowedHosts: plan.host_ids });
   }
   throw new Error("unknown completion command");
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
-  try { await main(); } catch(error) { process.stderr.write(`${error.message}\n`); process.exitCode=1; }
+  try { console.log(JSON.stringify(await runCollectionCli(process.argv.slice(2)))); }
+  catch(error) { process.stderr.write(`${error.message}\n`); process.exitCode=78; }
 }

@@ -151,9 +151,27 @@ export function releaseEntryInventory(dir, scope) {
 export function recoverReleaseResidue({ root, entry, scope = "root", observedDigest, reason,
   writersStopped = false, readProcess = namedProcessIdentity }) {
   validateReleaseReason(reason);
-  const rule = releaseName(scope, entry, "directory");
-  if (rule.disposition !== "diagnostic") throw new Error("only registered administrative residue can be recovered");
   const path = join(root, entry);
+  const originalStat = lstatSync(path);
+  const type = originalStat.isDirectory() ? "directory" : originalStat.isFile() ? "file" : "unsafe";
+  const rule = releaseName(scope, entry, type);
+  if (rule.disposition !== "diagnostic") throw new Error("only registered administrative residue can be recovered");
+  if (type === "file") {
+    const raw = readPrivateBytes(path, { legacyMode: true });
+    if (!writersStopped) throw new Error("staged file has no provable writer; explicit stopped-writer confirmation required");
+    if (releaseBytesDigest(raw) !== observedDigest) throw new Error("residue changed since inspection");
+    const incidentRoot = createPrivateDirectory(`${resolve(root)}-incidents`);
+    const destination = createPrivateDirectory(join(incidentRoot, randomUUID()));
+    const current = lstatSync(path);
+    if (current.ino !== originalStat.ino || current.dev !== originalStat.dev ||
+      releaseBytesDigest(readPrivateBytes(path, { legacyMode: true })) !== observedDigest) throw new Error("residue changed since inspection");
+    renameSync(path, join(destination, "residue.raw"));
+    writePrivateRecord(destination, "recovery.json", { schema: 1, entry, observed_sha256: observedDigest,
+      reason, recovered_at: new Date().toISOString(), writer_confirmation: true }, { kind: "recovery", scope: "administrative" });
+    syncDirectory(root);
+    syncDirectory(incidentRoot);
+    return { recovered: true, destination };
+  }
   requirePrivateDirectory(path);
   const inventory = releaseEntryInventory(path, "administrative");
   const bytes = Buffer.from(JSON.stringify(inventory));
@@ -171,6 +189,11 @@ export function recoverReleaseResidue({ root, entry, scope = "root", observedDig
   } else if (!writersStopped) throw new Error("owner unknown; explicit stopped-writer confirmation required");
   const incidentRoot = createPrivateDirectory(`${resolve(root)}-incidents`);
   const destination = join(incidentRoot, randomUUID());
+  const current = lstatSync(path);
+  if (current.ino !== originalStat.ino || current.dev !== originalStat.dev ||
+    releaseBytesDigest(Buffer.from(JSON.stringify(releaseEntryInventory(path, "administrative")))) !== observedDigest) {
+    throw new Error("residue changed since inspection");
+  }
   renameSync(path, destination);
   writePrivateRecord(destination, "recovery.json", { schema: 1, entry, observed_sha256: observedDigest,
     reason, recovered_at: new Date().toISOString(), writer_confirmation: writersStopped }, { kind: "recovery", scope: "administrative" });

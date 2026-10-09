@@ -200,3 +200,34 @@ test("completion independently rejects a missing server or runner enrollment pro
     assert.throws(() => assertCompletionEnrollment(plan, { ...facts, baselines: [{ ...facts.baselines[0], ...change }] }), /baseline/);
   }
 });
+
+test("archival keeps incident warnings and refuses an unresolved entry moved into the archive",async()=>{
+  const f=fixture();writeFileSync(join(f.dir,"completion.json"),"broken",{mode:0o600});
+  await terminate(f,"quarantine");
+  await archiveReleaseAttempt({root:f.root,uuid:f.plan.attempt_uuid});
+  const history=readReleaseHistory(f.root);
+  assert.equal(history.rows.length,0);
+  assert.equal(history.archived_incidents[0].attempt_uuid,f.plan.attempt_uuid);
+  assert.equal(history.archived_incidents[0].reason,"operator confirmed unused or invalid attempt");
+  const another=startReleaseAttempt(f.root,f.identity,["worker-a"],[]);
+  const {renameSync}=await import("node:fs");renameSync(another.dir,join(`${f.root}-archive`,another.plan.attempt_uuid));
+  assert.throws(()=>readReleaseHistory(f.root),/archive contains unresolved/);
+});
+
+test("the actual lifecycle CLI inspects and preserves ownerless locks and staged files",async()=>{
+  const {runLifecycleCli}=await import("../production-release-lifecycle.mjs");
+  const f=fixture();mkdirSync(join(f.root,".lock.history"),{mode:0o700});
+  const command=["--root",f.root,"--entry",".lock.history"];
+  const inspected=await runLifecycleCli(["inspect-residue",...command]);
+  await assert.rejects(runLifecycleCli(["recover-lock",...command,"--observed-digest",inspected.observed_sha256,"--reason","confirmed ownerless residue"]),/owner unknown/);
+  const result=await runLifecycleCli(["recover-lock",...command,"--observed-digest",inspected.observed_sha256,"--reason","confirmed ownerless residue","--writers-stopped","confirmed"]);
+  assert.equal(result.recovered,true);
+  assert.equal(readReleaseHistory(f.root).diagnostics.length,0);
+  const filename=`.write-plan-${f.plan.attempt_uuid}`;
+  writeFileSync(join(f.root,filename),"partial-private-plan",{mode:0o600});
+  const staged=await runLifecycleCli(["inspect-residue","--root",f.root,"--entry",filename]);
+  const recovered=await runLifecycleCli(["recover-staging","--root",f.root,"--entry",filename,"--observed-digest",staged.observed_sha256,
+    "--reason","stopped staged writer","--writers-stopped","confirmed"]);
+  assert.equal(readFileSync(join(recovered.destination,"residue.raw"),"utf8"),"partial-private-plan");
+  assert.equal(assertGrammarCoverage(rawInventory(f.root)),true);
+});

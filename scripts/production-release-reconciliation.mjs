@@ -8,8 +8,9 @@ import { releaseRequest } from "./production-release-endpoint.mjs";
 import { releaseBytesDigest, releaseJsonBytes } from "./production-release-files.mjs";
 import { readPublishedProductionRelease } from "./production-release-tags.mjs";
 import { validateProductionReceipt } from "./production-release-record.mjs";
+import { validateEnrollmentInventory } from "./production-release-plan.mjs";
 import { RELEASE_ALIAS, RELEASE_DIGEST, RELEASE_SHA, RELEASE_UUID, RELEASE_STATES,
-  parseReleaseOptions, validateReleaseContext, validateReleaseSkip } from "./production-release-state.mjs";
+  parseReleaseOptions, validateReleaseContext, validateReleaseReason, validateReleaseSkip } from "./production-release-state.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`release reconciliation refused: ${message}`); };
 const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value) &&
@@ -17,9 +18,23 @@ const exact = (value, fields) => value && typeof value === "object" && !Array.is
 
 export function validateReleaseSnapshot(snapshot) {
   must(exact(snapshot, ["schema", "nonce", "root", "recording_hostname", "tool_sha256", "node_major",
-    "rows", "diagnostics", "warning"]) && snapshot.schema === 1 && Array.isArray(snapshot.rows) &&
+    "rows", "diagnostics", "warning", ...(Object.hasOwn(snapshot, "inventory") ? ["inventory"] : []),
+    ...(Object.hasOwn(snapshot, "archived_incidents") ? ["archived_incidents"] : [])]) && snapshot.schema === 1 && Array.isArray(snapshot.rows) &&
     snapshot.rows.length <= 1000 && Array.isArray(snapshot.diagnostics) && snapshot.diagnostics.length <= 4096,
   "snapshot schema/capacity");
+  if (snapshot.inventory !== undefined && snapshot.inventory !== null) validateEnrollmentInventory(snapshot.inventory);
+  if (snapshot.archived_incidents !== undefined) {
+    must(Array.isArray(snapshot.archived_incidents) && snapshot.archived_incidents.length <= 100_000,
+      "archived incident inventory bound");
+    const seen = new Set();
+    for (const incident of snapshot.archived_incidents) {
+      must(exact(incident, ["attempt_uuid", "status", "reason", "evidence_sha256"]) && RELEASE_UUID.test(incident.attempt_uuid ?? "") &&
+        !seen.has(incident.attempt_uuid) && ["invalid_quarantined", "deployed_uncompleted"].includes(incident.status) &&
+        RELEASE_DIGEST.test(incident.evidence_sha256 ?? ""), "archived incident binding");
+      validateReleaseReason(incident.reason);
+      seen.add(incident.attempt_uuid);
+    }
+  }
   const ids = new Set();
   for (const row of snapshot.rows) {
     must(exact(row, ["attempt_uuid", "plan_sha256", "row_sha256", "plan", "status", "disposition", "completion", "activity_heads"]) &&
@@ -46,7 +61,7 @@ export function validateReleaseSnapshot(snapshot) {
           row.plan.authority.runners.every(item => exact(item, ["alias", "sha256"]) && hosts.includes(item.alias) && RELEASE_DIGEST.test(item.sha256)),
         "projected expected enrollment");
       }
-    } else must(row.plan_sha256 === null || row.status === "invalid_completion", "missing plan status");
+    } else must(row.plan_sha256 === null || ["invalid_completion", "invalid_quarantined"].includes(row.status), "missing plan status");
     if (row.completion) {
       must(row.plan && row.completion.attempt_uuid === row.attempt_uuid && row.completion.revision === row.plan.identity.revision &&
         row.completion.version === row.plan.identity.version && row.completion.branch === row.plan.identity.branch,
@@ -131,7 +146,7 @@ export async function reconcileProductionReleases({ installRoot, role = "runner"
   }
   const unresolved = [];
   const resolved = [];
-  const incidents = [];
+  const incidents = (snapshot.archived_incidents ?? []).map(incident => incident.attempt_uuid);
   for (const row of snapshot.rows) {
     remaining(120_000);
     if (row.disposition === "terminal-incident") { incidents.push(row.attempt_uuid); continue; }
@@ -151,11 +166,14 @@ export async function reconcileProductionReleases({ installRoot, role = "runner"
   }
   assertReleaseUnresolved(unresolved, skip);
   remaining(120_000);
+  const incidentSummary = { incident_count: incidents.length, incidents_sha256: releaseBytesDigest(releaseJsonBytes(incidents)),
+    incidents: incidents.slice(0, 128), archived_incidents: role === "card" ? snapshot.archived_incidents ?? [] : [] };
   return { schema: 1, status: "enrolled", pass: true, role, root: authority.root,
     authority_sha256: authority.sha256, canonical_root: snapshot.root, recording_hostname: snapshot.recording_hostname,
     tool_sha256: authority.descriptor.tool_sha256, release_context: context,
     snapshot_sha256: releaseBytesDigest(releaseJsonBytes(snapshot)), unresolved, skip, skip_reason: skipReason ?? null,
-    resolved, incidents, elapsed_ms: Math.ceil(performance.now() - started), audited_at: new Date().toISOString() };
+    resolved, ...incidentSummary, warning: snapshot.warning,
+    elapsed_ms: Math.ceil(performance.now() - started), audited_at: new Date().toISOString() };
 }
 
 export async function runReconciliationCli(args) {

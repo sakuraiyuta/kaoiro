@@ -55,6 +55,15 @@ async function main() {
   } else if (operation === "audit") {
     const { runReconciliationCli } = await import("./production-release-reconciliation.mjs");
     await runReconciliationCli(args);
+  } else if (operation === "collect") {
+    const { runCollectionCli } = await import("./collect-production-release.mjs");
+    process.stdout.write(`${JSON.stringify(await runCollectionCli(args))}\n`);
+  } else if (operation === "worker-control") {
+    const { runWorkerCli } = await import("./production-runner-worker.mjs");
+    process.stdout.write(`${JSON.stringify(await runWorkerCli(args))}\n`);
+  } else if (operation === "lifecycle") {
+    const { runLifecycleCli } = await import("./production-release-lifecycle.mjs");
+    process.stdout.write(`${JSON.stringify(await runLifecycleCli(args))}\n`);
   } else if (["runner-audit", "runner-seal", "runner-switch", "runner-cleanup", "runner-restore-admission", "runner-recovery-switch"].includes(operation)) {
     const { runRunnerReleaseGate } = await import("./production-release-runner.mjs");
     const result = await runRunnerReleaseGate(operation, args.slice(1), { toolRoot: root, toolDigest: expected, actualDeploy });
