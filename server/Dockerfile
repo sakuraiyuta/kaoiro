@@ -52,7 +52,8 @@ ENV KAOIRO_BUILD_IDENTITY_JSON=${KAOIRO_BUILD_IDENTITY_JSON}
 
 RUN corepack enable
 
-COPY scripts/build-identity.mjs scripts/serialize-build-identity.mjs /app/scripts/
+COPY scripts/build-identity.mjs scripts/serialize-build-identity.mjs scripts/child-process-environment.mjs /app/scripts/
+COPY runner/deploy/child-process-environment.mjs /app/runner/deploy/child-process-environment.mjs
 
 # pnpm-workspace.yaml carries the build-script approval (esbuild), so it
 # has to be in the deps layer alongside the manifest and lockfile.
