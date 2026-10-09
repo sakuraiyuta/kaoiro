@@ -23,6 +23,7 @@ describe("delivery policy decoding and current-owner display", () => {
   it("requires exact supporting ack and never derives support from an engine", () => {
     expect(deliveryPolicyLabel(view(), true)).toBe("on（確認済み）");
     const pending = parseDeliveryPolicy({ ...view(), applied_revision: 2 });
+    expect(pending.confirmed).toBe(false);
     expect(deliveryPolicyLabel(pending, true)).toBe("確認待ち");
     expect(deliveryPolicyLabel({ ...view(), wrapper_support: false }, true)).toBe("実行中の切替は未対応");
     for (const engine of ["codex", "antigravity"]) {
