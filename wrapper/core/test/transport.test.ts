@@ -153,9 +153,11 @@ describe("ServerLink delivery policy", () => {
     try {
       const { controller, acks } = setup();
       mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+      warning.mockClear();
       policy({ revision: 5, policy: "on" });
       expect(controller.decision().allowed).toBe(true);
-      expect(warning).toHaveBeenCalled();
+      expect(warning.mock.calls.map(call => String(call[0])).join(""))
+        .toContain("delivery_policy: server declared protocol version (absent)");
       emit("phx_error", {});
       expect(controller.decision().allowed).toBe(false);
       mock.joinRef = "join-2";
@@ -165,9 +167,12 @@ describe("ServerLink delivery policy", () => {
       expect(controller.decision().allowed).toBe(false);
       expect(acks()).toHaveLength(1);
       expect(warning.mock.calls.map(call => String(call[0])).join("")).toContain("delivery_policy_revision_below_high_water");
+      warning.mockClear();
       policy({ version: "future", revision: 5, policy: "on" });
       expect(controller.decision().allowed).toBe(true);
       expect(acks()).toHaveLength(2);
+      expect(warning.mock.calls.map(call => String(call[0])).join(""))
+        .toContain('delivery_policy: server declared protocol version "future"');
     } finally { warning.mockRestore(); }
   });
 
