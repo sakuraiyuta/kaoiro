@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
+  import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
   import AgentGridShell from "./lib/AgentGridShell.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
@@ -342,6 +343,7 @@
   // runner's spawn outcome.
   let hosts = $state<HostInfo[]>([]);
   let isOperator = $state(false);
+  const policyStore = new DeliveryPolicyStore(() => ({ connection, operator: isOperator, connected: status === "connected" }));
   let showLaunch = $state(false);
   // Client-side settings drawer (#85, operator- and viewer-visible: it only
   // touches localStorage, no server round-trip).
@@ -768,6 +770,14 @@
     // own wrapper re-emitting state_change.
     return projectDirectoryName(live, directory[selected]);
   });
+  $effect(() => {
+    const envelope = selectedEnvelope;
+    if (envelope) untrack(() => policyStore.seed(envelope));
+  });
+  $effect(() => {
+    const id = selected;
+    return () => { if (id) untrack(() => policyStore.clearNotice(id)); };
+  });
   // Detail navigation follows the live grid's displayed order. Disconnected
   // cards live in a separate collapsed section and are intentionally absent
   // from the ring, matching the existing detail header's live-agent strip.
@@ -839,8 +849,11 @@
     connection = connectKaoiro(
       defaultSocketUrl(location),
       {
-        onStatus: (next) => (status = next),
+        onStatus: (next) => { status = next; if (next !== "connected") policyStore.disconnect(); },
+        onDeliveryPolicyControl: (available) => { policyStore.available = available; if (!available) policyStore.disconnect(); },
+        onDeliveryPolicyChanged: (id, view) => policyStore.event(id, view),
         onJoined: () => {
+          policyStore.reset();
           invalidatePersonas();
           personaMembership = null;
           // A fresh connection: everything the previous one buffered belongs
@@ -893,6 +906,7 @@
           refreshServerHealth();
         },
         onSnapshot: (next) => {
+          policyStore.snapshot(next);
           agents = next;
           awaitingSnapshot = false;
           refreshPersonasForAgents();
@@ -943,6 +957,7 @@
             tasks = applyTaskEnvelope(tasks, envelope);
             return;
           }
+          if (!isReplyEnvelope(envelope)) policyStore.seed(envelope);
           // Reply lines feed the transcript; state envelopes update the
           // latest-state map that drives the grid faces.
           if (isReplyEnvelope(envelope)) {
@@ -1254,6 +1269,7 @@
           );
         },
         onAgentDeleted: (agentId) => {
+          policyStore.remove(agentId);
           statusLines.remove(agentId);
           // A disconnected agent was removed (#14, ADR-0030 D6): drop it
           // from the grid, its transcript, the directory ledger, AND any
@@ -1514,6 +1530,7 @@
     // revoked/expired session must not keep the operator affordance.
     hosts = [];
     isOperator = false;
+    policyStore.reset();
     showLaunch = false;
     runnerSessions = null;
     deliveries = {};
@@ -1989,8 +2006,10 @@
   </p>
 {/if}
 
-{#if showLaunch && connection}
+{#if showLaunch && isOperator && status === "connected" && connection}
   <LaunchDialog
+    deliveryPolicyAvailable={policyStore.available}
+    canOperate={() => isOperator && status === "connected"}
     {hosts}
     {connection}
     sessions={runnerSessions}
@@ -2058,6 +2077,14 @@
       {/if}
       <div class="detail-stage">
         <AgentDetail
+          {policyStore}
+          policyConnected={status === "connected"}
+          onDeliveryPolicyChange={isOperator && status === "connected" ? (id, policy) => {
+            if (isOperator && status === "connected") void policyStore.set(id, policy, agents[id]?.state !== "disconnected");
+          } : undefined}
+          onDeliveryPolicyRefresh={isOperator && status === "connected" ? (id) => {
+            if (isOperator && status === "connected") void policyStore.refresh(id);
+          } : undefined}
           envelope={selectedEnvelope}
           logs={logs[selectedEnvelope.agent_id] ?? []}
           {agents}

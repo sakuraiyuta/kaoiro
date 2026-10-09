@@ -1,5 +1,8 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
+  import DeliveryPolicyControl from "./DeliveryPolicyControl.svelte";
+  import type { DeliveryPolicyStore } from "./deliveryPolicyStore.svelte";
+  import type { DeliveryPolicy } from "./deliveryPolicy";
   import BottomSheet from "./BottomSheet.svelte";
   import { conversationEntryKey } from "./conversationTimeline";
   import {
@@ -66,6 +69,10 @@
 
   let {
     envelope,
+    policyStore,
+    onDeliveryPolicyChange,
+    onDeliveryPolicyRefresh,
+    policyConnected = false,
     logs = [],
     agents = {},
     connection = null,
@@ -87,6 +94,10 @@
     onSetPermission,
   }: {
     envelope: Envelope;
+    policyStore?: DeliveryPolicyStore;
+    policyConnected?: boolean;
+    onDeliveryPolicyChange?: ((id: string, policy: DeliveryPolicy) => void) | undefined;
+    onDeliveryPolicyRefresh?: ((id: string) => void) | undefined;
     logs?: Envelope[];
     agents?: Record<string, Envelope>;
     connection?: KaoiroConnection | null;
@@ -3044,6 +3055,15 @@
            above stays pinned. (Inner content is intentionally left at its
            original indentation to keep this a 2-line structural wrap.) -->
       <div class="status-scroll">
+      {#if policyStore}
+        <DeliveryPolicyControl agentId={envelope.agent_id} view={policyStore.views[envelope.agent_id]}
+          connected={policyConnected && envelope.state !== "disconnected"}
+          available={policyStore.available} saving={policyStore.saving[envelope.agent_id]}
+          reading={policyStore.reading[envelope.agent_id]} notice={policyStore.notices[envelope.agent_id]}
+          generation={policyStore.generation}
+          onChange={onDeliveryPolicyChange ? (policy) => onDeliveryPolicyChange?.(envelope.agent_id, policy) : undefined}
+          onRefresh={onDeliveryPolicyRefresh ? () => onDeliveryPolicyRefresh?.(envelope.agent_id) : undefined} />
+      {/if}
       <StatusLinePanel
         view={statusLine}
         onOpenHistory={onOpenStatusLineHistory

@@ -15,6 +15,7 @@
   } from "./protocol";
   import { formatRunnerHostLabel } from "./buildIdentity";
   import Modal from "./Modal.svelte";
+  import { hasDeliveryMechanism, launchDeliveryDefault, parseLaunchDeliveryPolicy, type DeliveryPolicy } from "./deliveryPolicy";
 
   let {
     hosts,
@@ -22,8 +23,12 @@
     sessions,
     serverBuildRevision = null,
     serverBuildDirty = null,
+    deliveryPolicyAvailable = false,
+    canOperate = () => true,
     onClose,
   }: {
+    deliveryPolicyAvailable?: boolean;
+    canOperate?: () => boolean;
     hosts: HostInfo[];
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
@@ -123,6 +128,21 @@
   let error = $state<string | null>(null);
 
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
+  let deliveryChoice = $state<DeliveryPolicy>("on");
+  let deliveryManual = $state(false);
+  let deliveryTarget = "";
+  const deliveryDefault = $derived(launchDeliveryDefault(host?.in_flight_defaults, engine));
+  const deliveryMetadata = $derived(parseLaunchDeliveryPolicy(host?.engines?.find(e => e.id === engine)?.launch_delivery_policy));
+  const deliveryModes = $derived(deliveryMetadata?.persona_overrides && Object.hasOwn(deliveryMetadata.persona_overrides, personaId)
+    ? deliveryMetadata.persona_overrides[personaId] : deliveryMetadata?.mechanisms);
+  const deliveryEnabled = $derived(deliveryPolicyAvailable && deliveryDefault.source !== "unknown" &&
+    deliveryMetadata?.ceiling === true && hasDeliveryMechanism(deliveryModes));
+  $effect(() => {
+    const target = `${hostId}:${engine}`;
+    if (deliveryTarget !== target) { deliveryTarget = target; deliveryManual = false; }
+    if (!deliveryManual) deliveryChoice = deliveryDefault.policy;
+  });
+
 
   // Build identity mismatch warning (issue #218). Observability only —
   // never blocks launch (canLaunch/launch() never reference this). Round 2
@@ -474,7 +494,7 @@
 
   async function launch(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (!canLaunch) return;
+    if (!canLaunch || !canOperate()) return;
     busy = true;
     error = null;
     try {
@@ -490,6 +510,7 @@
         // Engine + launch-time picks (ADR-0032 F4bc). engine rides even for
         // the claude-code default so the server records it for restore.
         engine,
+        ...(deliveryEnabled ? { delivery_policy: deliveryChoice } : {}),
         ...(model === "" ? {} : { model }),
         ...(effort === "" ? {} : { effort }),
         // Codex / Antigravity launch permission (ADR-0033 F3, ADR-0057 F4c).
@@ -563,6 +584,19 @@
     {#if hosts.length === 0}
       <p class="note">起動可能なホストがありません(runner 未接続)。</p>
     {:else}
+      <div class="delivery-choice">
+        <label class="row"><input type="checkbox" checked={deliveryChoice === "on"} disabled={!deliveryEnabled || busy}
+          onchange={(event) => { deliveryManual = true; deliveryChoice = event.currentTarget.checked ? "on" : "off"; }} />実行中の割込配送</label>
+        <p class="hint">{!deliveryPolicyAvailable ? "この server の操作 API は未確認" :
+          !deliveryMetadata ? "起動時の配送方法は未確認" :
+          deliveryDefault.source === "unknown" ? "host の既定設定は未確認" :
+          !deliveryMetadata.ceiling ? "host の上限設定で無効" :
+          !hasDeliveryMechanism(deliveryModes) ? "この engine では未対応。メッセージは queue に入る" :
+          deliveryManual ? "手動で選択した設定を使用" :
+          deliveryDefault.source === "fallback" ? "host の既定値がないため on を使用" : "host の既定設定を使用"}</p>
+        <p class="hint">あなたやエージェントからの入力は対応する方法で配送し、それ以外は通常の待ち行列に入ります。</p>
+      </div>
+
       <label>
         ホスト
         <select bind:value={hostId}>

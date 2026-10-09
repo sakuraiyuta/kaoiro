@@ -24,11 +24,13 @@
     "@playwright/test": "^1.62.1",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/phoenix": "^1.6.7",
+    "@types/ws": "^8.18.2",
     "jsdom": "^29.1.1",
     "svelte": "^5.56.3",
     "svelte-check": "^4.6.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "ws": "^8.22.0"
   }
 }

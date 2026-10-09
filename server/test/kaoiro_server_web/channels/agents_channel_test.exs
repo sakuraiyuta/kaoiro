@@ -6058,12 +6058,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # Flush the async cast before the handler reads the pointer.
       SessionPointers.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
+      assert {:ok, _} = KaoiroServer.DeliveryPolicies.compare_and_set(agent_id, :off, 0)
       socket = join_as(:operator)
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
       assert_reply ref, :ok
       assert_broadcast "spawn", payload
+      assert {:ok, %{policy: :off, revision: 1}} = KaoiroServer.DeliveryPolicies.get(agent_id)
+      refute Map.has_key?(payload, "delivery_policy")
       # Same agent_id (revive in place), resume the recorded session under cwd,
       # keep the last persona, fresh token.
       assert payload["agent_id"] == agent_id
@@ -6419,6 +6422,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       _ = AgentDirectory.get(agent_id)
       @endpoint.subscribe("runner:" <> host_id)
+      assert {:ok, _} = KaoiroServer.DeliveryPolicies.compare_and_set(agent_id, :off, 0)
       socket = join_as(:operator)
 
       ref =
@@ -6429,6 +6433,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok
       assert_broadcast "spawn", payload
+      assert {:ok, %{policy: :off, revision: 1}} = KaoiroServer.DeliveryPolicies.get(agent_id)
+      refute Map.has_key?(payload, "delivery_policy")
       # payload の session_id を使う(SessionPointers の値ではなく)
       assert payload["resume_session_id"] == "new-sess-1"
       # cwd は SessionPointers を引き継ぐ

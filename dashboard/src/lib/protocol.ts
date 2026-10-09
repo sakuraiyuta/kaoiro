@@ -9,6 +9,9 @@
 import { Socket } from "phoenix";
 import type { Channel } from "phoenix";
 
+import { DeliveryPolicyError, parseDeliveryPolicy, parseLaunchDeliveryPolicy, policyObject, policyRevision,
+  type DeliveryPolicy, type DeliveryPolicyView, type DeliveryPolicyAccepted, type LaunchDeliveryPolicy } from "./deliveryPolicy";
+
 import { randomUUID } from "./uuid";
 import {
   parseStatusLine,
@@ -2417,6 +2420,7 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
  *  payload. models reuses the ext.models entry shape (#54) so the launch
  *  cascade and the running-agent switcher share one renderer. */
 export interface EngineCatalog {
+  launch_delivery_policy?: LaunchDeliveryPolicy | undefined;
   id: string;
   models: ModelOption[];
   /** Launch-time permission axes this engine offers as operator-selectable
@@ -2433,6 +2437,7 @@ export interface EngineCatalog {
 /** A live host the operator can launch agents on (ADR-0023 / #22). Derived
  *  from the operator-only `hosts` push; viewers never receive it. */
 export interface HostInfo {
+  in_flight_defaults?: unknown;
   host_id: string;
   personas: Persona[];
   cwd_allowlist: string[];
@@ -2462,6 +2467,7 @@ export interface HostInfo {
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
  *  server allocates agent_id and mints the per-agent token. */
 export interface SpawnRequest {
+  delivery_policy?: DeliveryPolicy;
   host_id: string;
   /** persona id, resolved server-side to the host's declared persona. */
   persona: string;
@@ -2661,6 +2667,8 @@ export interface KaoiroHandlers {
    *  reports the TRANSPORT: a socket can open before the channel joins, and
    *  the buffer's window is the channel's, not the socket's. */
   onJoined?: () => void;
+  onDeliveryPolicyControl?: (available: boolean) => void;
+  onDeliveryPolicyChanged?: (agentId: string, view: DeliveryPolicyView) => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
   /** Whether the bounded agent wire projection omitted entries on this join. */
@@ -2852,6 +2860,8 @@ export interface SessionResetFailedPayload {
 }
 
 export interface KaoiroConnection {
+  setDeliveryPolicy: (agentId: string, policy: DeliveryPolicy, expectedRevision: number) => Promise<DeliveryPolicyAccepted>;
+  getDeliveryPolicy: (agentId: string) => Promise<DeliveryPolicyView>;
   disconnect: () => void;
   /** Force-cycles the Phoenix socket: disconnect then reconnect (issue
    *  #119). Use when the tab or network reappears in a state where
@@ -3178,7 +3188,9 @@ export function parseHosts(value: unknown): HostInfo[] {
         ...(Array.isArray(e.capabilities)
           ? { capabilities: e.capabilities }
           : {}),
-        ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
+        ...(Array.isArray(e.engines) ? { engines: e.engines.filter(engine => policyObject(engine) && typeof engine.id === "string" && Array.isArray(engine.models)).map(engine => ({ ...engine,
+          launch_delivery_policy: parseLaunchDeliveryPolicy(engine.launch_delivery_policy) })) } : {}),
+        ...(Object.hasOwn(e, "in_flight_defaults") ? { in_flight_defaults: e.in_flight_defaults } : {}),
         // issue #218: absent on a pre-#218 runner — only copy over when
         // present AND correctly typed/in-domain, so a malformed/forged
         // value cannot spoof a build_revision that was never actually
@@ -4282,6 +4294,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   status_line_snapshot: "checked",
   status_line: "checked",
   status_line_settings: "checked",
+  delivery_policy_changed: "checked",
 } as const satisfies Record<string, "checked">;
 
 export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
@@ -4497,6 +4510,42 @@ export function connectKaoiro(
   //     teardownGen). A prior round-6 attempt used a fire-time live compare
   //     (allowedScheduleGen); a completed reconnect re-baselined it and let
   //     stale chains slip through. arm-time capture is the fix.
+  let policyReady = false;
+  let policyGeneration = 0;
+  const policyPending = new Set<(error: DeliveryPolicyError) => void>();
+  function clearPolicyChannel(): void {
+    policyReady = false;
+    policyGeneration++;
+    for (const reject of policyPending) reject(new DeliveryPolicyError("disconnected", undefined, undefined, true));
+    policyPending.clear();
+    handlers.onDeliveryPolicyControl?.(false);
+  }
+  function policyRequest(event: string, payload: Record<string, unknown>): Promise<unknown> {
+    if (!policyReady || channel.state !== "joined" || !socket.isConnected()) {
+      return Promise.reject(new DeliveryPolicyError("unavailable"));
+    }
+    const generation = policyGeneration;
+    return new Promise((resolve, reject) => {
+      const fail = (error: DeliveryPolicyError) => { policyPending.delete(fail); reject(error); };
+      policyPending.add(fail);
+      pushVersioned(channel, event, payload)
+        .receive("ok", (value: unknown) => {
+          policyPending.delete(fail);
+          if (generation !== policyGeneration) fail(new DeliveryPolicyError("disconnected", undefined, undefined, true));
+          else resolve(value);
+        })
+        .receive("error", (value: unknown) => {
+          const reason = policyObject(value) && typeof value.reason === "string" &&
+            ["forbidden", "unknown_agent", "policy_unknown", "persistence_failed", "revision_exhausted", "invalid_payload", "revision_conflict"].includes(value.reason)
+            ? value.reason : "unknown_error";
+          const conflict = policyObject(value) && reason === "revision_conflict" && policyRevision(value.current_revision) &&
+            (value.policy === "on" || value.policy === "off");
+          fail(new DeliveryPolicyError(reason, conflict ? value.current_revision as number : undefined,
+            conflict ? value.policy as DeliveryPolicy : undefined, reason === "unknown_error"));
+        })
+        .receive("timeout", () => fail(new DeliveryPolicyError("timeout", undefined, undefined, true)));
+    });
+  }
   let disposed = false;
   let cycleGeneration = 0;
   let cycleInFlight = false;
@@ -4592,6 +4641,7 @@ export function connectKaoiro(
       handlers.onStatus("connected");
     });
     s.onClose(() => {
+      clearPolicyChannel();
       // Phoenix's native reconnectTimer calls socket.connect() itself. Mark
       // the ticket stale here so that path cannot accidentally reuse the
       // ticket which authenticated the now-closed transport.
@@ -4599,6 +4649,7 @@ export function connectKaoiro(
       handlers.onStatus("disconnected");
     });
     s.onError(() => {
+      clearPolicyChannel();
       if (!disposed) requireFreshTicket();
       handlers.onStatus("disconnected");
     });
@@ -4617,6 +4668,13 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
+    c.onError(() => clearPolicyChannel());
+    c.onClose(() => clearPolicyChannel());
+    bindServerEvent(c, "delivery_policy_changed", (payload: unknown) => {
+      if (policyObject(payload) && typeof payload.agent_id === "string") {
+        handlers.onDeliveryPolicyChanged?.(payload.agent_id, parseDeliveryPolicy(payload.delivery_policy));
+      }
+    });
     bindServerEvent(c, "snapshot", (payload: { agents?: unknown; snapshot_incomplete?: unknown }) => {
       const agents: Record<string, Envelope> = {};
       for (const value of Object.values(payload.agents ?? {})) {
@@ -4873,7 +4931,12 @@ export function connectKaoiro(
     // join push's receive hooks across `rejoin()`'s `resend()`, so this
     // fires on every reconnect too — which is exactly when the client has
     // to forget what the previous connection buffered.
-    ch.join().receive("ok", () => handlers.onJoined?.());
+    ch.join().receive("ok", (reply: unknown) => {
+      clearPolicyChannel();
+      handlers.onJoined?.();
+      policyReady = policyObject(reply) && reply.delivery_policy_control === "v1";
+      handlers.onDeliveryPolicyControl?.(policyReady);
+    });
     return ch;
   }
 
@@ -5129,6 +5192,7 @@ export function connectKaoiro(
 
   return {
     disconnect: () => {
+      clearPolicyChannel();
       // Terminal: block any in-flight reconnect's teardown callback from
       // rebuilding after we tear down (must-fix 2). Bumping the generation
       // is defence in depth — the disposed check alone is enough.
@@ -5169,6 +5233,7 @@ export function connectKaoiro(
       // (d) leave は fire-and-forget (dead transport 対策)、
       // (e) socket.disconnect の cb で new Channel を subscribe → socket.connect。
       if (disposed || cycleInFlight) return;
+      clearPolicyChannel();
       cycleInFlight = true;
       const gen = ++cycleGeneration;
 
@@ -5304,6 +5369,18 @@ export function connectKaoiro(
         );
       }
       return promise;
+    },
+    getDeliveryPolicy: async (agentId) => {
+      const value = await policyRequest("get_delivery_policy", { agent_id: agentId });
+      if (!policyObject(value) || value.agent_id !== agentId) throw new DeliveryPolicyError("invalid_reply", undefined, undefined, true);
+      return parseDeliveryPolicy(value.delivery_policy);
+    },
+    setDeliveryPolicy: async (agentId, policy, expectedRevision) => {
+      if (!policyRevision(expectedRevision) || (policy !== "on" && policy !== "off")) throw new DeliveryPolicyError("invalid_payload");
+      const value = await policyRequest("set_delivery_policy", { agent_id: agentId, policy, expected_revision: expectedRevision });
+      if (!policyObject(value) || !policyRevision(value.revision) || value.status !== "pending")
+        throw new DeliveryPolicyError("invalid_reply", undefined, undefined, true);
+      return { revision: value.revision, status: "pending" };
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),

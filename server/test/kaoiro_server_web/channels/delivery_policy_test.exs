@@ -260,6 +260,53 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     refute Map.has_key?(safe["ext"]["delivery_policy"], "mechanisms")
   end
 
+  test "fresh read refuses a snapshot with inconsistent owner identities", %{id: id} do
+    wrapper(id, %{"delivery_policy" => "v1"})
+    operator = client(:operator)
+    foreign = self()
+    previous = :sys.get_state(WorkStore).operator_modes[id]
+
+    :sys.replace_state(WorkStore, fn state ->
+      %{state | operator_modes: Map.put(state.operator_modes, id, {foreign, modes()})}
+    end)
+
+    try do
+      assert_reply push(operator, "get_delivery_policy", %{"version" => "0", "agent_id" => id}),
+                   :ok,
+                   %{"delivery_policy" => view}
+
+      refute Map.has_key?(view, "mechanisms")
+      assert view["confirmed"] == false
+    after
+      :sys.replace_state(WorkStore, fn state ->
+        %{state | operator_modes: Map.put(state.operator_modes, id, previous)}
+      end)
+    end
+  end
+
+  test "two dashboard channels race once and the losing CAS cannot overwrite", %{id: id} do
+    wrapper(id, %{"delivery_policy" => "v1"})
+    first = client(:operator)
+    second = client(:admin)
+    left = push(first, "set_delivery_policy", request(id, "off", 1))
+    right = push(second, "set_delivery_policy", request(id, "off", 1))
+    assert_receive %Phoenix.Socket.Reply{ref: ^left, status: left_status, payload: left_payload}
+
+    assert_receive %Phoenix.Socket.Reply{
+      ref: ^right,
+      status: right_status,
+      payload: right_payload
+    }
+
+    results = [{left_status, left_payload}, {right_status, right_payload}]
+    assert {:ok, %{"revision" => 2, "status" => "pending"}} in results
+
+    assert {:error,
+            %{"reason" => "revision_conflict", "current_revision" => 2, "policy" => "off"}} in results
+
+    assert {:ok, %{policy: :off, revision: 2}} = DeliveryPolicies.get(id)
+  end
+
   test "viewer unknown-agent write is forbidden before existence lookup", %{id: id} do
     viewer = client(:viewer)
 
