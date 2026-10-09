@@ -49,7 +49,8 @@ async function main() {
   const boundary=api(`repos/${repository}/actions/runs/${process.env.KAOIRO_LANDING_FIRST_RUN_ID}`);
   require(boundary.workflow_id===current.workflow_id && boundary.event==="push" && boundary.head_branch==="develop", "activation boundary differs");
   gitAuthentication();
-  const { allocateLanding }=await import("./landing-tags.mjs");
+  const { allocateLanding, auditLandingInventory }=await import("./landing-tags.mjs");
+  auditLandingInventory({cwd:process.cwd(),remote:"origin",repositoryId});
   const runOne=async run=> {
     if(run.run_number<boundary.run_number || run.event!=="push" || run.head_branch!=="develop") return;
     execFileSync("git",["fetch","--tags","origin"],{stdio:"pipe",timeout:15_000});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -88,6 +88,34 @@ function remote() {
   git(root,"clone","--bare","-q",source,bare);git(source,"remote","add","origin",bare);
   return {root,source,bare,revision,git};
 }
+
+test("the workflow audits all tags before returning an existing claim",()=>{
+  const fixture=remote();
+  const bin=join(fixture.root,"bin");mkdirSync(bin);
+  const run={id:1,run_number:1,workflow_id:77,event:"push",head_branch:"develop",
+    head_sha:fixture.revision,created_at:"2026-10-09T00:00:00Z",
+    repository:{id:BUILD_REPOSITORY_ID},head_repository:{id:BUILD_REPOSITORY_ID}};
+  const gh=join(bin,"gh");
+  writeFileSync(gh,`#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(run))});\n`);
+  chmodSync(gh,0o700);
+  const invoke=()=>spawnSync(process.execPath,[new URL("../landing-workflow.mjs",import.meta.url).pathname,"allocate"],{
+    cwd:fixture.source,encoding:"utf8",timeout:30_000,
+    env:{...process.env,PATH:`${bin}:${process.env.PATH}`,GH_TOKEN:"local-fixture-only",
+      GITHUB_REPOSITORY:"sakuraiyuta/kaoiro",GITHUB_REPOSITORY_ID:String(BUILD_REPOSITORY_ID),GITHUB_RUN_ID:"1",
+      KAOIRO_LANDING_FIRST_RUN_ID:"1",KAOIRO_LANDING_ENABLED:"true",KAOIRO_LANDING_CONTROL_SHA:fixture.revision,
+      KAOIRO_IDENTITY_GATES_SHA:fixture.revision,KAOIRO_IDENTITY_V9:"true",KAOIRO_IDENTITY_V10:"true"},
+  });
+  const refs=()=>fixture.git(fixture.source,"ls-remote","--tags","origin");
+  const initial=refs();
+  const accepted=invoke();assert.equal(accepted.status,0,accepted.stderr);assert.equal(refs(),initial);
+  const orphan={schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision:fixture.revision,
+    branch:"develop",version:"2026.10.09.2",original_run_id:2,created_at:"2026-10-09T00:00:01Z"};
+  fixture.git(fixture.source,"tag","-a","v2026.10.09.2","-m",JSON.stringify(orphan));
+  fixture.git(fixture.source,"push","origin","refs/tags/v2026.10.09.2");
+  const corrupted=refs();
+  const rejected=invoke();assert.equal(rejected.status,78,rejected.stderr);
+  assert.match(rejected.stderr,/claim|duplicate|inventory/);assert.equal(refs(),corrupted);
+});
 test("a redeploy with a new UUID reuses the immutable first release tag",()=>{
   const {source,revision,git}=remote();const first=receipt(revision);
   const result=publishProductionRelease({cwd:source,receipt:first,...options});assert.equal(result.reused,false);
