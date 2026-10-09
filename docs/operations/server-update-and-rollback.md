@@ -843,6 +843,24 @@ otherwise each of its status updates asks the operator for approval. Codex and
 Antigravity peers need no change
 ([inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md)).
 
+## Dashboard delivery compatibility
+
+The dashboard requires `delivery_policy_control: "v1"` in the lobby join
+reply. A server rollback that omits it leaves policy readable where a safe
+view exists but disables API actions; a rejoin clears previous readiness.
+An old wrapper without policy-ack support has no live switch. An old runner,
+or a register whose optional launch metadata was omitted for size, shows the
+same unconfirmed launch hint and leaves ordinary launch available. See the
+[display table](../reference/ui/delivery-controls.md).
+
+Stored off survives dashboard reload, same-ID restore/resume and runner
+re-registration. Rolling back to a server that does not implement policy
+cannot promise enforcement. Restoring a lower server revision resets the
+client's revision floor, but does not reset a live wrapper's high-water mark.
+Use the existing [delivery-policy revision recovery](#delivery-policy-revision-recovery)
+procedure, including its wrapper restart boundary; dashboard confirmation
+must follow the new owner's exact ack, not the save reply.
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).

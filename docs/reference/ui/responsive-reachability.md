@@ -2,7 +2,7 @@
 title: Responsive reachability-path inventory
 description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element.
 status: provisional
-last_updated: 2026-09-27
+last_updated: 2026-10-09
 related: [responsive-layout, design]
 ---
 
@@ -23,6 +23,21 @@ Terminology:
   correct, not a missing element.
 - **Always** — visible without an operation while its display condition holds.
 - **Reachability path** — user operations required to bring the element into view.
+
+## Delivery policy controls
+
+The [delivery control](delivery-controls.md) is in LaunchDialog for a new ID
+and in AgentDetail's status panel for an existing ID. The launch dialog only
+renders for a connected operator/admin. The live status is readable by viewers;
+its checkbox and fresh-read action require an operator connection. The API
+marker, current owner and supported mechanisms additionally gate activation.
+
+| Element | Desktop | Tablet / phone |
+| --- | --- | --- |
+| Fresh-launch delivery checkbox and hint | Open LaunchDialog; form scroll | Same modal and form scroll |
+| Stored setting, application status and owner mechanisms | Detail status panel; status scroll | Open detail status sheet; sheet content scroll |
+| Live delivery checkbox and fresh read | Same status panel | Same status sheet |
+| Pending/conflict/uncertain announcement | Polite status region next to control | Same region inside sheet |
 
 ## Definition
 

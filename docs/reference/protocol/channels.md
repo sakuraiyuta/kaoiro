@@ -177,6 +177,18 @@ full topic index.
 
 ## Per-agent delivery policy
 
+A successful `agents:lobby` join returns `delivery_policy_control: "v1"`.
+Clients clear readiness on disconnect/rejoin and require this exact marker
+before read/write actions; an absent or unknown marker does not authorize
+probing an older server.
+
+`get_delivery_policy` accepts exactly `{version: "0", agent_id}` and returns
+`{agent_id, delivery_policy}`. It is operator/admin-only, with role rejection
+before agent lookup. Unknown IDs return `unknown_agent`; a known agent with
+no readable policy returns an unknown view. It never creates a row, increments
+a counter or pushes to the wrapper. `invalid_payload`, `forbidden` and
+`policy_unknown` are the other bounded errors.
+
 `set_delivery_policy` on `agents:lobby` accepts exactly
 `{version: "0", agent_id, policy: "on" | "off", expected_revision}` from a
 server-authenticated operator or admin. The role is checked again inside
@@ -225,9 +237,19 @@ an absent registration is not a legacy owner.
 Server-authored `ext.delivery_policy` and the versioned
 `delivery_policy_changed {agent_id, delivery_policy}` event expose policy,
 revision when known, applied revision when known, `confirmed`, `pending` and
-`wrapper_support`. Viewer snapshots retain only this safe ext field; live
+`wrapper_support`, plus optional `mechanisms: {operator_early,
+inter_agent_early, inter_agent_yield}` from the same current-owner WorkStore
+snapshot. Early enums are `fold`, `steer`, `hook`, `none`; yield is
+`tool_boundary` or `none`. Explicit operator none is authoritative; only an
+absent operator declaration falls back to the inter-agent mode. Inconsistent
+or absent owner snapshots omit mechanisms. Viewer snapshots retain only this
+safe ext field and these closed mechanism enums; live
 updates use the existing agent-visibility predicate. Wrapper ext cannot author
-this field. C2 owns the UI control and its viewer guard.
+this field. The [dashboard control](../ui/delivery-controls.md) separates
+stored preference, exact wrapper acknowledgement and current-owner mechanism.
+An accepted save remains pending. CAS conflicts require a fresh read and
+explicit reselection; lost or malformed replies are uncertain, never retried
+silently. The client does not queue policy writes while disconnected.
 
 State, permission and question envelopes retain the AgentStates policy view
 without a policy-store read. The initial envelope uses the view already read

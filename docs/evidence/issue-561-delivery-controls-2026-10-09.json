@@ -1,0 +1,844 @@
+{
+  "implementation_commit": "8583dd97d3564fcbf134c5531d450060c6340e4c",
+  "base": "70bc934ad5c4926b254c5d9231c3996283325cb7",
+  "inputs": {
+    "dashboard/e2e/deliveryPolicy.spec.ts": "1a30063cb32169bb2b3b3a0092b99ecc249c09ddee433a5e409dcef541505dc5",
+    "dashboard/package.json": "f3e617d72f6b3f8f5f31a1208d7de9de04eefe2fe653cba5f4cc316a7512b9f2",
+    "dashboard/playwright.delivery.config.ts": "314d043f48f5644bd0d5197faae8d58ab09b3d92c53c34cac06a8b63b48866ba",
+    "dashboard/pnpm-lock.yaml": "0b97f0951245741275e44a2f8d728b981325b4c28cc7a0899170e70fe4e6f229",
+    "dashboard/src/App.svelte": "d93d46b7c2289d54f0aa9bdda9ce1826b4eacfe0a1768a0685a203391377b6f1",
+    "dashboard/src/lib/AgentDetail.svelte": "1ba98a70e1386358e39850ec0f9dd8a1bd5a9180c34e776e579be6fdf3f209e0",
+    "dashboard/src/lib/DeliveryPolicyControl.svelte": "44ad53c8bd55299a6de0a44d3dc19d785248293502d805888265ba19c45291aa",
+    "dashboard/src/lib/LaunchDialog.svelte": "0350f537f4351bacdaef37680d37b622ff23209e53b5954d5003f30e7f66e8fd",
+    "dashboard/src/lib/deliveryPolicy.ts": "fbc0946d19af807c956d79b5705b8bd947c95fdd100a1480304af4cdd7c0135c",
+    "dashboard/src/lib/deliveryPolicyStore.svelte.ts": "dbb9baebf12f82748725df366f4a072e1c79465dd8d567abc9b0be1c1abf25b6",
+    "dashboard/src/lib/protocol.ts": "c3aa8faf95cb7ad1bd20fdba9c5aa0c753a5e20bb90a7914eb5c17bc57d81a0a",
+    "dashboard/test/appDeliveryAction.integration.test.ts": "b7296166133c6743f37d8cc3836cbeaae1b0399f1202c4c57919b3dd886c38b3",
+    "dashboard/test/appDeliveryRole.integration.test.ts": "b2152256ed8a312f6df7dcbccedb24ca3d07d3ee98f5576a206654e9a43c82ba",
+    "dashboard/test/clientProtocolVersion.integration.test.ts": "13cf31fc9b392d8cbd7fb9be2c1f5f6272c10a8ec47a8ecf1ac664a55c3c9892",
+    "dashboard/test/deliveryPolicy.integration.test.ts": "6a045502fc70aea9e8b5f41fc5a0c0727f64e4549ac887d0460b65a1588c87b6",
+    "dashboard/test/deliveryPolicyLoopback.ts": "ebeeabb80b84ad874fae91e21da1547019bb5ce8eed4d62d02dcafd2a87fbdd3",
+    "dashboard/test/deliveryPolicyWire.integration.test.ts": "6de61f77627b1feeea6d83a5a0d02824f67542417bd000ba310c6ad082a7c3d3",
+    "dashboard/test/fixtures/RetainedDeliveryAction.svelte": "e84a94ecb4057165478252eca8481deef8a0050a8d2f6e9bb72576fbb5ac89b9",
+    "dashboard/test/launchDelivery.integration.test.ts": "9bb2e58acedb3400c9e5a36613daf32759a81942b46477798e5dc73c768e1bbb",
+    "protocol/src/delivery-policy.ts": "7a1cc1bf6de69e5c02edc0a4286b93c47ad246cfba1da7e9d76b3392c37983c9",
+    "server/lib/kaoiro_server/delivery_policies/state.ex": "dea671cdfbbe4d3bcc02d35755b999a121967589ae997eef19f4aff8fffd32c7",
+    "server/lib/kaoiro_server_web/channels/agents_channel.ex": "cd557d09ee9c769b9e119a4ee8235d9cf9042974018cc21245418ab19b6ee3f3",
+    "server/lib/kaoiro_server_web/viewer_agent_projection.ex": "85c9c7e18953120644ba502feaa547fe2d1084c74238c559b3edb2a48fff5e37",
+    "server/test/kaoiro_server_web/channels/agents_channel_test.exs": "e42c3c69839db9d1fc856c03436a659150213b3eb97cf6c424511dfe1711203f",
+    "server/test/kaoiro_server_web/channels/delivery_policy_test.exs": "3486372b6890b68737f1151bc8a164a585b057053e0d61cee6834dd80653bdaf",
+    "server/test/kaoiro_server_web/channels/wrapper_channel_test.exs": "256b1ccfba90b22feef4eb10d6fb365e8839e9328a8a529d8e855c4ff0e5c72b"
+  },
+  "gates": [
+    {
+      "gate": "server",
+      "command": "mix precommit",
+      "result": "2147 passed; 1 excluded",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/server-final-serial.log",
+      "sha256": "0172b24c32dcfb5f0532f7720ca54a976a1bd79a6063af67c237e46088923b8e"
+    },
+    {
+      "gate": "dashboard",
+      "command": "pnpm test --maxWorkers=1",
+      "result": "1503 passed; 93 files",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/dashboard-final-serial.log",
+      "sha256": "714456ac71fd11989042d2f0be77c2002e0671c30b00a648f6a15c83d012a9ad"
+    },
+    {
+      "gate": "dashboard check",
+      "command": "pnpm check",
+      "result": "0 errors; 0 warnings",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/check-final-serial.log",
+      "sha256": "e3de9b8a70d006ca26f8c9b008cd093ed0ec9172c548ba25732ba2dcd0d993d0"
+    },
+    {
+      "gate": "dashboard build",
+      "command": "pnpm build",
+      "result": "1 build completed",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/build-final-serial.log",
+      "sha256": "7c300743ecc4edc64fbcd8e0a0ea2fa52f7a58340e58684a46148c61cfa841ee"
+    },
+    {
+      "gate": "built browser",
+      "command": "pnpm exec playwright test --config playwright.delivery.config.ts",
+      "result": "16 passed",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/browser-final-serial.log",
+      "sha256": "0b44c989084b8f5d9aaf2609357152c5f943e3fb74b2d8957ed275a486d6d05a"
+    },
+    {
+      "gate": "runner",
+      "command": "pnpm test",
+      "result": "1110 passed; 54 files",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/runner-full.log",
+      "sha256": "aab448b76a0278f9fd0506a8338adf242b00e83f5b279add33d95521cbec40c3"
+    },
+    {
+      "gate": "consumer typechecks",
+      "command": "pnpm -r typecheck",
+      "result": "7 packages completed",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/consumers-check.log",
+      "sha256": "74f7b93343519ea8c6e2a588939ab6ec33d3d6ab93f99176bc329ba758d74797"
+    },
+    {
+      "gate": "consumer builds",
+      "command": "pnpm -r build",
+      "result": "7 packages completed",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/consumers-build.log",
+      "sha256": "9ac0be956b53d5a46781d3d54137acd88c851ce5185a1ae7c8ff00f1e6e37251"
+    },
+    {
+      "gate": "focused dashboard",
+      "command": "pnpm test --maxWorkers=2 <five delivery test files>",
+      "result": "23 passed; 5 files",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/final-mutations/baseline-dashboard.log",
+      "sha256": "69a717b3ec76ae60cbd16678f75e112f7aeba27888c784deb61571b11538811e"
+    },
+    {
+      "gate": "focused server",
+      "command": "mix test test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "result": "37 passed",
+      "exit": 0,
+      "log": "tmp/reviews/issue-561/kogane-logs/final-mutations/baseline-server.log",
+      "sha256": "022d9f5135e72e303bb65939276c6d6e12a25b5874fe4a557bc6abe9239ca662"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "M01-event-binding",
+      "path": "dashboard/src/lib/protocol.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicyWire.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicyWire.integration.test.ts (4 tests | 1 failed) 3307ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "log_sha256": "527497f18ae92cbe01e05e6c6707490028840d1c406aa9bb05e75bcbec9bc93b",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicyWire.integration.test.ts > uses the real Phoenix client for exact read/write, checked events and rich conflicts"
+      ]
+    },
+    {
+      "name": "M02-cas-revision",
+      "path": "dashboard/src/lib/protocol.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicyWire.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicyWire.integration.test.ts (4 tests | 1 failed) 2310ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "log_sha256": "4f83fa83622bae50737575bf373dcbf517ea851cd11b5d9dfb14671ae4d12360",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicyWire.integration.test.ts > uses the real Phoenix client for exact read/write, checked events and rich conflicts"
+      ]
+    },
+    {
+      "name": "M03-conflict-details",
+      "path": "dashboard/src/lib/protocol.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicyWire.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicyWire.integration.test.ts (4 tests | 1 failed) 2352ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "log_sha256": "06cb3ec0b4d5fdfda56acbc1f807ea8a867c6ca9beb4bce1fd6e266dc5cc7d2e",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicyWire.integration.test.ts > uses the real Phoenix client for exact read/write, checked events and rich conflicts"
+      ]
+    },
+    {
+      "name": "M04-readiness-reset",
+      "path": "dashboard/src/lib/protocol.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicyWire.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicyWire.integration.test.ts (4 tests | 1 failed) 2404ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "log_sha256": "be105f46375e4ae193aae54063f8515b5c3c252bd1c92e33985579424363a7a4",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicyWire.integration.test.ts > explicit disconnect immediately cancels a pending policy request and readiness"
+      ]
+    },
+    {
+      "name": "M05-ack-exact",
+      "path": "dashboard/src/lib/deliveryPolicy.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 29ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "5dd11e4e0f90120e3a81cec4c2e999478c3a6745bcd176941a454eb082bdb770",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > requires exact supporting ack and never derives support from an engine"
+      ]
+    },
+    {
+      "name": "M06-accepted-confirmed",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 32ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "43810f161af20b9cb01748ee3c4d4ebb14d090982c5b6af3f92e2993c93112e9",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > accepted writes stay pending behind their revision floor and allow off before ack"
+      ]
+    },
+    {
+      "name": "M07-fabricated-support",
+      "path": "dashboard/src/lib/deliveryPolicy.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 30ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "3c2cbaf8b5d26e4289ad235af70af156f3e0e52b6f59142359f19eb18bbed216",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > requires exact supporting ack and never derives support from an engine"
+      ]
+    },
+    {
+      "name": "M08-auto-retry",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 30ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "765a1e10ee10bca7cbd4441850e6bd0df9d92a9d9595a52f63ce370a1a671df3",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > conflict refreshes without retry and lost replies remain uncertain until observed"
+      ]
+    },
+    {
+      "name": "M09-read-generation",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 2 failed) 31ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 2 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 12 passed (14)"
+      ],
+      "log_sha256": "3e1d70a9f924759c569cf65f2f9b50a2a232f7e59eaee250fbc979c95e184ba8",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > a fresh generation discards a read even when its revision is higher",
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > deleting an agent clears pending flags and rejects a late read even after the ID reappears"
+      ]
+    },
+    {
+      "name": "M10-request-token",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 35ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "f73c34dd87e6a0c882a111ae4fee28df589e78e0de0fe7b0bfbec903ba632689",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > unknown event wins over a delayed successful write and removal invalidates requests"
+      ]
+    },
+    {
+      "name": "M11-read-event-order",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 33ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "a0bfc328b58149967fd017505255e1257d9180925c83a97b7669897d57dc21d9",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > a newer event beats a late acceptance and a read racing that event"
+      ]
+    },
+    {
+      "name": "M12-revision-floor",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 34ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "74af83aa413d05327061c7320486211c0de38b6337d3aecc06989de45cae707b",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > accepted writes stay pending behind their revision floor and allow off before ack"
+      ]
+    },
+    {
+      "name": "M13-json-bound",
+      "path": "dashboard/src/lib/deliveryPolicy.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 2 failed) 36ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 2 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 12 passed (14)"
+      ],
+      "log_sha256": "33f40f962e3609bf8770c96ee5dd73b37127775f3a376b1d8a75b252a3681a5e",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > decodes complete metadata, exact overrides, and independent defaults fail closed",
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > keeps both exact metadata boundaries independently"
+      ]
+    },
+    {
+      "name": "M14-override-bound",
+      "path": "dashboard/src/lib/deliveryPolicy.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 2 failed) 37ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 2 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 12 passed (14)"
+      ],
+      "log_sha256": "94169ab018cc3fcfd57af3da51798a506825b94711036fcbda62260cd7904ce3",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > decodes complete metadata, exact overrides, and independent defaults fail closed",
+        "FAIL  test/deliveryPolicy.integration.test.ts > delivery policy decoding and current-owner display > keeps both exact metadata boundaries independently"
+      ]
+    },
+    {
+      "name": "M15-role-action",
+      "path": "dashboard/src/App.svelte",
+      "suite": "unit",
+      "selector": "test/appDeliveryAction.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/appDeliveryAction.integration.test.ts (1 test | 1 failed) 144ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed (1)"
+      ],
+      "log_sha256": "beb1eeff4110dc12612f1dad873914c833e0740748883d0314de9e71a2e0eb2f",
+      "failing_tests": [
+        "FAIL  test/appDeliveryAction.integration.test.ts > action rechecks role before calling the store even before the old DOM is removed"
+      ]
+    },
+    {
+      "name": "M16-detail-role-render",
+      "path": "dashboard/src/App.svelte",
+      "suite": "unit",
+      "selector": "test/appDeliveryRole.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/appDeliveryRole.integration.test.ts (1 test | 1 failed) 212ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed (1)"
+      ],
+      "log_sha256": "c5007ad1a9d52ff565e512db7ce10b578b4cdd84c4d1e0d4b8dc07e208581c08",
+      "failing_tests": [
+        "FAIL  test/appDeliveryRole.integration.test.ts > operator sees control; a viewer never receives it despite a valid API marker"
+      ]
+    },
+    {
+      "name": "M17-launch-action",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "unit",
+      "selector": "test/launchDelivery.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/launchDelivery.integration.test.ts (3 tests | 1 failed) 156ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 2 passed (3)"
+      ],
+      "log_sha256": "03634bfcc789cc527aa53a0999f1592faf51834e072c9a79702578b277da2e1f",
+      "failing_tests": [
+        "FAIL  test/launchDelivery.integration.test.ts > launch action rechecks authorization after the dialog was opened"
+      ]
+    },
+    {
+      "name": "M18-launch-default",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "unit",
+      "selector": "test/launchDelivery.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/launchDelivery.integration.test.ts (3 tests | 1 failed) 144ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 2 passed (3)"
+      ],
+      "log_sha256": "c0eaa27fb917024f5d3ad34c2b60d582371bf915453ea4ff67d31cd46a5f2782",
+      "failing_tests": [
+        "FAIL  test/launchDelivery.integration.test.ts > resume-mode fresh spawn includes the displayed launch policy"
+      ]
+    },
+    {
+      "name": "M19-buffer-bound",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 32ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "509b025b40d42f125bb6df1869d23e175f4b3237d3ec8f538e3a97105a46b2af",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > bounds pre-snapshot buffering and clears only local navigation notices"
+      ]
+    },
+    {
+      "name": "M20-local-notice",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 27ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "d4f2eb8e228768ff25635d33cd19634e8d683f5abbd576dc4a1855a977f70f11",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > leaving a detail discards local notices including a late failed write"
+      ]
+    },
+    {
+      "name": "M21-unknown-wins",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 49ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "44de26ae089127cc22017bcc27d368656f8fd641126f6c765e454d47424c8330",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > unknown event wins over a delayed successful write and removal invalidates requests"
+      ]
+    },
+    {
+      "name": "M22-app-marker",
+      "path": "dashboard/src/App.svelte",
+      "suite": "browser",
+      "selector": "built launch sends",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "99e9aa5416b0d91133dbd17e23a331f69425e42ad782dff9f1c2eefb6b841b44",
+      "failing_tests": []
+    },
+    {
+      "name": "M23-launch-role-render",
+      "path": "dashboard/src/App.svelte",
+      "suite": "browser",
+      "selector": "viewer rejoin",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "66702ab9dd32a6060d1c4ef64d876c757868f7ab49da26a790599f993c0c58b1",
+      "failing_tests": []
+    },
+    {
+      "name": "M24-manual-choice",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "browser",
+      "selector": "built launch sends",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "cfff381f09cadd23e9001cb171549ac3333c43af16130aaab8156cce02c613f0",
+      "failing_tests": []
+    },
+    {
+      "name": "M25-launch-capability",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "browser",
+      "selector": "launch default and disablement: none",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "db6c84b527189e1474ebc66237d5c27e17a723656b4b648f7d0c4ad527fcb710",
+      "failing_tests": []
+    },
+    {
+      "name": "M26-spawn-policy",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "browser",
+      "selector": "built launch sends",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "2d96e4af081e26af882f0ace2e919c9ab4d83970f825567b97d8fa2bcab6a041",
+      "failing_tests": []
+    },
+    {
+      "name": "M27-mount-write",
+      "path": "dashboard/src/App.svelte",
+      "suite": "browser",
+      "selector": "viewer rejoin",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "a97b44cf6812c11d1036ce8a198866b4aa5e8087e17bd381d53f29f2e58caeb5",
+      "failing_tests": []
+    },
+    {
+      "name": "M28-built-event",
+      "path": "dashboard/src/App.svelte",
+      "suite": "browser",
+      "selector": "at 1440",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "72dc18889664aba9a86aad78df7bfda1d4881c9d7f05633829921f2f2fca17b2",
+      "failing_tests": []
+    },
+    {
+      "name": "M29-built-read",
+      "path": "dashboard/src/App.svelte",
+      "suite": "browser",
+      "selector": "fresh read repairs",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "efb635af65af1d74fcddaae4371f7c1c65da4d68ca15f470c29b5ecd44e8c763",
+      "failing_tests": []
+    },
+    {
+      "name": "M30-live-status",
+      "path": "dashboard/src/lib/DeliveryPolicyControl.svelte",
+      "suite": "browser",
+      "selector": "at 1440",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "3e3b268726eefea3a50faccced5199feb6515362c20e8ab9e5d56d0503902b29",
+      "failing_tests": []
+    },
+    {
+      "name": "M31-read-role",
+      "path": "server/lib/kaoiro_server_web/channels/agents_channel.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "4a1f442820fad6dc949c30570a8f4be2a2ecc763b276258985718024eaec6995",
+      "failing_tests": [
+        "1) test lobby declares policy controls and read is role-first, exact and side-effect free (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M32-operator-none",
+      "path": "server/lib/kaoiro_server/delivery_policies/state.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "8a32dcd7dde7f9dba6045b63efc8fb4e0c17bac5620422d351d7053ba8607a54",
+      "failing_tests": [
+        "1) test operator none does not fall back and viewer mechanisms expose only valid enums (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M33-viewer-whitelist",
+      "path": "server/lib/kaoiro_server_web/viewer_agent_projection.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "8f8ba787fb748e21e229f9ffbd9339da5e61882cad2c37c0b4493cede0065506",
+      "failing_tests": [
+        "1) test operator none does not fall back and viewer mechanisms expose only valid enums (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M34-owner-consistency",
+      "path": "server/lib/kaoiro_server/work_store.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "manual_assertion_review": "Owner mismatch exposed mechanisms; refute assertion failed.",
+      "log_sha256": "9bf2bc4ddd5eb87f81c6010e1e9efb0fafebcaabdd3ebd7fc63efdda15123c62",
+      "failing_tests": [
+        "1) test fresh read refuses a snapshot with inconsistent owner identities (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M35-stale-owner",
+      "path": "server/lib/kaoiro_server/work_store.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "4d90149bd529f912115ce2767c5daa5b6578f5d69e53ac4f1e6fdb9764e71dac",
+      "failing_tests": [
+        "1) test fresh read, event and viewer projection use only current-owner mechanisms (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M36-ordinary-cache",
+      "path": "server/lib/kaoiro_server_web/channels/wrapper_channel.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 32/37 passed",
+        "Failed: 5 tests"
+      ],
+      "log_sha256": "07cacd45c128af3962c5201e7a9293c7193e3574a2888e8c833c8f9909ad5316",
+      "failing_tests": [
+        "1) test first state uses the join/ack view with WorkStore suspended: ack=false (KaoiroServerWeb.DeliveryPolicyTest)",
+        "2) test state_change keeps cached off and broadcasts without WorkStore (KaoiroServerWeb.DeliveryPolicyTest)",
+        "3) test permission_request keeps cached off and broadcasts without WorkStore (KaoiroServerWeb.DeliveryPolicyTest)",
+        "4) test first state uses the join/ack view with WorkStore suspended: ack=true (KaoiroServerWeb.DeliveryPolicyTest)",
+        "5) test question_request keeps cached off and broadcasts without WorkStore (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M37-restore-overwrite",
+      "path": "server/lib/kaoiro_server_web/channels/agents_channel.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/agents_channel_test.exs:6052",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 0/1 passed, 435 excluded",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "986d12d680bf174573edb43a97c200667b6059376b44c7d42fb99f4e66585979",
+      "failing_tests": [
+        "1) test restore (#22, ADR-0014 \u5fa9\u5e30) operator \u306e restore: \u540c\u4e00 agent_id \u3092 resume \u4ed8\u304d\u3067 runner \u3078\u518d spawn (KaoiroServerWeb.AgentsChannelTest)"
+      ]
+    },
+    {
+      "name": "M38-delete-read-token",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 35ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "a1cb27b0124895c0abe1dce1b4ed5556b64a655b75e3b7bbdfcb20aa6cd8247d",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > deleting an agent clears pending flags and rejects a late read even after the ID reappears"
+      ]
+    },
+    {
+      "name": "M39-delete-saving",
+      "path": "dashboard/src/lib/deliveryPolicyStore.svelte.ts",
+      "suite": "unit",
+      "selector": "test/deliveryPolicy.integration.test.ts",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "\u276f test/deliveryPolicy.integration.test.ts (14 tests | 1 failed) 32ms",
+        "\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 13 passed (14)"
+      ],
+      "log_sha256": "407c77cb900f344b7591732225252bed22b4cd0aeb534b65e0dedde701787f7d",
+      "failing_tests": [
+        "FAIL  test/deliveryPolicy.integration.test.ts > policy projection and asynchronous control > deleting an agent clears pending flags and rejects a late read even after the ID reappears"
+      ]
+    },
+    {
+      "name": "M40-register-retention",
+      "path": "server/lib/kaoiro_server/host_registry.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "583693377e8cd54a06a701fcb5578a1bdf47cf1556209ea2e12cc343ba471ae9",
+      "failing_tests": [
+        "1) test real register and operator hosts preserve launch metadata and defaults independently (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M41-persona-override",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "browser",
+      "selector": "launch target resets",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "f4a1f623efbe45131e5eaad7adf0af7e3d7be09e8e773560b82e09e3fa507f7e",
+      "failing_tests": []
+    },
+    {
+      "name": "M42-target-reset",
+      "path": "dashboard/src/lib/LaunchDialog.svelte",
+      "suite": "browser",
+      "selector": "launch target resets",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "b26ebd49be459f0faba4a1f726b722c8f84c96aa2c409ca4a3e0b180df2fccda",
+      "failing_tests": []
+    },
+    {
+      "name": "M43-read-shape",
+      "path": "server/lib/kaoiro_server_web/channels/agents_channel.ex",
+      "suite": "server",
+      "selector": "test/kaoiro_server_web/channels/delivery_policy_test.exs",
+      "exit": 2,
+      "status": "RED",
+      "summary": [
+        "Result: 36/37 passed",
+        "Failed: 1 test"
+      ],
+      "log_sha256": "a3150dc2fbe9cc8a60db99d26d4b0c10fb047e3930225f5b1561d395c2ed628d",
+      "failing_tests": [
+        "1) test lobby declares policy controls and read is role-first, exact and side-effect free (KaoiroServerWeb.DeliveryPolicyTest)"
+      ]
+    },
+    {
+      "name": "M44-failed-choice-resync",
+      "path": "dashboard/src/lib/DeliveryPolicyControl.svelte",
+      "suite": "browser",
+      "selector": "rejected write",
+      "exit": 1,
+      "status": "RED",
+      "summary": [
+        "1 failed"
+      ],
+      "log_sha256": "2cf13c14ca7e499c2c408d58206a34abe4bf6d27d12960f52cfe5ec8f4e6adb1",
+      "failing_tests": []
+    }
+  ],
+  "screenshots": {
+    "delivery-1440.png": "bb48ba4b26e09524fe7b3bfee79078278757647e2542c03981bc9d71b28a93a5",
+    "delivery-844.png": "63e24370fc3009f777f79cc3a7e3be96d2976d09cde5bee8f97d0bcb746f9121",
+    "delivery-390.png": "85be25483611d6227020d64d6ee8b2c114541262baf25839de2d3edebca697cb"
+  },
+  "integration_limit": "C3 runner producer -> real register -> decoder/UI remains unverified, assigned to issue 562 by the director."
+}
