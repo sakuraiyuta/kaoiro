@@ -134,3 +134,19 @@ Notes on the table:
 - o1 and o2: order swaps. o1 is pinned by the order test in the guard (the fixture alone does not see it); o2 is also seen by the fixture.
 - g1: a listed store missing from the list. g2: the enumeration only sees listed tables, so the unlisted-table control turns red.
 - Before the order test was added, o1 was green (exit 0). The table above is the rerun after commit 95b003b5.
+
+
+## C1 gate with the file_event budget (commit cddf0eaf)
+
+Budget: `TestTimeouts.file_event/0` = 2 x `out_of_band/0`, so 1000 ms locally (5000 ms under CI). The 14 waits that follow a file write use it. The threshold for this gate is half of that budget, 500 ms.
+
+- Watcher test blob: `a27764e23ba3948af943d1effa7de36745d7c395` (commit cddf0eaf). Probe copy generated from that blob, with `assert_receive` replaced by a timed wrapper, 17 probe lines per run.
+- Runs: 30 full-file runs (`--seed 1000` to `1029`) under 4 busy loops, started and stopped by PID.
+- Load (1 min, at each run start): 1.10 9.25.
+- Largest sample: 289.2 ms.
+- Samples above 500 ms: 0. Samples above 250 ms: 6.
+- Gate (`c1-gate.sh`, sha256 `ee3e8241c1617215...`, outside the repository), arguments `30 runs, 17 sites, threshold 500000 us`: exit 0 (gate_status=pass).
+
+Full suite on cddf0eaf (`scripts/mix-test.sh --seed 554`): 2093 passed, 1 excluded, exit 0, 173.2 s; `DeliveryLossDispatcher terminating` count 0.
+
+Negative control for the budget pin: moving one `file_event()` use back to `out_of_band()` makes the budget guard red (exit 2, 1 of 2 passed); moving all 14 back makes it red too (exit 2, 1 of 2 passed).
