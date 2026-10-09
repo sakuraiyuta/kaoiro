@@ -25,6 +25,23 @@ defmodule KaoiroServer.StoreResetCoverageGuardTest do
     end
   end
 
+  # The reset order is a contract. A store that reads another at start must be
+  # reset after it, and IngressOrder after both of its seed sources. The
+  # isolation fixture cannot observe the first pair, because the reset empties
+  # AgentStatusLines' rows before it restarts, so this test pins the order.
+  test "readers at start are reset after the stores they read" do
+    order = TestStores.dets_singletons()
+
+    assert position(order, KaoiroServer.TokenDenylist) <
+             position(order, KaoiroServer.AgentStatusLines)
+
+    assert position(order, KaoiroServer.ClearWatermarks) <
+             position(order, KaoiroServer.IngressOrder)
+
+    assert position(order, KaoiroServer.SessionStarts) <
+             position(order, KaoiroServer.IngressOrder)
+  end
+
   test "the reset list matches the deployment manifest of persisted stores" do
     manifest =
       PersistencePaths.manifest()
@@ -68,4 +85,6 @@ defmodule KaoiroServer.StoreResetCoverageGuardTest do
 
   # {open but not listed, listed but not open}
   defp diff(open, listed), do: {Enum.sort(open -- listed), Enum.sort(listed -- open)}
+
+  defp position(order, store), do: Enum.find_index(order, &(&1 == store))
 end
