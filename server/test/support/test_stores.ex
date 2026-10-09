@@ -47,10 +47,17 @@ defmodule KaoiroServer.TestStores do
   @spec memory_stores :: [module()]
   def memory_stores, do: @memory_stores
 
+  @dispatcher KaoiroServerWeb.DeliveryLossDispatcher
+
   @spec reset! :: :ok
   def reset! do
+    # The dispatcher polls DeliveryStates every second. A poll that lands while
+    # DeliveryStates is down exits the dispatcher, so it is stopped first and
+    # started again after the stores are back (issue 554).
+    :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, @dispatcher)
     Enum.each(@memory_stores, &restart!/1)
     Enum.each(@dets_singletons, &reset_dets!/1)
+    {:ok, _pid} = Supervisor.restart_child(KaoiroServer.Supervisor, @dispatcher)
     :ok
   end
 
