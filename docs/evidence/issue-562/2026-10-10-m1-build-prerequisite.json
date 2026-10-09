@@ -1,0 +1,199 @@
+{
+  "measured_revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+  "review_baseline": "ed6a5164047b892c1cb380028a5ff0a7769ad802",
+  "review_sha256": "a7bf60c1f763fd7ecc12fc46d49fa7c3f7f881c7852097070fff919d033c04cf",
+  "must_cumulative": 1,
+  "node_version": "v24.3.0",
+  "pnpm_version": "10.20.0",
+  "environment": {
+    "CI": "true",
+    "CODEX_HOME": "unset"
+  },
+  "positive": [
+    {
+      "name": "install",
+      "command": [
+        "pnpm",
+        "install",
+        "--frozen-lockfile"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-clean",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:14.485084+00:00",
+      "end": "2026-10-09T16:35:16.834855+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/install.log",
+      "log_sha256": "dc145bbeb43c1ff66c91567c8e6eb9dc76f9f5b896c1866436ed274cb427f83e"
+    },
+    {
+      "name": "wrapper-build",
+      "command": [
+        "pnpm",
+        "-C",
+        "wrapper",
+        "build"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-clean",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:16.835640+00:00",
+      "end": "2026-10-09T16:35:31.773560+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/wrapper-build.log",
+      "log_sha256": "14d4691370c8e9015c2056a5fac8538ced88305ac107e121c6cd39423ff1c026"
+    },
+    {
+      "name": "runner-typecheck",
+      "command": [
+        "pnpm",
+        "-C",
+        "runner",
+        "typecheck"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-clean",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:31.774337+00:00",
+      "end": "2026-10-09T16:35:38.786791+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/runner-typecheck.log",
+      "log_sha256": "2a1c068d09fe5f96667d3a3b23521acc7693afffe2f02108ee728c1578419865"
+    },
+    {
+      "name": "runner-test",
+      "command": [
+        "setsid",
+        "-w",
+        "pnpm",
+        "-C",
+        "runner",
+        "test"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-clean",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:38.787321+00:00",
+      "end": "2026-10-09T16:54:42.932360+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/runner-test.log",
+      "log_sha256": "b56b8ae85ebeee4f544893cac06495806b92c25c2b601cde9a549d1438851ea3"
+    }
+  ],
+  "negative": [
+    {
+      "name": "negative-install",
+      "command": [
+        "pnpm",
+        "install",
+        "--frozen-lockfile"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-negative",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:39.911440+00:00",
+      "end": "2026-10-09T16:35:43.136719+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/negative-install.log",
+      "log_sha256": "f8b52d4e7254a6badefd3625f4d2cdb2b2f94f489c3616d72f304c203fbb8540"
+    },
+    {
+      "name": "negative-wrapper-build",
+      "command": [
+        "pnpm",
+        "-C",
+        "wrapper",
+        "build"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-negative",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:35:43.139069+00:00",
+      "end": "2026-10-09T16:36:04.871369+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/negative-wrapper-build.log",
+      "log_sha256": "0b075ead98b4e7591538099eaef6422328fc860f8bfa85927261825e2734d15c"
+    },
+    {
+      "name": "negative-runner-typecheck",
+      "command": [
+        "pnpm",
+        "-C",
+        "runner",
+        "typecheck"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-negative",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:36:04.875909+00:00",
+      "end": "2026-10-09T16:36:14.489610+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/negative-runner-typecheck.log",
+      "log_sha256": "2cb26999655b7ccf456cdb6576e44fbf97eeeb7c9b71f8e71bb4d50e8a0b7285"
+    },
+    {
+      "name": "build-prerequisite-removed",
+      "command": [
+        "setsid",
+        "-w",
+        "pnpm",
+        "-C",
+        "runner",
+        "test",
+        "test/delivery-composition.test.ts"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-negative",
+      "runner_dist_before": false,
+      "exit": 1,
+      "start": "2026-10-09T16:36:14.490827+00:00",
+      "end": "2026-10-09T16:37:02.701495+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/build-prerequisite-removed.log",
+      "log_sha256": "a3c7c638e8f6fe050fabc8c82a25ddb8e94181f3a7f1e1889b60812790afaedb"
+    },
+    {
+      "name": "build-prerequisite-restored",
+      "command": [
+        "setsid",
+        "-w",
+        "pnpm",
+        "-C",
+        "runner",
+        "test",
+        "test/delivery-composition.test.ts"
+      ],
+      "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562-m1-negative",
+      "runner_dist_before": false,
+      "exit": 0,
+      "start": "2026-10-09T16:37:02.705515+00:00",
+      "end": "2026-10-09T16:37:19.678018+00:00",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/m1-kogane/build-prerequisite-restored.log",
+      "log_sha256": "000ef48749ebf12aedc2efbc3043ab88bc6dbd68009d5fce9a1ed71860a0c9c8"
+    }
+  ],
+  "restored": {
+    "revision": "60a9635719ff093917fc3902b34825aafc1e3d17",
+    "file": "runner/package.json",
+    "sha256": "66b511205bdac707652d607103832d88e60f483cd1e9a3f0f73a22aab9195f4e",
+    "restored_to_head": true
+  },
+  "counts": {
+    "positive_full": {
+      "tests_passed": 1137,
+      "files_passed": 57,
+      "exit": 0
+    },
+    "negative_targeted": {
+      "tests_failed": 4,
+      "files_failed": 1,
+      "exit": 1
+    },
+    "restored_targeted": {
+      "tests_passed": 4,
+      "files_passed": 1,
+      "exit": 0
+    }
+  },
+  "cleanup": "Both temporary worktrees removed after measurement; logs retained."
+}
