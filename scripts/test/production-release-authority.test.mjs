@@ -356,6 +356,26 @@ test("SSH authority checks private key metadata without reading the key bytes", 
   assert.throws(() => readReleaseAuthority(f.installRoot), /unsafe or oversized private release file/);
 });
 
+test("the tooling verifier rejects foreign ownership of the actual updater independently of the launcher", () => {
+  const f = fixture(), actualDeploy = join(f.base, "actual-deploy");
+  mkdirSync(actualDeploy, { mode: 0o700 });
+  for (const name of readdirSync(join(f.toolRoot, "runner/deploy")))
+    copyFileSync(join(f.toolRoot, "runner/deploy", name), join(actualDeploy, name));
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
+    const native=fs.lstatSync;
+    fs.lstatSync=(file,...args)=>{const stat=native(file,...args);
+      if(file===${JSON.stringify(join(actualDeploy, "kaoiro-runner-update.sh"))}) stat.uid=process.getuid()+1;
+      return stat;};
+    syncBuiltinESMExports();
+    const {verifyReleaseToolClosure}=await import(${JSON.stringify(join(f.toolRoot, "scripts/production-release-tools.mjs"))});
+    verifyReleaseToolClosure(${JSON.stringify(f.toolRoot)},${JSON.stringify(f.manifest.sha256)},
+      {actualRunnerDeploy:${JSON.stringify(actualDeploy)}});
+  `], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /physical updater tool changed/);
+});
+
 test("the server audit constructor excludes ambient Node injection from its exporter child", () => {
   const f = fixture("server");
   f.start();
