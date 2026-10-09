@@ -24,13 +24,23 @@ describe("loadSettings", () => {
       notificationSoundVolume: 0.3,
       agentCardStatsEnabled: false,
       hideNonMessageLogEntries: true,
+      gridSort: "recent",
     });
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.3,
       agentCardStatsEnabled: false,
       hideNonMessageLogEntries: true,
+      gridSort: "recent",
     });
+  });
+
+  it("gridSort の不正値は default の name に戻す", () => {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ gridSort: "random" }),
+    );
+    expect(loadSettings().gridSort).toBe("name");
   });
 
   it("壊れた JSON なら default にフォールバックする", () => {
@@ -118,7 +128,15 @@ describe("updateSettings", () => {
       notificationSoundVolume: 0.2,
       agentCardStatsEnabled: true,
       hideNonMessageLogEntries: false,
+      gridSort: "name",
     });
+  });
+
+  it("gridSort を更新して永続化する", () => {
+    updateSettings({ gridSort: "recent" });
+    expect(settings.gridSort).toBe("recent");
+    expect(loadSettings().gridSort).toBe("recent");
+    updateSettings({ gridSort: "name" });
   });
 
   it("volume の clamp を適用する", () => {
