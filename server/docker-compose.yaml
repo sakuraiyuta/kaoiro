@@ -39,6 +39,8 @@ services:
         KAOIRO_BUILD_DIRTY: ${KAOIRO_BUILD_DIRTY:-false}
         KAOIRO_BUILD_VERSION: ${KAOIRO_BUILD_VERSION:-unknown}
         KAOIRO_BUILD_CHANNEL: ${KAOIRO_BUILD_CHANNEL:-dev}
+        KAOIRO_BUILD_BRANCH: ${KAOIRO_BUILD_BRANCH:-unknown}
+        KAOIRO_BUILD_IDENTITY_JSON: ${KAOIRO_BUILD_IDENTITY_JSON:-}
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even

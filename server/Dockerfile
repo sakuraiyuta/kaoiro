@@ -41,15 +41,18 @@ ARG KAOIRO_BUILD_REVISION=unknown
 ARG KAOIRO_BUILD_DIRTY=false
 ARG KAOIRO_BUILD_VERSION=unknown
 ARG KAOIRO_BUILD_CHANNEL=dev
+ARG KAOIRO_BUILD_BRANCH=unknown
+ARG KAOIRO_BUILD_IDENTITY_JSON
 ENV KAOIRO_BUILD_REVISION=${KAOIRO_BUILD_REVISION}
 ENV KAOIRO_BUILD_DIRTY=${KAOIRO_BUILD_DIRTY}
 ENV KAOIRO_BUILD_VERSION=${KAOIRO_BUILD_VERSION}
 ENV KAOIRO_BUILD_CHANNEL=${KAOIRO_BUILD_CHANNEL}
+ENV KAOIRO_BUILD_BRANCH=${KAOIRO_BUILD_BRANCH}
+ENV KAOIRO_BUILD_IDENTITY_JSON=${KAOIRO_BUILD_IDENTITY_JSON}
 
 RUN corepack enable
 
-COPY VERSION /app/VERSION
-COPY scripts/build-identity.mjs /app/scripts/build-identity.mjs
+COPY scripts/build-identity.mjs scripts/serialize-build-identity.mjs /app/scripts/
 
 # pnpm-workspace.yaml carries the build-script approval (esbuild), so it
 # has to be in the deps layer alongside the manifest and lockfile.
@@ -57,6 +60,8 @@ COPY dashboard/package.json dashboard/pnpm-lock.yaml dashboard/pnpm-workspace.ya
 RUN pnpm install --frozen-lockfile
 
 COPY dashboard ./
+RUN node /app/scripts/serialize-build-identity.mjs /app/build-info.json
+ENV KAOIRO_BUILD_IDENTITY_FILE=/app/build-info.json
 RUN pnpm build
 
 FROM ${BUILDER_IMAGE} AS builder
@@ -173,12 +178,11 @@ ARG KAOIRO_BUILD_REVISION=unknown
 ARG KAOIRO_BUILD_DIRTY=false
 ARG KAOIRO_BUILD_VERSION=unknown
 ARG KAOIRO_BUILD_CHANNEL=dev
-RUN printf '{"version":"%s","channel":"%s","revision":"%s","dirty":%s,"build_identity_formats":["legacy-calver","landing-calver-v1"]}\n' \
-      "$KAOIRO_BUILD_VERSION" "$KAOIRO_BUILD_CHANNEL" \
-      "$KAOIRO_BUILD_REVISION" "$KAOIRO_BUILD_DIRTY" \
-      > /app/build-info.json \
-    && chown nobody:root /app/build-info.json
+ARG KAOIRO_BUILD_BRANCH=unknown
+ARG KAOIRO_BUILD_IDENTITY_JSON
+COPY --from=dashboard --chown=nobody:root /app/build-info.json /app/build-info.json
 LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
+LABEL org.opencontainers.image.version=${KAOIRO_BUILD_VERSION}
 # org.opencontainers.image.* is the reserved OCI-standard namespace (no
 # "dirty" key exists in it), so this is a project-custom label, not an
 # OCI-defined one. Round 2 (MF-2) baked dirty into build-info.json but

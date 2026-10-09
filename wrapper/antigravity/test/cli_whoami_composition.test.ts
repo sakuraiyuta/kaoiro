@@ -6,6 +6,8 @@ import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
 import { createHarnessHost } from "./host_test_harness.js";
 import { runAntigravityCli } from "../src/cli.js";
+import { loadWrapperBuildInfo } from "@kaoiro/wrapper-core";
+import { fileURLToPath } from "node:url";
 import { ToolHost } from "../src/toolhost.js";
 
 class FakeAgy extends EventEmitter {
@@ -65,6 +67,8 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
       display_name: "Momo",
       server_url: "ws://localhost:4000",
     };
+    const baked = loadWrapperBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
+    expect(baked.revision).not.toBe("unknown");
     let hostOptions!: AntigravityHostOptions;
     let actualHost!: AntigravityHost;
     let hostResolve!: () => void;
@@ -83,6 +87,7 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
       loadConfig: () => config,
       createServerLink: (_url, _agentId, options) => {
+        expect(options.buildInfo).toEqual(baked);
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
         return link as never;
       },
@@ -111,6 +116,8 @@ describe("Antigravity CLI whoami composition (issue #418)", () => {
       // Negative control: before the first init event, session_id key is absent
       const beforeInit = await callWhoami(toolHost);
       expect(beforeInit).not.toHaveProperty("session_id");
+      expect(beforeInit.build).toEqual({revision:baked.revision,dirty:baked.dirty,version:baked.version,channel:baked.channel,
+        ...(baked.branch === undefined ? {} : {branch:baked.branch})});
 
       // Deliver turn input and emit the first init event with conversation_id
       const sendPromise = actualHost.send("hello");

@@ -11,13 +11,50 @@ export interface BuildIdentity {
   dirty: boolean;
   version: string;
   channel: "dev" | "release";
+  branch: string;
+  landing?: LandingRecord;
   degraded: boolean;
   degradeReason: string | null;
 }
 
-export function computeBuildIdentity(cwd?: string): BuildIdentity;
-
-export function readProjectVersion(cwd?: string): string;
+export interface LandingRecord {
+  schema: 1;
+  kind: "landing";
+  repository_id: number;
+  revision: string;
+  branch: "develop";
+  version: string;
+  original_run_id: number;
+  created_at: string;
+}
+export interface FrozenBuildIdentity {
+  revision: string;
+  dirty: boolean;
+  version: string;
+  channel: "dev" | "release";
+  branch: string;
+  built_at: string;
+  build_identity_formats: string[];
+  landing?: LandingRecord;
+}
+export interface IdentityOptions {
+  buildRef?: string;
+  repositoryId?: number;
+  target?: string;
+  timeoutMs?: number;
+}
+export const BUILD_REPOSITORY_ID: number;
+export const BUILD_IDENTITY_FORMATS: string[];
+export function computeBuildIdentity(cwd?: string, options?: IdentityOptions): BuildIdentity;
+export function requireTaggedIdentity(cwd?: string, options?: IdentityOptions): BuildIdentity;
+export function isValidBuildBranch(value: unknown): value is string;
+export function parseLandingVersion(value: unknown): { day: string; number: number } | null;
+export function formatLandingVersion(day: string, number: number): string;
+export function validateLandingRecord(value: unknown, repositoryId?: number): LandingRecord;
+export function readLandingTag(cwd: string, tag: string, repositoryId?: number): { record: LandingRecord; object: string; tag: string };
+export function artifactBuildIdentity(identity: BuildIdentity, builtAt?: string): FrozenBuildIdentity;
+export function readFrozenBuildIdentity(file: string, expectedDigest?: string): FrozenBuildIdentity;
+export function consumeBuildIdentity(cwd?: string, env?: Record<string, string | undefined>): FrozenBuildIdentity;
 
 export function formatIdentityString(identity: {
   revision: string;
@@ -28,3 +65,7 @@ export function isValidBuildInfoShape(value: unknown): value is {
   revision: string;
   dirty: boolean;
 };
+
+export function validateFrozenBuildIdentity(value: unknown): FrozenBuildIdentity;
+export function explicitBuildIdentity(env: Record<string, string | undefined>): FrozenBuildIdentity | null;
+export function assertSourceIdentity(cwd: string, identity: FrozenBuildIdentity): void;

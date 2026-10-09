@@ -11,6 +11,7 @@ const envKeys = [
   "KAOIRO_BUILD_CHANNEL",
   "KAOIRO_BUILD_REVISION",
   "KAOIRO_BUILD_DIRTY",
+  "KAOIRO_BUILD_BRANCH",
 ] as const;
 
 const VALID_RELEASE_ENV = {
@@ -18,6 +19,7 @@ const VALID_RELEASE_ENV = {
   KAOIRO_BUILD_CHANNEL: "release",
   KAOIRO_BUILD_REVISION: "0123456789abcdef0123456789abcdef01234567",
   KAOIRO_BUILD_DIRTY: "false",
+  KAOIRO_BUILD_BRANCH: "main",
 };
 
 const UNKNOWN_DEV = {
@@ -25,6 +27,7 @@ const UNKNOWN_DEV = {
   channel: "dev",
   revision: "unknown",
   dirty: false,
+  branch: "unknown",
 };
 
 async function renderClientLabel(
@@ -69,12 +72,20 @@ async function renderClientLabel(
 }
 
 describe("Vite build identity ingress", () => {
+  it("renders the modern branch through the actual Vite bundle", async () => {
+    await expect(renderClientLabel({...VALID_RELEASE_ENV, KAOIRO_BUILD_VERSION:"2026.10.09.2",
+      KAOIRO_BUILD_CHANNEL:"dev", KAOIRO_BUILD_BRANCH:"develop"})).resolves.toEqual([
+      "v2026.10.09.2 / develop / 0123456"]);
+  });
   it("accepts a valid explicit release identity", () => {
     expect(buildIdentity(VALID_RELEASE_ENV)).toEqual({
       version: "2026.9.0",
       channel: "release",
       revision: "0123456789abcdef0123456789abcdef01234567",
       dirty: false,
+      branch: "main",
+      built_at: "unknown",
+      build_identity_formats: ["legacy-calver", "landing-calver-v1"],
     });
   });
 
@@ -93,7 +104,7 @@ describe("Vite build identity ingress", () => {
 
   it("renders a valid explicit release through the real Vite bundle", async () => {
     await expect(renderClientLabel(VALID_RELEASE_ENV)).resolves.toEqual([
-      "kaoiro release client v2026.9.0 / 0123456",
+      "v2026.9.0 / main / 0123456",
     ]);
   });
 
@@ -105,6 +116,6 @@ describe("Vite build identity ingress", () => {
         KAOIRO_BUILD_REVISION: "not-a-sha",
         KAOIRO_BUILD_DIRTY: "false",
       }),
-    ).resolves.toEqual(["kaoiro dev client vunknown / unknown"]);
+    ).resolves.toEqual(["unknown / unknown / unknown"]);
   });
 });

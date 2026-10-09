@@ -107,7 +107,7 @@ describe("LaunchDialog on Modal.svelte (issue #277)", () => {
     ]);
 
     expect(target.querySelector("select option")?.textContent?.trim()).toBe(
-      "host-a — kaoiro dev runner v2026.9.0 / 0123456",
+      "host-a — v2026.9.0 / unknown / 0123456",
     );
   });
 

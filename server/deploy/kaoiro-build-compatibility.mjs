@@ -19,7 +19,8 @@ function refuse(message) {
 
 function versionFormat(version) {
   if (typeof version !== "string") return null;
-  if (/^\d{4}\.(?:[1-9]|1[0-2])\.\d{1,6}$/.test(version)) return LEGACY;
+  const legacy = /^\d{4}\.(?:[1-9]|1[0-2])\.\d{1,6}$/.exec(version);
+  if (legacy && legacy[0] === version) return LEGACY;
   const match = /^(2[0-9]{3}|[3-9][0-9]{3})\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])\.([1-9][0-9]{0,5})$/.exec(version);
   if (version === "untagged") return LANDING;
   if (!match || match[0] !== version) return null;
@@ -28,7 +29,7 @@ function versionFormat(version) {
 }
 
 export function targetFormats(info, expectedRevision) {
-  if (!info || typeof info !== "object" || !SHA.test(expectedRevision) || info.revision !== expectedRevision) {
+  if (!info || typeof info !== "object" || (typeof expectedRevision !== "string" || expectedRevision.length !== 40 || !SHA.test(expectedRevision)) || info.revision !== expectedRevision) {
     refuse("pinned target image does not attest its full revision");
   }
   const formats = info.build_identity_formats ?? [LEGACY];

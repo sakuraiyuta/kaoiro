@@ -746,6 +746,15 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function tagFixtureLanding(dir, revision, number = 1) {
+  const version = `2026.10.09.${number}`;
+  const record = { schema: 1, kind: "landing", repository_id: 1343265983, revision,
+    branch: "develop", version, original_run_id: number, created_at: "2026-10-09T00:00:00Z" };
+  execFileSync("git", ["-C", dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "tag", "-a", `v${version}`, revision, "-m", JSON.stringify(record)]);
+  const object = execFileSync("git", ["-C", dir, "rev-parse", `refs/tags/v${version}`], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", dir, "update-ref", `refs/tags/identity/landing/${revision}`, object]);
+}
+
 function initRepo(dir) {
   mkdirSync(dir, { recursive: true });
   execFileSync("git", ["init", "-q", "-b", "main", dir]);
@@ -763,7 +772,9 @@ function initRepo(dir) {
   writeFileSync(join(dir, ".gitignore"), ".env\n");
   execFileSync("git", ["-C", dir, "add", "-A"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "-m", "init"]);
-  return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const revision = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  tagFixtureLanding(dir, revision);
+  return revision;
 }
 
 let root;
@@ -1502,7 +1513,8 @@ test("runUpdate derives old_sha from the old image build info, not git rev-parse
   execFileSync("git", ["-C", sourceDir, "add", "server/docker-compose.yaml"]);
   execFileSync("git", ["-C", sourceDir, "commit", "-q", "-m", "target"]);
   const targetSha = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main"]);
+  tagFixtureLanding(sourceDir, execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), 2);
+  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main", "--tags"]);
   const imageRevision = headSha;
   let caught;
   withOldBuildInfo(JSON.stringify({ revision: imageRevision }), () => {
@@ -2923,7 +2935,8 @@ test("runUpdate records the target effective compose plan after a legitimate tar
   execFileSync("git", ["-C", sourceDir, "add", "server/docker-compose.yaml"]);
   execFileSync("git", ["-C", sourceDir, "commit", "-q", "-m", "target compose change"]);
   const target = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main"]);
+  tagFixtureLanding(sourceDir, execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), 2);
+  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main", "--tags"]);
 
   try {
     withScenario("running", () => runUpdate({ repo: workDir, target }, configWithOverride()));

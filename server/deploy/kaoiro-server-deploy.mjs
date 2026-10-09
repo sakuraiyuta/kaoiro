@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
-import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
+import { artifactBuildIdentity, assertSourceIdentity, computeBuildIdentity, requireTaggedIdentity } from "../../scripts/build-identity.mjs";
 import { fsyncExistingPath, writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
@@ -1463,18 +1463,25 @@ function buildUnderLock({ repo, target }, config) {
     fail(`repo at ${repo} is dirty at ${identity.revision} after merge --ff-only; refusing to build`);
   }
 
+  let frozen;
+  try { frozen = artifactBuildIdentity(requireTaggedIdentity(repo, { target })); }
+  catch (error) { fail(error.message); }
+  assertSourceIdentity(repo, frozen);
   runDocker(bin, ["compose", "build"], {
     cwd: serverDir,
     env: {
       ...process.env,
       KAOIRO_BUILD_REVISION: identity.revision,
       KAOIRO_BUILD_DIRTY: String(identity.dirty),
-      KAOIRO_BUILD_VERSION: identity.version,
-      KAOIRO_BUILD_CHANNEL: identity.channel,
+      KAOIRO_BUILD_VERSION: frozen.version,
+      KAOIRO_BUILD_CHANNEL: frozen.channel,
+      KAOIRO_BUILD_BRANCH: frozen.branch,
+      KAOIRO_BUILD_IDENTITY_JSON: JSON.stringify(frozen),
     },
     stdio: "inherit",
   });
 
+  assertSourceIdentity(repo, frozen);
   const versionedTag = `kaoiro-server:${target}`;
   runDocker(bin, ["tag", "kaoiro-server:latest", versionedTag], { cwd: serverDir });
   const imageId = dockerInspect(bin, versionedTag, "{{.Id}}");
@@ -1603,7 +1610,10 @@ export function runStart(flags, config) {
       fail("start --initialize is required to bootstrap a fresh deployment (no prior state found)", 64);
     }
 
-    const identity = computeBuildIdentity(repo);
+    let identity;
+    try { identity = artifactBuildIdentity(requireTaggedIdentity(repo)); }
+    catch (error) { fail(error.message); }
+    assertSourceIdentity(repo, identity);
     runDocker(bin, ["compose", "up", "-d", "--build"], {
       cwd: serverDir,
       env: {
@@ -1612,10 +1622,13 @@ export function runStart(flags, config) {
         KAOIRO_BUILD_DIRTY: String(identity.dirty),
         KAOIRO_BUILD_VERSION: identity.version,
         KAOIRO_BUILD_CHANNEL: identity.channel,
+        KAOIRO_BUILD_BRANCH: identity.branch,
+        KAOIRO_BUILD_IDENTITY_JSON: JSON.stringify(identity),
       },
       stdio: "inherit",
     });
 
+    assertSourceIdentity(repo, identity);
     return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
   } finally {
     releaseLock(lockPath);

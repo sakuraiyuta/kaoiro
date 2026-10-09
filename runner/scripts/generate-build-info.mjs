@@ -30,7 +30,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
+import { consumeBuildIdentity } from "../../scripts/build-identity.mjs";
 
 // This script's own dir -> runner/scripts -> repo root is two levels up.
 // Git state is checked from the REPO ROOT, not runner/'s own directory,
@@ -42,24 +42,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const runnerDir = resolve(scriptDir, "..");
 const repoRoot = resolve(runnerDir, "..");
 
-const identity = computeBuildIdentity(repoRoot);
-if (identity.degraded) {
-  process.stderr.write(
-    `generate-build-info: degraded to unknown (${identity.degradeReason})\n`,
-  );
-}
-
-// `built_at` is diagnostic ONLY (issue #218, decided) -- never compared
-// for equality, never part of identity. It answers "how stale is this
-// artifact", not "what commit is it". Runner-only: the server side does
-// not carry it (issue #218 round 2 advisory 2 — see ADR-0053).
-const buildInfo = {
-  revision: identity.revision,
-  dirty: identity.dirty,
-  built_at: new Date().toISOString(),
-  version: identity.version,
-  channel: identity.channel,
-};
+const buildInfo = consumeBuildIdentity(repoRoot);
 
 const distDir = join(runnerDir, "dist");
 mkdirSync(distDir, { recursive: true });

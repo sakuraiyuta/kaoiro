@@ -6,7 +6,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeBuildIdentity } from "./build-identity.mjs";
+import { consumeBuildIdentity } from "./build-identity.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputArg = process.argv[2];
@@ -18,21 +18,6 @@ if (!outputArg) {
 const outputDir = isAbsolute(outputArg)
   ? outputArg
   : resolve(process.cwd(), outputArg);
-const identity = computeBuildIdentity(repoRoot);
-if (identity.degraded) {
-  process.stderr.write(
-    `generate-wrapper-build-info: degraded to unknown (${identity.degradeReason})\n`,
-  );
-}
-
+const identity = consumeBuildIdentity(repoRoot);
 mkdirSync(outputDir, { recursive: true });
-writeFileSync(
-  resolve(outputDir, "build-info.json"),
-  `${JSON.stringify({
-    revision: identity.revision,
-    dirty: identity.dirty,
-    built_at: new Date().toISOString(),
-    version: identity.version,
-    channel: identity.channel,
-  }, null, 2)}\n`,
-);
+writeFileSync(resolve(outputDir, "build-info.json"), `${JSON.stringify(identity, null, 2)}\n`);

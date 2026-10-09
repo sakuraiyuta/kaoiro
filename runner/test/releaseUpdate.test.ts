@@ -665,7 +665,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     // the identity.
     const other = revisionOf("something-else");
     const archive = makeReleaseTarball(work, B, {
-      cliVersionOverride: `kaoiro dev runner v2026.9.0 / ${other.slice(0, 7)}`,
+      cliVersionOverride: `v2026.9.0 / unknown / ${other.slice(0, 7)}`,
       cliBuildInfoOverride: { revision: other },
     });
 

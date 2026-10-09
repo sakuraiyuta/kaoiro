@@ -3205,6 +3205,7 @@
                   version: wrapperBuildInfo.build_version,
                   channel: wrapperBuildInfo.build_channel,
                   revision: wrapperBuildInfo.build_revision,
+                  branch: wrapperBuildInfo.build_branch ?? "unknown",
                 })}
               </dd>
             </div>

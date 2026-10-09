@@ -41,6 +41,7 @@ describe("computeBuildIdentity degrade rule (issue #218 round 2 MF-2)", () => {
       revision: "unknown",
       dirty: false,
       version: "unknown",
+      branch: "unknown",
       channel: "dev",
       degraded: true,
       degradeReason: expect.stringContaining("status"),

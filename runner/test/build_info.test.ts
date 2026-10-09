@@ -305,7 +305,7 @@ describe("formatBuildIdentity (issue #288)", () => {
         version: "2026.9.0",
         channel: "release",
       }),
-    ).toBe("kaoiro release runner v2026.9.0 / 0123456");
+    ).toBe("v2026.9.0 / unknown / 0123456");
   });
 
   it("legacy build-info は unknown/dev として明示する", () => {
@@ -315,7 +315,7 @@ describe("formatBuildIdentity (issue #288)", () => {
         dirty: false,
         built_at: "unknown",
       }),
-    ).toBe("kaoiro dev runner vunknown / unknown");
+    ).toBe("unknown / unknown / unknown");
   });
 
   it("表記が変わっても revision の短縮形は必ず運ぶ (issue #290)", () => {

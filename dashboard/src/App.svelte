@@ -1877,6 +1877,7 @@
                 version: serverHealth.build_version,
                 channel: serverHealth.build_channel,
                 revision: serverHealth.build_revision,
+                branch: serverHealth.build_branch ?? "unknown",
               },
         )}
       </span>

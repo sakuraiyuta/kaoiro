@@ -158,8 +158,9 @@ export function formatBuildRevision(info: BuildInfo): string {
  *  label is for `--version` and operator-facing build information only. */
 export function formatBuildIdentity(info: BuildInfo): string {
   const version = info.version ?? "unknown";
-  const channel = info.channel ?? "dev";
+  const branch = info.branch ?? "unknown";
   const shortHash =
     info.revision === "unknown" ? "unknown" : info.revision.slice(0, 7);
-  return `kaoiro ${channel} runner v${version} / ${shortHash}`;
+  const label = ["unknown", "untagged"].includes(version) ? version : `v${version}`;
+  return `${label} / ${branch} / ${shortHash}`;
 }

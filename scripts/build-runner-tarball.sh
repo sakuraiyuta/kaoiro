@@ -45,9 +45,14 @@ esac
 
 target="$host_os-$host_cpu"
 out="$root/dist-tarball"
+require_tagged=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --require-tagged)
+      require_tagged=true
+      shift
+      ;;
     --target)
       target="${2:?--target needs a value}"
       shift 2
@@ -90,6 +95,22 @@ for cmd in pnpm node tar; do
   }
 done
 
+# Freeze before the lock/staging directory can affect the dirty check.
+identity_scratch=$(mktemp -d "${TMPDIR:-/tmp}/fuji571-tarball-identity.XXXXXX")
+trap 'rm -rf "$identity_scratch"' EXIT INT TERM
+if [[ -z "${KAOIRO_BUILD_IDENTITY_FILE:-}" ]]; then
+  identity_args=()
+  if $require_tagged; then identity_args+=(--require-tagged); fi
+  node "$root/scripts/build-identity.mjs" "${identity_args[@]}" --snapshot "$identity_scratch/identity.json"
+  export KAOIRO_BUILD_IDENTITY_FILE="$identity_scratch/identity.json"
+fi
+export KAOIRO_BUILD_IDENTITY_SHA256
+KAOIRO_BUILD_IDENTITY_SHA256=$(node -e 'console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$KAOIRO_BUILD_IDENTITY_FILE")
+if $require_tagged; then
+  node --input-type=module -e 'import {consumeBuildIdentity,parseLandingVersion} from "./scripts/build-identity.mjs"; const i=consumeBuildIdentity(); if(i.dirty || i.revision==="unknown" || i.branch==="unknown" || !parseLandingVersion(i.version) || !i.landing) process.exit(78);'
+fi
+node --input-type=module -e 'import {consumeBuildIdentity,assertSourceIdentity} from "./scripts/build-identity.mjs"; assertSourceIdentity(process.cwd(),consumeBuildIdentity());'
+
 # Serialise builds. mkdir is atomic, so it doubles as the lock; taking it
 # BEFORE touching the working tree is what keeps two runs from racing on the
 # pnpm-workspace.yaml injection.
@@ -112,7 +133,7 @@ cleanup() {
   if [[ -f "$ws_backup" ]]; then
     cp "$ws_backup" "$ws"
   fi
-  rm -rf "$stage"
+  rm -rf "$stage" "$identity_scratch"
   rmdir "$lock" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -187,6 +208,9 @@ printf '%s\n' "$version_string" >"$stage/$name/VERSION"
 echo "build-runner-tarball: writing MANIFEST.json"
 node "$root/scripts/build-release-manifest.mjs" "$stage/$name"
 
+# The workspace injection is restored before the final source check.
+if [[ -f "$ws_backup" ]]; then cp "$ws_backup" "$ws"; fi
+node --input-type=module -e 'import {consumeBuildIdentity,assertSourceIdentity} from "./scripts/build-identity.mjs"; assertSourceIdentity(process.cwd(),consumeBuildIdentity());'
 echo "build-runner-tarball: archiving"
 # COPYFILE_DISABLE=1 stops macOS bsdtar from embedding its copyfile
 # metadata (resource forks / ACLs) as AppleDouble `._*` files, which a

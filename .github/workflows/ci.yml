@@ -171,7 +171,7 @@ jobs:
           # pass-through. Value omitted so a local manual run of this same
           # command (no CI var set) leaves it unset inside the container
           # too, matching the local default.
-          tar --no-xattrs -cf - server scripts VERSION docs/reference/configuration/server.md \
+          tar --no-xattrs -cf - server scripts docs/reference/configuration/server.md \
             docs/operations/session-pointer-recovery.md \
             protocol/fixtures runner/test/fixtures | docker run --rm -i -w /w \
             -e CI \

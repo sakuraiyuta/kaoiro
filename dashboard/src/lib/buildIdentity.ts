@@ -5,6 +5,7 @@ export interface DisplayBuildIdentity {
   channel: BuildChannel;
   revision: string;
   dirty?: boolean;
+  branch?: string;
 }
 
 export function normalizeDisplayBuildIdentity(
@@ -22,6 +23,7 @@ export function normalizeDisplayBuildIdentity(
 }
 
 const clientBuildIdentity = normalizeDisplayBuildIdentity({
+  branch: import.meta.env.VITE_KAOIRO_BUILD_BRANCH || "unknown",
   version: import.meta.env.VITE_KAOIRO_BUILD_VERSION || "unknown",
   channel:
     import.meta.env.VITE_KAOIRO_BUILD_CHANNEL === "release" ? "release" : "dev",
@@ -32,12 +34,13 @@ const clientBuildIdentity = normalizeDisplayBuildIdentity({
 export { clientBuildIdentity };
 
 export function formatBuildIdentity(
-  component: "server" | "client" | "runner" | "wrapper",
+  _component: "server" | "client" | "runner" | "wrapper",
   identity: DisplayBuildIdentity,
 ): string {
   const shortHash =
     identity.revision === "unknown" ? "unknown" : identity.revision.slice(0, 7);
-  return `kaoiro ${identity.channel} ${component} v${identity.version} / ${shortHash}`;
+  const version = ["unknown", "untagged"].includes(identity.version) ? identity.version : `v${identity.version}`;
+  return `${version} / ${identity.branch ?? "unknown"} / ${shortHash}`;
 }
 
 export function formatRunnerHostLabel(host: {
@@ -45,6 +48,7 @@ export function formatRunnerHostLabel(host: {
   build_version?: string;
   build_channel?: BuildChannel;
   build_revision?: string;
+  build_branch?: string;
 }): string {
   if (
     host.build_version === undefined ||
@@ -57,5 +61,6 @@ export function formatRunnerHostLabel(host: {
     version: host.build_version,
     channel: host.build_channel,
     revision: host.build_revision,
+    branch: host.build_branch ?? "unknown",
   })}`;
 }

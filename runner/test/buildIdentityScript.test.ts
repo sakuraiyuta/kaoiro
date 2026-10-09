@@ -65,11 +65,11 @@ describe("computeBuildIdentity (issue #218 round 2)", () => {
     expect(identity.degraded).toBe(false);
     expect(identity.revision).toMatch(/^[0-9a-f]{40}$/);
     expect(identity.dirty).toBe(false);
-    expect(identity.version).toBe("2026.9.0");
+    expect(identity.version).toBe("untagged");
     expect(identity.channel).toBe("dev");
   });
 
-  it("main の clean な VERSION 同版タグを release として返す", () => {
+  it("manual legacy tags do not manufacture a new release identity", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
     git(["init", "--quiet", "-b", "main"], tmpDir);
     writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
@@ -80,7 +80,7 @@ describe("computeBuildIdentity (issue #218 round 2)", () => {
     );
     git(["tag", "v2026.9.0"], tmpDir);
 
-    expect(computeBuildIdentity(tmpDir).channel).toBe("release");
+    expect(computeBuildIdentity(tmpDir).version).toBe("untagged");
   });
 
   it.each([
@@ -159,6 +159,7 @@ describe("computeBuildIdentity (issue #218 round 2)", () => {
       revision: "unknown",
       dirty: false,
       version: "unknown",
+      branch: "unknown",
       channel: "dev",
       degraded: true,
       degradeReason: expect.stringContaining("rev-parse"),
@@ -181,13 +182,13 @@ describe("formatIdentityString (issue #218 round 2)", () => {
 });
 
 describe("build-identity.mjs default CLI (issue #288)", () => {
-  it("root VERSION を読み、version/channel を shell 出力へ含める", () => {
+  it("prints the resolved identity with quoted shell values", () => {
     const out = execFileSync("node", [scriptPath], {
       cwd: repoRoot,
       encoding: "utf8",
     });
-    expect(out).toContain("KAOIRO_BUILD_VERSION=2026.9.0");
-    expect(out).toContain("KAOIRO_BUILD_CHANNEL=dev");
+    expect(out).toContain("KAOIRO_BUILD_VERSION='untagged'");
+    expect(out).toContain("KAOIRO_BUILD_CHANNEL='dev'");
   });
 });
 
