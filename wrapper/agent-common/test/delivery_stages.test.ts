@@ -47,6 +47,26 @@ describe("DeliveryStageReporter", () => {
     reporter.localPolicyDisabled([retired]);
     expect(reports.map(report => report.stage)).toEqual(["queued", "settled"]);
   });
+
+  it("keeps an already submitted early input accepted when off arrives", () => {
+    const reports: Record<string, unknown>[] = [];
+    const accepted = envelope(9);
+    accepted.payload.delivery_authority = { requested: "early", granted: "early" };
+    const reporter = new DeliveryStageReporter({
+      send: report => { reports.push(report); },
+      identity: () => ({ incarnation: "i", generation: "g" }),
+      turns: { deliveryEnvelopesForTurn: () => [accepted] },
+    });
+    reporter.queued(accepted);
+    reporter.submittedEnvelopes("turn", [accepted], "fold_hook");
+    reporter.localPolicyDisabled([accepted]);
+    reporter.includedEnvelopes([accepted]);
+    reporter.settled("turn");
+    expect(reports.map(report => report.stage)).toEqual(["queued", "submitted", "included", "settled"]);
+    expect(reports[1]).toMatchObject({ mode: "early", handoff: "fold_hook" });
+    expect(reports.some(report => report.reason === "local_policy_disabled")).toBe(false);
+    expect(accepted.payload.delivery_authority).toMatchObject({ granted: "early" });
+  });
   it("reports fold inclusion, yield disposition, and a voided receipt under the captured identity", () => {
     const reports: Record<string, unknown>[] = [];
     const folded = envelope(20);
