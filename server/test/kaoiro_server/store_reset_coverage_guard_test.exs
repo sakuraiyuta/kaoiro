@@ -35,6 +35,9 @@ defmodule KaoiroServer.StoreResetCoverageGuardTest do
     assert position(order, KaoiroServer.TokenDenylist) <
              position(order, KaoiroServer.AgentStatusLines)
 
+    assert position(order, KaoiroServer.TokenDenylist) <
+             position(order, KaoiroServer.DeliveryPolicies)
+
     assert position(order, KaoiroServer.ClearWatermarks) <
              position(order, KaoiroServer.IngressOrder)
 

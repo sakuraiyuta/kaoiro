@@ -13,7 +13,7 @@ defmodule KaoiroServer.TestStores do
   covers. The order is part of the contract:
 
     * a store that reads another store at start comes after it
-      (AgentStatusLines reads TokenDenylist), and
+      (DeliveryPolicies and AgentStatusLines read TokenDenylist), and
     * IngressOrder comes last, after the two stores it seeds from
       (ClearWatermarks and SessionStarts).
 
@@ -34,6 +34,7 @@ defmodule KaoiroServer.TestStores do
     KaoiroServer.QuagmireSettings,
     KaoiroServer.Users,
     KaoiroServer.TokenDenylist,
+    KaoiroServer.DeliveryPolicies,
     KaoiroServer.AgentDirectory,
     KaoiroServer.AgentStatusLines,
     KaoiroServer.ClearWatermarks,
