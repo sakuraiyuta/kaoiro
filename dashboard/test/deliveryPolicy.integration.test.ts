@@ -53,12 +53,15 @@ describe("delivery policy decoding and current-owner display", () => {
   });
   it("keeps both exact metadata boundaries independently", () => {
     const raw = { version: "v1", ceiling: true, mechanisms: modes,
-      persona_overrides: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`p${i}`, modes])), padding: "" };
+      persona_overrides: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`p${i}`, modes])) };
     const size = () => new TextEncoder().encode(JSON.stringify(raw)).length;
-    raw.padding = "x".repeat(8192 - size());
+    const key = "p0" + "x".repeat(8192 - size());
+    delete raw.persona_overrides.p0; raw.persona_overrides[key] = modes;
     expect(size()).toBe(8192); expect(parseLaunchDeliveryPolicy(raw)).toBeDefined();
-    raw.padding += "x"; expect(size()).toBe(8193); expect(parseLaunchDeliveryPolicy(raw)).toBeUndefined();
-    raw.padding = ""; raw.persona_overrides.p64 = modes;
+    delete raw.persona_overrides[key]; raw.persona_overrides[key + "x"] = modes;
+    expect(size()).toBe(8193); expect(parseLaunchDeliveryPolicy(raw)).toBeUndefined();
+    delete raw.persona_overrides[key + "x"]; raw.persona_overrides.p0 = modes;
+    raw.persona_overrides.p64 = modes;
     expect(size()).toBeLessThan(8192); expect(parseLaunchDeliveryPolicy(raw)).toBeUndefined();
   });
 
