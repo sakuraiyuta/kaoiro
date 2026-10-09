@@ -22,7 +22,8 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     AgentStatusLines,
     TokenDenylist,
     Users,
-    WorkStore
+    WorkStore,
+    WrapperBuildInfos
   }
 
   @agent "iso.reused-agent"
@@ -50,7 +51,8 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     assert PermissionSettings.get(@agent) == nil
     refute match?({:ok, _}, WorkStore.op_result(@principal, @operation_id))
     assert QuagmireSettings.rally_turns() != 97
-    refute Enum.any?(Users.all(), &(Map.get(&1, :display_name) == "Iso"))
+    refute Enum.any?(Map.values(Users.all()), &(Map.get(&1, :display_name) == "Iso"))
+    refute Map.has_key?(WrapperBuildInfos.snapshot(), @agent)
     refute TokenDenylist.revoked?(@agent)
     assert AgentStatusLines.history(@agent) == {:ok, []}
     assert ClearWatermarks.get(@agent) == nil
@@ -84,6 +86,19 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     assert {:ok, _} = WorkStore.apply(@principal, work_operation(), %{operator: true})
     :ok = QuagmireSettings.put_rally_turns(97)
     {:ok, _user} = Users.get_or_create("github", "operator", "Iso")
+
+    :ok =
+      WrapperBuildInfos.put(
+        @agent,
+        %{
+          "build_revision" => String.duplicate("a", 40),
+          "build_dirty" => false,
+          "build_version" => "2026.9.0",
+          "build_channel" => "dev"
+        },
+        self()
+      )
+
     :ok = TokenDenylist.revoke(@agent, nil)
     {:ok, _} = AgentStatusLines.put(@agent, "iso line")
     :ok = ClearWatermarks.record(@agent, @seed, "2026-08-01T00:00:00Z")
@@ -100,6 +115,7 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
     assert PermissionModes.get(@agent) != nil
     assert {:ok, _} = WorkStore.op_result(@principal, @operation_id)
     assert QuagmireSettings.rally_turns() == 97
+    assert Map.has_key?(WrapperBuildInfos.snapshot(), @agent)
     assert TokenDenylist.revoked?(@agent)
     assert ClearWatermarks.get(@agent) != nil
     assert SessionStarts.get(@agent) != nil
@@ -125,6 +141,23 @@ defmodule KaoiroServerWeb.StoreIsolationTest do
       "director" => @principal,
       "requires_verdict" => false
     }
+  end
+
+  test "the clean checker handles an empty Users registry" do
+    KaoiroServer.TestStores.reset!()
+    assert Users.all() == %{}
+    assert_clean!()
+  end
+
+  test "the clean checker handles users other than the leaked identity" do
+    assert {:ok, _} = Users.get_or_create("fixture-non-iso", "operator", "Another")
+    assert map_size(Users.all()) > 0
+    assert_clean!()
+  end
+
+  test "the clean checker rejects the leaked user in a nonempty registry" do
+    assert {:ok, _} = Users.get_or_create("fixture-iso", "operator", "Iso")
+    assert_raise ExUnit.AssertionError, fn -> assert_clean!() end
   end
 
   describe "the same identities in two test lifetimes" do

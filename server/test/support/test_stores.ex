@@ -22,7 +22,11 @@ defmodule KaoiroServer.TestStores do
   See `KaoiroServer.StoreResetCoverageGuardTest` for the coverage check.
   """
 
-  @memory_stores [KaoiroServer.ConversationStates, KaoiroServer.AgentActivity]
+  @memory_stores [
+    KaoiroServer.ConversationStates,
+    KaoiroServer.AgentActivity,
+    KaoiroServer.WrapperBuildInfos
+  ]
 
   @dets_singletons [
     KaoiroServer.SessionPointers,

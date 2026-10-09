@@ -29,6 +29,18 @@ defmodule KaoiroServer.StoreResetCoverageGuardTest do
   # reset after it, and IngressOrder after both of its seed sources. The
   # isolation fixture cannot observe the first pair, because the reset empties
   # AgentStatusLines' rows before it restarts, so this test pins the order.
+  test "every listed memory store is running and can be reset" do
+    for store <- TestStores.memory_stores() do
+      assert is_pid(Process.whereis(store)), "#{inspect(store)} is not running"
+    end
+
+    assert :ok = TestStores.reset!()
+
+    for store <- TestStores.memory_stores() do
+      assert is_pid(Process.whereis(store)), "#{inspect(store)} did not restart"
+    end
+  end
+
   test "readers at start are reset after the stores they read" do
     order = TestStores.dets_singletons()
 
