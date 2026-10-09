@@ -80,6 +80,18 @@ function seedLanding(repo: string, remote: string, target: string, day: string, 
   git(repo, ["push", "--atomic", remote, `refs/tags/${tag}`, `refs/tags/identity/landing/${target}`]);
 }
 
+function seedPublicLandingOnly(repo: string, remote: string, target: string, day: string, number: number, runId: number) {
+  const version = `${day.replaceAll("-", ".")}.${number}`;
+  const record = { schema: 1, kind: "landing", repository_id: BUILD_REPOSITORY_ID, revision: target,
+    branch: "develop", version, original_run_id: runId, created_at: `${day}T12:00:00Z` };
+  const tag = `v${version}`;
+  git(repo, ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "tag", "-a", tag,
+    target, "--cleanup=verbatim", "-m", JSON.stringify(record)]);
+  const object = git(repo, ["rev-parse", `refs/tags/${tag}`]);
+  git(repo, ["push", remote, `refs/tags/${tag}`]);
+  return { record, tag, object };
+}
+
 function makeGitShim(root: string) {
   const bin = join(root, "shim-bin");
   mkdirSync(bin);
@@ -277,6 +289,39 @@ describe("landing tag allocation against a bare Git remote", () => {
     git(f.first, ["tag", "v2026.10.09.01", f.targets[0]!]);
     git(f.first, ["push", f.remote, "refs/tags/v2026.10.09.01"]);
     expect(() => allocateLanding(inputFor(f.second, f.remote, f.targets[1]!))).toThrow(/malformed reserved landing tag/);
+  });
+
+  it("rejects a hand-made public version tag without a full-SHA claim", async () => {
+    const f = fixture();
+    const allocateLanding = await loadAllocator();
+    const publicOnly = seedPublicLandingOnly(f.first, f.remote, f.targets[0]!, "2026-10-09", 1, 401);
+
+    expect(remoteRefs(f.remote)).toContainEqual({ object: publicOnly.object, ref: `refs/tags/${publicOnly.tag}` });
+    expect(remoteRefs(f.remote).some(ref => ref.ref === `refs/tags/identity/landing/${f.targets[0]}`)).toBe(false);
+    expect(() => allocateLanding(inputFor(f.second, f.remote, f.targets[1]!)))
+      .toThrow(/landing public tag, claim and annotation disagree/);
+  });
+
+  it("rejects a full-SHA claim that points to a different tag object", async () => {
+    const f = fixture();
+    const allocateLanding = await loadAllocator();
+    const day = "2026-10-09";
+    const number = 1;
+    const runId = 402;
+    seedLanding(f.first, f.remote, f.targets[0]!, day, number, runId);
+    const version = `${day.replaceAll("-", ".")}.${number}`;
+    const record = { schema: 1, kind: "landing", repository_id: BUILD_REPOSITORY_ID, revision: f.targets[0],
+      branch: "develop", version, original_run_id: runId, created_at: `${day}T12:00:00Z` };
+    const alternateObject = git(f.remote, ["mktag"],
+      `object ${f.targets[0]}\ntype commit\ntag v${version}\n` +
+      "tagger fixture <fixture@example.invalid> 1000000000 +0000\n\n" + JSON.stringify(record) + "\n");
+    git(f.remote, ["update-ref", `refs/tags/identity/landing/${f.targets[0]}`, alternateObject]);
+
+    const publicObject = remoteRefs(f.remote).find(ref => ref.ref === `refs/tags/v${version}`)?.object;
+    expect(alternateObject).not.toBe(publicObject);
+    expect(remoteRefs(f.remote)).toContainEqual({ object: alternateObject, ref: `refs/tags/identity/landing/${f.targets[0]}` });
+    expect(() => allocateLanding(inputFor(f.second, f.remote, f.targets[1]!)))
+      .toThrow(/landing public tag, claim and annotation disagree/);
   });
 
   it("rejects the whole pair when the receiver refuses the SHA claim", async () => {
