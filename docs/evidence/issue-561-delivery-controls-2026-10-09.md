@@ -6,7 +6,7 @@ last_updated: 2026-10-09
 
 # Issue 561 delivery controls
 
-Implementation and verifier commit: `68a498d5a69ef76d9d1155e47f82e7ea243e00c9`, based on `70bc934ad5c4926b254c5d9231c3996283325cb7`.
+Implementation and verifier commit: `0c56b99ab8cdf8f9c6194c7f8886667de134b63b`, based on `70bc934ad5c4926b254c5d9231c3996283325cb7`.
 The adjacent [machine-readable record](issue-561-delivery-controls-2026-10-09.json)
 contains every changed implementation/test input hash, gate log hash and mutation
 log hash. Documentation commits preserve these implementation blobs.
@@ -18,7 +18,11 @@ transport tests consume it. Production behavior is unchanged by the director's
 client-mirror correction: its only production delta removes a handoff comment.
 Dashboard gates and negative controls were remeasured with the extracted
 fixture. Server and runner evidence retains its original commit provenance;
-those implementation and verifier inputs are unchanged.
+those implementation and verifier inputs are unchanged. A later comment-only
+clarification explicitly names the client mirror and planned shared-fixture
+cross-check. Full dashboard test (1503 passed, exit 0) and check (0 errors,
+0 warnings, exit 0) were rerun at the implementation commit above. The JSON
+retains the measurement commit for every earlier result.
 
 ## Positive gates
 

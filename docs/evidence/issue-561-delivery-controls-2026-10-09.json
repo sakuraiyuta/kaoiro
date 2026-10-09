@@ -1,5 +1,5 @@
 {
-  "implementation_commit": "68a498d5a69ef76d9d1155e47f82e7ea243e00c9",
+  "implementation_commit": "0c56b99ab8cdf8f9c6194c7f8886667de134b63b",
   "base": "70bc934ad5c4926b254c5d9231c3996283325cb7",
   "inputs": {
     "dashboard/e2e/deliveryPolicy.spec.ts": "1a30063cb32169bb2b3b3a0092b99ecc249c09ddee433a5e409dcef541505dc5",
@@ -10,7 +10,7 @@
     "dashboard/src/lib/AgentDetail.svelte": "1ba98a70e1386358e39850ec0f9dd8a1bd5a9180c34e776e579be6fdf3f209e0",
     "dashboard/src/lib/DeliveryPolicyControl.svelte": "44ad53c8bd55299a6de0a44d3dc19d785248293502d805888265ba19c45291aa",
     "dashboard/src/lib/LaunchDialog.svelte": "0350f537f4351bacdaef37680d37b622ff23209e53b5954d5003f30e7f66e8fd",
-    "dashboard/src/lib/deliveryPolicy.ts": "e8420f927db152b63bd4506e30767e7478f86682c6445860b357a0e80599c7ed",
+    "dashboard/src/lib/deliveryPolicy.ts": "12f1437da1f8f731eecbd8a1d359f8c15d61373149c305c45ee5aef26d5f8084",
     "dashboard/src/lib/deliveryPolicyStore.svelte.ts": "dbb9baebf12f82748725df366f4a072e1c79465dd8d567abc9b0be1c1abf25b6",
     "dashboard/src/lib/protocol.ts": "c3aa8faf95cb7ad1bd20fdba9c5aa0c753a5e20bb90a7914eb5c17bc57d81a0a",
     "dashboard/test/appDeliveryAction.integration.test.ts": "b7296166133c6743f37d8cc3836cbeaae1b0399f1202c4c57919b3dd886c38b3",
@@ -45,18 +45,18 @@
       "command": "pnpm test --maxWorkers=1",
       "result": "1503 passed; 93 files",
       "exit": 0,
-      "log": "tmp/reviews/issue-561/kogane-logs/client-mirror/dashboard.log",
-      "sha256": "2aa0b294df4acfc28ccc0f6ba865ebd6c34485b9fe7d42e86e171b3bd230d90a",
-      "measured_commit": "68a498d5a69ef76d9d1155e47f82e7ea243e00c9"
+      "log": "tmp/reviews/issue-561/kogane-logs/client-mirror-comment/test.log",
+      "sha256": "fbc7f6a335f358c83620cb6b2f11b6ac82df6bbde2793c4efd7285f7aa523916",
+      "measured_commit": "0c56b99ab8cdf8f9c6194c7f8886667de134b63b"
     },
     {
       "gate": "dashboard check",
       "command": "pnpm check",
       "result": "0 errors; 0 warnings",
       "exit": 0,
-      "log": "tmp/reviews/issue-561/kogane-logs/client-mirror/check.log",
+      "log": "tmp/reviews/issue-561/kogane-logs/client-mirror-comment/check.log",
       "sha256": "e3de9b8a70d006ca26f8c9b008cd093ed0ec9172c548ba25732ba2dcd0d993d0",
-      "measured_commit": "68a498d5a69ef76d9d1155e47f82e7ea243e00c9"
+      "measured_commit": "0c56b99ab8cdf8f9c6194c7f8886667de134b63b"
     },
     {
       "gate": "dashboard build",
@@ -960,5 +960,6 @@
     "delivery-390.png": "2fce07bda8a9da9099b06f3537707c430846aa7c7707df86c60ec4b56ad3b050"
   },
   "integration_limit": "C3 runner producer -> real register -> decoder/UI remains unverified, assigned to issue 562 by the director.",
-  "client_mirror_correction": "Director turn 5: keep a local client mirror per ADR-0007; use one local contract fixture. Production delta removes only a comment. Dashboard gates and 36 negative controls remeasured; nine server mutations and unchanged server/runner gates retain their measured commit."
+  "client_mirror_correction": "Director turn 5: keep a local client mirror per ADR-0007; use one local contract fixture. Production delta removes only a comment. Dashboard gates and 36 negative controls remeasured; nine server mutations and unchanged server/runner gates retain their measured commit.",
+  "comment_clarification": "A subsequent comment-only commit names the client mirror and planned shared-fixture cross-check. Full dashboard test and check were rerun; remaining evidence retains its measured commit."
 }
