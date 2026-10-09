@@ -39,6 +39,7 @@ test("SSH snapshot fixes one destination and reuses its key/environment selectio
   });
   assert.equal(captured.env.SSH_AUTH_SOCK, snapshot.gitEnv.SSH_AUTH_SOCK);
   assert.ok(captured.args.includes("-oidentityfile=/fixture/key"));
+  assert.ok(captured.args.includes("-oLogLevel=QUIET"));
   assert.match(snapshot.gitEnv.GIT_SSH_COMMAND, /identityfile=\/fixture\/key/);
   assert.equal(snapshot.gitEnv.GIT_ALLOW_PROTOCOL, "ssh");
   assert.equal(snapshot.gitEnv.GIT_CONFIG_COUNT, undefined);

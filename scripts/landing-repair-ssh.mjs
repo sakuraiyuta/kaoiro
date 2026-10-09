@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { actorLogin, digest, shellQuote } from "./landing-backlog.mjs";
 
 const FIXED_OPTIONS = ["-oBatchMode=yes", "-oStrictHostKeyChecking=yes", "-oUpdateHostKeys=no",
-  "-oConnectTimeout=10", "-oConnectionAttempts=1", "-oPermitLocalCommand=no"];
+  "-oConnectTimeout=10", "-oConnectionAttempts=1", "-oPermitLocalCommand=no", "-oLogLevel=QUIET"];
 const must = (condition, message) => { if (!condition) throw new Error(message); };
 const nativeSsh = (args, env) => spawnSync("/usr/bin/ssh", args, {
   env, encoding: "utf8", timeout: 15_000, maxBuffer: 4096,

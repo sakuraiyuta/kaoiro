@@ -587,7 +587,9 @@ probe must name the same login, including letter case. Read only stderr up to
 and exit 1, and apply the same actor grammar as the allow-list. Exit 0/255,
 signal, timeout, additional output or a deploy-key greeting refuses before
 push. Probe and push share the same immutable effective SSH identity/environment
-selection, strict host-key checking and no known-host update. Only the fixed
+selection, strict host-key checking and no known-host update. A fixed quiet
+client log level suppresses local missing-default-key diagnostics; remote
+extra output still fails the exact greeting check. Only the fixed
 GitHub host/user/port and validated repository can be used. The push uses the
 existing paired allocator, original target and original UTC clock.
 
