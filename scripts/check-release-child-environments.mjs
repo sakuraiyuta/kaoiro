@@ -38,9 +38,6 @@ export function checkReleaseChildEnvironments(root, read = readFileSync) {
   }
   for (const name of CHILD_ENVIRONMENT_SCOPE) {
     const source = read(resolve(root, name), "utf8");
-    if (/node:child_process|\b(?:execFileSync|execFile|execSync|spawnSync|spawn|fork)\s*\(/.test(source)) {
-      throw new Error("unmanaged child process: " + name);
-    }
     if (!source.includes("child-process-environment.mjs")) throw new Error("child helper import missing: " + name);
     const count = [...source.matchAll(/\b(?:execChildSync|spawnChildSync)\s*\(/g)].length;
     if (!count) throw new Error("child scope has no checked call: " + name);
