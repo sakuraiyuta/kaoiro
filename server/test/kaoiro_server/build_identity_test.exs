@@ -49,7 +49,6 @@ defmodule KaoiroServer.BuildIdentityTest do
       refute BuildIdentity.valid_version?("2026.9.1234567")
     end
 
-
     test "unknown は build identity の fail-soft 値として valid" do
       assert BuildIdentity.valid_version?("unknown")
     end

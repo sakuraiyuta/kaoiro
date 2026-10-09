@@ -237,15 +237,27 @@ defmodule KaoiroServerWeb.HealthControllerTest do
                json_response(conn, 200)
     end
   end
-  test "the real health route advertises bridge formats and the baked modern branch", %{conn: conn} do
+
+  test "the real health route advertises bridge formats and the baked modern branch", %{
+    conn: conn
+  } do
     dir = tmp_release_root!()
-    write_build_info!(dir, Jason.encode!(%{version: "2026.10.09.2", channel: "dev",
-      revision: String.duplicate("c", 40), dirty: false, branch: "develop"}))
+
+    write_build_info!(
+      dir,
+      Jason.encode!(%{
+        version: "2026.10.09.2",
+        channel: "dev",
+        revision: String.duplicate("c", 40),
+        dirty: false,
+        branch: "develop"
+      })
+    )
+
     System.put_env("RELEASE_ROOT", dir)
     payload = conn |> get("/api/health") |> json_response(200)
     assert payload["build_branch"] == "develop"
     assert payload["build_version"] == "2026.10.09.2"
     assert payload["build_identity_formats"] == ["legacy-calver", "landing-calver-v1"]
   end
-
 end
