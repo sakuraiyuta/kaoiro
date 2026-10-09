@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runLandingRepair, AlreadyRepaired, ReceiptRecoveryRequired } from "../landing-repair.mjs";
-import { repairRefs, readLocalRepairRecord } from "../landing-repair-records.mjs";
+import { runLandingRepair, operatorLandingContext, AlreadyRepaired, ReceiptRecoveryRequired } from "../landing-repair.mjs";
+import { landingCandidates, auditLandingBacklog, originalPushRecord } from "../landing-backlog.mjs";
+import { repairRefs, readLocalRepairRecord, writeLocalRepairRecord } from "../landing-repair-records.mjs";
 import { sshGreetingActor, operatorSshSnapshot } from "../landing-repair-ssh.mjs";
 import { workflowPermissionRefusal } from "../landing-tags.mjs";
 import { repairFixture } from "./fixtures/landing-repair-fixture.mjs";
@@ -88,6 +89,9 @@ test("repair preserves original clock and target, writes intent before push and 
   assert.equal(result.identity.version, "2026.10.09.1");
   assert.equal(f.git("cat-file", "-t", result.intent_object), "blob");
   assert.equal(f.git("cat-file", "-t", result.receipt_object), "blob");
+  const savedIntent = readLocalRepairRecord(f.repo, result.intent_ref);
+  assert.throws(() => writeLocalRepairRecord(f.repo, result.intent_ref, savedIntent.value), /update-ref refused/);
+  assert.equal(readLocalRepairRecord(f.repo, result.intent_ref).object, savedIntent.object);
   const calls = f.calls(), push = calls.findIndex(args => args[0] === "push" && args.includes("--atomic"));
   assert.ok(calls.findIndex(args => args[0] === "update-ref" && args[1] === result.intent_ref) < push);
   assert.ok(calls.findIndex(args => args[0] === "update-ref" && args[1] === result.receipt_ref) > push);
@@ -180,4 +184,16 @@ test("generic push failure remains 78 with unknown remaining scope", async () =>
   const result = f.cli("landing-workflow.mjs", ["reconcile"], { FUJI_REFUSAL: "generic" });
   assert.equal(result.status, 78, result.stderr); assert.equal(JSON.parse(result.stdout).inventory_scope, "unknown");
   assert.equal(atomicCalls(f).length, 1);
+}));
+
+test("a saturated observation or oversized diagnostic is unknown instead of a truncated zero", async () => withFixture(async f => {
+  const context = operatorLandingContext("fixture/repo", f.dependencies);
+  function* repeated() { for (let i = 0; i < 100_001; i++) yield f.data.pushes[0]; }
+  assert.throws(() => landingCandidates(context, { runs: repeated(), inventory: { entries: [{ record: { revision: f.control } }] } }), /observation cap/);
+  const runs = Array.from({ length: 70_000 }, (_, i) => ({ ...f.data.pushes[0], id: i + 1,
+    run_number: i + 1, head_sha: (i + 1).toString(16).padStart(40, "0") }));
+  assert.throws(() => auditLandingBacklog(context, { cwd: f.repo, remote: f.remote, runs,
+    readArtifact: (_repository, run) => { const record = originalPushRecord({ after: run.head_sha,
+      ref: "refs/heads/develop", forced: false, deleted: false }, run, context.repositoryId);
+      return { record, bytes: Buffer.from(JSON.stringify(record)) }; } }), /output exceeds bound/);
 }));
