@@ -8,7 +8,7 @@ import { runLandingRepair, operatorLandingContext, AlreadyRepaired, ReceiptRecov
 import { landingCandidates, auditLandingBacklog, originalPushRecord } from "../landing-backlog.mjs";
 import { repairRefs, readLocalRepairRecord, writeLocalRepairRecord, validateRepairReceipt } from "../landing-repair-records.mjs";
 import { childEnvironment, childEnvironmentProfile } from "../child-process-environment.mjs";
-import { allocateLanding, readLandingInventory } from "../landing-tags.mjs";
+import { allocateLanding, readLandingInventory, auditLandingInventory } from "../landing-tags.mjs";
 import { repairDiagnostic } from "../landing-workflow.mjs";
 import { sshGreetingActor, operatorSshSnapshot } from "../landing-repair-ssh.mjs";
 import { workflowPermissionRefusal } from "../landing-tags.mjs";
@@ -82,6 +82,35 @@ test("snapshot profile reaches inventory and allocation, and unbranded clones re
   }
 }));
 
+test("remote landing APIs refuse an omitted environment before any remote command", async () => withFixture(async f => {
+  const input = { cwd: f.repo, remote: f.remote, target: f.control, originalRunId: 1,
+    createdAt: "2026-10-09T00:00:00Z" };
+  const context = operatorLandingContext("fixture/repo", f.dependencies);
+  for (const work of [() => readLandingInventory(input), () => auditLandingInventory(input),
+    () => allocateLanding(input), () => auditLandingBacklog(context, { ...input, runs: [] })]) {
+    assert.throws(work, /remote Git requires an explicit prepared environment/);
+  }
+  assert.equal(f.calls().filter(args => ["fetch", "push"].includes(args[0])).length, 0);
+  assert.ok(readLandingInventory({ ...input, gitEnv: childEnvironment("git") }));
+}));
+
+test("repair flow gives every fetch and push the frozen snapshot environment", async () => withFixture(async f => {
+  let snapshot;
+  const result = await runLandingRepair("repair", f.args(), { ...f.dependencies,
+    sshSnapshot: actor => snapshot = operatorSshSnapshot(actor, {
+      env: f.env, readConfig: () => ({ status: 0, stdout: config }),
+      probe: () => ({ status: 1, stderr: greeting(actor) }),
+    }) });
+  assert.equal(result.exit_code, 0);
+  const calls = f.environments().filter(row => ["fetch", "push"].includes(row.args[0]));
+  assert.equal(calls.filter(row => row.args[0] === "fetch").length, 4);
+  assert.equal(calls.filter(row => row.args[0] === "push").length, 1);
+  for (const { env } of calls) {
+    assert.equal(env.GIT_SSH_COMMAND, snapshot.gitEnv.GIT_SSH_COMMAND);
+    assert.equal(env.GIT_ALLOW_PROTOCOL, "ssh");
+  }
+}));
+
 test("CI workflow gives the same authorization header to allocation and both backlog audits", async () => withFixture(async f => {
   const result = f.cli("landing-workflow.mjs", ["allocate"]);
   assert.equal(result.status, 0, result.stderr);
@@ -135,7 +164,7 @@ test("operator shape, allow-list shape, login and push permission fail closed in
 
 test("same target with another clock or original run refuses rather than reporting 73", async () => withFixture(async f => {
   const pair = allocateLanding({ cwd: f.repo, remote: f.remote, target: f.control,
-    originalRunId: 1, createdAt: "2026-10-09T01:00:00Z" });
+    originalRunId: 1, createdAt: "2026-10-09T01:00:00Z", gitEnv: childEnvironment("git") });
   assert.equal(pair.created, true);
   assert.throws(() => new AlreadyRepaired(pair, { target: f.control, originalRunId: 1, createdAt: "2026-10-09T00:00:00Z" }), /exact original event/);
   await assert.rejects(runLandingRepair("repair", f.args(), f.dependencies), error =>
@@ -145,7 +174,7 @@ test("same target with another clock or original run refuses rather than reporti
 
 test("same target with another original run is never an exact duplicate", async () => withFixture(async f => {
   allocateLanding({ cwd: f.repo, remote: f.remote, target: f.control,
-    originalRunId: 2, createdAt: "2026-10-09T00:00:00Z" });
+    originalRunId: 2, createdAt: "2026-10-09T00:00:00Z", gitEnv: childEnvironment("git") });
   await assert.rejects(runLandingRepair("repair", f.args(), f.dependencies), error =>
     !(error instanceof AlreadyRepaired) && /exact original event/.test(error.message));
 }));
@@ -409,7 +438,7 @@ test("a saturated observation or oversized diagnostic is unknown instead of a tr
   assert.throws(() => landingCandidates(context, { runs: repeated(), inventory: { entries: [{ record: { revision: f.control } }] } }), /observation cap/);
   const runs = Array.from({ length: 70_000 }, (_, i) => ({ ...f.data.pushes[0], id: i + 1,
     run_number: i + 1, head_sha: (i + 1).toString(16).padStart(40, "0") }));
-  assert.throws(() => auditLandingBacklog(context, { cwd: f.repo, remote: f.remote, runs,
+  assert.throws(() => auditLandingBacklog(context, { cwd: f.repo, remote: f.remote, runs, gitEnv: childEnvironment("git"),
     readArtifact: (_repository, run) => { const record = originalPushRecord({ after: run.head_sha,
       ref: "refs/heads/develop", forced: false, deleted: false }, run, context.repositoryId);
       return { record, bytes: Buffer.from(JSON.stringify(record)) }; } }), /output exceeds bound/);

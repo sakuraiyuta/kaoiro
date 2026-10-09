@@ -9,6 +9,8 @@ import { BUILD_REPOSITORY_ID, readLandingTag } from "../../scripts/build-identit
 const realGit = process.env.PATH?.split(delimiter).map(directory => join(directory, "git")).find(path => existsSync(path));
 if (!realGit) throw new Error("git executable is required for landing tag tests");
 const allocatorUrl = new URL("../../scripts/landing-tags.mjs", import.meta.url).href;
+const environmentUrl = new URL("../../scripts/child-process-environment.mjs", import.meta.url).href;
+const { childEnvironment } = await import(environmentUrl);
 const fixtures: string[] = [];
 const initialPath = process.env.PATH ?? "";
 const initialLoseResponse = process.env.LANDING_GIT_LOSE_RESPONSE;
@@ -54,6 +56,7 @@ async function loadAllocator() {
     originalRunId: number;
     createdAt: string;
     repositoryId: number;
+    gitEnv: Record<string, string>;
   }) => { record: Record<string, unknown>; tag: string; object: string; created: boolean };
 }
 
@@ -62,11 +65,12 @@ async function loadInventoryAuditor() {
     cwd: string;
     remote: string;
     repositoryId: number;
+    gitEnv: Record<string, string>;
   }) => boolean;
 }
 
 function inputFor(repo: string, remote: string, target: string, createdAt = "2026-10-09T12:00:00Z", originalRunId = 101) {
-  return { cwd: repo, remote, target, originalRunId, createdAt, repositoryId: BUILD_REPOSITORY_ID };
+  return { cwd: repo, remote, target, originalRunId, createdAt, repositoryId: BUILD_REPOSITORY_ID, gitEnv: childEnvironment("git") };
 }
 
 function remoteRefs(remote: string) {
@@ -151,7 +155,8 @@ function runAllocatorProcess(input: ReturnType<typeof inputFor>, env: NodeJS.Pro
   const childCode = `
     const { allocateLanding } = await import(${JSON.stringify(allocatorUrl)});
     try {
-      const result = await allocateLanding(JSON.parse(process.env.LANDING_INPUT_JSON));
+      const { childEnvironment } = await import(${JSON.stringify(environmentUrl)});
+      const result = await allocateLanding({ ...JSON.parse(process.env.LANDING_INPUT_JSON), gitEnv: childEnvironment("git") });
       process.stdout.write(JSON.stringify({ ok: true, result }));
     } catch (error) {
       process.stderr.write(String(error?.stack ?? error));
@@ -190,12 +195,12 @@ describe("landing tag allocation against a bare Git remote", () => {
     const auditLandingInventory = await loadInventoryAuditor();
     const emptyRefs = remoteRefs(f.remote);
 
-    expect(await auditLandingInventory({ cwd: f.first, remote: "origin", repositoryId: BUILD_REPOSITORY_ID })).toBe(true);
+    expect(await auditLandingInventory({ cwd: f.first, remote: "origin", repositoryId: BUILD_REPOSITORY_ID, gitEnv: childEnvironment("git") })).toBe(true);
     expect(remoteRefs(f.remote)).toEqual(emptyRefs);
 
     seedLanding(f.first, f.remote, f.targets[0]!, "2026-10-09", 1, 400);
     const populatedRefs = remoteRefs(f.remote);
-    expect(await auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID })).toBe(true);
+    expect(await auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID, gitEnv: childEnvironment("git") })).toBe(true);
     expect(remoteRefs(f.remote)).toEqual(populatedRefs);
   });
 
@@ -335,7 +340,7 @@ describe("landing tag allocation against a bare Git remote", () => {
 
     expect(remoteRefs(f.remote)).toContainEqual({ object: publicOnly.object, ref: `refs/tags/${publicOnly.tag}` });
     expect(remoteRefs(f.remote).some(ref => ref.ref === `refs/tags/identity/landing/${f.targets[0]}`)).toBe(false);
-    expect(() => auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID }))
+    expect(() => auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID, gitEnv: childEnvironment("git") }))
       .toThrow(/landing public tag, claim and annotation disagree/);
   });
 

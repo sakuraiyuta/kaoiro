@@ -607,10 +607,21 @@ GitHub host/user/port and validated repository can be used. The push uses the
 existing paired allocator, original target and original UTC clock.
 Explicit Git environments must be prepared by that builder; copying them loses
 its profile and is refused. The CI allocation and both inventory audits share
-one prepared authenticated Git environment. GH alone carries the session bus
-and runtime-directory values needed for Secret Service; SSH credentials are not
-added to that profile.
+one prepared authenticated Git environment. Remote landing inventory and
+publication require an explicit prepared environment; omissions are refused.
+Operator audit explicitly selects the ordinary Git profile; manual repair uses
+the frozen SSH profile, and CI uses its authenticated profile. Local Git metadata
+operations may select the ordinary profile by default.
+The `gh` profile carries session-bus and runtime-directory values needed for
+Secret Service, as do several other profiles. It excludes `SSH_AUTH_SOCK`.
 
+Test gates preload the shared host-manager guard. Shells and the known launchers
+`env`, `setsid`, `nohup`, `timeout`, `nice`, `sudo` and `xargs` reject literal manager
+names and user-manager options in every argument, including shell positional
+arguments. This conservative fixture boundary also rejects benign mentions.
+Computed command names and commands inside separately executed shell scripts
+remain outside it. The updater's owned-manager check remains a separate boundary.
+Guard mutations use inert child-process sinks, never a host-manager invocation.
 
 The command writes local Git blobs and compare-and-create refs before and
 after publication:

@@ -11,6 +11,7 @@ const hostBins = new Set(["/usr/bin", "/bin", "/usr/local/bin"].flatMap(director
   ["systemd-run", "systemctl", "busctl"].map(name => resolve(directory, name)))
   .filter(existsSync).map(path => realpathSync(path)));
 const shells = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+const launchers = new Set(["env", "setsid", "nohup", "timeout", "nice", "sudo", "xargs"]);
 
 function refuse(message) {
   const error = new Error(message);
@@ -51,6 +52,10 @@ function protect(file, args, options) {
     if (hostBins.has(existsSync(manager) ? realpathSync(manager) : manager)) {
       refuse("test refused updater shell with real user systemd");
     }
+  }
+  if ((shells.has(basename(actual)) || launchers.has(basename(actual))) && args.some(arg =>
+      /(?:systemd-run|systemctl|busctl)/.test(arg) || /^--u(?:s(?:e(?:r)?)?)?(?:=|$)/.test(arg))) {
+    refuse("test refused manager/user option in shell or launcher arguments");
   }
   const shellIndex = shells.has(basename(actual)) ? args.findIndex(arg => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(arg)) : -1;
   if (shellIndex >= 0) shellCommand(args[shellIndex + 1] ?? "");

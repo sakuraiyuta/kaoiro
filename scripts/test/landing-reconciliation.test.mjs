@@ -109,6 +109,7 @@ test("the production reconciliation entry fetches once per inventory rather than
     { tmpdir } = await import("node:os"),
     { dirname, join } = await import("node:path"),
     { fileURLToPath } = await import("node:url");
+  const { childEnvironment } = await import("../child-process-environment.mjs");
   const { allocateLanding } = await import("../landing-tags.mjs"),
     { BUILD_REPOSITORY_ID } = await import("../build-identity.mjs");
   const root = fs.mkdtempSync(join(tmpdir(), "kaoiro-workflow-entry-test-")),
@@ -141,6 +142,7 @@ test("the production reconciliation entry fetches once per inventory rather than
       originalRunId: 1,
       createdAt: "2026-10-09T00:00:00Z",
       repositoryId: BUILD_REPOSITORY_ID,
+      gitEnv: childEnvironment("git"),
     });
     const pushes = Array.from({ length: 12 }, (_, i) => ({
       id: i + 1,

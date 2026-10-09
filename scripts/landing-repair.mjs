@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { api, actorLogin, repositoryName, originalArtifact, validateOriginalRecord, digest,
   validateLandingContext, auditLandingBacklog, shellQuote } from "./landing-backlog.mjs";
 import { allocateLanding, readLandingInventory } from "./landing-tags.mjs";
+import { childEnvironment } from "./child-process-environment.mjs";
 import { parseReleaseOptions } from "./production-release-state.mjs";
 import { operatorSshSnapshot } from "./landing-repair-ssh.mjs";
 import { checkedLocalGit, localGit, repairRefs, readLocalRepairRecord, writeLocalRepairRecord,
@@ -73,7 +74,7 @@ export async function runLandingRepair(command, args, {
   const context = operatorLandingContext(flags.repository, { cwd, readApi });
   const remote = `git@github.com:${context.repository}.git`;
   if (command === "audit") {
-    const result = auditLandingBacklog(context, { cwd, remote, readApi, readArtifact }).report;
+    const result = auditLandingBacklog(context, { cwd, remote, readApi, readArtifact, gitEnv: childEnvironment("git") }).report;
     return { ...result, exit_code: result.pending_count === 0 ? 0 : 78 };
   }
   must(/^[1-9][0-9]{0,15}$/.test(flags["original-run"] ?? "") &&

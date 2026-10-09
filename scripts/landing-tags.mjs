@@ -15,7 +15,13 @@ const MAX_ATTEMPTS = 5;
 const GIT_TIMEOUT_MS = 30_000;
 const RESERVED_VERSION_PREFIX = /^v\d{4}\.\d{2}\.\d{2}\./;
 
-function runGit(cwd, args, input, gitEnv = childEnvironment("git")) {
+const LOCAL_GIT_COMMANDS = new Set(["init", "for-each-ref", "cat-file", "mktag", "update-ref"]);
+
+function runGit(cwd, args, input, gitEnv) {
+  const local = LOCAL_GIT_COMMANDS.has(args[0]) ||
+    args[0] === "remote" && ["add", "get-url"].includes(args[1]);
+  if (!local && gitEnv === undefined) throw new Error("remote Git requires an explicit prepared environment");
+  if (gitEnv === undefined) gitEnv = childEnvironment("git");
   const result = spawnChildSync(childEnvironmentProfile(gitEnv), "git", args, {
     cwd,
     encoding: "utf8",
@@ -120,12 +126,12 @@ function resolvePushRemote(cwd, remote, gitEnv) {
   return remote;
 }
 
-export function auditLandingInventory({ cwd, remote, repositoryId = BUILD_REPOSITORY_ID }) {
+export function auditLandingInventory({ cwd, remote, repositoryId = BUILD_REPOSITORY_ID, gitEnv }) {
   if (typeof cwd !== "string" || cwd.length === 0 || typeof remote !== "string" || remote.length === 0 || remote.startsWith("-")) {
     throw new Error("landing audit requires a checkout and a valid remote");
   }
-  const inventoryRemote = resolvePushRemote(cwd, remote);
-  const snapshot = readRemoteInventory(inventoryRemote, repositoryId);
+  const inventoryRemote = resolvePushRemote(cwd, remote, gitEnv);
+  const snapshot = readRemoteInventory(inventoryRemote, repositoryId, gitEnv);
   try {
     return true;
   } finally {
