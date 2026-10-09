@@ -54,7 +54,8 @@ export function collectRunnerCompletion(plan, baseline, { runnerRoot, configPath
   const file = join(resolve(runnerRoot), "current/dist/build-info.json");
   const info = read(file);
   must(attests(info, plan.identity.revision) && equal(info, plan.identity), "activated runner artifact differs from pinned target");
-  const codex = acceptedForwardTransaction(resolve(runnerRoot), codexTransaction, plan.identity.revision);
+  const codex = plan.codex_host_ids.includes(baseline.host_id)
+    ? acceptedForwardTransaction(resolve(runnerRoot), codexTransaction, plan.identity.revision) : null;
   return {host_id:baseline.host_id,revision:info.revision,version:info.version,branch:info.branch,dirty:info.dirty,
     unit:baseline.service,update_invocation_id:updater.InvocationID,service_active:true,worker_exit:0,
     worker_started_at:started,worker_finished_at:finished,artifact_sha256:sha256(file),codex};
@@ -107,7 +108,8 @@ async function main() {
   const [command,...argv]=process.argv.slice(2), flags={};
   for(let i=0;i<argv.length;i+=2) { must(argv[i]?.startsWith("--") && argv[i+1], "option/value pairs required"); flags[argv[i].slice(2)]=argv[i+1]; }
   if(command==="start") {
-    const result=startReleaseAttempt(flags.root ?? join(homedir(),"kaoiro-deploy/production-releases"),readFrozenBuildIdentity(flags.identity),JSON.parse(flags.hosts));
+    const result=startReleaseAttempt(flags.root ?? join(homedir(),"kaoiro-deploy/production-releases"),readFrozenBuildIdentity(flags.identity),JSON.parse(flags.hosts),
+      flags["codex-hosts"] === undefined ? undefined : JSON.parse(flags["codex-hosts"]));
     console.log(JSON.stringify(result)); return;
   }
   const plan=read(join(flags.attempt,"attempt.json"));
@@ -124,7 +126,7 @@ async function main() {
     const server=await collectServerCompletion(plan,{transactionDir:flags["server-transaction"],healthUrl:flags["health-url"]});
     const receipt={schema:1,kind:"production_completion",environment:"production",publication_mode:"by_landing",
       repository_id:plan.identity.landing.repository_id,attempt_uuid:plan.attempt_uuid,revision:plan.identity.revision,
-      version:plan.identity.version,branch:plan.identity.branch,completed_at:new Date().toISOString(),host_ids:plan.host_ids,
+      version:plan.identity.version,branch:plan.identity.branch,completed_at:new Date().toISOString(),host_ids:plan.host_ids,codex_host_ids:plan.codex_host_ids,
       server,runners:JSON.parse(flags.runners).map(read),canary:read(flags.canary)};
     console.log(JSON.stringify(completeReleaseAttempt(flags.attempt,receipt,{allowedHosts:plan.host_ids}))); return;
   }

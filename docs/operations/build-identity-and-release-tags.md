@@ -81,10 +81,11 @@ do not move a landing tag to make rollback pass.
 
 Server DONE/stability alone, detached runner enqueue alone and source recovery
 are incomplete. Before either operation, create one attempt and fix the exact
-required host inventory in the execution card. Each required host currently
-needs its completed forward Codex acceptance; do not fabricate one for a host
-without such an operation. The inventory contract must be reviewed before use
-on a different fleet.
+required host inventory in the execution card. Fix `codex_host_ids` separately at start: only those hosts require completed
+forward Codex acceptance. Omission conservatively requires every `host_ids`
+member. Explicit `--codex-hosts` must be a subset; use `[]` for no Codex update.
+The immutable attempt binds both inventories. Do not fabricate an acceptance
+for any other host.
 
 The following commands operate on the reviewed tool checkout; each attempt is
 outside ordinary server transaction pruning:

@@ -50,7 +50,7 @@ describe("runner CLI built entry point", () => {
     for (const { name, result } of outputs) {
       expect(result.error, name).toBeUndefined();
       expect(result.status, name).toBe(0);
-      expect(result.stdout, name).toMatch(/^kaoiro .+ runner v.+ \/ .+\n$/);
+      expect(result.stdout, name).toMatch(/^(?:v[0-9.]+|unknown|untagged) \/ [^\n]+ \/ (?:[0-9a-f]{7}|unknown)\n$/);
     }
     expect(outputs.map(({ result }) => result.stdout)).toEqual([
       outputs[0]!.result.stdout,

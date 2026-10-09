@@ -46,7 +46,10 @@ const path = require("node:path");
     fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"),
   );
   const shortHash = info.revision === "unknown" ? "unknown" : info.revision.slice(0, 7);
-  process.stdout.write(\`kaoiro \${info.channel ?? "dev"} runner v\${info.version ?? "unknown"} / \${shortHash}\\n\`);
+  if (process.argv.includes("--json")) { process.stdout.write(JSON.stringify(info)+"\\n"); process.exit(0); }
+  const version = info.version ?? "unknown";
+  const label = version === "unknown" || version === "untagged" ? version : "v"+version;
+  process.stdout.write(\`\${label} / \${info.branch ?? "unknown"} / \${shortHash}\\n\`);
   process.exit(0);
 }
 process.stdout.write("stub cli.js: no --version given\\n");
@@ -99,6 +102,10 @@ describe("kaoiro-runner-launch.sh --version (issue #218 round 2 MF-5)", () => {
     );
 
     expect(out.trim()).toBe(formatBuildIdentity(buildInfo));
+    const machine = execFileSync(join(tmpDir,"deploy","kaoiro-runner-launch.sh"),["--version","--json"],{
+      encoding:"utf8",env:{...process.env,CODEX_HOME:undefined,KAOIRO_RUNNER_DIR:join(tmpDir,"no-config-here")},
+    });
+    expect(JSON.parse(machine)).toEqual(buildInfo);
   });
 
   // Complementary regression pin: an ORDINARY launch (no --version) must

@@ -16,7 +16,7 @@ const make=()=>{const dir=mkdtempSync(join(tmpdir(),"fuji571-receipt-test-"));sc
 function receipt(revision="a".repeat(40), uuid="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", date=Date.now()+10) {
   const time=offset=>new Date(date+offset).toISOString();
   return {schema:1,kind:"production_completion",environment:"production",publication_mode:"by_landing",repository_id:BUILD_REPOSITORY_ID,
-    attempt_uuid:uuid,revision,version:"2026.10.09.1",branch:"develop",completed_at:time(3),host_ids:["homeguard"],
+    attempt_uuid:uuid,revision,version:"2026.10.09.1",branch:"develop",completed_at:time(3),host_ids:["homeguard"],codex_host_ids:["homeguard"],
     server:{transaction_id:"20261009T000000Z",image_id:`sha256:${"a".repeat(64)}`,container_id:"server",health_revision:revision,
       health_dirty:false,stability_passed:true,journal_sha256:"b".repeat(64),manifest_sha256:"c".repeat(64)},
     runners:[{host_id:"homeguard",revision,version:"2026.10.09.1",branch:"develop",dirty:false,unit:"kaoiro-runner",
@@ -48,6 +48,7 @@ test("stable attempts publish once outside ordinary transaction retention",()=>{
   const identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",
     landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
   const {dir,plan}=startReleaseAttempt(root,identity,["homeguard"]);
+  assert.deepEqual(plan.codex_host_ids,["homeguard"]);
   const r=receipt(revision,plan.attempt_uuid,Date.parse(plan.created_at)+10);
   assert.equal(completeReleaseAttempt(dir,r,options).reused,false);
   assert.equal(completeReleaseAttempt(dir,r,options).reused,true);
@@ -55,6 +56,24 @@ test("stable attempts publish once outside ordinary transaction retention",()=>{
   assert.throws(()=>completeReleaseAttempt(dir,altered,options),/immutable/);
   assert.equal(receiptDigest(JSON.parse(readFileSync(join(dir,"completion.json")))),receiptDigest(r));
   assert.throws(()=>startReleaseAttempt(root,{...identity,version:"untagged"},["homeguard"]),/tagged clean/);
+  assert.throws(()=>startReleaseAttempt(root,identity,["homeguard"],["other"]),/subset/);
+  const onlyRunner=startReleaseAttempt(root,identity,["homeguard"],[]);
+  const noCodex=receipt(revision,onlyRunner.plan.attempt_uuid,Date.parse(onlyRunner.plan.created_at)+10);
+  noCodex.codex_host_ids=[];noCodex.runners[0].codex=null;
+  assert.equal(completeReleaseAttempt(onlyRunner.dir,noCodex,options).reused,false);
+  const alteredInventory=structuredClone(r);alteredInventory.codex_host_ids=[];alteredInventory.runners[0].codex=null;
+  assert.throws(()=>completeReleaseAttempt(dir,alteredInventory,options),/attempt binding/);
+});
+test("the execution card requires Codex acceptance only on its fixed selected hosts",()=>{
+  const r=receipt();
+  r.host_ids.push("worker2");
+  r.runners.push({...structuredClone(r.runners[0]),host_id:"worker2",codex:null});
+  const allowedHosts=["homeguard","worker2"];
+  assert.equal(validateProductionReceipt(r,{allowedHosts}),r);
+  const missing=structuredClone(r);missing.runners[0].codex=null;
+  assert.throws(()=>validateProductionReceipt(missing,{allowedHosts}),/Codex acceptance/);
+  const outside=structuredClone(r);outside.codex_host_ids.push("outsider");
+  assert.throws(()=>validateProductionReceipt(outside,{allowedHosts}),/subset/);
 });
 function remote() {
   const root=make(),source=join(root,"source"),bare=join(root,"remote.git");mkdirSync(source);
