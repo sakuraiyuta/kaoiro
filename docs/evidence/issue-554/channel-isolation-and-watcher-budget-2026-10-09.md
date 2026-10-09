@@ -95,3 +95,42 @@ to commit `c301a5a9`. The file was removed.
 - Baseline at 0bfede23, same seed: 2077 passed, 1 excluded, exit 0, 143.5 s.
 - `DeliveryLossDispatcher terminating` (noproc from `DeliveryStates.pending_losses`): 0 at the baseline, 4 at 2d48d704. The dispatcher polls DeliveryStates every second, and the reset stops DeliveryStates while it runs. The supervisor restarts the dispatcher, so tests pass, but the crash is a side effect of this change. Proposed fix (not applied): stop the dispatcher before the DeliveryStates step and restart it after (test-only). Product-side handling of noproc is a follow-up.
 - Mutant table: not run at the time of this record.
+
+
+## Final verification (commit 95b003b5)
+
+Dispatcher fix: `test_stores.ex` stops `DeliveryLossDispatcher` before the reset steps and starts it after them (commit 9b3096ed).
+
+- Full suite, `scripts/mix-test.sh --seed 554`: 2091 passed, 1 excluded, exit 0, 175.7 s. `DeliveryLossDispatcher terminating` count: 0 (baseline 0bfede23: 143.5 s, 2077 passed, 0; before the fix at 2d48d704: 182.2 s, 2090 passed, 4).
+- Repeat gate, `wrapper_channel_test.exs --repeat-until-failure 2 --seed 554`: three runs, each 242 passed, exit 0.
+- Reset-loop probe (400 `TestStores.reset!/0` calls per run, dispatcher crash reports counted in the captured log): with the fix, 0, 0, 0 (three runs); with the fix removed, 2, 1, 1 (two runs repeated). The probe lives outside the repository.
+- Single-edit mutants (each run alone, file restored with `git checkout`; the test files target `store_isolation_test.exs`, `store_reset_coverage_guard_test.exs`, `store_singleton_guard_test.exs`, seed 554):
+
+| mutant | exit | result (targeted files) | red tests |
+|---|---|---|---|
+| r01_memory_ConversationStates | 2 | 8/9 passed | 1 |
+| r02_memory_AgentActivity | 2 | 8/9 passed | 1 |
+| r03_dets_SessionPointers | 2 | 4/9 passed | 5 |
+| r04_dets_PermissionModes | 2 | 4/9 passed | 5 |
+| r05_dets_PermissionSettings | 2 | 4/9 passed | 5 |
+| r06_dets_SessionLifecycleEvents | 2 | 4/9 passed | 5 |
+| r07_dets_DeliveryStates | 2 | 4/9 passed | 5 |
+| r08_dets_WorkStore | 2 | 4/9 passed | 5 |
+| r09_dets_QuagmireSettings | 2 | 4/9 passed | 5 |
+| r10_dets_Users | 2 | 5/9 passed | 4 |
+| r11_dets_TokenDenylist | 2 | 3/9 passed | 6 |
+| r12_dets_AgentDirectory | 2 | 4/9 passed | 5 |
+| r13_dets_AgentStatusLines | 2 | 4/9 passed | 5 |
+| r14_dets_ClearWatermarks | 2 | 3/9 passed | 6 |
+| r15_dets_SessionStarts | 2 | 3/9 passed | 6 |
+| r16_dets_IngressOrder | 2 | 5/9 passed | 4 |
+| o1_AgentStatusLines_before_TokenDenylist | 2 | 8/9 passed | 1 |
+| o2_IngressOrder_before_seed_sources | 2 | 7/9 passed | 2 |
+| g1_list_missing_Users | 2 | 5/9 passed | 4 |
+| g2_enumeration_blind_to_unlisted | 2 | 8/9 passed | 1 |
+
+Notes on the table:
+- r01 to r16: one reset step removed (2 memory, 14 DETS).
+- o1 and o2: order swaps. o1 is pinned by the order test in the guard (the fixture alone does not see it); o2 is also seen by the fixture.
+- g1: a listed store missing from the list. g2: the enumeration only sees listed tables, so the unlisted-table control turns red.
+- Before the order test was added, o1 was green (exit 0). The table above is the rerun after commit 95b003b5.
