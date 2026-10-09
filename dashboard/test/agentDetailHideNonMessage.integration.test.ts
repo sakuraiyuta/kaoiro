@@ -126,6 +126,24 @@ async function render() {
   return target;
 }
 
+it("keeps the wrapper branch through the actual AgentDetail component", async () => {
+  const component = mount(AgentDetail, {
+    target: document.body,
+    props: {
+      envelope: stateEnvelope(), logs: [], agents: {}, onClose: vi.fn(),
+      wrapperBuildInfo: {
+        build_version: "2026.10.09.12", build_channel: "dev",
+        build_revision: "1234567890abcdef1234567890abcdef12345678",
+        build_dirty: false, build_branch: "issue-571-wrapper",
+      },
+    },
+  });
+  mounted.push(component);
+  await tick();
+  expect(document.querySelector('[data-testid="wrapper-build-info"] dd')?.textContent?.trim())
+    .toBe("v2026.10.09.12 / issue-571-wrapper / 1234567");
+});
+
 describe("AgentDetail hideNonMessageLogEntries (issue #228)", () => {
   it("既定 (off) では tool_use/tool_result を含む全 kind を表示する", async () => {
     const target = await render();

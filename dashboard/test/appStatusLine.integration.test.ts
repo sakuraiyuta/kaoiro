@@ -142,6 +142,27 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("keeps the server branch through the health reader and App header", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: unknown) => ({
+    ok: true,
+    status: 200,
+    json: async () => String(input).includes("/api/health") ? {
+      status: "ok",
+      protocol_version: "0",
+      build_version: "2026.10.09.12",
+      build_channel: "dev",
+      build_revision: "1234567890abcdef1234567890abcdef12345678",
+      build_dirty: false,
+      build_branch: "issue-571-header",
+    } : { ticket: "t-1" },
+  })));
+  await mountApp();
+  await vi.waitFor(() => {
+    expect(document.querySelector('[data-component="server"]')?.textContent?.trim())
+      .toBe("v2026.10.09.12 / issue-571-header / 1234567");
+  });
+});
+
 describe("the card row", () => {
   it("draws no row before the snapshot arrives", async () => {
     const h = await mountApp();
