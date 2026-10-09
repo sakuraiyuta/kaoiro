@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";

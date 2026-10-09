@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -68,7 +68,7 @@ export function productionDispatchCard({
     "canonical card authority required",
   );
   const tools = resolve(cwd),
-    head = execFileSync("git", ["rev-parse", "HEAD"], {
+    head = execChildSync("git", "git", ["rev-parse", "HEAD"], {
       cwd: tools,
       encoding: "utf8",
       stdio: "pipe",
@@ -110,13 +110,13 @@ export function auditProductionCompletions({ root, cwd, remote = "origin" }) {
   );
   let inventory;
   if (completed.length) {
-    execFileSync("git", ["fetch", "--tags", remote], {
+    execChildSync("git", "git", ["fetch", "--tags", remote], {
       cwd,
       timeout: 15_000,
       stdio: "pipe",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });
-    inventory = execFileSync("git", ["ls-remote", "--refs", "--tags", remote], {
+    inventory = execChildSync("git", "git", ["ls-remote", "--refs", "--tags", remote], {
       cwd,
       timeout: 15_000,
       encoding: "utf8",

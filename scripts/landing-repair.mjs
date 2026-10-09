@@ -45,7 +45,7 @@ export function operatorLandingContext(repository, { cwd = root, readApi = api }
 }
 
 export class AlreadyRepaired extends Error {
-  constructor(pair) { super("already_repaired"); this.exitCode = 73; this.pair = pair; }
+  constructor(pair, original) { super("already_repaired"); this.exitCode = 73; this.pair = exactPair(pair, original); }
 }
 export class ReceiptRecoveryRequired extends Error {
   constructor(result) { super("remote pair exists; receipt recording requires record-existing"); this.result = result; }
@@ -58,12 +58,13 @@ function exactPair(pair, original) {
 function sameIntent(value, expected) {
   validateRepairIntent(value);
   for (const field of ["repository", "repository_id", "workflow_id", "boundary_run_id", "target",
-    "original_run_id", "created_at", "artifact_sha256"])
+    "original_run_id", "created_at", "artifact_sha256", "operator", "control_sha"])
     must(value[field] === expected[field], "retained repair intent original evidence differs");
 }
 
 export async function runLandingRepair(command, args, {
   cwd = root, readApi = api, readArtifact = originalArtifact, sshSnapshot = operatorSshSnapshot,
+  allocate = allocateLanding,
 } = {}) {
   must(["audit", "repair", "resume", "record-existing"].includes(command), "unknown landing repair command");
   const flags = parseReleaseOptions(args, ["repository", "original-run", "expected-target", "git-transport"]);
@@ -108,10 +109,10 @@ export async function runLandingRepair(command, args, {
   if (recorded) {
     must(pair && equal(recorded.value.identity, pair.record) && recorded.value.pair_object === pair.object,
       "retained receipt differs from authoritative remote pair");
-    throw new AlreadyRepaired(pair);
+    throw new AlreadyRepaired(pair, original);
   }
   if (command === "repair") {
-    if (pair) throw new AlreadyRepaired(pair);
+    if (pair) throw new AlreadyRepaired(pair, original);
     must(!prior, "repair intent exists; use explicit resume");
   } else {
     must(prior, "recovery requires an existing local repair intent");
@@ -120,7 +121,7 @@ export async function runLandingRepair(command, args, {
   }
   const intentObject = prior?.object ?? writeLocalRepairRecord(cwd, refs.intent, intentValue);
   if (command !== "record-existing") {
-    pair = await allocateLanding({ cwd, remote, repositoryId: context.repositoryId, target: original.target,
+    pair = await allocate({ cwd, remote, repositoryId: context.repositoryId, target: original.target,
       originalRunId: original.originalRunId, createdAt: original.createdAt, gitEnv: ssh.gitEnv });
     exactPair(pair, original);
     inventory = readLandingInventory({ cwd, remote, repositoryId: context.repositoryId, gitEnv: ssh.gitEnv });
@@ -140,7 +141,8 @@ export async function runLandingRepair(command, args, {
         "--repository", context.repository, "--original-run", original.originalRunId,
         "--expected-target", original.target].map(shellQuote).join(" ") });
   }
-  return { schema: 1, status: "repaired", exit_code: 0, identity: pair.record, pair_object: pair.object,
+  return { schema: 1, status: pair.created === false && command !== "record-existing" ? "already_repaired" : "repaired",
+    exit_code: pair.created === false && command !== "record-existing" ? 73 : 0, identity: pair.record, pair_object: pair.object,
     intent_ref: refs.intent, intent_object: intentObject, receipt_ref: refs.receipt, receipt_object: receiptObject,
     control_sha: context.control, operator: actor.login, evidence_scope: "this_control_checkout" };
 }

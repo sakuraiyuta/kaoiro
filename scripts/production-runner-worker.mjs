@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { CHILD_PATH, execChildSync } from "./child-process-environment.mjs";
 import {
   existsSync,
   lstatSync,
@@ -270,7 +270,7 @@ export async function queueProductionRunner({
       "--property=Type=oneshot",
       "--property=RemainAfterExit=yes",
       "--expand-environment=no",
-      `--setenv=PATH=${process.env.PATH}`,
+      `--setenv=PATH=${CHILD_PATH}`,
       ...(process.env.KAOIRO_NODE
         ? [`--setenv=KAOIRO_NODE=${process.env.KAOIRO_NODE}`]
         : []),
@@ -284,7 +284,7 @@ export async function queueProductionRunner({
       dirname(baseline.updater_tool),
       ...executedArgs,
     ];
-    execFileSync(systemdRunBin, args, {
+    execChildSync("systemd", systemdRunBin, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 15_000,
@@ -375,7 +375,7 @@ export function cleanupProductionRunner({
   );
   for (const name of names) {
     try {
-      execFileSync(systemctlBin, ["--user", "stop", "--", name], {
+      execChildSync("systemd", systemctlBin, ["--user", "stop", "--", name], {
         stdio: "pipe",
         timeout: 5000,
       });
@@ -386,7 +386,7 @@ export function cleanupProductionRunner({
   }
   for (const name of names) {
     try {
-      execFileSync(systemctlBin, ["--user", "reset-failed", "--", name], {
+      execChildSync("systemd", systemctlBin, ["--user", "reset-failed", "--", name], {
         stdio: "pipe",
         timeout: 5000,
       });
@@ -445,7 +445,7 @@ export async function inspectProductionRunnerActivity({
         "only a never-started dedicated timer may be cancelled",
       );
       if (scheduled.LoadState !== "not-found")
-        execFileSync("systemctl", ["--user", "stop", "--", timer], {
+        execChildSync("systemd", "systemctl", ["--user", "stop", "--", timer], {
           stdio: "pipe",
           timeout: 5000,
         });

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ export const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 export const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 export function api(path) {
   let raw;
-  try { raw = execFileSync("gh", ["api", path], { encoding: "utf8", timeout: 15_000, maxBuffer: 8_388_608 }); }
+  try { raw = execChildSync("gh", "gh", ["api", path], { encoding: "utf8", timeout: 15_000, maxBuffer: 8_388_608 }); }
   catch { throw new Error("landing GitHub API read failed"); }
   return JSON.parse(raw);
 }
@@ -130,7 +130,7 @@ export function* listLandingPushRuns({
 export function originalArtifact(repository, run) {
   const scratch = mkdtempSync(join(tmpdir(), "kaoiro-original-event-"));
   try {
-    try { execFileSync("gh", ["run", "download", String(run.id), "--repo", repository,
+    try { execChildSync("gh", "gh", ["run", "download", String(run.id), "--repo", repository,
       "--name", "landing-event-v1", "--dir", scratch], { stdio: "pipe", timeout: 30_000 }); }
     catch { throw new Error("original landing artifact is unavailable"); }
     const path = join(scratch, "original-event.json"), stat = lstatSync(path);

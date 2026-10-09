@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnChildSync } from "./child-process-environment.mjs";
 import { actorLogin, repositoryName } from "./landing-backlog.mjs";
 import { formatLandingVersion, validateLandingRecord } from "./build-identity.mjs";
 const must = (condition, message) => { if (!condition) throw new Error(message); };
@@ -13,7 +13,7 @@ const exact = (value, fields) => value && typeof value === "object" && !Array.is
   JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...fields].sort());
 
 export function localGit(cwd, args, input) {
-  const result = spawnSync("git", args, { cwd, input, encoding: "utf8", timeout: 15_000, maxBuffer: 65_536,
+  const result = spawnChildSync("git", "git", args, { cwd, input, encoding: "utf8", timeout: 15_000, maxBuffer: 65_536,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, stdio: ["pipe", "pipe", "pipe"] });
   must(!result.error && !result.signal, "local repair Git operation failed");
   return result;
@@ -42,7 +42,8 @@ export function validateRepairIntent(value) {
 }
 export function validateRepairReceipt(value, intent, object) {
   must(exact(value, RECEIPT) && value.schema === 1 && value.kind === "landing_repair_receipt" &&
-    value.intent_object === object && sha(value.pair_object) && sha(value.control_sha) && actorLogin(value.operator) &&
+    value.intent_object === object && sha(value.pair_object) && value.control_sha === intent.control_sha &&
+    value.operator === intent.operator && sha(value.control_sha) && actorLogin(value.operator) &&
     hash(value.remote_observation_sha256) && hash(value.ssh_configuration_sha256), "repair receipt schema rejected");
   validateLandingRecord(value.identity, intent.repository_id);
   must(value.identity.revision === intent.target && value.identity.original_run_id === intent.original_run_id &&

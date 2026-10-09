@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -100,7 +100,7 @@ async function main() {
       actualDeploy && realpathSync(actualDeploy) === actualDeploy,
       "physical deploy path required",
     );
-    execFileSync(join(actualDeploy, "kaoiro-runner-update.sh"), args.slice(1), {
+    execChildSync("runner", join(actualDeploy, "kaoiro-runner-update.sh"), args.slice(1), {
       stdio: "inherit",
       env: process.env,
     });

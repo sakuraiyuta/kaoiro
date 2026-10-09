@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { childEnvironmentProfile, spawnChildSync } from "./child-process-environment.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,15 +15,15 @@ const MAX_ATTEMPTS = 5;
 const GIT_TIMEOUT_MS = 30_000;
 const RESERVED_VERSION_PREFIX = /^v\d{4}\.\d{2}\.\d{2}\./;
 
-function runGit(cwd, args, input, gitEnv = process.env) {
-  const result = spawnSync("git", args, {
+function runGit(cwd, args, input, gitEnv) {
+  const result = spawnChildSync(childEnvironmentProfile(gitEnv), "git", args, {
     cwd,
     encoding: "utf8",
     input,
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: 32 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...gitEnv, GIT_TERMINAL_PROMPT: "0" },
+    env: gitEnv,
   });
   return {
     status: result.status ?? 1,

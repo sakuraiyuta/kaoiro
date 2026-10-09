@@ -1,3 +1,4 @@
+import { installChildFixture } from "./fixtures/child-process-fixture.mjs";
 import assert from "node:assert/strict";
 import {
   copyFileSync,
@@ -44,6 +45,7 @@ import {
 } from "../production-release-runner-facts.mjs";
 
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const restorers = [];
 const roots = [],
   saved = new Map();
 function env(key, value) {
@@ -51,6 +53,7 @@ function env(key, value) {
   process.env[key] = value;
 }
 afterEach(() => {
+  for (const restore of restorers.splice(0).reverse()) restore();
   for (const [key, value] of saved) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -157,6 +160,7 @@ function fixture() {
   env("GATE_STATE", stateFile);
   env("GATE_CALLS", callsFile);
   env("GATE_BASELINE", baselineFile);
+  restorers.push(installChildFixture(bin, { GATE_STATE: stateFile, GATE_CALLS: callsFile, GATE_BASELINE: baselineFile }));
   const queue = (extra) =>
     queueProductionRunner({
       dir,

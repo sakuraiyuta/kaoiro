@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import {
@@ -423,7 +423,7 @@ export async function reconcileProductionReleases({
     const timeout = remaining(15_000);
     return gitCommand
       ? gitCommand(cwd, args, timeout)
-      : execFileSync("git", args, {
+      : execChildSync("git", "git", args, {
           cwd,
           timeout,
           encoding: "utf8",

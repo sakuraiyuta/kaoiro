@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { hostname, homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -266,12 +266,12 @@ export function releaseAuthorityRequest(
   try {
     raw =
       d.transport === "ssh"
-        ? execFileSync(
+        ? execChildSync("authority",
             "/usr/bin/ssh",
             releaseSshArguments(d, operation),
             options,
           )
-        : execFileSync(
+        : execChildSync("authority",
             d.node_path,
             [d.exporter_path, operation, d.tool_sha256, d.root],
             options,

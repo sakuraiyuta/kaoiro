@@ -306,10 +306,13 @@ test("the workflow audits all tags before returning an existing claim", () => {
     `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(run))});\n`,
   );
   chmodSync(gh, 0o700);
+  const preload = join(fixture.root, "child-preload.mjs");
+  writeFileSync(preload, `import { installChildFixture } from ${JSON.stringify(new URL("./fixtures/child-process-fixture.mjs", import.meta.url).href)}; installChildFixture(${JSON.stringify(bin)});`);
   const invoke = () =>
     spawnSync(
       process.execPath,
       [
+        "--import", preload,
         new URL("../landing-workflow.mjs", import.meta.url).pathname,
         "allocate",
       ],

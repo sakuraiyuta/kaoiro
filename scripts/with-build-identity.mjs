@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawnChildSync } from "./child-process-environment.mjs";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ try {
   const file = join(scratch, "identity.json");
   writeFileSync(file, `${JSON.stringify(identity)}\n`, { flag: "wx", mode: 0o400 });
   const digest = createHash("sha256").update(readFileSync(file)).digest("hex");
-  const result = spawnSync(args[0], args.slice(1), { stdio: "inherit", env: { ...process.env,
+  const result = spawnChildSync("build", args[0], args.slice(1), { stdio: "inherit", env: { ...process.env,
     KAOIRO_BUILD_IDENTITY_FILE: file, KAOIRO_BUILD_IDENTITY_SHA256: digest,
     KAOIRO_BUILD_IDENTITY_JSON: JSON.stringify(identity),
     KAOIRO_BUILD_REVISION: identity.revision, KAOIRO_BUILD_DIRTY: String(identity.dirty),

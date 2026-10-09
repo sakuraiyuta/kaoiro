@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { childEnvironment, execChildSync } from "./child-process-environment.mjs";
 import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { api, repositoryName, originalPushRecord, shellQuote, validateLandingContext, auditLandingBacklog } from "./landing-backlog.mjs";
@@ -10,9 +10,7 @@ const require = (condition, message) => {
 export { originalPushRecord, validateOriginalObservation, validateOriginalRecord, listLandingPushRuns } from "./landing-backlog.mjs";
 function gitAuthentication() {
   require(process.env.GH_TOKEN, "publisher token unavailable");
-  process.env.GIT_CONFIG_COUNT = "1";
-  process.env.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
-  process.env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${process.env.GH_TOKEN}`).toString("base64")}`;
+
 }
 
 export function repairDiagnostic(identity, control) {
@@ -44,7 +42,7 @@ async function main() {
   require(["push", "workflow_dispatch", "schedule"].includes(current.event) &&
     current.repository?.id === repositoryId && current.head_repository?.id === repositoryId,
     "untrusted reconciliation trigger");
-  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const head = execChildSync("ci-git", "git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const boundary = api(`repos/${repository}/actions/runs/${process.env.KAOIRO_LANDING_FIRST_RUN_ID}`);
   const context = validateLandingContext({ repository, repositoryId, workflowId: current.workflow_id,
     boundary, env: process.env, head });
@@ -57,7 +55,8 @@ async function main() {
     const original = row.original;
     try {
       await allocateLanding({ cwd: process.cwd(), remote: "origin", target: original.target,
-        originalRunId: original.originalRunId, createdAt: original.createdAt, repositoryId });
+        originalRunId: original.originalRunId, createdAt: original.createdAt, repositoryId,
+        gitEnv: childEnvironment("ci-git") });
     } catch (error) {
       if (!(error instanceof LandingRepairRequired)) throw error;
       denied = repairDiagnostic({ ...error.identity, repository }, head);

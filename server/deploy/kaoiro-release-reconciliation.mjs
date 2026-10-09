@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "../../scripts/child-process-environment.mjs";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -66,7 +66,7 @@ export function auditServerRelease(flags, serverDir, repo) {
     ["dry-run", flags.dryRun ? "true" : undefined],
   ])
     if (value) args.push(`--${key}`, value);
-  const raw = execFileSync(authority.descriptor.node_path, args, {
+  const raw = execChildSync("authority", authority.descriptor.node_path, args, {
     timeout: 125_000,
     encoding: "utf8",
     maxBuffer: 524_288,

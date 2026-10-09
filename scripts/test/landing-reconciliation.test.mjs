@@ -174,11 +174,13 @@ test("the production reconciliation entry fetches once per inventory rather than
       `#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process'),a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');try{cp.execFileSync('/usr/bin/git',a,{stdio:'inherit'});}catch(e){process.exit(e.status??1);}\n`,
       { mode: 0o755 },
     );
+    const preload = join(root, "child-preload.mjs");
+    fs.writeFileSync(preload, `import { installChildFixture } from ${JSON.stringify(new URL("./fixtures/child-process-fixture.mjs", import.meta.url).href)}; installChildFixture(${JSON.stringify(bin)});`);
     const script = join(
       dirname(fileURLToPath(import.meta.url)),
       "../landing-workflow.mjs",
     );
-    const result = spawnSync(process.execPath, [script, "reconcile"], {
+    const result = spawnSync(process.execPath, ["--import", preload, script, "reconcile"], {
       cwd: repo,
       encoding: "utf8",
       env: {

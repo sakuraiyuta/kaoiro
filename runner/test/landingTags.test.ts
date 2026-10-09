@@ -1,3 +1,4 @@
+import { installChildFixture } from "../../scripts/test/fixtures/child-process-fixture.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
@@ -129,15 +130,18 @@ process.exit(result.status ?? 1);
   const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   writeFileSync(shim, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(shimModule)} "$@"\n`, { mode: 0o755 });
   chmodSync(shim, 0o755);
+  writeFileSync(join(bin, "preload.mjs"), `import { installChildFixture } from ${JSON.stringify(new URL("../../scripts/test/fixtures/child-process-fixture.mjs", import.meta.url).href)}; installChildFixture(${JSON.stringify(bin)});`);
   return { bin, path: `${bin}${delimiter}${initialPath}` };
 }
 
 function withPath<T>(path: string, callback: () => T): T {
   const oldPath = process.env.PATH;
   process.env.PATH = path;
+  const restore = installChildFixture(path.split(delimiter)[0]!);
   try {
     return callback();
   } finally {
+    restore();
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
   }
@@ -155,7 +159,7 @@ function runAllocatorProcess(input: ReturnType<typeof inputFor>, env: NodeJS.Pro
     }
   `;
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--input-type=module", "-e", childCode], {
+    const child = spawn(process.execPath, ["--import", join((env.PATH ?? "").split(delimiter)[0]!, "preload.mjs"), "--input-type=module", "-e", childCode], {
       cwd: input.cwd,
       env: { ...env, LANDING_INPUT_JSON: JSON.stringify(input) },
       stdio: ["ignore", "pipe", "pipe"],

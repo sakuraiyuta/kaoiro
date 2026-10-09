@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { validateProductionReceipt } from "./production-release-record.mjs";
@@ -35,7 +35,7 @@ export function validateDispatch(run, { repositoryId, allowedActors }) {
 async function main() {
   validateAutomationGate(
     process.env,
-    execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    execChildSync("ci-git", "git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     "release",
   );
   const repository = process.env.GITHUB_REPOSITORY,
@@ -43,7 +43,7 @@ async function main() {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))
     throw new Error("repository context");
   const run = JSON.parse(
-    execFileSync(
+    execChildSync("gh",
       "gh",
       ["api", `repos/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`],
       { encoding: "utf8", timeout: 15_000, maxBuffer: 65_536 },
@@ -71,9 +71,6 @@ async function main() {
     return;
   }
   if (process.argv[2] !== "publish") throw new Error("unknown receiver action");
-  process.env.GIT_CONFIG_COUNT = "1";
-  process.env.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
-  process.env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${process.env.GH_TOKEN}`).toString("base64")}`;
   const result = publishProductionRelease({
     cwd: process.cwd(),
     receipt,

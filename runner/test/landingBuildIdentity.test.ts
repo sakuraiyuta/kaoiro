@@ -1,3 +1,4 @@
+import { installChildFixture } from "../../scripts/test/fixtures/child-process-fixture.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -129,10 +130,11 @@ describe("exact landing identity", () => {
       process.stdout.write(observed.stdout);process.stderr.write(observed.stderr);process.exit(observed.status??98);
     `, { mode: 0o755 });
     const previousPath = process.env.PATH;
+    const restore = installChildFixture(shim);
     try {
       process.env.PATH = `${shim}:${previousPath}`;
       expect(() => requireTaggedIdentity(repo, { target: revision, timeoutMs: 1000 })).toThrow(/selected landing tag and claim differ from origin read-back/);
-    } finally { process.env.PATH = previousPath; }
+    } finally { restore(); process.env.PATH = previousPath; }
     expect(git(["rev-parse", "refs/tags/v2026.10.09.1"])).toBe(original);
     expect(git(["rev-parse", "refs/tags/v2026.10.09.1"], remote)).toBe(replacement);
   });

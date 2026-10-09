@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Version and branch resolution lives here; artifact consumers read one frozen input.
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -13,7 +13,7 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
  *  fails. Never throws. */
 function gitOutput(args, cwd) {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim();
+    return execChildSync("git", "git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim();
   } catch {
     return null;
   }
@@ -132,7 +132,7 @@ export function requireTaggedIdentity(cwd = repoRoot, options = {}) {
   const deadline = Date.now() + (options.timeoutMs ?? 10_000);
   let identity;
   do {
-    execFileSync("git", ["fetch", "--tags", "origin"], { cwd, stdio: "pipe", timeout: Math.max(1, deadline - Date.now()) });
+    execChildSync("git", "git", ["fetch", "--tags", "origin"], { cwd, stdio: "pipe", timeout: Math.max(1, deadline - Date.now()) });
     const remote = gitOutput(["ls-remote", "--tags", "--refs", "origin"], cwd);
     const local = gitOutput(["for-each-ref", "--format=%(objectname)\t%(refname)", "refs/tags"], cwd);
     if (remote === null || local === null) throw new Error("cannot prove complete remote tag inventory");

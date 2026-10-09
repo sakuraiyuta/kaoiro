@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { childEnvironment, spawnChildSync } from "./child-process-environment.mjs";
 import { actorLogin, digest, shellQuote } from "./landing-backlog.mjs";
 
 const FIXED_OPTIONS = ["-oBatchMode=yes", "-oStrictHostKeyChecking=yes", "-oUpdateHostKeys=no",
   "-oConnectTimeout=10", "-oConnectionAttempts=1", "-oPermitLocalCommand=no", "-oLogLevel=QUIET"];
 const must = (condition, message) => { if (!condition) throw new Error(message); };
-const nativeSsh = (args, env) => spawnSync("/usr/bin/ssh", args, {
+const nativeSsh = (args, env) => spawnChildSync("ssh", "/usr/bin/ssh", args, {
   env, encoding: "utf8", timeout: 15_000, maxBuffer: 4096,
   stdio: ["ignore", "ignore", "pipe"],
 });
@@ -21,8 +21,8 @@ export function sshGreetingActor(result, expectedActor) {
 }
 
 export function operatorSshSnapshot(expectedActor, { env = process.env, readConfig, probe = nativeSsh } = {}) {
-  const frozenEnv = Object.freeze({ ...env });
-  const config = readConfig ? readConfig() : spawnSync("/usr/bin/ssh", ["-G", ...FIXED_OPTIONS, "git@github.com"], {
+  const frozenEnv = childEnvironment("ssh", env);
+  const config = readConfig ? readConfig() : spawnChildSync("ssh", "/usr/bin/ssh", ["-G", ...FIXED_OPTIONS, "git@github.com"], {
     env: frozenEnv, encoding: "utf8", timeout: 15_000, maxBuffer: 65_536,
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -55,5 +55,5 @@ export function operatorSshSnapshot(expectedActor, { env = process.env, readConf
   // HTTP credentials must not survive into the SSH-only repair transport.
   for (const key of Object.keys(gitEnv)) if (key.startsWith("GIT_CONFIG")) delete gitEnv[key];
   Object.assign(gitEnv, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_ALLOW_PROTOCOL: "ssh" });
-  return Object.freeze({ gitEnv: Object.freeze(gitEnv), configurationSha256: digest(JSON.stringify(frozenArgs)) });
+  return Object.freeze({ gitEnv: childEnvironment("ssh-git", gitEnv), configurationSha256: digest(JSON.stringify(frozenArgs)) });
 }

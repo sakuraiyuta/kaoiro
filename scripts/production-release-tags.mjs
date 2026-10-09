@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { BUILD_REPOSITORY_ID, readLandingTag } from "./build-identity.mjs";
@@ -7,7 +7,7 @@ import {
   validateProductionReceipt,
 } from "./production-release-record.mjs";
 const git = (cwd, args) =>
-  execFileSync("git", args, {
+  execChildSync("ci-git", "git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

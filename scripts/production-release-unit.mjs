@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 
 const must = (condition, message) => {
   if (!condition) throw new Error(`release unit refused: ${message}`);
@@ -12,7 +12,7 @@ const unitName = (name) => {
   return name;
 };
 const read = (bin, args) =>
-  execFileSync(bin, args, {
+  execChildSync("systemd", bin, args, {
     encoding: "utf8",
     timeout: 5000,
     maxBuffer: 65_536,

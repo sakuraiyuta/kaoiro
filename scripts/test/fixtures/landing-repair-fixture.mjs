@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { installChildFixture } from "./child-process-fixture.mjs";
 import { stageReleaseTools } from "../../production-release-tools.mjs";
 import { BUILD_REPOSITORY_ID } from "../../build-identity.mjs";
 import { originalPushRecord } from "../../landing-backlog.mjs";
@@ -58,10 +59,14 @@ export function repairFixture() {
     const record = data.records[data.pushes.findIndex(row => row.id === run.id)];
     return { record, bytes: Buffer.from(JSON.stringify(record)) };
   };
+  const restoreChildren = installChildFixture(bin);
+  const preload = join(root, "preload.mjs");
+  env.NODE_OPTIONS = `--import=${preload}`;
+  writeFileSync(preload, `import { installChildFixture } from ${JSON.stringify(new URL("./child-process-fixture.mjs", import.meta.url).href)}; installChildFixture(${JSON.stringify(bin)}, ${JSON.stringify(env)});`);
   const dependencies = { cwd: repo, readApi, readArtifact, sshSnapshot: () => ({ configurationSha256: "f".repeat(64), gitEnv: env }) };
-  const cli = (script, args, extra = {}) => spawnSync(process.execPath, [join(repo, "scripts", script), ...args], { cwd: repo, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
+  const cli = (script, args, extra = {}) => spawnSync(process.execPath, ["--import", preload, join(repo, "scripts", script), ...args], { cwd: repo, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
   const calls = () => { try { return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse); } catch { return []; } };
   const args = (index = 0) => ["--git-transport", "ssh", "--repository", "fixture/repo", "--original-run", String(index + 1), "--expected-target", pushes[index].head_sha];
   return { root, repo, remote, bin, env, control, second, data, save, git, log, marker, cli, calls, args, dependencies,
-    dispose: () => rmSync(root, { recursive: true, force: true }) };
+    dispose: () => { restoreChildren(); rmSync(root, { recursive: true, force: true }); } };
 }

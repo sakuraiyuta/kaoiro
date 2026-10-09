@@ -579,6 +579,18 @@ node scripts/landing-repair.mjs repair --git-transport ssh \
 ```
 
 `repair`, `resume` and `record-existing` require the literal transport `ssh`.
+Any local `url.*.insteadOf` or `url.*.pushInsteadOf` setting refuses repair,
+including benign HTTPS-to-SSH rewrites. Use a reviewed clean checkout without
+these settings; do not bypass the check or redirect the repository path.
+
+Issue 571 child commands use one closed environment builder. Executable search
+uses the current Node directory and `/usr/local/bin:/usr/bin:/bin`, rather than
+the caller's `PATH`. Git/SSH children exclude loader settings, arbitrary Git
+environment settings, and HTTP tokens. Only gh receives its HTTP credential;
+Actions Git receives an explicitly constructed authorization header. User-manager
+connection keys, runner settings and build identity fields are carried only by
+their corresponding profiles. Use absolute build command paths when a tool is
+installed outside the fixed search path.
 There is no HTTPS fallback and no added OAuth workflow scope. `gh` reads the
 original run/artifact, accepted control/boundary and current User login only.
 That login must have repository push authority and match the existing
@@ -604,10 +616,15 @@ only the remote same-object tag/claim arbitrates issuance.
 - No intent/pair: `repair` must record intent before any push.
 - Valid intent without a pair: inspect the original evidence and explicitly
   use `resume` with the same required options. No replacement clock/target.
+  The same authenticated operator and reviewed control SHA must also match
+  the retained intent. A changed artifact cannot be substituted during resume.
 - Exact pair with missing receipt: `record-existing` verifies the pair and
   writes a receipt without pushing. A post-push receipt failure prints this
   recovery command and the actual remote object.
 - Exact pair and valid receipt: duplicate operation returns 73 with no ref move.
+  A pair for the same target with a different original run or clock is refused,
+  never reported as an exact duplicate. If another checkout wins during issuance,
+  the exact pair can be recorded locally and the result reports 73, not creation.
 - An established pair without local intent remains resolved remotely; do not
   manufacture a repair journal in another checkout.
 - Malformed or contradictory local refs refuse. Preserve the exact named ref
