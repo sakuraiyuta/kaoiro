@@ -32,6 +32,8 @@ replayed onto landed C1S `8e9360a5507c0ca2387df48c1118903a14544197`;
 release only after the supporting C1S server is integrated. Rollback below a
 live wrapper's high-water requires restarting that affected wrapper, as
 [documented](../operations/server-update-and-rollback.md#delivery-policy-revision-recovery).
+The [C1W evidence record](../evidence/issue-463/2026-10-09-c1w-live-delivery-policy.md)
+separates native RPC acceptance, model inclusion and remaining measurement limits.
 
 ## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 
