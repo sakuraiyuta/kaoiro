@@ -307,6 +307,7 @@ case "$1" in
     ;;
   exec)
     if [ "$4" = rpc ]; then
+      if [ "$KAOIRO_TEST_FLEET_RPC_MODULE_ABSENT" = 1 ]; then printf 'UndefinedFunctionError: KaoiroServer.ReleaseFleet.snapshot_json/0 is undefined\\n' >&2; exit 1; fi
       if [ "$KAOIRO_TEST_FLEET_RPC_FAIL" = 1 ]; then exit 1; fi
       if [ "$KAOIRO_TEST_FLEET_RPC_HANG" = 1 ]; then exec node -e 'setTimeout(() => {}, 10000)'; fi
       if [ -n "$KAOIRO_TEST_FLEET_JSON" ]; then printf '%s\\n' "$KAOIRO_TEST_FLEET_JSON"; else printf '{"schema":1,"hosts":[],"wrappers":[]}\\n'; fi
@@ -5677,6 +5678,33 @@ function withFleetEnv(values, fn) {
 
 const modernFleet = JSON.stringify({ schema: 1,
   hosts: [{ id: "registered-new-runner", build_version: "2026.10.09.2" }], wrappers: [] });
+
+test("the first bridge requires confirmed fleet stop when the old server lacks ReleaseFleet", () => {
+  const log = join(root, "first-bridge-calls.log");
+  withFleetEnv({ KAOIRO_TEST_FLEET_RPC_MODULE_ABSENT: "1", KAOIRO_TEST_CALL_LOG: log }, () => {
+    assert.throws(() => withScenario("running-clean-stop", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())),
+      err => err.exitCode === 78 && /UndefinedFunctionError/.test(err.message));
+    assert.ok(!readCallLog(log).some(line => line.startsWith("compose stop")));
+    assert.ok(!readdirSync(join(root, "kaoiro-deploy")).some(name => name.startsWith(".lock")));
+    const tx = readdirSync(join(root, "kaoiro-deploy")).find(name => !name.startsWith("."));
+    const result = withScenario("running-clean-stop", () =>
+      runUpdate({ repo: workDir, target: headSha, transaction: tx, maintenanceApproved: true, fleetStopped: true }, configWithCleanStopMeasured()));
+    assert.equal(result.phase, "done");
+    assert.equal(readCallLog(log).filter(line => line.includes("ReleaseFleet.snapshot_json")).length, 1);
+  });
+});
+
+test("a subsequent bridge upgrade checks the live modern fleet without fleet-stopped", () => {
+  const log = join(root, "subsequent-bridge-calls.log");
+  withFleetEnv({ KAOIRO_TEST_FLEET_JSON: modernFleet, KAOIRO_TEST_CALL_LOG: log }, () => {
+    const result = withScenario("running-clean-stop", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()));
+    assert.equal(result.phase, "done");
+    assert.ok(readCallLog(log).some(line => line.includes("ReleaseFleet.snapshot_json")));
+    assert.ok(readCallLog(log).some(line => line.startsWith("compose stop")));
+  });
+});
 
 test("update refuses a pre-bridge target before STOPPING and releases its deployment lock", () => {
   const log = join(root, "fleet-calls.log");

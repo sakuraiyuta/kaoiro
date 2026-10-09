@@ -77,6 +77,15 @@ statement: the operator must stop/revert the incompatible fleet first.
 Invalid target image identity is never waived. Restore known old artifacts;
 do not move a landing tag to make rollback pass.
 
+For the first bridge upgrade from a server without `ReleaseFleet`, the execution
+card must order these steps: stop every required runner and confirm that their
+cgroups contain zero wrappers and every dashboard tile is offline; update the
+server with `--fleet-stopped`; update the runners; then run the canary. Use the
+flag only after both stop observations pass. A missing legacy RPC fails closed
+without the flag. Subsequent upgrades from a bridge server omit the flag and
+must obtain the live compatibility snapshot. Never carry this first-upgrade
+exception into ordinary execution cards.
+
 ## Common production checkpoint
 
 Server DONE/stability alone, detached runner enqueue alone and source recovery
