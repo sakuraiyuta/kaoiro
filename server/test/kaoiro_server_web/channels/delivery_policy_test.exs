@@ -921,9 +921,10 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
                    }),
                    :ok
 
-      assert_push "hosts", %{
-        "hosts" => %{^id => %{"engines" => ^catalogs, "in_flight_defaults" => ^defaults}}
-      }
+      assert_push "hosts", %{"hosts" => %{^id => host}}
+      wire = host |> Jason.encode!() |> Jason.decode!()
+      assert wire["engines"] == catalogs
+      assert wire["in_flight_defaults"] == defaults
     end
   end
 
