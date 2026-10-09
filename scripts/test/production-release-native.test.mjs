@@ -140,6 +140,28 @@ test(
       `#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process');const a=process.argv.slice(2);if(a.at(-1)!==${JSON.stringify(service)}){try{cp.execFileSync('/usr/bin/systemctl',a,{stdio:'inherit'});}catch(e){process.exit(e.status??1);}process.exit(0);}fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(a)+'\\n');if(a[1]==='show'){if(a.some(x=>x.includes('LoadState,')))console.log('LoadState=loaded\\nActiveState=active\\nSubState=running\\nMainPID=123');else console.log('{ path=${root}/current/deploy/kaoiro-runner-launch.sh ; argv[]=${root}/current/deploy/kaoiro-runner-launch.sh ; }');}\n`,
       { mode: 0o755 },
     );
+    const preload = join(base, "owned-native-preload.mjs");
+    writeFileSync(preload, `import cp from 'node:child_process';
+      import {syncBuiltinESMExports} from 'node:module';
+      const original=cp.execFileSync;
+      cp.execFileSync=(file,args,options={})=>{
+        if(file==='systemctl' && args.at(-1)===${JSON.stringify(service)})
+          return original(${JSON.stringify(join(bin, "systemctl"))},args,options);
+        if(file==='systemd-run') {
+          if(!args.includes(${JSON.stringify(`--unit=${unit.replace(/\.service$/, "")}`)}))
+            throw new Error('native fixture unit mismatch');
+          args=[${JSON.stringify(`--setenv=NODE_OPTIONS=--import=${preload}`)},...args];
+        }
+        if(file.endsWith('/kaoiro-runner-update.sh')) {
+          if(args[args.indexOf('--service')+1]!==${JSON.stringify(service)})
+            throw new Error('native fixture service mismatch');
+          options={...options,env:{...options.env,KAOIRO_SYSTEMCTL:${JSON.stringify(join(bin, "systemctl"))}}};
+        }
+        return original(file,args,options);
+      };
+      syncBuiltinESMExports();
+      export const restore=()=>{cp.execFileSync=original;syncBuiltinESMExports();};\n`, { mode: 0o600 });
+    const { restore: restoreNativeFixture } = await import(preload);
     const health = createServer((_request, response) => {
       response.setHeader("Content-Type", "application/json");
       response.end(
@@ -288,6 +310,7 @@ test(
           unit.replace(/\.service$/, ".timer"),
         ]);
       } catch {}
+      restoreNativeFixture();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;

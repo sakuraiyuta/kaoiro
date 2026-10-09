@@ -41,6 +41,30 @@ test("the guard survives the product's NODE_OPTIONS-free Node child environment"
   assert.match(result.stderr, /ERR_TEST_HOST_SYSTEMD/);
 });
 
+test("the real updater shell cannot use a production service name with its real manager", () => {
+  const updater = fileURLToPath(new URL("../../runner/deploy/kaoiro-runner-update.sh", import.meta.url));
+  const root = mkdtempSync(join(tmpdir(), "fuji571-updater-guard-"));
+  try {
+    const args = ["--install-dir", root, "--service", "kaoiro-runner", "--from-repo", root];
+    assert.throws(() => spawnChildSync("runner", updater, args), { code: "ERR_TEST_HOST_SYSTEMD" });
+    assert.throws(() => spawnSync("sh", [updater, ...args]), { code: "ERR_TEST_HOST_SYSTEMD" });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the updater-shell safety self-test delegates only to an inert sink if its guard is cut", () => {
+  const guard = fileURLToPath(new URL("./fixtures/host-systemd-guard.mjs", import.meta.url));
+  const updater = fileURLToPath(new URL("../../runner/deploy/kaoiro-runner-update.sh", import.meta.url));
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import childProcess from 'node:child_process';
+    delete globalThis[Symbol.for('kaoiro.test.host-systemd-guard')];
+    childProcess.execFileSync = () => { throw new Error('inert updater sink reached'); };
+    await import(${JSON.stringify(guard)} + '?updater-self-test');
+    try { childProcess.execFileSync('sh',[${JSON.stringify(updater)},'--service','kaoiro-runner']); }
+    catch(error) { if(error.code === 'ERR_TEST_HOST_SYSTEMD') process.exit(0); throw error; }
+    process.exit(1);`], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("the guard self-test uses an inert native sink if its refusal is removed", () => {
   const guard = fileURLToPath(new URL("./fixtures/host-systemd-guard.mjs", import.meta.url));
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", `

@@ -25,6 +25,16 @@ function protect(file, args, options) {
     error.code = "ERR_TEST_HOST_SYSTEMD";
     throw error;
   }
+  const runsUpdater = basename(file) === "kaoiro-runner-update.sh" ||
+    args.some(arg => typeof arg === "string" && basename(arg) === "kaoiro-runner-update.sh");
+  if (runsUpdater) {
+    const manager = executable(options.env?.KAOIRO_SYSTEMCTL ?? "systemctl", options);
+    if (hostBins.has(existsSync(manager) ? realpathSync(manager) : manager)) {
+      const error = new Error("test refused updater shell with real user systemd");
+      error.code = "ERR_TEST_HOST_SYSTEMD";
+      throw error;
+    }
+  }
   // Product child environments deliberately strip NODE_OPTIONS; carry the test
   // guard as a Node argument so subprocesses cannot lose it at that boundary.
   if (actual === realpathSync(process.execPath)) return ["--import", preload, ...args];

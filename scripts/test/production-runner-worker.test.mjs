@@ -45,6 +45,7 @@ import {
 } from "../production-release-runner-facts.mjs";
 
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const fixtureService = "kaoiro-fuji571-worker-fixture";
 const restorers = [];
 const roots = [],
   saved = new Map();
@@ -163,6 +164,7 @@ function fixture() {
   restorers.push(installChildFixture(bin, { GATE_STATE: stateFile, GATE_CALLS: callsFile, GATE_BASELINE: baselineFile }));
   const queue = (extra) =>
     queueProductionRunner({
+      service: fixtureService,
       dir,
       host: "worker-a",
       runnerRoot: runner,
@@ -692,6 +694,7 @@ test("the actual queue CLI accepts a JSON envelope larger than 4096 bytes before
     "--skip-reason", "x".repeat(512)]);
   assert.ok(Buffer.byteLength(args) > 4096);
   const result = await runWorkerCli(["queue", "--attempt", f.dir, "--host", "worker-a",
+    "--service", fixtureService,
     "--runner-root", f.runner, "--config", f.configPath, "--update-args", args]);
   assert.equal(result.queued, true);
 });
