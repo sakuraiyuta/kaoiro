@@ -30,8 +30,8 @@ export interface BuildInfo {
    *  the wire or included in the canonical `--version` label; read this file
    *  directly for build time. */
   built_at: string;
-  /** CalVer project version from the monorepo VERSION file. Optional for
-   *  pre-#288 artifacts; generated builds carry it with `channel`. */
+  /** Tag-derived version frozen by scripts/build-identity.mjs at build time.
+   *  Optional in legacy artifacts; generated builds carry it with `channel`. */
   version?: string;
   /** Build channel derived from git state and the matching release tag. */
   channel?: "dev" | "release";

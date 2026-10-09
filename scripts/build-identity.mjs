@@ -138,11 +138,23 @@ export function requireTaggedIdentity(cwd = repoRoot, options = {}) {
     if (remote === null || local === null) throw new Error("cannot prove complete remote tag inventory");
     const rows = value => value.split("\n").filter(Boolean).sort();
     const localRows = new Set(rows(local));
-    if (rows(remote).some(row => !localRows.has(row))) throw new Error("local tag inventory is incomplete or differs from origin");
+    const remoteRows = new Set(rows(remote));
+    if (localRows.size !== remoteRows.size || [...remoteRows].some(row => !localRows.has(row))) {
+      throw new Error("local tag inventory is incomplete or differs from origin");
+    }
     identity = computeBuildIdentity(cwd, options);
     if (options.target && identity.revision !== options.target) throw new Error("source revision differs from pinned target");
     if (identity.dirty || identity.degraded) throw new Error(`production identity refused: ${identity.degradeReason ?? "dirty source"}`);
-    if (parseLandingVersion(identity.version) && identity.landing) return identity;
+    if (parseLandingVersion(identity.version) && identity.landing) {
+      const landing = readLandingTag(cwd, `v${identity.version}`, options.repositoryId ?? BUILD_REPOSITORY_ID);
+      const refs = [`refs/tags/${landing.tag}`, `refs/tags/identity/landing/${identity.revision}`];
+      const readback = gitOutput(["ls-remote", "--refs", "origin", ...refs], cwd);
+      if (readback === null || JSON.stringify(rows(readback)) !==
+          JSON.stringify(refs.map(ref => `${landing.object}\t${ref}`).sort())) {
+        throw new Error("selected landing tag and claim differ from origin read-back");
+      }
+      return identity;
+    }
     if (Date.now() >= deadline) break;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(250, deadline - Date.now()));
   } while (Date.now() < deadline);
