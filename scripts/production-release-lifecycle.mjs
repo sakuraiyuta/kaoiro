@@ -120,9 +120,7 @@ export async function readLifecycleInspection(
       revision: event.current_revision,
     })),
     activity_sha256: releaseBytesDigest(releaseJsonBytes(activity.events)),
-    inventory_sha256: inventory
-      ? releaseBytesDigest(releaseJsonBytes(inventory))
-      : null,
+    inventory_sha256: releaseBytesDigest(releaseJsonBytes(inventory)),
   };
 }
 

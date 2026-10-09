@@ -583,6 +583,9 @@ private storage and then running `abandon`, and the fresh setup.
 
 If `abandon` refuses with `EEXIST` on `.lock.update` or `.lock.links`, an
 updater may have died (SIGKILL, host restart) without releasing the lock.
+When `.lock.update` contains only `codex-owner.json`, first check for a
+surviving build directory: cleanup deliberately keeps the update lock if
+removing that directory failed, even after the release records were moved.
 Before removing it, confirm that the detached update unit
 (`<service>-update.service`, `kaoiro-runner-update.service` for the default
 service) is not running, that no update, install or switch you started and no

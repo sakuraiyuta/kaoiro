@@ -11,8 +11,10 @@ afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: 
 function project() {
   const repo = mkdtempSync(join(tmpdir(), "fuji571-frozen-test-")); scratch.push(repo);
   mkdirSync(join(repo, "scripts")); mkdirSync(join(repo, "runner/scripts"), { recursive: true });
-  for (const name of ["build-identity.mjs", "with-build-identity.mjs", "serialize-build-identity.mjs", "generate-wrapper-build-info.mjs"])
+  for (const name of ["build-identity.mjs", "with-build-identity.mjs", "serialize-build-identity.mjs", "generate-wrapper-build-info.mjs", "child-process-environment.mjs"])
     cpSync(join(root, "scripts", name), join(repo, "scripts", name));
+  mkdirSync(join(repo, "runner/deploy"));
+  cpSync(join(root, "runner/deploy/child-process-environment.mjs"), join(repo, "runner/deploy/child-process-environment.mjs"));
   cpSync(join(root, "runner/scripts/generate-build-info.mjs"), join(repo, "runner/scripts/generate-build-info.mjs"));
   writeFileSync(join(repo, ".gitignore"), "runner/dist\nwrapper-dist\nserver.json\n");
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: "pipe" }).trim();

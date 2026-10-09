@@ -7,3 +7,4 @@ const CODEX_PACKAGE_URL = new URL(
   __kaoiroTestImportMetaResolve?: (specifier: string) => string | undefined;
 }).__kaoiroTestImportMetaResolve = (specifier) =>
   specifier === "@openai/codex/package.json" ? CODEX_PACKAGE_URL : undefined;
+import "../../scripts/test/fixtures/host-systemd-guard.mjs";
