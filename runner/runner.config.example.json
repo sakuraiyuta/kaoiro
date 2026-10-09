@@ -18,5 +18,19 @@
   "antigravity": {
     "cli_path": "/home/user/.local/bin/agy",
     "probe_timeout_ms": 30000
+  },
+  "in_flight_delivery": {
+    "claude-code": {
+      "enabled": true,
+      "default": true
+    },
+    "codex": {
+      "enabled": true,
+      "default": true
+    },
+    "antigravity": {
+      "enabled": false,
+      "default": false
+    }
   }
 }

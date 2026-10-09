@@ -1,3 +1,5 @@
+import { captureDeliveryEnvironment, type DeliveryEnvironment } from "@kaoiro/agent-common";
+import { deliveryEnvironment } from "./delivery-settings.js";
 // Default child launcher (phase 4-4b): turns a resolved WrapperConfig into a
 // real wrapper child process. Factored out from the supervisor so the
 // supervision logic can be tested without spawning processes.
@@ -84,7 +86,7 @@ export function resolveWrapperLaunch(
  * holding the per-agent wrapper config files; those carry the server_token, so
  * each is written 0600 and removed when its child exits.
  */
-export function makeLauncher(): LaunchFn {
+export function makeLauncher(deliveryEnvAtStart: DeliveryEnvironment = captureDeliveryEnvironment(process.env)): LaunchFn {
   // Per-engine launch prefixes, resolved lazily: a host that never spawns
   // codex never require.resolves that package.
   const prefixes = new Map<EngineKind, string[]>();
@@ -127,7 +129,7 @@ export function makeLauncher(): LaunchFn {
     const childConfig = { ...config };
     if (toolHome === undefined) delete childConfig.codex_tool_home;
     else childConfig.codex_tool_home = toolHome;
-    const childEnv = { ...process.env };
+    const childEnv = deliveryEnvironment(process.env, deliveryEnvAtStart);
     if (engine !== "codex") delete childEnv.CODEX_HOME;
     let cleaned = false;
     const cleanup = (): void => {

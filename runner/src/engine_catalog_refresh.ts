@@ -1,3 +1,4 @@
+import type { AppliedDeliverySnapshot } from "./delivery-settings.js";
 // Orchestrator for the `refresh_engine_catalog` request (Option E,
 // ADR-0039). Validates the incoming payload, coalesces onto the runner's
 // per-engine memory cache + dedup mutex, and — on a successful probe —
@@ -34,6 +35,7 @@ export interface RefreshEngineCatalogDeps {
   getHostId: () => string;
   cache: ClaudeCatalogCache;
   getCurrentConfig: () => RunnerConfig;
+  getDeliverySnapshot?: () => AppliedDeliverySnapshot;
   getCodexAuthMode: () => CodexAuthMode;
   /** Live getter for the runner's memory-only Antigravity catalog probe
    *  (ADR-0057 F6), same rationale as the getters above: a config reload or
@@ -127,6 +129,7 @@ async function handle(
         outcome.models,
         deps.buildInfo,
         deps.getAntigravityCatalog(),
+        deps.getDeliverySnapshot?.(),
       );
       deps.updateRegister(nextRegister);
     }

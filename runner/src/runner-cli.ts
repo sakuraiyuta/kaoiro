@@ -1,3 +1,5 @@
+import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
+import { createDeliverySnapshot, deliveryBehaviourRelay, deliveryEnvironment } from "./delivery-settings.js";
 // Runner CLI runtime — loads the runner config, connects to the kaoiro server
 // on `runner:<host_id>`, registers the host, heartbeats, and supervises the
 // host's wrapper processes on operator spawn/stop/restart (ADR-0023, phases
@@ -23,13 +25,12 @@ import {
 } from "./build_info.js";
 import {
   behaviourWarnings,
-  computeBehaviourRelay,
   describeBehaviourRelay,
   readSetVariables,
   resolveHeartbeatLogging,
 } from "./behaviour-settings.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
-import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
+import { makeRefreshEngineCatalogHandler, type RefreshEngineCatalogDeps } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import { resolveAgyVersion } from "./antigravity-version.js";
@@ -53,7 +54,7 @@ import {
 } from "./extra-models-options.js";
 import { makeLauncher } from "./spawn.js";
 import type { AntigravityMaxConfig } from "./permission_ceiling.js";
-import { Supervisor, type SupervisorOptions } from "./supervisor.js";
+import { Supervisor, type SupervisorOptions, type SupervisorRuntimeUpdate } from "./supervisor.js";
 import { RunnerLink, type RunnerLinkOptions } from "./transport.js";
 
 /** Liveness ping cadence; matches the phoenix transport heartbeat default. */
@@ -135,6 +136,7 @@ export interface RunnerCliDependencies {
     options: RunnerLinkOptions,
   ) => RunnerLinkLike;
   watchRunnerConfig?: typeof watchRunnerConfig;
+  catalogProbe?: RefreshEngineCatalogDeps["probe"];
   installSignalHandlers?: boolean;
 }
 
@@ -172,6 +174,7 @@ export async function runRunnerCli(
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #135) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
+  const deliveryEnvAtStart = captureDeliveryEnvironment(process.env);
   let fileConfig = loadConfig(configPath);
   let config = applyOverride(fileConfig);
   const token = process.env.KAOIRO_RUNNER_TOKEN;
@@ -189,7 +192,8 @@ export async function runRunnerCli(
   )) {
     process.stderr.write(line);
   }
-  let behaviourRelay = computeBehaviourRelay(config, process.env);
+  let appliedDelivery = createDeliverySnapshot(config, deliveryEnvAtStart);
+  let behaviourRelay = deliveryBehaviourRelay(config, process.env, appliedDelivery);
   // Read per Phoenix log line, so a reload changes it without a reconnect.
   let heartbeatLogging = resolveHeartbeatLogging(config, process.env);
 
@@ -254,10 +258,8 @@ export async function runRunnerCli(
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
   let link: RunnerLinkLike;
-  const supervisor = createSupervisor({
-    hostId: config.host_id,
+  const initialRuntime = {
     cwdAllowlist: config.cwd_allowlist,
-    launch: createLauncher(),
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
     codexAuthMode,
     codexBackend: config.codex?.backend,
@@ -279,6 +281,18 @@ export async function runRunnerCli(
     // finishes between spawns reaches the next child. Empty / null falls
     // back to the bootstrap floor server-side (resolveWrapperConfig).
     getClaudeEngineCatalog: () => claudeCatalog.getStale(),
+  };
+  let runtimeSettings: SupervisorRuntimeUpdate = {
+    ...initialRuntime,
+    codexChatgptPlan: config.codex?.chatgpt_plan,
+    codexInternalSubagents: config.codex?.internal_subagents,
+    ...extraModelsRuntimeUpdate(config),
+    contextWorkBudgetPercent: config.context_work_budget_percent,
+  };
+  const supervisor = createSupervisor({
+    hostId: config.host_id,
+    ...initialRuntime,
+    launch: createLauncher(deliveryEnvAtStart),
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
@@ -296,28 +310,33 @@ export async function runRunnerCli(
     // handler.
     getHostId: () => config.host_id,
     cache: claudeCatalog,
+    ...(dependencies.catalogProbe === undefined ? {} : { probe: dependencies.catalogProbe }),
     getCurrentConfig: () => config,
+    getDeliverySnapshot: () => appliedDelivery,
     getCodexAuthMode: () => codexAuthMode,
     // Live getter: threads the already-probed Antigravity catalog into a
     // Claude-only refresh's rebuilt register, so it does not regress to the
     // pinned snapshot.
     getAntigravityCatalog: () => antigravityCatalog,
     getAntigravityCliVersion: () => antigravityVersion ?? undefined,
-    updateRegister: (register) => link.updateRegister(register),
+    updateRegister: (register) => { link.updateRegister(register); appliedRegister = register; },
     sendCatalogResult: (result) => link.sendCatalogResult(result),
     buildInfo,
   });
 
-  link = createRunnerLink(config.server_url, config.host_id, {
-    ...(token === undefined || token === "" ? {} : { token }),
-    register: buildRegister(
+  let appliedRegister = buildRegister(
       config,
       antigravityVersion ?? undefined,
       codexAuthMode,
       undefined,
       buildInfo,
       antigravityCatalog,
-    ),
+      appliedDelivery,
+    );
+
+  link = createRunnerLink(config.server_url, config.host_id, {
+    ...(token === undefined || token === "" ? {} : { token }),
+    register: appliedRegister,
     heartbeatMs: HEARTBEAT_MS,
     logHeartbeats: () => heartbeatLogging,
     onSpawn: (payload) => supervisor.handleSpawn(payload),
@@ -351,7 +370,8 @@ export async function runRunnerCli(
   ): Promise<void> => {
     // Validate the variables first: an invalid one skips this reload (the
     // caller logs "config apply failed") and the last valid config stays.
-    const setVariables = readSetVariables(next, process.env);
+    const nextEnvironment = deliveryEnvironment(process.env, deliveryEnvAtStart);
+    const setVariables = readSetVariables(next, nextEnvironment);
     // Warnings are written only once the reload is applied, so a reload that
     // fails later is never reported as having taken effect.
     const seenAfterReload = new Set(deprecationSeen);
@@ -361,7 +381,9 @@ export async function runRunnerCli(
       setVariables,
       seenAfterReload,
     );
-    const nextBehaviourRelay = computeBehaviourRelay(next, process.env);
+    const nextDelivery = createDeliverySnapshot(next, deliveryEnvAtStart);
+    const nextBehaviourRelay = deliveryBehaviourRelay(next, nextEnvironment, nextDelivery);
+    const nextHeartbeatLogging = resolveHeartbeatLogging(next, nextEnvironment);
     const diff = changedFields(config, next);
     const nextAntigravityEnabled = isAntigravityEnabled(next);
     if (diff.length === 0 && !nextAntigravityEnabled) {
@@ -380,7 +402,7 @@ export async function runRunnerCli(
     // Phase-24: hot reload の分岐は resolver に集約。explicit → explicit /
     // explicit → absent / absent → explicit / off → on / on → off の 5
     // 遷移が一貫して policy に従う。explicit set 時は必ず doctor 非呼出。
-    codexAuthMode = await resolveCodex({
+    const nextCodexAuthMode = await resolveCodex({
       nextCodex: next.codex,
       nextEnabled: nextCodexEnabled,
       prevCodex: config.codex,
@@ -390,86 +412,92 @@ export async function runRunnerCli(
     // ADR-0057 F6: re-probe on every reload while enabled (quota-free, no
     // TTL cache to preserve); clear the catalog when the operator disables
     // the capability so a stale probe result cannot outlive it.
-    antigravityExecutable = nextAntigravityEnabled
+    const nextAntigravityExecutable = nextAntigravityEnabled
       ? resolveExecutable(next.antigravity?.cli_path)
       : undefined;
-    antigravityProbeTimeoutMs =
+    const nextAntigravityProbeTimeoutMs =
       next.antigravity?.probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
-    antigravityCatalog = antigravityExecutable === undefined
+    const nextAntigravityCatalog = nextAntigravityExecutable === undefined
       ? undefined
       : await resolveCatalog(
-          antigravityExecutable,
-          antigravityProbeTimeoutMs,
+          nextAntigravityExecutable,
+          nextAntigravityProbeTimeoutMs,
         );
     // issue #387 Part 2(A): re-probe `agy --version` on every reload while
     // enabled, mirroring the catalog probe above. Warn only on an actual
     // change from the last value THIS process observed (both sides present
     // and different) — an absent probe result (binary missing/broken) never
     // by itself counts as a "change" here.
-    const nextAntigravityVersion = antigravityExecutable === undefined
+    const nextAntigravityVersion = nextAntigravityExecutable === undefined
       ? null
-      : await resolveVersion(antigravityExecutable, antigravityProbeTimeoutMs);
-    if (
-      antigravityVersion !== null &&
-      nextAntigravityVersion !== null &&
-      nextAntigravityVersion !== antigravityVersion
-    ) {
-      process.stderr.write(
-        `runner: warn — antigravity agy version changed ${antigravityVersion} -> ${nextAntigravityVersion}\n`,
-      );
-    }
-    antigravityVersion = nextAntigravityVersion;
-    supervisor.updateRuntimeConfig({
+      : await resolveVersion(nextAntigravityExecutable, nextAntigravityProbeTimeoutMs);
+    const nextRuntime: SupervisorRuntimeUpdate = {
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
-      codexAuthMode,
+      codexAuthMode: nextCodexAuthMode,
       codexBackend: next.codex?.backend,
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
       ...extraModelsRuntimeUpdate(next),
-      antigravityExecutable,
-      antigravityProbeTimeoutMs,
+      antigravityExecutable: nextAntigravityExecutable,
+      antigravityProbeTimeoutMs: nextAntigravityProbeTimeoutMs,
       antigravityMax: antigravityMaxFrom(next),
       behaviourRelay: nextBehaviourRelay,
       contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),
-    });
+    };
     // Preserve any live-probed Claude catalog on reload so operators do not
     // silently regress to the bootstrap default entry (ADR-0039).
     const claudeOverride = claudeCatalog.getStale() ?? undefined;
     const nextRegister = buildRegister(
       next,
       nextAntigravityVersion ?? undefined,
-      codexAuthMode,
+      nextCodexAuthMode,
       claudeOverride,
       buildInfo,
-      antigravityCatalog,
+      nextAntigravityCatalog,
+      nextDelivery,
     );
+    const previous = { config, fileConfig, appliedDelivery, appliedRegister, behaviourRelay, runtimeSettings,
+      codexAuthMode, antigravityExecutable, antigravityProbeTimeoutMs, antigravityCatalog, antigravityVersion, heartbeatLogging };
+    const priorRegister = appliedRegister;
+    const reconnect = next.host_id !== config.host_id || next.server_url !== config.server_url;
+    try {
+      config = next; fileConfig = nextFile; appliedDelivery = nextDelivery; appliedRegister = nextRegister;
+      behaviourRelay = nextBehaviourRelay; runtimeSettings = nextRuntime;
+      codexAuthMode = nextCodexAuthMode; antigravityExecutable = nextAntigravityExecutable;
+      antigravityProbeTimeoutMs = nextAntigravityProbeTimeoutMs; antigravityCatalog = nextAntigravityCatalog;
+      antigravityVersion = nextAntigravityVersion; heartbeatLogging = nextHeartbeatLogging;
+      supervisor.updateRuntimeConfig(nextRuntime);
+      if (reconnect) link.reconnect(next.server_url, next.host_id, nextRegister);
+      else link.updateRegister(nextRegister);
+    } catch (error) {
+      ({ config, fileConfig, appliedDelivery, appliedRegister, behaviourRelay, runtimeSettings, codexAuthMode,
+        antigravityExecutable, antigravityProbeTimeoutMs, antigravityCatalog, antigravityVersion, heartbeatLogging } = previous);
+      supervisor.updateRuntimeConfig(runtimeSettings);
+      if (reconnect) link.reconnect(config.server_url, config.host_id, priorRegister);
+      else link.updateRegister(priorRegister);
+      throw error;
+    }
     if (
-      next.host_id !== config.host_id ||
-      next.server_url !== config.server_url
+      previous.antigravityVersion !== null &&
+      nextAntigravityVersion !== null &&
+      nextAntigravityVersion !== previous.antigravityVersion
     ) {
       process.stderr.write(
-        `runner: reconnecting host=${next.host_id} to ${next.server_url}\n`,
+        `runner: warn — antigravity agy version changed ${previous.antigravityVersion} -> ${nextAntigravityVersion}\n`,
       );
-      link.reconnect(next.server_url, next.host_id, nextRegister);
-    } else {
-      link.updateRegister(nextRegister);
     }
-    config = next;
-    fileConfig = nextFile;
-    heartbeatLogging = resolveHeartbeatLogging(next, process.env);
     for (const line of behaviourLines) process.stderr.write(line);
     for (const name of seenAfterReload) deprecationSeen.add(name);
     if (
-      JSON.stringify(behaviourRelay) !== JSON.stringify(nextBehaviourRelay)
+      JSON.stringify(previous.behaviourRelay) !== JSON.stringify(nextBehaviourRelay)
     ) {
       process.stderr.write(
         `runner: behaviour settings for subsequent wrappers: ${describeBehaviourRelay(nextBehaviourRelay)}\n`,
       );
     }
-    behaviourRelay = nextBehaviourRelay;
     process.stderr.write(`runner: codex backend=${config.codex?.backend ?? "exec"} for subsequent wrappers\n`);
   };
   const watcher = watchConfig(

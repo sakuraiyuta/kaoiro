@@ -13,6 +13,7 @@ import type { RunnerConfig } from "./config.js";
  *  entry here is a compile error, so a new setting cannot be silently left
  *  out of the reload diff (an empty diff skips the whole reload). */
 const RELOAD_FIELDS: Record<keyof RunnerConfig, true> = {
+  in_flight_delivery: true,
   host_id: true,
   server_url: true,
   cwd_allowlist: true,

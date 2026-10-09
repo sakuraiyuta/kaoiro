@@ -71,6 +71,7 @@ describe("changedFields", () => {
   // RunnerConfig (typed Required<>), and each is mutated in turn.
   it("RunnerConfig の全 top-level key の変更を差分に含める", () => {
     const full: Required<RunnerConfig> = {
+      in_flight_delivery: { codex: { enabled: true } },
       host_id: "h",
       server_url: "ws://a/runner",
       personas: [{ id: "p", name: "P", sprite_set: "p" }],
@@ -86,6 +87,7 @@ describe("changedFields", () => {
       log_phoenix_heartbeats: false,
     };
     const changed: Required<RunnerConfig> = {
+      in_flight_delivery: { codex: { enabled: false } },
       host_id: "h2",
       server_url: "ws://b/runner",
       personas: [{ id: "p2", name: "P", sprite_set: "p" }],

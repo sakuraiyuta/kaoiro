@@ -26,10 +26,39 @@ import {
 } from "@kaoiro/claude-code/settings";
 import type { EngineKind, WrapperConfig } from "@kaoiro/protocol";
 import { ConfigError } from "./config-error.js";
+import { DELIVERY_ENGINE_SETTINGS } from "@kaoiro/agent-common";
 import type { RunnerConfig } from "./config.js";
 
 export type BehaviourBlock = "claude_code" | "codex" | "antigravity";
 export type BehaviourValue = number | boolean | string;
+
+export const HOST_DELIVERY_ROWS = DELIVERY_ENGINE_SETTINGS;
+export type InFlightDeliveryConfig = Partial<Record<EngineKind, { enabled?: boolean; default?: boolean }>>;
+
+export function parseInFlightDelivery(value: unknown): InFlightDeliveryConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ConfigError("in_flight_delivery must be an object");
+  }
+  const parsed: InFlightDeliveryConfig = {};
+  for (const [engine, raw] of Object.entries(value)) {
+    if (!HOST_DELIVERY_ROWS.some(row => row.engine === engine)) {
+      throw new ConfigError("in_flight_delivery has an unknown engine key");
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new ConfigError(`in_flight_delivery.${engine} must be an object`);
+    }
+    const entry: { enabled?: boolean; default?: boolean } = {};
+    for (const [key, item] of Object.entries(raw)) {
+      if (key !== "enabled" && key !== "default") {
+        throw new ConfigError(`in_flight_delivery.${engine} has an unknown key`);
+      }
+      if (typeof item !== "boolean") throw new ConfigError(`in_flight_delivery.${engine}.${key} must be a boolean`);
+      entry[key] = item;
+    }
+    parsed[engine as EngineKind] = entry;
+  }
+  return parsed;
+}
 
 /** Environment variables of the runner's own settings. Defined here, not in
  *  config.ts, because the registry below is built at module load and config.ts

@@ -21,6 +21,9 @@ importers:
 
   runner:
     dependencies:
+      '@kaoiro/agent-common':
+        specifier: workspace:*
+        version: link:../wrapper/agent-common
       '@kaoiro/antigravity':
         specifier: workspace:*
         version: link:../wrapper/antigravity
@@ -46,6 +49,9 @@ importers:
       '@types/phoenix':
         specifier: ^1.6.7
         version: 1.6.7
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.2
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -55,6 +61,9 @@ importers:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.20.0)
+      ws:
+        specifier: ^8.21.0
+        version: 8.22.0
 
   wrapper/agent-common:
     dependencies:
@@ -992,6 +1001,9 @@ packages:
   '@types/phoenix@1.6.7':
     resolution: {integrity: sha512-oN9ive//QSBkf19rfDv45M7eZPi0eEXylht2OLEXicu5b4KoQ1OzXIw+xDSGWxSxe1JmepRR/ZH283vsu518/Q==}
 
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
+
   '@vitest/expect@2.1.9':
     resolution: {integrity: sha512-UJCIkTBenHeKT1TTlKMJWy1laZewsRIzYighyYiJKZreqtdxSos/S1t+ktRMQWu2CKqaarrkeszJx1cgC5tGZw==}
 
@@ -1679,6 +1691,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   zlibjs@0.3.1:
     resolution: {integrity: sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w==}
 
@@ -2208,6 +2232,10 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/phoenix@1.6.7': {}
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 22.20.0
 
   '@vitest/expect@2.1.9':
     dependencies:
@@ -2990,6 +3018,8 @@ snapshots:
       stackback: 0.0.2
 
   wrappy@1.0.2: {}
+
+  ws@8.22.0: {}
 
   zlibjs@0.3.1: {}
 

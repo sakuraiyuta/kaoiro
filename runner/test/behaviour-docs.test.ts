@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BEHAVIOUR_ROWS,
+  HOST_DELIVERY_ROWS,
   behaviourConfigPath,
 } from "../src/behaviour-settings.js";
 
@@ -28,5 +29,14 @@ describe("runner.md behaviour settings table", () => {
     expect(documentedRows()).toEqual(
       BEHAVIOUR_ROWS.map((row) => [row.env, behaviourConfigPath(row)]),
     );
+  });
+});
+
+
+describe("host delivery registry documentation", () => {
+  it("pins canonical engine prefixes and independently resolved defaults", () => {
+    const rows = readFileSync(RUNNER_DOC, "utf8").split("\n").filter(line => line.includes("| `in_flight_delivery."));
+    expect(rows).toEqual(HOST_DELIVERY_ROWS.map(row =>
+      `| \`${row.engine}\` | \`in_flight_delivery.${row.engine}\` | \`${row.enabled}\` | \`${row.default}\` |`));
   });
 });

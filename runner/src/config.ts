@@ -1,3 +1,5 @@
+import { parseInFlightDelivery, type InFlightDeliveryConfig } from "./behaviour-settings.js";
+import { createDeliverySnapshot, projectDeliveryRegister, type AppliedDeliverySnapshot } from "./delivery-settings.js";
 // Loading and validation of the runner config (ADR-0023, ADR-0031). The
 // runner reads this once on start to know its host_id, where to connect,
 // its persona trust policy against the server catalog, and its cwd allow-
@@ -60,6 +62,7 @@ const HOST_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  *  (full objects) is accepted for one release cycle as an allowlist by id
  *  with a deprecation warning; mixing legacy and new fields is rejected. */
 export interface RunnerConfig {
+  in_flight_delivery?: InFlightDeliveryConfig;
   host_id: string;
   server_url: string;
   personas?: Persona[];
@@ -564,6 +567,8 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     config.claude_code = parseBehaviourBlock("claude_code", raw.claude_code);
   }
 
+  if (raw.in_flight_delivery !== undefined) config.in_flight_delivery = parseInFlightDelivery(raw.in_flight_delivery);
+
   Object.assign(config, parseTopLevelBehaviour(raw));
 
   return config;
@@ -646,6 +651,7 @@ export function buildRegister(
   claudeCatalogOverride?: EngineCatalogEntry["models"],
   buildInfo?: BuildInfo,
   antigravityCatalogOverride?: EngineCatalogEntry["models"],
+  deliverySnapshot: AppliedDeliverySnapshot = createDeliverySnapshot(config, process.env),
 ): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
@@ -705,7 +711,7 @@ export function buildRegister(
   const safeAntigravityCliVersion = capabilities.includes("antigravity")
     ? normalizeAgyCliVersion(antigravityCliVersion)
     : undefined;
-  return {
+  return projectDeliveryRegister({
     version: "0",
     host_id: config.host_id,
     cwd_allowlist: config.cwd_allowlist,
@@ -733,7 +739,7 @@ export function buildRegister(
     ...(safeAntigravityCliVersion === undefined
       ? {}
       : { antigravity_cli_version: safeAntigravityCliVersion }),
-  };
+  }, deliverySnapshot);
 }
 
 /** Builds a `heartbeat` liveness message for the given host. */
