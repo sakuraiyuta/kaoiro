@@ -183,6 +183,51 @@ test("the real exporter refuses a request root different from its fixed command 
     { ...releaseRequest(f.descriptor), root: alternate }), /request root differs from fixed authority root/);
 });
 
+test("verified launcher refuses missing or extra fixed authority root arguments", () => {
+  const f = fixture();
+  for (const roots of [[], [f.root, f.root]]) {
+    const run = spawnSync(process.execPath,
+      [f.descriptor.exporter_path, "export", f.manifest.sha256, ...roots],
+      { input: `${JSON.stringify(releaseRequest(f.descriptor))}\n`, encoding: "utf8" });
+    assert.equal(run.status, 78);
+    assert.match(run.stderr, /fixed authority root argument required/);
+  }
+});
+
+test("endpoint itself refuses missing, relative and noncanonical fixed roots", () => {
+  const f = fixture();
+  for (const root of [undefined, "relative", `${f.root}/../history`]) {
+    const entry = new URL("../production-release-endpoint.mjs", import.meta.url).href;
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `import { runReleaseEndpoint } from ${JSON.stringify(entry)};
+       await runReleaseEndpoint("export", ${JSON.stringify(f.manifest.sha256)}, ${JSON.stringify(root)});`],
+      { input: `${JSON.stringify(releaseRequest(f.descriptor))}\n`, encoding: "utf8" });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /fixed authority root required/);
+  }
+});
+
+test("complete CLI carries fixed enrollment inventory to the server collector", () => {
+  const f = fixture("server");
+  const attempt = f.start();
+  const inventory = {
+    schema: 1,
+    health_url: "https://recording.example/health",
+    runtime_hosts: attempt.plan.runtime_hosts,
+    authority: attempt.plan.authority,
+  };
+  writeFileSync(`${f.root}-inventory.json`, releaseJsonBytes(inventory), { mode: 0o600 });
+  writeFileSync(join(attempt.dir, "server-audit.json"),
+    releaseJsonBytes({ transaction_dir: join(f.base, "unused-transaction") }), { mode: 0o600 });
+  const run = spawnSync(process.execPath,
+    [f.descriptor.exporter_path, "collect", f.manifest.sha256, "complete",
+      "--server-dir", f.installRoot, "--attempt", attempt.dir,
+      "--health-url", "https://staging.example/health"], { encoding: "utf8" });
+  assert.equal(run.status, 78);
+  assert.match(run.stderr, /differs from fixed enrollment/);
+  assert.equal(existsSync(join(attempt.dir, "completion.json")), false);
+});
+
 test("snapshot warning and administrative diagnostics have bounded safe grammar", () => {
   const f = fixture();
   const snapshot = releaseAuthorityRequest(f.authority, releaseRequest(f.descriptor));
@@ -271,6 +316,9 @@ test("SSH argv fixes the identity and host key options without agent or expansio
     args.at(-1),
     /^\/usr\/bin\/env -i PATH=\/usr\/bin:\/bin LC_ALL=C /,
   );
+  assert.ok(args.at(-1).endsWith(
+    `'${f.descriptor.exporter_path}' export ${f.manifest.sha256} '${f.root}'`,
+  ));
   assert.throws(
     () => releaseSshArguments(f.descriptor, "arbitrary-command"),
     /fixed SSH operation/,

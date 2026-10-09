@@ -48,9 +48,7 @@ export async function readLifecycleInspection(
   { healthUrl, inventory, now = Date.now() },
 ) {
   const fixedHealthUrl = enrolledHealthUrl(inventory, healthUrl);
-  const pairs = Array.isArray(inventory)
-    ? validateRuntimeHosts(inventory)
-    : inventory && validateEnrollmentInventory(inventory).runtime_hosts;
+  const pairs = validateEnrollmentInventory(inventory).runtime_hosts;
   const lifecycle = row.state.id === "invalid_completion";
   const aliases = lifecycle
     ? pairs.map((pair) => pair.alias)

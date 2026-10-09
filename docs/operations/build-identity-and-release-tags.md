@@ -125,7 +125,8 @@ The server authority digest must match the fixed server descriptor. `health_url`
 pins the complete recording-server endpoint for completion and terminal
 transitions. An omitted CLI URL uses this value; a different URL is refused
 before any external read. A legacy inventory without it remains usable for
-admission but must be updated by the operator before completion or retirement. On each
+admission but must be updated by the operator before completion, retirement,
+abandon or quarantine. On each
 runner, `release-host-aliases.json` maps its public alias to the real config
 `host_id`. Freeze this full inventory into every attempt; neither a launch
 option nor a corrupt plan may narrow it. Use arbitrary stable aliases, not

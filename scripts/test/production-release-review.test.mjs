@@ -35,7 +35,7 @@ test("completion and lifecycle resolve their health URL from the fixed inventory
   }
   const { health_url, ...legacy } = inventory;
   assert.throws(() => enrolledHealthUrl(legacy), /fixed enrollment health URL required/);
-  for (const health_url of ["file:///private", "https://user:secret@recording.example/health", "https://recording.example/health#fragment"])
+  for (const health_url of ["file:///private", "https://user:secret@recording.example/health", "https://recording.example/health#fragment", "https://recording.example/health?x=1"])
     assert.throws(() => enrolledHealthUrl({ ...inventory, health_url }), /fixed health URL/);
 });
 
