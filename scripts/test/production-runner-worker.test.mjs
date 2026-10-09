@@ -36,7 +36,11 @@ import {
   releaseBytesDigest,
   releaseJsonBytes,
 } from "../production-release-files.mjs";
-import { installRunnerReleasePlan } from "../production-release-runner-facts.mjs";
+import {
+  canonicalRunnerReleaseRow,
+  installRunnerReleasePlan,
+  validateRunnerLifecycleContext,
+} from "../production-release-runner-facts.mjs";
 
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const roots = [],
@@ -682,5 +686,28 @@ test("retained listing checks raw names and keeps corrupt working attempts visib
   assert.throws(
     () => listRetainedProductionRunners(parent),
     /unknown release history entry/,
+  );
+});
+
+test("lifecycle context rejects changed damaged bytes before its native activity can be imported", () => {
+  const f = fixture();
+  writeFileSync(
+    `${f.history}-inventory.json`,
+    releaseJsonBytes({ schema: 1, ...f.planOptions }),
+    { mode: 0o600 },
+  );
+  const damaged = join(f.canonical, "runner-baseline-worker-a.json");
+  writeFileSync(damaged, "broken-baseline", { mode: 0o600 });
+  const context = validateRunnerLifecycleContext({
+    root: f.runner,
+    uuid: f.plan.attempt_uuid,
+    alias: "worker-a",
+    configPath: f.configPath,
+  });
+  assert.equal(canonicalRunnerReleaseRow(context).status, "invalid_completion");
+  writeFileSync(damaged, "different-broken-baseline", { mode: 0o600 });
+  assert.throws(
+    () => canonicalRunnerReleaseRow(context),
+    /canonical invalid row\/enrollment inventory changed/,
   );
 });
