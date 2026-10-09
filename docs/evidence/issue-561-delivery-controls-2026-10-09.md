@@ -6,10 +6,19 @@ last_updated: 2026-10-09
 
 # Issue 561 delivery controls
 
-Implementation and verifier commit: `8583dd97d3564fcbf134c5531d450060c6340e4c`, based on `70bc934ad5c4926b254c5d9231c3996283325cb7`.
+Implementation and verifier commit: `68a498d5a69ef76d9d1155e47f82e7ea243e00c9`, based on `70bc934ad5c4926b254c5d9231c3996283325cb7`.
 The adjacent [machine-readable record](issue-561-delivery-controls-2026-10-09.json)
 contains every changed implementation/test input hash, gate log hash and mutation
 log hash. Documentation commits preserve these implementation blobs.
+
+The dashboard keeps a client mirror, independently of `@kaoiro/protocol`.
+The shared local contract example is
+`dashboard/test/fixtures/launchDeliveryContract.ts`; the decoder and owned
+transport tests consume it. Production behavior is unchanged by the director's
+client-mirror correction: its only production delta removes a handoff comment.
+Dashboard gates and negative controls were remeasured with the extracted
+fixture. Server and runner evidence retains its original commit provenance;
+those implementation and verifier inputs are unchanged.
 
 ## Positive gates
 
@@ -66,9 +75,9 @@ consumer and the existing server projection with contract-shaped inputs.
 
 ## Independent negative controls
 
-Each mutation changed one named check/wiring point in an owned detached
-worktree, starting from the same fixed implementation. Files were restored
-exactly between runs. All 44 final mutations failed on behavior, not compilation.
+Each mutation changed one named check/wiring point in an owned worktree,
+starting from the fixed commit recorded for that result. Files were restored
+exactly between runs. All 45 final mutations failed on behavior, not compilation.
 Vitest/Playwright returned 1; ExUnit returned 2. M22 specifically leaves the
 checkbox disabled, so the browser's attempted check times out with the element
 reported disabled. M34 was manually classified from its failed `refute`
@@ -76,8 +85,9 @@ assertion because the log summarizer did not recognize that wording.
 
 The initial action-guard test survived M15 because another layer masked the
 cut. The final retained-callback test isolates App's action recheck and fails.
-Only the final logs under `tmp/reviews/issue-561/kogane-logs/final-mutations/`
-are used below; earlier attempts are retained separately.
+Server mutation logs remain under `tmp/reviews/issue-561/kogane-logs/final-mutations/`.
+Dashboard mutations were remeasured under `kogane-logs/client-mirror/mutations/`;
+the JSON record identifies the commit and log for each result.
 
 | Mutation | Suite | Targeted check | Result / exit |
 | --- | --- | --- | --- |
@@ -125,9 +135,11 @@ are used below; earlier attempts are retained separately.
 | M42-target-reset | browser | launch target resets | red / 1 |
 | M43-read-shape | server | test/kaoiro_server_web/channels/delivery_policy_test.exs | red / 2 |
 | M44-failed-choice-resync | browser | rejected write | red / 1 |
+| M45-contract-fixture | unit | contract default consumed by decoder tests | red / 1 |
 
 The local reproducibility script is
-`tmp/reviews/issue-561/kogane-mutations-final.py`; complete commands, changed
+`tmp/reviews/issue-561/kogane-mutations-final.py` and
+`kogane-client-mirror-mutations.py`; complete commands, changed
 fragments and outputs are in each hashed log. The disposable worktree is
 removed after recording evidence. Independent implementation review and C3
 integration are still required before the director marks the work accepted.

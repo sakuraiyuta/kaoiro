@@ -14,6 +14,10 @@ messages remain available. Turning off does not retract already accepted work.
 The [channel contract](../protocol/channels.md#per-agent-delivery-policy)
 defines persistence, acknowledgement and admission separately.
 
+The dashboard keeps its own client mirror of the public delivery types; it
+does not depend on `@kaoiro/protocol`. The decoder and transport tests share
+the contract example in `dashboard/test/fixtures/launchDeliveryContract.ts`.
+
 ## Fresh launch
 
 The launch dialog displays the selected host/engine's `in_flight_defaults`
