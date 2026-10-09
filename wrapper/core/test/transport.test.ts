@@ -2032,6 +2032,26 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(6);
   });
 
+  it.each(["mode", "reason", "outcome", "disposition reason"] as const)(
+    "preserves a queued change to %s independently of the other fields", field => {
+      const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+        interAgentDeliveryModes: { version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true } });
+      mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+      const base = { incarnation: "inc-a", delivery_seq: 8, stage: "queued" as const, at: "T", mode: "normal" as const,
+        reason: "before", yield_disposition: { outcome: "downgraded" as const, reason: "before", at: "T" } };
+      link.reportDeliveryStage(base);
+      const changed = field === "mode" ? { ...base, mode: "early" as const }
+        : field === "reason" ? { ...base, reason: "after" }
+        : field === "outcome" ? { ...base, yield_disposition: { ...base.yield_disposition, outcome: "cut" as const } }
+        : { ...base, yield_disposition: { ...base.yield_disposition, reason: "after" } };
+      link.reportDeliveryStage(changed);
+      link.reportDeliveryStage({ ...changed, at: "later", yield_disposition: { ...changed.yield_disposition, at: "later" } });
+      const sent = mock.pushes.filter(push => push.event === "delivery_stage");
+      expect(sent).toHaveLength(2);
+      expect(sent[1]?.payload).toMatchObject(changed);
+    },
+  );
+
   it("counts distinct queued meanings against the same pending-report capacity", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
       interAgentDeliveryModes: { version: "v1", early: "fold", yield: "none", stage_reports: true } });
