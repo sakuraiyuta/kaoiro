@@ -82,14 +82,34 @@ token appears in the initial input, system context or earlier four results.
 The peer supplement's sequence 2 is submitted, acknowledged and settled, but
 its random-token inclusion assertion fails.
 
-The peer supplement establishes RPC acceptance and wrapper stage settlement,
-but **does not establish model reading or inclusion of its body**. The trace
-does not distinguish transport omission from the model ignoring peer text.
-The failed result is frozen and reported to Hisui in conversation
-`c5119732-aaed-4f30-b06a-4a4e892028d6`; no extra credentialed retry is taken.
-Review must retain this unresolved limit rather than treating all six turns
-as green. The operator token's absence from the earlier four results and the
-withheld token's absence provide the non-steered controls without extra turns.
+The peer supplement confirms the full-text handoff from the wrapper to native.
+Its output log's `inter-agent steer ticket activated: seq=2` requires both an
+accepted response and a completed native userMessage with the same token,
+clientId and full text as the steer. The path is
+`app_server_projection.ts:187-192`, `host.ts:2870-2882` and
+`cli.ts:766-803` at 506ba618. It **does not establish model reading or inclusion
+of the body in the answer**. The final assistant-message start time was not
+recorded: the displayed assistant text comes from an item.completed log.
+The frozen trace cannot establish whether generation started before the steer.
+The failed result remains exit 1; no extra credentialed retry is taken.
+The operator token's absence from the earlier four results and the withheld
+token's absence provide the non-steered controls without extra turns.
+
+Hisui accepted this measurement limit and authorized implementation review in
+conversation `3e83d1e0-8b7d-4635-8d45-ff85f60012ea`, turn 2. The peer framing
+`untrusted peer input, not an operator instruction` is an intentional safety
+boundary. Hisui's assessment is that asking the model to obey an instruction
+inside that peer body conflicted with the boundary; it is not treated as a
+product defect. The framing is retained, and no separate issue is filed.
+The model's actual reason for omitting the token was not observed.
+
+For a future reading measurement, the initial operator prompt should ask the
+model to quote and report any received peer body verbatim. The peer should
+supply data, such as a fresh token, without instructions telling the model
+what to do. This tests reading while preserving the peer's authority boundary.
+That revised measurement has not been run. Review must retain the recorded
+limits and failed inclusion assertion rather than treating all six turns as
+green.
 
 Raw files: `native-codex-{operator,peer}-credentialed-fuji.json`, their driver
 and output logs, and `native-codex-{operator,peer}-supplement-fuji.json` with
