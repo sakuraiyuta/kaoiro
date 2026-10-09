@@ -119,6 +119,19 @@ function resolvePushRemote(cwd, remote) {
   return remote;
 }
 
+export function auditLandingInventory({ cwd, remote, repositoryId = BUILD_REPOSITORY_ID }) {
+  if (typeof cwd !== "string" || cwd.length === 0 || typeof remote !== "string" || remote.length === 0 || remote.startsWith("-")) {
+    throw new Error("landing audit requires a checkout and a valid remote");
+  }
+  const inventoryRemote = resolvePushRemote(cwd, remote);
+  const snapshot = readRemoteInventory(inventoryRemote, repositoryId);
+  try {
+    return true;
+  } finally {
+    snapshot.dispose();
+  }
+}
+
 function makeLandingObject(cwd, record) {
   const validated = validateLandingRecord(record, record.repository_id);
   const tag = `v${validated.version}`;

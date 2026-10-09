@@ -56,6 +56,14 @@ async function loadAllocator() {
   }) => { record: Record<string, unknown>; tag: string; object: string; created: boolean };
 }
 
+async function loadInventoryAuditor() {
+  return (await import(allocatorUrl)).auditLandingInventory as (input: {
+    cwd: string;
+    remote: string;
+    repositoryId: number;
+  }) => boolean;
+}
+
 function inputFor(repo: string, remote: string, target: string, createdAt = "2026-10-09T12:00:00Z", originalRunId = 101) {
   return { cwd: repo, remote, target, originalRunId, createdAt, repositoryId: BUILD_REPOSITORY_ID };
 }
@@ -173,6 +181,20 @@ afterEach(() => {
 });
 
 describe("landing tag allocation against a bare Git remote", () => {
+  it("audits empty and valid inventories without changing remote refs", async () => {
+    const f = fixture();
+    const auditLandingInventory = await loadInventoryAuditor();
+    const emptyRefs = remoteRefs(f.remote);
+
+    expect(await auditLandingInventory({ cwd: f.first, remote: "origin", repositoryId: BUILD_REPOSITORY_ID })).toBe(true);
+    expect(remoteRefs(f.remote)).toEqual(emptyRefs);
+
+    seedLanding(f.first, f.remote, f.targets[0]!, "2026-10-09", 1, 400);
+    const populatedRefs = remoteRefs(f.remote);
+    expect(await auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID })).toBe(true);
+    expect(remoteRefs(f.remote)).toEqual(populatedRefs);
+  });
+
   it("publishes one annotated version tag and its full-SHA claim as the same atomic object", async () => {
     const f = fixture();
     const allocateLanding = await loadAllocator();
@@ -299,6 +321,17 @@ describe("landing tag allocation against a bare Git remote", () => {
     expect(remoteRefs(f.remote)).toContainEqual({ object: publicOnly.object, ref: `refs/tags/${publicOnly.tag}` });
     expect(remoteRefs(f.remote).some(ref => ref.ref === `refs/tags/identity/landing/${f.targets[0]}`)).toBe(false);
     expect(() => allocateLanding(inputFor(f.second, f.remote, f.targets[1]!)))
+      .toThrow(/landing public tag, claim and annotation disagree/);
+  });
+
+  it("audit rejects a public landing tag without its SHA claim", async () => {
+    const f = fixture();
+    const auditLandingInventory = await loadInventoryAuditor();
+    const publicOnly = seedPublicLandingOnly(f.first, f.remote, f.targets[0]!, "2026-10-09", 1, 403);
+
+    expect(remoteRefs(f.remote)).toContainEqual({ object: publicOnly.object, ref: `refs/tags/${publicOnly.tag}` });
+    expect(remoteRefs(f.remote).some(ref => ref.ref === `refs/tags/identity/landing/${f.targets[0]}`)).toBe(false);
+    expect(() => auditLandingInventory({ cwd: f.second, remote: "origin", repositoryId: BUILD_REPOSITORY_ID }))
       .toThrow(/landing public tag, claim and annotation disagree/);
   });
 
