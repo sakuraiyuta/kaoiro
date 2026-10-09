@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readReleaseAuthority, releaseAuthorityRequest } from "./production-release-authority.mjs";
 import { releaseRequest } from "./production-release-endpoint.mjs";
-import { createPrivateDirectory, readPrivateBytes, readPrivateJson, releaseBytesDigest, requirePrivateDirectory,
-  writePrivateRecord } from "./production-release-files.mjs";
+import { createPrivateDirectory, namedProcessIdentity, readPrivateBytes, readPrivateJson, releaseBytesDigest,
+  requirePrivateDirectory, syncDirectory, withReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
 import { validateReleasePlan, validateRuntimeHosts } from "./production-release-plan.mjs";
 import { validateReleaseSnapshot } from "./production-release-reconciliation.mjs";
 import { RELEASE_ALIAS, RELEASE_UUID } from "./production-release-state.mjs";
@@ -108,7 +108,20 @@ export function installRunnerReleasePlan({ root, raw, alias, configPath }) {
   must(row?.plan_sha256 === releaseBytesDigest(raw) && row.disposition === "unresolved" && !row.completion,
     "copied plan is not the current canonical unfinished plan");
   const parent = createPrivateDirectory(join(root, "production-attempts"));
-  const dir = createPrivateDirectory(join(parent, plan.attempt_uuid));
-  writePrivateRecord(dir, "attempt.json", raw, { kind: "plan" });
+  const dir = join(parent, plan.attempt_uuid);
+  withReleaseLock(parent, "history", () => {
+    if (existsSync(dir)) {
+      must(releaseBytesDigest(readPrivateBytes(join(dir, "attempt.json"))) === releaseBytesDigest(raw), "working plan is immutable");
+      return;
+    }
+    const staged = createPrivateDirectory(join(parent, `.start-${plan.attempt_uuid}`));
+    writePrivateRecord(staged, "owner.json", { schema: 1, invocation_uuid: plan.attempt_uuid, ...namedProcessIdentity(process.pid) },
+      { kind: "owner", scope: "administrative" });
+    writePrivateRecord(staged, "attempt.json", raw, { kind: "plan", scope: "administrative" });
+    unlinkSync(join(staged, "owner.json"));
+    syncDirectory(staged);
+    renameSync(staged, dir);
+    syncDirectory(parent);
+  }, "root");
   return validateRunnerReleaseContext({ root, dir, alias, configPath });
 }

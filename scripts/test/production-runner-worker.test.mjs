@@ -11,6 +11,7 @@ import { collectRunnerCompletion } from "../collect-production-release.mjs";
 import { readReleaseAuthority } from "../production-release-authority.mjs";
 import { stageReleaseTools } from "../production-release-tools.mjs";
 import { releaseBytesDigest, releaseJsonBytes } from "../production-release-files.mjs";
+import { installRunnerReleasePlan } from "../production-release-runner-facts.mjs";
 
 const source=resolve(dirname(fileURLToPath(import.meta.url)),"../..");
 const roots=[],saved=new Map();
@@ -100,4 +101,16 @@ test("completion rejects a worker without the independently enrolled baseline",(
   const f=fixture();
   assert.throws(()=>collectRunnerCompletion(f.plan,{attempt_uuid:f.plan.attempt_uuid,alias:"worker-a",simulation:false},
     {runnerRoot:f.runner,configPath:f.configPath}),/baseline lacks/);
+});
+
+test("the real plan-transfer constructor commits only bytes that match the canonical private plan",()=>{
+  const f=fixture(),raw=readFileSync(join(f.canonical,"attempt.json"));
+  rmSync(f.dir,{recursive:true});
+  const installed=installRunnerReleasePlan({root:f.runner,raw,alias:"worker-a",configPath:f.configPath});
+  assert.equal(installed.plan_sha256,releaseBytesDigest(raw));
+  assert.deepEqual(readdirSync(join(f.runner,"production-attempts")),[f.plan.attempt_uuid]);
+  assert.equal(installRunnerReleasePlan({root:f.runner,raw,alias:"worker-a",configPath:f.configPath}).plan_sha256,installed.plan_sha256);
+  assert.throws(()=>installRunnerReleasePlan({root:f.runner,raw:releaseJsonBytes({...f.plan,created_at:new Date(0).toISOString()}),alias:"worker-a",configPath:f.configPath}),/canonical/);
+  writeFileSync(f.configPath,releaseJsonBytes({host_id:"another-private-host"}));
+  assert.throws(()=>installRunnerReleasePlan({root:f.runner,raw,alias:"worker-a",configPath:f.configPath}),/live config/);
 });

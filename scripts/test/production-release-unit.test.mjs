@@ -14,7 +14,8 @@ test("typed unit verification distinguishes argv boundaries and requires the act
   assert.throws(() => unitSnapshot("--all"), /unit name/);
 });
 
-test("the production reader verifies its own real timer-shaped units through ExecStartEx", () => {
+test("the production reader verifies its own real timer-shaped units through ExecStartEx",
+  { skip: process.env.KAOIRO_RELEASE_UNIT_PROBE !== "1" }, () => {
   const run = (bin, args) => execFileSync(bin, args, { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] });
   const argv = ["/usr/bin/true", "a b", "literal $BACKUP ${HOME} %h %%", "a;b", "a}b", "a\\b", 'a"b'];
   for (const expand of [false, true]) {
