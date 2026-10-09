@@ -70,4 +70,12 @@ jobs:
           KAOIRO_IDENTITY_GATES_SHA: ${{ vars.KAOIRO_IDENTITY_GATES_SHA }}
           KAOIRO_IDENTITY_V9: ${{ vars.KAOIRO_IDENTITY_V9 }}
           KAOIRO_IDENTITY_V10: ${{ vars.KAOIRO_IDENTITY_V10 }}
+          KAOIRO_LANDING_RESULT_PATH: landing-result.json
         run: node scripts/landing-workflow.mjs allocate
+      - name: Preserve bounded landing result on failure
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: landing-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: landing-result.json
+          if-no-files-found: error

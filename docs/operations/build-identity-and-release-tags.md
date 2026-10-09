@@ -2,7 +2,7 @@
 title: Build identity and release tags
 description: Immutable landing identities, common production checkpoints and guarded release automation.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 related: [deployment, protocol]
 ---
 
@@ -429,10 +429,12 @@ The card contains a fully resolved one-line command of this form, with the
 actual validated compact receipt instead of a placeholder:
 
 ```sh
-gh workflow run production-release.yml --repo sakuraiyuta/kaoiro --ref develop -f 'receipt=<validated-completion-JSON>'
+node <reviewed-control-checkout>/scripts/landing-repair.mjs audit --repository sakuraiyuta/kaoiro && gh workflow run production-release.yml --repo sakuraiyuta/kaoiro --ref develop -f 'receipt=<validated-completion-JSON>'
 ```
 
-The card's `command` chains dispatch and mandatory verification. While the
+The card's `command` first audits all post-activation landing events, then
+chains dispatch and mandatory verification. Pending landings or an unknown
+inventory stop before dispatch; a push-only Actions result is not a full audit. While the
 workflow is pending, verification is nonzero; repeat the card's `verification`
 after the workflow finishes. It must exit
 zero and write `tag-ack.json` only after both remote refs and the exact landing
@@ -550,6 +552,79 @@ A failed common recorder leaves publication pending and the previous completed
 record untouched. Retain attempt directories and acknowledgments independently
 of ordinary deploy pruning. Release workflow retries/redeploys reuse the first
 tag; never force, delete, renumber or rewrite an immutable tag to recover.
+
+## Recorded repair of a historical landing
+
+The automatic Contents-write token can be denied when an original commit has
+workflow content different from the default branch. After a failed atomic
+push, only a valid unchanged remote inventory with no winning pair and the
+exact bounded GitHub App workflow-permission refusal yields
+`landing_operator_repair_required`. Other denials remain unknown errors.
+The job stops all writes after the first refusal, enumerates the remaining
+backlog read-only, and preserves `landing-result-<run-id>-<run-attempt>` plus
+the Actions summary. Only the actually denied identity is marked for operator
+repair. Neither a 403 nor a workflow difference alone proves this cause.
+
+Use `repair_command` from that result in a **clean checkout of its exact
+`repair_control_sha`**. The public job cannot know an operator's private local
+checkout path, so the command is relative to that identified checkout. The
+private production card resolves its audit to an absolute path. Both validate
+HEAD against repository control/gate variables before acting. For example:
+
+```sh
+node scripts/landing-repair.mjs repair --git-transport ssh \
+  --repository sakuraiyuta/kaoiro --original-run <original-run-id> \
+  --expected-target <full-original-target-SHA>
+```
+
+`repair`, `resume` and `record-existing` require the literal transport `ssh`.
+There is no HTTPS fallback and no added OAuth workflow scope. `gh` reads the
+original run/artifact, accepted control/boundary and current User login only.
+That login must have repository push authority and match the existing
+`KAOIRO_RELEASE_ACTORS` allow-list. A fixed `/usr/bin/ssh -T git@github.com`
+probe must name the same login, including letter case. Read only stderr up to
+4 KiB, accept only GitHub's anchored single successful-authentication sentence
+and exit 1, and apply the same actor grammar as the allow-list. Exit 0/255,
+signal, timeout, additional output or a deploy-key greeting refuses before
+push. Probe and push share the same immutable effective SSH identity/environment
+selection, strict host-key checking and no known-host update. Only the fixed
+GitHub host/user/port and validated repository can be used. The push uses the
+existing paired allocator, original target and original UTC clock.
+
+The command writes local Git blobs and compare-and-create refs before and
+after publication:
+`refs/kaoiro/landing-repairs/<repository-id>/<original-run-id>/intent` and
+`.../receipt`. These are **per-checkout evidence**, never pushed or shared
+publication authority. Back up the named checkout's objects/refs together;
+only the remote same-object tag/claim arbitrates issuance.
+
+- No intent/pair: `repair` must record intent before any push.
+- Valid intent without a pair: inspect the original evidence and explicitly
+  use `resume` with the same required options. No replacement clock/target.
+- Exact pair with missing receipt: `record-existing` verifies the pair and
+  writes a receipt without pushing. A post-push receipt failure prints this
+  recovery command and the actual remote object.
+- Exact pair and valid receipt: duplicate operation returns 73 with no ref move.
+- An established pair without local intent remains resolved remotely; do not
+  manufacture a repair journal in another checkout.
+- Malformed or contradictory local refs refuse. Preserve the exact named ref
+  and object, compare its blob with the original artifact and verified backup,
+  and use native Git recovery after confirming writers stopped. Never remove
+  locks automatically or invent original-event evidence.
+
+`audit --repository sakuraiyuta/kaoiro` re-reads remote pairs and the bounded
+UTC-window original-run inventory. It states its frozen observation range and
+returns nonzero for any pending identity, missing evidence or saturated range.
+Already established valid pairs do not require an expired original artifact.
+Repeated runs retain the established original tuple; no pre-activation backfill
+is performed. Re-run audit after repair before the card's dispatch.
+
+| Exit | Result | Meaning |
+|---|---|---|
+| 0 | success/resolved | Exact remote identity and applicable record checks pass; an audit also states its scope. |
+| 73 | `already_repaired` | Exact original identity already paired; no duplicate push or ref move. |
+| 77 | `landing_operator_repair_required` | Automatic allocator observed the pinned workflow-permission refusal with valid unchanged inventory and no winning pair. |
+| 78 | other refusal/error | Pending/unknown inventory, invalid original evidence, credential/transport failure or unrelated rejection; no success inferred. |
 
 ## Repairing a malformed reserved tag
 

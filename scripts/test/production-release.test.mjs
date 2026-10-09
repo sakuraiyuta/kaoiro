@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +12,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { repairFixture } from "./fixtures/landing-repair-fixture.mjs";
 import { stageReleaseTools } from "../production-release-tools.mjs";
 import { readReleaseAuthority } from "../production-release-authority.mjs";
 import { releaseJsonBytes } from "../production-release-files.mjs";
@@ -641,9 +643,7 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
   assert.equal(card.workflow, "production-release.yml");
   assert.equal(card.ref, "develop");
   assert.ok(
-    card.command.startsWith(
-      "gh workflow run production-release.yml --repo 'sakuraiyuta/kaoiro' --ref develop -f 'receipt=",
-    ),
+    card.command.startsWith(card.landing_audit + " && " + card.dispatch),
   );
   assert.ok(card.command.includes(revision));
   assert.equal(card.receipt_sha256, receiptDigest(r));
@@ -653,6 +653,15 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     ),
   );
   assert.ok(card.command.endsWith(card.verification));
+  const landingFixture = repairFixture();
+  try {
+    const pendingCard = productionDispatchCard({ dir, cwd: landingFixture.repo, repository: "fixture/repo" });
+    const pending = spawnSync("sh", ["-c", pendingCard.command], {
+      cwd: landingFixture.repo, env: landingFixture.env, encoding: "utf8", timeout: 30_000,
+    });
+    assert.equal(pending.status, 78, pending.stderr);
+    assert.equal(existsSync(landingFixture.marker), false, "pending landing must stop the generated card before dispatch");
+  } finally { landingFixture.dispose(); }
   const { status } = spawnSync("sh", ["-c", card.verification], {
     encoding: "utf8",
   });

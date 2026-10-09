@@ -82,7 +82,8 @@ export function productionDispatchCard({
   const verification =
     `${node} ${launcher} collect ${digest} ack --server-dir ${quote(authority.root)} --attempt ${quote(resolve(dir))} --repo ${quote(tools)}` +
     ` && ${node} ${launcher} audit ${digest} --install-root ${quote(authority.root)} --expected-authority-sha256 ${quote(authority.sha256)} --role card --repo ${quote(tools)}`;
-  const command = `${dispatch} && ${verification}`;
+  const landingAudit = `${quote(process.execPath)} ${quote(join(tools, "scripts/landing-repair.mjs"))} audit --repository ${quote(repository)}`;
+  const command = `${landingAudit} && ${dispatch} && ${verification}`;
   return {
     schema: 1,
     attempt_uuid: receipt.attempt_uuid,
@@ -95,6 +96,7 @@ export function productionDispatchCard({
     workflow: "production-release.yml",
     ref: "develop",
     command,
+    landing_audit: landingAudit,
     dispatch,
     verification,
     notice:

@@ -90,6 +90,15 @@ The actual default branch is develop, so landing workflows there permits
 workflow_dispatch. Main promotion is unrelated operator work. This decision
 does not change the default branch.
 
+Historical workflow-permission refusals retain the narrow automatic token.
+An allow-listed operator repairs the exact original event with existing SSH
+credentials, recording per-checkout Git intent before the same atomic paired
+allocator and a receipt after remote read-back. The authenticated SSH greeting
+must equal the API actor; HTTPS fallback and scope expansion are excluded.
+The operator card's first audit must resolve every post-activation landing
+before dispatch. Missing or unknown evidence refuses; it cannot select a new
+clock, replacement target or fabricated success.
+
 ## Consequences
 
 Production builders wait for the exact tag before downtime. All consumers need

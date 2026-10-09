@@ -210,7 +210,7 @@ test("the production reconciliation entry fetches once per inventory rather than
           args.includes("--verify") &&
           args.some((x) => x === `refs/tags/identity/landing/${revision}`),
       ).length,
-      25,
+      2,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

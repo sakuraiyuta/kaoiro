@@ -15,7 +15,7 @@ const MAX_ATTEMPTS = 5;
 const GIT_TIMEOUT_MS = 30_000;
 const RESERVED_VERSION_PREFIX = /^v\d{4}\.\d{2}\.\d{2}\./;
 
-function runGit(cwd, args, input) {
+function runGit(cwd, args, input, gitEnv = process.env) {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
@@ -23,18 +23,19 @@ function runGit(cwd, args, input) {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: 32 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: { ...gitEnv, GIT_TERMINAL_PROMPT: "0" },
   });
   return {
     status: result.status ?? 1,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     error: result.error,
+    signal: result.signal,
   };
 }
 
-function gitChecked(cwd, args, input) {
-  const result = runGit(cwd, args, input);
+function gitChecked(cwd, args, input, gitEnv) {
+  const result = runGit(cwd, args, input, gitEnv);
   if (result.error || result.status !== 0) {
     throw new Error(`git ${args[0]} failed${result.status === 0 ? " to start" : ` (exit ${result.status})`}`);
   }
@@ -95,12 +96,12 @@ function parseInventory(snapshot, repositoryId) {
   return { refs, signature, publicByRevision, publicByName, byDay };
 }
 
-function readRemoteInventory(remote, repositoryId) {
+function readRemoteInventory(remote, repositoryId, gitEnv) {
   const snapshot = mkdtempSync(join(tmpdir(), "kaoiro-landing-inventory-"));
   try {
-    gitChecked(snapshot, ["init", "--bare", "--quiet"]);
-    gitChecked(snapshot, ["remote", "add", "landing-source", remote]);
-    gitChecked(snapshot, ["fetch", "--no-tags", "--no-recurse-submodules", "landing-source", "+refs/tags/*:refs/tags/*"]);
+    gitChecked(snapshot, ["init", "--bare", "--quiet"], undefined, gitEnv);
+    gitChecked(snapshot, ["remote", "add", "landing-source", remote], undefined, gitEnv);
+    gitChecked(snapshot, ["fetch", "--no-tags", "--no-recurse-submodules", "landing-source", "+refs/tags/*:refs/tags/*"], undefined, gitEnv);
     const inventory = parseInventory(snapshot, repositoryId);
     return { snapshot, inventory, dispose: () => rmSync(snapshot, { recursive: true, force: true }) };
   } catch (error) {
@@ -109,8 +110,8 @@ function readRemoteInventory(remote, repositoryId) {
   }
 }
 
-function resolvePushRemote(cwd, remote) {
-  const configured = runGit(cwd, ["remote", "get-url", "--push", "--all", remote]);
+function resolvePushRemote(cwd, remote, gitEnv) {
+  const configured = runGit(cwd, ["remote", "get-url", "--push", "--all", remote], undefined, gitEnv);
   if (!configured.error && configured.status === 0) {
     const urls = configured.stdout.split("\n").map(value => value.trim()).filter(Boolean);
     if (urls.length !== 1) throw new Error("landing remote must resolve to exactly one push URL");
@@ -132,7 +133,40 @@ export function auditLandingInventory({ cwd, remote, repositoryId = BUILD_REPOSI
   }
 }
 
-function makeLandingObject(cwd, record) {
+export class LandingRepairRequired extends Error {
+  constructor(identity) {
+    super("landing_operator_repair_required");
+    this.code = "landing_operator_repair_required";
+    this.identity = identity;
+  }
+}
+
+export function workflowPermissionRefusal(result, { object, tag, target }) {
+  if (result.error || result.signal || result.status !== 1 || typeof result.stderr !== "string" ||
+      Buffer.byteLength(result.stderr) > 16_384) return null;
+  const rows = result.stderr.split("\n").filter(line => line.includes("[remote rejected]"));
+  if (rows.length !== 2) return null;
+  const expected = new Set([tag, `identity/landing/${target}`]);
+  const paths = [];
+  for (const line of rows) {
+    const match = /^! \[remote rejected\] ([0-9a-f]{40}) -> (?:refs\/tags\/)?([^ ]+) \((.*)\)$/.exec(line.trim());
+    if (!match || match[1] !== object || !expected.delete(match[2])) return null;
+    const path = /^refusing to allow a GitHub App to create or update workflow `(\.github\/workflows\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.ya?ml)` without `workflows` permission$/.exec(match[3])?.[1];
+    if (path) paths.push(path);
+    else if (match[3] !== "atomic push failure") return null;
+  }
+  return expected.size === 0 && paths.length > 0 && paths.every(path => path === paths[0]) ? paths[0] : null;
+}
+
+export function readLandingInventory({ cwd, remote, repositoryId = BUILD_REPOSITORY_ID, gitEnv }) {
+  const snapshot = readRemoteInventory(resolvePushRemote(cwd, remote, gitEnv), repositoryId, gitEnv);
+  try {
+    return { signature: snapshot.inventory.signature,
+      entries: [...snapshot.inventory.publicByRevision.values()].map(value => resultFor(value, false)) };
+  } finally { snapshot.dispose(); }
+}
+
+function makeLandingObject(cwd, record, gitEnv) {
   const validated = validateLandingRecord(record, record.repository_id);
   const tag = `v${validated.version}`;
   const taggerSeconds = Math.floor(Date.parse(validated.created_at) / 1000);
@@ -145,7 +179,7 @@ function makeLandingObject(cwd, record) {
     JSON.stringify(validated),
     "",
   ].join("\n");
-  const object = gitChecked(cwd, ["mktag"], raw);
+  const object = gitChecked(cwd, ["mktag"], raw, gitEnv);
   if (!/^[0-9a-f]{40}$/.test(object)) throw new Error("git mktag returned an invalid object id");
   return { object, tag };
 }
@@ -159,7 +193,7 @@ function resultFor(landing, created) {
  * frozen develop push event. The remote is read through a fresh bare snapshot
  * for every bounded conflict retry; no remote ref is ever moved or deleted.
  */
-export function allocateLanding({ cwd, remote, target, originalRunId, createdAt, repositoryId = BUILD_REPOSITORY_ID }) {
+export function allocateLanding({ cwd, remote, target, originalRunId, createdAt, repositoryId = BUILD_REPOSITORY_ID, gitEnv }) {
   if (typeof cwd !== "string" || cwd.length === 0 || typeof remote !== "string" || remote.length === 0 || remote.startsWith("-")) {
     throw new Error("landing allocation requires a checkout and a valid remote");
   }
@@ -175,12 +209,12 @@ export function allocateLanding({ cwd, remote, target, originalRunId, createdAt,
     original_run_id: originalRunId,
     created_at: createdAt,
   }, repositoryId);
-  gitChecked(cwd, ["cat-file", "-e", `${target}^{commit}`]);
-  const inventoryRemote = resolvePushRemote(cwd, remote);
+  gitChecked(cwd, ["cat-file", "-e", `${target}^{commit}`], undefined, gitEnv);
+  const inventoryRemote = resolvePushRemote(cwd, remote, gitEnv);
 
   const day = createdAt.slice(0, 10);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const before = readRemoteInventory(inventoryRemote, repositoryId);
+    const before = readRemoteInventory(inventoryRemote, repositoryId, gitEnv);
     try {
       const existing = before.inventory.publicByRevision.get(target);
       if (existing) return resultFor(existing, false);
@@ -197,14 +231,14 @@ export function allocateLanding({ cwd, remote, target, originalRunId, createdAt,
         original_run_id: originalRunId,
         created_at: createdAt,
       }, repositoryId);
-      const { object, tag } = makeLandingObject(cwd, record);
+      const { object, tag } = makeLandingObject(cwd, record, gitEnv);
       const publicRefspec = `${object}:refs/tags/${tag}`;
       const claimRefspec = `${object}:refs/tags/identity/landing/${target}`;
-      const pushed = runGit(cwd, ["push", "--atomic", "--no-follow-tags", remote, publicRefspec, claimRefspec]);
+      const pushed = runGit(cwd, ["push", "--atomic", "--no-follow-tags", remote, publicRefspec, claimRefspec], undefined, gitEnv);
 
       let after;
       try {
-        after = readRemoteInventory(inventoryRemote, repositoryId);
+        after = readRemoteInventory(inventoryRemote, repositoryId, gitEnv);
       } catch (error) {
         if (attempt === MAX_ATTEMPTS - 1) throw error;
         continue;
@@ -214,6 +248,8 @@ export function allocateLanding({ cwd, remote, target, originalRunId, createdAt,
         if (winner) return resultFor(winner, winner.object === object);
         if (pushed.error || pushed.status !== 0) {
           if (after.inventory.signature === before.inventory.signature) {
+            const workflowPath = workflowPermissionRefusal(pushed, { object, tag, target });
+            if (workflowPath) throw new LandingRepairRequired({ repositoryId, target, originalRunId, createdAt, workflowPath });
             throw new Error(`git push --atomic failed (exit ${pushed.status})`);
           }
         }
