@@ -198,12 +198,44 @@ reuse result. Never require a later receipt digest to equal the first one.
 
 ## Automation activation and trust
 
-All automation is disabled by default. The host-to-Actions notification adapter
-(S4) has not been selected or installed. The common receiver is
-`.github/workflows/production-release.yml`; it accepts a bounded completed
-receipt, validates both original and rerun actors and the required host
-allowlist, and executes only fixed reviewed control code. Receipt input is
-data, never shell text or an executable ref.
+All automation is disabled by default. At the common canary checkpoint, the
+operator dispatches the fixed `production-release.yml` workflow from their own
+`gh` credentials (operator decision, 2026-10-09). No Actions-write token is
+provisioned on a production host. Generate an execution card after recording
+completion:
+
+```sh
+node scripts/production-release-card.mjs card \
+  --attempt <attempt-directory> --repo /home/yuta/git/kaoiro
+```
+
+The card contains a fully resolved one-line command of this form, with the
+actual validated compact receipt instead of a placeholder:
+
+```sh
+gh workflow run production-release.yml --repo sakuraiyuta/kaoiro --ref develop -f 'receipt=<validated-completion-JSON>'
+```
+
+Run the card's `verification` command after the workflow finishes. It must exit
+zero and write `tag-ack.json` only after both remote refs and the exact landing
+pair agree. A workflow result or dispatch HTTP success alone is insufficient.
+The receiver validates both original and rerun actors, the host allowlist and
+bounded receipt, and executes only fixed reviewed control code. Receipt input
+is data, never an executable ref.
+
+Run the completion-side reconciliation audit before and after each checkpoint:
+
+```sh
+node scripts/production-release-card.mjs audit \
+  --root /home/yuta/kaoiro-deploy/production-releases --repo /home/yuta/git/kaoiro
+```
+
+Exit one reports completed attempts with missing or unconfirmed remote tags, or
+invalid local completion records. This catches an omitted dispatch from the
+receipt side; GitHub alone cannot discover private receipts never submitted.
+It reads remote refs without creating them, and never transmits credentials.
+Repair by executing the validated card, then repeat read-back. Redeploying the
+same commit reuses its immutable tag and records the new local attempt.
 
 The actual repository default is develop. Landing the workflows there makes
 dispatch discoverable; a main bootstrap or promotion is unnecessary. Main
@@ -229,10 +261,14 @@ in a throwaway GitHub repository, then operator provisioning on the real repo:
   and successful registration; keep the high-risk section-3 start gate.
 
 A personal-repository probe rejected GitHub Actions app ID 15368 as a creation
-bypass actor (HTTP 422). Do not assume that a creation restriction with that
-actor can be installed. The creation actor arrangement requires operator
-adjudication; keep the independent update/deletion prohibition without bypass.
-No broadening of creation actors is implied by this implementation.
+bypass actor (HTTP 422). The operator therefore selected write-role creation
+(operator decision, 2026-10-09): a separate creation ruleset allows
+RepositoryRole write, while the update/deletion prohibition has no bypass.
+Creation permission never grants permission to move or delete existing refs.
+Hand-made public tags without their claims, or conflicting claim objects,
+degrade build identity and are reported by the full inventory audit. Workflow
+reconciliation audits that inventory even when all known runs already have
+claims. Reader checks and audits do not replace approval of trusted code.
 
 Only after these conditions and review, the operator sets on
 `sakuraiyuta/kaoiro`: `KAOIRO_IDENTITY_GATES_SHA` to the exact approved control

@@ -11,6 +11,7 @@ import { originalPushRecord, validateOriginalRecord } from "../landing-workflow.
 import { validateDispatch } from "../production-release-workflow.mjs";
 import { validateAutomationGate } from "../release-automation-gate.mjs";
 import { acknowledgeReleaseAttempt, collectRunnerCompletion, collectServerCompletion } from "../collect-production-release.mjs";
+import { productionDispatchCard, auditProductionCompletions } from "../production-release-card.mjs";
 const scratch=[]; afterEach(()=>{for(const dir of scratch.splice(0))rmSync(dir,{recursive:true,force:true});});
 const make=()=>{const dir=mkdtempSync(join(tmpdir(),"fuji571-receipt-test-"));scratch.push(dir);return dir;};
 function receipt(revision="a".repeat(40), uuid="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", date=Date.now()+10) {
@@ -131,4 +132,22 @@ test("receiver authorization covers original and rerun actors",()=>{
 test("fake dependencies cannot record a production completion",async()=>{
   assert.throws(()=>collectRunnerCompletion({attempt_uuid:"x",host_ids:["homeguard"]},{attempt_uuid:"x",host_id:"homeguard",simulation:true},{systemctlBin:"fake"}),/fake service/);
   await assert.rejects(collectServerCompletion({}, {dockerBin:"fake"}),/fake Docker/);
+});
+
+test("the operator card binds the fixed workflow/ref and audit reports omitted publication",()=>{
+  const {root,source,revision}=remote();
+  const identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
+  const attempts=join(root,"attempts"),{dir,plan}=startReleaseAttempt(attempts,identity,["homeguard"]);
+  const r=receipt(revision,plan.attempt_uuid,Date.parse(plan.created_at)+10);completeReleaseAttempt(dir,r,options);
+  const card=productionDispatchCard({dir,cwd:source});
+  assert.equal(card.repository,"sakuraiyuta/kaoiro");assert.equal(card.workflow,"production-release.yml");assert.equal(card.ref,"develop");
+  assert.ok(card.command.startsWith("gh workflow run production-release.yml --repo 'sakuraiyuta/kaoiro' --ref develop -f 'receipt="));
+  assert.ok(card.command.includes(revision));assert.equal(card.receipt_sha256,receiptDigest(r));
+  assert.ok(card.verification.includes("collect-production-release.mjs' ack --attempt"));
+  assert.deepEqual(auditProductionCompletions({root:attempts,cwd:source}).map(row=>row.status),["publication_missing"]);
+  publishProductionRelease({cwd:source,receipt:r,...options});
+  assert.deepEqual(auditProductionCompletions({root:attempts,cwd:source}).map(row=>row.status),["published"]);
+  writeFileSync(join(dir,"completion.json"),JSON.stringify({...r,attempt_uuid:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}));
+  assert.throws(()=>productionDispatchCard({dir,cwd:source}),/attempt differs/);
+  assert.equal(auditProductionCompletions({root:attempts,cwd:source})[0].status,"invalid_completion");
 });

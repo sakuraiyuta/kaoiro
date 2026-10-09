@@ -69,7 +69,9 @@ malicious actor already able to replace trusted code.
 Workflow allocation stays disabled until V9/V10 have passed, the approved
 control SHA is fixed and the append-only tag rules are provisioned. Both GitHub
 job admission and the control scripts require the exact gated control SHA.
-No update/deletion bypass applies to immutable tags. Test GitHub behavior in a
+Write-role principals may create reserved tags under a separate creation rule
+(operator decision, 2026-10-09). No update/deletion bypass applies to immutable
+tags. Test GitHub behavior in a
 throwaway repository, never by adding trial tags to production.
 
 The actual default branch is develop, so landing workflows there permits
@@ -85,4 +87,4 @@ visible without claiming production readiness. Updaters attest the full SHA;
 seven-character label collisions have no authority.
 
 See [Build identity and release tags](../operations/build-identity-and-release-tags.md)
-for the current operational contract, activation gates and pending notifier.
+for the current operational contract, activation gates and operator dispatch.
