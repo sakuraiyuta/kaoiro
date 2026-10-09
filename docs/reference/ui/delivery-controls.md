@@ -95,3 +95,7 @@ Normal cached envelopes cannot overwrite an existing policy event. Navigation
 discards local notices without reversing an in-flight save, and replies remain
 bound to their original agent. The bounded pre-snapshot event buffer retains
 at most one entry per agent, up to the server projection limit of 200.
+
+The decoder tests and enum checks require the repository's shared
+`protocol/fixtures/launch-delivery-policy.json`; extracting only `dashboard/`
+without that fixture makes both `check` and `test` fail.

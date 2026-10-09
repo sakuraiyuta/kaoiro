@@ -17,7 +17,7 @@ structure, not a `runner:<host_id>` channel message like the ones in
 Most fields mirror the `spawn` payload verbatim (`resolveWrapperConfig`,
 runner/src/supervisor.ts). This section documents the fields that instead
 come from `runner.config.json`'s per-engine blocks. Claude's delivery controls
-below are process-local options, not runner-relayed fields.
+below resolve at launch, using the runner-relayed flags and captured environment.
 
 `codex_tool_home?: string` is a local runner-to-Codex-wrapper field. The runner
 creates a private empty directory for each Codex wrapper and overwrites any
@@ -26,6 +26,13 @@ launched Codex wrapper creates its own private directory when the field is
 absent. The wrapper rejects a missing path or one resolving to its state home
 before a turn. The directory is passed to native shell tools, while the native
 Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
+
+- `in_flight_delivery_enabled?: boolean` — the runner resolves the host ceiling
+  for this engine and relays it explicitly. `false` disables all declared
+  in-flight modes after backend/legacy opt-ins; per-agent policy cannot widen it.
+  Direct Claude/Codex launches without this key preserve legacy behavior.
+  Antigravity still omits delivery declarations. Changes apply to later wrapper
+  lifetimes; the live per-agent policy remains a separate gate.
 
 - `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
   resolved to `"exec"` when omitted and relayed only for Codex launches. The

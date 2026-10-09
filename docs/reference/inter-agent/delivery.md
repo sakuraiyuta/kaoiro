@@ -465,3 +465,12 @@ See [policy negotiation and revision safety](../protocol/channels.md#per-agent-d
 ## Input-bound reply contract
 
 See [inline recovery and ownership](reply-basis.md#inline-recovery-and-ownership).
+
+## Host launch ceiling
+
+The [runner host ceiling](../configuration/runner.md#host-delivery-ceilings-and-defaults)
+is resolved with the backend and existing legacy opt-ins before wrapper join.
+A false ceiling declares no in-flight mechanism on Claude/Codex; Antigravity
+continues to omit its declaration. The register's launch metadata and the next
+wrapper use the same applied snapshot. Live policy can narrow this declaration
+but cannot widen it. Config reload changes subsequent wrapper lifetimes only.

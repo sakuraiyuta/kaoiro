@@ -2,7 +2,7 @@
 title: Default-on in-flight delivery with a per-agent opt-out
 description: Design for making in-flight delivery the default on every engine, with a revisioned per-agent opt-out stored on the server and switchable from the dashboard at launch and live.
 status: approved
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 ---
 
 # Default-on in-flight delivery with a per-agent opt-out
@@ -34,6 +34,18 @@ live wrapper's high-water requires restarting that affected wrapper, as
 [documented](../operations/server-update-and-rollback.md#delivery-policy-revision-recovery).
 The [C1W evidence record](../evidence/issue-463/2026-10-09-c1w-live-delivery-policy.md)
 separates native RPC acceptance, model inclusion and remaining measurement limits.
+
+## C3 implementation boundary
+
+The runner resolves host ceilings and independent new-row defaults from the
+canonical `in_flight_delivery` engine table. Antigravity omissions resolve to
+false for both keys. Startup, successful reload and catalog refresh share one
+applied snapshot with subsequent wrapper launches, including the four captured
+legacy delivery environment variables. Legacy mechanism opt-ins and the Codex
+backend default remain in place. Bounded launch metadata uses the shared pure
+resolver and a required cross-client JSON contract fixture. Integration evidence
+must cover the producer through real server register to the dashboard decoder
+and UI; independent implementation review remains required before landing.
 
 ## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 

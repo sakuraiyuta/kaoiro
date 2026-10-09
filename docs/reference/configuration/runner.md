@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-10-02
+last_updated: 2026-10-10
 ---
 
 # Runner configuration
@@ -79,6 +79,44 @@ key (exactly `1` keeps heartbeats; any other set value omits them). For
 temporary dogfood investigation, launching with
 `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS=1 scripts/dogfood.sh` also emits the full
 log to `tmp/dogfood-logs/runner.log`.
+
+## Host delivery ceilings and defaults
+
+`in_flight_delivery` uses canonical engine IDs, including the hyphen in
+`claude-code`. Each engine accepts optional boolean `enabled` and `default`
+keys. Omitted keys resolve independently:
+
+| Engine | Config prefix | `enabled` | `default` |
+| --- | --- | --- | --- |
+| `claude-code` | `in_flight_delivery.claude-code` | `true` | `true` |
+| `codex` | `in_flight_delivery.codex` | `true` | `true` |
+| `antigravity` | `in_flight_delivery.antigravity` | `false` | `false` |
+
+`enabled: false` is a launch ceiling: it disables every in-flight mechanism
+for that engine, even when a legacy flag or persona list enables it. `true`
+still requires the existing backend and legacy gates (`claude_code.phase2_delivery`,
+`codex.operator_steer` and their environment overrides). Antigravity has no
+in-flight mechanism even with an explicit true ceiling. `default` seeds a new
+server policy row when launch has no explicit choice; it never rewrites a stored
+row and cannot enable a mechanism beyond the ceiling.
+
+Only this new block is strict: unknown engine/key names, non-object blocks,
+arrays, null and non-boolean values reject startup. An invalid reload retains
+the last applied configuration. Existing engine blocks retain their parsing
+rules. A successful reload publishes one snapshot for the next wrapper config,
+register defaults and launch metadata; an awaited catalog refresh reads the
+latest applied snapshot. Existing wrappers keep their launch declaration.
+
+The runner captures `KAOIRO_CLAUDE_PHASE2_DELIVERY`,
+`KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, `KAOIRO_CODEX_OPERATOR_STEER` and
+`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` at startup. Reload and spawned children
+use these captured values, including absence; restart the runner to change them.
+An empty flag falls back to the file, exactly `1` enables globally, and other
+set values defer to the persona list. One malformed persona ID invalidates the
+whole list; matching is case-sensitive. No new environment variable is added.
+
+The runner explicitly registers every advertised engine's resolved default and
+bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata).
 
 ## Behaviour settings
 

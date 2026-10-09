@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-10-02
+last_updated: 2026-10-10
 related: [protocol, architecture]
 ---
 
@@ -108,6 +108,36 @@ version inventory below is normative for all routes.
 injected by the server at spawn; pre-registering per-agent tokens is unnecessary
 ([ADR-0024](../../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Token issuance
 and lifetime are defined by ADR-0024. Full runner-less direct `node wrapper` support is [#71](https://github.com/sakuraiyuta/kaoiro/issues/71).
+
+## Launch delivery metadata
+
+`register.in_flight_defaults` maps every advertised canonical engine ID to an
+explicit boolean. The server uses it only when creating a new policy row with
+no explicit launch choice. Re-register never rewrites existing rows.
+
+`engines[].launch_delivery_policy` has `version: "v1"`, boolean `ceiling`,
+and complete `mechanisms` (`operator_early`, `inter_agent_early`,
+`inter_agent_yield`). Early values are `none`, `fold`, `steer`, `hook`; yield
+values are `none`, `tool_boundary`. Optional `persona_overrides` maps exact
+canonical persona IDs to complete mechanism objects. False ceiling means all
+modes are `none`. This describes launch capability, not current per-agent policy
+or proof of delivery. Older runners may omit it.
+
+Each engine object is bounded at 8,192 UTF-8 JSON bytes and 64 overrides.
+Overflow omits the whole metadata object. Before sending, the runner estimates
+the complete register as `ceil(JSON bytes * 1.5 * 2) + 4096` against 65,536
+external-term bytes. Under pressure it removes all remaining metadata while
+preserving catalogs, defaults and other fields. The ratio allowance exceeds the
+measured maximum 1.332 across the acceptance fixtures (including 3 engines,
+32 short models each, maximum metadata, and a near-limit base register).
+This guard cannot repair a base register that already exceeds the server limit.
+A size omission produces one warning per register build containing only engine,
+reason, size and limit. No persona IDs, model strings or paths appear in it.
+
+The public client's independent mirror and protocol types share the data-only
+`protocol/fixtures/launch-delivery-policy.json` contract fixture. It is a required
+test input; type checks verify both enum sets without a dashboard production
+dependency on `@kaoiro/protocol` (ADR-0007).
 
 ## Launch cwd and execution cwd
 
