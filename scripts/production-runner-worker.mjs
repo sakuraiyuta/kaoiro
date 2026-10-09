@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -9,7 +9,9 @@ import { validateProductionReceipt } from "./production-release-record.mjs";
 import { validateFrozenBuildIdentity } from "./build-identity.mjs";
 import { validateReleasePlan } from "./production-release-plan.mjs";
 import { RELEASE_ALIAS, RELEASE_SHA, parseReleaseOptions } from "./production-release-state.mjs";
-import { readPrivateJson, withAsyncReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
+import { createPrivateDirectory, readPrivateJson, releaseEntryInventory, requirePrivateDirectory, syncDirectory, withAsyncReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
+import { readReleaseAttempt } from "./production-release-history.mjs";
+import { validateRuntimeHosts } from "./production-release-plan.mjs";
 import { canonicalRunnerReleaseRow, importRunnerReleaseFact, recordRunnerReleaseActivity,
   validateRunnerReleaseContext, validateRunnerLifecycleContext } from "./production-release-runner-facts.mjs";
 import { reconcileProductionReleases } from "./production-release-reconciliation.mjs";
@@ -164,30 +166,56 @@ export async function inspectProductionRunnerActivity({ runnerRoot, uuid, host, 
 }
 export function listRetainedProductionRunners(root,{systemctlBin="systemctl"}={}) {
   const rows=[];
-  if(!existsSync(root))return rows;
-  const dirs=readdirSync(root).filter(name=>UUID.test(name));must(dirs.length<=1000,"attempt listing bound");
-  for(const name of dirs) {
-    const dir=join(root,name);if(!lstatSync(dir).isDirectory())continue;
-    const raw=read(join(dir,"attempt.json")),plan=planFor(dir,raw.host_ids?.[0]);
+  const entries=releaseEntryInventory(root,"root");must(entries.length<=4096,"working history listing bound");
+  const aliases=validateRuntimeHosts(readPrivateJson(join(dirname(root),"release-host-aliases.json"),{privateParent:false})).map(pair=>pair.alias);
+  for(const entry of entries) {
+    const name=entry.name;
+    if(!UUID.test(name)){rows.push({entry:name,warning:true,status:"administrative"});continue;}
+    const dir=join(root,name),row=readReleaseAttempt(dir),plan=row.plan;
+    must(row.state.id!=="unknown_identity","unidentified working attempt; repair-history required");
     let recorded=false;
-    try {recordedReceipt(dir,plan);recorded=true;} catch { /* Invalid completion records must also remain visible. */ }
-    for(const host of plan.host_ids) {
+    if(plan)try {recordedReceipt(dir,plan);recorded=true;} catch { /* Invalid completion records must also remain visible. */ }
+    for(const host of plan?.host_ids??aliases) {
       const unit=runnerWorkerUnit(name,host),state=unitSnapshot(unit,systemctlBin);
-      if(state.LoadState!=="not-found")rows.push({attempt_uuid:name,host_id:host,unit,state:state.ActiveState,
-        recorded,warning:!recorded});
+      if(state.LoadState!=="not-found" || !plan)rows.push({attempt_uuid:name,host_id:host,unit,state:state.ActiveState??"unknown",
+        recorded,warning:!recorded,status:row.state.id});
     }
   }
   return rows;
 }
+
+export async function archiveRunnerWorkingCopy({ runnerRoot, uuid, host, configPath, repo }) {
+  must(UUID.test(uuid??""),"archive UUID required before path construction");
+  configPath ??= join(process.env.KAOIRO_RUNNER_DIR ?? join(homedir(), ".config/kaoiro"), "runner.config.json");
+  const dir=join(realpathSync(runnerRoot),"production-attempts",uuid);
+  const context=validateRunnerReleaseContext({root:runnerRoot,dir,alias:host,configPath});
+  const row=canonicalRunnerReleaseRow(context);
+  must(row.completion,"working-copy archive requires canonical completion and exact retained-unit cleanup");
+  cleanupProductionRunner({dir,host,runnerRoot,configPath});
+  const {readPublishedProductionRelease}=await import("./production-release-tags.mjs");
+  readPublishedProductionRelease({cwd:repo,receipt:row.completion,allowedHosts:context.plan.host_ids});
+  return withAsyncReleaseLock(join(context.root,"production-attempts"),"history",()=>{
+    releaseEntryInventory(dir,"attempt");
+    const archive=createPrivateDirectory(join(context.root,"production-attempts-archive")),destination=join(archive,uuid);
+    must(!existsSync(destination) && requirePrivateDirectory(dir).dev===requirePrivateDirectory(archive).dev,"working archive destination/device differs");
+    renameSync(dir,destination);syncDirectory(dirname(dir));syncDirectory(archive);
+    return {archived:true,destination,attempt_uuid:uuid};
+  },"root");
+}
 export async function runWorkerCli(argv) {
   const [command,...args]=argv,flags=parseReleaseOptions(args,
-    ["attempt", "uuid", "host", "runner-root", "config", "service", "update-args", "delay", "root"]);
+    ["attempt", "uuid", "host", "runner-root", "config", "service", "update-args", "delay", "root", "repo"]);
   if(command==="queue")return queueProductionRunner({dir:flags.attempt,host:flags.host,runnerRoot:flags["runner-root"],configPath:flags.config,
     service:flags.service,updateArgs:JSON.parse(flags["update-args"]),delaySeconds:flags.delay===undefined?180:Number(flags.delay)});
   else if(command==="cleanup")return cleanupProductionRunner({dir:flags.attempt,host:flags.host,runnerRoot:flags["runner-root"],configPath:flags.config});
   else if(command==="inspect" || command==="cancel")return inspectProductionRunnerActivity({runnerRoot:flags["runner-root"],uuid:flags.uuid,
     host:flags.host,configPath:flags.config,cancel:command==="cancel"});
-  else if(command==="list")return listRetainedProductionRunners(flags.root);
+  else if(command==="archive")return archiveRunnerWorkingCopy({runnerRoot:flags["runner-root"],uuid:flags.uuid,host:flags.host,configPath:flags.config,repo:flags.repo});
+  else if(command==="list"){
+    const root=join(realpathSync(flags["runner-root"]),"production-attempts");
+    must(!flags.root || resolve(flags.root)===root,"list cannot substitute another working history");
+    return listRetainedProductionRunners(root);
+  }
   else throw new Error("unknown worker command");
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

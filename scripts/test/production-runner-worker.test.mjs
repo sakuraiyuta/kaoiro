@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import { artifactBuildIdentity, BUILD_REPOSITORY_ID } from "../build-identity.mjs";
 import { startReleaseAttempt } from "../production-release-record.mjs";
-import { cleanupProductionRunner, inspectProductionRunnerActivity, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
+import { cleanupProductionRunner, inspectProductionRunnerActivity, listRetainedProductionRunners, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
 import { collectRunnerCompletion, runCollectionCli } from "../collect-production-release.mjs";
 import { readReleaseAuthority } from "../production-release-authority.mjs";
 import { stageReleaseTools } from "../production-release-tools.mjs";
@@ -192,4 +192,14 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
       assert.equal(readReleaseAttempt(attempt.dir).state.id,"invalid_quarantined");
     }
   } finally {await new Promise(resolve=>health.close(resolve));}
+});
+
+test("retained listing checks raw names and keeps corrupt working attempts visible",()=>{
+  const f=fixture(),parent=dirname(f.dir);
+  assert.deepEqual(listRetainedProductionRunners(parent),[]);
+  writeFileSync(join(f.dir,"attempt.json"),"broken-plan",{mode:0o600});
+  assert.equal(listRetainedProductionRunners(parent)[0].warning,true);
+  assert.equal(listRetainedProductionRunners(parent)[0].status,"invalid_completion");
+  mkdirSync(join(parent,".lock.unregistered"),{mode:0o700});
+  assert.throws(()=>listRetainedProductionRunners(parent),/unknown release history entry/);
 });
