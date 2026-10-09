@@ -112,3 +112,19 @@ for (const scenario of ["on", "omitted", "malformed", "ceiling", "none", "invali
     else expect(request).not.toHaveProperty("delivery_policy");
   });
 }
+
+test("built conflict announcement requires a deliberate new choice", async ({ page }) => {
+  await page.goto(loop.url);
+  await page.locator('button[aria-label$="の詳細を開く"]').first().dispatchEvent("click");
+  const control = page.getByRole("region", { name: "実行中の割込配送" });
+  const checkbox = control.getByRole("checkbox", { name: "割込配送を許可する" });
+  await expect(checkbox).toBeEnabled();
+  loop.state.policy = { ...deliveryView, policy: "off", revision: 2, applied_revision: 2 };
+  await checkbox.uncheck();
+  await expect(control.getByRole("status")).toContainText("選び直してください");
+  await expect(checkbox).not.toBeChecked();
+  expect(loop.frames.filter(f => f[3] === "set_delivery_policy")).toHaveLength(1);
+  await checkbox.check();
+  await expect.poll(() => loop.frames.filter(f => f[3] === "set_delivery_policy").length).toBe(2);
+  expect(loop.frames.filter(f => f[3] === "set_delivery_policy")[1]![4]).toMatchObject({ expected_revision: 2, policy: "on" });
+});
