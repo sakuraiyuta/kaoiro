@@ -35,7 +35,8 @@ test("a new fixture maps an owned manager command before the shared safety bound
 test("the guard survives the product's NODE_OPTIONS-free Node child environment", () => {
   const helper = fileURLToPath(new URL("../child-process-environment.mjs", import.meta.url));
   const result = spawnChildSync("git", process.execPath, ["--input-type=module", "-e",
-    `import {execChildSync} from ${JSON.stringify(helper)}; execChildSync('systemd','systemd-run',['--version']);`], { encoding: "utf8" });
+    `if(!globalThis[Symbol.for('kaoiro.test.host-systemd-guard')]) throw new Error('guard propagation missing');
+     const {execChildSync}=await import(${JSON.stringify(helper)}); execChildSync('systemd','systemd-run',['--version']);`], { encoding: "utf8" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /ERR_TEST_HOST_SYSTEMD/);
 });
