@@ -239,6 +239,7 @@ export async function runAntigravityCli(
         dirty: buildInfo.dirty,
         version: buildInfo.version,
         channel: buildInfo.channel,
+        ...(buildInfo.branch === undefined ? {} : { branch: buildInfo.branch }),
       },
     }) as WhoamiSnapshot,
   });

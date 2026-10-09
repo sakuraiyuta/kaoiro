@@ -734,6 +734,7 @@ export function buildRegister(
             : {
                 build_version: safeBuildInfo.version,
                 build_channel: safeBuildInfo.channel,
+                ...(safeBuildInfo.branch === undefined ? {} : { build_branch: safeBuildInfo.branch }),
               }),
         }),
     ...(safeAntigravityCliVersion === undefined

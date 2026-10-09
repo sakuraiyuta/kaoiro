@@ -36,6 +36,7 @@ import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
+import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
@@ -71,6 +72,14 @@ function fail(message, exitCode = 1, extra) {
   const err = new DeployError(message, exitCode);
   if (extra) Object.assign(err, extra);
   throw err;
+}
+
+function compatibleFleet(input) {
+  try {
+    return requireFleetCompatibility(input);
+  } catch (error) {
+    fail(error.message, error.exitCode ?? 78);
+  }
 }
 
 function gitOutput(args, cwd) {
@@ -1216,6 +1225,7 @@ const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"])
 const BOOL_FLAGS = new Map([
   ["--dry-run", "dryRun"],
   ["--maintenance-approved", "maintenanceApproved"],
+  ["--fleet-stopped", "fleetStopped"],
   ["--confirm-restore", "confirmRestore"],
   ["--initialize", "initialize"],
 ]);
@@ -2238,9 +2248,11 @@ export function runUpdate(flags, config) {
       "recovery",
     );
     requirePlanIdentityMatch(recoveryPlan, targetPlan);
-    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED,
-      journal.policy_store_placement === undefined ? {} : { policy_store_placement: journal.policy_store_placement },
-      validateJournalAgainstStateMachine);
+    if (journal.phase !== PHASE.MAINTENANCE_GATE_PASSED) {
+      journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED,
+        journal.policy_store_placement === undefined ? {} : { policy_store_placement: journal.policy_store_placement },
+        validateJournalAgainstStateMachine);
+    }
 
     // クロエ round 1 review N-5: pulled here, before the stop window
     // opens — not implicitly by the first `docker run alpine ...` the
@@ -2256,7 +2268,9 @@ export function runUpdate(flags, config) {
     // distinguishable from "the gate passed but stop was never
     // attempted" (a crash before this line would still show
     // MAINTENANCE_GATE_PASSED).
-    journal = advancePhase(dir, journal, PHASE.STOPPING, {}, validateJournalAgainstStateMachine);
+    const fleetCompatibility = compatibleFleet({ bin, targetImageId: buildResult.imageId,
+      targetRevision: target, containerId: oldContainerId, fleetStopped: flags.fleetStopped === true });
+    journal = advancePhase(dir, journal, PHASE.STOPPING, { fleet_compatibility: fleetCompatibility }, validateJournalAgainstStateMachine);
 
     // --- commit: from here on the service is stopped. Everything above
     // this line is documented as no-downtime in runUpdate's own doc
@@ -2717,6 +2731,11 @@ export function runRollback(flags, config) {
       );
     }
 
+    const liveContainers = flags.fleetStopped === true ? [] : dockerComposeContainerIds(bin, serverDir, SERVICE);
+    if (liveContainers.length > 1) fail("build identity guard requires one live server container", 78);
+    const fleetCompatibility = compatibleFleet({ bin, targetImageId: oldImageId,
+      targetRevision: oldSha, containerId: liveContainers[0], fleetStopped: flags.fleetStopped === true });
+
     if (!destructive) {
       runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
       const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
@@ -2732,7 +2751,7 @@ export function runRollback(flags, config) {
       // and "genuinely stopped" (STOPPING..ARCHIVED), and this call is
       // correct either way without needing to distinguish them.
       runDocker(bin, ["start", preflightContainer]);
-      journal = advancePhase(dir, journal, PHASE.ROLLED_BACK, {}, validateJournalAgainstStateMachine);
+      journal = advancePhase(dir, journal, PHASE.ROLLED_BACK, { fleet_compatibility: fleetCompatibility }, validateJournalAgainstStateMachine);
       return {
         command: "rollback",
         phase: "rolled_back",

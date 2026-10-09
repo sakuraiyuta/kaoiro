@@ -52,7 +52,6 @@ const SENTINELS = [
 ];
 
 const REVISION_RE = /^[0-9a-f]{40}$/;
-const VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 const EXACT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 class VerifyError extends Error {}
@@ -112,8 +111,34 @@ function isValidBuiltAt(value) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
+function isLandingBuildVersion(value) {
+  if (typeof value !== "string") return false;
+  const match = /^(2[0-9]{3}|[3-9][0-9]{3})\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])\.([1-9][0-9]{0,5})$/.exec(value);
+  if (!match || match[0] !== value) return false;
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+
 function isValidBuildVersion(value) {
-  return value === "unknown" || (typeof value === "string" && VERSION_RE.test(value));
+  if (value === "unknown" || value === "untagged") return true;
+  if (typeof value !== "string") return false;
+  return isLandingBuildVersion(value) || /^\d{4}\.(?:[1-9]|1[0-2])\.\d{1,6}$/.exec(value)?.[0] === value;
+}
+
+function isValidBuildBranch(value) {
+  if (typeof value !== "string" || value.length === 0 ||
+      new TextEncoder().encode(value).length > 256 || value === "@" ||
+      value.startsWith("-") || value.endsWith(".") ||
+      /[\x00-\x20\x7f~^:?*\[\\]/.test(value) ||
+      value.includes("..") || value.includes("@{")) return false;
+  return value.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+function hasValidBuildBranch(version, branch) {
+  return branch === undefined
+    ? !isLandingBuildVersion(version) && version !== "untagged"
+    : isValidBuildBranch(branch);
 }
 
 function isValidBuildChannel(value) {
@@ -122,10 +147,12 @@ function isValidBuildChannel(value) {
 
 function isBuildIdentityConsistent(value) {
   return (
-    value.channel !== "release" ||
+    hasValidBuildBranch(value.version, value.branch) &&
+    (!isLandingBuildVersion(value.version) || (value.dirty === false && value.revision !== "unknown")) &&
+    (value.channel !== "release" ||
     (value.dirty === false &&
       value.revision !== "unknown" &&
-      value.version !== "unknown")
+      value.version !== "unknown" && value.version !== "untagged"))
   );
 }
 
@@ -139,6 +166,7 @@ function isBuildInfoShape(value) {
     typeof value.dirty === "boolean" &&
     typeof value.built_at === "string" &&
     isValidBuiltAt(value.built_at) &&
+    hasValidBuildBranch(value.version, value.branch) &&
     hasVersion === hasChannel &&
     (!hasVersion ||
       (isValidBuildVersion(value.version) &&

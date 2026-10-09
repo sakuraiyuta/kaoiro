@@ -170,6 +170,7 @@ export interface WrapperBuildInfoPayload {
   build_dirty: boolean;
   build_version: string;
   build_channel: "dev" | "release";
+  build_branch?: string;
 }
 
 /** Nested, allow-listed wrapper identity exposed by peer directory tools. */
@@ -178,6 +179,7 @@ export interface WrapperBuildIdentity {
   dirty: boolean;
   version: string;
   channel: WrapperBuildInfoPayload["build_channel"];
+  branch?: string;
 }
 
 /** Assigned persona (protocol.md / ADR-0003). Under the server-集約 SoT
@@ -1488,6 +1490,7 @@ export interface RunnerRegister {
    *  are optional as a pair for pre-#288 runner compatibility. */
   build_version?: string;
   build_channel?: "dev" | "release";
+  build_branch?: string;
   /** Current Antigravity CLI `agy --version` output (issue #410). Optional
    *  for older runners, disabled Antigravity, or an unavailable/invalid
    *  version probe; informational only. */

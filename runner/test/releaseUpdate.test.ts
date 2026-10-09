@@ -36,6 +36,7 @@
 // catch a worker that died of a broken pipe or an inherited signal
 // disposition, not because it establishes self-stop safety.
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import {
   chmodSync,
   existsSync,
@@ -159,6 +160,37 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
   });
 
   const goodExecStart = () => `${root}/current/deploy/kaoiro-runner-launch.sh`;
+
+  it.each([true, false])("checks the live server format before stop (supported=%s)", async (supported) => {
+    const server = createServer((_request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ status: "ok", build_identity_formats: supported
+        ? ["legacy-calver", "landing-calver-v1"] : ["legacy-calver"] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing loopback address");
+      const config = join(dir, "runner.config.json");
+      writeFileSync(config, JSON.stringify({ server_url: `ws://127.0.0.1:${address.port}/runner` }));
+      const archive = makeReleaseTarball(work, B, { buildVersion: "2026.10.09.2", buildBranch: "develop" });
+      const result = await new Promise<{ status: number | null; stderr: string }>((resolve) => {
+        const child = spawn(updateScript, ["--install-dir", root, "--service", SERVICE, "--tarball", archive], {
+          env: { ...process.env, KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+            KAOIRO_RUNNER_CONFIG: config, KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_RUNNER_ENV: join(dir, "absent.env") },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+        child.on("close", (status) => resolve({ status, stderr }));
+      });
+      expect(result.status, result.stderr).toBe(supported ? 0 : 78);
+      expect(readCalls().some((line) => line.includes(" stop "))).toBe(supported);
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${supported ? B : A}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
 
   describe("--detach の systemd-run 起動契約", () => {
     it("caller から独立させる引数で queue し、自分では作業しない", () => {
@@ -587,6 +619,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     // systemctl is not the postcondition; what `current` answers is.
     const archive = makeReleaseTarball(work, B, {
       cliVersionOverride: revisionOf("something-else"),
+      cliBuildInfoOverride: { revision: revisionOf("something-else") },
     });
 
     const result = runUpdate(["--tarball", archive], {
@@ -603,7 +636,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     // that changes the operator-facing wording is checked by a script that
     // has never seen it. #288 did exactly that and a correct rollout exited
     // 70 with rollback instructions (issue #290). The wording below is one
-    // this script has no knowledge of; only the revision inside it matters.
+    // this script has no knowledge of; the separate machine identity attests the revision.
     const archive = makeReleaseTarball(work, B, {
       cliVersionOverride: `kaoiro runner (build ${B.slice(0, 7)}, dev)`,
     });
@@ -617,7 +650,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
 
   it("pre-#288 の bare な revision 表記も受け入れる", () => {
     // A downgrade lands an artifact whose --version predates the label.
-    const archive = makeReleaseTarball(work, B, { cliVersionOverride: B });
+    const archive = makeReleaseTarball(work, B, { cliVersionOverride: B, legacyCli: true });
 
     const result = runUpdate(["--tarball", archive], {
       KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
@@ -633,6 +666,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     const other = revisionOf("something-else");
     const archive = makeReleaseTarball(work, B, {
       cliVersionOverride: `kaoiro dev runner v2026.9.0 / ${other.slice(0, 7)}`,
+      cliBuildInfoOverride: { revision: other },
     });
 
     const result = runUpdate(["--tarball", archive], {
@@ -643,11 +677,11 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     expect(result.stderr).toContain("did NOT reach a good state");
   });
 
-  it("revision を含まない表記は fail closed で拒否する", () => {
-    // A label that drops the hash leaves nothing to verify against, so the
-    // check must refuse rather than pass on the version number alone.
+  it("machine identity の revision が unknown なら拒否する", () => {
+    // The human label cannot compensate for missing machine provenance.
     const archive = makeReleaseTarball(work, B, {
       cliVersionOverride: "kaoiro dev runner v2026.9.0",
+      cliBuildInfoOverride: { revision: "unknown" },
     });
 
     const result = runUpdate(["--tarball", archive], {
@@ -748,50 +782,28 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
   });
 });
 
-describe("kaoiro_identity_attests_revision (issue #290)", () => {
-  const commonScript = fileURLToPath(
-    new URL("../deploy/kaoiro-runner-common.sh", import.meta.url),
-  );
+describe("full machine revision attestation", () => {
+  const commonScript = fileURLToPath(new URL("../deploy/kaoiro-runner-common.sh", import.meta.url));
   const revision = "0123456789abcdef0123456789abcdef01234567";
-  const short = revision.slice(0, 7);
+  const info = { revision, dirty: false, built_at: "unknown", version: "2026.10.09.1", channel: "dev", branch: "develop" };
+  const attests = (reported: unknown, expected = revision): boolean => spawnSync("sh", [
+    "-c", 'deploy_dir=$(dirname "$1"); . "$1"; kaoiro_identity_attests_revision "$2" "$3"',
+    "sh", commonScript, typeof reported === "string" ? reported : JSON.stringify(reported), expected,
+  ], { encoding: "utf8" }).status === 0;
 
-  /** Calls the predicate in a real `sh`, the way its callers source it. */
-  const attests = (reported: string, id: string): boolean =>
-    spawnSync(
-      "sh",
-      [
-        "-c",
-        '. "$1" && kaoiro_identity_attests_revision "$2" "$3"',
-        "sh",
-        commonScript,
-        reported,
-        id,
-      ],
-      { encoding: "utf8" },
-    ).status === 0;
-
-  it("表記に依らず revision を名指すトークンを見つける", () => {
-    expect(attests(`kaoiro dev runner v2026.9.0 / ${short}`, revision)).toBe(true);
-    expect(attests(revision, revision)).toBe(true);
-    expect(attests(`kaoiro runner (build ${revision.slice(0, 12)})`, revision)).toBe(true);
+  it("compares the complete machine revision", () => {
+    expect(attests(info)).toBe(true);
+    expect(attests({ ...info, revision: "0123456" + "f".repeat(33) })).toBe(false);
   });
-
-  it("別 revision・hash 無し・空出力はいずれも拒否する", () => {
-    expect(attests("kaoiro dev runner v2026.9.0 / fedcba9", revision)).toBe(false);
-    expect(attests("kaoiro dev runner v2026.9.0", revision)).toBe(false);
-    expect(attests("", revision)).toBe(false);
-    // Adjacency FUSES tokens, so a hex character written flush against the
-    // short hash is no longer a prefix of the revision. That is why the
-    // producer side (build_info.test.ts) asserts the delimiters rather than
-    // mere containment.
-    expect(attests(`kaoiro runner build b${short}`, revision)).toBe(false);
+  it("does not use a hash embedded in a branch or human label", () => {
+    expect(attests({ ...info, branch: revision, revision: "f".repeat(40) })).toBe(false);
+    expect(attests(`v2026.10.09.1 / ${revision} / 0123456`)).toBe(false);
+    expect(attests("")).toBe(false);
   });
-
-  it("unknown な release は commit を名乗る報告を受け入れない", () => {
-    // formatBuildIdentity renders a missing VERSION as `vunknown` while the
-    // revision stays intact, so an artifact naming a real commit must not
-    // attest a directory that claims none.
-    expect(attests("kaoiro dev runner vunknown / unknown", "unknown")).toBe(true);
-    expect(attests(`kaoiro dev runner vunknown / ${short}`, "unknown")).toBe(false);
+  it("rejects dirty, invalid and partial machine records", () => {
+    expect(attests({ ...info, dirty: true })).toBe(false);
+    expect(attests({ ...info, version: "2026.02.30.1" })).toBe(false);
+    expect(attests({ ...info, branch: undefined })).toBe(false);
+    expect(attests({ ...info, built_at: "2026-99-99T00:00:00.000Z" })).toBe(false);
   });
 });

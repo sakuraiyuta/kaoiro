@@ -94,7 +94,7 @@ if [ "${1:-}" = "--version" ]; then
   entry="$deploy_dir/../dist/cli.js"
   [ -f "$entry" ] ||
     die_config "runner not built: $entry (run 'pnpm -C runner build')"
-  exec "$node_bin" "$entry" --version
+  exec "$node_bin" "$entry" "$@"
 fi
 
 # A missing config is the first-run case. Point at the wizard rather than

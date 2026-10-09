@@ -51,6 +51,8 @@ defmodule KaoiroServerWeb.HealthController do
       status: "ok",
       build_version: identity.version,
       build_channel: identity.channel,
+      build_branch: Map.get(identity, :branch, "unknown"),
+      build_identity_formats: BuildIdentity.supported_formats(),
       build_revision: identity.revision,
       build_dirty: identity.dirty,
       protocol_version: @protocol_version
@@ -71,9 +73,18 @@ defmodule KaoiroServerWeb.HealthController do
             "channel" => channel,
             "revision" => revision,
             "dirty" => dirty
-          }} <- Jason.decode(raw),
-         true <- BuildIdentity.valid_identity?(revision, dirty, version, channel) do
-      %{version: version, channel: channel, revision: revision, dirty: dirty}
+          } = parsed} <- Jason.decode(raw),
+         true <-
+           not Map.has_key?(parsed, "branch") or BuildIdentity.valid_branch?(parsed["branch"]),
+         true <-
+           BuildIdentity.valid_identity?(revision, dirty, version, channel, parsed["branch"]) do
+      %{
+        version: version,
+        channel: channel,
+        revision: revision,
+        dirty: dirty,
+        branch: Map.get(parsed, "branch", "unknown")
+      }
     else
       _ -> %{version: "unknown", channel: "dev", revision: "unknown", dirty: false}
     end

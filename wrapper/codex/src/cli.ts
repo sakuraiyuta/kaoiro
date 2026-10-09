@@ -641,6 +641,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         dirty: buildInfo.dirty,
         version: buildInfo.version,
         channel: buildInfo.channel,
+        ...(buildInfo.branch === undefined ? {} : { branch: buildInfo.branch }),
       },
     }),
   });

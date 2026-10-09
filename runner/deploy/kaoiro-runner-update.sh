@@ -351,6 +351,9 @@ fi
 install_args=""
 [ "$allow_dirty" = no ] || install_args="--allow-dirty"
 
+kaoiro_preflight_build_format "$root/releases/$id" ||
+  kaoiro_die "Target build format refused before stopping the runner" 78
+
 # --- commit: from here on a stop may interrupt the source.
 
 source_was_active=no
@@ -386,8 +389,8 @@ abort_before_switch() {
     esac
     kaoiro_codex_state restart-source-verify "$root" "$codex_transaction" >/dev/null ||
       kaoiro_die "$reason; source restart verification failed; transaction $codex_transaction" "$abort_status"
-    source_running=$("$root/current/deploy/kaoiro-runner-launch.sh" --version 2>/dev/null || true)
-    kaoiro_identity_attests_revision "$source_running" "${source_id%-dirty}" ||
+    source_running=$(kaoiro_read_machine_identity "$root/current" "${source_id%-dirty}" "$allow_dirty" 2>/dev/null || true)
+    kaoiro_identity_attests_revision "$source_running" "${source_id%-dirty}" "$allow_dirty" ||
       kaoiro_die "$reason; source identity verification failed; transaction $codex_transaction" "$abort_status"
     kaoiro_die "$reason; $recovery_message; transaction $codex_transaction" "$abort_status"
   fi
@@ -449,13 +452,13 @@ start_failed=no
 # Read the identity back through `current`, the same path the unit launches
 # through. Comparing against what we installed is what turns "the commands
 # exited 0" into "the host is serving the release we meant".
-running=$("$root/current/deploy/kaoiro-runner-launch.sh" --version 2>/dev/null || true)
+running=$(kaoiro_read_machine_identity "$root/current" "${id%-dirty}" "$allow_dirty" 2>/dev/null || true)
 
 # `$id` is the release-directory identity (`<revision>[-dirty]`); what the
 # artifact reports is its own wording of the same revision, so the check is
 # attestation, not string equality — see kaoiro_identity_attests_revision.
 if [ "$start_failed" = yes ] ||
-  ! kaoiro_identity_attests_revision "$running" "${id%-dirty}"; then
+  ! kaoiro_identity_attests_revision "$running" "${id%-dirty}" "$allow_dirty"; then
   printf '%s: update did NOT reach a good state\n' "$prog" >&2
   printf '%s:   requested release: %s\n' "$prog" "$id" >&2
   printf '%s:   current reports:   %s\n' "$prog" "${running:-<unreadable>}" >&2

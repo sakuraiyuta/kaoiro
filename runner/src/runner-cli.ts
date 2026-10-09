@@ -162,13 +162,13 @@ export async function runRunnerCli(
   const createRunnerLink = dependencies.createRunnerLink
     ?? ((serverUrl, hostId, options) => new RunnerLink(serverUrl, hostId, options));
   const watchConfig = dependencies.watchRunnerConfig ?? watchRunnerConfig;
-  const { configPath, version } = parseArgs(argv);
+  const { configPath, version, json } = parseArgs(argv);
   // issue #218: checked BEFORE loadRunnerConfig — a first-run host with no
   // config yet (setup wizard not run) must still be able to answer
   // --version, and it must never touch the network.
   const buildInfo = loadBuildInfo();
   if (version) {
-    process.stdout.write(`${formatBuildIdentity(buildInfo)}\n`);
+    process.stdout.write(`${json ? JSON.stringify(buildInfo) : formatBuildIdentity(buildInfo)}\n`);
     return;
   }
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #135) — applied here

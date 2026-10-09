@@ -63,6 +63,11 @@ if (process.argv.includes("--version")) {
   const version = typeof info.version === "string" ? info.version : "unknown";
   const channel = info.channel === "release" ? "release" : "dev";
   const shortHash = revision === "unknown" ? "unknown" : revision.slice(0, 7);
+  if (process.argv.includes("--json") && !@@LEGACY_CLI@@) {
+    const machine = { ...info, ...@@MACHINE_OVERRIDE@@ };
+    process.stdout.write(JSON.stringify(machine) + "\\n");
+    process.exit(0);
+  }
   process.stdout.write(
     (override || \`kaoiro \${channel} runner v\${version} / \${shortHash}\`) +
       "\\n",
@@ -117,12 +122,15 @@ export interface ReleaseTreeOptions {
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
   buildVersion?: string;
+  buildBranch?: string;
   dirty?: boolean;
   channel?: "dev" | "release";
   /** Makes the stub cli's `--version` report this instead of the tree's own
    *  identity — the only way left to stage a running artifact that disagrees
    *  with its release directory. */
   cliVersionOverride?: string;
+  cliBuildInfoOverride?: Record<string, unknown>;
+  legacyCli?: boolean;
   /** Skip MANIFEST.json generation — for the "release built by an older
    *  installer" / dev-checkout cases. */
   manifest?: false;
@@ -182,7 +190,9 @@ export function writeReleaseTree(
   put(
     "dist/cli.js",
     (options.cliPrelude ?? "") +
-      STUB_CLI.replace("@@VERSION_OVERRIDE@@", options.cliVersionOverride ?? ""),
+      STUB_CLI.replace("@@VERSION_OVERRIDE@@", options.cliVersionOverride ?? "")
+        .replace("@@MACHINE_OVERRIDE@@", JSON.stringify(options.cliBuildInfoOverride ?? {}))
+        .replace("@@LEGACY_CLI@@", String(options.legacyCli ?? false)),
   );
   put("dist/stub_dep.js", STUB_DEP);
   put(
@@ -193,6 +203,7 @@ export function writeReleaseTree(
       built_at: "2026-08-16T00:00:00.000Z",
       version: options.buildVersion ?? "2026.9.0",
       channel: options.channel ?? "dev",
+      ...(options.buildBranch === undefined ? {} : { branch: options.buildBranch }),
     }),
   );
   // The wrappers are real PACKAGES here, not two lone files, and a shared
@@ -275,6 +286,7 @@ export function writeReleaseTree(
       built_at: "2026-08-16T00:00:00.000Z",
       version: options.buildVersion ?? "2026.9.0",
       channel: options.channel ?? "dev",
+      ...(options.buildBranch === undefined ? {} : { branch: options.buildBranch }),
     }),
   );
   put(

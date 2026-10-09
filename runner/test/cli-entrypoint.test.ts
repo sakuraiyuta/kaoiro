@@ -59,6 +59,14 @@ describe("runner CLI built entry point", () => {
     ]);
   });
 
+  it("prints the full baked machine identity without loading config", () => {
+    const result = run(cli, ["--version", "--json"], root);
+    expect(result.status).toBe(0);
+    const identity = JSON.parse(result.stdout);
+    expect(identity.revision).toMatch(/^[0-9a-f]{40}$/);
+    expect(typeof identity.dirty).toBe("boolean");
+  });
+
   it("fails loudly for a missing config through every built entry", () => {
     const missingConfig = join(root, "missing-runner.config.json");
     for (const { name, path } of entries) {

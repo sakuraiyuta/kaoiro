@@ -19,6 +19,35 @@ defmodule KaoiroServer.BuildIdentity do
 
   @revision_re ~r/\A[0-9a-f]{40}\z/
   @version_re ~r/\A\d{4}\.(?:[1-9]|1[0-2])\.\d{1,6}\z/
+  @landing_re ~r/\A(2[0-9]{3}|[3-9][0-9]{3})\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])\.([1-9][0-9]{0,5})\z/
+
+  def supported_formats, do: ["legacy-calver", "landing-calver-v1"]
+
+  def landing_version?(value) when is_binary(value) do
+    case Regex.run(@landing_re, value) do
+      [_, year, month, day, _] ->
+        match?({:ok, _}, Date.from_iso8601("#{year}-#{month}-#{day}"))
+
+      _ ->
+        false
+    end
+  end
+
+  def landing_version?(_), do: false
+
+  def requires_branch?(version), do: landing_version?(version) or version == "untagged"
+
+  def valid_branch?(value) when is_binary(value) do
+    byte_size(value) in 1..256 and value != "@" and
+      not String.starts_with?(value, "-") and not String.ends_with?(value, ".") and
+      not Regex.match?(~r/[\x00-\x20\x7f~^:?*\[\\]/, value) and
+      not String.contains?(value, ["..", "@{"]) and
+      Enum.all?(String.split(value, "/"), fn part ->
+        part != "" and not String.starts_with?(part, ".") and not String.ends_with?(part, ".lock")
+      end)
+  end
+
+  def valid_branch?(_), do: false
 
   @doc "True for the literal \"unknown\" or a lowercase 40-hex-digit SHA."
   @spec valid_revision?(term()) :: boolean()
@@ -28,8 +57,8 @@ defmodule KaoiroServer.BuildIdentity do
 
   @doc "True for a CalVer project version in YYYY.M.PATCH form or unknown."
   @spec valid_version?(term()) :: boolean()
-  def valid_version?("unknown"), do: true
-  def valid_version?(v) when is_binary(v), do: Regex.match?(@version_re, v)
+  def valid_version?(value) when value in ["unknown", "untagged"], do: true
+  def valid_version?(v) when is_binary(v), do: Regex.match?(@version_re, v) or landing_version?(v)
   def valid_version?(_), do: false
 
   @doc "True for a supported build channel."
@@ -39,12 +68,17 @@ defmodule KaoiroServer.BuildIdentity do
 
   @doc "True when a release also has clean, known provenance."
   @spec valid_identity?(term(), term(), term(), term()) :: boolean()
-  def valid_identity?(revision, dirty, version, channel) do
+  def valid_identity?(revision, dirty, version, channel, branch \\ nil) do
     is_boolean(dirty) and
       valid_revision?(revision) and
       valid_version?(version) and
       valid_channel?(channel) and
+      if(requires_branch?(version),
+        do: valid_branch?(branch),
+        else: branch == nil or valid_branch?(branch)
+      ) and
+      (not landing_version?(version) or (dirty == false and revision != "unknown")) and
       (channel != "release" or
-         (dirty == false and revision != "unknown" and version != "unknown"))
+         (dirty == false and revision != "unknown" and version not in ["unknown", "untagged"]))
   end
 end

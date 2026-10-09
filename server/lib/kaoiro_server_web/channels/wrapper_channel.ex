@@ -1860,18 +1860,28 @@ defmodule KaoiroServerWeb.WrapperChannel do
     |> maybe_put_optional_field("inter_agent_delivery", delivery)
   end
 
-  defp maybe_put_build_identity(entry, %{
-         "build_revision" => revision,
-         "build_dirty" => dirty,
-         "build_version" => version,
-         "build_channel" => channel
-       }) do
-    Map.put(entry, "build", %{
+  defp maybe_put_build_identity(
+         entry,
+         %{
+           "build_revision" => revision,
+           "build_dirty" => dirty,
+           "build_version" => version,
+           "build_channel" => channel
+         } = info
+       ) do
+    build = %{
       "revision" => revision,
       "dirty" => dirty,
       "version" => version,
       "channel" => channel
-    })
+    }
+
+    build =
+      if Map.has_key?(info, "build_branch"),
+        do: Map.put(build, "branch", info["build_branch"]),
+        else: build
+
+    Map.put(entry, "build", build)
   end
 
   defp maybe_put_build_identity(entry, _), do: entry

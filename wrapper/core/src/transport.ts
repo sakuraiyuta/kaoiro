@@ -1910,6 +1910,7 @@ export class ServerLink {
             build_dirty: buildInfo.dirty,
             build_version: buildInfo.version,
             build_channel: buildInfo.channel,
+            ...(buildInfo.branch === undefined ? {} : { build_branch: buildInfo.branch }),
           });
         }
         this.#historyJoinGeneration += 1;

@@ -703,6 +703,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         dirty: buildInfo.dirty,
         version: buildInfo.version,
         channel: buildInfo.channel,
+        ...(buildInfo.branch === undefined ? {} : { branch: buildInfo.branch }),
       },
     }),
   });

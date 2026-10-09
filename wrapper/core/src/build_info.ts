@@ -5,12 +5,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./build_identity_domain.js";
 
 export interface WrapperBuildInfo {
   revision: string;
   dirty: boolean;
   version: string;
   channel: "dev" | "release";
+  branch?: string;
 }
 
 const UNKNOWN_WRAPPER_BUILD_INFO: WrapperBuildInfo = {
@@ -21,15 +23,16 @@ const UNKNOWN_WRAPPER_BUILD_INFO: WrapperBuildInfo = {
 };
 
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
-const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 /** A release label is valid only when its provenance fields prove it. */
 export function isWrapperBuildInfoConsistent(
-  info: Pick<WrapperBuildInfo, "revision" | "dirty" | "version" | "channel">,
+  info: Pick<WrapperBuildInfo, "revision" | "dirty" | "version" | "channel" | "branch">,
 ): boolean {
   return (
-    info.channel !== "release" ||
-    (!info.dirty && info.revision !== "unknown" && info.version !== "unknown")
+    hasValidBuildBranch(info.version, info.branch) &&
+    (!isLandingBuildVersion(info.version) || (!info.dirty && info.revision !== "unknown")) &&
+    (info.channel !== "release" ||
+      (!info.dirty && info.revision !== "unknown" && info.version !== "unknown" && info.version !== "untagged"))
   );
 }
 
@@ -55,13 +58,15 @@ export function isWrapperBuildIdentityValid(value: unknown): value is WrapperBui
     (raw.revision === "unknown" || BUILD_REVISION_RE.test(raw.revision)) &&
     typeof raw.dirty === "boolean" &&
     typeof raw.version === "string" &&
-    (raw.version === "unknown" || BUILD_VERSION_RE.test(raw.version)) &&
+    isValidBuildVersion(raw.version) &&
+    hasValidBuildBranch(raw.version, raw.branch) &&
     (raw.channel === "dev" || raw.channel === "release") &&
     isWrapperBuildInfoConsistent({
       revision: raw.revision,
       dirty: raw.dirty,
       version: raw.version,
       channel: raw.channel,
+      ...(raw.branch === undefined ? {} : { branch: raw.branch as string }),
     })
   );
 }
@@ -96,5 +101,6 @@ export function loadWrapperBuildInfo(
     dirty: parsed.dirty,
     version: parsed.version,
     channel: parsed.channel,
+    ...(parsed.branch === undefined ? {} : { branch: parsed.branch }),
   };
 }

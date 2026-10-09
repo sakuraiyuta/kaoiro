@@ -107,4 +107,32 @@ defmodule KaoiroServer.BuildIdentityTest do
       assert BuildIdentity.valid_identity?("unknown", true, "unknown", "dev")
     end
   end
+
+  test "cross-language calendar and branch corpus" do
+    corpus =
+      Path.expand("../../../scripts/fixtures/build-identity-domain.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    for value <- corpus["valid_versions"],
+        do: assert(BuildIdentity.valid_version?(value), inspect(value))
+
+    for value <- corpus["invalid_versions"],
+        do: refute(BuildIdentity.valid_version?(value), inspect(value))
+
+    for value <- corpus["valid_branches"],
+        do: assert(BuildIdentity.valid_branch?(value), inspect(value))
+
+    for value <- corpus["invalid_branches"],
+        do: refute(BuildIdentity.valid_branch?(value), inspect(value))
+  end
+
+  test "landing versions require clean complete branch provenance" do
+    revision = String.duplicate("a", 40)
+    assert BuildIdentity.valid_identity?(revision, false, "2026.10.09.1", "dev", "develop")
+    refute BuildIdentity.valid_identity?(revision, false, "2026.10.09.1", "dev")
+    refute BuildIdentity.valid_identity?(revision, true, "2026.10.09.1", "dev", "develop")
+    refute BuildIdentity.valid_identity?(revision, false, "untagged", "release", "develop")
+    assert BuildIdentity.valid_identity?(revision, false, "2026.9.0", "dev")
+  end
 end

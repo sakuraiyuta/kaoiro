@@ -8,6 +8,7 @@ export interface RunnerCliArgs {
   /** issue #218/#288: `--version` prints the build identity and exits, without
    *  touching config / network. */
   version: boolean;
+  json?: boolean;
 }
 
 // Positional [configPath], defaulting to runner.config.json in the cwd.
@@ -15,10 +16,11 @@ export function parseRunnerArgs(argv: string[]): RunnerCliArgs {
   const { positionals, values } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { version: { type: "boolean", default: false } },
+    options: { version: { type: "boolean", default: false }, json: { type: "boolean" } },
   });
   return {
     configPath: positionals[0] ?? "runner.config.json",
     version: values.version === true,
+    ...(values.json === true ? { json: true } : {}),
   };
 }

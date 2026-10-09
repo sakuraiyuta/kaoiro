@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./build_identity_domain.js";
 
 export interface BuildInfo {
   /** Full 40-char git SHA the running dist/ was built from, or "unknown"
@@ -34,6 +35,7 @@ export interface BuildInfo {
   version?: string;
   /** Build channel derived from git state and the matching release tag. */
   channel?: "dev" | "release";
+  branch?: string;
 }
 
 const UNKNOWN_BUILD_INFO: BuildInfo = {
@@ -51,7 +53,6 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
  *  pnpm-deploy-pruned package boundary at runtime (see the module doc
  *  comment above). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
-const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 /** Value domain for `built_at` (issue #218 round 4, ふじ 差し戻し): the
  *  exact `new Date().toISOString()` value generate-build-info.mjs
@@ -69,22 +70,20 @@ function isValidBuiltAt(value: string): boolean {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
-function isValidBuildVersion(value: unknown): value is string {
-  return value === "unknown" || (typeof value === "string" && BUILD_VERSION_RE.test(value));
-}
-
 function isValidBuildChannel(value: unknown): value is "dev" | "release" {
   return value === "dev" || value === "release";
 }
 
 /** A release label is meaningful only when its provenance fields prove it. */
 export function isBuildInfoConsistent(
-  info: Pick<BuildInfo, "revision" | "dirty" | "version" | "channel">,
+  info: Pick<BuildInfo, "revision" | "dirty" | "version" | "channel" | "branch">,
 ): boolean {
   if (info.channel === undefined || info.version === undefined) return true;
   return (
-    info.channel !== "release" ||
-    (!info.dirty && info.revision !== "unknown" && info.version !== "unknown")
+    hasValidBuildBranch(info.version, info.branch) &&
+    (!isLandingBuildVersion(info.version) || (!info.dirty && info.revision !== "unknown")) &&
+    (info.channel !== "release" ||
+      (!info.dirty && info.revision !== "unknown" && info.version !== "unknown" && info.version !== "untagged"))
   );
 }
 
@@ -99,6 +98,7 @@ function isBuildInfoShape(value: unknown): value is BuildInfo {
     typeof v.dirty === "boolean" &&
     typeof v.built_at === "string" &&
     isValidBuiltAt(v.built_at) &&
+    hasValidBuildBranch(v.version, v.branch) &&
     hasVersion === hasChannel &&
     (!hasVersion ||
       (isValidBuildVersion(v.version) &&
@@ -108,6 +108,7 @@ function isBuildInfoShape(value: unknown): value is BuildInfo {
           dirty: v.dirty as boolean,
           version: v.version as string,
           channel: v.channel as "dev" | "release",
+          ...(v.branch === undefined ? {} : { branch: v.branch as string }),
         })))
   );
 }

@@ -133,6 +133,11 @@ defmodule KaoiroServer.HostRegistry do
         last_heartbeat: now
       }
 
+      entry =
+        if Map.has_key?(attrs, :build_branch),
+          do: Map.put(entry, :build_branch, attrs.build_branch),
+          else: entry
+
       {:reply, :ok, Map.put(state, host_id, entry)}
     end
   end

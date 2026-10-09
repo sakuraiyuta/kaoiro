@@ -1,3 +1,4 @@
+import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./buildIdentityDomain";
 // kaoiro public-protocol client — plain TS, no Svelte dependency
 // (ADR-0007). Speaks Phoenix Channels (vsn=2.0.0 via the official client,
 // ADR-0009) and consumes the same API as any external client: join
@@ -2320,14 +2321,9 @@ export async function fetchAuthMethods(
  *  were a real revision (spoofing prevention, same posture as the
  *  `typeof` guards elsewhere in this file). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
-const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 function isValidBuildRevision(value: unknown): value is string {
   return value === "unknown" || (typeof value === "string" && BUILD_REVISION_RE.test(value));
-}
-
-function isValidBuildVersion(value: unknown): value is string {
-  return value === "unknown" || (typeof value === "string" && BUILD_VERSION_RE.test(value));
 }
 
 function isValidBuildChannel(value: unknown): value is "dev" | "release" {
@@ -2348,10 +2344,13 @@ function isConsistentBuildIdentity(
   dirty: boolean,
   version: string,
   channel: "dev" | "release",
+  branch?: unknown,
 ): boolean {
   return (
-    channel !== "release" ||
-    (!dirty && revision !== "unknown" && version !== "unknown")
+    hasValidBuildBranch(version, branch) &&
+    (!isLandingBuildVersion(version) || (!dirty && revision !== "unknown")) &&
+    (channel !== "release" ||
+      (!dirty && revision !== "unknown" && version !== "unknown" && version !== "untagged"))
   );
 }
 
@@ -2368,6 +2367,7 @@ export interface ServerHealth {
   status: string;
   build_version: string;
   build_channel: "dev" | "release";
+  build_branch?: string;
   build_revision: string;
   build_dirty: boolean;
   protocol_version: string;
@@ -2405,6 +2405,7 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
         (body as ServerHealth).build_dirty,
         (body as ServerHealth).build_version,
         (body as ServerHealth).build_channel,
+        (body as ServerHealth).build_branch,
       ) ||
       typeof (body as ServerHealth).protocol_version !== "string"
     ) {
@@ -2459,6 +2460,7 @@ export interface HostInfo {
    *  Optional as a pair for pre-#288 runner compatibility. */
   build_version?: string;
   build_channel?: "dev" | "release";
+  build_branch?: string;
   /** Current `agy --version` output; absent for older runners or failed
    *  probes. Informational only. */
   antigravity_cli_version?: string;
@@ -2634,6 +2636,7 @@ export interface InterAgentDeliveryStatus {
 export interface WrapperBuildInfo {
   build_version: string;
   build_channel: "dev" | "release";
+  build_branch?: string;
   build_revision: string;
   build_dirty: boolean;
 }
@@ -3166,9 +3169,11 @@ export function parseHosts(value: unknown): HostInfo[] {
     ) {
       const e = entry as HostInfo;
       const validRevisionPair =
-        isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean";
+        isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean" &&
+        hasValidBuildBranch(e.build_version, e.build_branch);
       const validVersionPair =
-        isValidBuildVersion(e.build_version) && isValidBuildChannel(e.build_channel);
+        isValidBuildVersion(e.build_version) && isValidBuildChannel(e.build_channel) &&
+        hasValidBuildBranch(e.build_version, e.build_branch);
       const validAntigravityCliVersion = isValidAntigravityCliVersion(
         e.antigravity_cli_version,
       );
@@ -3180,6 +3185,7 @@ export function parseHosts(value: unknown): HostInfo[] {
           e.build_dirty!,
           e.build_version!,
           e.build_channel!,
+          e.build_branch,
         );
       hosts.push({
         host_id: hostId,
@@ -3214,12 +3220,13 @@ export function parseHosts(value: unknown): HostInfo[] {
           ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
           : {}),
         ...(validVersionPair &&
-        (e.build_channel !== "release"
+        (e.build_channel !== "release" && !isLandingBuildVersion(e.build_version) && e.build_version !== "untagged"
           ? (!validRevisionPair || validCompleteIdentity)
           : validCompleteIdentity)
           ? {
               build_version: e.build_version,
               build_channel: e.build_channel,
+              ...(e.build_branch === undefined ? {} : { build_branch: e.build_branch }),
             }
           : {}),
         ...(validAntigravityCliVersion
@@ -3247,6 +3254,7 @@ export function parseWrapperBuildInfo(value: unknown): WrapperBuildInfo | null {
       raw.build_dirty,
       raw.build_version,
       raw.build_channel,
+      raw.build_branch,
     )
   ) {
     return null;
@@ -3254,6 +3262,7 @@ export function parseWrapperBuildInfo(value: unknown): WrapperBuildInfo | null {
   return {
     build_version: raw.build_version,
     build_channel: raw.build_channel,
+    ...(raw.build_branch === undefined ? {} : { build_branch: raw.build_branch as string }),
     build_revision: raw.build_revision,
     build_dirty: raw.build_dirty,
   };

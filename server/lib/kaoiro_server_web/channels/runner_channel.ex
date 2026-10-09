@@ -442,15 +442,20 @@ defmodule KaoiroServerWeb.RunnerChannel do
     has_dirty = Map.has_key?(payload, "build_dirty")
     has_version = Map.has_key?(payload, "build_version")
     has_channel = Map.has_key?(payload, "build_channel")
+    has_branch = Map.has_key?(payload, "build_branch")
 
     cond do
-      has_revision != has_dirty or has_version != has_channel ->
+      has_revision != has_dirty or has_version != has_channel or
+        (has_branch and not has_version) or
+          (BuildIdentity.requires_branch?(payload["build_version"]) and
+             (not has_branch or not has_revision)) ->
         {:error, :incomplete_build_info}
 
       true ->
         with {:ok, revision_attrs} <- parse_revision_pair(payload, has_revision),
-             {:ok, version_attrs} <- parse_version_pair(payload, has_version) do
-          attrs = Map.merge(revision_attrs, version_attrs)
+             {:ok, version_attrs} <- parse_version_pair(payload, has_version),
+             {:ok, branch_attrs} <- parse_branch(payload, has_branch) do
+          attrs = revision_attrs |> Map.merge(version_attrs) |> Map.merge(branch_attrs)
 
           case attrs do
             %{
@@ -459,9 +464,15 @@ defmodule KaoiroServerWeb.RunnerChannel do
               build_version: version,
               build_channel: channel
             } ->
-              if BuildIdentity.valid_identity?(revision, dirty, version, channel),
-                do: {:ok, attrs},
-                else: {:error, :invalid_build_info}
+              if BuildIdentity.valid_identity?(
+                   revision,
+                   dirty,
+                   version,
+                   channel,
+                   Map.get(attrs, :build_branch)
+                 ),
+                 do: {:ok, attrs},
+                 else: {:error, :invalid_build_info}
 
             _ ->
               if Map.get(attrs, :build_channel) == "release",
@@ -470,6 +481,14 @@ defmodule KaoiroServerWeb.RunnerChannel do
           end
         end
     end
+  end
+
+  defp parse_branch(_payload, false), do: {:ok, %{}}
+
+  defp parse_branch(payload, true) do
+    if BuildIdentity.valid_branch?(payload["build_branch"]),
+      do: {:ok, %{build_branch: payload["build_branch"]}},
+      else: {:error, :invalid_build_branch}
   end
 
   defp parse_revision_pair(_payload, false), do: {:ok, %{}}

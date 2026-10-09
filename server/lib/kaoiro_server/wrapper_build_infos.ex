@@ -12,7 +12,7 @@ defmodule KaoiroServer.WrapperBuildInfos do
   alias KaoiroServer.BuildIdentity
 
   @max_infos 1000
-  @info_keys ~w(build_revision build_dirty build_version build_channel)
+  @info_keys ~w(build_revision build_dirty build_version build_channel build_branch)
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -35,21 +35,20 @@ defmodule KaoiroServer.WrapperBuildInfos do
   end
 
   @doc "Returns the canonical flat identity, or an invalid-payload error."
-  def canonical_info(%{
-        "build_revision" => revision,
-        "build_dirty" => dirty,
-        "build_version" => version,
-        "build_channel" => channel
-      }) do
-    if BuildIdentity.valid_identity?(revision, dirty, version, channel) do
+  def canonical_info(
+        %{
+          "build_revision" => revision,
+          "build_dirty" => dirty,
+          "build_version" => version,
+          "build_channel" => channel
+        } = info
+      ) do
+    if (not Map.has_key?(info, "build_branch") or
+          BuildIdentity.valid_branch?(info["build_branch"])) and
+         BuildIdentity.valid_identity?(revision, dirty, version, channel, info["build_branch"]) do
       {:ok,
        Map.take(
-         %{
-           "build_revision" => revision,
-           "build_dirty" => dirty,
-           "build_version" => version,
-           "build_channel" => channel
-         },
+         info,
          @info_keys
        )}
     else

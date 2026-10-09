@@ -64,7 +64,7 @@ const args = process.argv.slice(2), fixture = JSON.parse(process.env.KAOIRO_TEST
 const stateFile = process.env.KAOIRO_TEST_POLICY_STATE;
 const probe = args.some(a => a.startsWith("kaoiro-policy-"));
 const handled = args[0] === "create" || args[0] === "version" ||
-  (args[0] === "exec" && fixture.newStore) ||
+  (args[0] === "exec" && fixture.newStore && !args.includes("rpc")) ||
   (args[0] === "image" && args[1] === "inspect") || (args[0] === "volume" && args[1] === "inspect") ||
   (args[0] === "compose" && args[1] === "version") || probe || args.some(a => a.includes("DeliveryPolicies.beam"));
 if (!handled) {
@@ -306,6 +306,12 @@ case "$1" in
     exit 0
     ;;
   exec)
+    if [ "$4" = rpc ]; then
+      if [ "$KAOIRO_TEST_FLEET_RPC_FAIL" = 1 ]; then exit 1; fi
+      if [ "$KAOIRO_TEST_FLEET_RPC_HANG" = 1 ]; then exec node -e 'setTimeout(() => {}, 10000)'; fi
+      if [ -n "$KAOIRO_TEST_FLEET_JSON" ]; then printf '%s\\n' "$KAOIRO_TEST_FLEET_JSON"; else printf '{"schema":1,"hosts":[],"wrappers":[]}\\n'; fi
+      exit 0
+    fi
     if [ "$3" != env ] || [ "$4" != LC_ALL=C ] || [ "$5" != stat ] || [ "$6" != --printf=present ] || [ "$7" != -- ]; then exit 125; fi
     if [ "$KAOIRO_TEST_FILE_PROBE_REAL" = 1 ]; then
       env LC_ALL=C stat --printf=present -- "$8"
@@ -609,7 +615,10 @@ case "$1" in
               printf '{"revision":"%s"}\\n' "$KAOIRO_TEST_OLD_IMAGE_REVISION"
             fi
             ;;
-          *) exit 1 ;;
+          *)
+            if [ -n "$KAOIRO_TEST_TARGET_BUILD_INFO" ]; then printf '%s\\n' "$KAOIRO_TEST_TARGET_BUILD_INFO";
+            else printf '{"revision":"%s","build_identity_formats":["legacy-calver","landing-calver-v1"]}\\n' "$(git -C "$KAOIRO_TEST_WORK_DIR" rev-parse HEAD)"; fi
+            ;;
         esac
         ;;
       # issue #322 M5: the module-presence PROBE (ls the beam file via
@@ -845,6 +854,8 @@ function configWithCleanStopMeasured() {
 }
 
 function withOverrideEnv(fn) {
+  const priorWorkDir = process.env.KAOIRO_TEST_WORK_DIR;
+  process.env.KAOIRO_TEST_WORK_DIR = workDir;
   const priorDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
   const priorCurl = process.env.KAOIRO_DEPLOY_CURL_BIN;
   const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
@@ -873,6 +884,8 @@ function withOverrideEnv(fn) {
   try {
     return fn();
   } finally {
+    if (priorWorkDir === undefined) delete process.env.KAOIRO_TEST_WORK_DIR;
+    else process.env.KAOIRO_TEST_WORK_DIR = priorWorkDir;
     if (priorDocker === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
     else process.env.KAOIRO_DEPLOY_DOCKER_BIN = priorDocker;
     if (priorCurl === undefined) delete process.env.KAOIRO_DEPLOY_CURL_BIN;
@@ -4806,7 +4819,7 @@ test("runRollback restores a STARTING transaction when compose up failed after c
     process.env.KAOIRO_TEST_STOP_FILE = stoppedFile;
 
     const result = withScenario("up-fails-container", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
     );
     assert.equal(result.phase, "rolled_back");
     assert.equal(result.destructive, true);
@@ -4841,7 +4854,7 @@ test("runRollback restores a STARTING transaction when compose up created no con
     let result;
     try {
       result = withScenario("up-fails-no-container", () =>
-        runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+        runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
       );
     } finally {
       delete process.env.KAOIRO_TEST_CALL_LOG;
@@ -4873,7 +4886,7 @@ test("runRollback restores when the target container has already exited", () => 
   process.env.KAOIRO_TEST_STOP_FILE = stopFile;
   try {
     const result = withScenario("running-clean-stop", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
     );
     assert.equal(result.phase, "rolled_back");
   } finally {
@@ -4982,7 +4995,7 @@ test("runRollback refuses before wiping when a foreign deployment still mounts t
   let caught;
   try {
     withScenario("rollback-volume-filter-foreign-running", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
     );
   } catch (err) {
     caught = err;
@@ -5022,7 +5035,7 @@ test("runRollback refuses before wiping when compose candidate enumeration fails
   let caught;
   try {
     withScenario("rollback-compose-ps-a-fails", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
     );
   } catch (err) {
     caught = err;
@@ -5059,7 +5072,7 @@ test("runRollback refuses before wiping when the volume-filter query fails", () 
   let caught;
   try {
     withScenario("rollback-volume-filter-fails", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true }, configWithCleanStopMeasured()),
     );
   } catch (err) {
     caught = err;
@@ -5398,7 +5411,7 @@ test("runRollback stops every stopped-or-running candidate currently associated 
 
   const result = withScenario("multiple-containers", () =>
     runRollback(
-      { repo: workDir, transaction: transactionId, confirmRestore: true },
+      { repo: workDir, transaction: transactionId, confirmRestore: true, fleetStopped: true },
       configWithCleanStopMeasured(),
     ),
   );
@@ -5635,4 +5648,78 @@ test("policy placement: legacy image-bound absence preserves resume without repe
     assert.equal(calls().split("\n").filter(line => line.includes("DeliveryPolicies.beam")).length, 2);
     assert.ok(!calls().includes("compose stop"));
   });
+});
+
+function withFleetEnv(values, fn) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  try { return fn(); }
+  finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+const modernFleet = JSON.stringify({ schema: 1,
+  hosts: [{ id: "registered-new-runner", build_version: "2026.10.09.2" }], wrappers: [] });
+
+test("update refuses a pre-bridge target before STOPPING and releases its deployment lock", () => {
+  const log = join(root, "fleet-calls.log");
+  withFleetEnv({ KAOIRO_TEST_FLEET_JSON: modernFleet,
+    KAOIRO_TEST_TARGET_BUILD_INFO: JSON.stringify({ revision: headSha }), KAOIRO_TEST_CALL_LOG: log }, () => {
+    assert.throws(() => withScenario("running-clean-stop", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())),
+      /does not support the registered identity/);
+    const tx = readdirSync(join(root, "kaoiro-deploy")).find(name => !name.startsWith("."));
+    assert.equal(readJournal(join(root, "kaoiro-deploy", tx)).phase, PHASE.MAINTENANCE_GATE_PASSED);
+    assert.ok(!readCallLog(log).some(line => line.startsWith("compose stop")));
+    assert.ok(!readdirSync(join(root, "kaoiro-deploy")).some(name => name.startsWith(".lock")));
+    const result = withScenario("running-clean-stop", () =>
+      runUpdate({ repo: workDir, target: headSha, transaction: tx, maintenanceApproved: true, fleetStopped: true }, configWithCleanStopMeasured()));
+    assert.equal(result.phase, "done");
+  });
+});
+
+for (const destructive of [false, true]) {
+  test(`rollback refuses a pre-bridge image before any rollback mutation (destructive=${destructive})`, () => {
+    let transactionId;
+    if (destructive) {
+      transactionId = withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())).transactionId;
+    } else {
+      assert.throws(() => withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured())), /maintenance-approved/);
+      transactionId = readdirSync(join(root, "kaoiro-deploy")).find(name => !name.startsWith("."));
+    }
+    const log = join(root, "rollback-fleet-calls.log");
+    withFleetEnv({ KAOIRO_TEST_FLEET_JSON: modernFleet, KAOIRO_TEST_CALL_LOG: log }, () => {
+      assert.throws(() => withScenario("running-clean-stop", () =>
+        runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured())),
+        /does not support the registered identity/);
+      const calls = readCallLog(log);
+      assert.ok(!calls.some(line => /^(tag|start|stop) /.test(line) || line.includes("find /data -mindepth")));
+      assert.ok(!readdirSync(join(root, "kaoiro-deploy")).some(name => name.startsWith(".lock")));
+    });
+  });
+}
+
+for (const failure of ["FAIL", "HANG"]) {
+  test(`an unavailable live RPC refuses before STOPPING and releases the lock (${failure})`, () => {
+    const log = join(root, "rpc-failure.log");
+    const started = Date.now();
+    withFleetEnv({ [`KAOIRO_TEST_FLEET_RPC_${failure}`]: "1", KAOIRO_TEST_CALL_LOG: log }, () => {
+      assert.throws(() => withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())),
+        /live release RPC failed or timed out/);
+      assert.ok(!readCallLog(log).some(line => line.startsWith("compose stop")));
+      assert.ok(!readdirSync(join(root, "kaoiro-deploy")).some(name => name.startsWith(".lock")));
+    });
+    if (failure === "HANG") assert.ok(Date.now() - started < 9_000, "outer RPC timeout must bound the stop-window preflight");
+  });
+}
+
+test("fleet stop is a separate explicit flag", () => {
+  assert.deepEqual(parseArgs(["rollback", "--fleet-stopped"]).flags, { fleetStopped: true });
 });

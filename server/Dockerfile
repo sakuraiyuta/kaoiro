@@ -173,7 +173,7 @@ ARG KAOIRO_BUILD_REVISION=unknown
 ARG KAOIRO_BUILD_DIRTY=false
 ARG KAOIRO_BUILD_VERSION=unknown
 ARG KAOIRO_BUILD_CHANNEL=dev
-RUN printf '{"version":"%s","channel":"%s","revision":"%s","dirty":%s}\n' \
+RUN printf '{"version":"%s","channel":"%s","revision":"%s","dirty":%s,"build_identity_formats":["legacy-calver","landing-calver-v1"]}\n' \
       "$KAOIRO_BUILD_VERSION" "$KAOIRO_BUILD_CHANNEL" \
       "$KAOIRO_BUILD_REVISION" "$KAOIRO_BUILD_DIRTY" \
       > /app/build-info.json \
