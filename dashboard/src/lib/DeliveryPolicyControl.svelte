@@ -9,6 +9,8 @@
   } = $props();
   const writable = $derived(available && connected && view.policy !== "unknown" &&
     view.revision !== undefined && view.wrapper_support && hasDeliveryMechanism(view.mechanisms) && !saving);
+  let checked = $state(false);
+  $effect(() => { if (!saving) checked = view.policy === "on"; });
   let attempted = "";
   $effect(() => {
     const key = `${generation}:${agentId}`;
@@ -22,7 +24,7 @@
 <section class="delivery-policy" aria-label="実行中の割込配送">
   <strong>実行中の割込配送</strong>
   <p>保存設定: {view.policy}</p>
-  <p role="status" aria-live="polite">{notice || deliveryPolicyLabel(view, connected)}</p>
+  <p role="status" aria-live="polite">{saving ? "保存中" : notice || deliveryPolicyLabel(view, connected)}</p>
   {#if !available}<p>この server の操作 API は未確認</p>{/if}
   {#if view.mechanisms}
     <p>あなたから: {view.mechanisms.operator_early} / エージェント間: {view.mechanisms.inter_agent_early}</p>
@@ -31,7 +33,7 @@
   {/if}
   {#if view.policy === "off"}<p>すでに受け付けた処理は完了する場合があります。</p>{/if}
   {#if onChange}
-    <label><input type="checkbox" checked={view.policy === "on"} disabled={!writable}
+    <label><input type="checkbox" bind:checked disabled={!writable}
       onchange={(event) => { if (writable) onChange?.(event.currentTarget.checked ? "on" : "off"); }} />
       割込配送を許可する</label>
   {/if}

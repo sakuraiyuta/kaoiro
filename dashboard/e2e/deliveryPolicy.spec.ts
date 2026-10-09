@@ -128,3 +128,16 @@ test("built conflict announcement requires a deliberate new choice", async ({ pa
   await expect.poll(() => loop.frames.filter(f => f[3] === "set_delivery_policy").length).toBe(2);
   expect(loop.frames.filter(f => f[3] === "set_delivery_policy")[1]![4]).toMatchObject({ expected_revision: 2, policy: "on" });
 });
+
+test("a rejected write returns the checkbox to the saved setting", async ({ page }) => {
+  await page.goto(loop.url);
+  await page.locator('button[aria-label$="の詳細を開く"]').first().dispatchEvent("click");
+  const control = page.getByRole("region", { name: "実行中の割込配送" });
+  const checkbox = control.getByRole("checkbox", { name: "割込配送を許可する" });
+  await expect(checkbox).toBeChecked(); loop.state.automatic = false;
+  await checkbox.click();
+  await expect.poll(() => loop.frames.filter(f => f[3] === "set_delivery_policy").length).toBe(1);
+  loop.reply(loop.frames.find(f => f[3] === "set_delivery_policy")!, { reason: "persistence_failed" }, "error");
+  await expect(control.getByRole("status")).toContainText("設定を保存できませんでした");
+  await expect(checkbox).toBeEnabled(); await expect(checkbox).toBeChecked();
+});
