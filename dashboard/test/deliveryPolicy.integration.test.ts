@@ -134,4 +134,17 @@ describe("policy projection and asynchronous control", () => {
     expect(store.notices.p199).toBe(""); expect(store.views.p199?.policy).toBe("off");
   });
 
+  it("a fresh generation discards a read even when its revision is higher", async () => {
+    const { store, read } = setup(); const result = deferred<DeliveryPolicyView>(); read.mockReturnValue(result.promise);
+    const pending = store.refresh("a"); store.reset(); store.available = true; store.snapshot({ a: envelope() });
+    result.resolve(view(9, "off")); await pending; expect(store.views.a?.revision).toBe(1);
+  });
+  it("leaving a detail discards local notices including a late failed write", async () => {
+    const { store, write, read } = setup(); const result = deferred<{ revision: number; status: "pending" }>();
+    write.mockReturnValue(result.promise); read.mockResolvedValue(view(2, "off"));
+    const pending = store.set("a", "off", true); store.clearNotice("a");
+    result.reject(new DeliveryPolicyError("revision_conflict", 2, "off")); await pending;
+    expect(store.notices.a).toBe(""); expect(store.views.b?.policy).toBe("on");
+  });
+
 });

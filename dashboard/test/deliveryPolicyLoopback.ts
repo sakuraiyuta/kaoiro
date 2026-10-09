@@ -30,7 +30,7 @@ export async function deliveryLoopback(staticRoot?: string) {
   const frames: unknown[][] = [];
   let peer: { send: (data: string) => void; close: () => void } | undefined;
   let joinRef: unknown = null;
-  const state = { operator: true, marker: true, automatic: true, policy: { ...deliveryView }, hosts: deliveryHosts };
+  const state = { operator: true, marker: "v1" as unknown, automatic: true, policy: { ...deliveryView }, hosts: deliveryHosts };
   function send(event: string, payload: unknown) { peer?.send(JSON.stringify([joinRef, null, "agents:lobby", event, payload])); }
   function reply(frame: unknown[], response: unknown, status = "ok") {
     peer?.send(JSON.stringify([frame[0], frame[1], frame[2], "phx_reply", { status, response }]));
@@ -44,7 +44,7 @@ export async function deliveryLoopback(staticRoot?: string) {
     ws!.on("message", data => {
       const frame = JSON.parse(data.toString()) as unknown[]; frames.push(frame);
       const payload = frame[4] as Record<string, unknown>;
-      if (frame[3] === "phx_join") { joinRef = frame[0]; reply(frame, state.marker ? { delivery_policy_control: "v1" } : {}); snapshot(); }
+      if (frame[3] === "phx_join") { joinRef = frame[0]; reply(frame, state.marker ? { delivery_policy_control: state.marker } : {}); snapshot(); }
       else if (frame[3] === "heartbeat" || frame[3] === "phx_leave") reply(frame, {});
       else if (frame[3] === "get_delivery_policy" && state.automatic) reply(frame, { agent_id: payload.agent_id, delivery_policy: state.policy });
       else if (frame[3] === "set_delivery_policy" && state.automatic) {

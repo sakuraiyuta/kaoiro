@@ -43,3 +43,12 @@ it("explicit disconnect immediately cancels a pending policy request and readine
   const outcome = expect(pending).rejects.toMatchObject({ reason: "disconnected", uncertain: true });
   conn!.disconnect(); expect(marker).toHaveBeenLastCalledWith(false); await outcome;
 });
+it("rejoin forgets a former marker and an unknown marker never enables requests", async () => {
+  const { marker } = await connect();
+  loop.state.marker = "v2"; loop.send("phx_error", {});
+  await vi.waitFor(() => expect(loop.frames.filter(f => f[3] === "phx_join").length).toBe(2), { timeout: 3000 });
+  expect(marker).toHaveBeenLastCalledWith(false);
+  await expect(conn!.getDeliveryPolicy("host.p")).rejects.toMatchObject({ reason: "unavailable" });
+  loop.state.marker = "v1"; loop.send("phx_error", {});
+  await vi.waitFor(() => expect(marker).toHaveBeenLastCalledWith(true), { timeout: 3000 });
+});
