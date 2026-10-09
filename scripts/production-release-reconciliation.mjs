@@ -17,7 +17,7 @@ import {
 } from "./production-release-files.mjs";
 import { readPublishedProductionRelease } from "./production-release-tags.mjs";
 import { validateProductionReceipt } from "./production-release-record.mjs";
-import { validateEnrollmentInventory } from "./production-release-plan.mjs";
+import { validateEnrollmentProjection } from "./production-release-plan.mjs";
 import {
   RELEASE_ALIAS,
   RELEASE_DIGEST,
@@ -64,7 +64,7 @@ export function validateReleaseSnapshot(snapshot) {
     "snapshot schema/capacity",
   );
   if (snapshot.inventory !== undefined && snapshot.inventory !== null)
-    validateEnrollmentInventory(snapshot.inventory);
+    validateEnrollmentProjection(snapshot.inventory);
   if (snapshot.archived_incidents !== undefined) {
     must(
       Array.isArray(snapshot.archived_incidents) &&

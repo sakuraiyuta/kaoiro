@@ -18,6 +18,7 @@ import {
 } from "./production-release-files.mjs";
 import {
   validateEnrollmentInventory,
+  projectEnrollmentInventory,
   validateReleasePlan,
   projectReleasePlan,
 } from "./production-release-plan.mjs";
@@ -418,7 +419,14 @@ export function readReleaseAttempt(dir) {
       invalid = true;
     }
   }
-  if (serverAudit?.transaction_dir && !invalid) {
+  if (
+    serverAudit?.transaction_dir &&
+    !invalid &&
+    !completion &&
+    !abandonmentValid &&
+    !quarantineValid &&
+    !retirementValid
+  ) {
     try {
       must(
         typeof serverAudit.transaction_dir === "string" &&
@@ -614,7 +622,7 @@ export function readArchivedReleaseIncidents(root) {
 export function projectReleaseHistory(history) {
   const inventoryPath = `${history.root}-inventory.json`;
   const inventory = existsSync(inventoryPath)
-    ? validateEnrollmentInventory(
+    ? projectEnrollmentInventory(
         readPrivateJson(inventoryPath, { privateParent: false }),
       )
     : null;
@@ -635,10 +643,7 @@ export function projectReleaseHistory(history) {
         row.records,
         {
           attempt_uuid: row.attempt_uuid,
-          host_ids:
-            inventory?.runtime_hosts.map((pair) => pair.alias) ??
-            row.plan?.host_ids ??
-            [],
+          host_ids: inventory?.host_ids ?? row.plan?.host_ids ?? [],
         },
         { lifecycle: true },
       ).events.map(({ alias, sequence, sha256, state }) => ({

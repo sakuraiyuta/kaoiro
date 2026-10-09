@@ -670,6 +670,22 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     ),
     ["published"],
   );
+  writeFileSync(
+    join(dir, "server-audit.json"),
+    releaseJsonBytes({
+      schema: 1,
+      attempt_uuid: plan.attempt_uuid,
+      pass: true,
+      root: server,
+      authority_sha256: authority.sha256,
+      release_context: {
+        attempt_uuid: plan.attempt_uuid,
+        plan_sha256: receiptDigest(plan),
+      },
+      transaction_dir: join(root, "pruned-native-transaction"),
+    }),
+    { mode: 0o600 },
+  );
   const published = spawnSync("sh", ["-c", card.verification], {
     encoding: "utf8",
     timeout: 30_000,

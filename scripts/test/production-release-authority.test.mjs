@@ -405,17 +405,18 @@ test("server prepare refuses its enrolled history before Docker or transaction c
     allow_docker_override: true,
   };
   try {
-    for (const dryRun of [false, true]) {
-      assert.throws(
-        () =>
-          runUpdate(
-            { repo: f.repo, target: f.identity.revision, dryRun },
-            config,
-          ),
-        /unresolved attempts/,
-      );
-      assert.equal(existsSync(backup), false);
-    }
+    for (const backupRoot of [backup, join(f.base, "other-backup")])
+      for (const dryRun of [false, true]) {
+        assert.throws(
+          () =>
+            runUpdate(
+              { repo: f.repo, target: f.identity.revision, dryRun },
+              { ...config, backup_root: backupRoot },
+            ),
+          /unresolved attempts/,
+        );
+        assert.equal(existsSync(backupRoot), false);
+      }
     f.start();
     assert.throws(
       () =>
@@ -739,4 +740,31 @@ test("the native update entrance cannot bypass an enrolled server activity lock"
     if (previous === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
     else process.env.KAOIRO_DEPLOY_DOCKER_BIN = previous;
   }
+});
+
+test("the real exporter projects enrollment aliases and digest without private host IDs or install paths", () => {
+  const f = fixture(),
+    attempt = f.start(),
+    value = {
+      schema: 1,
+      runtime_hosts: attempt.plan.runtime_hosts,
+      authority: attempt.plan.authority,
+    };
+  writeFileSync(`${f.root}-inventory.json`, releaseJsonBytes(value), {
+    mode: 0o600,
+  });
+  const snapshot = validateReleaseSnapshot(
+    releaseAuthorityRequest(f.authority, releaseRequest(f.descriptor)),
+  );
+  assert.deepEqual(snapshot.inventory.host_ids, ["worker-a"]);
+  assert.equal(
+    snapshot.inventory.sha256,
+    releaseBytesDigest(releaseJsonBytes(value)),
+  );
+  assert.equal(
+    JSON.stringify(snapshot).includes("private-machine-marker"),
+    false,
+  );
+  assert.equal(JSON.stringify(snapshot).includes(f.installRoot), false);
+  assert.equal(Object.hasOwn(snapshot.inventory, "runtime_hosts"), false);
 });

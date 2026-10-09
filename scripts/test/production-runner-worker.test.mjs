@@ -639,6 +639,23 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
         host: "worker-a",
         configPath: f.configPath,
       });
+      if (damage === "baseline") {
+        writeFileSync(
+          join(attempt.dir, "runner-baseline-worker-a.json"),
+          "changed-damaged-record",
+          { mode: 0o600 },
+        );
+        await assert.rejects(
+          runLifecycleCli(args),
+          /lifecycle evidence differs/,
+        );
+        await inspectProductionRunnerActivity({
+          runnerRoot: f.runner,
+          uuid,
+          host: "worker-a",
+          configPath: f.configPath,
+        });
+      }
       const result = await runLifecycleCli(args);
       assert.equal(result.kind, "invalid_quarantined");
       assert.equal(

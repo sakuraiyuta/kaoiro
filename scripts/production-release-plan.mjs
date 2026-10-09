@@ -100,6 +100,57 @@ export function validateEnrollmentInventory(value) {
   return value;
 }
 
+export function projectEnrollmentInventory(value) {
+  validateEnrollmentInventory(value);
+  return {
+    schema: 1,
+    host_ids: value.runtime_hosts.map((pair) => pair.alias),
+    authority: {
+      server: { sha256: value.authority.server.sha256 },
+      runners: value.authority.runners.map(({ alias, sha256 }) => ({
+        alias,
+        sha256,
+      })),
+    },
+    sha256: createHash("sha256")
+      .update(`${JSON.stringify(value)}\n`)
+      .digest("hex"),
+  };
+}
+export function validateEnrollmentProjection(value) {
+  must(
+    exact(value, ["schema", "host_ids", "authority", "sha256"]) &&
+      value.schema === 1 &&
+      RELEASE_DIGEST.test(value.sha256 ?? ""),
+    "enrollment projection schema/digest",
+  );
+  must(
+    Array.isArray(value.host_ids) &&
+      value.host_ids.length > 0 &&
+      value.host_ids.length <= 16 &&
+      new Set(value.host_ids).size === value.host_ids.length &&
+      value.host_ids.every((alias) => RELEASE_ALIAS.test(alias ?? "")),
+    "enrollment projection aliases",
+  );
+  must(
+    exact(value.authority, ["server", "runners"]) &&
+      exact(value.authority.server, ["sha256"]) &&
+      RELEASE_DIGEST.test(value.authority.server.sha256 ?? "") &&
+      Array.isArray(value.authority.runners) &&
+      value.authority.runners.length === value.host_ids.length &&
+      new Set(value.authority.runners.map((owner) => owner.alias)).size ===
+        value.host_ids.length &&
+      value.authority.runners.every(
+        (owner) =>
+          exact(owner, ["alias", "sha256"]) &&
+          value.host_ids.includes(owner.alias) &&
+          RELEASE_DIGEST.test(owner.sha256 ?? ""),
+      ),
+    "enrollment projection authority",
+  );
+  return value;
+}
+
 export function validateReleasePlan(plan, uuid) {
   must(
     plan?.schema === 1 &&

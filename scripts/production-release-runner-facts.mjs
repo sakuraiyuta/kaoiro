@@ -18,7 +18,7 @@ import {
   writePrivateRecord,
 } from "./production-release-files.mjs";
 import {
-  validateEnrollmentInventory,
+  validateEnrollmentProjection,
   validateReleasePlan,
   validateRuntimeHosts,
 } from "./production-release-plan.mjs";
@@ -99,14 +99,13 @@ export function canonicalRunnerReleaseRow(context) {
     (row) => row.attempt_uuid === context.plan.attempt_uuid,
   );
   if (context.lifecycle) {
-    const inventory = validateEnrollmentInventory(snapshot.inventory);
+    const inventory = validateEnrollmentProjection(snapshot.inventory);
     must(
       row &&
         row.status === "invalid_completion" &&
         row.plan_sha256 === context.plan_sha256 &&
         row.lifecycle_row_sha256 === context.lifecycle_row_sha256 &&
-        releaseBytesDigest(Buffer.from(`${JSON.stringify(inventory)}\n`)) ===
-          context.inventory_sha256,
+        inventory.sha256 === context.inventory_sha256,
       "canonical invalid row/enrollment inventory changed",
     );
     return row;
@@ -154,12 +153,12 @@ export function validateRunnerLifecycleContext({
       alias,
       configPath,
     });
-  const inventory = validateEnrollmentInventory(snapshot.inventory);
+  const inventory = validateEnrollmentProjection(snapshot.inventory);
   const expected = inventory.authority.runners.find(
     (owner) => owner.alias === alias,
   );
   must(
-    expected?.root === root && expected.sha256 === authority.sha256,
+    expected?.sha256 === authority.sha256,
     "fixed lifecycle inventory authority differs",
   );
   const config = readPrivateJson(configPath, {
@@ -171,9 +170,10 @@ export function validateRunnerLifecycleContext({
       privateParent: false,
     }),
   );
-  const pair = inventory.runtime_hosts.find((pair) => pair.alias === alias);
+  const pair = local.find((pair) => pair.alias === alias);
   must(
-    pair &&
+    inventory.host_ids.includes(alias) &&
+      pair &&
       local.some(
         (item) =>
           item.alias === alias && item.runtime_host_id === pair.runtime_host_id,
@@ -190,9 +190,7 @@ export function validateRunnerLifecycleContext({
     authority,
     lifecycle: true,
     lifecycle_row_sha256: row.lifecycle_row_sha256,
-    inventory_sha256: releaseBytesDigest(
-      Buffer.from(`${JSON.stringify(inventory)}\n`),
-    ),
+    inventory_sha256: inventory.sha256,
   };
 }
 

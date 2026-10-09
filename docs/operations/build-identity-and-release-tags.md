@@ -373,6 +373,11 @@ the same lock before inspecting or writing an attempt; an old healthy revision
 alone cannot prove an idle server. The lock does not depend on `backup_root`.
 Generic installs keep their existing behavior. A killed owner uses the same
 explicit `inspect-residue` / `recover-lock` procedure, with preserved bytes.
+The exporter exposes enrollment aliases and a digest with per-leg authority
+digests, without real host IDs or install paths. The importer keeps and verifies
+the complete private enrollment inventory locally. Once an attempt has a valid
+immutable completion or terminal proof, pruning its native journal does not
+reopen it; native journal observations are for unfinished attempts.
 
 Known corrupt private facts and ordinary activity records use a separate
 `runner-lifecycle-activity-*` stream for quarantine inspection. This stream is
@@ -531,8 +536,9 @@ than silently skipping a reserved ref.
 
 If a malformed ref must be removed, the operator first exports the active tag
 ruleset and its bypass identities with `gh api repos/sakuraiyuta/kaoiro/rulesets`.
-The operator temporarily grants only their own identity the required bypass,
-then deletes only the reviewed malformed ref with
+The operator temporarily excludes only the exact reviewed malformed ref from
+the immutable tag rule, without adding a principal-wide bypass, then deletes
+only that ref with
 `git push origin :refs/tags/<reviewed-malformed-ref>`. Restore and independently
 verify the original ruleset immediately, before re-enabling allocation or the
 receiver. Record the old object ID, evidence, approver and restored ruleset in
