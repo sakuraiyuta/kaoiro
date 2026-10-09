@@ -261,11 +261,13 @@ in a throwaway GitHub repository, then operator provisioning on the real repo:
   and successful registration; keep the high-risk section-3 start gate.
 
 A personal-repository probe rejected GitHub Actions app ID 15368 as a creation
-bypass actor (HTTP 422). The operator therefore selected write-role creation
-(operator decision, 2026-10-09): a separate creation ruleset allows
-RepositoryRole write, while the update/deletion prohibition has no bypass.
+bypass actor (HTTP 422). An actual Contents-write Actions bot also failed a
+RepositoryRole-write creation bypass (rule suites 4440870693 / 4440870712).
+The operator's write-capable creation decision is implemented with normal
+Contents-write authorization and no creation ruleset. The independent
+update/deletion prohibition has no bypass.
 Creation permission never grants permission to move or delete existing refs.
-Use these exact selectors in both rulesets; a shallow `identity/**` selector
+Use these exact selectors in the immutable ruleset; a shallow `identity/**` selector
 must not stand in for the nested claim paths:
 
 | Namespace | Ruleset ref selector |
@@ -276,6 +278,31 @@ must not stand in for the nested claim paths:
 | Production public tag | `refs/tags/release/*` |
 
 Require live update and deletion refusals for all four paths before activation.
+
+After landing and reviewing the exact execution card, the operator provisions
+the real repository's rule. The agent must not run this production command:
+
+```sh
+gh api --method POST repos/sakuraiyuta/kaoiro/rulesets --input - <<'JSON'
+{
+  "name": "Kaoiro immutable release identities",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"exclude": [], "include": [
+    "refs/tags/v*", "refs/tags/identity/landing/*",
+    "refs/tags/identity/release/production/*", "refs/tags/release/*"
+  ]}},
+  "rules": [{"type": "update"}, {"type": "deletion"}],
+  "bypass_actors": []
+}
+JSON
+gh api repos/sakuraiyuta/kaoiro/rulesets
+```
+
+Review the existing rules first. A separate creation restriction on these paths
+would block the workflow bot; its removal is an operator operation. Never add a
+bypass to the immutable rule. Keep automation disabled until the post-install
+read-back confirms active enforcement and all four exact selectors.
 
 Hand-made public tags without their claims, or conflicting claim objects,
 degrade build identity and are reported by the full inventory audit. Workflow

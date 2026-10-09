@@ -70,8 +70,9 @@ malicious actor already able to replace trusted code.
 Workflow allocation stays disabled until V9/V10 have passed, the approved
 control SHA is fixed and the append-only tag rules are provisioned. Both GitHub
 job admission and the control scripts require the exact gated control SHA.
-Write-role principals may create reserved tags under a separate creation rule
-(operator decision, 2026-10-09). No update/deletion bypass applies to immutable
+Write-capable principals may create reserved tags under normal Contents-write
+authorization (operator decision, 2026-10-09); no creation ruleset is installed.
+No update/deletion bypass applies to immutable
 tags. Test GitHub behavior in a
 throwaway repository, never by adding trial tags to production.
 
