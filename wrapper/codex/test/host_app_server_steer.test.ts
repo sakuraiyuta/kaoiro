@@ -1,3 +1,4 @@
+import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -13,6 +14,12 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn();vi.restoreAllMocks(); });
 
 type SteerReply = (request: RpcObject, reply: (value: unknown) => void, error: (code: number, message: string, data?: unknown) => void) => void;
+
+function legacyDeliveryPolicy() {
+  const controller = new DeliveryPolicyController();
+  controller.acceptJoin({}, controller.beginJoin());
+  return controller;
+}
 
 function fixture(optIn = true, extra: Partial<CodexHostOptions> = {}) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
@@ -47,7 +54,7 @@ function fixture(optIn = true, extra: Partial<CodexHostOptions> = {}) {
   stdin.on("finish", exit);child.kill = vi.fn(() => { exit();return true; });
   const logs: Envelope[] = [], rejected: Envelope[] = [];
   let available = true, syncPending = false, blocked = false;
-  const options: CodexHostOptions = { backend: "app-server", appendSystemPrompt: "PERSONA",
+  const options: CodexHostOptions = { deliveryPolicy: legacyDeliveryPolicy(), backend: "app-server", appendSystemPrompt: "PERSONA",
     appServerSessionFactory: options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }),
     onState: () => {}, onLog: e => logs.push(e), onInstructionRejected: e => rejected.push(e),
     permissionSyncPending: () => syncPending, liveInputBlocked: () => blocked, ...extra };
@@ -144,6 +151,65 @@ it.each(["synthetic", "placeholder"] as const)("T12: a queued %s input still blo
   if (kind === "synthetic") await f.host.send("NOTICE");
   else expect(f.host.createInterAgentPlaceholder("placeholder", 1)).toBe(true);
   expect(await f.host.steerInterAgentInput("EARLY", iaHooks(), "early")).toEqual({ kind: "queued", reason: "behind_earlier_input" });
+});
+
+function supportingPolicy() {
+  const controller = new DeliveryPolicyController();
+  const join = controller.beginJoin();
+  controller.acceptJoin({ delivery_policy: "v1" }, join);
+  controller.apply({ revision: 1, policy: "on" }, join);
+  return { controller, off: () => controller.apply({ revision: 2, policy: "off" }, join),
+    on: () => controller.apply({ revision: 3, policy: "on" }, join) };
+}
+
+it.each(["operator", "peer"] as const)("fences %s at the final commit after turn/start readiness changes", async source => {
+  const policy = supportingPolicy();
+  const f = fixture(true, { deliveryPolicy: policy.controller, interAgentSteer: { available: () => true } });
+  f.holdStarts = true;
+  await f.operator("BASE", "normal");
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(1));
+  const admitted = vi.fn(() => null);
+  const hooks = { admit: admitted, onAdmit: vi.fn(), onPrecondition: () => false,
+    onResponse: vi.fn(), onItem: vi.fn(), onTerminal: vi.fn(), onSettle: vi.fn() };
+  const pending = source === "operator" ? f.operator("OFF ROOT")
+    : f.host.steerInterAgentInput("OFF PEER", hooks, "off-peer");
+  await new Promise(resolve => setImmediate(resolve));
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  policy.off();
+  f.releaseStart(); f.holdStarts = false;
+  const outcome = await pending;
+  expect(f.byMethod("turn/steer")).toHaveLength(0);
+  expect(admitted).not.toHaveBeenCalled();
+  expect(hooks.onAdmit).not.toHaveBeenCalled();
+  if (source === "peer") {
+    expect(outcome).toEqual({ kind: "queued", reason: "local_policy_disabled" });
+    await f.host.send("OFF PEER", undefined, ["cid"], "root");
+  } else expect(f.system()).toContain("Operator input queued for the next turn (local_policy_disabled).");
+  policy.on();
+  f.terminal();
+  await vi.waitFor(() => expect(f.byMethod("turn/start")).toHaveLength(2));
+  expect(f.texts("turn/start")).toEqual(["BASE", source === "operator" ? "OFF ROOT" : "OFF PEER"]);
+  await f.operator("NEW ON");
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
+  f.inputItem(f.clientId(0)); f.terminal();
+});
+
+it("keeps an already started peer RPC owned across off, including late corroboration", async () => {
+  const policy = supportingPolicy();
+  const f = fixture(false, { deliveryPolicy: policy.controller, interAgentSteer: { available: () => true } });
+  await running(f);
+  let respond!: (value: unknown) => void;
+  f.onSteer = (_request, reply) => { respond = reply; };
+  const settled = vi.fn(), hooks = { admit: () => null, onAdmit: vi.fn(), onPrecondition: () => false,
+    onResponse: vi.fn(), onItem: vi.fn(), onTerminal: vi.fn(), onSettle: settled };
+  expect(await f.host.steerInterAgentInput("ACCEPTED", hooks, "accepted")).toMatchObject({ kind: "sent" });
+  policy.off();
+  f.completedItem("accepted", "ACCEPTED"); f.terminal();
+  respond({ turnId: "turn-1" });
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+  expect(settled.mock.calls[0]?.slice(2, 5)).toEqual([{ kind: "A" }, true, "written"]);
+  expect(f.texts("turn/start")).toEqual(["BASE"]);
+  expect(f.byMethod("turn/steer")).toHaveLength(1);
 });
 
 it("steers an operator input into the running turn and reports inclusion", async () => {

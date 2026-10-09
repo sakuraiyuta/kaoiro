@@ -40,6 +40,7 @@ async function compose(backend: "exec" | "app-server", optIn: boolean | "flag", 
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       linkOptions = options as unknown as Record<string, any>;
+      options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
       queueMicrotask(() => { (options.onPersonaPrompt as (prompt: string) => void)("system prompt"); });
       return link as never;
     },

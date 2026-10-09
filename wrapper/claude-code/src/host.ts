@@ -1,4 +1,5 @@
 import { MAX_COALESCED_BYTES, MAX_COALESCED_MESSAGES, ToolOrigins } from "@kaoiro/agent-common";
+import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 // Agent host — runs a query() session, derives state from its message stream,
 // and routes tool-permission requests through canUseTool so they surface as
 // waiting_permission. Streaming input (send) and interrupt are wired here.
@@ -376,6 +377,7 @@ export type {
 } from "@kaoiro/agent-common";
 
 export interface AgentHostOptions {
+  deliveryPolicy?: DeliveryPolicyController;
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
   /**
@@ -631,6 +633,7 @@ interface QueuedTurn {
 }
 
 interface PushedReceipt {
+  policyRevision?: number;
   foldId: string;
   digest: string;
   sessionId: string;
@@ -748,6 +751,7 @@ export class AgentHost implements EngineAdapter {
    *  for the comparison this guards. */
   #displayNameRevision = 0;
   readonly #options: AgentHostOptions;
+  readonly #deliveryPolicy: DeliveryPolicyController;
   readonly #queryFn: typeof query;
   readonly #probeFn: (deps?: ProbeSpawnDeps) => Promise<ProbeOutcome>;
   readonly #now: () => string;
@@ -1050,6 +1054,7 @@ export class AgentHost implements EngineAdapter {
   constructor(config: WrapperConfig, options: AgentHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#deliveryPolicy = options.deliveryPolicy ?? new DeliveryPolicyController();
     this.#queryFn = options.queryFn ?? query;
     this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
@@ -1252,17 +1257,19 @@ export class AgentHost implements EngineAdapter {
     ticketValues?: readonly string[];
     conversationIds: readonly string[];
     operatorInput?: boolean;
-  }): boolean {
-    if (!this.canPushLiveInput()) return false;
+  }): { kind: "pushed"; policyRevision?: number } | { kind: "declined"; reason: "local_policy_disabled" | "ineligible" } {
+    if (!this.canPushLiveInput()) return { kind: "declined", reason: "ineligible" };
     const active = this.#activeTurn!;
-    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= this.foldsPerTurn) return false;
+    if (options.kind === "fold" && (this.#foldsUsedByTurn.get(active.turnToken) ?? 0) >= this.foldsPerTurn) return { kind: "declined", reason: "ineligible" };
     const ownerPromptId = [...this.#promptOwners].find(([, owner]) =>
       owner.token === active.turnToken && owner.sessionId === this.#sessionId && !owner.tainted)?.[0];
-    if (ownerPromptId === undefined) return false;
+    if (ownerPromptId === undefined) return { kind: "declined", reason: "ineligible" };
     const foldId = randomBytes(16).toString("hex");
     const text = options.text(foldId);
     if (!text.includes(foldId)) throw new Error("pushed input lacks its receipt identifier");
-    if (!this.pushedInputFits(text, options.envelopes.length)) return false;
+    if (!this.pushedInputFits(text, options.envelopes.length)) return { kind: "declined", reason: "ineligible" };
+    const policy = this.#deliveryPolicy.decision();
+    if (!policy.allowed) return { kind: "declined", reason: "local_policy_disabled" };
     const message: SDKUserMessage = {
       type: "user",
       session_id: "",
@@ -1285,6 +1292,7 @@ export class AgentHost implements EngineAdapter {
       conversationIds: options.conversationIds,
       ...(options.operatorInput === undefined ? {} : { operatorInput: options.operatorInput }),
       written: false,
+      ...(policy.revision === undefined ? {} : { policyRevision: policy.revision }),
     };
     this.#pendingPushedReceipt = receipt;
     if (options.kind === "fold") {
@@ -1293,9 +1301,11 @@ export class AgentHost implements EngineAdapter {
       if (active.kind !== "sdk_notification" && options.operatorInput) active.operatorFolded = true;
     }
     this.#pushedQueue.push(receipt);
+    writeRedactedStderr(`[kaoiro] ${JSON.stringify({ event: "claude_live_input_accepted", kind: receipt.kind,
+      fold_id: receipt.foldId, policy_revision: receipt.policyRevision })}\n`);
     this.#wakeTurnBoundary();
     this.#wake();
-    return true;
+    return { kind: "pushed", ...(policy.revision === undefined ? {} : { policyRevision: policy.revision }) };
   }
 
   receiptDiagnostics(): { root_hook_timeout: number; notification_clock_pauses: number } {

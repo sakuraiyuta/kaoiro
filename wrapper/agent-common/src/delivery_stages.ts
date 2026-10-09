@@ -19,6 +19,7 @@ interface TrackedDelivery {
   deliverySeq: number;
   mode?: DeliveryIntent;
   submitted: boolean;
+  localPolicyDisabled?: boolean;
   steer?: boolean;
   retired: boolean;
   turnToken?: string;
@@ -82,6 +83,21 @@ export class DeliveryStageReporter {
     const delivery = this.#deliveryByEnvelope.get(envelope);
     if (delivery === undefined) return;
     this.#report(delivery, "queued", delivery.mode === undefined ? {} : { mode: delivery.mode });
+  }
+
+  localPolicyDisabled(envelopes: readonly Envelope[]): void {
+    this.#observeIdentity();
+    for (const envelope of envelopes) {
+      this.capture(envelope);
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery === undefined || delivery.retired || delivery.submitted || delivery.localPolicyDisabled) continue;
+      delivery.localPolicyDisabled = true;
+      delivery.mode = "normal";
+      this.#report(delivery, "queued", { mode: "normal", reason: "local_policy_disabled",
+        ...(modeOf(envelope) === "yield" ? { yield_disposition: {
+          outcome: "downgraded" as const, reason: "local_policy_disabled", at: this.#now(),
+        } } : {}) });
+    }
   }
 
   capture(envelope: Envelope): void {

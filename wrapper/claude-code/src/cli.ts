@@ -79,7 +79,7 @@ import {
   makeRefreshModelsResult,
   makeStateChange,
 } from "@kaoiro/agent-common";
-import { ServerLink } from "@kaoiro/wrapper-core";
+import { DeliveryPolicyController, ServerLink } from "@kaoiro/wrapper-core";
 import { resolveClaudeSources } from "./source_resolution.js";
 import {
   TurnWatchdog,
@@ -171,6 +171,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     dependencies.createHost ?? ((...args) => new AgentHost(...args));
   const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
+  const deliveryPolicy = new DeliveryPolicyController();
   const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
@@ -421,9 +422,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
-      const early = earlyNegotiated() && batch.items.every(item =>
+      const policyAllowed = deliveryPolicy.decision().allowed;
+      const nonNormal = batch.items.map(item => item.envelope).filter(envelope => {
+        const granted = (envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted;
+        return granted === "early" || granted === "yield";
+      });
+      if (!policyAllowed) {
+        deliveryStages.localPolicyDisabled(nonNormal);
+      }
+      const early = policyAllowed && earlyNegotiated() && batch.items.every(item =>
         (item.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "early");
-      const yieldInput = yieldNegotiated() && batch.items.length === 1 &&
+      const yieldInput = policyAllowed && yieldNegotiated() && batch.items.length === 1 &&
         (batch.items[0]!.envelope.payload as Partial<InterAgentMessagePayload>).delivery_authority?.granted === "yield";
       void enqueueInstruction(() =>
         host
@@ -773,6 +782,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   });
 
   attemptFoldCandidates = (): void => {
+    if (!deliveryPolicy.decision().allowed) {
+      for (const [batchToken, batch] of foldCandidates) {
+        foldCandidates.delete(batchToken);
+        deliveryStages.localPolicyDisabled(batch.items.map(item => item.envelope));
+      }
+      return;
+    }
     if (!earlyNegotiated() || !host?.canFoldLiveInput()) return;
     const ownerToken = host.activeInterAgentTurnToken();
     if (ownerToken === null) return;
@@ -804,7 +820,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         ticketValues: ticketLease.authorizations.map(auth => auth.reply_ticket),
         conversationIds: batch.conversationIds,
       });
-      if (!accepted) { ticketLease.discard(); return; }
+      if (accepted.kind === "declined") {
+        ticketLease.discard();
+        if (accepted.reason === "local_policy_disabled") {
+          foldCandidates.delete(batchToken);
+          deliveryStages.localPolicyDisabled(envelopes);
+        }
+        return;
+      }
       if (!host.removeQueuedInput(batchToken)) {
         throw new Error("folded batch no longer owns a queued host input");
       }
@@ -818,7 +841,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let yieldClaimInFlight = false;
   const downgradeYield = (batch: DispatchedInterAgentBatch, reason: string, allowFold = true): void => {
     yieldCandidates.delete(batch.turnToken);
-    deliveryStages.yieldDisposition(batch.items[0]!.envelope, {
+    if (reason === "local_policy_disabled") deliveryStages.localPolicyDisabled(batch.items.map(item => item.envelope));
+    else deliveryStages.yieldDisposition(batch.items[0]!.envelope, {
       outcome: "downgraded", reason, at: new Date().toISOString(),
     });
     if (allowFold && host.hasQueuedInput(batch.turnToken)) {
@@ -828,6 +852,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   attemptYieldCandidates = (): void => {
+    if (!deliveryPolicy.decision().allowed) {
+      for (const batch of [...yieldCandidates.values()]) downgradeYield(batch, "local_policy_disabled", false);
+      return;
+    }
     if (yieldClaimInFlight || !yieldNegotiated() ||
         !host?.canPushLiveInput()) return;
     const entry = yieldCandidates.entries().next().value;
@@ -913,6 +941,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           attemptYieldCandidates();
           return;
         }
+        if (!deliveryPolicy.decision().allowed) {
+          yieldClaimInFlight = false;
+          downgradeYield(batch, "local_policy_disabled", false);
+          attemptYieldCandidates();
+          return;
+        }
         if (!host.matchesLiveInputContext(ownerToken, cutContext) ||
             host.yieldEligibility(authority.work_id!) !== null ||
             !host.canReserveYieldOvertake() || !host.hasQueuedInput(batchToken)) {
@@ -967,12 +1001,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         envelopes,
         conversationIds: prepared.batch.conversationIds,
       });
-      if (!pushed || !host.removeQueuedInput(batchToken)) {
+      if (pushed.kind === "declined") {
         yieldClaimInFlight = false;
-        downgradeYield(batch, "eligibility_changed");
+        downgradeYield(batch, pushed.reason === "local_policy_disabled" ? pushed.reason : "eligibility_changed",
+          pushed.reason !== "local_policy_disabled");
         attemptYieldCandidates();
         return;
       }
+      if (!host.removeQueuedInput(batchToken)) throw new Error("cut batch no longer owns a queued host input");
       interAgentTurns.markPushed(batchToken);
       yieldCandidates.delete(batchToken);
       yieldClaimInFlight = false;
@@ -987,6 +1023,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
+    deliveryPolicy,
     noticeAttribution: "v1",
     interAgentDeliveryModes: {
       version: "v1",
@@ -1050,11 +1087,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
               conversationIds: [],
               operatorInput: true,
             });
-            if (pushed) return;
+            if (pushed.kind === "pushed") return;
           }
           await host.send(text, attachmentIds, undefined, undefined, {
             source: "operator",
-            urgent: earlyNegotiated() && deliveryIntent === "early",
+            urgent: deliveryPolicy.decision().allowed && earlyNegotiated() && deliveryIntent === "early",
           });
         })().catch((err: unknown) => {
           writeRedactedStderr(`send failed: ${String(err)}\n`);
@@ -1284,6 +1321,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<AgentHostOptions, "onTurnStart">
   >({
     onState,
+    deliveryPolicy,
     pendingReceiptRootTimeoutMs,
     phase2RootScheduling: () => earlyNegotiated() || yieldNegotiated(),
     onLog,

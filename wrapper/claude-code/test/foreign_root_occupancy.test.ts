@@ -3,6 +3,7 @@
 // Each control below names the guard it pins; the mutation log lists the
 // production edit that turns it red.
 
+import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { describe, expect, it, vi } from "vitest";
 import type {
   Options,
@@ -90,7 +91,10 @@ function makeRig(script: (c: Ctx) => AsyncGenerator<SDKMessage, void>): Rig {
     const c: Ctx = { input: args.prompt[Symbol.asyncIterator](), options: args.options, rig };
     return Object.assign(script(c), { interrupt: async () => {} }) as unknown as Query;
   }) as unknown as QueryFn;
+  const deliveryPolicy = new DeliveryPolicyController();
+  deliveryPolicy.acceptJoin({}, deliveryPolicy.beginJoin());
   rig.host = new AgentHost(config, {
+    deliveryPolicy,
     onState: (e) => rig.states.push(e.state),
     warn: (message) => { rig.warnings.push(message); },
     queryFn,
@@ -383,7 +387,7 @@ describe("foreign root occupancy (issue #426 stage 1)", () => {
       c.rig.obs.pull = await pull(next);
     });
     await play(rig);
-    expect(rig.obs).toEqual({ pushed: true, pull: "held" });
+    expect(rig.obs).toEqual({ pushed: { kind: "pushed" }, pull: "held" });
     expect(rig.decisions).toEqual([{ kind: "unknown", reason: "foreign_occupancy" }]);
   });
 

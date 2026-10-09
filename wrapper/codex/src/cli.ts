@@ -55,6 +55,7 @@ import {
   formatTurnWatchdogLine,
   parseCliArgs,
   ServerLink,
+  DeliveryPolicyController,
 } from "@kaoiro/wrapper-core";
 import {
   CODEX_APPROVAL_TIMEOUT_MS,
@@ -173,6 +174,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const prepareStartup = dependencies.prepareStartup ?? prepareCodexStartup;
   const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
+  const deliveryPolicy = new DeliveryPolicyController();
   const { configPath, prompt, resume: resumeSessionId } = parseArgs(
     process.argv.slice(2),
   );
@@ -727,6 +729,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // Every path that declines an early input goes through here, so the sender's
     // "granted: early" is never the only trace of why it was queued.
     const queued = (reason: string): false => {
+      if (reason === "local_policy_disabled") deliveryStages.localPolicyDisabled([envelope]);
       if (early) {
         try {
           writeRedactedStderr(`[kaoiro] inter-agent early input queued: ${reason} seq=${typeof sequence === "number" ? sequence : "none"} from=${envelope.agent_id}\n`);
@@ -734,6 +737,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       }
       return false;
     };
+    if (early && !deliveryPolicy.decision().allowed) return queued("local_policy_disabled");
     if (!phase3Enabled || typeof host === "undefined" || !interAgent ||
         link?.deliveryModes()?.early !== "steer" || link.noticeAttributionMode() !== "v1") return queued("steer_not_negotiated");
     if (!early) return false;
@@ -859,6 +863,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     interAgentReplyBasis: "v1",
+    deliveryPolicy,
     noticeAttribution: "v1",
     interAgentDeliveryModes: { version: "v1", early: phase3Enabled ? "steer" : "none", yield: "none", stage_reports: true },
     // Declared even when off: without it the server derives the operator
@@ -1054,6 +1059,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     Omit<CodexHostOptions, "onTurnStart">
   >({
     backend,
+    deliveryPolicy,
     ...(approvalAxis ? {
       appServerApprovals: {
         decide: (toolName, input, signal, options) =>

@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 ---
 
 # Codex app-server transport
@@ -287,3 +287,14 @@ Not offered: `acceptForSession`, policy amendments, `cancel`,
 `item/permissions/requestApproval` (always `-32601`), and elicitations. The
 bridge tools raise no server request under `on-request` or `untrusted`
 (probes P4a/P4b), so they keep their own operator gate.
+
+## Live delivery policy acceptance
+
+`CodexHost.#admitSteer` reads the CLI's shared controller before reserving peer
+reply obligations or spending steer counters. It rechecks after turn/start
+readiness, so a policy applied while waiting prevents the RPC. A local denial
+uses `local_policy_disabled` and preserves one normal root. Started RPCs keep
+their existing response/item reconciliation, definite precondition fallback
+and possibly written unknown outcome. Policy changes do not reset limits or
+relax queue, ownership, reset, settings or foreign-turn guards. See
+[policy negotiation](../protocol/channels.md#per-agent-delivery-policy).

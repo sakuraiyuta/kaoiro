@@ -37,6 +37,7 @@ import type {
   PermissionSyncMessage,
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
+import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import {
   initialMachineState,
   makeAttachRejected,
@@ -387,6 +388,7 @@ export interface CodexInterAgentSteerHooks {
 }
 
 export interface CodexHostOptions {
+  deliveryPolicy?: DeliveryPolicyController;
   /** Internal opt-in only; normal CLI/config/env launch always uses exec. */
   backend?: "exec" | "app-server";
   appServerSessionFactory?: AppServerHostRuntimeOptions["createSession"];
@@ -679,6 +681,7 @@ export class CodexHost implements EngineAdapter {
    *  engines. */
   #displayNameRevision = 0;
   readonly #options: CodexHostOptions;
+  readonly #deliveryPolicy: DeliveryPolicyController;
   readonly #contextMeter = new AppServerContextMeter();
   #appRuntime: AppServerHostRuntime | null = null;
   #appTurnToken: string | null = null;
@@ -820,6 +823,7 @@ export class CodexHost implements EngineAdapter {
   constructor(config: WrapperConfig, options: CodexHostOptions) {
     this.#config = config;
     this.#options = options;
+    this.#deliveryPolicy = options.deliveryPolicy ?? new DeliveryPolicyController();
     this.#turnTraceBaseDir =
       options.turnTraceDir ?? defaultCodexTurnTraceDir();
     this.#turnTraceCaptureDir = codexTurnTraceCaptureDir(
@@ -2776,6 +2780,7 @@ export class CodexHost implements EngineAdapter {
     if (ia !== undefined && (this.#iaSteerWritesByToken.get(token) ?? 0) >= MAX_IA_STEERS_PER_TURN) return "inter_agent_steer_cap";
     const overtakes = ia !== undefined && this.#queue.some(isPeerRoot);
     if (overtakes && (this.#iaOvertakesByToken.get(token) ?? 0) >= MAX_IA_OVERTAKES_PER_TURN) return "overtake_budget";
+    if (!this.#deliveryPolicy.decision().allowed) return "local_policy_disabled";
     const leaseReason = ia?.admit(token, arrival);
     if (leaseReason !== undefined && leaseReason !== null) return leaseReason;
     const record = new SteerRecord(id, turnId, {

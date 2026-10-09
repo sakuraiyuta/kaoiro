@@ -42,6 +42,7 @@ describe("issue #460 Claude server status handoff", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -137,6 +138,7 @@ describe("issue #460 Claude server status handoff", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "none", yield: "tool_boundary", stage_reports: true }),

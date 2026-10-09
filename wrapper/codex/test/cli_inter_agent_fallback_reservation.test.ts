@@ -113,6 +113,7 @@ async function compose(options: { holdSteerWrite?: boolean; steerOutcome?: "P" |
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
+      options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
       return link as never;
     },

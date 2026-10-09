@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 related: [deployment]
 ---
 
@@ -131,6 +131,21 @@ needs to be current.
 
 A non-dry `update` fetches `origin` inside `runBuild` before its fast-forward
 merge. The dry-run plan includes that future fetch without performing it.
+
+### Delivery policy revision recovery
+
+After restoring the delivery-policy store from a backup, a live wrapper may
+report `delivery_policy_revision_below_high_water` with the received revision
+and its retained `high_water`. It rejects that lower row without an ack and
+stays fenced on a supporting rejoin. Normal root delivery remains available.
+
+Verify the restored store and effective policy first, then restart the
+affected wrappers through the normal operator stop/restore procedure. A new
+wrapper process has no prior high-water and applies the restored current row
+before acknowledging it. Confirm its matching current-revision ack and an
+eligible on/off control. Do not edit wrapper history, reset a policy on a
+timer, or treat a reconnect as recovery. For a wrapper release use the
+[high-risk canary procedure](high-risk-change-release.md).
 
 ### Delivery policy store placement
 

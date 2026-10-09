@@ -19,6 +19,20 @@ as issues 558 to 567 ([mapping](https://github.com/sakuraiyuta/kaoiro/issues/463
 "In-flight delivery" means: operator early input (Claude fold, Codex
 `turn/steer`) and inter-agent early / yield delivery into a running turn.
 
+## C1W implementation boundary
+
+The wrapper implementation for [issue #560](https://github.com/sakuraiyuta/kaoiro/issues/560)
+shares one controller between each Claude/Codex CLI transport and host. Off
+blocks new acceptances before its ack; previously accepted Claude receipts
+may still reach the SDK afterwards. Native controls and independent
+implementation review remain prerequisites to landing this child. C1W does
+not retire launch flags or change mechanism defaults. Its candidate was forked
+from the C1S branch at `7df92a775237ef6696d4b16b56a14c5840245d96`, then
+replayed onto landed C1S `8e9360a5507c0ca2387df48c1118903a14544197`;
+release only after the supporting C1S server is integrated. Rollback below a
+live wrapper's high-water requires restarting that affected wrapper, as
+[documented](../operations/server-update-and-rollback.md#delivery-policy-revision-recovery).
+
 ## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 
 Source defaults and configured production behavior are separate:
@@ -242,9 +256,10 @@ recorded in the existing stage records.
 wrapper installs a local fence before it acknowledges. Each queued item is
 decided exactly once, at a single commit point per engine:
 
-- Claude: the commit point is the input scheduler's submit (issue #434: the
-  single serialization point for folds and cuts). An item classified as early
-  checks the fence again at submit. If the fence is up, the item goes to the
+- Claude: the commit point is synchronous `AgentHost.pushLiveInput` acceptance,
+  after formatting/size checks and before receipt, queue or quota mutations.
+  An item classified as early checks the fence again at submit. If the fence
+  is up, the item goes to the
   root queue with `local_policy_disabled`. A yield whose claim succeeded but
   whose cut is not yet pushed is not cut; the item takes the existing
   failed-claim path, which the fence then sends to the root queue. The policy

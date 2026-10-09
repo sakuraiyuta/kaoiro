@@ -237,6 +237,14 @@ first event still settles with `failed_before_handoff`.
 
 The server rejects an unknown `handoff` value with `invalid_delivery_stage`, and
 the wrapper keeps a rejected report pending until the delivery identity changes.
+Pending `queued` reports are coalesced by delivery identity, sequence and their
+mode, reason and yield-disposition outcome/reason. Timestamp-only retries retain
+the first report; a changed local queued decision is sent separately within
+the same 512-report pending limit. Other stages retain their stage-only pending
+key. The server retains the first queued timestamp and updates supplied mode
+and reason on the same delivery record. A captured yield disposition is retried
+unchanged; a conflicting later disposition is rejected. Queued reports do not
+advance delivery acknowledgement or release early ownership.
 Deploy the server before the runner, and if the server is rolled back to a
 version that predates `turn_start_accepted`, roll the runner back with it.
 
@@ -423,6 +431,27 @@ Recovery needs a new wrapper process; a session reset inside the failed host
 does not restore admission. The wrapper exits once its running turn ends and
 the runner relaunches it. See [Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
 and [wrapper delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls).
+
+## Live delivery policy boundary
+
+Off blocks new in-flight acceptances once its local fence is installed,
+before the acknowledgement; input accepted before that boundary may still
+reach the SDK after the acknowledgement.
+
+Claude reads the shared controller in `AgentHost.pushLiveInput`, after text
+formatting and size checks and before accepting a receipt or spending a fold.
+Codex reads it in `CodexHost.#admitSteer`, before peer reservation and the
+synchronous RPC start. An already accepted Claude receipt or started Codex
+RPC keeps its existing outcome; policy changes never create another copy.
+
+A local refusal preserves one queued root, reports `local_policy_disabled`
+once under its original delivery identity, and reports subsequent root
+handoff as normal. It does not acknowledge handoff at queue insertion, refund
+a claimed yield token, change reply authority, or promote that refused item
+when policy later turns on. Policy on does not bypass the applicable engine
+ordering guards or reset per-turn limits.
+
+See [policy negotiation and revision safety](../protocol/channels.md#per-agent-delivery-policy).
 
 ## Related topics
 

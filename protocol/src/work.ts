@@ -40,6 +40,9 @@ export interface DeliveryModes {
 }
 
 export type DeliveryDowngrade =
+  | "recipient_policy_off"
+  | "policy_unknown"
+  | "policy_unconfirmed"
   | "unsupported_by_recipient"
   | "yield_not_authorized"
   | "yield_interval"

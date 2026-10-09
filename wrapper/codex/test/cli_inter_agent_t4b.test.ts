@@ -86,6 +86,7 @@ it.each([{ spend: false, cid: "X", late: false, peer: "peer" }, { spend: true, c
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }), loadConfig: () => ({ ...config }),
     prepareStartup: async () => {},
     createServerLink: (_url, _id, incoming) => {
+      incoming.deliveryPolicy?.acceptJoin({}, incoming.deliveryPolicy.beginJoin());
       callbacks = incoming as unknown as Record<string, any>;
       queueMicrotask(() => incoming.onPersonaPrompt?.("PERSONA")); return link as never;
     },

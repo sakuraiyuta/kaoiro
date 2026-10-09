@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-10-04
+last_updated: 2026-10-09
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -553,3 +553,15 @@ None. The common-envelope type/payload design is settled in
 ## Input-bound inter-agent replies
 
 See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.
+
+## Live delivery policy acceptance
+
+`AgentHost.pushLiveInput` returns pushed or declined, with a policy revision
+on a supporting acceptance. It reads the shared controller after text
+formatting and before any receipt, active-input, queue or quota mutation.
+Operator folds, peer folds and claimed cuts use the same boundary.
+`claude_live_input_accepted` records its kind, receipt id and policy revision
+without input text or reply tickets. An accepted receipt remains owned by
+the existing prompt-hook path across a later off transition, even when its
+SDK pull follows the policy ack. See the
+[operator-visible boundary](../inter-agent/delivery.md#live-delivery-policy-boundary).

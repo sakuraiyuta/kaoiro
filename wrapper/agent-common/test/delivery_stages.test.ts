@@ -10,6 +10,43 @@ const envelope = (seq: number): Envelope => ({
 } as unknown as Envelope);
 
 describe("DeliveryStageReporter", () => {
+  it("records a local fence once under its captured identity and keeps later root handoff normal", () => {
+    const reports: Record<string, unknown>[] = [];
+    const item = envelope(7);
+    item.payload.delivery_authority = { requested: "early", granted: "early" };
+    let identity = { incarnation: "i", generation: "g" };
+    const reporter = new DeliveryStageReporter({ send: report => { reports.push(report); },
+      identity: () => identity, turns: { deliveryEnvelopesForTurn: () => [item] } });
+    reporter.queued(item);
+    reporter.localPolicyDisabled([item]);
+    reporter.localPolicyDisabled([item]);
+    expect(reports.filter(report => report.reason === "local_policy_disabled")).toEqual([
+      expect.objectContaining({ stage: "queued", mode: "normal", incarnation: "i", generation: "g", delivery_seq: 7 }),
+    ]);
+    expect(item.payload.delivery_authority).toMatchObject({ granted: "early" });
+    reporter.submitted("root", "prompt_hook");
+    reporter.localPolicyDisabled([item]);
+    expect(reports.at(-1)).toMatchObject({ stage: "submitted", mode: "normal", handoff: "prompt_hook" });
+    identity = { incarnation: "next", generation: "next" };
+    reporter.localPolicyDisabled([item]);
+    expect(reports).toHaveLength(3);
+  });
+
+  it("does not borrow a later identity or revive retired inputs on policy refusal", () => {
+    const reports: Record<string, unknown>[] = [];
+    let identity: { incarnation: string; generation: string } | null = null;
+    const beforeJoin = envelope(7), retired = envelope(8);
+    const reporter = new DeliveryStageReporter({ send: report => { reports.push(report); },
+      identity: () => identity, turns: { deliveryEnvelopesForTurn: () => [] } });
+    reporter.capture(beforeJoin);
+    identity = { incarnation: "i", generation: "g" };
+    reporter.localPolicyDisabled([beforeJoin]);
+    expect(reports).toEqual([]);
+    reporter.queued(retired);
+    reporter.settleEnvelope(retired, "terminal_skip");
+    reporter.localPolicyDisabled([retired]);
+    expect(reports.map(report => report.stage)).toEqual(["queued", "settled"]);
+  });
   it("reports fold inclusion, yield disposition, and a voided receipt under the captured identity", () => {
     const reports: Record<string, unknown>[] = [];
     const folded = envelope(20);

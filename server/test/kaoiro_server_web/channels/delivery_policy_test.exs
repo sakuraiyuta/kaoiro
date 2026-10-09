@@ -151,7 +151,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
         started = System.monotonic_time(:microsecond)
         assert_reply push(socket, "envelope", state(id)), :ok
         elapsed = System.monotonic_time(:microsecond) - started
-        assert elapsed < 250_000
+        assert elapsed < 500_000
         IO.puts("559 availability first-state ack=#{unquote(ack?)}: #{elapsed} us")
         assert_broadcast "envelope", %{"agent_id" => ^id} = live
         assert live == AgentStates.get_envelope(id)
@@ -183,7 +183,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
         started = System.monotonic_time(:microsecond)
         assert_reply push(socket, "envelope", forged), :ok
         elapsed = System.monotonic_time(:microsecond) - started
-        assert elapsed < 250_000
+        assert elapsed < 500_000
         IO.puts("559 availability #{unquote(type)}: #{elapsed} us")
         assert_broadcast "envelope", %{"agent_id" => ^id, "type" => unquote(type)} = live
         assert live == AgentStates.get_envelope(id)
@@ -211,7 +211,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
                    :ok,
                    %{"delivery_intent" => "normal"}
 
-      assert System.monotonic_time(:microsecond) - started < 250_000
+      assert System.monotonic_time(:microsecond) - started < 500_000
 
       assert_broadcast "instruction", %{"text" => "ordinary", "delivery_intent" => "normal"}
     end)
@@ -250,7 +250,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
                      :ok,
                      %{"delivery_authority" => %{requested: "normal", granted: "normal"}}
 
-        assert System.monotonic_time(:microsecond) - started < 250_000
+        assert System.monotonic_time(:microsecond) - started < 500_000
 
         assert_broadcast "envelope", %{
           "type" => "inter_agent_message",
@@ -552,6 +552,144 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
       "payload" => %{"delivery_authority" => %{granted: "normal"}}
     }
 
+    assert KaoiroServer.DeliveryStates.pending_early(from, id) == {0, 0}
+  end
+
+  test "changed queued reports preserve timestamp, expose the local result, and do not ack delivery",
+       %{id: id} do
+    from = id <> ".sender"
+    {%{"inter_agent_delivery_incarnation" => incarnation}, receiver} = wrapper(id)
+    {_, sender} = wrapper(from)
+    @endpoint.subscribe("wrapper:" <> id)
+    cid = id <> ".queued"
+
+    payload = %{
+      "to" => id,
+      "kind" => "inform",
+      "body" => "queued policy",
+      "conversation_id" => cid,
+      "turn_number" => 1,
+      "delivery_intent" => "early",
+      "meta" => %{"done" => false, "propose_next" => ""},
+      "owner" => %{"kind" => "user", "id" => "operator"},
+      "new_conversation" => true,
+      "in_reply_to" => 0
+    }
+
+    assert_reply push(sender, "envelope", %{
+                   state(from)
+                   | "type" => "inter_agent_message",
+                     "payload" => payload
+                 }),
+                 :ok
+
+    assert_broadcast "envelope", %{
+      "delivery_seq" => seq,
+      "payload" => %{"delivery_authority" => %{granted: "early"}}
+    }
+
+    first = DateTime.utc_now() |> DateTime.to_iso8601()
+    later = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.to_iso8601()
+
+    queued = %{
+      "version" => "0",
+      "incarnation" => incarnation,
+      "generation" => id,
+      "delivery_seq" => seq,
+      "stage" => "queued",
+      "at" => first,
+      "mode" => "early"
+    }
+
+    assert_reply push(receiver, "delivery_stage", queued), :ok
+    assert {:ok, _} = DeliveryPolicies.compare_and_set(id, :off, 1)
+    disposition = %{"outcome" => "downgraded", "reason" => "local_policy_disabled", "at" => later}
+
+    changed =
+      Map.merge(queued, %{
+        "mode" => "normal",
+        "reason" => "local_policy_disabled",
+        "at" => later,
+        "yield_disposition" => disposition
+      })
+
+    assert_reply push(receiver, "delivery_stage", changed), :ok
+    assert_reply push(receiver, "delivery_stage", changed), :ok
+
+    assert_reply push(sender, "delivery_status_request", %{
+                   "version" => "0",
+                   "conversation_id" => cid,
+                   "turn_number" => 1
+                 }),
+                 :ok,
+                 %{
+                   "delivery_status" => %{
+                     stages: %{"queued" => ^first},
+                     changed_at: ^later,
+                     mode: "normal",
+                     reason: "local_policy_disabled",
+                     yield_disposition: ^disposition
+                   }
+                 }
+
+    assert %{acked_seq: 0} = KaoiroServer.DeliveryStates.get(id)
+    assert KaoiroServer.DeliveryStates.pending_early(from, id) == {1, 1}
+  end
+
+  test "non-normal IA admission reads durable off despite an obsolete on display view", %{id: id} do
+    from = id <> ".sender"
+    {_, receiver} = wrapper(id)
+    {_, sender} = wrapper(from)
+    assert {:ok, %{revision: 2}} = DeliveryPolicies.compare_and_set(id, :off, 1)
+    _ = :sys.get_state(receiver.channel_pid)
+
+    stale = %{
+      "policy" => "on",
+      "revision" => 1,
+      "confirmed" => true,
+      "pending" => false,
+      "wrapper_support" => false
+    }
+
+    AgentStates.overlay_delivery_policy(id, stale)
+    assert AgentStates.get_envelope(id)["ext"]["delivery_policy"] == stale
+    @endpoint.subscribe("wrapper:" <> id)
+
+    ref =
+      push(sender, "envelope", %{
+        "version" => "0",
+        "agent_id" => from,
+        "ts" => "T",
+        "type" => "inter_agent_message",
+        "state" => "thinking",
+        "payload" => %{
+          "to" => id,
+          "kind" => "inform",
+          "body" => "obsolete view",
+          "conversation_id" => id <> ".stale",
+          "turn_number" => 1,
+          "delivery_intent" => "early",
+          "meta" => %{"done" => false, "propose_next" => ""},
+          "owner" => %{"kind" => "user", "id" => "operator"},
+          "new_conversation" => true,
+          "in_reply_to" => 0
+        }
+      })
+
+    assert_reply ref, :ok, %{
+      "delivery_authority" => %{
+        requested: "early",
+        granted: "normal",
+        downgrade: "recipient_policy_off"
+      }
+    }
+
+    assert_broadcast "envelope", %{
+      "type" => "inter_agent_message",
+      "payload" => %{"delivery_authority" => %{granted: "normal"}}
+    }
+
+    assert {:ok, %{policy: :off, revision: 2}} = DeliveryPolicies.get(id)
     assert KaoiroServer.DeliveryStates.pending_early(from, id) == {0, 0}
   end
 

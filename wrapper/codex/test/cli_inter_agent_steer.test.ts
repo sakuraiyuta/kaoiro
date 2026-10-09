@@ -20,6 +20,7 @@ function inbound(granted: "early" | "normal" = "early"): Envelope {
 }
 
 interface ComposeExtra {
+  policyOff?: boolean;
   mutate?: (early: any) => void;
   root?: { agent_id: string; conversation_id: string };
   idle?: boolean;
@@ -117,6 +118,13 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       linkOptions = options as unknown as Record<string, any>;
+      options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
+      if (extra.policyOff) {
+        const policy = options.deliveryPolicy!;
+        const join = policy.beginJoin();
+        policy.acceptJoin({ delivery_policy: "v1" }, join);
+        policy.apply({ revision: 1, policy: "off" }, join);
+      }
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
       return link as never;
     },
@@ -129,6 +137,17 @@ async function compose(backend: "app-server" | "exec", echo: boolean, grant: "ea
 }
 
 describe("production Codex IA steer composition", () => {
+  it.each(["classification", "final commit"] as const)("keeps one normal root and no acknowledgement after %s policy refusal", async boundary => {
+    const result = await compose("app-server", true, "early", "included", true, false,
+      boundary === "classification" ? { policyOff: true } : { hostQueued: "local_policy_disabled" });
+    expect(result.send).toHaveBeenCalledOnce();
+    expect(result.steer).toHaveBeenCalledTimes(boundary === "classification" ? 0 : 1);
+    expect(result.acknowledged).toEqual([]);
+    expect(result.reports.filter(report => report.reason === "local_policy_disabled")).toEqual([
+      expect.objectContaining({ stage: "queued", mode: "normal", incarnation: "inc", generation: "gen", delivery_seq: 1 }),
+    ]);
+    expect(result.reports.some(report => report.stage === "submitted")).toBe(false);
+  });
   it("steers a server-granted early peer input and resolves its sequence", async () => {
     const result = await compose("app-server", true);
     expect(result.linkOptions.interAgentDeliveryModes.early).toBe("steer");

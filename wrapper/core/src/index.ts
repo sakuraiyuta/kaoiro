@@ -43,6 +43,8 @@ export {
   redactCredentials,
   writeRedactedStderr,
 } from "./redact.js";
+export { DeliveryPolicyController } from "./delivery_policy.js";
+export type { DeliveryPolicyAck, DeliveryPolicyDecision, DeliveryPolicyApplication } from "./delivery_policy.js";
 export { createPhoenixSocket } from "./phoenix_socket.js";
 export type { PhoenixSocketOptions } from "./phoenix_socket.js";
 export {

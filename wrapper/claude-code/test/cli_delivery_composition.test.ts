@@ -54,6 +54,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => scenario === "no mode echo" ? undefined : { early: "none", yield: "none", stage_reports: true },
@@ -103,6 +104,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -206,6 +208,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -283,6 +286,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -408,6 +412,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -526,6 +531,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -574,7 +580,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         pushedInputFits: (text: string, count: number) => count <= 10 && Buffer.byteLength(text, "utf8") <= 16_384,
         hasQueuedInput: (token: string) => queued.has(token),
         removeQueuedInput: (token: string) => queued.delete(token),
-        pushLiveInput: (input: { kind: string }) => { pushes.push(input.kind); return true; },
+        pushLiveInput: (input: { kind: string }) => { pushes.push(input.kind); return { kind: "pushed" }; },
       }) as never,
     });
     try {
@@ -637,6 +643,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -668,7 +675,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         removeQueuedInput: (token: string) => queued.delete(token),
         pushLiveInput: (input: { text: (foldId: string) => string }) => {
           pushes.push(input.text("0".repeat(32)));
-          return true;
+          return { kind: "pushed" };
         },
       }) as never,
     });
@@ -716,6 +723,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -761,6 +769,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
@@ -800,6 +809,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
@@ -850,6 +860,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
@@ -910,6 +921,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
@@ -1017,6 +1029,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: (interAgent) => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
@@ -1097,6 +1110,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
           queueMicrotask(() => {
             linkOptions.onInterAgentDeliveryStatus({ issued_seq: 0, acked_seq: 0 });
             linkOptions.onPersonaPrompt("system prompt");
@@ -1168,6 +1182,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryIncarnation: () => "server-incarnation",
@@ -1351,6 +1366,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => {
           options.onReplyBasisMode!("v1");
           options.onPersonaPrompt!("system prompt");
@@ -1450,6 +1466,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => {
           linkOptions.onPersonaPrompt("system prompt");
         });

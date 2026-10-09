@@ -60,6 +60,7 @@ describe("Claude claimed-cut receipt chain", () => {
       loadConfig: () => ({ ...config, folds_per_turn: 3 }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),
@@ -174,6 +175,7 @@ describe("Claude claimed-cut final receipt deadline", () => {
       loadConfig: () => ({ ...config, pending_receipt_root_timeout_ms: 100 }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
           deliveryModes: () => ({ early: "fold", yield: "tool_boundary", stage_reports: true }),

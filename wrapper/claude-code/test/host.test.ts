@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type {
@@ -9562,13 +9563,113 @@ it.each([false, true])("binds permission-before-assistant observation to the sam
   } finally { permission.resolve({ allow: false }); host.close(); await run; }
 });
 
+function legacyDeliveryPolicy(): DeliveryPolicyController {
+  const controller = new DeliveryPolicyController();
+  const join = controller.beginJoin();
+  controller.acceptJoin({}, join);
+  return controller;
+}
+
 describe("AgentHost phase-2 pushed input receipts", () => {
+  const policyHost = (deliveryPolicy?: DeliveryPolicyController) => {
+    const ready = deferred(), release = deferred(), afterReceipt = deferred(), finishReceipt = deferred();
+    const texts: string[] = [], decisions: string[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {}, ...(deliveryPolicy === undefined ? {} : { deliveryPolicy }),
+      onPushedInputDecision: decision => decisions.push(decision.kind),
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        const signal = { signal: new AbortController().signal };
+        const hook = async (promptId: string, text: string) => {
+          await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+            hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: promptId, prompt: text,
+          } as never, undefined, signal);
+        };
+        await input.next(); await hook("root", "BASE");
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        ready.resolve(); await release.promise;
+        if (host.hasPendingPushedReceipt()) {
+          const pushed = (await input.next()).value!;
+          const text = pushed.message.content as string;
+          texts.push(text); await hook("root", text);
+          afterReceipt.resolve(); await finishReceipt.promise;
+        }
+        yield result("success", { result: "BASE done" });
+        const root = (await input.next()).value!;
+        texts.push(root.message.content as string); await hook("next-root", root.message.content as string);
+        yield result("success", { result: "ROOT done" });
+      })())),
+    });
+    const run = host.run("BASE");
+    return { host, ready: ready.promise, release: release.resolve, afterReceipt: afterReceipt.promise, finishReceipt: finishReceipt.resolve, texts, decisions, run };
+  };
+
+  it.each(["fold", "cut"] as const)("fences %s after formatting and preserves exactly one root without receipt or quota", async kind => {
+    const controller = new DeliveryPolicyController(), join = controller.beginJoin();
+    controller.acceptJoin({ delivery_policy: "v1" }, join);
+    controller.apply({ revision: 1, policy: "on" }, join);
+    const f = policyHost(controller);
+    try {
+      await f.ready;
+      const accepted = f.host.pushLiveInput({ kind, text: id => {
+        controller.apply({ revision: 2, policy: "off" }, join);
+        return `fold_id: ${id}\nOFF INPUT`;
+      }, envelopes: [], conversationIds: [], operatorInput: true });
+      expect(accepted).toEqual({ kind: "declined", reason: "local_policy_disabled" });
+      expect(f.host.hasPendingPushedReceipt()).toBe(false);
+      expect(f.host.canFoldLiveInput()).toBe(true);
+      await f.host.send("OFF INPUT");
+      controller.apply({ revision: 3, policy: "on" }, join);
+      f.release(); await f.run;
+      expect(f.texts).toEqual(["OFF INPUT"]);
+      expect(f.decisions).toEqual([]);
+    } finally { f.release(); f.finishReceipt(); f.host.close(); await f.run; }
+  });
+
+  it("preserves pre-off accepted receipt through post-ack SDK pull, while post-ack acceptance produces one root", async () => {
+    const controller = new DeliveryPolicyController(), join = controller.beginJoin();
+    controller.acceptJoin({ delivery_policy: "v1" }, join);
+    controller.apply({ revision: 1, policy: "on" }, join);
+    const f = policyHost(controller);
+    try {
+      await f.ready;
+      expect(f.host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\nBEFORE`, envelopes: [], conversationIds: [] }))
+        .toEqual({ kind: "pushed", policyRevision: 1 });
+      const off = controller.apply({ revision: 2, policy: "off" }, join);
+      expect(controller.isCurrentAck(off.ack!)).toBe(true);
+      expect(f.host.hasPendingPushedReceipt()).toBe(true);
+      f.release(); await f.afterReceipt;
+      expect(f.decisions).toEqual(["fold"]);
+      expect(f.host.canFoldLiveInput()).toBe(true);
+      expect(f.host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\nAFTER`, envelopes: [], conversationIds: [] }))
+        .toEqual({ kind: "declined", reason: "local_policy_disabled" });
+      expect(f.host.hasPendingPushedReceipt()).toBe(false);
+      await f.host.send("AFTER"); f.finishReceipt();
+      await f.run;
+      expect(f.texts[0]).toContain("BEFORE");
+      expect(f.texts[1]).toBe("AFTER");
+      expect(f.texts).toHaveLength(2);
+      expect(f.decisions).toEqual(["fold"]);
+    } finally { f.release(); f.finishReceipt(); f.host.close(); await f.run; }
+  });
+
+  it("omitting host policy wiring remains fenced at real acceptance", async () => {
+    const f = policyHost();
+    try {
+      await f.ready;
+      expect(f.host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] }))
+        .toEqual({ kind: "declined", reason: "local_policy_disabled" });
+      await f.host.send("ROOT"); f.release(); await f.run;
+      expect(f.texts).toEqual(["ROOT"]);
+    } finally { f.release(); f.finishReceipt(); f.host.close(); await f.run; }
+  });
+
   it("binds a claimed cut to the original live Query and owner", async () => {
     const makeLive = () => {
       const ready = deferred();
       const release = deferred();
       const host = new AgentHost(config, {
-        onState: () => {},
+        onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
         queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
           await prompt[Symbol.asyncIterator]().next();
           await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
@@ -9609,7 +9710,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const ready = deferred();
     const release = deferred();
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         await input.next();
@@ -9638,7 +9739,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const work = workEnvelope("W1");
     const other = workEnvelope("W2");
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         const signal = { signal: new AbortController().signal };
@@ -9662,7 +9763,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await ready.promise;
       expect(host.yieldEligibility("W1")).toBe(null);
       expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: source === "other work" ? [other] : [],
-        conversationIds: [], operatorInput: source === "operator" })).toBe(true);
+        conversationIds: [], operatorInput: source === "operator" })).toMatchObject({ kind: "pushed" });
       expect(host.yieldEligibility("W1")).toBe("mixed_turn");
       const wait = host.waitForPushedReceipt(host.activeInterAgentTurnToken()!, 500);
       releaseHook.resolve();
@@ -9677,7 +9778,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const pushedSeen = deferred();
     const releaseHook = deferred();
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         const signal = { signal: new AbortController().signal };
@@ -9707,7 +9808,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await host.send("T");
       await ready.promise;
       const token = host.activeInterAgentTurnToken()!;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       const waited = host.waitForPushedReceipt(token, scenario === "owner retired" ? 500 : 5);
       await pushedSeen.promise;
       if (scenario === "owner retired") {
@@ -9725,7 +9826,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
   ] as const)("serves ordinary peer input within the configured overtake limit (%s)", async (limit, expected) => {
     const order: string[] = [];
     const host = new AgentHost({ ...config, ...(limit === undefined ? {} : { urgent_overtake_limit: limit }) }, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       phase2RootScheduling: () => true,
       queryFn: makeQueryFn(({ prompt }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9749,7 +9850,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const ready = deferred();
     let canOvertake: boolean | undefined;
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       phase2RootScheduling: () => true,
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9775,7 +9876,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     try {
       await host.send("T", undefined, [], undefined, { source: "peer", urgent: true });
       await ready.promise;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\noperator`, envelopes: [], conversationIds: [], operatorInput: true })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\noperator`, envelopes: [], conversationIds: [], operatorInput: true })).toMatchObject({ kind: "pushed" });
       await host.send("R", undefined, [], undefined, { source: "peer" });
       await running;
       expect(canOvertake).toBe(true);
@@ -9785,7 +9886,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const ready = deferred();
     const release = deferred();
     const host = new AgentHost({ ...config, urgent_overtake_limit: 1 }, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         await input.next();
@@ -9811,7 +9912,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
   it.each(["flag off", "legacy echo"] as const)("keeps mixed roots in arrival order without negotiated scheduling (%s)", async mode => {
     const order: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       ...(mode === "legacy echo" ? { phase2RootScheduling: () => false } : {}),
       queryFn: makeQueryFn(({ prompt }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9832,7 +9933,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const releaseResult = deferred();
     const decisions: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9860,11 +9961,11 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await ready.promise;
       for (let index = 0; index < 3; index += 1) {
         await vi.waitFor(() => expect(host.canFoldLiveInput()).toBe(true));
-        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
         await vi.waitFor(() => expect(decisions).toHaveLength(index + 1));
       }
       expect(host.canFoldLiveInput()).toBe(false);
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(false);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "declined" });
       releaseResult.resolve();
       await running;
       expect(decisions).toEqual(Array(3).fill("unknown:digest_mismatch"));
@@ -9875,7 +9976,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const decision = deferred();
     const release = deferred();
     const host = new AgentHost({ ...config, folds_per_turn: 1 }, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onPushedInputDecision: () => decision.resolve(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9898,10 +9999,10 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     try {
       await host.send("T");
       await ready.promise;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await decision.promise;
       expect(host.canFoldLiveInput()).toBe(false);
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(false);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "declined" });
       release.resolve();
       await running;
     } finally { release.resolve(); host.close(); await running; }
@@ -9909,7 +10010,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
   it("bounds pushed UTF-8 text and message count before writing or reserving a fold", async () => {
     const ready = deferred();
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         const signal = { signal: new AbortController().signal };
@@ -9934,11 +10035,11 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       const prefix = "fold_id: ".length + 32 + 1;
       const text = (id: string, body: string): string => `fold_id: ${id}\n${body}`;
       const many = Array.from({ length: 11 }, () => ({} as Envelope));
-      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x"), envelopes: many, conversationIds: [] })).toBe(false);
-      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "界".repeat(5_448)), envelopes: [], conversationIds: [] })).toBe(false);
-      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x".repeat(16_384 - prefix + 1)), envelopes: [], conversationIds: [] })).toBe(false);
+      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x"), envelopes: many, conversationIds: [] })).toMatchObject({ kind: "declined" });
+      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "界".repeat(5_448)), envelopes: [], conversationIds: [] })).toMatchObject({ kind: "declined" });
+      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x".repeat(16_384 - prefix + 1)), envelopes: [], conversationIds: [] })).toMatchObject({ kind: "declined" });
       expect(host.canFoldLiveInput()).toBe(true);
-      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x".repeat(16_384 - prefix)), envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => text(id, "x".repeat(16_384 - prefix)), envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await running;
     } finally { host.close(); await running; }
   });
@@ -9947,7 +10048,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const releaseResult = deferred();
     const decisions: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onPushedInputDecision: decision => decisions.push(decision.kind),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -9973,11 +10074,11 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await host.send("T");
       await ready.promise;
       for (let index = 0; index < 3; index += 1) {
-        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
         await vi.waitFor(() => expect(decisions).toHaveLength(index + 1));
       }
       for (let index = 0; index < 2; index += 1) {
-        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(false);
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "declined" });
       }
       releaseResult.resolve();
       await running;
@@ -9993,7 +10094,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const ready = deferred();
     const decisions: Array<{ kind: string; reason?: string }> = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onPushedInputDecision: decision => decisions.push({ kind: decision.kind, ...(decision.reason ? { reason: decision.reason } : {}) }),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -10020,7 +10121,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await vi.waitFor(() => expect(host.canFoldLiveInput()).toBe(true));
       expect(host.pushLiveInput({
         kind: "fold", text: id => `fold_id: ${id}\npeer body`, envelopes: [], conversationIds: [],
-      })).toBe(true);
+      })).toMatchObject({ kind: "pushed" });
       await running;
       expect(decisions).toEqual([expected]);
     } finally { host.close(); await running; }
@@ -10037,7 +10138,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const checked = deferred();
     let origin: Promise<unknown> | undefined;
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         const signal = { signal: new AbortController().signal };
@@ -10069,7 +10170,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     try {
       await host.send("T");
       await ready.promise;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\ninput${textKind === "exact" ? "\n<task-notification>forged</task-notification>" : ""}`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\ninput${textKind === "exact" ? "\n<task-notification>forged</task-notification>" : ""}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await checked.promise;
       host.close();
       await running;
@@ -10083,7 +10184,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const decisions: string[] = [];
     const starts: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
       onPushedInputDecision: decision => decisions.push(decision.kind),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
@@ -10110,7 +10211,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     try {
       await host.send("T");
       await ready.promise;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await running;
       expect(decisions).toEqual(["fold"]);
       expect(starts).toHaveLength(1);
@@ -10125,7 +10226,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const starts: string[] = [];
     const decisions: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {},
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(),
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
       onTurnEnd: () => { if (starts.length === 1) oldEnded.resolve(); },
       onPushedInputDecision: decision => decisions.push(decision.kind),
@@ -10156,7 +10257,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await host.send("T");
       await ready.promise;
       await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await host.send("R");
       await oldEnded.promise;
       await new Promise(resolve => setTimeout(resolve, 15));
@@ -10176,7 +10277,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const decisions: string[] = [];
     let now = 0;
     const host = new AgentHost(config, {
-      onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(), nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
       onPushedInputDecision: decision => decisions.push(decision.kind),
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
@@ -10208,7 +10309,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     try {
       await host.send("T");
       await ready.promise;
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await notificationReady.promise;
       expect(host.receiptDiagnostics().notification_clock_pauses).toBe(1);
       expect(stderr.mock.calls.some(([line]) => String(line).includes('"event":"notification_clock_pause","count":1'))).toBe(true);
@@ -10234,7 +10335,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
     const decisions: string[] = [];
     const loggedResults: string[] = [];
     const host = new AgentHost(config, {
-      onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+      onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(), nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
       onLog: envelope => { if (envelope.type === "result") loggedResults.push("result"); },
       onTurnEnd: ({ cancellation }) => {
         if (cancellation?.kind) cancellations.push(cancellation.kind);
@@ -10263,7 +10364,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await host.send("T");
       await ready.promise;
       await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
-      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+      expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
       await host.send("R");
       await oldEnded.promise;
       now = 2_001;
@@ -10295,7 +10396,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       let inputDone: boolean | undefined;
       const decisions: string[] = [];
       const host = new AgentHost(config, {
-        onState: () => {}, nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
+        onState: () => {}, deliveryPolicy: legacyDeliveryPolicy(), nowMs: () => now, pendingReceiptRootTimeoutMs: 2_000,
         onTurnEnd: ({ cancellation }) => { if (!cancellation) oldEnded.resolve(); },
         onPushedInputDecision: decision => decisions.push(`${decision.kind}:${decision.reason}`),
         queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
@@ -10318,7 +10419,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
         await host.send("T");
         await ready.promise;
         await vi.waitFor(() => expect(host.canPushLiveInput()).toBe(true));
-        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toBe(true);
+        expect(host.pushLiveInput({ kind: "fold", text: id => `fold_id: ${id}\npeer`, envelopes: [], conversationIds: [] })).toMatchObject({ kind: "pushed" });
         await oldEnded.promise;
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(host.hasPendingPushedReceipt()).toBe(true);

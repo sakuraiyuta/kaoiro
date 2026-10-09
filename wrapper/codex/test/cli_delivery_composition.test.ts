@@ -131,6 +131,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { options.onReplyBasisMode!("v1"); options.onPersonaPrompt!("system prompt"); });
         return {
           sendInterAgent: async (envelope: Envelope) =>
@@ -247,6 +248,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
           queueMicrotask(() => {
             (linkOptions.onPersonaPrompt as (prompt: string) => void)("system prompt");
           });
@@ -403,6 +405,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
           queueMicrotask(() => {
             (options.onPersonaPrompt as (prompt: string) => void)("system prompt");
           });
@@ -732,6 +735,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           linkOptions = options as unknown as Record<string, any>;
+        options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
           queueMicrotask(() => {
             (options.onPersonaPrompt as (prompt: string) => void)("system prompt");
           });

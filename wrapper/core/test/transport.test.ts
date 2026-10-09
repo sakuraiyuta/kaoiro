@@ -16,6 +16,9 @@ type PushReceivers = Map<string, (payload: unknown) => void>;
 const mock = vi.hoisted(() => ({
   connected: true,
   channelState: "joined",
+  joinRef: "join-1",
+  onPush: null as ((event: string, payload: unknown) => void) | null,
+  onError: null as (() => void) | null,
   handlers: new Map<string, ((payload: unknown) => void)[]>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
   // Every push in order — `replay_ia` is chunked into several (M4), so a
@@ -33,6 +36,7 @@ const mock = vi.hoisted(() => ({
 vi.mock("phoenix", () => {
   class Channel {
     get state() { return mock.channelState; }
+    joinRef() { return mock.joinRef; }
     on(event: string, cb: (payload: unknown) => void): void {
       const bound = mock.handlers.get(event);
       if (bound === undefined) mock.handlers.set(event, [cb]);
@@ -61,6 +65,7 @@ vi.mock("phoenix", () => {
       const receivers: PushReceivers = new Map();
       mock.lastPush = { event, payload, receivers };
       mock.pushes.push({ event, payload });
+      mock.onPush?.(event, payload);
       const chain = {
         receive(status: string, cb: (payload: unknown) => void) {
           receivers.set(status, cb);
@@ -83,7 +88,7 @@ vi.mock("phoenix", () => {
     }
     disconnect(): void {}
     onClose(callback: (event?: { code?: number }) => void): void { mock.onClose = callback; }
-    onError(_callback: () => void): void {}
+    onError(callback: () => void): void { mock.onError = callback; }
   }
   return { Channel, Socket };
 });
@@ -103,6 +108,104 @@ import type { ServerLinkOptions } from "../src/transport.js";
 import type { Envelope } from "@kaoiro/protocol";
 import type { VersionedWrapperEvent } from "../src/transport.js";
 import { createDeliveryAcknowledgementRuntime } from "../../agent-common/src/delivery_ack.js";
+import { DeliveryPolicyController } from "../src/delivery_policy.js";
+
+beforeEach(() => {
+  mock.connected = true;
+  mock.channelState = "joined";
+  mock.joinRef = "join-1";
+  mock.onPush = null;
+});
+
+describe("ServerLink delivery policy", () => {
+  beforeEach(() => {
+    mock.handlers.clear(); mock.pushes = []; mock.lastPush = null; mock.joinReceivers.clear();
+  });
+  const policy = (payload: unknown, joinRef = mock.joinRef): void => {
+    for (const handler of mock.handlers.get("delivery_policy") ?? []) {
+      (handler as (payload: unknown, ref: string, join: string) => void)(payload, "push-ref", joinRef);
+    }
+  };
+  const setup = () => {
+    const controller = new DeliveryPolicyController();
+    const link = new ServerLink("ws://x/wrapper", "policy.agent", { personaId: "p", deliveryPolicy: controller });
+    return { controller, link, acks: () => mock.pushes.filter(push => push.event === "delivery_policy_applied") };
+  };
+
+  it("declares support, receives centrally, installs off before the flat versioned ack", () => {
+    const { controller, acks } = setup();
+    expect(mock.lastChannelParams).toMatchObject({ delivery_policy: "v1" });
+    expect(mock.handlers.get("delivery_policy")).toHaveLength(1);
+    policy({ version: "0", revision: 1, policy: "on" });
+    expect(acks()).toHaveLength(0);
+    mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+    policy({ version: "0", revision: 1, policy: "on" });
+    expect(controller.decision().allowed).toBe(true);
+    mock.onPush = event => {
+      if (event === "delivery_policy_applied") expect(controller.decision()).toMatchObject({ allowed: false, revision: 2, policy: "off" });
+    };
+    policy({ version: "0", revision: 2, policy: "off" });
+    expect(acks().map(push => push.payload)).toEqual([{ version: "0", revision: 1 }, { version: "0", revision: 2 }]);
+  });
+
+  it("ignores an old join reference, applies current version-mismatched rows and fences channel-only rejoins", () => {
+    const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { controller, acks } = setup();
+      mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+      policy({ revision: 5, policy: "on" });
+      expect(controller.decision().allowed).toBe(true);
+      expect(warning).toHaveBeenCalled();
+      emit("phx_error", {});
+      expect(controller.decision().allowed).toBe(false);
+      mock.joinRef = "join-2";
+      mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+      policy({ version: "0", revision: 6, policy: "on" }, "join-1");
+      policy({ version: "0", revision: 2, policy: "on" });
+      expect(controller.decision().allowed).toBe(false);
+      expect(acks()).toHaveLength(1);
+      expect(warning.mock.calls.map(call => String(call[0])).join("")).toContain("delivery_policy_revision_below_high_water");
+      policy({ version: "future", revision: 5, policy: "on" });
+      expect(controller.decision().allowed).toBe(true);
+      expect(acks()).toHaveLength(2);
+    } finally { warning.mockRestore(); }
+  });
+
+  it.each(["socket", "channel", "close", "error", "timeout"])("does not buffer or retry ack across %s loss", loss => {
+    const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { controller, acks } = setup();
+      mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+      policy({ version: "0", revision: 1, policy: "on" });
+      const pending = mock.lastPush!;
+      if (loss === "socket") mock.connected = false;
+      else if (loss === "channel") mock.channelState = "joining";
+      else if (loss === "close") mock.onClose?.();
+      else if (loss === "error") mock.onError?.();
+      else mock.joinReceivers.get("timeout")!({});
+      pending.receivers.get("timeout")!({});
+      policy({ version: "0", revision: 2, policy: "on" });
+      expect(acks()).toHaveLength(1);
+      expect(controller.decision().allowed).toBe(false);
+    } finally { warning.mockRestore(); }
+  });
+
+  it("retries the exact current ack once, without older responses reopening off", () => {
+    const warning = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { controller, acks } = setup();
+      mock.joinReceivers.get("ok")!({ delivery_policy: "v1" });
+      policy({ version: "0", revision: 1, policy: "on" });
+      const old = mock.lastPush!;
+      policy({ version: "0", revision: 2, policy: "off" });
+      mock.lastPush!.receivers.get("timeout")!({});
+      mock.lastPush!.receivers.get("timeout")!({});
+      old.receivers.get("timeout")!({});
+      expect(acks().map(push => push.payload)).toEqual([{ version: "0", revision: 1 }, { version: "0", revision: 2 }, { version: "0", revision: 2 }]);
+      expect(controller.decision().allowed).toBe(false);
+    } finally { warning.mockRestore(); }
+  });
+});
 
 function emit(event: string, payload: unknown): void {
   const bound = mock.handlers.get(event);
@@ -1704,6 +1807,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
   } as unknown as Envelope);
 
   const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
+    delivery_policy_applied: () => emit("delivery_policy", { version: "0", revision: 1, policy: "off" }),
     delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
     disconnect_intent: (link) => void link.reportDisconnectIntent("stop"),
     delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
@@ -1741,6 +1845,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
   it("T1-2: every active versioned event is actually sent", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
+      deliveryPolicy: new DeliveryPolicyController(),
       interAgentReplyBasis: "v1",
       interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
@@ -1748,6 +1853,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     });
     // delivery_ack(1) must name a sequence the ledger has seen issued.
     mock.joinReceivers.get("ok")?.({
+      delivery_policy: "v1",
       inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
       delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
     });
@@ -1758,6 +1864,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
   it("T1-3: all active versioned payloads carry a flat version", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
+      deliveryPolicy: new DeliveryPolicyController(),
       interAgentReplyBasis: "v1",
       interAgentDeliveryModes: { version: "v1", early: "none", yield: "tool_boundary", stage_reports: true },
       workControl: "v1",
@@ -1765,6 +1872,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     });
     // delivery_ack(1) must name a sequence the ledger has seen issued.
     mock.joinReceivers.get("ok")?.({
+      delivery_policy: "v1",
       inter_agent_delivery_modes: "v1", work_control: "v1", inter_agent_delivery_incarnation: "inc-1",
       delivery: { issued_seq: 1, acked_seq: 0, pending_since: "T" },
     });
@@ -1892,6 +2000,42 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(mock.pushes.some(push => push.event === "delivery_stage")).toBe(false);
     expect(link.reportDeliveryStage({ incarnation: link.deliveryIncarnation()!, delivery_seq: 1, stage: "queued", at: "T" })).toBe(true);
     expect(mock.lastPush).toMatchObject({ event: "delivery_stage", payload: { incarnation: "server-incarnation", generation: expect.any(String) } });
+  });
+
+  it("retains changed queued meanings while coalescing timestamp-only pending retries", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true } });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    const base = { incarnation: "inc-a", delivery_seq: 8, stage: "queued" as const, at: "T", mode: "yield" as const };
+    link.reportDeliveryStage(base);
+    link.reportDeliveryStage({ ...base, at: "later" });
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(1);
+    const changed = { ...base, at: "T2", mode: "normal" as const, reason: "local_policy_disabled",
+      yield_disposition: { outcome: "downgraded" as const, reason: "local_policy_disabled", at: "T2" } };
+    link.reportDeliveryStage(changed);
+    link.reportDeliveryStage({ ...changed, at: "later", yield_disposition: { ...changed.yield_disposition, at: "later" } });
+    const sent = mock.pushes.filter(push => push.event === "delivery_stage");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.payload).toMatchObject(changed);
+    link.reportDeliveryStage({ ...changed, reason: "another" });
+    link.reportDeliveryStage({ ...changed, yield_disposition: { ...changed.yield_disposition, outcome: "cut" } });
+    link.reportDeliveryStage({ ...changed, yield_disposition: { ...changed.yield_disposition, reason: "another" } });
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(5);
+    const submitted = { ...base, stage: "submitted" as const, handoff: "prompt_hook" as const };
+    link.reportDeliveryStage(submitted);
+    link.reportDeliveryStage({ ...submitted, mode: "normal", reason: "changed" });
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(6);
+  });
+
+  it("counts distinct queued meanings against the same pending-report capacity", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao",
+      interAgentDeliveryModes: { version: "v1", early: "fold", yield: "none", stage_reports: true } });
+    mock.joinReceivers.get("ok")?.({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "inc-a" });
+    for (let index = 0; index < MAX_PENDING_DELIVERY_STAGE_REPORTS; index++) {
+      expect(link.reportDeliveryStage({ incarnation: "inc-a", delivery_seq: 1, stage: "queued", at: "T", reason: `variant-${index}` })).toBe(true);
+    }
+    expect(link.reportDeliveryStage({ incarnation: "inc-a", delivery_seq: 1, stage: "queued", at: "T", reason: "overflow" })).toBe(false);
+    expect(mock.pushes.filter(push => push.event === "delivery_stage")).toHaveLength(MAX_PENDING_DELIVERY_STAGE_REPORTS);
   });
 
   it.each(["error", "timeout"] as const)("retains a %s stage report until the same-identity rejoin acknowledges it", status => {
@@ -2509,6 +2653,18 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       kind: "accepted",
       delivery_authority: { requested: "yield", granted: "early", downgrade: "yield_token_unavailable" },
     });
+  });
+
+  it.each(["recipient_policy_off", "policy_unknown", "policy_unconfirmed"])("preserves %s in both authority and advisory", async downgrade => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "p" });
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("ok")?.({
+      delivery_authority: { requested: "early", granted: "normal", downgrade },
+      delivery: { advisory: { recipient_state: "thinking", granted: "normal", mechanism: "queue", unresolved_count: 0, guidance: "queued", downgrade } },
+    });
+    await expect(pending).resolves.toMatchObject({ kind: "accepted",
+      delivery_authority: { requested: "early", granted: "normal", downgrade },
+      delivery: { advisory: { granted: "normal", downgrade } } });
   });
 
   it("projects work-transfer acknowledgements without exposing extra server fields", async () => {

@@ -193,6 +193,24 @@ For a supporting wrapper this temporarily produces `policy_unconfirmed`
 until that incarnation acknowledges the new revision; C2 can show pending.
 An accepted reply does not acknowledge wrapper application.
 
+Claude and both Codex backends declare delivery policy support. The wrapper
+installs each valid current-join policy synchronously before sending the
+two-field acknowledgement. A supporting join without a valid row stays
+fenced; a reconnect does not restore readiness from a cached row. Invalid
+fields and equal-revision conflicts close live admission. Lower revisions
+are ignored and diagnosed as `delivery_policy_revision_below_high_water`.
+See [policy recovery](../../operations/server-update-and-rollback.md#delivery-policy-revision-recovery).
+
+An absent policy echo is an old server: the wrapper follows its launch-time
+mechanism only when it has no valid policy history or its last valid policy
+was on. Remembered off remains fenced. A present unsupported echo stays
+fenced. Antigravity does not declare policy support; Codex exec participation
+does not enable steering.
+
+Older wrappers discard unknown policy downgrade reasons while retaining
+delivery authority, so granted normal input remains usable without those
+diagnostics.
+
 A wrapper declares `delivery_policy: "v1"` in its join request. Only that exact
 support declaration is echoed. After subscription the server pushes
 `delivery_policy {version: "0", revision, policy}` and repeats the latest

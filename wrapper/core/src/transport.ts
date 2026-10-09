@@ -63,6 +63,7 @@ import {
 import { writeRedactedStderr } from "./redact.js";
 import { DeliveryRecovery, type DeliveryResyncRequest, type DeliveryResyncReply } from "./delivery_recovery.js";
 import { createPhoenixSocket, type PhoenixSocketOptions } from "./phoenix_socket.js";
+import { DeliveryPolicyController, type DeliveryPolicyAck } from "./delivery_policy.js";
 
 type ServerSocketFactory = (
   serverUrl: string,
@@ -241,6 +242,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
   set_effort: "checked",
   set_permission: "checked",
   permission_sync: "checked",
+  delivery_policy: "checked",
   refresh_models: "checked",
   set_permission_mode: "checked",
   persona_sync: "checked",
@@ -261,6 +263,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
   delivery_stage: "versioned",
+  delivery_policy_applied: "versioned",
   yield_claim: "versioned",
   work_transfer_ack: "versioned",
   work_op_result_request: "versioned",
@@ -325,6 +328,7 @@ export function chunkReplayIaItems(
 }
 
 export interface ServerLinkOptions {
+  deliveryPolicy?: DeliveryPolicyController;
   interAgentReplyBasis?: "v1";
   noticeAttribution?: "v1";
   onNoticeAttributionMode?: (mode: "v1" | "legacy" | "pending") => void;
@@ -1284,7 +1288,7 @@ function interAgentSendReplyFields(reply: unknown): Pick<Extract<InterAgentAccep
   if (!isObject(reply)) return {};
   const raw = reply as Partial<InterAgentSendReply>;
   const intents = ["normal", "early", "yield"] as const;
-  const downgrades = ["unsupported_by_recipient", "yield_not_authorized", "yield_interval", "yield_capacity", "yield_token_unavailable", "early_quota", "recipient_legacy"] as const;
+  const downgrades = ["unsupported_by_recipient", "yield_not_authorized", "yield_interval", "yield_capacity", "yield_token_unavailable", "early_quota", "recipient_legacy", "recipient_policy_off", "policy_unknown", "policy_unconfirmed"] as const;
   const authority = isObject(raw.delivery_authority) ? raw.delivery_authority : null;
   const requested = authority?.requested;
   const granted = authority?.granted;
@@ -1377,6 +1381,9 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
 }
 
 export class ServerLink {
+  readonly #deliveryPolicy: DeliveryPolicyController | undefined;
+  #policyJoin = 0;
+  #policyJoinRef: unknown = null;
   #noticeAttributionMode: "v1" | "legacy" | "pending" = "pending";
   readonly #onNoticeAttributionMode: ServerLinkOptions["onNoticeAttributionMode"];
   noticeAttributionMode(): "v1" | "legacy" | "pending" { return this.#noticeAttributionMode; }
@@ -1480,6 +1487,8 @@ export class ServerLink {
     options: ServerLinkOptions,
     socketFactory: ServerSocketFactory = createPhoenixSocket,
   ) {
+    this.#deliveryPolicy = options.deliveryPolicy;
+    this.#policyJoin = this.#deliveryPolicy?.beginJoin() ?? 0;
     this.#onReplyBasisMode = options.onReplyBasisMode;
     this.#onNoticeAttributionMode = options.onNoticeAttributionMode;
     const createDeliveryRecovery = () => new DeliveryRecovery({
@@ -1507,6 +1516,7 @@ export class ServerLink {
     // than as the legacy absent case.
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
+      ...(this.#deliveryPolicy === undefined ? {} : { delivery_policy: "v1" }),
       inter_agent_delivery_ack: "dispatch-v1",
       ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
       ...(options.noticeAttribution ? { notice_attribution: options.noticeAttribution } : {}),
@@ -1534,6 +1544,21 @@ export class ServerLink {
       if (isObject(payload) && typeof payload.prompt === "string") {
         options.onPersonaPrompt?.(payload.prompt);
       }
+    });
+
+    this.#bindServerEvent("delivery_policy", (payload: unknown, joinRef?: unknown) => {
+      if (this.#deliveryPolicy === undefined) return;
+      if (!this.#socket.isConnected() || this.#channel.state !== "joined") {
+        this.#deliveryPolicy.disconnect();
+        this.#policyJoinRef = null;
+        return;
+      }
+      if (joinRef !== undefined && joinRef !== this.#policyJoinRef) return;
+      const applied = this.#deliveryPolicy.apply(payload, this.#policyJoin);
+      if (applied.diagnostic) {
+        writeRedactedStderr(`[kaoiro] ${JSON.stringify(applied.diagnostic)}\n`);
+      }
+      if (applied.ack) this.#acknowledgePolicy(applied.ack);
     });
 
     this.#bindServerEvent("instruction", (payload: unknown) => {
@@ -1788,6 +1813,8 @@ export class ServerLink {
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
     const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
+      this.#deliveryPolicy?.disconnect();
+      this.#policyJoinRef = null;
       this.#deliveryModes = null;
       this.#deliveryModesSettled = false;
       this.#operatorInputModes = null;
@@ -1822,6 +1849,16 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         if (this.#replyBasisTerminal) return;
+        this.#policyJoin = this.#deliveryPolicy?.beginJoin() ?? 0;
+        this.#policyJoinRef = (this.#channel as Channel & { joinRef?: () => string }).joinRef?.() ?? null;
+        this.#deliveryPolicy?.acceptJoin(reply, this.#policyJoin);
+        if (this.#deliveryPolicy && isObject(reply) && "delivery_policy" in reply && reply.delivery_policy !== "v1") {
+          writeRedactedStderr("[kaoiro] delivery policy unsupported join echo; live delivery fenced\n");
+        }
+        if (this.#deliveryPolicy?.decision().policy === "off" &&
+            (!isObject(reply) || !Object.prototype.hasOwnProperty.call(reply, "delivery_policy"))) {
+          writeRedactedStderr("[kaoiro] old server cannot confirm remembered off; live delivery fenced\n");
+        }
         // Reset here, not on disconnect: a watermark buffered before this
         // join may have timed out unsent, and a channel-only rejoin never
         // closes the socket. The join-time resends below must still go out.
@@ -1955,18 +1992,29 @@ export class ServerLink {
    *  validation the individual handler happens to do. */
   #bindServerEvent(
     event: ServerEventName,
-    handler: (payload: unknown) => void,
+    handler: (payload: unknown, joinRef?: unknown) => void,
   ): void {
     const checked = SERVER_EVENT_VERSION_POLICY[event] === "checked";
-    this.#channel.on(event, (payload: unknown) => {
+    this.#channel.on(event, (payload: unknown, ...args: unknown[]) => {
       if (checked) {
         warnOnVersionMismatch(
           event,
           isObject(payload) ? payload.version : undefined,
         );
       }
-      handler(payload);
+      handler(payload, args[1]);
     });
+  }
+
+  #acknowledgePolicy(ack: DeliveryPolicyAck, retry = false): void {
+    if (!this.#deliveryPolicy?.isCurrentAck(ack) || !this.#socket.isConnected() ||
+        this.#channel.state !== "joined") return;
+    this.#pushVersioned("delivery_policy_applied", { revision: ack.revision })
+      .receive("error", () => writeRedactedStderr("[kaoiro] delivery policy acknowledgement refused\n"))
+      .receive("timeout", () => {
+        writeRedactedStderr("[kaoiro] delivery policy acknowledgement timed out\n");
+        if (!retry) this.#acknowledgePolicy(ack, true);
+      });
   }
 
   /** Records the SDK session id the host just captured (ADR-0014 phase-0).
@@ -2123,7 +2171,9 @@ export class ServerLink {
       generation !== eligibleIdentity.generation
     ) return false;
     const complete = { ...report, generation } as Omit<DeliveryStageReport, "version">;
-    const key = JSON.stringify([complete.incarnation, complete.generation, complete.delivery_seq, complete.stage]);
+    const key = JSON.stringify([complete.incarnation, complete.generation, complete.delivery_seq, complete.stage,
+      ...(complete.stage === "queued" ? [complete.mode ?? null, complete.reason ?? null,
+        complete.yield_disposition?.outcome ?? null, complete.yield_disposition?.reason ?? null] : [])]);
     if (this.#pendingDeliveryStages.has(key)) return true;
     if (this.#pendingDeliveryStages.size >= MAX_PENDING_DELIVERY_STAGE_REPORTS) {
       if (!this.#deliveryStageOverflowWarned) {
@@ -2606,6 +2656,8 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
+    this.#deliveryPolicy?.disconnect();
+    this.#policyJoinRef = null;
     this.#failReplyBasis(true, true);
     this.#deliveryRecovery.dispose();
     this.#pendingDeliveryStages.clear();
