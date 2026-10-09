@@ -1,10 +1,10 @@
 ---
 title: Adopt one lockstep CalVer project version and explicit build channels
-status: accepted
+status: superseded
 date: 2026-09-01
 opened: 2026-09-01
 supersedes: []
-superseded_by: null
+superseded_by: 66
 related_specs: [deployment, protocol]
 related_adrs: [53]
 ---
@@ -13,7 +13,8 @@ related_adrs: [53]
 
 ## Status
 
-Accepted (2026-09-01, operator decision for issue #288).
+Superseded by [ADR-0066](0066-tag-derived-lockstep-build-identity.md).
+The following records the original 2026-09-01 decision for issue #288.
 
 ## Context
 

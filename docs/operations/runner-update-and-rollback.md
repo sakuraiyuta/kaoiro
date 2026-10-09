@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 related: [deployment]
 ---
 
@@ -23,6 +23,20 @@ completing (the runner's start path, the wrapper's turn lifecycle) follows
 [High-risk change release](high-risk-change-release.md) first: it adds a
 production-shape start check and a canary stage before the steps below, and it
 links back here for the commands.
+
+## Build identity preconditions
+
+Forward production updates require an exact completed landing tag; `--from-repo`
+builds use `--require-tagged` by default. Tagged and `untagged` candidates also
+check the current server's advertised `build_identity_formats` before stopping
+the old unit. A failed check leaves the old runner running. Updater success uses
+`--version --json` with the 40-character SHA, never the seven-character label.
+Legacy releases can attest their pinned physical build-info JSON.
+
+Detached enqueue is not completion. Record the actual worker result, registered
+identity and required Codex acceptance in the
+[release checkpoint](build-identity-and-release-tags.md). Existing retained
+rollback targets keep their native/state recovery contract.
 
 ## 4.6 Migrate to the release profile and update thereafter (issue #219)
 
@@ -50,7 +64,7 @@ with stale `node_modules` fails at runtime.
 ```sh
 git fetch origin && git merge --ff-only <target-sha>
 pnpm install --frozen-lockfile
-pnpm -C wrapper build && pnpm -C runner build
+node scripts/with-build-identity.mjs --require-tagged -- sh -c 'pnpm -C wrapper build && pnpm -C runner build'
 ```
 
 **On failure, follow the server-side [failure handling](server-update-and-rollback.md#44-failure-handling), item (2).**
@@ -103,7 +117,7 @@ systemctl --user show -p ExecStart --value kaoiro-runner
 # 2. Build tarball from repo while runner remains active
 cd <repo-path>
 git status --porcelain   # Must be empty (dirty checkout appends -dirty to id)
-./scripts/build-runner-tarball.sh --target linux-x64
+./scripts/build-runner-tarball.sh --require-tagged --target linux-x64
 
 # 3. Install as a release without touching running dist
 ./runner/deploy/kaoiro-runner-install.sh \

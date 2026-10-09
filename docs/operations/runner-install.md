@@ -324,11 +324,18 @@ platform-specific npm packages), and native modules are all included, **neither
 location and `cd`s there).
 
 ```sh
-./scripts/build-runner-tarball.sh                      # For this host
-./scripts/build-runner-tarball.sh --target linux-x64   # Cross-generation
-./scripts/build-runner-tarball.sh --target darwin-arm64
-./scripts/build-runner-tarball.sh --out /path/to/dir   # Change output destination
+./scripts/build-runner-tarball.sh --require-tagged     # Production, this host
+./scripts/build-runner-tarball.sh --require-tagged --target linux-x64
+./scripts/build-runner-tarball.sh --require-tagged --target darwin-arm64
+./scripts/build-runner-tarball.sh --require-tagged --out /path/to/dir   # Change output destination
 ```
+
+Production builders wait for the exact HEAD landing tag and immutable claim
+before staging or downtime. The builder freezes one identity JSON and passes it
+to every component. Omitting `--require-tagged` is for explicit development
+artifacts; production activation refuses `untagged` unless `--allow-dirty` is
+explicitly used for development. See
+[Build identity and release tags](build-identity-and-release-tags.md).
 
 Targets are `darwin-arm64` / `linux-x64` (the 2 architectures with actual
 demand). On other hosts (Intel mac, arm64 Linux), omitting an explicit

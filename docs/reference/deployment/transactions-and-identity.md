@@ -20,7 +20,7 @@ registration information.
 | Server `build_dirty` is intentional | `build_dirty` from `curl <server-url>/api/health` (`false` for a clean build at target SHA) |
 | Server OCI label equals target SHA | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
 | Runner `build_revision` equals target SHA | Dashboard host list (LaunchDialog), or the `rev=<full SHA>` line in runner startup logs |
-| Runner `--version` returns target identity | Release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version` (same path the unit starts, so missed `current` switches surface). Checkout-direct: `<repo-path>/runner/dist/cli.js --version`. Both work without config and print `kaoiro {channel} runner v{version} / <short-hash>` |
+| Runner `--version` returns target identity | Release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version` (same path the unit starts, so missed `current` switches surface). Checkout-direct: `<repo-path>/runner/dist/cli.js --version`. Both work without config. Add `--json` and compare the returned 40-character `revision`; the label is `v{version} / {branch} / <short-hash>` (or `untagged / {branch} / <short-hash>`) |
 
 **mtime is still not evidence of success.** A `dist` directory mtime does not
 change when files are only rebuilt in place. During the 2026-08-12 rollout, all
@@ -33,6 +33,15 @@ SHA” check. Signed attestation is outside this issue. A SHA mismatch is not it
 a deploy-rejection condition (ADR-0053)—docs-only commits, backports, and rolling
 windows can legitimately differ; equality is only the **success check for this
 runbook**.
+
+## Lockstep version and production completion
+
+[ADR-0066](../../adr/0066-tag-derived-lockstep-build-identity.md) defines immutable
+landing tags and one frozen JSON for every build consumer. Build version and
+branch are not inferred from a short label. A completed server transaction is
+only the server leg of release completion: the common receipt also binds actual
+runner workers, registration, required Codex acceptance and the canary. See
+[Build identity and release tags](../../operations/build-identity-and-release-tags.md).
 
 ## Delivery policy placement artifact
 

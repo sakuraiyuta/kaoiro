@@ -277,14 +277,17 @@ updating rather than silently naming a rollback after an unrelated checkout.
 
 **(2) Prepare the server image (automatic, no downtime)**
 
-Still part of the same `update` call. `KAOIRO_BUILD_VERSION` /
-`KAOIRO_BUILD_CHANNEL` / `KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY`
+Still part of the same `update` call. `KAOIRO_BUILD_VERSION` / `KAOIRO_BUILD_BRANCH` /
+`KAOIRO_BUILD_CHANNEL` / `KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY`,
+plus the frozen `KAOIRO_BUILD_IDENTITY_JSON`
 (build identity, issues #218/#288, [ADR-0053](../adr/0053-build-identity.md),
 [ADR-0056](../adr/0056-project-calver-build-version.md)) are computed by
 `scripts/build-identity.mjs` and passed **directly into `docker compose
 build`'s child process environment** — no shell `eval`, so there is no
 `set -a` step to forget (the exact footgun a hand-run `eval "$(...)"; docker
-compose build` used to hit when the auto-export was missing). The old
+compose build` used to hit when the auto-export was missing). The production builder waits for the exact landing tag/claim before building
+and verifies the source before/afterward. Every image/dashboard consumer uses
+the same frozen JSON. The old
 container keeps running with its old image ID; failure here has zero impact
 on the live system.
 
@@ -869,3 +872,18 @@ must follow the new owner's exact ack, not the save reply.
 - [Server install runbook](server-install.md).
 - [Production deployment manual](production.md).
 - [High-risk change release](high-risk-change-release.md).
+
+## Build-format rollback safety
+
+Immediately before STOPPING, and before both rollback paths, deploy reads the
+target image's baked `build_identity_formats` and a fresh bounded snapshot of
+connected runner/wrapper identities. Incompatible or unavailable observations
+refuse before mutation. Docker exec has an outer timeout and both registry
+calls have inner timeouts; refusal releases the deploy lock.
+
+`--fleet-stopped` is a separate explicit operator declaration that the affected
+fleet is stopped. Maintenance or restore approval does not imply it. Use the
+reviewed execution card to stop/revert incompatible runners/wrappers before
+rolling back a server that predates the reader bridge. Invalid target image
+identity is never waived. Server DONE alone does not authorize a release tag;
+complete the [joint release checkpoint](build-identity-and-release-tags.md).

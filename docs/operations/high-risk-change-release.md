@@ -62,6 +62,11 @@ a candidate.
 git diff --name-only <base>..<head> -- \
   'runner/deploy/**' \
   scripts/build-runner-tarball.sh scripts/build-release-manifest.mjs \
+  scripts/build-identity.mjs scripts/with-build-identity.mjs \
+  scripts/landing-tags.mjs scripts/landing-workflow.mjs \
+  scripts/production-release-tags.mjs scripts/production-release-workflow.mjs \
+  scripts/release-automation-gate.mjs \
+  .github/workflows/develop-landing.yml .github/workflows/production-release.yml \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
   runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
@@ -83,6 +88,11 @@ git diff --name-only <base>..<head> -- \
   wrapper/codex/src/app_server_transport.ts wrapper/codex/src/app_server_rpc.ts \
   wrapper/codex/src/app_server_steer.ts wrapper/codex/src/tool_home.ts
 ```
+
+Changes to the tagging workflows, allocator or central tag-domain definition
+are FS changes. Before landing, require operator approval and V6/V9 evidence
+for the exact candidate commit. Allocation also requires V9/V10 before it is
+enabled; see [Build identity and release tags](build-identity-and-release-tags.md).
 
 No path rule catches a change to the pinned version of an engine SDK, CLI or
 native binary (`package.json` and the lockfile). Treat it as high risk for
