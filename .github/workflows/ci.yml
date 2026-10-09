@@ -7,6 +7,18 @@ on:
     branches: [main, develop]
 
 jobs:
+  release-identity:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: setsid --wait node --test scripts/test/production-release.test.mjs scripts/test/production-runner-worker.test.mjs
+
   wrapper:
     runs-on: ubuntu-latest
     defaults:

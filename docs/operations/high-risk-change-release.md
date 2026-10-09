@@ -364,7 +364,11 @@ and the restart kills the old wrappers (B7).
 - **C0.** The gate in section 3. Required for FS-class changes, recommended for
   TL-class changes.
 - **C1.** Switch and restart with [Subsequent updates](runner-update-and-rollback.md#462-subsequent-updates),
-  after confirming that every agent is idle and B7 holds. Do not restore anyone.
+  after confirming that every agent is idle and B7 holds. For a production release
+  receipt, use its [dedicated retained worker](build-identity-and-release-tags.md#common-production-checkpoint),
+  whose default 180-second delay permits the agent turn to end before cgroup
+  inspection. If peer input arrives between reset and stop, repeat preparation
+  or stop immediately after join. Do not restore anyone.
   Right after the restart, confirm that no old wrapper survived:
 
   ```sh

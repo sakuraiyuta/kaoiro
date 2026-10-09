@@ -166,6 +166,13 @@ order. **Stopping happens only immediately before switching**; build and expansi
 never touch the active release. If build or expansion fails, it **never reaches
 stop** and the old runner keeps running.
 
+For a release completion receipt, use the dedicated delayed, retained worker in
+[Build identities and release tags](build-identity-and-release-tags.md#common-production-checkpoint)
+instead of the plain transient unit below. It preserves exit evidence until
+recorded completion, delays the cgroup check until the agent turn has ended,
+and refuses duplicate enqueue under one attempt/host. The ordinary update
+and rollback interfaces below keep their existing behavior.
+
 `--detach` queues the update as a transient **service** unit via
 `systemd-run --user --no-block`. **Always use it when running from an agent under
 the runner**; without it, stopping the runner kills the caller and later steps

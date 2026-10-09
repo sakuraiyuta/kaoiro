@@ -98,25 +98,51 @@ node scripts/collect-production-release.mjs start \
 ```
 
 Record the returned UUID/directory in the card. On every required runner host,
-collect a baseline before its updater, then collect its finished leg:
+queue a dedicated delayed worker from this reviewed checkout:
 
 ```sh
-node scripts/collect-production-release.mjs runner-before \
+node scripts/production-runner-worker.mjs queue \
   --attempt <attempt-directory> --host homeguard --service kaoiro-runner \
-  --runner-root /home/yuta/.local/share/kaoiro --output <baseline-file>
-# Run the separately reviewed state-aware update and acceptance procedure.
+  --runner-root /home/yuta/.local/share/kaoiro \
+  --update-args '["--from-repo","/home/yuta/git/kaoiro"]'
+```
+
+The returned unit is unique to the attempt UUID and host. Its default delay is
+180 seconds, with zero randomized delay and one-second timer accuracy. End the
+agent turn immediately after enqueue: the cgroup safety check must run after
+the command's child processes have gone away. If peer input arrives between
+reset and stop, repeat the idle/reset preparation or stop immediately after the
+join; do not continue against a changed fleet. Queueing is not completion.
+The baseline is persisted before submission, so uncertain submission cannot be
+queued twice under the same attempt/host. Use a new attempt rather than retrying
+an uncertain enqueue. Existing dedicated unit names also refuse.
+
+The service runs the pinned physical updater without `--detach`, under
+`Type=oneshot` and `RemainAfterExit=yes`. Its independent cgroup survives runner
+stop, and its successful exit, invocation ID and UTC timestamps remain available
+until explicitly cleaned. Only PATH and optional KAOIRO_NODE are forwarded.
+For a Codex host, include the reviewed `--codex-home` and `--codex-backup-dir`
+option/value pairs; the host must be in the attempt's fixed `codex_host_ids`.
+The existing `kaoiro-runner-update.service` and ordinary `--detach` workflow are
+unchanged; plain transient units can disappear after exit and do not provide
+this retained completion evidence.
+
+After the worker and the state-aware acceptance procedure finish:
+
+```sh
 node scripts/collect-production-release.mjs runner-after \
-  --attempt <attempt-directory> --baseline <baseline-file> \
+  --attempt <attempt-directory> --baseline <returned-baseline-file> \
   --runner-root /home/yuta/.local/share/kaoiro \
   --config /home/yuta/.config/kaoiro/runner.config.json \
   --codex-transaction <accepted-forward-UUID> --output <runner-fact-file>
 ```
 
-`runner-after` requires a new successful actual updater invocation after the
-baseline, the pinned updater's ExecStart, an active runner unit, the full baked
-identity and a completed modern forward acceptance. Recovery/rollback receipts
-cannot substitute. The script reads only fixed units and transaction paths;
-it never enumerates host processes or kills the fleet.
+`runner-after` requires a new successful retained updater invocation after the
+baseline, its pinned ExecStart, `active/exited` and actual exit code zero, an
+active runner unit, the full baked identity and the completed modern forward
+acceptance on every selected Codex host. Recovery/rollback receipts cannot
+substitute. All service reads use bounded calls and fixed unit names, never
+host process enumeration.
 
 After server DONE and the operator canary, `complete` rechecks the live
 container/image, full health identity and live registration of every required
@@ -137,6 +163,23 @@ plus one newline, exactly as written. Private evidence stays outside it; retain
 only fixed success facts, IDs and hashes. Simulated service/Docker dependencies
 cannot complete this production command. Credentials and arbitrary logs never
 enter a receipt or tag annotation.
+
+Only after `completion.json` is validated and written may the retained units be
+stopped and reset:
+
+```sh
+node scripts/production-runner-worker.mjs list \
+  --root /home/yuta/kaoiro-deploy/production-releases
+node scripts/production-runner-worker.mjs cleanup \
+  --attempt <attempt-directory> --host homeguard
+```
+
+Cleanup checks the recorded attempt, inventory, full target, invocation and
+pinned tool before stopping only that attempt's exact service/timer pair. The
+list warns about retained units with absent or invalid completion records; it
+never deletes them. Retain these for diagnosis, and use a new attempt after
+repair. Successful cleanup can be repeated after the units have disappeared.
+Private records survive unit cleanup and ordinary transaction pruning.
 
 A receipt without `tag-ack.json` is pending. Dispatch HTTP success is not an ACK.
 After publication, read both immutable remote refs and their exact landing

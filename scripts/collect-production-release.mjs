@@ -24,14 +24,14 @@ const equal = (info, target) => info.revision === target.revision && info.versio
 const wire = info => ({revision:info.build_revision,version:info.build_version,branch:info.build_branch,dirty:info.build_dirty});
 export function unitSnapshot(unit, bin = "systemctl") {
   must(/^[A-Za-z0-9_.@-]+(?:\.service)?$/.test(unit), "invalid fixed unit name");
-  const raw = execFileSync(bin, ["--user", "show", unit, "--property=ActiveState,Result,ExecMainCode,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID,MainPID,ExecStart"],
-    { encoding: "utf8", timeout: 5_000, maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"] });
+  const raw = execFileSync(bin, ["--user", "show", unit, "--property=LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,ExecMainStartTimestamp,ExecMainExitTimestamp,InvocationID,MainPID,ExecStart"],
+    { encoding: "utf8", timeout: 5_000, maxBuffer: 16_384, stdio: ["ignore", "pipe", "pipe"],env:{...process.env,LC_ALL:"C",TZ:"UTC"} });
   return Object.fromEntries(raw.trim().split("\n").map(line => { const p=line.indexOf("=");return [line.slice(0,p),line.slice(p+1)]; }));
 }
 const timestamp = value => { const date = new Date(value); must(Number.isFinite(date.getTime()), "unreadable service timestamp"); return date.toISOString(); };
-export function collectRunnerBaseline(plan, hostId, service, runnerRoot, bin = "systemctl") {
+export function collectRunnerBaseline(plan, hostId, service, runnerRoot, bin = "systemctl", updaterUnit) {
   must(plan.host_ids.includes(hostId), "host absent from execution card");
-  const updater = `${service.replace(/\.service$/, "")}-update.service`;
+  const updater = updaterUnit ?? `${service.replace(/\.service$/, "")}-update.service`;
   const state = unitSnapshot(updater, bin);
   must(!["active", "activating", "deactivating"].includes(state.ActiveState), "previous updater is still running");
   return { schema:1, attempt_uuid:plan.attempt_uuid, host_id:hostId, service, updater,
@@ -44,7 +44,7 @@ export function collectRunnerCompletion(plan, baseline, { runnerRoot, configPath
   const updater = unitSnapshot(baseline.updater, systemctlBin);
   const service = unitSnapshot(baseline.service, systemctlBin);
   must(updater.InvocationID !== baseline.previous_invocation && /^[0-9a-f]{32}$/.test(updater.InvocationID) &&
-    updater.ActiveState === "inactive" && updater.Result === "success" && updater.ExecMainCode === "1" && updater.ExecMainStatus === "0", "actual updater invocation did not finish successfully");
+    updater.ActiveState === "active" && updater.SubState === "exited" && updater.Result === "success" && updater.ExecMainCode === "1" && updater.ExecMainStatus === "0", "actual retained updater invocation did not finish successfully");
   must(updater.ExecStart?.includes(`path=${baseline.updater_tool} ;`), "completed unit did not execute the pinned updater");
   const started = timestamp(updater.ExecMainStartTimestamp), finished = timestamp(updater.ExecMainExitTimestamp);
   must(Date.parse(started) >= Date.parse(baseline.created_at) && Date.parse(finished) >= Date.parse(started), "worker predates this attempt");
