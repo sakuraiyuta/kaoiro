@@ -4139,7 +4139,10 @@
                   </p>
                 {/if}
                 {#if permission.input}
-                  <details>
+                  <!-- Open by default: the input carries the actual command
+                       or path being approved, so it must be readable before
+                       the operator presses 許可. -->
+                  <details open>
                     <summary>input</summary>
                     <pre>{JSON.stringify(permission.input, null, 2)}</pre>
                   </details>
@@ -5710,9 +5713,9 @@
 
   .permission-dock pre {
     margin: 0.3rem 0 0;
-    max-height: 10rem;
+    max-height: 20rem;
     overflow: auto;
-    font-size: var(--fs-metadata);
+    font-size: var(--fs-body);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
