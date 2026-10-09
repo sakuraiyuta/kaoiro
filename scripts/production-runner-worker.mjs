@@ -118,8 +118,11 @@ export function cleanupProductionRunner({dir,host,runnerRoot=dirname(dirname(res
     state.Result==="success" && state.ExecMainCode==="1" && state.ExecMainStatus==="0", "unit differs from recorded completed worker");
   verifyRetainedUnitCommand(unitCommandSnapshot(unit), baseline.node_path,
     [baseline.node_path,baseline.launcher,"worker",baseline.tool_sha256,dirname(baseline.updater_tool),...baseline.update_args]);
-  const names=[unit,unit.replace(/\.service$/,".timer")].filter(name=>unitSnapshot(name,systemctlBin).LoadState!=="not-found");
-  execFileSync(systemctlBin,["--user","stop","--",...names],{stdio:"pipe",timeout:15_000});
+  const names=[unit.replace(/\.service$/,".timer"),unit].filter(name=>unitSnapshot(name,systemctlBin).LoadState!=="not-found");
+  for (const name of names) {
+    try { execFileSync(systemctlBin,["--user","stop","--",name],{stdio:"pipe",timeout:5000}); }
+    catch (error) { if (unitSnapshot(name,systemctlBin).LoadState!=="not-found") throw error; }
+  }
   for(const name of names) {
     try {execFileSync(systemctlBin,["--user","reset-failed","--",name],{stdio:"pipe",timeout:5000});}
     catch(error) {if(unitSnapshot(name,systemctlBin).LoadState!=="not-found")throw error;}
