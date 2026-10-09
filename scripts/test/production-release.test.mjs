@@ -156,6 +156,14 @@ test("receiver authorization covers original and rerun actors",()=>{
   const run={event:"workflow_dispatch",head_branch:"develop",repository:{id:BUILD_REPOSITORY_ID},head_repository:{id:BUILD_REPOSITORY_ID},actor:{login:"operator"},triggering_actor:{login:"operator"}};
   const options={repositoryId:BUILD_REPOSITORY_ID,allowedActors:["operator"]};validateDispatch(run,options);
   for(const bad of [{...run,event:"pull_request"},{...run,head_branch:"main"},{...run,triggering_actor:{login:"other"}}])assert.throws(()=>validateDispatch(bad,options));
+  for (const allowedActors of ["operator", null, {}, [], ["operator", "operator"], [1]]) {
+    assert.throws(() => validateDispatch(run, { ...options, allowedActors }), /allow-list/);
+  }
+});
+test("host authority requires an array instead of substring matching a string", () => {
+  for (const allowedHosts of ["homeguard", null, {}, [], [1], ["homeguard", "homeguard"]]) {
+    assert.throws(() => validateProductionReceipt(receipt(), { allowedHosts }), /allow-list/);
+  }
 });
 test("fake dependencies cannot record a production completion",async()=>{
   assert.throws(()=>collectRunnerCompletion({attempt_uuid:"x",host_ids:["homeguard"]},{attempt_uuid:"x",host_id:"homeguard",simulation:true},{systemctlBin:"fake"}),/fake service/);

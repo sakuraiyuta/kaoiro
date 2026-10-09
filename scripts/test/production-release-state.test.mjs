@@ -92,11 +92,11 @@ test("quarantine closes known corruption without claiming publication and preser
   writeFileSync(join(f.dir, "completion.json"), "broken-completion", { mode: 0o600 });
   assert.equal(readReleaseHistory(f.root).rows[0].state.id, "invalid_completion");
   const terminal = await terminate(f, "quarantine");
+  assert.equal(assertGrammarCoverage(rawInventory(f.root)), true);
   assert.equal(terminal.kind, "invalid_quarantined");
   assert.equal(readFileSync(join(f.dir, "completion.json"), "utf8"), "broken-completion");
   const row = readReleaseHistory(f.root).rows[0];
   assert.equal(row.state.id, "invalid_quarantined");
-  assert.equal(assertGrammarCoverage(rawInventory(f.root)), true);
   assert.ok(projectReleaseHistory(readReleaseHistory(f.root)).rows.every(row => !JSON.stringify(row).includes("operator confirmed")));
   const archived = await archiveReleaseAttempt({ root: f.root, uuid: f.plan.attempt_uuid });
   assert.equal(archived.status, "invalid_quarantined");
