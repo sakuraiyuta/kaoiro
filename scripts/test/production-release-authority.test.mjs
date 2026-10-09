@@ -145,7 +145,12 @@ test("server prepare refuses its enrolled history before Docker or transaction c
   const f = fixture("server");
   const first = f.start();
   const backup = join(f.base, "backup");
-  const config = { ...DEFAULT_CONFIG, backup_root: backup };
+  const fakeDocker = join(f.base, "docker");
+  writeFileSync(fakeDocker, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  const previousDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+  process.env.KAOIRO_DEPLOY_DOCKER_BIN = fakeDocker;
+  const config = { ...DEFAULT_CONFIG, backup_root: backup, allow_docker_override: true };
+  try {
   for (const dryRun of [false, true]) {
     assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision, dryRun }, config), /unresolved attempts/);
     assert.equal(existsSync(backup), false);
@@ -154,12 +159,20 @@ test("server prepare refuses its enrolled history before Docker or transaction c
   assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision,
     skipReleaseReconciliation: first.plan.attempt_uuid, skipReason: "operator deferred the first attempt" }, config), /unresolved attempts/);
   assert.equal(existsSync(backup), false);
+  } finally {
+    if (previousDocker === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+    else process.env.KAOIRO_DEPLOY_DOCKER_BIN = previousDocker;
+  }
 });
 
 test("server repeats its audit under the deployment lock before prepare observes Docker", () => {
   const f = fixture("server");
   const first = f.start();
   const backup = join(f.base, "backup");
+  const fakeDocker = join(f.base, "docker");
+  writeFileSync(fakeDocker, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  const previousDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+  process.env.KAOIRO_DEPLOY_DOCKER_BIN = fakeDocker;
   const original = fs.mkdirSync;
   let changed = false;
   fs.mkdirSync = (path, ...args) => {
@@ -171,9 +184,13 @@ test("server repeats its audit under the deployment lock before prepare observes
   try {
     assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision,
       releaseAttempt: first.plan.attempt_uuid, releasePlanSha256: releaseBytesDigest(releaseJsonBytes(first.plan)) },
-    { ...DEFAULT_CONFIG, backup_root: backup }), /unresolved attempts/);
+    { ...DEFAULT_CONFIG, backup_root: backup, allow_docker_override: true }), /unresolved attempts/);
     assert.equal(changed, true);
-  } finally { fs.mkdirSync = original; syncBuiltinESMExports(); }
+  } finally {
+    fs.mkdirSync = original; syncBuiltinESMExports();
+    if (previousDocker === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+    else process.env.KAOIRO_DEPLOY_DOCKER_BIN = previousDocker;
+  }
   assert.deepEqual(fs.readdirSync(backup), []);
 });
 
