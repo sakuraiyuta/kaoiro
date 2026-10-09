@@ -57,7 +57,17 @@ remote tag and claim back before writing `tag-ack.json`.
 The operator uses their own `gh` to dispatch the fixed workflow at the canary
 checkpoint (operator decision, 2026-10-09). No Actions-write token is provisioned
 on a production host. Completion-side reconciliation reports missing tags for
-private receipts that were never dispatched.
+private receipts that were never dispatched and unfinished attempts. Both the
+card's mandatory post-dispatch check and the next enrolled prepare require it.
+A UUID/reason skip applies only to its explicit unresolved set and is carried
+into delayed work; unknown authority cannot be waived. Enrolled physical roots
+use a digest-bound canonical authority, including before direct switch and
+bootstrap. Generic installations retain their behavior. Completion independently
+checks enrollment, so removing a descriptor cannot claim a production success.
+The post-stop switch checks only its fresh, same-boot lock-owner proof; network
+audits occur before stop. Invalid known records have guarded, evidence-preserving
+quarantine/retirement exits with permanent incident warnings. Unidentified
+history requires verified operator repair and never fabricated identity.
 
 ## Trust and rollout
 

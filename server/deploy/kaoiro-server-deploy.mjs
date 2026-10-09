@@ -38,7 +38,7 @@ import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
-import { auditServerRelease, bindServerReleaseAudit, assertServerResumeContext } from "./kaoiro-release-reconciliation.mjs";
+import { auditServerRelease, bindServerReleaseAudit, assertServerResumeContext, acquireServerReleaseActivity, releaseServerReleaseActivity } from "./kaoiro-release-reconciliation.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -1523,10 +1523,13 @@ export function runBuild(flags, config) {
   const serverDir = join(repo, "server");
   const backupRoot = resolveBackupRoot(config);
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  let releaseActivityLock;
   try {
+    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     return buildUnderLock({ repo, target }, config);
   } finally {
-    releaseLock(lockPath);
+    try { releaseServerReleaseActivity(releaseActivityLock); }
+    finally { releaseLock(lockPath); }
   }
 }
 
@@ -1590,7 +1593,9 @@ export function runStart(flags, config) {
   // reading OUTSIDE the lock, then mutating, would only move the race
   // rather than close it (the same reasoning as runRollback's own fix).
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  let releaseActivityLock;
   try {
+    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
     const result = classify(bin, serverDir, SERVICE, hasState);
 
@@ -1635,7 +1640,8 @@ export function runStart(flags, config) {
     assertSourceIdentity(repo, identity);
     return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
   } finally {
-    releaseLock(lockPath);
+    try { releaseServerReleaseActivity(releaseActivityLock); }
+    finally { releaseLock(lockPath); }
   }
 }
 
@@ -1943,7 +1949,9 @@ export function runUpdate(flags, config) {
   }
 
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  let releaseActivityLock;
   try {
+    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     const releaseAudit = auditServerRelease(flags, serverDir, repo);
     const unfinished = findUnfinishedTransaction(backupRoot);
     let transactionId;
@@ -2600,7 +2608,8 @@ export function runUpdate(flags, config) {
       pruneError,
     };
   } finally {
-    releaseLock(lockPath);
+    try { releaseServerReleaseActivity(releaseActivityLock); }
+    finally { releaseLock(lockPath); }
   }
 }
 
@@ -2747,7 +2756,9 @@ export function runRollback(flags, config) {
   // volume (measured: a deterministic injection at the mkdir call this
   // acquireLock makes reproduced exactly that — 2 wipes for 1 transaction).
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  let releaseActivityLock;
   try {
+    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     const decision = readRollbackDecision(dir, flags.transaction);
     let journal = decision.journal;
     const { oldImageId, oldSha, preflightContainer, destructive } = decision;
@@ -3068,7 +3079,8 @@ export function runRollback(flags, config) {
       health,
     };
   } finally {
-    releaseLock(lockPath);
+    try { releaseServerReleaseActivity(releaseActivityLock); }
+    finally { releaseLock(lockPath); }
   }
 }
 

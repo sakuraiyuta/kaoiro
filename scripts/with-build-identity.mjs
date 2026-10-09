@@ -12,7 +12,7 @@ const args = process.argv.slice(2);
 const requireTagged = args[0] === "--require-tagged";
 if (requireTagged) args.shift();
 if (args[0] === "--") args.shift();
-const scratch = mkdtempSync(join(tmpdir(), "fuji571-build-identity-"));
+const scratch = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
 try {
   if (!args.length) throw new Error("a build command is required");
   const identity = requireTagged ? artifactBuildIdentity(requireTaggedIdentity(root)) : consumeBuildIdentity(root);
