@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/generate-build-info.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "pnpm build && vitest run"
   },
   "devDependencies": {
     "@kaoiro/protocol": "workspace:*",

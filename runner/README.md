@@ -104,7 +104,14 @@ Moved to [Runner configuration](../docs/reference/configuration/runner.md#antigr
 
 ## Development
 
+Install workspace dependencies and build the wrapper packages first, including on a
+fresh checkout. The runner test command builds its own distribution before Vitest
+starts because CLI integration tests execute the distributed entry points. A build
+failure stops the test command.
+
 ```sh
+pnpm install --frozen-lockfile
+pnpm -C wrapper build
 pnpm -C runner typecheck
 pnpm -C runner test
 pnpm -C runner build
