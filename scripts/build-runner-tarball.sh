@@ -96,12 +96,12 @@ for cmd in pnpm node tar; do
 done
 
 # Freeze before the lock/staging directory can affect the dirty check.
-identity_scratch=$(mktemp -d "${TMPDIR:-/tmp}/fuji571-tarball-identity.XXXXXX")
+identity_scratch=$(mktemp -d "${TMPDIR:-/tmp}/kaoiro-tarball-identity.XXXXXX")
 trap 'rm -rf "$identity_scratch"' EXIT INT TERM
 if [[ -z "${KAOIRO_BUILD_IDENTITY_FILE:-}" ]]; then
   identity_args=()
   if $require_tagged; then identity_args+=(--require-tagged); fi
-  node "$root/scripts/build-identity.mjs" "${identity_args[@]}" --snapshot "$identity_scratch/identity.json"
+  node "$root/scripts/build-identity.mjs" ${identity_args[@]+"${identity_args[@]}"} --snapshot "$identity_scratch/identity.json"
   export KAOIRO_BUILD_IDENTITY_FILE="$identity_scratch/identity.json"
 fi
 export KAOIRO_BUILD_IDENTITY_SHA256
@@ -200,6 +200,7 @@ pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/nul
   exit 70
 }
 printf '%s\n' "$version_string" >"$stage/$name/VERSION"
+node "$root/scripts/production-release-tools.mjs" stage --source "$root" --destination "$stage/$name/deploy/release-tools" >/dev/null
 
 # MANIFEST.json — the runtime module closure, so a release with ONE missing
 # module is rejected before it starts (issue #219 round 2, ふじ 差し戻し

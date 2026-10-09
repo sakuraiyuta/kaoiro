@@ -88,9 +88,39 @@ codex_backup=
 codex_restore=
 codex_transaction=
 switch_recovered=no
+release_authority=
+release_repo=
+release_attempt=
+release_plan_sha256=
+release_skip=
+release_skip_reason=
+release_expected_authority=
+release_target=
+release_alias=
+release_seen=
+release_invocation=
+release_proof_sha256=
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --release-repo|--release-authority|--release-attempt|--release-plan-sha256|--skip-release-reconciliation|--skip-reason|--expected-authority-sha256|--release-target|--release-alias)
+      [ $# -ge 2 ] || kaoiro_die "$1 needs a value" 64
+      kaoiro_reject_option_like "$1" "$2"
+      case " $release_seen " in *" $1 "*) kaoiro_die "repeated release argument: $1" 64 ;; esac
+      release_seen="$release_seen $1"
+      case "$1" in
+        --release-repo) release_repo=$2 ;;
+        --release-authority) release_authority=$2 ;;
+        --release-attempt) release_attempt=$2 ;;
+        --release-plan-sha256) release_plan_sha256=$2 ;;
+        --skip-release-reconciliation) release_skip=$2 ;;
+        --skip-reason) release_skip_reason=$2 ;;
+        --expected-authority-sha256) release_expected_authority=$2 ;;
+        --release-target) release_target=$2 ;;
+        --release-alias) release_alias=$2 ;;
+      esac
+      shift 2
+      ;;
     --codex-home|--codex-backup-dir|--restore-codex-backup)
       [ $# -ge 2 ] || kaoiro_die "$1 needs a value" 64
       kaoiro_reject_option_like "$1" "$2"
@@ -180,6 +210,32 @@ esac
 systemctl_bin="${KAOIRO_SYSTEMCTL:-systemctl}"
 UPDATE_UNIT="${service%.service}-update"
 
+release_audit() {
+  _release_owner=$1
+  set -- --config "$(kaoiro_config_dir)/runner.config.json"
+  _release_repo=${release_repo:-$repo}
+  [ -z "$_release_repo" ] || set -- "$@" --repo "$_release_repo"
+  _release_target=$release_target
+  [ -z "$_release_target" ] || set -- "$@" --target-sha "$_release_target"
+  [ -z "$release_authority" ] || set -- "$@" --release-authority "$release_authority"
+  [ -z "$release_attempt" ] || set -- "$@" --release-attempt "$release_attempt"
+  [ -z "$release_plan_sha256" ] || set -- "$@" --release-plan-sha256 "$release_plan_sha256"
+  [ -z "$release_skip" ] || set -- "$@" --skip-release-reconciliation "$release_skip"
+  [ -z "$release_skip_reason" ] || set -- "$@" --skip-reason "$release_skip_reason"
+  [ -z "$release_expected_authority" ] || set -- "$@" --expected-authority-sha256 "$release_expected_authority"
+  [ -z "$release_alias" ] || set -- "$@" --alias "$release_alias"
+  [ -z "$_release_owner" ] || set -- "$@" --owner-pid "$_release_owner" --mode worker --updater "$self"
+  kaoiro_release_gate runner-audit "$root" "$@"
+}
+if [ -n "$codex_restore" ] && kaoiro_release_enrolled "$root"; then
+  [ -z "$release_attempt$release_plan_sha256$release_skip$release_skip_reason" ] ||
+    kaoiro_die "Recovery cannot assert a forward production release context" 64
+  kaoiro_release_gate runner-restore-admission "$root" --snapshot "$codex_restore" --home "$codex_home" --service "$service" >/dev/null ||
+    kaoiro_die "Recovery lineage refused before admission" 78
+else
+  release_audit "" >/dev/null || kaoiro_die "Release admission refused before queue or prepare" 78
+fi
+
 # ---------------------------------------------------------------- detach ---
 
 if [ "$detach" = yes ]; then
@@ -201,6 +257,16 @@ if [ "$detach" = yes ]; then
     [ -z "$build_target" ] || set -- "$@" --target "$build_target"
   fi
 
+  [ -z "$release_authority" ] || set -- "$@" --release-authority "$release_authority"
+  [ -z "$release_attempt" ] || set -- "$@" --release-attempt "$release_attempt"
+  [ -z "$release_plan_sha256" ] || set -- "$@" --release-plan-sha256 "$release_plan_sha256"
+  [ -z "$release_skip" ] || set -- "$@" --skip-release-reconciliation "$release_skip"
+  [ -z "$release_skip_reason" ] || set -- "$@" --skip-reason "$release_skip_reason"
+  [ -z "$release_expected_authority" ] || set -- "$@" --expected-authority-sha256 "$release_expected_authority"
+  [ -z "$release_repo" ] || set -- "$@" --release-repo "$release_repo"
+  [ -z "$release_target" ] || set -- "$@" --release-target "$release_target"
+  [ -z "$release_alias" ] || set -- "$@" --release-alias "$release_alias"
+
   # A unit left loaded in `failed` state from an earlier run would make
   # --unit collide. Clearing it is also why --collect is NOT passed: the
   # finished unit has to stay inspectable, since its journal is the only
@@ -216,6 +282,7 @@ if [ "$detach" = yes ]; then
   set -- --user --no-block \
     "--unit=$UPDATE_UNIT" \
     "--description=kaoiro runner update" \
+    --expand-environment=no \
     "--setenv=PATH=$PATH" \
     ${KAOIRO_NODE:+"--setenv=KAOIRO_NODE=$KAOIRO_NODE"} \
     -- "$self" "$@"
@@ -258,16 +325,25 @@ links_held=no
 # died on SIGKILL leaves ~1.2 GB behind that nothing else ever revisits. ONLY
 # this script's own prefix — a standalone install may be running under its
 # own lock with its own staging dir.
-kaoiro_gc_staging "$root" ".staging.build"
 
 build_dir=
 cleanup() {
+  if [ -f "$lock/release-owner.json" ]; then
+    kaoiro_release_gate runner-cleanup "$root" --owner-pid "$$" >/dev/null || return 1
+  fi
   [ -z "$build_dir" ] || rm -rf "$build_dir"
   [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
   rm -f "$lock/codex-owner.json"
   kaoiro_lock_release "$lock"
 }
 trap cleanup EXIT INT TERM
+if [ -n "$codex_restore" ] && kaoiro_release_enrolled "$root"; then
+  kaoiro_release_gate runner-restore-admission "$root" --snapshot "$codex_restore" --home "$codex_home" --service "$service" >/dev/null ||
+    kaoiro_die "Executed recovery lineage refused before prepare" 78
+else
+  release_audit "$$" >/dev/null || kaoiro_die "Executed worker reconciliation refused before prepare" 78
+fi
+kaoiro_gc_staging "$root" ".staging.build"
 
 # The unit has to launch through `current` for a switch to mean anything. A
 # host still pointed at a repo checkout would take the whole update — build,
@@ -356,6 +432,13 @@ install_args=""
 kaoiro_preflight_build_format "$root/releases/$id" "$allow_dirty" ||
   kaoiro_die "Target build format refused before stopping the runner" 78
 
+if kaoiro_release_enrolled "$root" && [ -z "$codex_restore" ]; then
+  kaoiro_release_gate runner-seal "$root" --owner-pid "$$" --target-sha "$id" >/dev/null ||
+    kaoiro_die "Release proof could not be sealed before stop" 78
+  release_invocation=$("$(kaoiro_node)" -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1])).invocation_uuid)' "$lock/release-switch-proof.json")
+  release_proof_sha256=$("$(kaoiro_node)" -e 'console.log(require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex"))' "$lock/release-switch-proof.json")
+fi
+
 # --- commit: from here on a stop may interrupt the source.
 
 source_was_active=no
@@ -415,8 +498,10 @@ if [ -n "$codex_transaction" ]; then
   fi
 fi
 
-# shellcheck disable=SC2086 # same reasoning as the install call above.
-if ! "$deploy_dir/kaoiro-runner-switch.sh" "$id" --install-dir "$root" --codex-transaction "$codex_transaction" $install_args >/dev/null; then
+set -- "$id" --install-dir "$root" --codex-transaction "$codex_transaction"
+[ "$allow_dirty" = no ] || set -- "$@" --allow-dirty
+[ -z "$release_invocation" ] || set -- "$@" --release-invocation "$release_invocation" --release-proof-sha256 "$release_proof_sha256"
+if ! "$deploy_dir/kaoiro-runner-switch.sh" "$@" >/dev/null; then
   if [ -n "$codex_transaction" ]; then
     [ -z "$codex_restore" ] ||
       kaoiro_die "Restore switch failed; runner remains stopped; inspect transaction $codex_transaction, then use operator fresh setup (docs/operations/codex-home.md) if snapshot recovery cannot succeed" 78

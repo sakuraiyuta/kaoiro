@@ -83,7 +83,7 @@ kaoiro_config_dir() {
 # scripts/build-runner-tarball.sh already uses. A SIGKILLed run leaves the
 # dir behind and the next run says so rather than silently proceeding.
 kaoiro_lock_acquire() {
-  mkdir "$1" 2>/dev/null && return 0
+  mkdir -m 700 "$1" 2>/dev/null && return 0
   printf '%s: another run holds %s\n' "$prog" "$1" >&2
   printf '%s: wait for it, or remove a stale lock dir\n' "$prog" >&2
   exit 75 # EX_TEMPFAIL
@@ -101,6 +101,17 @@ kaoiro_node() {
   command -v "$node_bin" >/dev/null 2>&1 ||
     kaoiro_die "node not found: $node_bin (set KAOIRO_NODE)" 78
   printf '%s\n' "$node_bin"
+}
+
+kaoiro_release_gate() {
+  _release_operation=$1
+  _release_root=$2
+  shift 2
+  "$(kaoiro_node)" "$deploy_dir/release-gate.mjs" "$_release_operation" "$_release_root" "$@"
+}
+
+kaoiro_release_enrolled() {
+  [ -e "$1/release-authority.json" ] || [ -L "$1/release-authority.json" ]
 }
 
 # A value beginning with `-` can be parsed as an OPTION by whatever command it

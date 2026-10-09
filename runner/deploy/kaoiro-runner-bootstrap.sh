@@ -370,6 +370,13 @@ config_exists=no
 run_wizard=yes
 [ "$config_exists" = no ] || [ "$reconfigure" = yes ] || run_wizard=no
 
+if kaoiro_release_enrolled "$root"; then
+  _release_dry_run=false
+  [ "$dry_run" = no ] || _release_dry_run=true
+  kaoiro_release_gate runner-audit "$root" --config "$config_json" --dry-run "$_release_dry_run" >/dev/null ||
+    kaoiro_die "Bootstrap release reconciliation refused before setup or install" 78
+fi
+
 # ------------------------------------------------------------------ plan ---
 
 if [ "$dry_run" = yes ]; then

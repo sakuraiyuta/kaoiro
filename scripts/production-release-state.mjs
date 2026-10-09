@@ -36,9 +36,11 @@ export const ROOT_LAYOUT = Object.freeze([
   entry("incident", "manifest", "manifest\\.json", "file", "classify", "verified repair"),
   entry("incident", "manifest-version", "[0-9a-f]{64}\\.manifest\\.json", "file", "classify", "verified repair"),
   entry("incident", "bytes", "[0-9a-f]{64}\\.raw", "file", "classify", "verified repair"),
+  ...["release-owner.json", "release-audit.json", "release-switch-proof.json"].map(name =>
+    entry("update-lock", name, escape(name), "file", "classify", "owner cleanup or verified dead-owner recovery")),
   ...["owner.json", "recovery.json"].map(name => entry("administrative", name, escape(name), "file", "diagnostic", "recover-lock or recover-staging")),
   entry("administrative", "staged-plan", "attempt\\.json", "file", "diagnostic", "commit start or recover-staging"),
-  ...["root", "attempt", "administrative", "incident"].map(scope => entry(scope, "write", `\\.write-(?:${Object.keys(RECORD_KINDS).join("|")}|runner-fact|activity|owner|recovery|incident-manifest|incident-bytes)-${UUID_SOURCE}`, "file", "diagnostic", "recover-staging")),
+  ...["root", "attempt", "administrative", "incident", "update-lock"].map(scope => entry(scope, "write", `\\.write-(?:${Object.keys(RECORD_KINDS).join("|")}|runner-fact|activity|owner|recovery|incident-manifest|incident-bytes)-${UUID_SOURCE}`, "file", "diagnostic", "recover-staging")),
   entry("attempt", "legacy-temporary", `(?:${fixedRecords.map(escape).join("|")}|runner-baseline-[0-9a-f]{16}\\.json)\\.tmp\\.[1-9][0-9]*`, "file", "diagnostic", "recover-staging"),
 ]);
 

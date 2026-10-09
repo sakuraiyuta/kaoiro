@@ -44,7 +44,7 @@ export function verifyLauncherClosure(expected, actualDeploy) {
 
 async function main() {
   const [operation, expected, ...args] = process.argv.slice(2);
-  const actualDeploy = operation === "worker" ? args[0] : undefined;
+  const actualDeploy = operation === "worker" || operation.startsWith("runner-") ? args[0] : undefined;
   verifyLauncherClosure(expected, actualDeploy);
   if (operation === "worker") {
     must(actualDeploy && realpathSync(actualDeploy) === actualDeploy, "physical deploy path required");
@@ -55,6 +55,10 @@ async function main() {
   } else if (operation === "audit") {
     const { runReconciliationCli } = await import("./production-release-reconciliation.mjs");
     await runReconciliationCli(args);
+  } else if (["runner-audit", "runner-seal", "runner-switch", "runner-cleanup", "runner-restore-admission", "runner-recovery-switch"].includes(operation)) {
+    const { runRunnerReleaseGate } = await import("./production-release-runner.mjs");
+    const result = await runRunnerReleaseGate(operation, args.slice(1), { toolRoot: root, toolDigest: expected, actualDeploy });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
   } else throw new Error("unknown fixed release bootstrap operation");
 }
 

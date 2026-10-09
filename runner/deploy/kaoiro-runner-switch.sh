@@ -41,7 +41,7 @@ set -eu
 
 prog=kaoiro-runner-switch
 unset CDPATH
-deploy_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+deploy_dir=$(cd -P -- "$(dirname -- "$0")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=kaoiro-runner-common.sh
 . "$deploy_dir/kaoiro-runner-common.sh"
@@ -51,9 +51,40 @@ root=
 rollback=no
 allow_dirty=no
 codex_transaction=
+release_invocation=
+release_proof_sha256=
+release_attempt=
+release_plan_sha256=
+release_skip=
+release_skip_reason=
+release_expected_authority=
+release_authority=
+release_repo=
+release_alias=
+release_seen=
+release_manual=no
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --release-repo|--release-invocation|--release-proof-sha256|--release-attempt|--release-plan-sha256|--skip-release-reconciliation|--skip-reason|--expected-authority-sha256|--release-authority|--release-alias)
+      [ $# -ge 2 ] || kaoiro_die "$1 needs a value" 64
+      kaoiro_reject_option_like "$1" "$2"
+      case " $release_seen " in *" $1 "*) kaoiro_die "repeated release argument: $1" 64 ;; esac
+      release_seen="$release_seen $1"
+      case "$1" in
+        --release-repo) release_repo=$2 ;;
+        --release-invocation) release_invocation=$2 ;;
+        --release-proof-sha256) release_proof_sha256=$2 ;;
+        --release-attempt) release_attempt=$2 ;;
+        --release-plan-sha256) release_plan_sha256=$2 ;;
+        --skip-release-reconciliation) release_skip=$2 ;;
+        --skip-reason) release_skip_reason=$2 ;;
+        --expected-authority-sha256) release_expected_authority=$2 ;;
+        --release-authority) release_authority=$2 ;;
+        --release-alias) release_alias=$2 ;;
+      esac
+      shift 2
+      ;;
     --install-dir)
       [ $# -ge 2 ] || kaoiro_die "--install-dir needs a value" 64
       kaoiro_reject_option_like --install-dir "$2"
@@ -101,10 +132,15 @@ done
 # read-then-write — release() and exit here happen close enough together
 # (both fall straight through to this script's own exit) that a single
 # EXIT/INT/TERM trap is enough; neither path does anything else afterward.
+update_lock="$root/.lock.update"
 links_lock="$root/.lock.links"
 links_held=no
 cleanup() {
   [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
+  if [ "$release_manual" = yes ]; then
+    kaoiro_release_gate runner-cleanup "$root" --owner-pid "$$" >/dev/null || return 1
+    kaoiro_lock_release "$update_lock"
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -114,6 +150,37 @@ trap cleanup EXIT INT TERM
 switch_to() {
   _id=$1
   _target="$root/releases/$_id"
+
+  if kaoiro_release_enrolled "$root"; then
+    if [ -n "$release_invocation$release_proof_sha256" ]; then
+      kaoiro_release_gate runner-switch "$root" --target-sha "$_id" --owner-pid "$$" \
+        --invocation-uuid "$release_invocation" --proof-sha256 "$release_proof_sha256" >/dev/null ||
+        kaoiro_die "Local release switch proof refused" 78
+    elif [ -n "$codex_transaction" ]; then
+      kaoiro_release_gate runner-recovery-switch "$root" --target-sha "$_id" --codex-transaction "$codex_transaction" >/dev/null ||
+        kaoiro_die "Only validated recovery may omit a forward switch proof" 78
+    else
+      kaoiro_lock_acquire "$update_lock"
+      release_manual=yes
+      set -- --target-sha "$_id" --config "$(kaoiro_config_dir)/runner.config.json" --owner-pid "$$" --mode manual \
+        --updater "$deploy_dir/kaoiro-runner-switch.sh"
+      [ -z "$release_repo" ] || set -- "$@" --repo "$release_repo"
+      [ -z "$release_attempt" ] || set -- "$@" --release-attempt "$release_attempt"
+      [ -z "$release_plan_sha256" ] || set -- "$@" --release-plan-sha256 "$release_plan_sha256"
+      [ -z "$release_skip" ] || set -- "$@" --skip-release-reconciliation "$release_skip"
+      [ -z "$release_skip_reason" ] || set -- "$@" --skip-reason "$release_skip_reason"
+      [ -z "$release_expected_authority" ] || set -- "$@" --expected-authority-sha256 "$release_expected_authority"
+      [ -z "$release_authority" ] || set -- "$@" --release-authority "$release_authority"
+      [ -z "$release_alias" ] || set -- "$@" --alias "$release_alias"
+      kaoiro_release_gate runner-audit "$root" "$@" >/dev/null || kaoiro_die "Direct switch reconciliation refused" 78
+      kaoiro_release_gate runner-seal "$root" --target-sha "$_id" --owner-pid "$$" >/dev/null ||
+        kaoiro_die "Direct switch proof could not be sealed" 78
+      release_invocation=$("$(kaoiro_node)" -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1])).invocation_uuid)' "$update_lock/release-switch-proof.json")
+      release_proof_sha256=$("$(kaoiro_node)" -e 'console.log(require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex"))' "$update_lock/release-switch-proof.json")
+    fi
+  elif [ -n "$release_seen" ]; then
+    kaoiro_die "Unenrolled root cannot assert production release options" 78
+  fi
 
   # .lock.links (issue #243 round 2, もも review must-fix) from HERE —
   # before even checking `$_target` exists — through the writes below.
@@ -139,6 +206,17 @@ switch_to() {
   # inside the lock) fails cleanly instead of activating nothing.
   kaoiro_lock_acquire "$links_lock"
   links_held=yes
+
+  if kaoiro_release_enrolled "$root"; then
+    if [ -n "$release_invocation" ]; then
+      kaoiro_release_gate runner-switch "$root" --target-sha "$_id" --owner-pid "$$" \
+        --invocation-uuid "$release_invocation" --proof-sha256 "$release_proof_sha256" >/dev/null ||
+        kaoiro_die "Release proof changed under the links lock" 78
+    else
+      kaoiro_release_gate runner-recovery-switch "$root" --target-sha "$_id" --codex-transaction "$codex_transaction" >/dev/null ||
+        kaoiro_die "Recovery lineage changed under the links lock" 78
+    fi
+  fi
 
   [ -d "$_target" ] || kaoiro_die "no such release: $_id (looked in $root/releases)" 78
   kaoiro_verify_release_tree "$_target"

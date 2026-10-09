@@ -354,7 +354,7 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
       fakeMkdir,
       [
         "#!/bin/sh",
-        `if [ "$#" -eq 1 ] && [ "$1" = ${JSON.stringify(linksLock)} ]; then`,
+        `if [ "$#" -eq 3 ] && [ "$1" = "-m" ] && [ "$2" = "700" ] && [ "$3" = ${JSON.stringify(linksLock)} ]; then`,
         `  rm -rf ${JSON.stringify(targetPath)}`,
         "fi",
         `exec ${JSON.stringify(realMkdir)} "$@"`,

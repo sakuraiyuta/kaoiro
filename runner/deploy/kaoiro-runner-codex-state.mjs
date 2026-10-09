@@ -227,6 +227,33 @@ export async function guard(root, target, uuid, preflight = false) {
   tx.phase = "switch-authorized";
   save(root, tx);
 }
+export async function validatedRecoverySwitch(root, target, uuid) {
+  if (!uuid) return false;
+  const tx = transaction(root, uuid);
+  requireModern(tx);
+  if (tx.mode === "forward") return false;
+  recoveryLineage(root, tx, false);
+  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
+  await guard(root, target, uuid, true);
+  return true;
+}
+export async function validateRestoreAdmission(root, snapshotPath, home, service) {
+  must(unresolved(root).every(tx => tx.mode === "forward" && tx.snapshot === snapshotPath), PENDING);
+  const refs = activeReferences(root);
+  const selected = refs.find(ref => ref.snapshot === snapshotPath && !ref.restored);
+  must(selected, "No retained reference matches this snapshot");
+  const old = transaction(root, selected.uuid);
+  requireModern(old);
+  must(old.mode === "forward" && old.service === service, LINEAGE);
+  const candidates = refs.filter(ref => !ref.restored && ref.binding.home.path === home).sort((a, b) => a.order - b.order);
+  must(candidates.at(-1)?.uuid === selected.uuid, "Non-latest restore admission refused");
+  const { manifest } = verifiedReference(root, old);
+  must(manifest.source.path === home && old.binding.home.path === home &&
+    [old.source.id, old.target.id].includes(currentRelease(root)), "Restore admission binding/lineage mismatch");
+  const target = await releaseIdentity(root, old.source.id);
+  must(target.sha256 === old.source.sha256, "Backup source native changed");
+  return { recovery: true, source_revision: old.source.id, backup_uuid: old.uuid };
+}
 async function prepare(root, target, home, destination, service, tool, owner) {
   must(process.platform === "linux", "State-aware operation requires Linux");
   must(hasEntry(join(root, ".lock.update")), "Update lock is required");

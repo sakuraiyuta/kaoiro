@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { RELEASE_DIGEST, RELEASE_SHA, parseReleaseOptions } from "./production-release-state.mjs";
 
-const SCOPES = ["scripts", "server/deploy", "runner/deploy"];
+const SCOPES = ["scripts", "scripts/lib", "server/deploy", "runner/deploy"];
 const MANIFEST = "TOOL-MANIFEST.json";
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const encode = value => `${JSON.stringify(value)}\n`;
@@ -35,7 +35,7 @@ export function collectReleaseToolClosure(root) {
     const directory = join(root, scope);
     must(realpathSync(directory) === directory, `linked tool directory: ${scope}`);
     for (const name of readdirSync(directory)) {
-      if (!/\.(mjs|sh)$/.test(name) || /\.test\.mjs$/.test(name)) continue;
+      if (scope !== "runner/deploy" && !/\.(mjs|sh)$/.test(name) || /\.test\.mjs$/.test(name)) continue;
       names.add(`${scope}/${name}`);
     }
   }

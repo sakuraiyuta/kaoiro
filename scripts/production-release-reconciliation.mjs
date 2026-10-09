@@ -125,7 +125,7 @@ export async function reconcileProductionReleases({ installRoot, role = "runner"
     ["publication_unconfirmed", "publication_missing", "published"].includes(row.status));
   let inventory;
   if (receipts.length) {
-    must(repository, "tag checkout required for completed attempts");
+    must(repository, "--release-repo data checkout required for completed attempts");
     if (!dryRun) runGit(repository, ["fetch", "--tags", remote]);
     inventory = runGit(repository, ["ls-remote", "--refs", "--tags", remote]).split("\n");
   }

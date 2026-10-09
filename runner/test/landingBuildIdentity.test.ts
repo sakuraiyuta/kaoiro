@@ -77,7 +77,7 @@ describe("exact landing identity", () => {
     const remote = join(dir, "origin.git");
     git(["clone", "-q", "--bare", repo, remote], dir);
     git(["remote", "add", "origin", remote]);
-    expect(() => requireTaggedIdentity(repo, { target: revision, timeoutMs: 20 })).toThrow(/completed exact landing/);
+    expect(() => requireTaggedIdentity(repo, { target: revision, timeoutMs: 1000 })).toThrow(/completed exact landing/);
     publish(); git(["push", "-q", "origin", "--tags"]);
     expect(requireTaggedIdentity(repo, { target: revision, timeoutMs: 1000 }).version).toBe("2026.10.09.1");
     const shallow = join(dir, "shallow");

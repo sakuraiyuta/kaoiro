@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
@@ -18,6 +18,7 @@ import { readReleaseAuthority, releaseAuthorityRequest, releaseSshArguments } fr
 import { releaseRequest } from "../production-release-endpoint.mjs";
 import { collectReleaseToolClosure, stageReleaseTools, verifyReleaseToolClosure } from "../production-release-tools.mjs";
 import { assertReleaseUnresolved, reconcileProductionReleases, validateReleaseSnapshot } from "../production-release-reconciliation.mjs";
+import { verifyRunnerSwitch } from "../production-release-runner.mjs";
 
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const scratch = [];
@@ -210,4 +211,78 @@ test("only snapshot_changed retries; malformed projections, missing authoritativ
     authorityRequest: () => ({ ...snapshot, private_runtime_hosts: [] }) }), /schema/);
   await assert.rejects(reconcileProductionReleases({ installRoot: f.installRoot, timeoutMs: 1,
     authorityRequest: () => { const until = performance.now() + 5; while (performance.now() < until) {} return snapshot; } }), /deadline/);
+});
+
+test("real owned shell lineage seals and consumes the local switch proof without calling its unavailable exporter", () => {
+  const f = fixture();
+  const revision = "a".repeat(40);
+  const target = "b".repeat(40);
+  const release = join(f.installRoot, "releases", revision);
+  const deploy = join(release, "deploy");
+  mkdirSync(deploy, { recursive: true, mode: 0o700 });
+  for (const name of readdirSync(join(source, "runner/deploy"))) {
+    if (fs.statSync(join(source, "runner/deploy", name)).isFile()) {
+      const file = join(deploy, name);
+      copyFileSync(join(source, "runner/deploy", name), file);
+      chmodSync(file, name.endsWith(".sh") ? 0o755 : 0o644);
+    }
+  }
+  stageReleaseTools(source, join(deploy, "release-tools"));
+  symlinkSync(`releases/${revision}`, join(f.installRoot, "current"));
+  const config = join(f.base, "runner.config.json");
+  writeFileSync(config, releaseJsonBytes({ host_id: "private-machine-marker" }), { mode: 0o600 });
+  writeFileSync(join(f.installRoot, "release-host-aliases.json"), releaseJsonBytes([
+    { alias: "worker-a", runtime_host_id: "private-machine-marker" },
+  ]), { mode: 0o600 });
+  const owner = join(f.base, "owner.sh");
+  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+  const gate = `${quote(process.execPath)} ${quote(join(deploy, "release-gate.mjs"))}`;
+  writeFileSync(owner, `#!/bin/sh
+set -eu
+mkdir -m 700 ${quote(join(f.installRoot, ".lock.update"))}
+${gate} runner-audit ${quote(f.installRoot)} --config ${quote(config)} --target-sha ${target} --owner-pid "$$" --mode worker --updater ${quote(join(deploy, "kaoiro-runner-update.sh"))} >/dev/null
+sealed=$(${gate} runner-seal ${quote(f.installRoot)} --owner-pid "$$" --target-sha ${target})
+invocation=$(${quote(process.execPath)} -e 'console.log(JSON.parse(process.argv[1]).invocation_uuid)' "$sealed")
+digest=$(${quote(process.execPath)} -e 'console.log(JSON.parse(process.argv[1]).proof_sha256)' "$sealed")
+mv ${quote(f.descriptor.exporter_path)} ${quote(`${f.descriptor.exporter_path}.offline`)}
+sh -c '${gate} runner-switch ${quote(f.installRoot)} --target-sha ${target} --owner-pid "$$" --invocation-uuid "$1" --proof-sha256 "$2" >/dev/null' owned-switch "$invocation" "$digest"
+${gate} runner-cleanup ${quote(f.installRoot)} --owner-pid "$$" >/dev/null
+rmdir ${quote(join(f.installRoot, ".lock.update"))}
+`, { mode: 0o700 });
+  // Use a separate script for the child so path quoting stays literal at both shell layers.
+  const child = join(f.base, "switch-child.sh");
+  writeFileSync(child, `#!/bin/sh\nset -eu\n${gate} runner-switch ${quote(f.installRoot)} --target-sha ${target} --owner-pid "$$" --invocation-uuid "$1" --proof-sha256 "$2" >/dev/null\n`, { mode: 0o700 });
+  const script = readFileSync(owner, "utf8").replace(/^sh -c .*owned-switch.*$/m, `${quote(child)} "$invocation" "$digest"`);
+  writeFileSync(owner, script);
+  const result = spawnSync(owner, [], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(join(f.installRoot, ".lock.update")), false);
+  assert.deepEqual(readReleaseHistory(f.root).rows, []);
+  const evidence = join(f.installRoot, "release-audits", readdirSync(join(f.installRoot, "release-audits"))[0]);
+  assert.deepEqual(readdirSync(evidence).sort(), ["release-audit.json", "release-owner.json", "release-switch-proof.json"]);
+
+  const lock = join(f.installRoot, ".lock.update");
+  mkdirSync(lock, { mode: 0o700 });
+  for (const name of readdirSync(evidence)) copyFileSync(join(evidence, name), join(lock, name));
+  const record = JSON.parse(readFileSync(join(lock, "release-owner.json")));
+  const proof = JSON.parse(readFileSync(join(lock, "release-switch-proof.json")));
+  const proofPath = join(lock, "release-switch-proof.json");
+  const readProcess = pid => ({ pid, ppid: pid === record.pid ? 1 : record.pid, start_ticks: record.start_ticks });
+  const verify = changes => verifyRunnerSwitch({ root: f.installRoot, target,
+    invocationUuid: record.invocation_uuid, proofDigest: releaseBytesDigest(readFileSync(proofPath)), callerPid: record.pid + 100,
+    readProcess, monotonic: () => proof.sealed_monotonic_seconds + 1, currentBoot: () => record.boot_id, ...changes });
+  assert.equal(verify().pass, true);
+  for (const mutate of [p => p.root = f.base, p => p.target_revision = revision, p => p.source_revision = target,
+    p => p.owner_sha256 = "0".repeat(64), p => p.audit_sha256 = "0".repeat(64),
+    p => p.authority_sha256 = "0".repeat(64), p => p.tool_sha256 = "0".repeat(64),
+    p => p.release_context = { attempt_uuid: randomUUID(), plan_sha256: "0".repeat(64) }]) {
+    const changed = structuredClone(proof); mutate(changed); writeFileSync(proofPath, releaseJsonBytes(changed));
+    assert.throws(() => verify(), /differs|changed|proof/);
+  }
+  writeFileSync(proofPath, releaseJsonBytes(proof));
+  assert.throws(() => verify({ monotonic: () => proof.sealed_monotonic_seconds + 901 }), /stale/);
+  assert.throws(() => verify({ monotonic: () => proof.sealed_monotonic_seconds - 1 }), /future/);
+  assert.throws(() => verify({ currentBoot: () => randomUUID() }), /boot/);
+  assert.throws(() => verify({ readProcess: pid => ({ pid, ppid: 1, start_ticks: record.start_ticks }) }), /direct child/);
+  assert.throws(() => verify({ readProcess: pid => ({ ...readProcess(pid), start_ticks: "1" }) }), /foreign invocation/);
 });
