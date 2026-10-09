@@ -210,11 +210,13 @@ function fixture() {
 }
 
 test("the default queue constructor reaches the real canonical importer before submitting a fake manager command", async () => {
+  assert.match(fixtureService, /^kaoiro-fuji571-/);
   const f = fixture(),
     result = await f.queue();
   assert.equal(result.completed, false);
   assert.equal(result.delay_seconds, 180);
   const baseline = JSON.parse(readFileSync(result.baseline_file));
+  assert.equal(baseline.service, fixtureService);
   assert.equal(baseline.updater, f.unit);
   assert.equal(baseline.alias, "worker-a");
   const invocation = f.calls().find((call) => call.bin === "systemd-run");

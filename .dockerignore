@@ -17,6 +17,12 @@
 !scripts/
 !scripts/build-identity.mjs
 !scripts/serialize-build-identity.mjs
+!scripts/child-process-environment.mjs
+!runner/
+runner/**
+!runner/deploy/
+runner/deploy/**
+!runner/deploy/child-process-environment.mjs
 
 # Node deps (dashboard/node_modules must be rebuilt inside the image so
 # the lockfile install stays the single source of truth).
