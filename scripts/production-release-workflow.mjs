@@ -6,6 +6,11 @@ import { validateProductionReceipt } from "./production-release-record.mjs";
 import { publishProductionRelease } from "./production-release-tags.mjs";
 import { validateAutomationGate } from "./release-automation-gate.mjs";
 export function validateDispatch(run,{repositoryId,allowedActors}) {
+  if (!Array.isArray(allowedActors) || allowedActors.length < 1 || allowedActors.length > 100 ||
+      allowedActors.some(actor => typeof actor !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)) ||
+      new Set(allowedActors).size !== allowedActors.length) {
+    throw new Error("production actor allow-list must be a nonempty unique login array");
+  }
   if(run.event!=="workflow_dispatch" || run.head_branch!=="develop" ||
      run.repository?.id!==repositoryId || run.head_repository?.id!==repositoryId ||
      !allowedActors.includes(run.actor?.login) || !allowedActors.includes(run.triggering_actor?.login)) {

@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { BUILD_REPOSITORY_ID, parseLandingVersion, validateFrozenBuildIdentity } from "./build-identity.mjs";
-import { acquireLock, releaseLock } from "../server/deploy/kaoiro-deploy-lock.mjs";
-import { writeFileDurably } from "../server/deploy/kaoiro-deploy-atomic-write.mjs";
+import { createPrivateDirectory, namedProcessIdentity, requirePrivateDirectory, syncDirectory,
+  withReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
+import { releaseName } from "./production-release-state.mjs";
+import { validateReleasePlan } from "./production-release-plan.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA = /^[0-9a-f]{40}$/;
@@ -18,6 +20,9 @@ const digest = value => typeof value === "string" && value.length === 64 && HASH
 const utc = value => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const sameIdentity = (value, identity) => value.revision === identity.revision && value.version === identity.version && value.branch === identity.branch && value.dirty === false;
 export function validateProductionReceipt(value, { repositoryId = BUILD_REPOSITORY_ID, allowedHosts = [] } = {}) {
+  require(Array.isArray(allowedHosts) && allowedHosts.length > 0 && allowedHosts.length <= 16 &&
+    allowedHosts.every(id => typeof id === "string" && text(id)) && new Set(allowedHosts).size === allowedHosts.length,
+  "release host allow-list must be a nonempty unique string array");
   require(Buffer.byteLength(JSON.stringify(value)) <= 16_384, "receipt exceeds byte bound");
   require(exact(value, ["schema", "kind", "environment", "publication_mode", "repository_id", "attempt_uuid", "revision", "version", "branch", "completed_at", "host_ids", "codex_host_ids", "server", "runners", "canary"]), "receipt fields");
   require(value.schema === 1 && value.kind === "production_completion" && value.environment === "production" &&
@@ -53,17 +58,47 @@ export function validateProductionReceipt(value, { repositoryId = BUILD_REPOSITO
   return value;
 }
 
-export function startReleaseAttempt(root, identity, hostIds, codexHostIds = hostIds) {
+export function startReleaseAttempt(root, identity, hostIds, codexHostIds = hostIds, options = {}) {
   validateFrozenBuildIdentity(identity);
   require(parseLandingVersion(identity.version) && !identity.dirty && fullSha(identity.revision), "tagged clean artifact required before operations");
   require(Array.isArray(hostIds) && hostIds.length > 0 && hostIds.length <= 16 && new Set(hostIds).size === hostIds.length && hostIds.every(text), "execution-card inventory");
   require(Array.isArray(codexHostIds) && new Set(codexHostIds).size === codexHostIds.length && codexHostIds.every(id => hostIds.includes(id)), "Codex host inventory must be a subset of required hosts");
   const uuid = randomUUID();
   const dir = join(root, uuid);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const plan = { schema: 1, attempt_uuid: uuid, identity, host_ids: [...hostIds].sort(), codex_host_ids: [...codexHostIds].sort(), created_at: new Date().toISOString() };
-  writeFileDurably(join(dir, "attempt.json"), `${JSON.stringify(plan)}\n`);
-  return { dir, plan };
+  if (!existsSync(root)) mkdirSync(root, { recursive: true, mode: 0o700 });
+  requirePrivateDirectory(root);
+  const plan = { schema: 1, attempt_uuid: uuid, identity, host_ids: [...hostIds].sort(),
+    codex_host_ids: [...codexHostIds].sort(), created_at: new Date().toISOString(), ...options };
+  validateReleasePlan(plan, uuid);
+  return withReleaseLock(root, "history", () => {
+    const stagingName = `.start-${uuid}`;
+    releaseName("root", stagingName, "directory");
+    const staging = createPrivateDirectory(join(root, stagingName));
+    writePrivateRecord(staging, "owner.json", { schema: 1, invocation_uuid: uuid, ...namedProcessIdentity(process.pid) },
+      { kind: "owner", scope: "administrative" });
+    writePrivateRecord(staging, "attempt.json", plan, { kind: "plan", scope: "administrative" });
+    unlinkSync(join(staging, "owner.json"));
+    syncDirectory(staging);
+    require(!existsSync(dir), "attempt UUID already exists");
+    renameSync(staging, dir);
+    syncDirectory(root);
+    return { dir, plan };
+  }, "root");
+}
+
+export function assertCompletionEnrollment(plan, { serverEvidence, runners }) {
+  require(plan.authority, "production completion requires an enrolled authority plan");
+  const expected = plan.authority.server;
+  require(serverEvidence?.authority_sha256 === expected.sha256 && serverEvidence.root === expected.root &&
+    serverEvidence.release_context?.attempt_uuid === plan.attempt_uuid &&
+    serverEvidence.release_context?.plan_sha256 === receiptDigest(plan) && serverEvidence.pass === true,
+  "server completion lacks the expected enrolled audit and own attempt binding");
+  for (const owner of plan.authority.runners) {
+    const fact = runners?.find(item => item.alias === owner.alias);
+    require(fact?.authority_sha256 === owner.sha256 && fact.root === owner.root &&
+      fact.attempt_uuid === plan.attempt_uuid && fact.plan_sha256 === receiptDigest(plan) && fact.executed_audit?.pass === true,
+    `runner completion lacks expected enrolled audit: ${owner.alias}`);
+  }
 }
 
 export function completeReleaseAttempt(dir, receipt, options) {
@@ -74,15 +109,16 @@ export function completeReleaseAttempt(dir, receipt, options) {
     JSON.stringify([...receipt.host_ids].sort()) === JSON.stringify(plan.host_ids) &&
     JSON.stringify([...receipt.codex_host_ids].sort()) === JSON.stringify(plan.codex_host_ids) &&
     receipt.runners.every(item => Date.parse(item.worker_started_at) >= Date.parse(plan.created_at)), "attempt binding");
-  const lock = acquireLock(dir, "completion");
-  try {
+  return withReleaseLock(dir, "record", () => {
+    require(!["abandonment.json", "quarantine.json", "retirement.json"].some(name => existsSync(join(dir, name))), "terminal attempt cannot complete");
+    if (plan.authority) assertCompletionEnrollment(plan, options);
     const target = join(dir, "completion.json");
     if (existsSync(target)) {
       const previous = JSON.parse(readFileSync(target, "utf8"));
       require(receiptDigest(previous) === receiptDigest(receipt), "completed receipt is immutable");
       return { receipt: previous, sha256: receiptDigest(previous), reused: true };
     }
-    writeFileDurably(target, `${JSON.stringify(receipt)}\n`);
+    writePrivateRecord(dir, "completion.json", receipt);
     return { receipt, sha256: receiptDigest(receipt), reused: false };
-  } finally { releaseLock(lock); }
+  });
 }
