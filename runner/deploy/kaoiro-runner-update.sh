@@ -212,7 +212,7 @@ UPDATE_UNIT="${service%.service}-update"
 
 release_audit() {
   _release_owner=$1
-  set -- --config "$(kaoiro_config_dir)/runner.config.json"
+  set -- --config "${KAOIRO_RUNNER_CONFIG:-$(kaoiro_config_dir)/runner.config.json}"
   _release_repo=${release_repo:-$repo}
   [ -z "$_release_repo" ] || set -- "$@" --repo "$_release_repo"
   _release_target=$release_target
@@ -267,6 +267,20 @@ if [ "$detach" = yes ]; then
   [ -z "$release_target" ] || set -- "$@" --release-target "$release_target"
   [ -z "$release_alias" ] || set -- "$@" --release-alias "$release_alias"
 
+  if kaoiro_release_enrolled "$root"; then
+    detached_tool_sha256=$("$(kaoiro_node)" -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1])).sha256)' "$deploy_dir/release-tools/TOOL-MANIFEST.json")
+    detached_authority_sha256=$("$(kaoiro_node)" -e 'console.log(require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex"))' "$root/release-authority.json")
+    if [ -n "$release_expected_authority" ]; then
+      [ "$release_expected_authority" = "$detached_authority_sha256" ] || kaoiro_die "Detached authority changed before queue" 78
+    else
+      set -- "$@" --expected-authority-sha256 "$detached_authority_sha256"
+    fi
+    set -- "$(kaoiro_node)" "$deploy_dir/release-tools/scripts/production-release-launcher.mjs" \
+      worker "$detached_tool_sha256" "$deploy_dir" "$@"
+  else
+    set -- "$self" "$@"
+  fi
+
   # A unit left loaded in `failed` state from an earlier run would make
   # --unit collide. Clearing it is also why --collect is NOT passed: the
   # finished unit has to stay inspectable, since its journal is the only
@@ -284,8 +298,10 @@ if [ "$detach" = yes ]; then
     "--description=kaoiro runner update" \
     --expand-environment=no \
     "--setenv=PATH=$PATH" \
+    "--setenv=KAOIRO_RUNNER_DIR=$(kaoiro_config_dir)" \
+    ${KAOIRO_RUNNER_CONFIG:+"--setenv=KAOIRO_RUNNER_CONFIG=$KAOIRO_RUNNER_CONFIG"} \
     ${KAOIRO_NODE:+"--setenv=KAOIRO_NODE=$KAOIRO_NODE"} \
-    -- "$self" "$@"
+    -- "$@"
 
   # Queue FIRST, report second. The report used to be printed and then
   # `exec` replaced this process, so a systemd-run that failed outright

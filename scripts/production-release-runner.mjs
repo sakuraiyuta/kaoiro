@@ -43,6 +43,10 @@ function assertShellCaller(pid) {
 export async function auditRunnerRelease(options, { toolRoot, toolDigest, updater } = {}) {
   const root = realpathSync(options.installRoot);
   const authority = readReleaseAuthority(root, { assertionPath: options.assertionPath, expectedDigest: options.expectedAuthorityDigest });
+  if (authority.status === "enrolled") {
+    must(toolDigest === authority.descriptor.tool_sha256, "executing closure differs from the enrolled authority");
+    verifyReleaseToolClosure(toolRoot, toolDigest, { actualRunnerDeploy: dirname(updater) });
+  }
   const alias = authority.status === "enrolled" ? resolveRunnerReleaseAlias(root, options.configPath) : undefined;
   must(!options.alias || alias === options.alias, "requested alias differs from the live registered host");
   const audit = await reconcileProductionReleases({ ...options, installRoot: root, alias });

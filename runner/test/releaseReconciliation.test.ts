@@ -37,7 +37,7 @@ function fixture(onStop = ":", withAttempt = false) {
   const calls = join(base, "service-calls"), systemctl = join(base, "systemctl");
   writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\ncase "$*" in\n*"show -p ExecStart"*) printf '{ path=${root}/current/deploy/kaoiro-runner-launch.sh ; argv[]=${root}/current/deploy/kaoiro-runner-launch.sh ; }\\n' ;;\n*" stop "*) ${onStop.replaceAll("@@EXPORTER@@", descriptor.exporter_path)} ;;\nesac\nexit 0\n`, { mode: 0o755 });
   const systemdRun = join(base, "systemd-run");
-  writeFileSync(systemdRun, `#!/bin/sh\nprintf 'QUEUE %s\\n' "$*" >> '${calls}'\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(systemdRun, `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(calls)}, 'QUEUE '+JSON.stringify(process.argv.slice(2))+'\\n');\n`, { mode: 0o755 });
   const archive = makeReleaseTarball(join(base, "archive"), target);
   const env = { KAOIRO_RUNNER_DIR: configDir, KAOIRO_SYSTEMCTL: systemctl, KAOIRO_SYSTEMD_RUN: systemdRun, KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_RUNNER_ENV: join(base, "absent.env") };
   const pending = () => {
@@ -105,6 +105,25 @@ it("the actual worker repeats its audit under the update lock before preparing a
   expect(result.stderr).toContain("Executed worker reconciliation refused before prepare");
   expect(existsSync(join(f.root, "releases", f.target))).toBe(false);
   expect(f.seen()).toBe("");
+});
+
+it("ordinary enrolled detach captures the launcher, authority and closure before its worker can execute", () => {
+  const f = fixture();
+  const queued = f.update(["--detach"]);
+  expect(queued.status, queued.stderr).toBe(0);
+  const line = f.seen().split("\n").find(line => line.startsWith("QUEUE "));
+  expect(line).toBeDefined();
+  const argv = JSON.parse(line!.slice(6)) as string[];
+  expect(argv).toContain("--expand-environment=no");
+  const command = argv.slice(argv.indexOf("--") + 1);
+  expect(command[1]).toBe(join(f.deploy, "release-tools/scripts/production-release-launcher.mjs"));
+  expect(command).toContain("--expected-authority-sha256");
+  writeFileSync(join(f.deploy, "kaoiro-runner-common.sh"), `${readFileSync(join(f.deploy, "kaoiro-runner-common.sh"), "utf8")}\n`);
+  const result = runScript(command[0]!, command.slice(1), f.env);
+  expect(result.status, result.stderr).toBe(78);
+  expect(result.stderr).toContain("actual updater closure differs");
+  expect(f.seen()).not.toContain("--user stop kaoiro-runner");
+  expect(readlinkSync(join(f.root, "current"))).toBe(`releases/${f.source}`);
 });
 
 it("a late proof refusal restarts the unchanged source", () => {
