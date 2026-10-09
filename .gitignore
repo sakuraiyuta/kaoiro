@@ -50,3 +50,5 @@ agent.*.json
 
 # Per-agent implementation worktrees (docs/specs/agent-operations.md)
 /worktrees/
+
+/server/.kaoiro-release-authority.json

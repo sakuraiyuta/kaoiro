@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { validateProductionReceipt, receiptDigest } from "./production-release-record.mjs";
 import { validateFrozenBuildIdentity } from "./build-identity.mjs";
 import { readPublishedProductionRelease } from "./production-release-tags.mjs";
+import { readReleaseHistory } from "./production-release-history.mjs";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const read=file=>{const raw=readFileSync(file);if(raw.length>524_288)throw new Error("completion input exceeds bound");return JSON.parse(raw);};
 const must=(value,message)=>{if(!value)throw new Error(message);};
@@ -27,22 +28,30 @@ export function productionDispatchCard({dir,cwd,repository="sakuraiyuta/kaoiro"}
   const tools=resolve(cwd),head=execFileSync("git",["rev-parse","HEAD"],{cwd:tools,encoding:"utf8",stdio:"pipe",timeout:5000}).trim();
   must(/^[0-9a-f]{40}$/.test(head),"reviewed tool commit unavailable");
   const command=`gh workflow run production-release.yml --repo ${quote(repository)} --ref develop -f ${quote(`receipt=${JSON.stringify(receipt)}`)}`;
-  const verification=`node ${quote(join(tools,"scripts/collect-production-release.mjs"))} ack --attempt ${quote(resolve(dir))} --repo ${quote(tools)}`;
+  const verification=`node ${quote(join(tools,"scripts/collect-production-release.mjs"))} ack --attempt ${quote(resolve(dir))} --repo ${quote(tools)}` +
+    ` && node ${quote(join(tools,"scripts/production-release-reconciliation.mjs"))} --install-root ${quote(join(tools,"server"))} --role card --repo ${quote(tools)}`;
   return {schema:1,attempt_uuid:receipt.attempt_uuid,revision:receipt.revision,version:receipt.version,receipt_sha256:receiptDigest(receipt),
     tools_revision:head,repository,workflow:"production-release.yml",ref:"develop",command,verification,
     notice:"Run with the operator's own gh after canary. Dispatch success is not publication acknowledgment; verification must exit 0 after both remote refs agree."};
 }
 export function auditProductionCompletions({root,cwd,remote="origin"}) {
-  if(!existsSync(root))return [];
-  const names=readdirSync(root).filter(name=>UUID.test(name));must(names.length<=1000,"completion audit listing bound");
+  const history = readReleaseHistory(root);
+  const completed = history.rows.filter(row => row.completion && row.state.id === "publication_unconfirmed");
+  let inventory;
+  if (completed.length) {
+    execFileSync("git", ["fetch", "--tags", remote], { cwd, timeout: 15_000, stdio: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    inventory = execFileSync("git", ["ls-remote", "--refs", "--tags", remote], { cwd, timeout: 15_000, encoding: "utf8", stdio: "pipe" }).trim().split("\n");
+  }
   const rows=[];
-  for(const name of names) {
-    const dir=join(root,name);if(!lstatSync(dir).isDirectory() || !existsSync(join(dir,"completion.json")))continue;
-    let receipt,plan;
-    try {({receipt,plan}=completedAttempt(dir));}
-    catch {rows.push({attempt_uuid:name,status:"invalid_completion"});continue;}
+  for(const row of history.rows) {
+    const name = row.attempt_uuid;
+    if (!row.completion || row.state.id !== "publication_unconfirmed") {
+      rows.push({ attempt_uuid: name, status: row.state.id }); continue;
+    }
+    const { completion: receipt, plan } = row;
     try {
-      const pair=readPublishedProductionRelease({cwd,receipt,remote,repositoryId:receipt.repository_id,allowedHosts:plan.host_ids});
+      const pair=readPublishedProductionRelease({cwd,receipt,remote,repositoryId:receipt.repository_id,
+        allowedHosts:plan.host_ids,refresh:false,remoteInventory:inventory});
       rows.push({attempt_uuid:name,revision:receipt.revision,status:"published",tag:pair.tag,object:pair.object});
     } catch(error) {
       rows.push({attempt_uuid:name,revision:receipt.revision,status:error.message==="release publication has not been acknowledged" ? "publication_missing" : "publication_unconfirmed"});
@@ -56,7 +65,7 @@ async function main() {
   if(command==="card")console.log(JSON.stringify(productionDispatchCard({dir:flags.attempt,cwd:flags.repo,repository:flags.repository}),null,2));
   else if(command==="audit") {
     const rows=auditProductionCompletions({root:flags.root,cwd:flags.repo});console.log(JSON.stringify(rows,null,2));
-    if(rows.some(row=>row.status!=="published"))process.exitCode=1;
+    if(rows.some(row=>!["published", "abandoned", "invalid_quarantined", "deployed_uncompleted"].includes(row.status)))process.exitCode=1;
   } else throw new Error("unknown production dispatch command");
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

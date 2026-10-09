@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "nod
 import { basename, join } from "node:path";
 import { BUILD_REPOSITORY_ID, parseLandingVersion, validateFrozenBuildIdentity } from "./build-identity.mjs";
 import { createPrivateDirectory, namedProcessIdentity, requirePrivateDirectory, syncDirectory,
-  withReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
+  readPrivateBytes, releaseBytesDigest, withReleaseLock, writePrivateRecord } from "./production-release-files.mjs";
 import { releaseName } from "./production-release-state.mjs";
 import { validateReleasePlan } from "./production-release-plan.mjs";
 
@@ -86,32 +86,33 @@ export function startReleaseAttempt(root, identity, hostIds, codexHostIds = host
   }, "root");
 }
 
-export function assertCompletionEnrollment(plan, { serverEvidence, runners }) {
+export function assertCompletionEnrollment(plan, { serverEvidence, runners, planDigest = receiptDigest(plan) }) {
   require(plan.authority, "production completion requires an enrolled authority plan");
   const expected = plan.authority.server;
   require(serverEvidence?.authority_sha256 === expected.sha256 && serverEvidence.root === expected.root &&
     serverEvidence.release_context?.attempt_uuid === plan.attempt_uuid &&
-    serverEvidence.release_context?.plan_sha256 === receiptDigest(plan) && serverEvidence.pass === true,
+    serverEvidence.release_context?.plan_sha256 === planDigest && serverEvidence.pass === true,
   "server completion lacks the expected enrolled audit and own attempt binding");
   for (const owner of plan.authority.runners) {
     const fact = runners?.find(item => item.alias === owner.alias);
     require(fact?.authority_sha256 === owner.sha256 && fact.root === owner.root &&
-      fact.attempt_uuid === plan.attempt_uuid && fact.plan_sha256 === receiptDigest(plan) && fact.executed_audit?.pass === true,
+      fact.attempt_uuid === plan.attempt_uuid && fact.plan_sha256 === planDigest && fact.executed_audit?.pass === true,
     `runner completion lacks expected enrolled audit: ${owner.alias}`);
   }
 }
 
 export function completeReleaseAttempt(dir, receipt, options) {
   validateProductionReceipt(receipt, options);
-  const plan = JSON.parse(readFileSync(join(dir, "attempt.json"), "utf8"));
+  return withReleaseLock(dir, "record", () => {
+  const rawPlan = readPrivateBytes(join(dir, "attempt.json"), { legacyMode: true });
+  const plan = validateReleasePlan(JSON.parse(rawPlan), receipt.attempt_uuid);
   require(basename(dir) === receipt.attempt_uuid && plan.attempt_uuid === receipt.attempt_uuid &&
     sameIdentity({ ...receipt, dirty: false }, plan.identity) &&
     JSON.stringify([...receipt.host_ids].sort()) === JSON.stringify(plan.host_ids) &&
     JSON.stringify([...receipt.codex_host_ids].sort()) === JSON.stringify(plan.codex_host_ids) &&
     receipt.runners.every(item => Date.parse(item.worker_started_at) >= Date.parse(plan.created_at)), "attempt binding");
-  return withReleaseLock(dir, "record", () => {
     require(!["abandonment.json", "quarantine.json", "retirement.json"].some(name => existsSync(join(dir, name))), "terminal attempt cannot complete");
-    if (plan.authority) assertCompletionEnrollment(plan, options);
+    if (plan.authority) assertCompletionEnrollment(plan, { ...options, planDigest: releaseBytesDigest(rawPlan) });
     const target = join(dir, "completion.json");
     if (existsSync(target)) {
       const previous = JSON.parse(readFileSync(target, "utf8"));

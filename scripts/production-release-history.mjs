@@ -131,10 +131,14 @@ export function readReleaseAttempt(dir) {
       records["retirement.json"] && !retirementValid) invalid = true;
   const conflict = terminalFiles.filter(name => records[name]).length > 1 || (!!completion && !!abandoned);
   let applied = Object.keys(records).some(name => name.startsWith("runner-after-"));
+  const externalRecords = [];
   const serverAudit = records["server-audit.json"]?.value;
   if (serverAudit?.transaction_dir) {
     must(typeof serverAudit.transaction_dir === "string" && resolve(serverAudit.transaction_dir) === serverAudit.transaction_dir, "unsafe server audit transaction path");
-    const journal = readPrivateJson(join(serverAudit.transaction_dir, "journal.json"), { legacyMode: true, privateParent: false });
+    const path = join(serverAudit.transaction_dir, "journal.json");
+    const raw = readPrivateBytes(path, { legacyMode: true, privateParent: false });
+    externalRecords.push({ path, sha256: releaseBytesDigest(raw) });
+    const journal = JSON.parse(raw);
     must(journal.release_context?.attempt_uuid === uuid || journal.history?.some(item => item.observation?.release_context?.attempt_uuid === uuid), "server journal belongs to another attempt");
     applied ||= journal.phase === "done";
   }
@@ -143,7 +147,7 @@ export function readReleaseAttempt(dir) {
     quarantineValid, retirementValid, applied, activity: activity.state };
   const state = classifyReleaseState(observation);
   return { attempt_uuid: uuid, dir, entries, records, plan, plan_sha256: planDigest,
-    row_sha256: releaseRowDigest(records), completion, observation, state, activity };
+    row_sha256: releaseRowDigest(records), completion, observation, state, activity, externalRecords };
 }
 
 export function readReleaseHistory(root, { recordingHostname = hostname() } = {}) {
@@ -169,6 +173,9 @@ export function readReleaseHistory(root, { recordingHostname = hostname() } = {}
     if (JSON.stringify(releaseEntryInventory(row.dir, "attempt")) !== JSON.stringify(row.entries)) throw new Error("snapshot_changed");
     for (const [name, item] of Object.entries(row.records)) {
       if (releaseBytesDigest(readPrivateBytes(join(row.dir, name), { legacyMode: true })) !== item.sha256) throw new Error("snapshot_changed");
+    }
+    for (const record of row.externalRecords) {
+      if (releaseBytesDigest(readPrivateBytes(record.path, { legacyMode: true, privateParent: false })) !== record.sha256) throw new Error("snapshot_changed");
     }
   }
   if (JSON.stringify(releaseEntryInventory(root, "root")) !== JSON.stringify(before)) throw new Error("snapshot_changed");

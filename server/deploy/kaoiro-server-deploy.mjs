@@ -38,6 +38,7 @@ import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
+import { auditServerRelease, bindServerReleaseAudit, assertServerResumeContext } from "./kaoiro-release-reconciliation.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -1221,7 +1222,8 @@ export function pruneOldTransactions(backupRoot, config, protectedTransactionId,
   return { removed, skipped };
 }
 
-const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
+const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction", "--release-authority",
+  "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason"]);
 const BOOL_FLAGS = new Map([
   ["--dry-run", "dryRun"],
   ["--maintenance-approved", "maintenanceApproved"],
@@ -1261,7 +1263,9 @@ export function parseArgs(argv) {
       if (value === undefined || value.startsWith("-")) {
         fail(`${arg} needs a value`, 64);
       }
-      flags[arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+      const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      if (Object.hasOwn(flags, key)) fail(`repeated argument: ${arg}`, 64);
+      flags[key] = value;
       continue;
     }
     if (BOOL_FLAGS.has(arg)) {
@@ -1888,6 +1892,8 @@ export function runUpdate(flags, config) {
   const backupRoot = resolveBackupRoot(config);
   const dryRun = flags.dryRun === true;
 
+  const admissionAudit = auditServerRelease(flags, serverDir, repo);
+
   if (dryRun) {
     if (flags.transaction !== undefined) {
       fail("--dry-run does not support --transaction", 64);
@@ -1912,6 +1918,7 @@ export function runUpdate(flags, config) {
       docker: overridden ? "fake" : "docker",
       container,
       target,
+      releaseReconciliation: admissionAudit,
       fetched,
       targetKnownLocally: targetKnownLocallyResult,
       unfinishedTransactionId: unfinished === null ? null : unfinished.id,
@@ -1937,6 +1944,7 @@ export function runUpdate(flags, config) {
 
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
   try {
+    const releaseAudit = auditServerRelease(flags, serverDir, repo);
     const unfinished = findUnfinishedTransaction(backupRoot);
     let transactionId;
     let dir;
@@ -1959,6 +1967,10 @@ export function runUpdate(flags, config) {
         );
       }
       ({ id: transactionId, dir, journal } = unfinished);
+      assertServerResumeContext(journal, releaseAudit);
+      bindServerReleaseAudit(releaseAudit, dir);
+      journal.release_reconciliation = releaseAudit;
+      writeJournal(dir, journal, validateJournalAgainstStateMachine);
       const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
       const buildEntry = journal.history.find((e) => e.phase === PHASE.BUILD_PREPARED);
       if (oldEntry === undefined || buildEntry === undefined) {
@@ -2047,6 +2059,8 @@ export function runUpdate(flags, config) {
       recoveryPlan = composePlan(bin, serverDir, recoveryComposeArgs(recoveryComposeFile, serverDir));
       journal = {
         schema_version: 1,
+        release_context: releaseAudit.release_context ?? null,
+        release_reconciliation: releaseAudit,
         transaction_id: transactionId,
         phase: PHASE.PREFLIGHT,
         history: [
@@ -2058,6 +2072,7 @@ export function runUpdate(flags, config) {
         ],
       };
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
+      bindServerReleaseAudit(releaseAudit, dir);
 
       // クロエ round 1 review MF-2: retagged from the RUNNING container's
       // own image id, never from `latest` — `compose build` below is

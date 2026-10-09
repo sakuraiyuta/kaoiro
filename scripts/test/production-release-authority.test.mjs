@@ -6,6 +6,10 @@ import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { runUpdate } from "../../server/deploy/kaoiro-server-deploy.mjs";
+import { DEFAULT_CONFIG } from "../../server/deploy/kaoiro-deploy-config.mjs";
 import { artifactBuildIdentity, BUILD_REPOSITORY_ID } from "../build-identity.mjs";
 import { startReleaseAttempt } from "../production-release-record.mjs";
 import { releaseBytesDigest, releaseJsonBytes } from "../production-release-files.mjs";
@@ -18,10 +22,12 @@ import { assertReleaseUnresolved, reconcileProductionReleases, validateReleaseSn
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const scratch = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true }); });
-function fixture() {
+function fixture(role = "runner") {
   const base = mkdtempSync(join(tmpdir(), "kaoiro-release-authority-test-"));
   scratch.push(base);
-  const installRoot = join(base, "install");
+  const repo = join(base, "repo");
+  mkdirSync(repo, { mode: 0o700 });
+  const installRoot = role === "server" ? join(repo, "server") : join(base, "install");
   const root = join(base, "history");
   mkdirSync(installRoot, { mode: 0o700 });
   mkdirSync(root, { mode: 0o700 });
@@ -30,9 +36,9 @@ function fixture() {
   const descriptor = { schema: 1, install_root: installRoot, transport: "local", recording_hostname: hostname(), root,
     tool_sha256: manifest.sha256, exporter_path: join(toolRoot, "scripts/production-release-launcher.mjs"),
     node_major: Number(process.versions.node.split(".")[0]), node_path: process.execPath };
-  const path = join(installRoot, "release-authority.json");
+  const path = join(installRoot, role === "server" ? ".kaoiro-release-authority.json" : "release-authority.json");
   writeFileSync(path, releaseJsonBytes(descriptor), { mode: 0o600 });
-  const authority = readReleaseAuthority(installRoot);
+  const authority = readReleaseAuthority(installRoot, { role });
   const revision = "a".repeat(40);
   const identity = artifactBuildIdentity({ revision, dirty: false, version: "2026.10.09.1", branch: "develop", channel: "dev",
     landing: { schema: 1, kind: "landing", repository_id: BUILD_REPOSITORY_ID, revision, branch: "develop",
@@ -42,7 +48,7 @@ function fixture() {
     authority: { server: { root: installRoot, sha256: authority.sha256 },
       runners: [{ alias: "worker-a", root: installRoot, sha256: authority.sha256 }] },
   });
-  return { base, root, toolRoot, installRoot, descriptor, path, authority, manifest, identity, start };
+  return { base, repo, root, toolRoot, installRoot, descriptor, path, authority, manifest, identity, start };
 }
 
 test("default authority constructor reaches the real verified endpoint and first history snapshot", async () => {
@@ -124,17 +130,51 @@ test("fixed importer keeps an identical retry idempotent while refusing changed 
   }), /canonical row changed|schema/);
 });
 
-test("all four entry roles preserve an exact skip set rather than a global waiver", async () => {
+test("the shared skip guard preserves an exact UUID set rather than a global waiver", async () => {
   const f = fixture();
   const first = f.start();
   await reconcileProductionReleases({ installRoot: f.installRoot,
     skipCsv: first.plan.attempt_uuid, skipReason: "operator deferred this attempt" });
   const second = f.start();
-  for (const entry of ["admission", "queue", "worker", "server-prepare"]) {
-    await assert.rejects(reconcileProductionReleases({ installRoot: f.installRoot,
-      skipCsv: first.plan.attempt_uuid, skipReason: `operator confirmed ${entry}` }), /unresolved attempts/);
-  }
+  await assert.rejects(reconcileProductionReleases({ installRoot: f.installRoot,
+    skipCsv: first.plan.attempt_uuid, skipReason: "operator deferred only the first attempt" }), /unresolved attempts/);
   assertReleaseUnresolved([first.plan.attempt_uuid, second.plan.attempt_uuid], [first.plan.attempt_uuid, second.plan.attempt_uuid]);
+});
+
+test("server prepare refuses its enrolled history before Docker or transaction creation, including dry-run", () => {
+  const f = fixture("server");
+  const first = f.start();
+  const backup = join(f.base, "backup");
+  const config = { ...DEFAULT_CONFIG, backup_root: backup };
+  for (const dryRun of [false, true]) {
+    assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision, dryRun }, config), /unresolved attempts/);
+    assert.equal(existsSync(backup), false);
+  }
+  f.start();
+  assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision,
+    skipReleaseReconciliation: first.plan.attempt_uuid, skipReason: "operator deferred the first attempt" }, config), /unresolved attempts/);
+  assert.equal(existsSync(backup), false);
+});
+
+test("server repeats its audit under the deployment lock before prepare observes Docker", () => {
+  const f = fixture("server");
+  const first = f.start();
+  const backup = join(f.base, "backup");
+  const original = fs.mkdirSync;
+  let changed = false;
+  fs.mkdirSync = (path, ...args) => {
+    const result = original(path, ...args);
+    if (String(path).startsWith(`${backup}/.lock.`)) { f.start(); changed = true; }
+    return result;
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => runUpdate({ repo: f.repo, target: f.identity.revision,
+      releaseAttempt: first.plan.attempt_uuid, releasePlanSha256: releaseBytesDigest(releaseJsonBytes(first.plan)) },
+    { ...DEFAULT_CONFIG, backup_root: backup }), /unresolved attempts/);
+    assert.equal(changed, true);
+  } finally { fs.mkdirSync = original; syncBuiltinESMExports(); }
+  assert.deepEqual(fs.readdirSync(backup), []);
 });
 
 test("only snapshot_changed retries; malformed projections, missing authoritative root and expiry refuse", async () => {
