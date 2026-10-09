@@ -147,6 +147,10 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
   assert.deepEqual(auditProductionCompletions({root:attempts,cwd:source}).map(row=>row.status),["publication_missing"]);
   publishProductionRelease({cwd:source,receipt:r,...options});
   assert.deepEqual(auditProductionCompletions({root:attempts,cwd:source}).map(row=>row.status),["published"]);
+  const anotherTarget=structuredClone(plan);anotherTarget.identity.revision="b".repeat(40);anotherTarget.identity.landing.revision="b".repeat(40);
+  writeFileSync(join(dir,"attempt.json"),JSON.stringify(anotherTarget));
+  assert.throws(()=>productionDispatchCard({dir,cwd:source}),/attempt differs/);
+  writeFileSync(join(dir,"attempt.json"),JSON.stringify(plan));
   writeFileSync(join(dir,"completion.json"),JSON.stringify({...r,attempt_uuid:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}));
   assert.throws(()=>productionDispatchCard({dir,cwd:source}),/attempt differs/);
   assert.equal(auditProductionCompletions({root:attempts,cwd:source})[0].status,"invalid_completion");

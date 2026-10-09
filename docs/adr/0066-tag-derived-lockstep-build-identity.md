@@ -54,9 +54,10 @@ atomically. A redeploy retains another attempt UUID/receipt and reuses the first
 immutable release tag. HTTP dispatch success is not acknowledgment: read the
 remote tag and claim back before writing `tag-ack.json`.
 
-The host-to-Actions notifier is a separate adapter. Its S4 credential/operator
-choice is pending; implementing the common receipt and receiver does not
-provision a host token or enable automation.
+The operator uses their own `gh` to dispatch the fixed workflow at the canary
+checkpoint (operator decision, 2026-10-09). No Actions-write token is provisioned
+on a production host. Completion-side reconciliation reports missing tags for
+private receipts that were never dispatched.
 
 ## Trust and rollout
 
