@@ -360,16 +360,12 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       ].join("\n"),
     });
 
-    const callerScript = [
-      `${JSON.stringify(updateScript)} --install-dir ${JSON.stringify(root)}`,
-      `--service ${SERVICE} --tarball ${JSON.stringify(archive)} --detach`,
-      `&& sleep 60`,
-    ].join(" ");
+    const callerScript = '"$1" --install-dir "$2" --service "$3" --tarball "$4" --detach && sleep 60';
 
     // detached: true makes node call setsid(), so the child's pid IS its
     // process-group id and the kill below hits the caller and everything it
     // still holds.
-    const caller = spawn("sh", ["-c", callerScript], {
+    const caller = spawn("sh", ["-c", callerScript, "sh", updateScript, root, SERVICE, archive], {
       detached: true,
       stdio: "ignore",
       env: {
