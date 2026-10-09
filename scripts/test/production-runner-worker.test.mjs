@@ -1,87 +1,103 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import { artifactBuildIdentity, BUILD_REPOSITORY_ID } from "../build-identity.mjs";
-import { startReleaseAttempt, completeReleaseAttempt } from "../production-release-record.mjs";
-import { cleanupProductionRunner, listRetainedProductionRunners, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
+import { startReleaseAttempt } from "../production-release-record.mjs";
+import { cleanupProductionRunner, queueProductionRunner, runnerWorkerUnit } from "../production-runner-worker.mjs";
 import { collectRunnerCompletion } from "../collect-production-release.mjs";
+import { readReleaseAuthority } from "../production-release-authority.mjs";
+import { stageReleaseTools } from "../production-release-tools.mjs";
+import { releaseBytesDigest, releaseJsonBytes } from "../production-release-files.mjs";
 
-const roots=[];
-const saved=new Map();
-function env(key,value) { if(!saved.has(key))saved.set(key,process.env[key]); process.env[key]=value; }
+const source=resolve(dirname(fileURLToPath(import.meta.url)),"../..");
+const roots=[],saved=new Map();
+function env(key,value) {if(!saved.has(key))saved.set(key,process.env[key]);process.env[key]=value;}
 afterEach(()=>{for(const [key,value] of saved){if(value===undefined)delete process.env[key];else process.env[key]=value;}saved.clear();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 function fixture() {
-  const root=mkdtempSync(join(tmpdir(),"fuji571-retained-worker-test-"));roots.push(root);
-  const bin=join(root,"bin"),runner=join(root,"runner"),tool=join(runner,"current/deploy/kaoiro-runner-update.sh");
-  mkdirSync(bin);mkdirSync(join(runner,"current/deploy"),{recursive:true});writeFileSync(tool,"#!/bin/sh\nexit 0\n",{mode:0o755});
-  const stateFile=join(root,"state.json"),callsFile=join(root,"calls.jsonl");writeFileSync(stateFile,"{}");
-  const program=`#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv.slice(2);fs.appendFileSync(process.env.FUJI571_CALLS,JSON.stringify({bin:require('node:path').basename(process.argv[1]),args:a})+'\\n');const state=JSON.parse(fs.readFileSync(process.env.FUJI571_STATE));if(a[1]==='show'){const value=state[a[2]]??{LoadState:'not-found',ActiveState:'inactive',InvocationID:''};console.log(Object.entries(value).map(([k,v])=>k+'='+v).join('\\n'));}if(a[1]==='stop'){for(const unit of a.slice(2))delete state[unit];fs.writeFileSync(process.env.FUJI571_STATE,JSON.stringify(state));}if(a[1]==='reset-failed')process.exit(1);\n`;
-  for(const name of ["systemctl","systemd-run"])writeFileSync(join(bin,name),program,{mode:0o755});
-  env("PATH",`${bin}:${process.env.PATH}`);env("FUJI571_STATE",stateFile);env("FUJI571_CALLS",callsFile);
-  const revision="a".repeat(40),identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
-  const {dir,plan}=startReleaseAttempt(join(root,"attempts"),identity,["homeguard"],[]);
-  const unit=runnerWorkerUnit(plan.attempt_uuid,"homeguard");
-  const queue=extra=>queueProductionRunner({dir,host:"homeguard",runnerRoot:runner,updateArgs:["--from-repo",root],...extra});
-  const calls=()=>readFileSync(callsFile,"utf8").trim().split("\n").map(JSON.parse);
+  const root=mkdtempSync(join(tmpdir(),"kaoiro-retained-worker-test-"));roots.push(root);
+  const bin=join(root,"bin"),runner=join(root,"runner"),history=join(root,"history"),revision="a".repeat(40),old="b".repeat(40);
+  for(const path of [bin,runner,history])mkdirSync(path,{mode:0o700});
+  const deploy=join(runner,"releases",old,"deploy");mkdirSync(deploy,{recursive:true});
+  for(const name of readdirSync(join(source,"runner/deploy")))copyFileSync(join(source,"runner/deploy",name),join(deploy,name));
+  const tools=join(deploy,"release-tools"),manifest=stageReleaseTools(source,tools);
+  symlinkSync(`releases/${old}`,join(runner,"current"));
+  const descriptor={schema:1,install_root:runner,transport:"local",recording_hostname:hostname(),root:history,
+    tool_sha256:manifest.sha256,exporter_path:join(tools,"scripts/production-release-launcher.mjs"),node_major:Number(process.versions.node.split(".")[0]),node_path:process.execPath};
+  writeFileSync(join(runner,"release-authority.json"),releaseJsonBytes(descriptor),{mode:0o600});
+  const authority=readReleaseAuthority(runner);
+  const pairs=[{alias:"worker-a",runtime_host_id:"private-machine-marker"}];
+  writeFileSync(join(runner,"release-host-aliases.json"),releaseJsonBytes(pairs),{mode:0o600});
+  const configPath=join(root,"runner.config.json");writeFileSync(configPath,releaseJsonBytes({host_id:pairs[0].runtime_host_id}),{mode:0o600});env("KAOIRO_RUNNER_DIR",root);
+  const identity=artifactBuildIdentity({revision,dirty:false,version:"2026.10.09.1",branch:"develop",channel:"dev",landing:{schema:1,kind:"landing",repository_id:BUILD_REPOSITORY_ID,revision,branch:"develop",version:"2026.10.09.1",original_run_id:1,created_at:"2026-10-09T00:00:00Z"}});
+  const planOptions={runtime_hosts:pairs,authority:{server:{root:join(root,"server"),sha256:"c".repeat(64)},runners:[{alias:"worker-a",root:runner,sha256:authority.sha256}]}};
+  const attempt=startReleaseAttempt(history,identity,["worker-a"],[],planOptions);
+  const parent=join(runner,"production-attempts");mkdirSync(parent,{mode:0o700});
+  const dir=join(parent,attempt.plan.attempt_uuid);mkdirSync(dir,{mode:0o700});copyFileSync(join(attempt.dir,"attempt.json"),join(dir,"attempt.json"));
+  const plan=attempt.plan,unit=runnerWorkerUnit(plan.attempt_uuid,"worker-a"),baselineFile=join(dir,"runner-baseline-worker-a.json");
+  const stateFile=join(root,"state.json"),callsFile=join(root,"calls.jsonl");writeFileSync(stateFile,"{}");writeFileSync(callsFile,"");
+  const program=`#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv.slice(2);const bin=require('node:path').basename(process.argv[1]);fs.appendFileSync(process.env.GATE_CALLS,JSON.stringify({bin,args:a})+'\\n');const states=JSON.parse(fs.readFileSync(process.env.GATE_STATE));if(bin==='busctl'){const b=JSON.parse(fs.readFileSync(process.env.GATE_BASELINE));console.log(JSON.stringify({type:'a(sasasttttuii)',data:[[b.node_path,[b.node_path,b.launcher,'worker',b.tool_sha256,require('node:path').dirname(b.updater_tool),...b.update_args],['no-env-expand'],0,0,0,0,0,0,0]]}));}if(a[1]==='show'){const value=states[a.at(-1)]??{LoadState:'not-found',ActiveState:'inactive',InvocationID:''};console.log(Object.entries(value).map(([k,v])=>k+'='+v).join('\\n'));}if(a[1]==='stop'){for(const unit of a.slice(3))delete states[unit];fs.writeFileSync(process.env.GATE_STATE,JSON.stringify(states));}if(a[1]==='reset-failed')process.exit(1);\n`;
+  for(const name of ["systemctl","systemd-run","busctl"])writeFileSync(join(bin,name),program,{mode:0o755});
+  env("PATH",`${bin}:${process.env.PATH}`);env("GATE_STATE",stateFile);env("GATE_CALLS",callsFile);env("GATE_BASELINE",baselineFile);
+  const queue=extra=>queueProductionRunner({dir,host:"worker-a",runnerRoot:runner,configPath,updateArgs:["--from-repo",root],...extra});
+  const calls=()=>readFileSync(callsFile,"utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
   const state=values=>writeFileSync(stateFile,JSON.stringify(values));
-  const t=n=>new Date(Date.parse(plan.created_at)+n).toISOString();
-  const receipt={schema:1,kind:"production_completion",environment:"production",publication_mode:"by_landing",repository_id:BUILD_REPOSITORY_ID,attempt_uuid:plan.attempt_uuid,revision,version:identity.version,branch:"develop",completed_at:t(3),host_ids:plan.host_ids,codex_host_ids:[],server:{transaction_id:"fixture-server",image_id:`sha256:${"b".repeat(64)}`,container_id:"fixture-container",health_revision:revision,health_dirty:false,stability_passed:true,journal_sha256:"c".repeat(64),manifest_sha256:"d".repeat(64)},runners:[{host_id:"homeguard",revision,version:identity.version,branch:"develop",dirty:false,unit:"kaoiro-runner",update_invocation_id:"e".repeat(32),service_active:true,worker_exit:0,worker_started_at:t(1),worker_finished_at:t(2),artifact_sha256:"f".repeat(64),codex:null}],canary:{passed:true,operator:"fixture-operator",revision,completed_at:t(2),evidence_sha256:"0".repeat(64)}};
-  const finished={LoadState:"loaded",ActiveState:"active",SubState:"exited",Result:"success",ExecMainCode:"1",ExecMainStatus:"0",InvocationID:"e".repeat(32),ExecStart:`{ path=${tool} ; argv[]=${tool} ; }`};
-  return {root,dir,plan,unit,queue,calls,state,receipt,finished,bin,runner};
+  const finished={LoadState:"loaded",ActiveState:"active",SubState:"exited",Result:"success",ExecMainCode:"1",ExecMainStatus:"0",InvocationID:"e".repeat(32)};
+  return {root,dir,plan,unit,queue,calls,state,finished,bin,runner,authority,identity,history,planOptions,canonical:attempt.dir,configPath,baselineFile};
 }
-test("the default constructor durably queues a delayed retained worker without detach",()=>{
-  const f=fixture(),result=f.queue();
+
+test("the default queue constructor reaches the real canonical importer before submitting a fake manager command",async()=>{
+  const f=fixture(),result=await f.queue();
   assert.equal(result.completed,false);assert.equal(result.delay_seconds,180);
-  const baseline=JSON.parse(readFileSync(result.baseline_file));assert.equal(baseline.updater,f.unit);assert.equal(baseline.attempt_uuid,f.plan.attempt_uuid);
+  const baseline=JSON.parse(readFileSync(result.baseline_file));assert.equal(baseline.updater,f.unit);assert.equal(baseline.alias,"worker-a");
   const invocation=f.calls().find(call=>call.bin==="systemd-run");
-  assert.ok(invocation.args.includes("--on-active=180s"));assert.ok(invocation.args.includes("--property=Type=oneshot"));assert.ok(invocation.args.includes("--property=RemainAfterExit=yes"));assert.ok(invocation.args.includes("--timer-property=AccuracySec=1s"));assert.ok(invocation.args.includes("--timer-property=RandomizedDelaySec=0"));
-  assert.ok(invocation.args.includes("--no-block"));assert.ok(!invocation.args.includes("--detach"));assert.ok(!invocation.args.some(arg=>arg.includes("KAOIRO_RUNNER_TOKEN=")));
-  assert.throws(()=>f.queue(),/already queued/);assert.equal(f.calls().filter(call=>call.bin==="systemd-run").length,1);
+  for(const arg of ["--on-active=180s","--property=Type=oneshot","--property=RemainAfterExit=yes","--timer-property=AccuracySec=1s","--timer-property=RandomizedDelaySec=0","--no-block","--expand-environment=no"])assert.ok(invocation.args.includes(arg));
+  assert.ok(!invocation.args.includes("--detach"));assert.ok(!invocation.args.some(arg=>arg.includes("KAOIRO_RUNNER_TOKEN=")));
+  assert.ok(invocation.args.includes(baseline.launcher));assert.ok(invocation.args.includes(f.plan.attempt_uuid));
+  assert.ok(!f.unit.includes("private-machine-marker"));
+  const activities=readdirSync(f.canonical).filter(name=>name.startsWith("runner-activity-")).map(name=>JSON.parse(readFileSync(join(f.canonical,name))));
+  assert.deepEqual(activities.map(row=>row.state).sort(),["intent","queued"]);
+  await assert.rejects(f.queue(),/already queued/);
+  assert.equal(f.calls().filter(call=>call.bin==="systemd-run").length,1);
 });
-test("uncertain submission remains reserved and is never queued twice",()=>{
+
+test("uncertain submission remains reserved and canonical intent is not silently idle",async()=>{
   const f=fixture();
-  assert.throws(()=>f.queue({systemdRunBin:join(f.root,"missing-command")}),/ENOENT/);
-  assert.throws(()=>f.queue(),/already queued/);
+  writeFileSync(join(f.bin,"systemd-run"),"#!/bin/sh\nexit 1\n",{mode:0o755});
+  await assert.rejects(f.queue());
+  await assert.rejects(f.queue(),/already queued/);
+  const states=readdirSync(f.canonical).filter(name=>name.startsWith("runner-activity-")).map(name=>JSON.parse(readFileSync(join(f.canonical,name))).state);
+  assert.deepEqual(states,["intent"]);
 });
-test("unit collisions, nonpositive delays, and unapproved update arguments refuse before enqueue",()=>{
+
+test("invalid queue arguments and a unit collision refuse before submission",async()=>{
   const f=fixture();f.state({[f.unit]:{LoadState:"loaded",ActiveState:"active"}});
-  assert.throws(()=>f.queue(),/already exists/);f.state({});
-  for(const delaySeconds of [0,-1,NaN,86401])assert.throws(()=>f.queue({delaySeconds}),/delay/);
-  for(const updateArgs of [["--allow-dirty","yes"],["--tarball","x","--from-repo","y"],["--from-repo","x","--codex-home","h","--codex-backup-dir","b"]])assert.throws(()=>f.queue({updateArgs}));
+  await assert.rejects(f.queue(),/already exists/);f.state({});
+  for(const delaySeconds of [0,-1,NaN,86401])await assert.rejects(f.queue({delaySeconds}),/delay/);
+  for(const updateArgs of [["--allow-dirty","yes"],["--tarball","x","--from-repo","y"],["--from-repo","x","--codex-home","h","--codex-backup-dir","b"],["--from-repo","x","--release-attempt","f".repeat(36)]])await assert.rejects(f.queue({updateArgs}));
   assert.equal(f.calls().filter(call=>call.bin==="systemd-run").length,0);
 });
-test("completion must be valid and bound to this inventory before the exact units are cleaned",()=>{
-  const f=fixture();f.queue();f.state({[f.unit]:f.finished,[f.unit.replace(/service$/,"timer")]:{LoadState:"loaded",ActiveState:"active"}});
-  assert.throws(()=>cleanupProductionRunner({dir:f.dir,host:"homeguard"}),/ENOENT/);
-  writeFileSync(join(f.dir,"completion.json"),JSON.stringify({...f.receipt,revision:"b".repeat(40),server:{...f.receipt.server,health_revision:"b".repeat(40)},runners:f.receipt.runners.map(r=>({...r,revision:"b".repeat(40)})),canary:{...f.receipt.canary,revision:"b".repeat(40)}}));
-  assert.throws(()=>cleanupProductionRunner({dir:f.dir,host:"homeguard"}),/another attempt/);
-  rmSync(join(f.dir,"completion.json"));completeReleaseAttempt(f.dir,f.receipt,{allowedHosts:f.plan.host_ids});
-  f.state({[f.unit]:{...f.finished,InvocationID:"f".repeat(32)}});assert.throws(()=>cleanupProductionRunner({dir:f.dir,host:"homeguard"}),/differs/);
-  assert.equal(f.calls().filter(call=>call.args[1]==="stop").length,0);
-  f.state({[f.unit]:f.finished,[f.unit.replace(/service$/,"timer")]:{LoadState:"loaded",ActiveState:"active"}});
-  assert.equal(cleanupProductionRunner({dir:f.dir,host:"homeguard"}).reused,false);
-  assert.deepEqual(f.calls().find(call=>call.args[1]==="stop").args,["--user","stop",f.unit,f.unit.replace(/service$/,"timer")]);
-  assert.equal(cleanupProductionRunner({dir:f.dir,host:"homeguard"}).reused,true);
+
+test("a queue UUID skip for A does not cover an older in-progress B",async()=>{
+  const f=fixture();
+  const a=startReleaseAttempt(f.history,f.identity,["worker-a"],[],f.planOptions);
+  startReleaseAttempt(f.history,f.identity,["worker-a"],[],f.planOptions);
+  await assert.rejects(f.queue({updateArgs:["--from-repo",f.root,"--skip-release-reconciliation",a.plan.attempt_uuid,"--skip-reason","deferred only A"]}),/unresolved attempts/);
+  assert.equal(f.calls().filter(call=>call.bin==="systemd-run").length,0);
 });
-test("retained listing warns on absent or invalid completion and never cleans anything",()=>{
-  const f=fixture();f.queue();f.state({[f.unit]:f.finished});
-  const root=join(f.root,"attempts");assert.equal(listRetainedProductionRunners(root)[0].warning,true);
-  writeFileSync(join(f.dir,"completion.json"),"{}");assert.equal(listRetainedProductionRunners(root)[0].warning,true);
-  rmSync(join(f.dir,"completion.json"));completeReleaseAttempt(f.dir,f.receipt,{allowedHosts:f.plan.host_ids});
-  assert.equal(listRetainedProductionRunners(root)[0].warning,false);
+
+test("cleanup cannot use a runner-local fabricated completion as authority",async()=>{
+  const f=fixture();await f.queue();f.state({[f.unit]:f.finished});
+  writeFileSync(join(f.dir,"completion.json"),"{}",{mode:0o600});
+  assert.throws(()=>cleanupProductionRunner({dir:f.dir,host:"worker-a",runnerRoot:f.runner,configPath:f.configPath}),/canonical completion/);
   assert.equal(f.calls().filter(call=>call.args[1]==="stop").length,0);
-  assert.deepEqual(listRetainedProductionRunners(join(f.root,"missing")),[]);
 });
-test("the default completion reader accepts retained success and refuses collected or running workers",()=>{
-  const f=fixture(),queued=f.queue(),baseline=JSON.parse(readFileSync(queued.baseline_file));
-  mkdirSync(join(f.runner,"current/dist"));writeFileSync(join(f.runner,"current/dist/build-info.json"),JSON.stringify(f.plan.identity));
-  const configPath=join(f.root,"runner.config.json");writeFileSync(configPath,JSON.stringify({host_id:"homeguard"}));
-  const options={runnerRoot:f.runner,configPath};
-  const states={[f.unit]:{...f.finished,ExecMainStartTimestamp:new Date(Date.parse(baseline.created_at)+10).toISOString(),ExecMainExitTimestamp:new Date(Date.parse(baseline.created_at)+20).toISOString()},"kaoiro-runner":{LoadState:"loaded",ActiveState:"active",MainPID:"1234"}};
-  f.state(states);assert.equal(collectRunnerCompletion(f.plan,baseline,options).update_invocation_id,"e".repeat(32));
-  for(const bad of [{LoadState:"not-found",ActiveState:"inactive"},{...states[f.unit],SubState:"running"},{...states[f.unit],ExecMainStatus:"1"},{...states[f.unit],ExecStart:"{ path=/another/tool ; }"},{...states[f.unit],InvocationID:baseline.previous_invocation}]) {
-    f.state({...states,[f.unit]:bad});assert.throws(()=>collectRunnerCompletion(f.plan,baseline,options));
-  }
+
+test("completion rejects a worker without the independently enrolled baseline",()=>{
+  assert.throws(()=>collectRunnerCompletion({attempt_uuid:"x",host_ids:["worker-a"]},{attempt_uuid:"x",host_id:"worker-a",simulation:true},{systemctlBin:"fake"}),/fake service/);
+  const f=fixture();
+  assert.throws(()=>collectRunnerCompletion(f.plan,{attempt_uuid:f.plan.attempt_uuid,alias:"worker-a",simulation:false},
+    {runnerRoot:f.runner,configPath:f.configPath}),/baseline lacks/);
 });

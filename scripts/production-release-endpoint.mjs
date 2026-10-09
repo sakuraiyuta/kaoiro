@@ -1,11 +1,12 @@
 import { hostname } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { RELEASE_ALIAS, RELEASE_DIGEST, RELEASE_UUID } from "./production-release-state.mjs";
+import { RELEASE_ALIAS, RELEASE_DIGEST, RELEASE_SHA, RELEASE_UUID } from "./production-release-state.mjs";
 import { readReleaseHistory, readReleaseAttempt, projectReleaseHistory } from "./production-release-history.mjs";
 import { attemptDirectory, readPrivateJson, releaseBytesDigest, releaseJsonBytes, withAsyncReleaseLock,
   writePrivateRecord } from "./production-release-files.mjs";
 import { validateRuntimeHosts } from "./production-release-plan.mjs";
+import { validateProductionRunner } from "./production-release-record.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`release endpoint refused: ${message}`); };
 const exact = (object, fields) => object && typeof object === "object" && !Array.isArray(object) &&
@@ -29,12 +30,45 @@ export function validateReleaseRequest(value, expectedTool, operation) {
 const COMMON_FACT = ["schema", "attempt_uuid", "alias", "root", "authority_sha256", "tool_sha256", "plan_sha256", "simulation"];
 const FACT_FIELDS = {
   baseline: ["source_revision", "target_revision", "config_host_verified", "service", "updater", "updater_tool", "launcher", "launcher_sha256",
-    "updater_sha256", "tool_root", "update_args", "previous_invocation", "created_at", "delay_seconds", "executed_audit"],
+    "updater_sha256", "tool_root", "node_path", "update_args", "previous_invocation", "created_at", "delay_seconds", "executed_audit"],
   before: ["source_revision", "target_revision", "config_host_verified", "service", "updater", "updater_tool", "launcher", "launcher_sha256",
-    "updater_sha256", "tool_root", "update_args", "previous_invocation", "created_at", "delay_seconds", "executed_audit"],
+    "updater_sha256", "tool_root", "node_path", "update_args", "previous_invocation", "created_at", "delay_seconds", "executed_audit"],
   after: ["runner", "executed_audit", "config_host_verified"],
   activity: ["event_uuid", "sequence", "previous_sha256", "state", "observed_at", "current_revision", "unit", "invocation_id", "inventory_sha256"],
 };
+
+function validateNativeRunnerFact(fact, kind, plan) {
+  must(exact(fact, [...COMMON_FACT, ...FACT_FIELDS[kind]]), "complete private fact fields required");
+  const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  if (kind === "activity") {
+    must(timestamp(fact.observed_at) && RELEASE_SHA.test(fact.current_revision ?? "") &&
+      fact.unit === `kaoiro-release-${fact.attempt_uuid}-${fact.alias}.service` &&
+      (fact.invocation_id === null || /^[0-9a-f]{32}$/.test(fact.invocation_id ?? "")), "bound native activity observation required");
+    return;
+  }
+  const audit = fact.executed_audit;
+  must(fact.config_host_verified === true && audit?.schema === 1 && audit.pass === true && audit.role === "runner" &&
+    audit.root === fact.root && audit.authority_sha256 === fact.authority_sha256 && audit.tool_sha256 === fact.tool_sha256 &&
+    audit.release_context?.attempt_uuid === fact.attempt_uuid && audit.release_context.plan_sha256 === fact.plan_sha256,
+    "executed enrolled audit differs from private fact");
+  if (kind === "after") {
+    validateProductionRunner(fact.runner, plan.identity, plan.codex_host_ids.includes(fact.alias));
+    must(fact.runner.host_id === fact.alias && Date.parse(fact.runner.worker_started_at) >= Date.parse(plan.created_at), "runner fact target/alias/start differs");
+    return;
+  }
+  const deploy = join(fact.root, "releases", fact.source_revision ?? "", "deploy");
+  must(RELEASE_SHA.test(fact.source_revision ?? "") && fact.target_revision === plan.identity.revision &&
+    fact.updater_tool === join(deploy, "kaoiro-runner-update.sh") && fact.tool_root === join(deploy, "release-tools") &&
+    fact.launcher === join(fact.tool_root, "scripts/production-release-launcher.mjs") &&
+    RELEASE_DIGEST.test(fact.launcher_sha256 ?? "") && RELEASE_DIGEST.test(fact.updater_sha256 ?? "") &&
+    typeof fact.node_path === "string" && fact.node_path.startsWith("/") &&
+    fact.updater === `kaoiro-release-${fact.attempt_uuid}-${fact.alias}.service` &&
+    Array.isArray(fact.update_args) && fact.update_args.length >= 2 && fact.update_args.length <= 32 &&
+    fact.update_args.every(value => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= 4096 && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) &&
+    timestamp(fact.created_at) && Date.parse(fact.created_at) >= Date.parse(plan.created_at) &&
+    Number.isInteger(fact.delay_seconds) && fact.delay_seconds >= 1 && fact.delay_seconds <= 86_400,
+    "captured native worker command/source/target is incomplete");
+}
 
 export async function importReleaseFact(request, fact) {
   const dir = attemptDirectory(request.root, request.attempt_uuid);
@@ -51,6 +85,7 @@ export async function importReleaseFact(request, fact) {
     if (row.plan?.authority) {
       expected = row.plan.authority.runners.find(owner => owner.alias === request.alias);
       must(expected && fact.root === expected.root && fact.authority_sha256 === expected.sha256, "fact does not attest expected enrolled root");
+      validateNativeRunnerFact(fact, request.kind, row.plan);
     } else {
       must(request.kind === "activity" && !row.plan, "valid production plan with expected authority required");
       const inventory = validateRuntimeHosts(readPrivateJson(`${request.root}-inventory.json`, { privateParent: false }));

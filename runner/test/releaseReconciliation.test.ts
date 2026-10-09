@@ -49,6 +49,13 @@ function fixture(onStop = ":", withAttempt = false) {
     return { dir: result.dir, uuid: result.plan.attempt_uuid, sha: digest(readFileSync(join(result.dir, "attempt.json"))) };
   };
   const context = withAttempt ? pending() : undefined;
+  if (context) {
+    const copies = join(root, "production-attempts");
+    mkdirSync(copies, { mode: 0o700 });
+    const copy = join(copies, context.uuid);
+    mkdirSync(copy, { mode: 0o700 });
+    writeFileSync(join(copy, "attempt.json"), readFileSync(join(context.dir, "attempt.json")), { mode: 0o600 });
+  }
   const contextArgs = context ? ["--release-attempt", context.uuid, "--release-plan-sha256", context.sha, "--release-target", target] : [];
   const update = (args: string[] = []) => runScript(join(deploy, "kaoiro-runner-update.sh"), ["--install-dir", root, "--tarball", archive, ...contextArgs, ...args], env);
   const seen = () => existsSync(calls) ? readFileSync(calls, "utf8") : "";

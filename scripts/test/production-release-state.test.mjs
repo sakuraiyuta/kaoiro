@@ -186,8 +186,17 @@ test("completion independently rejects a missing server or runner enrollment pro
   const context = { attempt_uuid: plan.attempt_uuid, plan_sha256: releaseBytesDigest(releaseJsonBytes(plan)) };
   const facts = { serverEvidence: { authority_sha256: plan.authority.server.sha256, root: f.base,
     release_context: context, pass: true }, runners: [{ alias: "worker-a", root: f.base,
-    authority_sha256: "b".repeat(64), attempt_uuid: context.attempt_uuid, plan_sha256: context.plan_sha256, executed_audit: { pass: true } }] };
+    authority_sha256: "b".repeat(64), tool_sha256: "c".repeat(64), attempt_uuid: context.attempt_uuid,
+    plan_sha256: context.plan_sha256, executed_audit: { pass: true } }],
+    baselines: [{ alias: "worker-a", root: f.base, authority_sha256: "b".repeat(64), tool_sha256: "c".repeat(64),
+      attempt_uuid: context.attempt_uuid, plan_sha256: context.plan_sha256, config_host_verified: true,
+      target_revision: plan.identity.revision, executed_audit: { pass: true } }] };
   assertCompletionEnrollment(plan, facts);
   assert.throws(() => assertCompletionEnrollment(plan, { ...facts, serverEvidence: undefined }), /server completion/);
   assert.throws(() => assertCompletionEnrollment(plan, { ...facts, runners: [] }), /runner completion/);
+  assert.throws(() => assertCompletionEnrollment(plan, { ...facts, baselines: [] }), /baseline/);
+  for (const change of [{ authority_sha256: "d".repeat(64) }, { tool_sha256: "d".repeat(64) },
+    { config_host_verified: false }, { target_revision: "d".repeat(40) }]) {
+    assert.throws(() => assertCompletionEnrollment(plan, { ...facts, baselines: [{ ...facts.baselines[0], ...change }] }), /baseline/);
+  }
 });

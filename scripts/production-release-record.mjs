@@ -19,6 +19,18 @@ const fullSha = value => typeof value === "string" && value.length === 40 && SHA
 const digest = value => typeof value === "string" && value.length === 64 && HASH.test(value);
 const utc = value => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const sameIdentity = (value, identity) => value.revision === identity.revision && value.version === identity.version && value.branch === identity.branch && value.dirty === false;
+export function validateProductionRunner(runner, identity, codexRequired) {
+  require(exact(runner, ["host_id", "revision", "version", "branch", "dirty", "unit", "update_invocation_id", "service_active", "worker_exit", "worker_started_at", "worker_finished_at", "artifact_sha256", "codex"]), "runner fields");
+  require(sameIdentity(runner, identity) && text(runner.host_id) && text(runner.unit) &&
+    /^[0-9a-f]{32}$/.test(runner.update_invocation_id) && runner.service_active === true && runner.worker_exit === 0 &&
+    utc(runner.worker_started_at) && utc(runner.worker_finished_at) &&
+    Date.parse(runner.worker_finished_at) >= Date.parse(runner.worker_started_at) && digest(runner.artifact_sha256), "actual forward worker leg");
+  if (codexRequired) {
+    require(exact(runner.codex, ["transaction_id", "evidence_sha256", "accepted_at"]) && text(runner.codex.transaction_id) &&
+      digest(runner.codex.evidence_sha256) && utc(runner.codex.accepted_at), "Codex acceptance leg");
+  } else require(runner.codex === null, "non-Codex host must not carry a fabricated acceptance");
+  return runner;
+}
 export function validateProductionReceipt(value, { repositoryId = BUILD_REPOSITORY_ID, allowedHosts = [] } = {}) {
   require(Array.isArray(allowedHosts) && allowedHosts.length > 0 && allowedHosts.length <= 16 &&
     allowedHosts.every(id => typeof id === "string" && text(id)) && new Set(allowedHosts).size === allowedHosts.length,
@@ -40,15 +52,8 @@ export function validateProductionReceipt(value, { repositoryId = BUILD_REPOSITO
   require(Array.isArray(value.runners) && value.runners.length === value.host_ids.length &&
     new Set(value.runners.map(item => item.host_id)).size === value.host_ids.length, "runner inventory");
   for (const runner of value.runners) {
-    require(exact(runner, ["host_id", "revision", "version", "branch", "dirty", "unit", "update_invocation_id", "service_active", "worker_exit", "worker_started_at", "worker_finished_at", "artifact_sha256", "codex"]), "runner fields");
-    require(value.host_ids.includes(runner.host_id) && sameIdentity(runner, value) && text(runner.unit) &&
-      /^[0-9a-f]{32}$/.test(runner.update_invocation_id) && runner.service_active === true && runner.worker_exit === 0 &&
-      utc(runner.worker_started_at) && utc(runner.worker_finished_at) &&
-      Date.parse(runner.worker_finished_at) >= Date.parse(runner.worker_started_at) && digest(runner.artifact_sha256), "actual forward worker leg");
-    if(value.codex_host_ids.includes(runner.host_id)) {
-      require(exact(runner.codex, ["transaction_id", "evidence_sha256", "accepted_at"]) && text(runner.codex.transaction_id) &&
-        digest(runner.codex.evidence_sha256) && utc(runner.codex.accepted_at), "Codex acceptance leg");
-    } else require(runner.codex === null, "non-Codex host must not carry a fabricated acceptance");
+    require(value.host_ids.includes(runner.host_id), "actual forward worker leg");
+    validateProductionRunner(runner, value, value.codex_host_ids.includes(runner.host_id));
   }
   const canary = value.canary;
   require(exact(canary, ["passed", "operator", "revision", "completed_at", "evidence_sha256"]) && canary.passed === true &&
@@ -86,7 +91,7 @@ export function startReleaseAttempt(root, identity, hostIds, codexHostIds = host
   }, "root");
 }
 
-export function assertCompletionEnrollment(plan, { serverEvidence, runners, planDigest = receiptDigest(plan) }) {
+export function assertCompletionEnrollment(plan, { serverEvidence, runners, baselines, planDigest = receiptDigest(plan) }) {
   require(plan.authority, "production completion requires an enrolled authority plan");
   const expected = plan.authority.server;
   require(serverEvidence?.authority_sha256 === expected.sha256 && serverEvidence.root === expected.root &&
@@ -98,6 +103,12 @@ export function assertCompletionEnrollment(plan, { serverEvidence, runners, plan
     require(fact?.authority_sha256 === owner.sha256 && fact.root === owner.root &&
       fact.attempt_uuid === plan.attempt_uuid && fact.plan_sha256 === planDigest && fact.executed_audit?.pass === true,
     `runner completion lacks expected enrolled audit: ${owner.alias}`);
+    const baseline = baselines?.find(item => item.alias === owner.alias);
+    require(baseline?.authority_sha256 === owner.sha256 && baseline.root === owner.root &&
+      baseline.attempt_uuid === plan.attempt_uuid && baseline.plan_sha256 === planDigest &&
+      baseline.tool_sha256 === fact.tool_sha256 && baseline.config_host_verified === true &&
+      baseline.target_revision === plan.identity.revision && baseline.executed_audit?.pass === true,
+    `runner completion lacks expected enrolled baseline: ${owner.alias}`);
   }
 }
 
@@ -112,7 +123,25 @@ export function completeReleaseAttempt(dir, receipt, options) {
     JSON.stringify([...receipt.codex_host_ids].sort()) === JSON.stringify(plan.codex_host_ids) &&
     receipt.runners.every(item => Date.parse(item.worker_started_at) >= Date.parse(plan.created_at)), "attempt binding");
     require(!["abandonment.json", "quarantine.json", "retirement.json"].some(name => existsSync(join(dir, name))), "terminal attempt cannot complete");
-    if (plan.authority) assertCompletionEnrollment(plan, { ...options, planDigest: releaseBytesDigest(rawPlan) });
+    if (plan.authority) {
+      const privateJson = name => JSON.parse(readPrivateBytes(join(dir, name)));
+      const serverEvidence = privateJson("server-audit.json");
+      const descriptor = readPrivateBytes(join(plan.authority.server.root, ".kaoiro-release-authority.json"), { privateParent: false });
+      require(releaseBytesDigest(descriptor) === plan.authority.server.sha256, "current server enrollment differs from frozen plan");
+      const journalRaw = readPrivateBytes(join(serverEvidence.transaction_dir, "journal.json"), { legacyMode: true, privateParent: false });
+      const journal = JSON.parse(journalRaw);
+      require(journal.phase === "done" && journal.transaction_id === receipt.server.transaction_id &&
+        releaseBytesDigest(journalRaw) === receipt.server.journal_sha256 &&
+        JSON.stringify(journal.release_context) === JSON.stringify(serverEvidence.release_context),
+        "server DONE evidence differs from canonical attempt binding");
+      const runners = plan.host_ids.map(alias => privateJson(`runner-after-${alias}.json`));
+      const baselines = plan.host_ids.map(alias => privateJson(`runner-baseline-${alias}.json`));
+      assertCompletionEnrollment(plan, { serverEvidence, runners, baselines, planDigest: releaseBytesDigest(rawPlan) });
+      for (const fact of runners) {
+        require(receiptDigest(fact.runner) === receiptDigest(receipt.runners.find(runner => runner.host_id === fact.alias)),
+          "public runner leg differs from the canonical private imported fact");
+      }
+    }
     const target = join(dir, "completion.json");
     if (existsSync(target)) {
       const previous = JSON.parse(readFileSync(target, "utf8"));

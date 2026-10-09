@@ -119,16 +119,22 @@ test("fixed importer keeps an identical retry idempotent while refusing changed 
   const row = snapshot.rows[0];
   const fact = { schema: 1, attempt_uuid: plan.attempt_uuid, alias: "worker-a", root: f.installRoot,
     authority_sha256: f.authority.sha256, tool_sha256: f.manifest.sha256, plan_sha256: row.plan_sha256, simulation: false,
-    runner: { host_id: "worker-a" }, executed_audit: { pass: true }, config_host_verified: true };
+    runner: { host_id: "worker-a", revision: plan.identity.revision, version: plan.identity.version, branch: plan.identity.branch,
+      dirty: false, unit: "kaoiro-runner", update_invocation_id: "e".repeat(32), service_active: true, worker_exit: 0,
+      worker_started_at: plan.created_at, worker_finished_at: plan.created_at, artifact_sha256: "f".repeat(64), codex: null },
+    executed_audit: { schema: 1, pass: true, role: "runner", root: f.installRoot, authority_sha256: f.authority.sha256,
+      tool_sha256: f.manifest.sha256, release_context: { attempt_uuid: plan.attempt_uuid, plan_sha256: row.plan_sha256 } },
+    config_host_verified: true };
   const request = releaseRequest(f.descriptor, { attempt_uuid: plan.attempt_uuid, alias: "worker-a", kind: "after",
     plan_sha256: row.plan_sha256, row_sha256: row.row_sha256 });
   const first = releaseAuthorityRequest(f.authority, request, { operation: "import", fact });
   assert.equal(first.reused, false);
   assert.equal(releaseAuthorityRequest(f.authority, request, { operation: "import", fact }).reused, true);
-  assert.throws(() => releaseAuthorityRequest(f.authority, request, { operation: "import", fact: { ...fact, config_host_verified: false } }), /immutable/);
+  assert.throws(() => releaseAuthorityRequest(f.authority, request, { operation: "import", fact:
+    { ...fact, runner: { ...fact.runner, artifact_sha256: "a".repeat(64) } } }), /immutable/);
   assert.throws(() => releaseAuthorityRequest(f.authority, { ...request, kind: "before" }, {
     operation: "import", fact: { ...fact, runner: undefined },
-  }), /canonical row changed|schema/);
+  }), /canonical row changed|schema|private fact fields/);
 });
 
 test("the shared skip guard preserves an exact UUID set rather than a global waiver", async () => {

@@ -8,6 +8,7 @@ import { createPrivateDirectory, namedProcessIdentity, readPrivateBytes, readPri
 import { validateRuntimeHosts } from "./production-release-plan.mjs";
 import { parseReleaseOptions, RELEASE_SHA, RELEASE_UUID } from "./production-release-state.mjs";
 import { verifyReleaseToolClosure } from "./production-release-tools.mjs";
+import { recordExecutedRunnerRelease, validateNativeRunnerInvocation, validateRunnerReleaseContext } from "./production-release-runner-facts.mjs";
 import { validatedRecoverySwitch, validateRestoreAdmission } from "../runner/deploy/kaoiro-runner-codex-state.mjs";
 
 const must = (value, message) => { if (!value) throw new Error(`runner release gate refused: ${message}`); };
@@ -45,6 +46,12 @@ export async function auditRunnerRelease(options, { toolRoot, toolDigest, update
   const alias = authority.status === "enrolled" ? resolveRunnerReleaseAlias(root, options.configPath) : undefined;
   must(!options.alias || alias === options.alias, "requested alias differs from the live registered host");
   const audit = await reconcileProductionReleases({ ...options, installRoot: root, alias });
+  let context;
+  if (audit.release_context) {
+    context = validateRunnerReleaseContext({ root, dir: join(root, "production-attempts", audit.release_context.attempt_uuid),
+      alias, configPath: options.configPath });
+    must(context.plan_sha256 === audit.release_context.plan_sha256, "working copy differs from the canonical own attempt");
+  }
   if (audit.status === "generic" || !options.ownerPid) return audit;
   const owner = assertShellCaller(options.ownerPid);
   must(["worker", "manual"].includes(options.mode), "lock-owner mode required");
@@ -53,9 +60,14 @@ export async function auditRunnerRelease(options, { toolRoot, toolDigest, update
     root, source_revision: currentRevision(root), expected_target: options.targetRevision ?? null,
     updater: realpathSync(updater), updater_sha256: releaseBytesDigest(readFileSync(updater)),
     authority_sha256: authority.sha256, tool_root: realpathSync(toolRoot), tool_sha256: toolDigest,
-    release_context: audit.release_context, alias, boot_id: boot(), created_at: new Date().toISOString() };
+    release_context: audit.release_context, alias, systemd_invocation_id: null,
+    boot_id: boot(), created_at: new Date().toISOString() };
+  if (context && process.env.KAOIRO_RELEASE_RETAINED_UNIT) {
+    descriptor.systemd_invocation_id = validateNativeRunnerInvocation(context, descriptor, process.env.KAOIRO_RELEASE_RETAINED_UNIT);
+  }
   lockWrite(root, "release-owner.json", descriptor);
   lockWrite(root, "release-audit.json", audit);
+  if (context && descriptor.systemd_invocation_id) recordExecutedRunnerRelease(context, descriptor, audit);
   return { ...audit, invocation_uuid: descriptor.invocation_uuid };
 }
 
