@@ -27,6 +27,7 @@ type WrapperConfigOptionalKey = OptionalKey<WrapperConfig>;
 const ROUND_TRIP_CASES: {
   [K in WrapperConfigOptionalKey]: { value: NonNullable<WrapperConfig[K]> };
 } = {
+  in_flight_delivery_enabled: { value: false },
   server_token: { value: "tok-1" },
   permission_timeout_ms: { value: 5000 },
   turn_watchdog_inactivity_ms: { value: 90_000 },
@@ -77,6 +78,12 @@ const ROUND_TRIP_CASES: {
 };
 
 describe("parseConfig", () => {
+  it("preserves explicit ceiling false and rejects non-booleans", () => {
+    expect(parseConfig({ ...valid, in_flight_delivery_enabled: false }).in_flight_delivery_enabled).toBe(false);
+    for (const value of [null, "false", 0, [], {}]) {
+      expect(() => parseConfig({ ...valid, in_flight_delivery_enabled: value })).toThrow();
+    }
+  });
   // Clear the env var across all tests so a developer who exports it in their
   // shell to test #60's env path does not break unrelated assertions that
   // expect parseConfig to leave permission_timeout_ms unset.

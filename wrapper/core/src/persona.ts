@@ -326,9 +326,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config[field] = value;
   }
 
-  // Runner-relayed global opt-ins. `true` is the same as the variable being
-  // "1"; `false` is the same as absent (see flagArgument in agent-common).
-  for (const field of ["operator_steer", "approval_axis", "phase2_delivery"] as const) {
+  for (const field of ["operator_steer", "approval_axis", "phase2_delivery", "in_flight_delivery_enabled"] as const) {
     const value = raw[field];
     if (value === undefined) continue;
     if (typeof value !== "boolean") {

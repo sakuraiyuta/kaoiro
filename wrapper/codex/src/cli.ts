@@ -1,3 +1,4 @@
+import { resolveDelivery } from "@kaoiro/agent-common";
 // Codex wrapper CLI — the composition root of the codex engine: loads the
 // config, connects the ServerLink, waits fail-closed for the server-pushed
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
@@ -182,11 +183,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const backend = dependencies.backend ?? config.codex_backend ?? "exec";
   writeRedactedStderr(`codex: backend=${backend}\n`);
   writeRedactedStderr(`codex: home=${codexHome()}\n`);
-  const operatorSteer = backend === "app-server" && personaOptInSource(
-    config.persona.id,
-    flagArgument(process.env.KAOIRO_CODEX_OPERATOR_STEER, config.operator_steer),
-    process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS,
-  ) !== "off";
+  const resolvedDelivery = resolveDelivery({
+    engine: "codex", personaId: config.persona.id, codexBackend: backend,
+    ceiling: config.in_flight_delivery_enabled, operatorSteer: config.operator_steer,
+    env: process.env,
+  });
+  const operatorSteer = resolvedDelivery.mechanisms.operator_early === "steer";
   writeRedactedStderr(`codex: operator_steer=${operatorSteer ? "on" : "off"}\n`);
   const approvalAxis = backend === "app-server" && personaOptInSource(
     config.persona.id,
@@ -721,7 +723,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   });
 
   const steerTickets = new Map<string, readonly Envelope[]>();
-  const phase3Enabled = backend === "app-server";
+  const phase3Enabled = resolvedDelivery.mechanisms.inter_agent_early === "steer";
   const trySteerInterAgent = async (envelope: Envelope, mode: InboundReplyMode): Promise<boolean> => {
     const payload = envelope.payload as { conversation_id?: string; delivery_authority?: { granted?: string } };
     const sequence = (envelope as Envelope & { delivery_seq?: unknown }).delivery_seq;
@@ -865,10 +867,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     interAgentReplyBasis: "v1",
     deliveryPolicy,
     noticeAttribution: "v1",
-    interAgentDeliveryModes: { version: "v1", early: phase3Enabled ? "steer" : "none", yield: "none", stage_reports: true },
+    interAgentDeliveryModes: { version: "v1", early: resolvedDelivery.mechanisms.inter_agent_early, yield: resolvedDelivery.mechanisms.inter_agent_yield, stage_reports: true },
     // Declared even when off: without it the server derives the operator
     // default from the inter-agent modes above and stamps input `early`.
-    operatorInputModes: { version: "v1", early: operatorSteer ? "steer" : "none" } as const,
+    operatorInputModes: { version: "v1", early: resolvedDelivery.mechanisms.operator_early } as const,
     ...(operatorSteer ? {
       onOperatorInputModes: (supported: boolean) => {
         if (supported) return;

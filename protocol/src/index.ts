@@ -7,7 +7,7 @@
 
 export * from "./work.js";
 export * from "./delivery-policy.js";
-import type { DeliveryPolicyView, InFlightDefaults } from "./delivery-policy.js";
+import type { DeliveryPolicyView, InFlightDefaults, LaunchDeliveryPolicyMetadata } from "./delivery-policy.js";
 import type { DeliveryAuthority, DeliveryIntent, DeliveryModes, WorkControl, WorkControlResult, WorkStamp } from "./work.js";
 
 /** State set v0 (protocol.md), plus `sending` which a wrapper raises
@@ -193,6 +193,7 @@ export type Persona = WirePersona;
  *  fail-closed). Shared with the runner, which resolves it to spawn a
  *  wrapper (ADR-0023). */
 export interface WrapperConfig {
+  in_flight_delivery_enabled?: boolean;
   agent_id: string;
   persona: Persona;
   /** Initial `display_name` (ADR-0050 D1, issue #209 D19/D20). Set by the
@@ -677,6 +678,7 @@ export interface EngineModelInfo {
  *  payload so the dashboard can build the three-stage launch select before
  *  any wrapper process exists (ADR-0032 F4bc). */
 export interface EngineCatalogEntry {
+  launch_delivery_policy?: LaunchDeliveryPolicyMetadata;
   id: EngineKind;
   models: EngineModelInfo[];
   /** Launch-time permission axes this engine offers as operator-selectable

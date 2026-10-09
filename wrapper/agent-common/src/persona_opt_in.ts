@@ -15,10 +15,14 @@ export function personaOptInSource(
   rawPersonas: string | undefined,
 ): PersonaOptInSource {
   if (flag === "1") return "flag";
-  if (rawPersonas === undefined) return "off";
-  const personas = rawPersonas.split(",").map(id => id.trim());
-  if (!personas.every(id => /^[A-Za-z0-9._-]+$/.test(id))) return "off";
+  const personas = deliveryPersonaList(rawPersonas);
   return personas.includes(personaId) ? "persona_list" : "off";
+}
+
+export function deliveryPersonaList(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  const personas = raw.split(",").map(id => id.trim());
+  return personas.every(id => /^[A-Za-z0-9._-]+$/.test(id)) ? [...new Set(personas)] : [];
 }
 
 /** The `flag` argument of `personaOptInSource` for a flag that may also be set

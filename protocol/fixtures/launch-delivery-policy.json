@@ -1,0 +1,612 @@
+{
+  "enums": {
+    "operator_early": {
+      "fold": true,
+      "steer": true,
+      "hook": true,
+      "none": true
+    },
+    "inter_agent_early": {
+      "fold": true,
+      "steer": true,
+      "hook": true,
+      "none": true
+    },
+    "inter_agent_yield": {
+      "tool_boundary": true,
+      "none": true
+    }
+  },
+  "in_flight_defaults": {
+    "claude-code": true,
+    "codex": false,
+    "antigravity": false
+  },
+  "valid": [
+    {
+      "name": "codex",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "claude",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "fold",
+          "inter_agent_early": "fold",
+          "inter_agent_yield": "tool_boundary"
+        }
+      }
+    },
+    {
+      "name": "hook",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "hook",
+          "inter_agent_early": "hook",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "ceiling-off",
+      "value": {
+        "version": "v1",
+        "ceiling": false,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "none",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "persona-override",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "Persona": {
+            "operator_early": "fold",
+            "inter_agent_early": "fold",
+            "inter_agent_yield": "tool_boundary"
+          },
+          "__proto__": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          }
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "null",
+      "value": null
+    },
+    {
+      "name": "array",
+      "value": []
+    },
+    {
+      "name": "version",
+      "value": {
+        "version": "v2",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "ceiling-type",
+      "value": {
+        "version": "v1",
+        "ceiling": "false",
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "missing-modes",
+      "value": {
+        "version": "v1",
+        "ceiling": true
+      }
+    },
+    {
+      "name": "partial-modes",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "steer"
+        }
+      }
+    },
+    {
+      "name": "unknown-early",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "future",
+          "inter_agent_early": "none",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "unknown-yield",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "none",
+          "inter_agent_yield": "future"
+        }
+      }
+    },
+    {
+      "name": "false-ceiling-active",
+      "value": {
+        "version": "v1",
+        "ceiling": false,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        }
+      }
+    },
+    {
+      "name": "partial-override",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "p": {
+            "operator_early": "none"
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid-persona",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "bad id": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          }
+        }
+      }
+    },
+    {
+      "name": "false-ceiling-override",
+      "value": {
+        "version": "v1",
+        "ceiling": false,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "none",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "p": {
+            "operator_early": "fold",
+            "inter_agent_early": "fold",
+            "inter_agent_yield": "tool_boundary"
+          }
+        }
+      }
+    },
+    {
+      "name": "array-overrides",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": []
+      }
+    },
+    {
+      "name": "overflow-count",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "p0": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p1": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p2": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p3": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p4": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p5": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p6": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p7": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p8": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p9": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p10": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p11": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p12": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p13": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p14": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p15": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p16": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p17": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p18": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p19": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p20": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p21": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p22": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p23": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p24": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p25": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p26": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p27": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p28": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p29": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p30": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p31": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p32": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p33": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p34": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p35": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p36": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p37": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p38": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p39": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p40": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p41": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p42": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p43": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p44": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p45": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p46": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p47": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p48": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p49": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p50": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p51": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p52": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p53": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p54": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p55": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p56": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p57": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p58": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p59": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p60": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p61": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p62": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p63": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          },
+          "p64": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          }
+        }
+      }
+    },
+    {
+      "name": "overflow-bytes",
+      "value": {
+        "version": "v1",
+        "ceiling": true,
+        "mechanisms": {
+          "operator_early": "none",
+          "inter_agent_early": "steer",
+          "inter_agent_yield": "none"
+        },
+        "persona_overrides": {
+          "pxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": {
+            "operator_early": "none",
+            "inter_agent_early": "none",
+            "inter_agent_yield": "none"
+          }
+        }
+      }
+    }
+  ]
+}

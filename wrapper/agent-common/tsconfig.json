@@ -3,7 +3,8 @@
   "compilerOptions": {
     "paths": {
       "@kaoiro/wrapper-core": ["../core/src/index.ts"]
-    }
+    },
+    "resolveJsonModule": true
   },
   "include": ["src", "test"]
 }

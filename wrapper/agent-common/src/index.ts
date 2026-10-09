@@ -188,4 +188,7 @@ export type { ReplyOrigin, ReplyAttempt, ReplyAuthorization } from "./reply_basi
 
 export { ToolOrigins } from "./tool_origins.js";
 export { workToolDescriptors } from "./work_tools.js";
+export { DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS, captureDeliveryEnvironment, resolveDelivery } from "./delivery_modes.js";
+export type { DeliveryEnvironment, DeliveryInputs } from "./delivery_modes.js";
+export { deliveryPersonaList } from "./persona_opt_in.js";
 export type { WorkToolHandlers } from "./work_tools.js";

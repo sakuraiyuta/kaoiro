@@ -28,6 +28,13 @@ export interface DeliveryMechanisms {
   inter_agent_yield: "tool_boundary" | "none";
 }
 
+export interface LaunchDeliveryPolicyMetadata {
+  version: "v1";
+  ceiling: boolean;
+  mechanisms: DeliveryMechanisms;
+  persona_overrides?: Record<string, DeliveryMechanisms>;
+}
+
 export interface GetDeliveryPolicyRequest {
   version: "0";
   agent_id: string;

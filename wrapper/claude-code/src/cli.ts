@@ -1,3 +1,4 @@
+import { resolveDelivery } from "@kaoiro/agent-common";
 // Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
 //
@@ -50,8 +51,6 @@ import {
   classifyInterAgentError,
   isIngressStamp,
   mergePendingDisplayNameSync,
-  flagArgument,
-  personaOptInSource,
 } from "@kaoiro/agent-common";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
@@ -181,12 +180,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   // the pending-receipt value from the host that receives it.
   const yieldClaimTimeoutMs = config.yield_claim_timeout_ms ?? 2_000;
   const pendingReceiptRootTimeoutMs = config.pending_receipt_root_timeout_ms ?? 2_000;
-  const phase2Source = personaOptInSource(
-    config.persona.id,
-    flagArgument(process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY, config.phase2_delivery),
-    process.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS,
-  );
-  const phase2Delivery = phase2Source !== "off";
+  const resolvedDelivery = resolveDelivery({
+    engine: "claude-code", personaId: config.persona.id,
+    ceiling: config.in_flight_delivery_enabled, phase2Delivery: config.phase2_delivery,
+    env: process.env,
+  });
+  const phase2Source = resolvedDelivery.source;
+  const phase2Delivery = resolvedDelivery.mechanisms.inter_agent_early === "fold";
   writeRedactedStderr(`[claude phase2 delivery] source=${phase2Source}\n`);
   const earlyNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.early === "fold";
   const yieldNegotiated = (): boolean => phase2Delivery && link?.deliveryModes()?.yield === "tool_boundary";
@@ -1027,8 +1027,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     noticeAttribution: "v1",
     interAgentDeliveryModes: {
       version: "v1",
-      early: phase2Delivery ? "fold" : "none",
-      yield: phase2Delivery ? "tool_boundary" : "none",
+      early: resolvedDelivery.mechanisms.inter_agent_early,
+      yield: resolvedDelivery.mechanisms.inter_agent_yield,
       stage_reports: true,
     },
     workControl: "v1",
