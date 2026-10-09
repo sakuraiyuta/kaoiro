@@ -32,6 +32,8 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/lib/AgentDetail.svelte", async () => ({ default: (await import("./fixtures/RetainedDeliveryAction.svelte")).default }));
+
 const App = (await import("../src/App.svelte")).default;
 
 let component: object | null = null;
@@ -117,8 +119,10 @@ async function ready(operator: boolean) {
   if (operator) h.onHosts?.([], false);
   h.onSnapshot({ "host-a.p": switchCapableEnvelope() }); await tick(); await openDetailFromGrid(); return h;
 }
-it("operator sees control; a viewer never receives it despite a valid API marker", async () => {
-  const h = await ready(true); expect(policyCheckbox()).not.toBeNull();
-  h.onJoined?.(); h.onDeliveryPolicyControl?.(true); h.onSnapshot({ "host-a.p": switchCapableEnvelope() }); await tick();
-  expect(policyCheckbox()).toBeNull(); expect(document.querySelector('.delivery-policy')?.textContent).toContain("保存設定: on");
+it("action rechecks role before calling the store even before the old DOM is removed", async () => {
+  const { DeliveryPolicyStore } = await import("../src/lib/deliveryPolicyStore.svelte");
+  const set = vi.spyOn(DeliveryPolicyStore.prototype, "set").mockResolvedValue();
+  const h = await ready(true); const action = document.querySelector<HTMLButtonElement>("[data-retained-delivery]")!;
+  h.onJoined?.(); action.click();
+  expect(set).not.toHaveBeenCalled();
 });
