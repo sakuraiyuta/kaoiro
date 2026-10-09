@@ -1,0 +1,1214 @@
+{
+  "measured_revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+  "base_revision": "c0684d8c6d5b1e44de2d6f9cc8e8870999d74c55",
+  "date": "2026-10-10",
+  "status": "implementation gates complete; independent implementation review pending",
+  "counts": {
+    "wrapper": {
+      "passed": 3871,
+      "skipped": 7,
+      "files_passed": 206,
+      "files_skipped": 2
+    },
+    "runner": {
+      "passed": 1137,
+      "files_passed": 57
+    },
+    "dashboard": {
+      "passed": 1524,
+      "files_passed": 94,
+      "check_errors": 0,
+      "check_warnings": 0,
+      "c2_browser_passed": 16,
+      "c3_browser_passed": 3,
+      "real_server_integration_passed": 3
+    },
+    "server_ci": {
+      "passed": 2147,
+      "excluded": 1
+    },
+    "workspace_typecheck_packages": 7,
+    "release_build_scripts": 6,
+    "fixture": {
+      "valid": 5,
+      "invalid": 15
+    }
+  },
+  "gates": [
+    {
+      "gate": "wrapper-final",
+      "command": "setsid -w pnpm test --maxWorkers=2 --minWorkers=1",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/wrapper",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/wrapper-final-kogane.log",
+      "log_sha256": "bc1dcf7c408b37d7abd613c604041a7e12f55c8fea65890a3955c4edeecda833",
+      "started_at": "2026-10-09T15:30:37.027862+00:00",
+      "ended_at": "2026-10-09T15:36:20.834871+00:00"
+    },
+    {
+      "gate": "runner-final",
+      "command": "setsid -w pnpm test --maxWorkers=4 --minWorkers=1",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/runner",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/runner-final-kogane.log",
+      "log_sha256": "f702ade7fe2a3aed638b2617995766c1f5de6028219e3f8cf263fbf970a53093",
+      "started_at": "2026-10-09T15:30:37.056047+00:00",
+      "ended_at": "2026-10-09T15:47:45.664845+00:00"
+    },
+    {
+      "gate": "dashboard-final",
+      "command": "setsid -w pnpm test && pnpm check && pnpm build && setsid -w pnpm exec playwright test --config playwright.delivery.config.ts && setsid -w pnpm exec playwright test --config playwright.delivery-integration.config.ts",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/dashboard",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/dashboard-final-kogane.log",
+      "log_sha256": "05bd1a4014c396b9123fac25bf7da57bb49e2037423577df69617e99ca8f014f",
+      "started_at": "2026-10-09T15:29:39.242247+00:00",
+      "ended_at": "2026-10-09T15:34:37.916230+00:00"
+    },
+    {
+      "gate": "workspace-final",
+      "command": "pnpm -r typecheck",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/workspace-final-kogane.log",
+      "log_sha256": "74f7b93343519ea8c6e2a588939ab6ec33d3d6ab93f99176bc329ba758d74797",
+      "started_at": "2026-10-09T15:30:36.988895+00:00",
+      "ended_at": "2026-10-09T15:32:06.333050+00:00"
+    },
+    {
+      "gate": "release-final",
+      "command": "./scripts/build-runner-tarball.sh --out /home/yuta/git/kaoiro/tmp/reviews/issue-562/kogane-release-final",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/release-final-kogane.log",
+      "log_sha256": "96aa11a50772b58c1805c913004cdc9e59b6d0b4123478f5c971161421cedbc3",
+      "started_at": "2026-10-09T15:29:36.885758+00:00",
+      "ended_at": "2026-10-09T15:33:23.185526+00:00"
+    },
+    {
+      "gate": "server-ci",
+      "command": "CI=true setsid -w mix precommit --seed 182700",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/server",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/server-ci-kogane.log",
+      "log_sha256": "fcdf0b09d3f4da66ac287520ec8df8694a4276a7a39cac88f0ef67cbb34a2737",
+      "started_at": "2026-10-09T15:48:03.482259+00:00",
+      "ended_at": "2026-10-09T15:52:13.531290+00:00"
+    },
+    {
+      "gate": "server-focused-retry",
+      "command": "setsid -w mix test test/kaoiro_server_web/channels/delivery_policy_test.exs:645 --seed 182700",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/server",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/server-focused-retry-kogane.log",
+      "log_sha256": "bc82163e09f24c81030260b6a1f50494e12fe940d0287197262c44520b6a7d48",
+      "started_at": "2026-10-09T15:37:06.744070+00:00",
+      "ended_at": "2026-10-09T15:37:11.518101+00:00"
+    },
+    {
+      "gate": "server-final",
+      "command": "setsid -w mix precommit",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/server",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 0,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/server-final-kogane.log",
+      "log_sha256": "f098d1bd9bd92d30f91b9e03d5a4c65460640d76e7194686880fbd9760cae16a",
+      "started_at": "2026-10-09T15:29:38.044609+00:00",
+      "ended_at": "2026-10-09T15:43:23.699002+00:00",
+      "status": "interrupted_after_observed_test_failure",
+      "completed_suite": false,
+      "observed_failure_count": 1,
+      "termination": {
+        "signal": "SIGTERM",
+        "owned_pid": 3230275,
+        "reason": "stop known failing run before clean same-seed retry",
+        "process_exit": 0
+      }
+    },
+    {
+      "gate": "server-retry",
+      "command": "setsid -w mix precommit --seed 182700",
+      "cwd": "/home/yuta/git/kaoiro/worktrees/kogane-562/server",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "exit": 2,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/server-retry-kogane.log",
+      "log_sha256": "d7bb7f16b2b8a77fc02b887edb9bfd4aaba379eee17d83805d2979b2d275ec3a",
+      "started_at": "2026-10-09T15:43:23.949657+00:00",
+      "ended_at": "2026-10-09T15:48:03.322947+00:00",
+      "status": "interrupted_after_observed_test_failures",
+      "completed_suite": false,
+      "observed_failure_count": 2,
+      "termination": {
+        "signal": "SIGTERM",
+        "owned_pid": 3515946,
+        "reason": "stop known failing normal-mode retry before diagnostic CI mode",
+        "process_exit": 2
+      }
+    }
+  ],
+  "register_sizes": [
+    {
+      "case": "actual",
+      "json_bytes": 4104,
+      "external_bytes": 4836,
+      "ratio": 1.1783625730994152
+    },
+    {
+      "case": "rawMaximum",
+      "json_bytes": 24953,
+      "external_bytes": 28393,
+      "ratio": 1.1378591752494691
+    },
+    {
+      "case": "ordinarySent",
+      "json_bytes": 9374,
+      "external_bytes": 11032,
+      "ratio": 1.1768721997013014
+    },
+    {
+      "case": "maximumSent",
+      "json_bytes": 299,
+      "external_bytes": 373,
+      "ratio": 1.2474916387959867
+    },
+    {
+      "case": "nearSent",
+      "json_bytes": 51272,
+      "external_bytes": 52420,
+      "ratio": 1.0223903885161492
+    },
+    {
+      "case": "short",
+      "json_bytes": 3464,
+      "external_bytes": 4612,
+      "ratio": 1.3314087759815243
+    },
+    {
+      "case": "unicodeSent",
+      "json_bytes": 27050,
+      "external_bytes": 28198,
+      "ratio": 1.0424399260628465
+    }
+  ],
+  "producer_size_measurements": {
+    "actual": {
+      "json_bytes": 4104,
+      "estimate": 16408
+    },
+    "rawMaximum": {
+      "json_bytes": 24953,
+      "estimate": 78955
+    },
+    "ordinarySent": {
+      "json_bytes": 9374,
+      "estimate": 32218
+    },
+    "maximumSent": {
+      "json_bytes": 299,
+      "estimate": 4993
+    },
+    "nearSent": {
+      "json_bytes": 51272,
+      "estimate": 157912
+    },
+    "short": {
+      "json_bytes": 3464,
+      "estimate": 14488
+    },
+    "unicodeSent": {
+      "json_bytes": 27050,
+      "estimate": 85246
+    }
+  },
+  "ordinary_10x_estimate": 144706.0,
+  "production_shape": {
+    "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+    "tarball_sha256": "7a508f32abd521f954ea27dfa11a716d484621bdd60c9eac707bcf82b62a3c4d",
+    "tarball_bytes": 471451217,
+    "manifest_sha256": "6a512e23d9f0243fd5976285169d90103efbdbcd30b2d33d5463b71087012fb4",
+    "positive_exit": 0,
+    "negative_exit": 1,
+    "negative_reason": "invalid boolean rejected before connection",
+    "metric": {
+      "gate": "production-shape-register",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "json_bytes": 695,
+      "estimate": 6181,
+      "limit": 65536,
+      "engine_count": 1,
+      "retained_metadata": 1,
+      "omitted_metadata": 0,
+      "omissions": []
+    }
+  },
+  "large_persona_probe": {
+    "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+    "artifact": "/home/yuta/git/kaoiro/worktrees/kogane-562/runner/dist/delivery-settings.js",
+    "artifact_sha256": "02ba72fa2f6c20267ac782ca35faf504ed4104dde52b5e865344cfb5b8231d7d",
+    "personas": 4000,
+    "overrides": 4000,
+    "duration_ms": 16.28608300000002
+  },
+  "mutations": [
+    {
+      "name": "outer-shape",
+      "file": "runner/src/behaviour-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/outer-shape.log",
+      "restored": true,
+      "final_source_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "restored_to_head": true,
+      "log_sha256": "44115c88fe3eb73175f6959a7f1347ad8b35d86d32502ad9bb7597883780e2ba",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  3 failed | 15 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  3 failed | 15 passed (18)"
+      ]
+    },
+    {
+      "name": "engine-key",
+      "file": "runner/src/behaviour-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/engine-key.log",
+      "restored": true,
+      "final_source_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "restored_to_head": true,
+      "log_sha256": "83991eeba5a05d73493d6ee25539c584901ace142b91dc8bd3bb7939f97fd1aa",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "engine-shape",
+      "file": "runner/src/behaviour-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/engine-shape.log",
+      "restored": true,
+      "final_source_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "restored_to_head": true,
+      "log_sha256": "ab1a4c56214565977537dadc5e8f7b5bf6feb8d1fcb3729992debe302183cdaf",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "inner-key",
+      "file": "runner/src/behaviour-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/inner-key.log",
+      "restored": true,
+      "final_source_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "restored_to_head": true,
+      "log_sha256": "de46aa9645d999116597b534249f68b23efa78145be303dc8b07665d13685801",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "boolean-type",
+      "file": "runner/src/behaviour-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/boolean-type.log",
+      "restored": true,
+      "final_source_sha256": "396323e8bea7ba240df84a881186f369cec32cccef1b4e55f8d899ecc05e3b3f",
+      "restored_to_head": true,
+      "log_sha256": "6239895f49e487437d5426af85a34964629dca6ce0e02709825e7e00861b6cd2",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "ceiling-false",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/ceiling-false.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "fc59bec437b5a1d2930fbdf6cea31831ac676894ba46de5ac0a5c3b40ef7654b",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "default-false",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/default-false.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "63d286101680b72a6f7e7da5d5ffd000a29f2d2b47c2122a0939a66ea702ba65",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "snapshot-env-copy",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/snapshot-env-copy.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "3f7622203c7527a6cb3c70e92310862a3b6fb35481fed86e27e7174f9f9af5b0",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "snapshot-frozen",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/snapshot-frozen.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "e396da803a52775d40f70e93d6ee803b8aee8a81a1fa07cde5ca213f7a1877f2",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "json-bound",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/json-bound.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "3f68f45c8fe3a5487d43abf5198c8a03667561213d034011efa03776ccf53b0c",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "override-bound",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/override-bound.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "dee5ecf9c65dd843022159bcfc055fdf69bf7d062809d56ad4ea4d793cb0969a",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "utf8-byte-count",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/utf8-byte-count.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "a7176f5544b14ad50f1c96d60536a15221a221ee99e7d077b19a99740d65f53a",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "size-warning",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/size-warning.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "b203c0dfedfa49608878ebc44e93be4d529e36cefd8a10413105faa3b2305224",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  3 failed | 15 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  3 failed | 15 passed (18)"
+      ]
+    },
+    {
+      "name": "resolved-default-register",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/resolved-default-register.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "7dd2e4a0de287a8b166c8894d79e5fb62d600d780039a3eb4e23e7c5ce6b6180",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "relay-ceiling",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/relay-ceiling.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "ac5f06f1973a967ec0a835a3954fc02078bfaa1783ecc79efb60ac8fad9ccf8b",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 2 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 2 passed (4)"
+      ]
+    },
+    {
+      "name": "reload-key",
+      "file": "runner/src/config-diff.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "6de62ded2d374d1b1c70221ff6d82055d3990f0b4aed29b94a1ef28fd2949853",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/reload-key.log",
+      "restored": true,
+      "final_source_sha256": "6de62ded2d374d1b1c70221ff6d82055d3990f0b4aed29b94a1ef28fd2949853",
+      "restored_to_head": true,
+      "log_sha256": "1bb816928db932f4550614f31c3f3f01c14a78796cf1a3ba79c9d895d8f9d3c0",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "ceiling-guard",
+      "file": "wrapper/agent-common/src/delivery_modes.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery_modes.test.ts",
+      "exit": 1,
+      "before_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/ceiling-guard.log",
+      "restored": true,
+      "final_source_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "restored_to_head": true,
+      "log_sha256": "8840da822681e175fabf4d810ed117f5d736781ca4f2ddd2250defc2ed206226",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  5 failed | 4 passed (9)"
+      ],
+      "failure_excerpt": [
+        "Tests  5 failed | 4 passed (9)"
+      ]
+    },
+    {
+      "name": "backend-guard",
+      "file": "wrapper/agent-common/src/delivery_modes.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery_modes.test.ts",
+      "exit": 1,
+      "before_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/backend-guard.log",
+      "restored": true,
+      "final_source_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "restored_to_head": true,
+      "log_sha256": "def117757aa89a4b48af9cfa5d18606eeae64e6731af13849398b75c4d509aa4",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 8 passed (9)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 8 passed (9)"
+      ]
+    },
+    {
+      "name": "global-flag",
+      "file": "wrapper/agent-common/src/persona_opt_in.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery_modes.test.ts",
+      "exit": 1,
+      "before_sha256": "690faf5912d937f9c5aeb2b56863a3f77e9dd5fec905520fd12113dcc2dc9c44",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/global-flag.log",
+      "restored": true,
+      "final_source_sha256": "690faf5912d937f9c5aeb2b56863a3f77e9dd5fec905520fd12113dcc2dc9c44",
+      "restored_to_head": true,
+      "log_sha256": "4ebb5045e1957c2f3bf93caba325a2cb844c1d796edd6cb0d7f477897c2d2394",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  3 failed | 6 passed (9)"
+      ],
+      "failure_excerpt": [
+        "Tests  3 failed | 6 passed (9)"
+      ]
+    },
+    {
+      "name": "invalid-list",
+      "file": "wrapper/agent-common/src/persona_opt_in.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery_modes.test.ts",
+      "exit": 1,
+      "before_sha256": "690faf5912d937f9c5aeb2b56863a3f77e9dd5fec905520fd12113dcc2dc9c44",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/invalid-list.log",
+      "restored": true,
+      "final_source_sha256": "690faf5912d937f9c5aeb2b56863a3f77e9dd5fec905520fd12113dcc2dc9c44",
+      "restored_to_head": true,
+      "log_sha256": "ce775a4bcd26017246d2d6ff15302361b0b9f399083f428f3e5bfa7881e5b9eb",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 7 passed (9)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 7 passed (9)"
+      ]
+    },
+    {
+      "name": "refresh-stale-snapshot",
+      "file": "runner/src/engine_catalog_refresh.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "76165386e0544249b1b478a89fba01fb42f8a68109a32c620cdfb26d607d9cf6",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/refresh-stale-snapshot.log",
+      "restored": true,
+      "final_source_sha256": "125a2077bc0f51ffd34ddd388fcc8c4aeec206c98d28e5009c198986132c044d",
+      "restored_to_head": true,
+      "log_sha256": "87732a1ebd7b788a8f3086be75629018a1d5882910f09aa3e54759d9d68981ea",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "preparation_note": "before_sha256 includes the consumption half of the two-edit stale capture mutation; final_source_sha256 is the restored baseline",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "refresh-process-env",
+      "file": "runner/src/engine_catalog_refresh.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "125a2077bc0f51ffd34ddd388fcc8c4aeec206c98d28e5009c198986132c044d",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/refresh-process-env.log",
+      "restored": true,
+      "final_source_sha256": "125a2077bc0f51ffd34ddd388fcc8c4aeec206c98d28e5009c198986132c044d",
+      "restored_to_head": true,
+      "log_sha256": "c07d5ff5049e545a00961ce883c61661d436d420a1dd13029bfb9e571ecaa3ec",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "rollback-runtime",
+      "file": "runner/src/runner-cli.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/rollback-runtime.log",
+      "restored": true,
+      "final_source_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "restored_to_head": true,
+      "log_sha256": "f53a00e3a4f2fa6f978990597207fc6c02aa44b3d04c86c533e7f87920a1551a",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "docs-registry",
+      "file": "docs/reference/configuration/runner.md",
+      "command": "setsid -w pnpm exec vitest run test/behaviour-docs.test.ts",
+      "exit": 1,
+      "before_sha256": "8339cb75f0b6e808749fb4d9cb011e2182c1ac7b24dd2ec1d0ac727f0b21135e",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/docs-registry.log",
+      "restored": true,
+      "final_source_sha256": "8339cb75f0b6e808749fb4d9cb011e2182c1ac7b24dd2ec1d0ac727f0b21135e",
+      "restored_to_head": true,
+      "log_sha256": "5e81c2442cc433bb8d2bef9a742ccb3a613900ed8ff0a4f8c675dd252360531d",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 1 passed (2)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 1 passed (2)"
+      ]
+    },
+    {
+      "name": "wrapper-ceiling-parser",
+      "file": "wrapper/core/src/persona.ts",
+      "command": "setsid -w pnpm exec vitest run test/persona.test.ts",
+      "exit": 1,
+      "before_sha256": "a99fbce69d9fd102247f1d854e9cf8584740b7ba87b8453d3682f0223a056ee0",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/wrapper-ceiling-parser.log",
+      "restored": true,
+      "final_source_sha256": "a99fbce69d9fd102247f1d854e9cf8584740b7ba87b8453d3682f0223a056ee0",
+      "restored_to_head": true,
+      "log_sha256": "434f0daeb988e9c9c2267e9c3bda9e0b601cbae1f58154ade17579c0e2daa8d6",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 106 passed (108)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 106 passed (108)"
+      ]
+    },
+    {
+      "name": "persona-override-generation",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/persona-override-generation.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "3ce8bd68892c3593da9ad307b0c81d65762a3024c1cc3414c680127450cad520",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 16 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 16 passed (18)"
+      ]
+    },
+    {
+      "name": "claude-code-child-ceiling",
+      "file": "wrapper/claude-code/src/cli.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-composition.test.ts",
+      "exit": 1,
+      "before_sha256": "54b6d54a6530ea57d43a7e2c37cc0a23379793b8613af471e88d02148b022464",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/claude-code-child-ceiling.log",
+      "restored": true,
+      "final_source_sha256": "54b6d54a6530ea57d43a7e2c37cc0a23379793b8613af471e88d02148b022464",
+      "restored_to_head": true,
+      "log_sha256": "a1b14b4bc704c4df39b7e172586ef674bd30bb54df0468ee905bc0d4b4a1e0c7",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  2 failed | 2 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  2 failed | 2 passed (4)"
+      ]
+    },
+    {
+      "name": "codex-child-ceiling",
+      "file": "wrapper/codex/src/cli.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-composition.test.ts",
+      "exit": 1,
+      "before_sha256": "faf8225c5bb89fb149ff2027d276e5f24e2efe3d6e3a0c981f0209f1f9a8fc64",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/codex-child-ceiling.log",
+      "restored": true,
+      "final_source_sha256": "faf8225c5bb89fb149ff2027d276e5f24e2efe3d6e3a0c981f0209f1f9a8fc64",
+      "restored_to_head": true,
+      "log_sha256": "a3f11f061adad504b85c2d7bf58d6d798d919ef0fb97381b0ebdbbb5500d03af",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "child-env-present",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-composition.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/child-env-present.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "0bfbc81bbc6cc3760ee884832a6db6c1931f50d1434f32355486cb48b806e434",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "child-env-absent",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-composition.test.ts",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/child-env-absent.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "bfbf2bfc78c9a52b70ed4b65a03f91bb7543dfa0cbc35026a4b8b012a6f987b4",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "register-preflight",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w mix test test/integration/delivery_launch_acceptance.exs",
+      "exit": 2,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/register-preflight.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "470f8416894d612eb441482a375be34737dd8ea68081b00ca42c264818767814",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 2/3 passed"
+      ],
+      "failure_excerpt": [
+        "payload: %{reason: \"payload_too_large\"},",
+        "Result: 2/3 passed"
+      ]
+    },
+    {
+      "name": "register-multiplier10",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w mix test test/integration/delivery_launch_acceptance.exs",
+      "exit": 2,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/register-multiplier10.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "ad51b8396d6e2b34f41c96d902d9fbbb5e246277daf3a782669d3b080f3b3753",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 2/3 passed"
+      ],
+      "failure_excerpt": [
+        "Result: 2/3 passed"
+      ]
+    },
+    {
+      "name": "register-multiplier1",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w mix test test/integration/delivery_launch_acceptance.exs",
+      "exit": 2,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/register-multiplier1.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "c7c5d879fba97d0bc07a2262df2aca7700128f67ded83445f64dd100bd97afcf",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 2/3 passed"
+      ],
+      "failure_excerpt": [
+        "Result: 2/3 passed"
+      ]
+    },
+    {
+      "name": "register-margin",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w mix test test/integration/delivery_launch_acceptance.exs",
+      "exit": 2,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/register-margin.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "901973ec35a7904c835e8cda1bce51a88dd9102ec04aad1096c64bb71be2e014",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 2/3 passed"
+      ],
+      "failure_excerpt": [
+        "Result: 2/3 passed"
+      ]
+    },
+    {
+      "name": "protocol-enum-drift",
+      "file": "protocol/src/delivery-policy.ts",
+      "command": "pnpm typecheck",
+      "exit": 2,
+      "before_sha256": "be596facee3414ca6ca9971b5f5fdb9e28d5618f8ad515cd65d80d09557d74ea",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/protocol-enum-drift.log",
+      "restored": true,
+      "final_source_sha256": "be596facee3414ca6ca9971b5f5fdb9e28d5618f8ad515cd65d80d09557d74ea",
+      "restored_to_head": true,
+      "log_sha256": "2006731e2145721ed6020bbaf20f6aef3111d1fe5d8708850b7088e1b93249ab",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [],
+      "failure_excerpt": [
+        "test/launch_delivery_contract.test.ts(5,29): error TS1360: Type '{ operator_early: { fold: boolean; steer: boolean; hook: boolean; none: boolean; }; inter_agent_early: { fold: boolean; steer: boolean; hook: boolean; none: boolean; }; inter_agent_yield: { tool_boundary: boolean; none: boolean; }; }' does not satisfy the expected type '{ operator_early: Record<\"fold\" | \"steer\" | \"hook\" | \"none\", boolean>; inter_agent_early: Record<\"fold\" | \"steer\" | \"hook\" | \"none\", boolean>; inter_agent_yield: Record<...>; }'.",
+        "test/launch_delivery_contract.test.ts(8,68): error TS2344: Type '\"none\" | \"tool_boundary\" | \"extra\"' does not satisfy the constraint '\"Expected: literal string: none, Actual: never\" | \"Expected: literal string: tool_boundary, Actual: never\" | \"Expected: literal string: extra, Actual: never\"'."
+      ]
+    },
+    {
+      "name": "dashboard-enum-drift",
+      "file": "dashboard/src/lib/deliveryPolicy.ts",
+      "command": "pnpm check",
+      "exit": 1,
+      "before_sha256": "922370b6a24405afe9740415a8999aa76a7fe37597feb1ccdf75b1f61c94bc3a",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/dashboard-enum-drift.log",
+      "restored": true,
+      "final_source_sha256": "922370b6a24405afe9740415a8999aa76a7fe37597feb1ccdf75b1f61c94bc3a",
+      "restored_to_head": true,
+      "log_sha256": "5f11afad27d86ce6d48d25b69520ba4e83dd306851ae9bf432e7ab084d308a92",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "svelte-check found 2 errors and 0 warnings in 1 file"
+      ],
+      "failure_excerpt": [
+        "svelte-check found 2 errors and 0 warnings in 1 file"
+      ]
+    },
+    {
+      "name": "producer-client-divergence",
+      "file": "runner/src/delivery-settings.ts",
+      "command": "setsid -w pnpm exec playwright test --config playwright.delivery-integration.config.ts --grep actual",
+      "exit": 1,
+      "before_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/producer-client-divergence.log",
+      "restored": true,
+      "final_source_sha256": "1c849201bf587c66eaead3c03ef79d53980015614972ff53fa85d564b89a756c",
+      "restored_to_head": true,
+      "log_sha256": "517f55d9915d7371f2c130fb05f4605a5affe3c01a1d6b23c77daa4c31b83a9d",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 3 passed",
+        "1 failed"
+      ],
+      "failure_excerpt": [
+        "Result: 3 passed",
+        "1 failed"
+      ]
+    },
+    {
+      "name": "explicit-policy-priority",
+      "file": "server/lib/kaoiro_server/delivery_policies/state.ex",
+      "command": "setsid -w mix test test/integration/delivery_launch_acceptance.exs",
+      "exit": 2,
+      "before_sha256": "dea671cdfbbe4d3bcc02d35755b999a121967589ae997eef19f4aff8fffd32c7",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/explicit-policy-priority.log",
+      "restored": true,
+      "final_source_sha256": "dea671cdfbbe4d3bcc02d35755b999a121967589ae997eef19f4aff8fffd32c7",
+      "restored_to_head": true,
+      "log_sha256": "dad5c15d5719914888bcffaf91d935c0657a569252db3dfebb4685d4a8a41ce4",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 2/3 passed"
+      ],
+      "failure_excerpt": [
+        "Result: 2/3 passed"
+      ]
+    },
+    {
+      "name": "existing-policy-preserved",
+      "file": "server/lib/kaoiro_server/delivery_policies.ex",
+      "command": "setsid -w mix test test/kaoiro_server/delivery_policies_test.exs",
+      "exit": 2,
+      "before_sha256": "62ff18304e8c6194b4da7da4b05fd2fc60d0333387d9cf7eef36c42a6855882c",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/existing-policy-preserved.log",
+      "restored": true,
+      "final_source_sha256": "62ff18304e8c6194b4da7da4b05fd2fc60d0333387d9cf7eef36c42a6855882c",
+      "restored_to_head": true,
+      "log_sha256": "1b783d6e293d4bece942d9a8f29a44b93a97fc75f8f6466afbe09c6f000fb098",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Result: 10/11 passed"
+      ],
+      "failure_excerpt": [
+        "Result: 10/11 passed"
+      ]
+    },
+    {
+      "name": "reload-early-publication",
+      "file": "runner/src/runner-cli.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/reload-early-publication.log",
+      "restored": true,
+      "final_source_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "restored_to_head": true,
+      "log_sha256": "dede6f1f6eab5e59dae41def93735bd4c1ddbba667107f85d0e1a0c94de201d2",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "reload-snapshot-publication",
+      "file": "runner/src/runner-cli.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-reload.test.ts",
+      "exit": 1,
+      "before_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/reload-snapshot-publication.log",
+      "restored": true,
+      "final_source_sha256": "4c28660ecca92d4579186b2dbf90988e02d78c2021544248591699b46dc759bc",
+      "restored_to_head": true,
+      "log_sha256": "1aa9edf91f5b3a97c8838dff11cd979f6b17db968030b22c103ff7b48954bdab",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 3 passed (4)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 3 passed (4)"
+      ]
+    },
+    {
+      "name": "antigravity-ceiling-default",
+      "file": "wrapper/agent-common/src/delivery_modes.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/antigravity-ceiling-default.log",
+      "restored": true,
+      "final_source_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "restored_to_head": true,
+      "log_sha256": "a1f848cb0e8ce2f5a1cdc9cba28d46f37dc3e4779b84763891658dc2355a3e12",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "antigravity-policy-default",
+      "file": "wrapper/agent-common/src/delivery_modes.ts",
+      "command": "setsid -w pnpm exec vitest run test/delivery-settings.test.ts",
+      "exit": 1,
+      "before_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/antigravity-policy-default.log",
+      "restored": true,
+      "final_source_sha256": "921f8a3214adea8a7752f9705392434707fab4876ec430ffd456a4375e5d005f",
+      "restored_to_head": true,
+      "log_sha256": "a9b4107df2f7a5b009199c4335009919cb70657ef9c071b26b5d1db87f60b9f8",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        "Test Files  1 failed (1)",
+        "Tests  1 failed | 17 passed (18)"
+      ],
+      "failure_excerpt": [
+        "Tests  1 failed | 17 passed (18)"
+      ]
+    },
+    {
+      "name": "missing-fixture-common",
+      "file": "protocol/fixtures/launch-delivery-policy.json",
+      "command": "pnpm typecheck",
+      "exit": 2,
+      "before_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored": true,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/missing-fixture-common.log",
+      "final_source_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored_to_head": true,
+      "log_sha256": "95ea1520aad23f8129e33195f68665a2fd6291e1e0f76a26ca05976858c0b4a6",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [],
+      "failure_excerpt": [
+        "test/launch_delivery_contract.test.ts(3,21): error TS2307: Cannot find module '../../../protocol/fixtures/launch-delivery-policy.json' or its corresponding type declarations.",
+        "test/launch_delivery_contract.test.ts(6,65): error TS2344: Type '\"fold\" | \"steer\" | \"hook\" | \"none\"' does not satisfy the constraint '\"Expected: literal string: fold, Actual: string\" | \"Expected: literal string: fold, Actual: number\" | \"Expected: literal string: fold, Actual: ...\" | \"Expected: literal string: steer, Actual: string\" | ... 7 more ... | \"Expected: literal string: none, Actual: ...\"'.",
+        "test/launch_delivery_contract.test.ts(7,68): error TS2344: Type '\"fold\" | \"steer\" | \"hook\" | \"none\"' does not satisfy the constraint '\"Expected: literal string: fold, Actual: string\" | \"Expected: literal string: fold, Actual: number\" | \"Expected: literal string: fold, Actual: ...\" | \"Expected: literal string: steer, Actual: string\" | ... 7 more ... | \"Expected: literal string: none, Actual: ...\"'.",
+        "test/launch_delivery_contract.test.ts(8,68): error TS2344: Type '\"none\" | \"tool_boundary\"' does not satisfy the constraint '\"Expected: literal string: none, Actual: string\" | \"Expected: literal string: none, Actual: number\" | \"Expected: literal string: none, Actual: ...\" | \"Expected: literal string: tool_boundary, Actual: string\" | \"Expected: literal string: tool_boundary, Actual: number\" | \"Expected: literal string: tool_boundary, Actua...'."
+      ]
+    },
+    {
+      "name": "missing-fixture-dashboard-check",
+      "file": "protocol/fixtures/launch-delivery-policy.json",
+      "command": "pnpm check",
+      "exit": 1,
+      "before_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored": true,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/missing-fixture-dashboard-check.log",
+      "final_source_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored_to_head": true,
+      "log_sha256": "aa20c083610e90053d4a99e77068cbfb995b52af5a4e43d4a9e0322a6b5b6a65",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "svelte-check found 7 errors and 0 warnings in 2 files"
+      ],
+      "failure_excerpt": [
+        "svelte-check found 7 errors and 0 warnings in 2 files"
+      ]
+    },
+    {
+      "name": "missing-fixture-dashboard-test",
+      "file": "protocol/fixtures/launch-delivery-policy.json",
+      "command": "setsid -w pnpm exec vitest run test/launchDeliveryContract.test.ts",
+      "exit": 1,
+      "before_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored": true,
+      "log": "/home/yuta/git/kaoiro/tmp/reviews/issue-562/mutations-kogane/missing-fixture-dashboard-test.log",
+      "final_source_sha256": "ffa82e04252eed03a931c1df684969201c0caad094f09a57096903573e82ec40",
+      "restored_to_head": true,
+      "log_sha256": "48cef1fe59cd1626710324c302545880d456e8a3fc7f564619184b04dbcafa74",
+      "revision": "8f79e01c6cef891f4ff4921b4e64a606f77a44b9",
+      "observed_summary": [
+        "Test Files  1 failed (1)"
+      ],
+      "failure_excerpt": [
+        "Tests  no tests"
+      ]
+    }
+  ],
+  "server_gate_decision": {
+    "conversation_id": "92594f01-1790-4ef1-a4fa-c53e3cc53eee",
+    "turn": 5,
+    "director": "Hisui",
+    "accepted_profile": "CI=true (existing assert_receive_timeout 500ms)",
+    "ordinary_profile": "100ms; observed failures at delivery_policy_test.exs:683 and :293; separate issue owned by director"
+  }
+}
