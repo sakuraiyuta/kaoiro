@@ -790,6 +790,21 @@
   {#if isOperator}
     <WorkCapacitySettings {connection} generation={appConnectionGeneration} snapshot={workSettings} onSnapshot={onWorkSettings} />
   {/if}
+
+  <label class="row">
+    グリッドの並び順
+    <select
+      value={settings.gridSort}
+      onchange={(e) =>
+        updateSettings({
+          gridSort: e.currentTarget.value === "recent" ? "recent" : "name",
+        })}
+    >
+      <option value="name">名前順</option>
+      <option value="recent">最近動いた順</option>
+    </select>
+  </label>
+
   {#if connection}
     {#if onOpenSessionLifecycle}
       <section class="session-lifecycle">

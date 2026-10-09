@@ -16,7 +16,12 @@ export interface Settings {
    *  system・ターン境界・assistant/user 本文は対象外で常時表示 — この設定
    *  では gate しない。既定 off (導入前の表示を変えない)。 */
   hideNonMessageLogEntries: boolean;
+  /** Order of the live agent grid. "name" is the original agent_id order;
+   *  "recent" puts the agent whose state changed most recently first. */
+  gridSort: GridSort;
 }
+
+export type GridSort = "name" | "recent";
 
 export const SETTINGS_STORAGE_KEY = "kaoiro:settings:v1";
 
@@ -25,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationSoundVolume: 0.7,
   agentCardStatsEnabled: true,
   hideNonMessageLogEntries: false,
+  gridSort: "name",
 };
 
 function clampVolume(value: number): number {
@@ -55,11 +61,16 @@ export function loadSettings(): Settings {
       typeof parsed.hideNonMessageLogEntries === "boolean"
         ? parsed.hideNonMessageLogEntries
         : DEFAULT_SETTINGS.hideNonMessageLogEntries;
+    const gridSort =
+      parsed.gridSort === "name" || parsed.gridSort === "recent"
+        ? parsed.gridSort
+        : DEFAULT_SETTINGS.gridSort;
     return {
       notificationSoundEnabled: enabled,
       notificationSoundVolume: volume,
       agentCardStatsEnabled,
       hideNonMessageLogEntries,
+      gridSort,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -93,6 +104,9 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   if (patch.hideNonMessageLogEntries !== undefined) {
     settings.hideNonMessageLogEntries = patch.hideNonMessageLogEntries;
+  }
+  if (patch.gridSort !== undefined) {
+    settings.gridSort = patch.gridSort;
   }
   saveSettings(settings);
 }
