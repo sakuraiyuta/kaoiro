@@ -150,6 +150,26 @@ queued worker/attempt using them is closed. Upgrade their descriptors and tool
 packs together under the same release-control approval; an unavailable pinned
 binary requires repair, not fallback to another Node.
 
+Before the first production prepare after enrollment or a descriptor upgrade,
+run its captured launcher
+through an owned timer-started oneshot with the production retained shape
+(`Type=oneshot`, `RemainAfterExit=yes`, `--expand-environment=no`). Use the
+reviewed physical Node path and closure digest, then inspect the exact unit:
+
+```sh
+<physical-node> <tool-root>/scripts/production-release-launcher.mjs \
+  preflight <tool-sha256> --install-root /home/yuta/.local/share/kaoiro \
+  --expected-authority-sha256 <descriptor-sha256>
+```
+
+The command performs three independent verified exporter reads, reports each
+elapsed time and refuses a successful read above 15 seconds (before the
+20-second child bound). It also refuses any transport/decoding/binding failure;
+do not continue to prepare after refusal. Re-run after
+repairing the fixed connection. Preflight does not resolve or waive unfinished
+attempts: every actual prepare and worker still performs its own reconciliation.
+Stop/reset only the exact owned preflight service/timer after inspection.
+
 ## Common production checkpoint
 
 Server DONE/stability, queue submission and source recovery are incomplete.

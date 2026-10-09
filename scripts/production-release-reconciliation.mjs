@@ -284,6 +284,57 @@ export function assertReleaseUnresolved(unresolved, skip = []) {
   );
 }
 
+export function preflightReleaseAuthority({
+  installRoot,
+  role = "runner",
+  assertionPath,
+  expectedAuthorityDigest,
+  authorityReader = readReleaseAuthority,
+  authorityRequest = releaseAuthorityRequest,
+  clock = () => performance.now(),
+} = {}) {
+  must(["server", "runner"].includes(role), "preflight role");
+  const authority = authorityReader(installRoot, {
+    role,
+    assertionPath,
+    expectedDigest: expectedAuthorityDigest,
+  });
+  must(authority.status === "enrolled", "preflight requires enrollment");
+  const started = clock();
+  const samples = [];
+  for (let index = 0; index < 3; index++) {
+    const before = clock();
+    const remaining = Math.floor(120_000 - (before - started));
+    must(remaining > 0 && remaining <= 120_000, "preflight whole deadline");
+    const snapshot = validateReleaseSnapshot(
+      authorityRequest(authority, releaseRequest(authority.descriptor), {
+        timeoutMs: Math.min(20_000, remaining),
+      }),
+    );
+    const elapsed = clock() - before;
+    must(
+      Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= 15_000,
+      `preflight sample ${index + 1} stalled: ${Math.ceil(elapsed)} ms (maximum 15000 ms)`,
+    );
+    samples.push({
+      sample: index + 1,
+      elapsed_ms: Math.ceil(elapsed),
+      rows: snapshot.rows.length,
+      snapshot_sha256: releaseBytesDigest(releaseJsonBytes(snapshot)),
+    });
+  }
+  return {
+    schema: 1,
+    status: "enrolled",
+    pass: true,
+    role,
+    authority_sha256: authority.sha256,
+    tool_sha256: authority.descriptor.tool_sha256,
+    samples,
+    elapsed_ms: Math.ceil(clock() - started),
+  };
+}
+
 export async function reconcileProductionReleases({
   installRoot,
   role = "runner",
@@ -472,6 +523,22 @@ export async function reconcileProductionReleases({
 }
 
 export async function runReconciliationCli(args) {
+  if (args[0] === "preflight") {
+    const flags = parseReleaseOptions(args.slice(1), [
+      "install-root",
+      "role",
+      "release-authority",
+      "expected-authority-sha256",
+    ]);
+    const result = preflightReleaseAuthority({
+      installRoot: flags["install-root"],
+      role: flags.role,
+      assertionPath: flags["release-authority"],
+      expectedAuthorityDigest: flags["expected-authority-sha256"],
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   const flags = parseReleaseOptions(args, [
     "install-root",
     "role",

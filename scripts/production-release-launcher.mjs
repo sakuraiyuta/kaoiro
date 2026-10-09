@@ -104,11 +104,13 @@ async function main() {
   } else if (operation === "export" || operation === "import") {
     const endpoint = await import("./production-release-endpoint.mjs");
     await endpoint.runReleaseEndpoint(operation, expected);
-  } else if (operation === "audit") {
+  } else if (operation === "audit" || operation === "preflight") {
     const { runReconciliationCli } = await import(
       "./production-release-reconciliation.mjs"
     );
-    await runReconciliationCli(args);
+    await runReconciliationCli(
+      operation === "preflight" ? ["preflight", ...args] : args,
+    );
   } else if (operation === "collect") {
     const { runCollectionCli } = await import(
       "./collect-production-release.mjs"

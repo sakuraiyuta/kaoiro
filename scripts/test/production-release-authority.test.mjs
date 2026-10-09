@@ -47,6 +47,7 @@ import {
 } from "../production-release-tools.mjs";
 import {
   assertReleaseUnresolved,
+  preflightReleaseAuthority,
   reconcileProductionReleases,
   validateReleaseSnapshot,
 } from "../production-release-reconciliation.mjs";
@@ -767,4 +768,55 @@ test("the real exporter projects enrollment aliases and digest without private h
   );
   assert.equal(JSON.stringify(snapshot).includes(f.installRoot), false);
   assert.equal(Object.hasOwn(snapshot.inventory, "runtime_hosts"), false);
+});
+
+test("default preflight uses three real endpoint reads through the verified launcher", () => {
+  const f = fixture();
+  f.start();
+  const result = preflightReleaseAuthority({ installRoot: f.installRoot });
+  assert.equal(result.pass, true);
+  assert.equal(result.samples.length, 3);
+  assert.ok(
+    result.samples.every(
+      (sample) => sample.rows === 1 && sample.elapsed_ms <= 15_000,
+    ),
+  );
+  const cli = spawnSync(
+    process.execPath,
+    [
+      f.descriptor.exporter_path,
+      "preflight",
+      f.manifest.sha256,
+      "--install-root",
+      f.installRoot,
+      "--expected-authority-sha256",
+      f.authority.sha256,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(JSON.parse(cli.stdout).samples.length, 3);
+});
+
+test("preflight refuses a 15001 ms successful read and never starts another sample", () => {
+  const f = fixture();
+  const snapshot = releaseAuthorityRequest(
+    f.authority,
+    releaseRequest(f.descriptor),
+  );
+  const clocks = [0, 0, 15_001];
+  let calls = 0;
+  assert.throws(
+    () =>
+      preflightReleaseAuthority({
+        installRoot: f.installRoot,
+        clock: () => clocks.shift(),
+        authorityRequest: () => {
+          calls++;
+          return snapshot;
+        },
+      }),
+    /sample 1 stalled: 15001 ms/,
+  );
+  assert.equal(calls, 1);
 });
