@@ -124,7 +124,15 @@ defmodule KaoiroServerWeb.DeliveryLaunchAcceptance do
 
     assert f["measurements"]["ordinary"]["json_bytes"] * f["ratio"] * 10 + 4096 > 65536
 
-    for key <- ["actual", "rawMaximum", "ordinarySent", "maximumSent", "nearSent", "short"] do
+    for key <- [
+          "actual",
+          "rawMaximum",
+          "ordinarySent",
+          "maximumSent",
+          "nearSent",
+          "short",
+          "unicodeSent"
+        ] do
       payload = f[key]
       json = byte_size(Jason.encode!(payload))
       external = :erlang.external_size(payload)
@@ -142,6 +150,12 @@ defmodule KaoiroServerWeb.DeliveryLaunchAcceptance do
            )
 
     assert Enum.all?(f["nearSent"]["engines"], &(not Map.has_key?(&1, "launch_delivery_policy")))
+
+    assert Enum.all?(
+             f["unicodeSent"]["engines"],
+             &(not Map.has_key?(&1, "launch_delivery_policy"))
+           )
+
     assert :erlang.external_size(f["near"]) > 65536
     assert_reply push(runner, "register", f["near"]), :error
   end

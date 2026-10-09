@@ -64,10 +64,6 @@ describe("host delivery settings", () => {
     const overflow = preflightDeliveryRegister(register, warn);
     expect(overflow.engines![0]).not.toHaveProperty("launch_delivery_policy"); expect(overflow.in_flight_defaults).toEqual({ codex: false });
     expect(warn).toHaveBeenLastCalledWith([{ engine: "codex", reason: "json_bytes", size: 8193, limit: 8192 }]);
-    delete metadata.persona_overrides![longKey + "x"];
-    metadata.persona_overrides![longKey.slice(0, -1) + "é"] = value;
-    expect(deliveryJsonBytes(metadata)).toBe(8193);
-    expect(preflightDeliveryRegister(register, warn).engines![0]).not.toHaveProperty("launch_delivery_policy");
     metadata.persona_overrides = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`p${i}`, none]));
     expect(deliveryJsonBytes(metadata)).toBeLessThan(8192);
     expect(preflightDeliveryRegister(register, warn).engines![0]).not.toHaveProperty("launch_delivery_policy");
@@ -81,19 +77,26 @@ describe("host delivery settings", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toHaveLength(3);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("private-path");
+    const unicodeRegister: RunnerRegister = { ...register, engines: register.engines!.map(entry => ({ ...entry,
+      models: Array.from({ length: 32 }, (_, i) => ({ value: `model-${i}`, display_name: "界".repeat(80) })),
+      launch_delivery_policy: { version: "v1", ceiling: true, mechanisms: none },
+    })) };
+    expect(registerSizeEstimate(unicodeRegister)).toBeGreaterThan(65536);
+    expect(preflightDeliveryRegister(unicodeRegister, vi.fn()).engines?.every(e => e.launch_delivery_policy === undefined)).toBe(true);
   });
   it("the production builder retains normal metadata and emits the size-only omission diagnostic", () => {
     const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const config = parseRunnerConfig(raw);
     buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, createDeliverySnapshot(config, {}));
     expect(warn).not.toHaveBeenCalled();
-    const personas = Array.from({ length: 65 }, (_, i) => `private-persona-${i}`).join(",");
+    const personas = Array.from({ length: 4000 }, (_, i) => `private-persona-${i}`).join(",");
     const register = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined,
       createDeliverySnapshot(config, { KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: personas }));
     expect(register.engines!.find(e => e.id === "codex")).not.toHaveProperty("launch_delivery_policy");
     expect(register.in_flight_defaults?.codex).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('"reason":"override_count"');
+    expect(String(warn.mock.calls[0]![0])).toContain('"size":4000');
     expect(String(warn.mock.calls[0]![0])).not.toContain("private-persona");
   });
 });

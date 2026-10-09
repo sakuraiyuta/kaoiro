@@ -129,7 +129,7 @@ the complete register as `ceil(JSON bytes * 1.5 * 2) + 4096` against 65,536
 external-term bytes. Under pressure it removes all remaining metadata while
 preserving catalogs, defaults and other fields. The ratio allowance exceeds the
 measured maximum 1.332 across the acceptance fixtures (including 3 engines,
-32 short models each, maximum metadata, and a near-limit base register).
+32 short models each, UTF-8 model names, maximum metadata, and a near-limit base register).
 This guard cannot repair a base register that already exceeds the server limit.
 A size omission produces one warning per register build containing only engine,
 reason, size and limit. No persona IDs, model strings or paths appear in it.

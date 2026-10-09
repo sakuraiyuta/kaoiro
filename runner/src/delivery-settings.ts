@@ -41,9 +41,14 @@ export function buildLaunchDeliveryMetadata(snapshot: AppliedDeliverySnapshot, e
   const list = engine === "claude-code" ? snapshot.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS
     : engine === "codex" ? snapshot.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS : undefined;
   const overrides: NonNullable<LaunchDeliveryPolicyMetadata["persona_overrides"]> = Object.create(null);
-  for (const personaId of deliveryPersonaList(list)) {
-    const modes = resolveDelivery({ ...inputs, personaId }).mechanisms;
-    if (JSON.stringify(modes) !== JSON.stringify(mechanisms)) overrides[personaId] = modes;
+  const personas = deliveryPersonaList(list);
+  const first = personas[0];
+  if (first !== undefined) {
+    // Every valid member has the same opt-in; avoid reparsing an oversized list per member.
+    const modes = resolveDelivery({ ...inputs, personaId: first }).mechanisms;
+    if (JSON.stringify(modes) !== JSON.stringify(mechanisms)) {
+      for (const personaId of personas) overrides[personaId] = { ...modes };
+    }
   }
   return { version: "v1", ceiling: inputs.ceiling, mechanisms,
     ...(Object.keys(overrides).length === 0 ? {} : { persona_overrides: overrides }) };

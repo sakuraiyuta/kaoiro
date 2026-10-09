@@ -2,7 +2,7 @@
 title: High-risk change release
 description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, the canary stage, and recovery when every agent has stopped.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 related: [deployment]
 ---
 
@@ -64,7 +64,7 @@ git diff --name-only <base>..<head> -- \
   scripts/build-runner-tarball.sh scripts/build-release-manifest.mjs \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
-  runner/src/transport.ts runner/src/args.ts \
+  runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
   runner/src/permission_ceiling.ts runner/src/resume_snapshot.ts
 
 # TL: a wrapper starts and completes a turn
@@ -77,6 +77,7 @@ git diff --name-only <base>..<head> -- \
   wrapper/core/src/args.ts \
   wrapper/agent-common/src/state.ts wrapper/agent-common/src/inter_agent.ts \
   wrapper/agent-common/src/pending.ts wrapper/agent-common/src/approval_gate.ts \
+  wrapper/agent-common/src/delivery_modes.ts \
   wrapper/codex/src/startup.ts wrapper/codex/src/app_server_host_runtime.ts \
   wrapper/codex/src/app_server_input.ts wrapper/codex/src/app_server_session.ts \
   wrapper/codex/src/app_server_transport.ts wrapper/codex/src/app_server_rpc.ts \
