@@ -391,7 +391,9 @@ export function releaseRequest(descriptor, additional = {}) {
   };
 }
 
-export async function runReleaseEndpoint(operation, expectedTool) {
+export async function runReleaseEndpoint(operation, expectedTool, expectedRoot) {
+  must(typeof expectedRoot === "string" && expectedRoot.startsWith("/") &&
+    resolve(expectedRoot) === expectedRoot, "fixed authority root required");
   const timer = setTimeout(
     () =>
       process.stdin.destroy(new Error("release endpoint deadline exceeded")),
@@ -422,6 +424,7 @@ export async function runReleaseEndpoint(operation, expectedTool) {
       expectedTool,
       operation,
     );
+    must(request.root === expectedRoot, "request root differs from fixed authority root");
     let value;
     if (operation === "export") {
       must(raw.slice(split + 1) === "", "export cannot carry write payload");

@@ -88,7 +88,7 @@ export function validatePlanAuthority(authority, hostIds) {
 
 export function validateEnrollmentInventory(value) {
   must(
-    exact(value, ["schema", "runtime_hosts", "authority"]) &&
+    exact(value, ["schema", "runtime_hosts", "authority", ...(Object.hasOwn(value ?? {}, "health_url") ? ["health_url"] : [])]) &&
       value.schema === 1,
     "fixed enrollment inventory schema",
   );
@@ -97,7 +97,26 @@ export function validateEnrollmentInventory(value) {
     value.authority,
     value.runtime_hosts.map((pair) => pair.alias),
   );
+  if (Object.hasOwn(value, "health_url")) validateHealthUrl(value.health_url);
   return value;
+}
+
+function validateHealthUrl(value) {
+  must(typeof value === "string" && Buffer.byteLength(value) <= 2048 &&
+    !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), "fixed health URL bound");
+  const url = new URL(value);
+  must(["http:", "https:"].includes(url.protocol) && !url.username && !url.password &&
+    !url.search && !url.hash, "fixed health URL scheme/authority");
+  return url.href;
+}
+
+export function enrolledHealthUrl(inventory, requested) {
+  validateEnrollmentInventory(inventory);
+  must(Object.hasOwn(inventory, "health_url"), "fixed enrollment health URL required");
+  const fixed = validateHealthUrl(inventory.health_url);
+  must(requested === undefined || validateHealthUrl(requested) === fixed,
+    "health URL differs from fixed enrollment inventory");
+  return fixed;
 }
 
 export function projectEnrollmentInventory(value) {

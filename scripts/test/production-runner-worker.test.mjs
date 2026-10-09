@@ -24,6 +24,7 @@ import {
   inspectProductionRunnerActivity,
   listRetainedProductionRunners,
   queueProductionRunner,
+  runWorkerCli,
   runnerWorkerUnit,
 } from "../production-runner-worker.mjs";
 import {
@@ -573,9 +574,6 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
   );
   const f = fixture(),
     inventory = { schema: 1, ...f.planOptions };
-  writeFileSync(`${f.history}-inventory.json`, releaseJsonBytes(inventory), {
-    mode: 0o600,
-  });
   const health = createServer((_request, response) => {
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({ build_revision: "b".repeat(40) }));
@@ -583,6 +581,8 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
   await new Promise((resolve) => health.listen(0, "127.0.0.1", resolve));
   try {
     const url = `http://127.0.0.1:${health.address().port}/health`;
+    inventory.health_url = url;
+    writeFileSync(`${f.history}-inventory.json`, releaseJsonBytes(inventory), { mode: 0o600 });
     for (const damage of [
       "empty",
       "plan",
@@ -636,6 +636,7 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
         "--health-url",
         url,
       ];
+      await assert.rejects(runLifecycleCli([...args.slice(0, -1), `${url}/staging`]), /differs from fixed enrollment/);
       await assert.rejects(runLifecycleCli(args), /activity/);
       await inspectProductionRunnerActivity({
         runnerRoot: f.runner,
@@ -670,6 +671,25 @@ test("the default quarantine CLI resolves empty, corrupt-plan and corrupt-termin
   } finally {
     await new Promise((resolve) => health.close(resolve));
   }
+});
+
+test("queue rejects Unicode control values before manager submission", async () => {
+  const f = fixture();
+  for (const character of ["\u0085", "\u202e", "\u2028", "\u2029"]) {
+    await assert.rejects(f.queue({ updateArgs: ["--tarball", `/private/${character}artifact`] }), /invalid updater argument/);
+  }
+  assert.equal(f.calls().some(call => call.bin === "systemd-run"), false);
+});
+
+test("the actual queue CLI accepts a JSON envelope larger than 4096 bytes before checking each value", async () => {
+  const f = fixture();
+  const uuids = Array.from({ length: 100 }, (_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`).join(",");
+  const args = JSON.stringify(["--tarball", "/private/artifact", "--skip-release-reconciliation", uuids,
+    "--skip-reason", "x".repeat(512)]);
+  assert.ok(Buffer.byteLength(args) > 4096);
+  const result = await runWorkerCli(["queue", "--attempt", f.dir, "--host", "worker-a",
+    "--runner-root", f.runner, "--config", f.configPath, "--update-args", args]);
+  assert.equal(result.queued, true);
 });
 
 test("retained listing checks raw names and keeps corrupt working attempts visible", () => {

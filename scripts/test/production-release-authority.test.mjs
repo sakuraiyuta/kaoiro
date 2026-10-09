@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { runUpdate } from "../../server/deploy/kaoiro-server-deploy.mjs";
+import { auditServerRelease } from "../../server/deploy/kaoiro-release-reconciliation.mjs";
 import { DEFAULT_CONFIG } from "../../server/deploy/kaoiro-deploy-config.mjs";
 import {
   artifactBuildIdentity,
@@ -174,6 +175,30 @@ test("default authority constructor reaches the real verified endpoint and first
   );
 });
 
+test("the real exporter refuses a request root different from its fixed command argument", () => {
+  const f = fixture();
+  const alternate = join(f.base, "alternate-history");
+  mkdirSync(alternate, { mode: 0o700 });
+  assert.throws(() => releaseAuthorityRequest(f.authority,
+    { ...releaseRequest(f.descriptor), root: alternate }), /request root differs from fixed authority root/);
+});
+
+test("snapshot warning and administrative diagnostics have bounded safe grammar", () => {
+  const f = fixture();
+  const snapshot = releaseAuthorityRequest(f.authority, releaseRequest(f.descriptor));
+  for (const warning of ["a".repeat(257), "unsafe\u202e", {}, undefined])
+    assert.throws(() => validateReleaseSnapshot({ ...snapshot, warning }), /warning bound/);
+  for (const diagnostic of [
+    { name: "x".repeat(129), command: "recover-lock" },
+    { name: ".lock.history", command: "x".repeat(257) },
+    { name: "bad\nname", command: "recover-lock" },
+    { name: ".lock.history", command: "bad\u202e" },
+  ]) assert.throws(() => validateReleaseSnapshot({ ...snapshot,
+    diagnostics: [{ status: "administrative", ...diagnostic }] }), /administrative diagnostics/);
+  validateReleaseSnapshot({ ...snapshot, warning: "archive before 1000 active attempts",
+    diagnostics: [{ status: "administrative", name: ".lock.history", command: "release or recover-lock" }] });
+});
+
 test("missing descriptor is generic, but enrolled missing authority and another root cannot silently pass", async () => {
   const f = fixture();
   rmSync(f.path);
@@ -279,6 +304,72 @@ test("closure is derived from actual first-party sources; linked or changed modu
     () => verifyReleaseToolClosure(f.toolRoot, f.manifest.sha256),
     /linked/,
   );
+});
+
+test("the launcher independently rejects foreign ownership of its manifest, module and actual deploy file", () => {
+  const f = fixture();
+  const actualDeploy = join(f.base, "actual-deploy");
+  mkdirSync(actualDeploy, { mode: 0o700 });
+  for (const name of readdirSync(join(f.toolRoot, "runner/deploy")))
+    copyFileSync(join(f.toolRoot, "runner/deploy", name), join(actualDeploy, name));
+  for (const [target, message] of [
+    [join(f.toolRoot, "TOOL-MANIFEST.json"), "unsafe manifest file"],
+    [join(f.toolRoot, "scripts/production-release-history.mjs"), "captured module changed"],
+    [join(actualDeploy, "kaoiro-runner-update.sh"), "actual updater closure differs"],
+  ]) {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const native=fs.lstatSync;
+      fs.lstatSync=(file,...args)=>{
+        const stat=native(file,...args);
+        if(file===${JSON.stringify(target)}) stat.uid=process.getuid()+1;
+        return stat;
+      };
+      syncBuiltinESMExports();
+      const {verifyLauncherClosure}=await import(${JSON.stringify(join(f.toolRoot, "scripts/production-release-launcher.mjs"))});
+      verifyLauncherClosure(${JSON.stringify(f.manifest.sha256)},${JSON.stringify(actualDeploy)});
+    `], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, new RegExp(message));
+  }
+});
+
+test("SSH authority checks private key metadata without reading the key bytes", () => {
+  const f = fixture();
+  const key = join(f.base, "key"), hosts = join(f.base, "known-hosts");
+  for (const path of [key, hosts]) writeFileSync(path, "owned fixture", { mode: 0o600 });
+  const { node_major, node_path, ...common } = f.descriptor;
+  writeFileSync(f.path, releaseJsonBytes({ ...common, transport: "ssh",
+    ssh_target: "recording", ssh_hostname: "recording.example", ssh_user: "operator", ssh_port: 22,
+    identity_file: key, known_hosts_file: hosts, remote_node: node_path, remote_node_major: node_major }), { mode: 0o600 });
+  const native = fs.openSync;
+  try {
+    fs.openSync = (path, ...args) => {
+      if (path === key) throw new Error("private key bytes must not be opened");
+      return native(path, ...args);
+    };
+    syncBuiltinESMExports();
+    assert.equal(readReleaseAuthority(f.installRoot).status, "enrolled");
+  } finally { fs.openSync = native; syncBuiltinESMExports(); }
+  chmodSync(key, 0o644);
+  assert.throws(() => readReleaseAuthority(f.installRoot), /unsafe or oversized private release file/);
+});
+
+test("the server audit constructor excludes ambient Node injection from its exporter child", () => {
+  const f = fixture("server");
+  f.start();
+  const marker = join(f.base, "ambient-module-ran"), poison = join(f.base, "poison.mjs");
+  writeFileSync(poison, `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'ambient');`);
+  const previous = process.env.NODE_OPTIONS;
+  try {
+    process.env.NODE_OPTIONS = `--import=${poison}`;
+    assert.throws(() => auditServerRelease({ target: f.identity.revision }, f.installRoot, f.repo), /unresolved/);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previous;
+  }
 });
 
 test("fixed importer keeps an identical retry idempotent while refusing changed bytes and stale new writes", () => {

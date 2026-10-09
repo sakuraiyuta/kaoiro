@@ -161,7 +161,7 @@ export async function queueProductionRunner({
         typeof value === "string" &&
         value.length > 0 &&
         Buffer.byteLength(value) <= 4096 &&
-        !/[\x00-\x1f\x7f]/.test(value) &&
+        !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value) &&
         !value.startsWith("-"),
       "invalid updater argument",
     );
@@ -610,7 +610,7 @@ export async function runWorkerCli(argv) {
       "delay",
       "root",
       "repo",
-    ]);
+    ], { valueBounds: { "update-args": 32 * 4096 + 256 } });
   if (command === "queue")
     return queueProductionRunner({
       dir: flags.attempt,

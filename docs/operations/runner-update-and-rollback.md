@@ -595,6 +595,10 @@ rm -r "$install_root/.lock.update"   # may still hold codex-owner.json
 rmdir "$install_root/.lock.links"
 ```
 
+Removing `.lock.update` also discards its release owner, audit and proof
+files. Preserve them privately first when investigating an interrupted update;
+completed runs retain their evidence under `<install-root>/release-audits/`.
+
 Remove only the lock that `abandon` reported. A lock directory is not a state
 record, so removing it does not edit Codex state.
 

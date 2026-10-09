@@ -149,6 +149,7 @@ export function verifyReleaseToolClosure(
       must(
         stat.isFile() &&
           !stat.isSymbolicLink() &&
+          stat.uid === process.getuid() &&
           realpathSync(path) === path &&
           hash(readFileSync(path)) === item.sha256,
         `physical updater tool changed: ${item.path}`,

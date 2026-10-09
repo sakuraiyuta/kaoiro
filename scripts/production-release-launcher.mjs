@@ -23,6 +23,7 @@ export function verifyLauncherClosure(expected, actualDeploy) {
       !manifestStat.isSymbolicLink() &&
       realpathSync(manifestPath) === manifestPath &&
       (manifestStat.mode & 0o6022) === 0 &&
+      manifestStat.uid === process.getuid() &&
       manifestStat.size <= 131_072,
     "unsafe manifest file",
   );
@@ -58,6 +59,7 @@ export function verifyLauncherClosure(expected, actualDeploy) {
       stat.isFile() &&
         !stat.isSymbolicLink() &&
         (stat.mode & 0o6022) === 0 &&
+        stat.uid === process.getuid() &&
         stat.size <= 1_048_576 &&
         realpathSync(path) === path &&
         digest(readFileSync(path)) === item.sha256,
@@ -73,6 +75,7 @@ export function verifyLauncherClosure(expected, actualDeploy) {
         stat.isFile() &&
           !stat.isSymbolicLink() &&
           realpathSync(current) === current &&
+          stat.uid === process.getuid() &&
           digest(readFileSync(current)) === item.sha256,
         "actual updater closure differs",
       );
@@ -102,8 +105,9 @@ async function main() {
       env: process.env,
     });
   } else if (operation === "export" || operation === "import") {
+    must(args.length === 1, "fixed authority root argument required");
     const endpoint = await import("./production-release-endpoint.mjs");
-    await endpoint.runReleaseEndpoint(operation, expected);
+    await endpoint.runReleaseEndpoint(operation, expected, args[0]);
   } else if (operation === "audit" || operation === "preflight") {
     const { runReconciliationCli } = await import(
       "./production-release-reconciliation.mjs"

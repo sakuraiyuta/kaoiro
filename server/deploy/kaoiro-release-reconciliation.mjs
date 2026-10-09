@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { readReleaseAuthority } from "../../scripts/production-release-authority.mjs";
 import {
   attemptDirectory,
@@ -70,7 +71,7 @@ export function auditServerRelease(flags, serverDir, repo) {
     encoding: "utf8",
     maxBuffer: 524_288,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: { PATH: "/usr/bin:/bin", HOME: homedir(), LANG: "C", LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" },
   });
   const audit = JSON.parse(raw);
   must(

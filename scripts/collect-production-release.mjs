@@ -48,6 +48,7 @@ import {
 import { readReleaseAuthority } from "./production-release-authority.mjs";
 import {
   validateEnrollmentInventory,
+  enrolledHealthUrl,
   validateReleasePlan,
 } from "./production-release-plan.mjs";
 import {
@@ -304,9 +305,10 @@ export function collectRunnerCompletion(
 }
 export async function collectServerCompletion(
   plan,
-  { transactionDir, healthUrl, dockerBin = "docker" },
+  { transactionDir, healthUrl, inventory, dockerBin = "docker" },
 ) {
   must(dockerBin === "docker", "fake Docker cannot complete production");
+  const fixedHealthUrl = enrolledHealthUrl(inventory, healthUrl);
   const manifest = readManifest(transactionDir),
     journal = readJournal(transactionDir);
   validateJournalAgainstStateMachine(journal);
@@ -333,7 +335,7 @@ export async function collectServerCompletion(
       observed.State?.Status === "running",
     "live server differs from completed transaction",
   );
-  const url = new URL(healthUrl);
+  const url = new URL(fixedHealthUrl);
   must(["http:", "https:"].includes(url.protocol), "health URL");
   const response = await fetch(url, {
     redirect: "error",
@@ -580,6 +582,7 @@ export async function runCollectionCli(argv) {
     const server = await collectServerCompletion(plan, {
       transactionDir: audit.transaction_dir,
       healthUrl: flags["health-url"],
+      inventory: enrolled.inventory,
     });
     const runners = plan.host_ids.map(
       (alias) =>

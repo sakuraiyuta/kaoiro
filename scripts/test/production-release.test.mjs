@@ -68,8 +68,8 @@ function receipt(
     version: "2026.10.09.1",
     branch: "develop",
     completed_at: time(3),
-    host_ids: ["homeguard"],
-    codex_host_ids: ["homeguard"],
+    host_ids: ["runner-01"],
+    codex_host_ids: ["runner-01"],
     server: {
       transaction_id: "20261009T000000Z",
       image_id: `sha256:${"a".repeat(64)}`,
@@ -82,7 +82,7 @@ function receipt(
     },
     runners: [
       {
-        host_id: "homeguard",
+        host_id: "runner-01",
         revision,
         version: "2026.10.09.1",
         branch: "develop",
@@ -110,7 +110,7 @@ function receipt(
     },
   };
 }
-const options = { allowedHosts: ["homeguard"] };
+const options = { allowedHosts: ["runner-01"] };
 test("activation binds both mandatory gates to the actual reviewed control commit", () => {
   const head = "a".repeat(40);
   for (const kind of ["landing", "release"]) {
@@ -174,8 +174,8 @@ test("stable attempts publish once outside ordinary transaction retention", () =
       created_at: "2026-10-09T00:00:00Z",
     },
   });
-  const { dir, plan } = startReleaseAttempt(root, identity, ["homeguard"]);
-  assert.deepEqual(plan.codex_host_ids, ["homeguard"]);
+  const { dir, plan } = startReleaseAttempt(root, identity, ["runner-01"]);
+  assert.deepEqual(plan.codex_host_ids, ["runner-01"]);
   const r = receipt(
     revision,
     plan.attempt_uuid,
@@ -196,15 +196,15 @@ test("stable attempts publish once outside ordinary transaction retention", () =
   assert.throws(
     () =>
       startReleaseAttempt(root, { ...identity, version: "untagged" }, [
-        "homeguard",
+        "runner-01",
       ]),
     /tagged clean/,
   );
   assert.throws(
-    () => startReleaseAttempt(root, identity, ["homeguard"], ["other"]),
+    () => startReleaseAttempt(root, identity, ["runner-01"], ["other"]),
     /subset/,
   );
-  const onlyRunner = startReleaseAttempt(root, identity, ["homeguard"], []);
+  const onlyRunner = startReleaseAttempt(root, identity, ["runner-01"], []);
   const noCodex = receipt(
     revision,
     onlyRunner.plan.attempt_uuid,
@@ -232,7 +232,7 @@ test("the execution card requires Codex acceptance only on its fixed selected ho
     host_id: "worker2",
     codex: null,
   });
-  const allowedHosts = ["homeguard", "worker2"];
+  const allowedHosts = ["runner-01", "worker2"];
   assert.equal(validateProductionReceipt(r, { allowedHosts }), r);
   const missing = structuredClone(r);
   missing.runners[0].codex = null;
@@ -406,7 +406,7 @@ test("only remote tag and claim read-back acknowledges a durable completed attem
     },
   });
   const { dir, plan } = startReleaseAttempt(join(root, "attempts"), identity, [
-    "homeguard",
+    "runner-01",
   ]);
   const r = receipt(
     revision,
@@ -533,12 +533,12 @@ test("receiver authorization covers original and rerun actors", () => {
 });
 test("host authority requires an array instead of substring matching a string", () => {
   for (const allowedHosts of [
-    "homeguard",
+    "runner-01",
     null,
     {},
     [],
     [1],
-    ["homeguard", "homeguard"],
+    ["runner-01", "runner-01"],
   ]) {
     assert.throws(
       () => validateProductionReceipt(receipt(), { allowedHosts }),
@@ -550,8 +550,8 @@ test("fake dependencies cannot record a production completion", async () => {
   assert.throws(
     () =>
       collectRunnerCompletion(
-        { attempt_uuid: "x", host_ids: ["homeguard"] },
-        { attempt_uuid: "x", host_id: "homeguard", simulation: true },
+        { attempt_uuid: "x", host_ids: ["runner-01"] },
+        { attempt_uuid: "x", host_id: "runner-01", simulation: true },
         { systemctlBin: "fake" },
       ),
     /fake service/,
@@ -582,7 +582,7 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
     },
   });
   const attempts = join(root, "attempts"),
-    { dir, plan } = startReleaseAttempt(attempts, identity, ["homeguard"]);
+    { dir, plan } = startReleaseAttempt(attempts, identity, ["runner-01"]);
   const r = receipt(
     revision,
     plan.attempt_uuid,
@@ -618,11 +618,11 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
   );
   const authority = readReleaseAuthority(server, { role: "server" });
   plan.runtime_hosts = [
-    { alias: "homeguard", runtime_host_id: "private-host-marker" },
+    { alias: "runner-01", runtime_host_id: "private-host-marker" },
   ];
   plan.authority = {
     server: { root: server, sha256: authority.sha256 },
-    runners: [{ alias: "homeguard", root: server, sha256: authority.sha256 }],
+    runners: [{ alias: "runner-01", root: server, sha256: authority.sha256 }],
   };
   writeFileSync(join(dir, "attempt.json"), releaseJsonBytes(plan), {
     mode: 0o600,
@@ -694,8 +694,8 @@ test("the operator card binds the fixed workflow/ref and audit reports omitted p
   const y = startReleaseAttempt(
     attempts,
     identity,
-    ["homeguard"],
-    ["homeguard"],
+    ["runner-01"],
+    ["runner-01"],
     { runtime_hosts: plan.runtime_hosts, authority: plan.authority },
   );
   const unreported = spawnSync("sh", ["-c", card.verification], {

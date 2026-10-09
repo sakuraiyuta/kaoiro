@@ -344,13 +344,17 @@ links_held=no
 
 build_dir=
 cleanup() {
+  _cleanup_status=0
+  [ -z "$build_dir" ] || rm -rf "$build_dir" || _cleanup_status=1
+  [ "$links_held" = no ] || kaoiro_lock_release "$links_lock" || _cleanup_status=1
   if [ -f "$lock/release-owner.json" ]; then
-    kaoiro_release_gate runner-cleanup "$root" --owner-pid "$$" >/dev/null || return 1
+    kaoiro_release_gate runner-cleanup "$root" --owner-pid "$$" >/dev/null || _cleanup_status=1
   fi
-  [ -z "$build_dir" ] || rm -rf "$build_dir"
-  [ "$links_held" = no ] || kaoiro_lock_release "$links_lock"
-  rm -f "$lock/codex-owner.json"
-  kaoiro_lock_release "$lock"
+  if [ "$_cleanup_status" -eq 0 ]; then
+    rm -f "$lock/codex-owner.json"
+    kaoiro_lock_release "$lock" || _cleanup_status=1
+  fi
+  return "$_cleanup_status"
 }
 trap cleanup EXIT INT TERM
 if [ -n "$codex_restore" ] && kaoiro_release_enrolled "$root"; then

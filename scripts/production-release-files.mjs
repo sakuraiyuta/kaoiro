@@ -59,7 +59,7 @@ export function syncDirectory(path) {
   }
 }
 
-export function readPrivateBytes(
+export function requirePrivateFile(
   path,
   {
     maxBytes = MAX_PRIVATE_RECORD,
@@ -88,6 +88,12 @@ export function readPrivateBytes(
   ) {
     throw new Error(`unsafe or oversized private release file: ${path}`);
   }
+  return before;
+}
+
+export function readPrivateBytes(path, options = {}) {
+  const { maxBytes = MAX_PRIVATE_RECORD } = options;
+  const before = requirePrivateFile(path, options);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   const chunks = [];
   let size = 0;

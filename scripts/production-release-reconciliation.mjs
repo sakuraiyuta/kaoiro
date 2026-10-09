@@ -63,6 +63,12 @@ export function validateReleaseSnapshot(snapshot) {
       snapshot.diagnostics.length <= 4096,
     "snapshot schema/capacity",
   );
+  must(
+    snapshot.warning === null ||
+      (typeof snapshot.warning === "string" && Buffer.byteLength(snapshot.warning) <= 256 &&
+        /^[A-Za-z0-9 .,:;()/_-]+$/.test(snapshot.warning)),
+    "snapshot warning bound/grammar",
+  );
   if (snapshot.inventory !== undefined && snapshot.inventory !== null)
     validateEnrollmentProjection(snapshot.inventory);
   if (snapshot.archived_incidents !== undefined) {
@@ -232,8 +238,10 @@ export function validateReleaseSnapshot(snapshot) {
       (item) =>
         exact(item, ["name", "status", "command"]) &&
         item.status === "administrative" &&
-        typeof item.name === "string" &&
-        typeof item.command === "string",
+        typeof item.name === "string" && Buffer.byteLength(item.name) <= 128 &&
+        /^[A-Za-z0-9._-]+$/.test(item.name) &&
+        typeof item.command === "string" && Buffer.byteLength(item.command) <= 256 &&
+        /^[A-Za-z0-9 .,:;()/_-]+$/.test(item.command),
     ),
     "administrative diagnostics",
   );

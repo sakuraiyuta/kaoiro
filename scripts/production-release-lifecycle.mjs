@@ -28,6 +28,7 @@ import {
 } from "./production-release-state.mjs";
 import {
   validateEnrollmentInventory,
+  enrolledHealthUrl,
   validateRuntimeHosts,
 } from "./production-release-plan.mjs";
 import { readPublishedProductionRelease } from "./production-release-tags.mjs";
@@ -46,6 +47,7 @@ export async function readLifecycleInspection(
   row,
   { healthUrl, inventory, now = Date.now() },
 ) {
+  const fixedHealthUrl = enrolledHealthUrl(inventory, healthUrl);
   const pairs = Array.isArray(inventory)
     ? validateRuntimeHosts(inventory)
     : inventory && validateEnrollmentInventory(inventory).runtime_hosts;
@@ -85,8 +87,7 @@ export async function readLifecycleInspection(
       "planless lifecycle evidence differs from fixed enrollment inventory",
     );
   }
-  must(typeof healthUrl === "string", "recording-server health URL required");
-  const url = new URL(healthUrl);
+  const url = new URL(fixedHealthUrl);
   must(["http:", "https:"].includes(url.protocol), "health URL scheme");
   const response = await fetch(url, {
     redirect: "error",

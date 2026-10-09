@@ -104,6 +104,7 @@ kaoiro_node() {
 }
 
 kaoiro_release_gate() {
+  : "${deploy_dir:?physical deploy directory required}"
   _release_operation=$1
   _release_root=$2
   shift 2

@@ -4,6 +4,7 @@ import { hostname, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   readPrivateBytes,
+  requirePrivateFile,
   releaseBytesDigest,
 } from "./production-release-files.mjs";
 import { RELEASE_DIGEST } from "./production-release-state.mjs";
@@ -153,7 +154,7 @@ export function readReleaseAuthority(
     ])
       validateAuthorityPath(descriptor[name]);
     for (const name of ["identity_file", "known_hosts_file"])
-      readPrivateBytes(descriptor[name], { privateParent: false });
+      requirePrivateFile(descriptor[name], { privateParent: false });
   }
   return {
     status: "enrolled",
@@ -172,7 +173,7 @@ export function releaseSshArguments(descriptor, operation) {
   );
   const command =
     `/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C ${shellPath(descriptor.remote_node)} ` +
-    `${shellPath(descriptor.exporter_path)} ${operation} ${descriptor.tool_sha256}`;
+    `${shellPath(descriptor.exporter_path)} ${operation} ${descriptor.tool_sha256} ${shellPath(descriptor.root)}`;
   return [
     "-F",
     "none",
@@ -272,7 +273,7 @@ export function releaseAuthorityRequest(
           )
         : execFileSync(
             d.node_path,
-            [d.exporter_path, operation, d.tool_sha256],
+            [d.exporter_path, operation, d.tool_sha256, d.root],
             options,
           );
   } catch (error) {

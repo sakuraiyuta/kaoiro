@@ -120,15 +120,21 @@ by `production-release-authority.mjs`; local descriptors additionally fix
 Use the kernel hostname for the recording role, not its FQDN.
 
 The fixed private `<canonical-root>-inventory.json` is an owned 0600 file:
-`{schema:1,runtime_hosts:[{alias,runtime_host_id}],authority:{server:{root,sha256},runners:[{alias,root,sha256}]}}`.
-The server authority digest must match the fixed server descriptor. On each
+`{schema:1,health_url:"https://recording.example/health",runtime_hosts:[{alias,runtime_host_id}],authority:{server:{root,sha256},runners:[{alias,root,sha256}]}}`.
+The server authority digest must match the fixed server descriptor. `health_url`
+pins the complete recording-server endpoint for completion and terminal
+transitions. An omitted CLI URL uses this value; a different URL is refused
+before any external read. A legacy inventory without it remains usable for
+admission but must be updated by the operator before completion or retirement. On each
 runner, `release-host-aliases.json` maps its public alias to the real config
 `host_id`. Freeze this full inventory into every attempt; neither a launch
 option nor a corrupt plan may narrow it. Use arbitrary stable aliases, not
 real IDs or their SHA-256 prefixes. GitHub allow-lists and public receipts use
-those same aliases. The private mapping and authority are never dispatched.
+those same aliases. The private mapping, health URL and authority are never dispatched. The
+exporter/importer also compares the request root with its fixed command
+argument; an input document cannot select a different history.
 
-SSH uses a fixed `/usr/bin/ssh` command, fixed exporter operation and an
+SSH uses a fixed `/usr/bin/ssh` command, fixed exporter operation, fixed canonical root argument and an
 allow-listed PATH/HOME/LANG/LC_ALL environment. It supplies `-F none`, `-T`,
 explicit user/port/HostName and key, `BatchMode=yes`,
 `StrictHostKeyChecking=yes`, `IdentityAgent=none`, `IdentitiesOnly=yes`,
@@ -158,7 +164,7 @@ reviewed physical Node path and closure digest, then inspect the exact unit:
 
 ```sh
 <physical-node> <tool-root>/scripts/production-release-launcher.mjs \
-  preflight <tool-sha256> --install-root /home/yuta/.local/share/kaoiro \
+  preflight <tool-sha256> --install-root <install-root> \
   --expected-authority-sha256 <descriptor-sha256>
 ```
 
@@ -178,8 +184,8 @@ subset; omission requires acceptance on every alias, while `[]` selects none.
 
 ```sh
 node scripts/collect-production-release.mjs start \
-  --server-dir /home/yuta/git/kaoiro/server \
-  --identity /home/yuta/kaoiro-deploy/build-identity.json \
+  --server-dir <server-root> \
+  --identity <deploy-root>/build-identity.json \
   --codex-hosts '[]'
 ```
 
@@ -193,13 +199,13 @@ output paths and caller-selected updater files are unavailable.
 ```sh
 node scripts/collect-production-release.mjs install-plan \
   --plan <private-copied-attempt.json> --host worker-a \
-  --runner-root /home/yuta/.local/share/kaoiro \
-  --config /home/yuta/.config/kaoiro/runner.config.json
+  --runner-root <install-root> \
+  --config <runner-config>
 node scripts/production-runner-worker.mjs queue \
   --attempt <fixed-runner-working-directory> --host worker-a \
-  --runner-root /home/yuta/.local/share/kaoiro \
-  --config /home/yuta/.config/kaoiro/runner.config.json \
-  --update-args '["--tarball","<reviewed-tarball>","--release-repo","/home/yuta/git/kaoiro"]'
+  --runner-root <install-root> \
+  --config <runner-config> \
+  --update-args '["--tarball","<reviewed-tarball>","--release-repo","<repository-root>"]'
 ```
 
 The dedicated unit is `kaoiro-release-<uuid>-<alias>.service`. The default delay
@@ -233,8 +239,8 @@ selected Codex alias. After acceptance, collect the real retained invocation:
 ```sh
 node scripts/collect-production-release.mjs runner-after \
   --attempt <fixed-runner-working-directory> --host worker-a \
-  --runner-root /home/yuta/.local/share/kaoiro \
-  --config /home/yuta/.config/kaoiro/runner.config.json \
+  --runner-root <install-root> \
+  --config <runner-config> \
   --codex-transaction <accepted-forward-UUID>
 ```
 
@@ -251,7 +257,7 @@ On the recording server, after native DONE and operator canary:
 
 ```sh
 node scripts/collect-production-release.mjs complete \
-  --server-dir /home/yuta/git/kaoiro/server \
+  --server-dir <server-root> \
   --attempt <canonical-attempt-directory> \
   --health-url <reviewed-health-url> --canary <private-canary.json>
 ```
@@ -271,11 +277,11 @@ command before removal; repeats accept a pair already gone.
 
 ```sh
 node scripts/production-runner-worker.mjs list \
-  --runner-root /home/yuta/.local/share/kaoiro
+  --runner-root <install-root>
 node scripts/production-runner-worker.mjs cleanup \
   --attempt <fixed-runner-working-directory> --host worker-a \
-  --runner-root /home/yuta/.local/share/kaoiro \
-  --config /home/yuta/.config/kaoiro/runner.config.json
+  --runner-root <install-root> \
+  --config <runner-config>
 ```
 
 Never clear a failed, live or unidentified worker by broad unit/process matching.
@@ -313,8 +319,8 @@ For an uncertain or unused UUID, first refresh every runner's native activity:
 
 ```sh
 node scripts/production-runner-worker.mjs inspect \
-  --runner-root /home/yuta/.local/share/kaoiro --uuid <uuid> --host worker-a \
-  --config /home/yuta/.config/kaoiro/runner.config.json
+  --runner-root <install-root> --uuid <uuid> --host worker-a \
+  --config <runner-config>
 ```
 
 `cancel` with the same arguments permits only a verified never-started dedicated
@@ -416,7 +422,7 @@ completion:
 
 ```sh
 node scripts/production-release-card.mjs card \
-  --attempt <attempt-directory> --repo /home/yuta/git/kaoiro
+  --attempt <attempt-directory> --repo <repository-root>
 ```
 
 The card contains a fully resolved one-line command of this form, with the
@@ -439,7 +445,7 @@ Run the completion-side reconciliation audit before and after each checkpoint:
 
 ```sh
 node scripts/production-release-card.mjs audit \
-  --root /home/yuta/kaoiro-deploy/production-releases --repo /home/yuta/git/kaoiro
+  --root <deploy-root>/production-releases --repo <repository-root>
 ```
 
 Nonzero reports unfinished attempts, completed attempts with missing or
