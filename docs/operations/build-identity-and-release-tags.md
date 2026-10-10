@@ -583,14 +583,18 @@ Any local `url.*.insteadOf` or `url.*.pushInsteadOf` setting refuses repair,
 including benign HTTPS-to-SSH rewrites. Use a reviewed clean checkout without
 these settings; do not bypass the check or redirect the repository path.
 
-Issue 571 child commands use one closed environment builder. Executable search
-uses the current Node directory and `/usr/local/bin:/usr/bin:/bin`, rather than
-the caller's `PATH`. Git/SSH children exclude loader settings, arbitrary Git
-environment settings, and HTTP tokens. Only gh receives its HTTP credential;
+Issue 571 child commands use one closed environment builder. Privileged profiles
+search the current Node directory and `/usr/local/bin:/usr/bin:/bin`. The build
+profile's sole caller, `with-build-identity.mjs`, preserves a nonempty supplied
+`PATH` exactly so pnpm, version-manager shims and nested compiler commands use
+the selected toolchain; an absent or empty `PATH` uses the fixed search path.
+Other environment keys remain allow-listed. The retained runner worker still
+uses its explicit fixed `CHILD_PATH`. Git/SSH children exclude loader settings,
+arbitrary Git environment settings, and HTTP tokens. Only gh receives its HTTP credential;
 Actions Git receives an explicitly constructed authorization header. User-manager
 connection keys, runner settings and build identity fields are carried only by
-their corresponding profiles. Use absolute build command paths when a tool is
-installed outside the fixed search path.
+their corresponding profiles. Privileged release commands require tools in
+their fixed search path or at the explicitly configured absolute path.
 There is no HTTPS fallback and no added OAuth workflow scope. `gh` reads the
 original run/artifact, accepted control/boundary and current User login only.
 That login must have repository push authority and match the existing

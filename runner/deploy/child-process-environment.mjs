@@ -26,6 +26,9 @@ export function childEnvironment(profile, source = process.env) {
   if (!Object.hasOwn(PROFILES, profile)) throw new Error("unknown child environment profile");
   if (prepared.get(source) === profile) return source;
   const result = { PATH: CHILD_PATH, HOME: homedir(), LANG: "C", LC_ALL: "C", TZ: "UTC" };
+  if (profile === "build" && typeof source.PATH === "string" && source.PATH.length > 0) {
+    result.PATH = source.PATH;
+  }
   for (const key of [...COMMON, ...PROFILES[profile]]) {
     if (typeof source[key] === "string") result[key] = source[key];
   }

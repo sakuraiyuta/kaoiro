@@ -52,6 +52,27 @@ describe("production frozen identity consumers", () => {
     const result = invoke(repo, `import {writeFileSync} from 'node:fs'; writeFileSync('moved-source','x');`);
     expect(result.status).toBe(78); expect(result.stderr).toContain("source revision or dirty state changed");
   });
+  it("finds pnpm and its nested tool only through the supplied toolchain PATH", () => {
+    const { repo, git } = project();
+    const bin = join(repo, ".git/toolchain");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), '#!/bin/sh\nexec fixture-build-tool "$@"\n', { mode: 0o755 });
+    writeFileSync(join(bin, "fixture-build-tool"), `#!/bin/sh
+test "$PNPM_HOME" = "$PATH" || exit 90
+test -z "\${GH_TOKEN+x}" || exit 91
+test -z "\${GIT_DIR+x}" || exit 92
+test -n "$KAOIRO_BUILD_IDENTITY_FILE" || exit 93
+test -n "$KAOIRO_BUILD_IDENTITY_SHA256" || exit 94
+test "$KAOIRO_BUILD_VERSION" = untagged || exit 95
+test "$KAOIRO_BUILD_BRANCH" = develop || exit 96
+printf '%s\\n' "$PATH" "$KAOIRO_BUILD_REVISION" "$*"
+`, { mode: 0o755 });
+    const result = spawnSync(process.execPath, [join(repo, "scripts/with-build-identity.mjs"), "--", "pnpm", "run", "build"],
+      { cwd: repo, encoding: "utf8", env: { PATH: bin, PNPM_HOME: bin, GH_TOKEN: "inert-secret", GIT_DIR: "/fixture/foreign" } });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`${bin}\n${git("rev-parse", "HEAD")}\nrun build\n`);
+  });
   it("refuses altered frozen bytes after a child makes the file writable", () => {
     const { repo } = project();
     const result = invoke(repo, `import {chmodSync,readFileSync,writeFileSync} from 'node:fs';

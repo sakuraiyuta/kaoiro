@@ -28,12 +28,25 @@ test("default constructor executes a real child with a closed environment", () =
 test("each operation's explicit keys preserve only its intended authority", () => {
   for (const profile of ["git", "ci-git", "ssh-git", "ssh", "gh", "systemd", "authority", "runner", "build"]) {
     const env = childEnvironment(profile, { ...hostile, SSH_AUTH_SOCK: "/fixture/socket", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" });
-    assert.equal(env.PATH, CHILD_PATH);
+    assert.equal(env.PATH, profile === "build" ? hostile.PATH : CHILD_PATH);
     for (const key of ["GIT_DIR", "GIT_EXEC_PATH", "GIT_SSH", "LD_PRELOAD", "NODE_OPTIONS", "EXTRA_SECRET"]) assert.equal(env[key], undefined, profile + key);
     assert.equal(env.GH_TOKEN, profile === "gh" ? hostile.GH_TOKEN : undefined);
   }
   assert.throws(() => childEnvironment("unknown"));
   assert.equal(childEnvironment("ci-git", hostile).GIT_CONFIG_VALUE_0, "AUTHORIZATION: basic " + Buffer.from("x-access-token:inert-secret").toString("base64"));
+});
+
+test("build children retain the exact selected toolchain PATH without ambient credentials", () => {
+  const selectedPath = "/fixture/toolchain:/fixture/compiler:/fixture/toolchain";
+  const actual = JSON.parse(execChildSync("build", process.execPath,
+    ["-e", "console.log(JSON.stringify(process.env))"],
+    { encoding: "utf8", env: { ...hostile, PATH: selectedPath, PNPM_HOME: "/fixture/toolchain" } }));
+  assert.equal(actual.PATH, selectedPath);
+  assert.equal(actual.PNPM_HOME, "/fixture/toolchain");
+  for (const key of Object.keys(hostile).filter(key => key !== "PATH")) assert.equal(actual[key], undefined, key);
+  for (const value of [undefined, "", null, 1]) {
+    assert.equal(childEnvironment("build", { PATH: value }).PATH, CHILD_PATH);
+  }
 });
 
 test("existing authority and new repair SSH launches both exclude ambient secrets", () => {
