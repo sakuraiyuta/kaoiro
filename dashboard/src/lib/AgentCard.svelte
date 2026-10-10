@@ -762,7 +762,10 @@
     --tone: var(--c-idle);
     border: 1px solid var(--line);
     border-radius: 0.5rem;
-    padding: 1.4rem 1rem 1.1rem;
+    /* Bottom padding reserves a strip for the absolutely placed corner
+       buttons (.stop / .terminate / .restore / .remove, bottom: 0.35rem and
+       about 1.3rem tall) so the status line above never sits under them. */
+    padding: 1.4rem 1rem 2.3rem;
     text-align: center;
     background:
       radial-gradient(
