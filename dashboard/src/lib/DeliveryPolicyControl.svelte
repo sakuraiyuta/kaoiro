@@ -37,14 +37,16 @@
       onchange={(event) => { if (writable) onChange?.(event.currentTarget.checked ? "on" : "off"); }} />
       割込配送を許可する</label>
   {/if}
-  {#if onRefresh && available}<button type="button" disabled={reading} onclick={onRefresh}>配送状態を再取得</button>{/if}
-  <p class="help">対応する配送方法での受け付けを許可します。配送の成功を保証する設定ではありません。</p>
+  {#if onRefresh && available}<button type="button" disabled={reading} onclick={onRefresh}
+    title="対応する配送方法での受け付けを許可します。配送の成功を保証する設定ではありません。">配送状態を再取得</button>{/if}
 </section>
 
 <style>
   .delivery-policy { border-top: 1px solid var(--border, #555); padding: .75rem 0; font-size: .8rem; overflow-wrap: anywhere; }
   p { margin: .35rem 0; }
   label { display: flex; align-items: center; gap: .4rem; min-height: 2.75rem; }
-  button { margin: .35rem 0; min-height: 2.75rem; }
-  .help { opacity: .75; }
+  button { margin: .35rem 0; padding: .1rem .4rem; border: 1px solid var(--line); border-radius: .3rem;
+    background: var(--bg-card); color: var(--fg-dim); font: inherit; font-size: var(--fs-caption); cursor: pointer; }
+  button:hover:not(:disabled) { color: var(--fg); border-color: var(--tone); }
+  button:disabled { cursor: progress; opacity: .5; }
 </style>
