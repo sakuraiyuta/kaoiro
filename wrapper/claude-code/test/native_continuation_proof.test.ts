@@ -291,6 +291,23 @@ describe("atomic native continuation proof", () => {
 });
 
 
+describe("a TaskStop on one Monitor leaves another source usable", () => {
+  it.each(["pending", "success"].flatMap(outcome => [[outcome, "command", "command"], [outcome, "command", "ws"], [outcome, "ws", "command"], [outcome, "ws", "ws"]]))(
+    "%s stop on a %s Monitor keeps a %s Monitor's claim and its proved lease", (outcome, targetKind, otherKind) => {
+      const r = rig(); r.launch("target", "Monitor", r.snapshot, targetKind === "ws"); r.launch("other", "Monitor", r.snapshot, otherKind === "ws");
+      const targetEvent = r.event("target"), otherEvent = r.event("other");
+      const lease = r.prove(otherEvent, r.snapshot, undefined, "before-stop");
+      expect("proof" in lease).toBe(true);
+      r.registry.stopAttempt("stop", "target");
+      if (outcome === "success") r.registry.stopOutcome("stop", true);
+      expect(r.prove(targetEvent, r.snapshot, undefined, "stopped-target")).toHaveProperty("reason");
+      const fresh = r.prove(otherEvent, r.snapshot, undefined, "after-stop");
+      expect("proof" in fresh).toBe(true);
+      if ("proof" in lease) expect(lease.proof.commit()).toBe(true);
+      if ("proof" in fresh) expect(fresh.proof.commit()).toBe(true);
+    });
+});
+
 describe("peer opener native row binding", () => {
   it.each(["golden", "escaped-sender", "encoded-text", "prefix-byte", "warning-byte", "warning-dash", "prefix-lf", "suffix-lf", "row-frame", "hook-frame", "sender", "unwrapped", "missing-warning", "double-wrapper", "trailing-lf", "leading-data", "trailing-data", "mid-turn", "other-warning", "two-frames", "bad-opening", "bad-ending"])("checks %s without spending a refused slot", variant => {
     const r = rig(); const from = variant === "escaped-sender" ? `a&<>"'` : "task";

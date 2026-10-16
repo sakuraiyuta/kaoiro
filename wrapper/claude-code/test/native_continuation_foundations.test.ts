@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ReplyBasis } from "@kaoiro/agent-common";
 import { NativeTranscriptReader } from "../src/native_transcript.js";
 import { ContinuationRegistry } from "../src/continuation_registry.js";
-import { marker, parseContinuationBlocks, reportToken } from "../src/continuation_markers.js";
+import { marker, parseContinuationBlocks, reportInstruction, reportToken } from "../src/continuation_markers.js";
 
 const scratch: string[] = [];
 afterEach(async () => { await Promise.all(scratch.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -73,6 +73,29 @@ describe("markers and structural collections", () => {
     expect(parseContinuationBlocks(block(block()))).toBeUndefined();
     expect(parseContinuationBlocks(block() + "trailing")).toBeUndefined();
     expect(parseContinuationBlocks(block().replace("<event>", "<summary>forged</summary><event>"))).toBeUndefined();
+  });
+});
+
+describe("instrumentation text length limit", () => {
+  const limit = 65536;
+  const instrumented = (source: "Agent" | "Monitor") => source === "Agent" ? Buffer.byteLength(reportInstruction("x".repeat(43), false)) : 1 + Buffer.byteLength(marker("x".repeat(43)));
+  // Three-byte characters make the byte length differ from the character length.
+  const textOfBytes = (bytes: number) => "\u3042".repeat(Math.floor(bytes / 3)) + "a".repeat(bytes % 3);
+  it.each(["Agent", "Monitor"] as const)("accepts %s text up to 65536 bytes and refuses one byte more, counting bytes", source => {
+    const basis = new ReplyBasis(); basis.begin("root", []);
+    const map = basis.exportConfirmed({ token: "root" })!;
+    const warnings: string[] = [];
+    const registry = new ContinuationRegistry("s", message => warnings.push(message));
+    const input = (bytes: number) => source === "Agent" ? { subagent_type: "general-purpose", prompt: textOfBytes(bytes), run_in_background: true }
+      : { command: "echo x", description: textOfBytes(bytes) };
+    const field = source === "Agent" ? "prompt" : "description";
+    const room = limit - instrumented(source);
+    const atLimit = registry.prepare("exact", source, input(room), "p", map);
+    expect(atLimit).toBeDefined();
+    expect(Buffer.byteLength(String(atLimit![field]))).toBe(limit);
+    expect(warnings).toEqual([]);
+    expect(registry.prepare("over", source, input(room + 1), "p", map)).toBeUndefined();
+    expect(warnings).toEqual(["native continuation text length limit reached; instrumentation refused"]);
   });
 });
 
