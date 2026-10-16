@@ -17,11 +17,11 @@ tamper checks (prefix change, truncation, replacement) are unchanged.
 ## What was measured
 
 `NativeTranscriptReader.capture` and `NativeTranscriptReader.validate` from this
-branch's source, run through `tsx` in one Node process against synthetic JSONL
-files written just before the run. Each file ends with a native opener row for a
-fresh prompt. After a cold first read, 20 repetitions of `capture` and
-`validate` were timed, and 20 more `capture` calls each followed one appended
-assistant row plus a new opener, as in a live session.
+branch's source, run in one process against synthetic JSONL files written just
+before the run. Each file ends with a native opener row for a fresh prompt.
+After a cold first read, 20 repetitions of `capture` and `validate` were
+timed, and 20 more `capture` calls each followed one appended assistant row
+plus a new opener, as in a live session.
 
 Two 50 MB class shapes were used: 12,500 assistant rows of about 4 KB each, and
 50 rows of about 1 MB each (a transcript dominated by large tool outputs).
@@ -30,20 +30,17 @@ for varied real text.
 
 ## Results
 
-Timings are milliseconds of wall clock on Linux x64, Node v22.23.3, 4 cores,
-with a load average below 1 and the file in the page cache.
+Timings are milliseconds of wall clock; the file was in the page cache.
 
-| Shape | File bytes | Rows | Cold first read (ms) | `capture` median / p95 / max (ms) | `validate` median / p95 / max (ms) | `capture` after one appended row, median / p95 / max (ms) |
+| Shape | File bytes | Rows | Cold first read (ms) | `capture` median / max (ms) | `validate` median / max (ms) | `capture` after one appended row, median / max (ms) |
 | --- | --- | --- | --- | --- | --- | --- |
-| many-small-rows (4000 byte rows) | 51763890 | 12500 | 228.6 | 217.5 / 242.4 / 242.5 | 218.3 / 249.1 / 255.4 | 225.2 / 244.1 / 245.5 |
-| few-large-rows (1000000 byte rows) | 50006940 | 50 | 163.0 | 208.7 / 238.5 / 238.7 | 213.6 / 238.5 / 240.2 | 211.9 / 240.7 / 243.7 |
-
-Resident set size after both shapes in the one process was 475 MiB.
+| many-small-rows (4000 byte rows) | 51763890 | 12500 | 228.6 | 217.5 / 242.5 | 218.3 / 255.4 | 225.2 / 245.5 |
+| few-large-rows (1000000 byte rows) | 50006940 | 50 | 163.0 | 208.7 / 238.7 | 213.6 / 240.2 | 211.9 / 243.7 |
 
 ## What this does and does not show
 
-Observed: on these synthetic files, one `capture` or `validate` took about
-210–255 ms at roughly 50 MB, and the cost did not depend measurably on whether
+Observed: on these synthetic files, the median `capture` or `validate` took
+209–225 ms at roughly 50 MB, with a worst case of 255 ms, and the cost did not depend measurably on whether
 the file had many small rows or a few large ones.
 
 Inferred from reading `host.ts` and `native_transcript.ts`, not separately

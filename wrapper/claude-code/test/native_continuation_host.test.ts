@@ -65,7 +65,7 @@ describe("native continuation preparation lifetime", () => {
 describe("native continuation host and actual send path", () => {
   it.each(["peer", "peer-warning", "peer-unwrapped", "peer-two-frames", "peer-damage-before-send", "event", "non-system-row", "stop-before-send", "damage-before-send", "unknown-source", "delayed-row", "bash", "bash-damage-before-send", "workflow", "timeout-bash", "child-launch", "missing-row",
     "agent", "agent-no-output", "agent-mistyped-marker", "agent-wrong-run", "agent-missing-producer", "agent-optional-metadata", "agent-damage-before-send", "agent-fold", "agent-malformed-fold", "agent-fold-peer-own", "agent-fold-peer-quote", "agent-fold-bare",
-    "agent-stop-measured-fail", "agent-stop-failure-hook", "agent-stop-unmeasured-result", "agent-reset-in-validate", "agent-reset-and-damage-in-validate"])("handles %s with its source-specific frozen basis", async variant => {
+    "agent-stop-failure-hook", "agent-stop-unmeasured-result", "agent-stop-no-command-result", "agent-reset-in-validate", "agent-reset-and-damage-in-validate"])("handles %s with its source-specific frozen basis", async variant => {
     const dir = await mkdtemp(join(tmpdir(), "kaoiro-426-host-")); scratch.push(dir);
     const path = join(dir, "native.jsonl"); await writeFile(path, "");
     const outgoing: Envelope[] = [], warnings: string[] = [], starts: string[] = [], failStops: unknown[] = [];
@@ -127,9 +127,9 @@ describe("native continuation host and actual send path", () => {
           ...(source === "Agent" ? { usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 } } : {}) });
         if (stopping) {
           const stopped = { prompt_id: "parent", tool_name: "TaskStop", tool_use_id: "stop", tool_input: { task_id: "task" } };
-          // The first is the pin 2.1.293 TaskStop result for a task that was not running; the second is its other, unmeasured note.
+          // Non-error TaskStop results are unmeasured, so neither wording may clear the pending stop.
           const message = variant === "agent-stop-unmeasured-result" ? "Task task had already ended (completed) but its loop had not exited; re-signalled it."
-            : "No background command with ID task is running on some-host for this session: it has already finished or been stopped, or it was never this session's.";
+            : "No background command with ID task is running here: it has already finished or been stopped.";
           if (variant === "agent-stop-failure-hook") await fire("PostToolUseFailure", { ...stopped, error: "Task task is not running (status: completed)", is_interrupt: false }, "stop");
           else await fire("PostToolUse", { ...stopped, tool_response: { message, task_id: "task", task_type: "local_bash" } }, "stop");
         }
@@ -188,11 +188,11 @@ describe("native continuation host and actual send path", () => {
       onPromptAdmitted: token => tool.confirmReplyInput(token), onTurnEnd: ({ turnToken }) => { if (turnToken) tool.endReplyInput(turnToken); } });
     try { await host.run("launch"); } finally { host.close(); }
     const refusedPeer = ["peer-warning", "peer-unwrapped", "peer-two-frames"].includes(variant);
-    const refused = refusedPeer || variant === "unknown-source" || variant === "non-system-row" || variant.endsWith("damage-before-send") || variant === "child-launch" || variant === "missing-row" || variant === "agent-wrong-run" || variant === "agent-missing-producer" || variant === "agent-fold" || variant === "agent-fold-peer-own" || variant === "agent-stop-unmeasured-result" || variant.includes("-in-validate");
+    const refused = refusedPeer || variant === "unknown-source" || variant === "non-system-row" || variant.endsWith("damage-before-send") || variant === "child-launch" || variant === "missing-row" || variant === "agent-wrong-run" || variant === "agent-missing-producer" || variant === "agent-fold" || variant === "agent-fold-peer-own" || variant === "agent-stop-unmeasured-result" || variant === "agent-stop-no-command-result" || variant.includes("-in-validate");
     expect(outgoing).toHaveLength(refused ? 0 : 1);
     expect(sendResult?.isError).toBe(refused ? true : undefined);
     if (!refused) expect((outgoing[0]!.payload as { in_reply_to: number }).in_reply_to).toBe(["bash", "workflow", "timeout-bash"].includes(variant) ? 3 : 1);
-    expect(starts).toHaveLength(refusedPeer || ["unknown-source", "non-system-row", "child-launch", "missing-row", "agent-wrong-run", "agent-missing-producer", "agent-fold", "agent-fold-peer-own", "agent-stop-unmeasured-result", "agent-reset-in-validate", "agent-reset-and-damage-in-validate"].includes(variant) ? 1 : 2)
+    expect(starts).toHaveLength(refusedPeer || ["unknown-source", "non-system-row", "child-launch", "missing-row", "agent-wrong-run", "agent-missing-producer", "agent-fold", "agent-fold-peer-own", "agent-stop-unmeasured-result", "agent-stop-no-command-result", "agent-reset-in-validate", "agent-reset-and-damage-in-validate"].includes(variant) ? 1 : 2)
     if (variant.includes("-in-validate")) expect(commits).toBe(0);
     if (variant === "agent-reset-in-validate") expect(failStops).toHaveLength(0);
     if (variant === "agent-reset-and-damage-in-validate") expect(failStops.length).toBeGreaterThan(0);;

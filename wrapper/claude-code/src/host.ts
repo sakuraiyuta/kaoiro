@@ -2748,11 +2748,6 @@ export class AgentHost implements EngineAdapter {
         this.#nativeRegistry.stopOutcome(input.tool_use_id, true);
       } else if (input.hook_event_name === "PostToolUseFailure" && input.is_interrupt === false) {
         this.#nativeRegistry.stopOutcome(input.tool_use_id, false);
-      } else if (!failed && result && result.task_id === toolInput.task_id && typeof result.message === "string" &&
-          result.message.startsWith(`No background command with ID ${String(toolInput.task_id)} is running on `) &&
-          result.message.endsWith(" for this session: it has already finished or been stopped, or it was never this session's.")) {
-        // Pin 2.1.293's only measured non-stop TaskStop result; any other unrecognised result keeps the suspension.
-        this.#nativeRegistry.stopOutcome(input.tool_use_id, false);
       }
     }
   }

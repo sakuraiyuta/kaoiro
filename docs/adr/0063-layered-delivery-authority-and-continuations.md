@@ -403,3 +403,13 @@ Monitor acceptance is conditional on exposing Monitor in an isolated test
 cache. The cache belongs only to the test's isolated home; no operator setting,
 peer cache, production configuration or additional unpublished variant is
 changed. Production Monitor distribution and availability remain unmeasured.
+
+TaskStop outcomes are classified only as a thrown error (`PostToolUseFailure`
+with `is_interrupt` false), which removes that call's pending suspension, and as
+the `Successfully stopped task:` result for the exact target, which closes the
+claims. The wording of any other `PostToolUse` result for the target was not
+measured, so none is treated as a failed stop: the suspension stays and no new
+claim for that task is offered. This fails closed and is a known limit, not an
+oversight; a later pin that lists the non-stop results can add them. A natural
+`completed` or `failed` terminal that arrives under a pending stop is not an
+explicit stop, and drains once every pending stop has failed.
