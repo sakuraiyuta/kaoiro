@@ -187,6 +187,16 @@ describe("atomic native continuation proof", () => {
     r.registry.source("a")!.terminal![field] = "wrong";
     expect(r.prove(prompt, r.snapshot, r.agentOrigin("a"))).toHaveProperty("reason");
   });
+  it.each(["missing", "empty", "non-string"])("Agent completion needs a known native output_file even when the notice omits it: %s", kind => {
+    const control = rig(); control.launch("a", "Agent");
+    expect("proof" in control.prove(control.agentCompletion("a", "report", false), control.snapshot, control.agentOrigin("a"))).toBe(true);
+    const r = rig(); r.launch("a", "Agent"); const prompt = r.agentCompletion("a", "report", false);
+    const terminal = r.registry.source("a")!.terminal!;
+    if (kind === "missing") delete terminal.output_file;
+    if (kind === "empty") terminal.output_file = "";
+    if (kind === "non-string") terminal.output_file = 7;
+    expect(r.prove(prompt, r.snapshot, r.agentOrigin("a"))).toHaveProperty("reason", "native_agent_completion_unproved");
+  });
   it("Agent block call cannot differ from the completion's accepted call", () => {
     const r = rig(); r.launch("a", "Agent");
     const prompt = r.agentCompletion("a", "report").replace("<tool-use-id>a</tool-use-id>", "<tool-use-id>other</tool-use-id>");
