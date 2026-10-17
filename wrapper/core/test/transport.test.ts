@@ -1455,7 +1455,7 @@ describe("ServerLink — requestPeerSessionReset (issue #677)", () => {
     const { link } = negotiated();
     void link.requestPeerSessionReset(REQUEST, { wait: false }).catch(() => {});
     expect(mock.lastPush?.event).toBe("peer_session_reset_request");
-    expect(mock.lastPush?.payload).toEqual({
+    expect(mock.lastPush?.payload).toStrictEqual({
       agent_id: "peer.1",
       mode: "new",
       work_id: "wrk_1",
@@ -1631,6 +1631,49 @@ describe("ServerLink — requestPeerSessionReset (issue #677)", () => {
     mock.lastPush!.receivers.get("timeout")!({});
     await expect(pending).rejects.toThrow("timeout");
     expect(late).toHaveLength(1);
+  });
+
+  it("flushes a held result to the adapter when the reply is an error", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    emit("peer_session_reset_result", result());
+    mock.lastPush!.receivers.get("error")!({ reason: "agent_busy" });
+    await expect(pending).rejects.toThrow("agent_busy");
+    expect(late).toHaveLength(1);
+  });
+
+  it("flushes a held result to the adapter when the ok reply carries no request_id", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    emit("peer_session_reset_result", result({ request_id: "rs-9" }));
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(pending).rejects.toThrow("unknown_error");
+    expect(late).toMatchObject([{ requestId: "rs-9" }]);
+  });
+
+  it("hands a held result nobody claims to the adapter once the reply settled", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: false });
+    emit("peer_session_reset_result", result({ request_id: "rs-other" }));
+    expect(late).toEqual([]);
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({ outcome: "accepted", requestId: "rs-1" });
+    expect(late).toMatchObject([{ requestId: "rs-other" }]);
+  });
+
+  it("keeps a held result while another request is still awaiting its reply", async () => {
+    const { link, late } = negotiated();
+    const first = link.requestPeerSessionReset(REQUEST, { wait: true });
+    const firstPush = mock.lastPush!;
+    const second = link.requestPeerSessionReset({ ...REQUEST, workId: "wrk_2" }, { wait: true });
+    const secondPush = mock.lastPush!;
+    emit("peer_session_reset_result", result({ request_id: "rs-2", work_id: "wrk_2" }));
+    firstPush.receivers.get("error")!({ reason: "agent_busy" });
+    await expect(first).rejects.toThrow("agent_busy");
+    expect(late).toEqual([]);
+    secondPush.receivers.get("ok")!({ request_id: "rs-2" });
+    await expect(second).resolves.toMatchObject({ outcome: "completed", requestId: "rs-2" });
+    expect(late).toEqual([]);
   });
 
   it("bounds the results held while a reply is pending", async () => {
