@@ -163,11 +163,20 @@ app-server with the axis off use `never`.
 
 ## Claude native continuation ownership
 
-`KAOIRO_CLAUDE_NATIVE_CONTINUATIONS=1` selects unified native continuation
-ownership for a new Claude wrapper lifetime. Only the exact value `1` enables
-it; absent or other values keep the legacy behavior. There is no live switch,
-runner configuration field, or additional server capability. The opt-in is
-independent of the phase-2 delivery controls below.
+Unified native continuation ownership is the default for a new Claude wrapper
+lifetime. `KAOIRO_CLAUDE_NATIVE_CONTINUATIONS` selects the mode at startup:
+
+| Value | Mode |
+| --- | --- |
+| unset | native (default) |
+| `1` | native (accepted for compatibility) |
+| `0` | legacy |
+| any other value | native, with one warning on stderr at startup |
+
+Only the exact value `0` selects legacy, so a mistyped value never silently
+turns the mode off. There is no live switch, runner configuration field, or
+additional server capability. The selection is independent of the phase-2
+delivery controls below.
 
 The mode instruments root Agent launches, eligible inactive `SendMessage`
 reactivations, and Monitor descriptions with wrapper-issued launch markers. It
@@ -175,9 +184,12 @@ requires native transcript evidence before granting a new send origin. Unknown
 or unproved sources remain unable to send; Bash and Workflow completion policy
 is retained. It does not enable native Monitor tools or change tool permission.
 
-The feature is default off. Landing it does not authorize production activation.
-Monitor acceptance uses an isolated cache that exposes Monitor; production
-availability remains unmeasured. See [Claude events](../engines/claude-events.md#opt-in-native-continuation-ownership)
+Native is the default because peer coordination builds on it; `0` is the
+fallback for when native ownership must be withdrawn.
+Landing it does not authorize production rollout, which remains a separate
+operator gate under the
+[high-risk change procedure](../../operations/high-risk-change-release.md). Monitor acceptance uses an isolated cache that exposes Monitor;
+production availability remains unmeasured. See [Claude events](../engines/claude-events.md#native-continuation-ownership)
 and [ADR-0063](../../adr/0063-layered-delivery-authority-and-continuations.md).
 
 ## Claude phase-2 delivery controls

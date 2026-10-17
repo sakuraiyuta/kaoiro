@@ -80,9 +80,9 @@ call. Unknown notification shapes and reused retired prompt IDs remain unbound.
 | Codex app-server | Bridge-preserved `x-codex-turn-metadata` thread/turn IDs matched to the authoritative start result and wrapper token; absent/mismatched metadata is rejected |
 | Antigravity | Native engine boundary remains a measurement gate; no full-engine protection claim or v1 activation follows from ToolHost-only measurements |
 
-## Opt-in native continuation snapshots
+## Native continuation snapshots
 
-The [Claude native continuation mode](../engines/claude-events.md#opt-in-native-continuation-ownership)
+The [Claude native continuation mode](../engines/claude-events.md#native-continuation-ownership)
 uses a detached immutable copy of the confirmed launch owner's map for Agent
 reports and Monitor events/completions. Source-owner retirement does not erase
 that copy. It contains no waiter, recovery or fold tickets, abort signal, or

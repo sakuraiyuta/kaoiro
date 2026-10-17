@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
 import type { McpSdkServerConfigWithInstance, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { NATIVE_CONTINUATIONS_ENV } from "../src/native_continuations_setting.js";
+
+// The fake SDK here writes no native transcript, so these compositions
+// select the legacy admission mode explicitly (native is the default).
+beforeEach(() => { vi.stubEnv(NATIVE_CONTINUATIONS_ENV, "0"); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 const config: WrapperConfig = {
   agent_id: "self.agent",

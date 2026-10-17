@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost } from "../src/host.js";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { NATIVE_CONTINUATIONS_ENV } from "../src/native_continuations_setting.js";
+
+// The fake SDK here writes no native transcript, so these compositions
+// select the legacy admission mode explicitly (native is the default).
+beforeEach(() => { vi.stubEnv(NATIVE_CONTINUATIONS_ENV, "0"); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 // Native results carry a run-wide delivery sequence; a live interval only
 // accepts a result whose index advanced.

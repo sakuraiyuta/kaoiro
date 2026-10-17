@@ -595,11 +595,12 @@ the existing prompt-hook path across a later off transition, even when its
 SDK pull follows the policy ack. See the
 [operator-visible boundary](../inter-agent/delivery.md#live-delivery-policy-boundary).
 
-## Opt-in native continuation ownership
+## Native continuation ownership
 
-With `KAOIRO_CLAUDE_NATIVE_CONTINUATIONS=1`, the unified reducer exclusively
-handles native continuations; the legacy background-notification matcher above
-cannot grant a parallel origin. The flag defaults off and is captured at startup.
+By default the unified reducer exclusively handles native continuations; the
+legacy background-notification matcher above cannot grant a parallel origin.
+The mode is captured at startup, and `KAOIRO_CLAUDE_NATIVE_CONTINUATIONS=0`
+selects the legacy matcher instead ([values](../configuration/wrapper.md#claude-native-continuation-ownership)).
 Acceptance and independent implementation review remain pending; the design and
 prerequisite measurements are [recorded separately](../../plans/issue-426-stage2-native-continuations.md).
 

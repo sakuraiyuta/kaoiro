@@ -320,7 +320,7 @@ toggles need a revisioned server acknowledgement and are outside this phase.
 
 ### Claude native continuation ownership
 
-The default-off [native continuation mode](../engines/claude-events.md#opt-in-native-continuation-ownership)
+The default [native continuation mode](../engines/claude-events.md#native-continuation-ownership)
 changes how an independent native report obtains a root send origin. It does not
 change server delivery modes, receipt acknowledgements, sender wait behavior,
 early/fold selection or their budgets. Ordinary peer roots retain their existing

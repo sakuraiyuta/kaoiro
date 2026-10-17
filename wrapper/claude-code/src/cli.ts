@@ -56,6 +56,7 @@ import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { formatClaudeFoldText } from "./fold_text.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
+import { resolveNativeContinuations } from "./native_continuations_setting.js";
 import {
   REQUEST_COMPACT_INPUT_SHAPE,
   requestCompactDescriptor,
@@ -212,7 +213,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
 
   // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).
   const envDefaultModel = process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL;
-  const nativeContinuations = process.env.KAOIRO_CLAUDE_NATIVE_CONTINUATIONS === "1";
+  const nativeContinuations = resolveNativeContinuations(
+    process.env,
+    (message) => writeRedactedStderr(message),
+  );
 
   // Source vocabulary for ext.model_source (ADR-0032 F4bc addendum,
   // phase-15 15-4 + phase-23 P1 pair-aware apply). Priority, effort catalog

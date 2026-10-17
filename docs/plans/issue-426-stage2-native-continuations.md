@@ -1,7 +1,7 @@
 ---
 title: Launch-bound Claude native continuations
 status: implementation-in-progress
-last_updated: 2026-10-16
+last_updated: 2026-10-17
 baseline: 6ea69f479c6e3033932c24468e5cdfbb2b1e38dc
 ---
 
@@ -16,8 +16,9 @@ This public rendering retains the normative contract and acceptance obligations;
 private evidence locations and review correspondence are omitted.
 
 Implementation acceptance, independent implementation review and the exact-candidate
-landing gate are pending. The implementation is opt-in and default off. Production
-enablement is a separate operator gate. No SDK upgrade, server authorization change,
+landing gate are pending. The operator made the mode the default on 2026-10-17;
+`KAOIRO_CLAUDE_NATIVE_CONTINUATIONS=0` selects legacy. Production rollout is a
+separate operator gate. No SDK upgrade, server authorization change,
 dashboard feature or frozen [issue #214](https://github.com/sakuraiyuta/kaoiro/issues/214) integration is part of this unit.
 
 The operator accepted same-host/same-OS-user trust (O1=A), including the bearer-copy,
@@ -364,8 +365,9 @@ judge this bounded evidence; product P0/P8 still checks actual final wiring.
 ## Return proof and one reducer
 
 Select one startup-only admission mode per Query: legacy, or unified native
-continuations. Proposed opt-in remains KAOIRO_CLAUDE_NATIVE_CONTINUATIONS=1,
-default off; review must approve the actual configuration name. No in-flight
+continuations. KAOIRO_CLAUDE_NATIVE_CONTINUATIONS selects it: native is the
+default (operator decision 2026-10-17), `0` selects legacy, and `1` is kept
+for compatibility. No in-flight
 switch, early/yield expansion, UI toggle or server comparison change is added.
 All proof variants enter one reducer, root binder, final validator and terminal
 settlement. Legacy matching cannot independently begin a turn in unified mode.
@@ -719,7 +721,7 @@ review either. The following are acceptance on the reviewed product candidate:
 | P6 fold/terminal | Native missing fold attachment remains denial-only. Accept 1/2/16 proved blocks, multiple Monitor completions/events and Monitor+Bash/Workflow with a common basis; one receipt/owner and atomic consumption. Completion+event within one block is one claim; WS close's optional producer settles once | Foreign opener then marked fold, second launch's fold, fresh-root overlap, wrong folded sender terminal, conflicting/regressing result index. Quarantined token cannot admit another root; late row cannot revive a refused call. Duplicate completion+event cannot double start/settle; 17 blocks, one unproved sibling, duplicate source occurrence or incompatible snapshots commit nothing. For Monitor(n)+Bash/Workflow(n+1) and Monitor(n)+Monitor(n+1), assert the accepted legacy control versus unified-mode visible batch-basis-conflict refusal, zero new owner/send and zero partial consumption. Mutate all-block/rollback and bound guards; mixed-map conflict never unions or selects a first/newest map. Two Agent completions with different run IDs in one prompt (same map) refuse the whole batch with zero origin and zero consumption, one Agent completion whose run matches the origin is accepted, and an Agent plus a Monitor completion with the matching Agent run is accepted; removing the `origin.runId` comparison turns the two-Agent refusal red |
 | P7 live evidence | Append-only growth and actual compact boundary retaining anchor preserve legitimate owner | At binding and final dispatch separately truncate/delete/replace/restore/change earlier bytes/drop opener/conflict identity. Product gate sends zero. Cut validator wiring and integrity guard separately for red/restored |
 | P8 description/permission | Command or ws URL/options and payload/EOF/stderr/status/lifecycle behavior unchanged; exact final suffix/description in notices/display, including native error/expiry/suppression/re-arm notices and binary handling when exposed; native/broker allow/deny/ask and original-input rejecting hook. Two hook orders do not assume update chaining | Refused original command remains unexecuted after metadata change; ask still reaches broker in the approved exact permission modes/settings. Canonical SendMessage message reaches the new child while stale content cannot select/arm a capability. Mutate command-preservation, actual-success join and native permission plumbing separately; compare effective inputs/execution marks and invalidate preparation when another hook overwrites marker/command/message. Mutation that arms from planned input alone or broadens allowedTools must fail; no native-parser duplicate or broker override |
-| P9 landing | Recorded native peer row/hook golden independent of product constants; installed SDK version and Linux x64 native binary hash checked in CI, requiring review on pin updates; default off and startup exclusivity; affected wrapper full suites/typecheck/build and mandatory runner typecheck/test; reviewer gates exact final landing candidate; production-equivalent CI | Missing mandatory validator and oldMatch-or-newProof bypass must be caught through production entry point. Rebase/target changes require final evidence; no helper asset is part of description-only candidate |
+| P9 landing | Recorded native peer row/hook golden independent of product constants; installed SDK version and Linux x64 native binary hash checked in CI, requiring review on pin updates; default on (`0` selects legacy, operator decision 2026-10-17) and startup exclusivity; affected wrapper full suites/typecheck/build and mandatory runner typecheck/test; reviewer gates exact final landing candidate; production-equivalent CI | Missing mandatory validator and oldMatch-or-newProof bypass must be caught through production entry point. Rebase/target changes require final evidence; no helper asset is part of description-only candidate |
 
 M1's strict delayed-old-report negative is not measured by R301 or E7. R301
 proves a new execution can reuse an old marker; E7 demonstrates fresh-message
@@ -759,8 +761,9 @@ configuration and docs. Existing task display remains separate from authority.
 
 Reviewable commits may split work inside that unit; they are not independently
 landed producer subsets. All accepted cases pass with unified mode selected,
-and legacy/default controls stay green, before landing the reviewed candidate
-default off. Director follows exact-candidate/patch-id/reviewer/runner/CI rules.
+including the default (unset) path, and legacy (`0`) controls stay green, before
+landing the reviewed candidate with native as the default.
+Director follows exact-candidate/patch-id/reviewer/runner/CI rules.
 No server auth change, dashboard feature, work grant, generic cross-session
 admission, SDK upgrade or early/yield behavior is included. A newly necessary
 independent product unit needs an explicit cost/scope decision and separate

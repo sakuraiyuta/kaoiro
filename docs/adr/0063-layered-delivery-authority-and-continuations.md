@@ -413,3 +413,37 @@ claim for that task is offered. This fails closed and is a known limit, not an
 oversight; a later pin that lists the non-stop results can add them. A natural
 `completed` or `failed` terminal that arrives under a pending stop is not an
 explicit stop, and drains once every pending stop has failed.
+
+## Amendment (2026-10-17, native continuations on by default)
+
+The operator decided that unified native continuation ownership is the
+default for [issue #426](https://github.com/sakuraiyuta/kaoiro/issues/426):
+it is the base on which peers coordinate while each uses its own engine's
+features. Off is a fallback for when native ownership must be withdrawn, not
+the normal mode. This supersedes "default off" in the 2026-10-16 amendment and
+its D9 supplement; the rest of those records stands.
+
+- `KAOIRO_CLAUDE_NATIVE_CONTINUATIONS` keeps its name. Unset selects native,
+  `0` selects legacy, and `1` selects native (the earlier opt-in value). Any
+  other value selects native and writes one warning at startup, so a mistyped
+  value never silently withdraws the mode. Selection stays startup-only and
+  exclusive; there is no live switch or runner configuration field.
+- The default does not expose native Monitor tools or change tool permission.
+- Known limits are unchanged by the default. When a peer messages a running
+  subagent and the child reports and ends at once, the first report cannot be
+  answered; legacy behaves the same, so this is not a regression, and it must
+  not be described as newly supported. Intentional same-UID tampering remains
+  outside protection.
+- The third native acceptance tranche is judged by people, not by the
+  fixture's checker. Two readers of different model families, neither of them
+  the implementer, independently compare the raw records (CLI events and
+  transcripts, loopback requests, server acknowledgements and stderr) with an
+  expectation table copied from the acceptance design. The fixture is a
+  recorder; checker output is reference only and is not given to the readers.
+  A scenario the readers find ambiguous is recorded here as unmeasured and
+  does not block landing. Native runs with the variable unset and with `0` are
+  part of this acceptance; every earlier native run set `1`.
+- Production rollout remains a separate operator gate. Once develop carries
+  this default, the next runner update changes the behavior of production
+  Claude peers, so the rollout follows the
+  [high-risk change procedure](../operations/high-risk-change-release.md).

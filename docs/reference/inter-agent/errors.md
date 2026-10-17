@@ -34,7 +34,7 @@ of `payload.error` is the discriminator.
 }
 ```
 
- - `kind` reuses `"inform"` (the nine-member enum is unchanged). Older
+- `kind` reuses `"inform"` (the nine-member enum is unchanged). Older
   receivers that do not know `error` display it as a normal inform.
 - Repeat the same human-readable reason in `body` for old-client display
   compatibility.
@@ -218,7 +218,7 @@ unknown task metadata is rejected rather than assigned the latest turn.
 
 ## Native continuation proof errors
 
-In the opt-in [Claude native continuation mode](../engines/claude-events.md#opt-in-native-continuation-ownership),
+In the [Claude native continuation mode](../engines/claude-events.md#native-continuation-ownership),
 `missing_native_proof_validator`, `native_proof_invalid`,
 `native_evidence_damaged` and `stale_native_lease` are local refusals with
 `send_not_attempted: true`. No message was sent. Retrying in that continuation,
