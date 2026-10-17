@@ -118,6 +118,19 @@ export type {
   SessionResetMode,
   TurnBoundary,
 } from "./request_session_reset.js";
+export {
+  REQUEST_PEER_SESSION_RESET_INPUT_SHAPE,
+  REQUEST_PEER_SESSION_RESET_TOOL_FQN,
+  peerSessionResetRootInput,
+  requestPeerSessionResetDescriptor,
+  validateRequestPeerSessionResetInput,
+} from "./request_peer_session_reset.js";
+export type {
+  PeerSessionResetCall,
+  PeerSessionResetNotice,
+  PeerSessionResetRequestInput,
+  RequestPeerSessionResetOptions,
+} from "./request_peer_session_reset.js";
 export { operatorApprovalGated } from "./approval_gate.js";
 export { flagArgument, personaOptInSource } from "./persona_opt_in.js";
 export type { PersonaOptInSource } from "./persona_opt_in.js";

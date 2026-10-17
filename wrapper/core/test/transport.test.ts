@@ -1403,6 +1403,273 @@ describe("ServerLink — requestSessionReset (phase-28 C2)", () => {
   });
 });
 
+describe("ServerLink — requestPeerSessionReset (issue #677)", () => {
+  const REQUEST = {
+    agentId: "peer.1",
+    mode: "new" as const,
+    workId: "wrk_1",
+    expectedAuthorityEpoch: 3,
+  };
+  const result = (over: Record<string, unknown> = {}) => ({
+    version: "0",
+    request_id: "rs-1",
+    agent_id: "peer.1",
+    mode: "new",
+    work_id: "wrk_1",
+    ok: true,
+    to_session_id: "sess-2",
+    ...over,
+  });
+
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.lastPush = null;
+    mock.pushes = [];
+  });
+
+  function negotiated(options: Partial<ServerLinkOptions> = {}) {
+    const late: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      workControl: "v1",
+      onPeerSessionResetResult: (notice) => late.push(notice),
+      ...options,
+    });
+    mock.joinReceivers.get("ok")?.({ work_control: "v1" });
+    return { link, late };
+  }
+
+  it("is a versioned wrapper event and a checked server event", () => {
+    expect(WRAPPER_CONTROL_EVENT_POLICY.peer_session_reset_request).toBe("versioned");
+    expect(SERVER_EVENT_VERSION_POLICY.peer_session_reset_result).toBe("checked");
+  });
+
+  it("rejects work_control_unavailable without pushing when work control was not negotiated", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    await expect(link.requestPeerSessionReset(REQUEST, { wait: true }))
+      .rejects.toThrow("work_control_unavailable");
+    expect(mock.pushes).toEqual([]);
+  });
+
+  it("sends the grant and omits an absent reason", () => {
+    const { link } = negotiated();
+    void link.requestPeerSessionReset(REQUEST, { wait: false }).catch(() => {});
+    expect(mock.lastPush?.event).toBe("peer_session_reset_request");
+    expect(mock.lastPush?.payload).toEqual({
+      agent_id: "peer.1",
+      mode: "new",
+      work_id: "wrk_1",
+      expected_authority_epoch: 3,
+      version: "0",
+    });
+    void link.requestPeerSessionReset({ ...REQUEST, reason: "fresh start" }, { wait: false })
+      .catch(() => {});
+    expect(mock.lastPush?.payload).toMatchObject({ reason: "fresh start" });
+  });
+
+  it("wait=false settles accepted at once and hands the later result to the adapter", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: false });
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({ outcome: "accepted", requestId: "rs-1" });
+    expect(late).toEqual([]);
+    emit("peer_session_reset_result", result());
+    expect(late).toEqual([{
+      requestId: "rs-1", agentId: "peer.1", mode: "new", workId: "wrk_1",
+      ok: true, toSessionId: "sess-2",
+    }]);
+  });
+
+  it("wait=true settles with the terminal result and does not also hand it to the adapter", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    emit("peer_session_reset_result", result());
+    await expect(pending).resolves.toEqual({
+      outcome: "completed", requestId: "rs-1", toSessionId: "sess-2",
+    });
+    expect(late).toEqual([]);
+  });
+
+  it("wait=true reports failed with a closed reason, collapsing an unknown one", async () => {
+    for (const [sent, expected] of [
+      ["spawn_failed", "spawn_failed"],
+      ["free text must not reach the model", "unknown_error"],
+      [undefined, "unknown_error"],
+    ] as const) {
+      const { link } = negotiated();
+      const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+      mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+      emit("peer_session_reset_result", result({ ok: false, reason: sent, to_session_id: undefined }));
+      await expect(pending).resolves.toEqual({
+        outcome: "failed", requestId: "rs-1", reason: expected,
+      });
+      mock.handlers.clear();
+    }
+  });
+
+  it("a null to_session_id (lazy Codex thread) completes with null", async () => {
+    const { link } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    emit("peer_session_reset_result", result({ to_session_id: null }));
+    await expect(pending).resolves.toEqual({
+      outcome: "completed", requestId: "rs-1", toSessionId: null,
+    });
+  });
+
+  it("a result that overtakes the reply is not lost (wait=true)", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    emit("peer_session_reset_result", result());
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({
+      outcome: "completed", requestId: "rs-1", toSessionId: "sess-2",
+    });
+    expect(late).toEqual([]);
+  });
+
+  it("a result that overtakes the reply is handed to the adapter (wait=false)", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: false });
+    emit("peer_session_reset_result", result({ ok: false, reason: "timeout", to_session_id: undefined }));
+    expect(late).toEqual([]);
+    mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+    await expect(pending).resolves.toEqual({ outcome: "accepted", requestId: "rs-1" });
+    expect(late).toMatchObject([{ requestId: "rs-1", ok: false, reason: "timeout" }]);
+  });
+
+  describe("the 70 s wait", () => {
+    it("gives up with outcome timeout at 70 s, not before, and a later result reaches the adapter", async () => {
+      vi.useFakeTimers();
+      try {
+        const { link, late } = negotiated();
+        let settled: unknown = null;
+        void link.requestPeerSessionReset(REQUEST, { wait: true }).then((r) => { settled = r; });
+        mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+        await vi.advanceTimersByTimeAsync(69_999);
+        expect(settled).toBeNull();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toEqual({ outcome: "timeout", requestId: "rs-1" });
+        emit("peer_session_reset_result", result());
+        expect(late).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a result inside the window cancels the timer", async () => {
+      vi.useFakeTimers();
+      try {
+        const { link, late } = negotiated();
+        const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+        mock.lastPush!.receivers.get("ok")!({ request_id: "rs-1" });
+        emit("peer_session_reset_result", result());
+        await expect(pending).resolves.toMatchObject({ outcome: "completed" });
+        expect(vi.getTimerCount()).toBe(0);
+        expect(late).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it.each([
+    "reset_not_authorized",
+    "work_control_unavailable",
+    "unknown_agent",
+    "unsupported_session_reset",
+    "agent_in_conversation",
+    "agent_busy",
+    "session_reset_pending",
+    "runner_unavailable",
+  ])("passes the closed reply reason %s through", async (reason) => {
+    const { link } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    mock.lastPush!.receivers.get("error")!({ reason });
+    await expect(pending).rejects.toThrow(reason);
+  });
+
+  it("collapses a reason outside the eight words to unknown_error", async () => {
+    for (const payload of [
+      { reason: "rm -rf / was executed" },
+      { reason: "" },
+      { reason: "invalid_mode" },
+      { reason: "spawn_failed" },
+      {},
+      "agent_busy",
+      null,
+    ]) {
+      const { link } = negotiated();
+      const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+      mock.lastPush!.receivers.get("error")!(payload);
+      await expect(pending).rejects.toThrow("unknown_error");
+    }
+  });
+
+  it("an ok reply without a request_id is not an acceptance", async () => {
+    const { link } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(pending).rejects.toThrow("unknown_error");
+  });
+
+  it("a reply timeout rejects as timeout and a result arriving afterwards reaches the adapter", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    mock.lastPush!.receivers.get("timeout")!({});
+    await expect(pending).rejects.toThrow("timeout");
+    emit("peer_session_reset_result", result());
+    expect(late).toHaveLength(1);
+  });
+
+  it("a result held while the reply was pending is flushed to the adapter when the reply is an error", async () => {
+    const { link, late } = negotiated();
+    const pending = link.requestPeerSessionReset(REQUEST, { wait: true });
+    emit("peer_session_reset_result", result());
+    expect(late).toEqual([]);
+    mock.lastPush!.receivers.get("timeout")!({});
+    await expect(pending).rejects.toThrow("timeout");
+    expect(late).toHaveLength(1);
+  });
+
+  it("bounds the results held while a reply is pending", async () => {
+    const { link, late } = negotiated();
+    void link.requestPeerSessionReset(REQUEST, { wait: true }).catch(() => {});
+    for (let i = 0; i < 17; i += 1) {
+      emit("peer_session_reset_result", result({ request_id: `rs-${i}` }));
+    }
+    expect(late).toMatchObject([{ requestId: "rs-0" }]);
+  });
+
+  it("ignores a result that is not well formed", () => {
+    const { late } = negotiated();
+    for (const bad of [
+      null,
+      "text",
+      result({ version: "1" }),
+      result({ version: undefined }),
+      result({ request_id: "" }),
+      result({ request_id: 7 }),
+      result({ mode: "reset" }),
+      result({ agent_id: "a".repeat(257) }),
+      result({ work_id: "w".repeat(129) }),
+      result({ work_id: "" }),
+      result({ ok: "true" }),
+      result({ to_session_id: 7 }),
+    ]) {
+      emit("peer_session_reset_result", bad);
+    }
+    expect(late).toEqual([]);
+  });
+
+  it("an unclaimed well-formed result reaches the adapter", () => {
+    const { late } = negotiated();
+    emit("peer_session_reset_result", result({ request_id: "rs-other" }));
+    expect(late).toMatchObject([{ requestId: "rs-other", ok: true }]);
+  });
+});
+
 describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () => {
   beforeEach(() => {
     mock.handlers.clear();
@@ -1934,6 +2201,9 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     status_line_set: (link) => void link.setStatusLine("working"),
     status_line_get: (link) => void link.readStatusLine("b.agent"),
     session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
+    peer_session_reset_request: (link) => void link.requestPeerSessionReset({
+      agentId: "peer.1", mode: "new", workId: "wrk_1", expectedAuthorityEpoch: 1,
+    }, { wait: false }).catch(() => {}),
     session_lifecycle: (link) =>
       link.reportSessionLifecycle(
         "threshold_notice",

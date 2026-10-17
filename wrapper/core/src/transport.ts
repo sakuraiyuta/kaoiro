@@ -255,6 +255,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
   delivery_status: "checked",
   work_notice: "checked",
   session_reset_failed: "checked",
+  peer_session_reset_result: "checked",
 } as const satisfies Record<string, "checked" | "binaryFrame" | "phoenixControl">;
 
 export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
@@ -279,6 +280,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   status_line_set: "versioned",
   status_line_get: "versioned",
   session_reset_request: "versioned",
+  peer_session_reset_request: "versioned",
   session_lifecycle: "versioned",
   envelope: "envelopeFrame",
 } as const satisfies Record<string, "versioned" | "envelopeFrame">;
@@ -451,6 +453,11 @@ export interface ServerLinkOptions {
    *  leg: it lets an old wrapper that could not be terminated tell its agent
    *  that the accepted reservation did not become a reset (#248). */
   onSessionResetFailed?: (failure: SessionResetFailure) => void;
+  /** Terminal result of a director-requested peer reset (issue #677) that no
+   *  `requestPeerSessionReset` call is waiting for: `wait=false`, or a result
+   *  that arrived after the 70 s wait gave up or after a reply timeout. The
+   *  adapter turns it into a root input for the model. */
+  onPeerSessionResetResult?: (notice: PeerSessionResetNotice) => void;
   /** Hydration verdict from the join reply (ADR-0051 D2). Called on EVERY
    *  (re)join, with `null` when the reply carried no `hydration` key — a
    *  legacy server, where the wrapper keeps its old startup-replay
@@ -505,6 +512,121 @@ const SESSION_RESET_FAILURE_REASONS: ReadonlySet<string> = new Set([
 
 /** Collapses to this when the reply carries no recognised reason. */
 export const SESSION_RESET_UNKNOWN_REASON = "unknown_error";
+
+/** The reasons a `peer_session_reset_request` reply may carry (issue #677).
+ *  Mirrors server `PeerSessionResetReplyReasons`; the CI step
+ *  `check_peer_session_reset_reply_vocabulary.exs` fails on drift. */
+const PEER_SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
+  "reset_not_authorized",
+  "work_control_unavailable",
+  "unknown_agent",
+  "unsupported_session_reset",
+  "agent_in_conversation",
+  "agent_busy",
+  "session_reset_pending",
+  "runner_unavailable",
+]);
+
+/** Upper bound on how long `requestPeerSessionReset(wait)` waits for the
+ *  terminal result after the server accepted: the server's own 60 s reset
+ *  timeout plus slack. Inside the Codex bridge tool timeout (310 s). */
+export const PEER_SESSION_RESET_WAIT_MS = 70_000;
+
+/** Results that arrive while a request's own reply is still in flight are
+ *  held (a fast failure can overtake the reply). Bounded so a flood of
+ *  unrelated results cannot grow it. */
+const MAX_EARLY_PEER_RESET_NOTICES = 16;
+
+/** Narrowed `peer_session_reset_result` (server -> requester topic). Every
+ *  value reaches a model turn, so ids are bounded and `reason` is closed. */
+export interface PeerSessionResetNotice {
+  requestId: string;
+  agentId: string;
+  mode: "new" | "clear";
+  workId: string;
+  ok: boolean;
+  /** Present when `ok` is false; outside the lifecycle vocabulary it is
+   *  `SESSION_RESET_UNKNOWN_REASON`. */
+  reason?: string;
+  /** Present when `ok` is true; null for Codex lazy thread assignment. */
+  toSessionId?: string | null;
+}
+
+export interface PeerSessionResetRequestInput {
+  agentId: string;
+  mode: "new" | "clear";
+  workId: string;
+  expectedAuthorityEpoch: number;
+  reason?: string;
+}
+
+/** What `requestPeerSessionReset` settles with. `accepted` only when the
+ *  caller did not ask to wait; `timeout` means the server accepted but no
+ *  terminal result arrived within `PEER_SESSION_RESET_WAIT_MS`. */
+export type PeerSessionResetCall =
+  | { outcome: "accepted"; requestId: string }
+  | { outcome: "completed"; requestId: string; toSessionId: string | null }
+  | { outcome: "failed"; requestId: string; reason: string }
+  | { outcome: "timeout"; requestId: string };
+
+const MAX_PEER_RESET_AGENT_ID_BYTES = 256;
+const MAX_PEER_RESET_WORK_ID_BYTES = 128;
+const MAX_PEER_RESET_SESSION_ID_BYTES = 256;
+
+function boundedString(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string" && value !== "" &&
+    Buffer.byteLength(value, "utf8") <= maxBytes;
+}
+
+function peerSessionResetNoticeFrom(payload: unknown): PeerSessionResetNotice | null {
+  if (!isObject(payload) || payload.version !== "0") return null;
+  const { request_id, agent_id, mode, work_id, ok } = payload;
+  if (mode !== "new" && mode !== "clear") return null;
+  if (
+    !boundedString(request_id, MAX_PEER_RESET_SESSION_ID_BYTES) ||
+    !boundedString(agent_id, MAX_PEER_RESET_AGENT_ID_BYTES) ||
+    !boundedString(work_id, MAX_PEER_RESET_WORK_ID_BYTES) ||
+    typeof ok !== "boolean"
+  ) {
+    return null;
+  }
+  const base: Pick<PeerSessionResetNotice, "requestId" | "agentId" | "mode" | "workId" | "ok"> = {
+    requestId: request_id,
+    agentId: agent_id,
+    mode,
+    workId: work_id,
+    ok,
+  };
+  if (!ok) {
+    const reason = payload.reason;
+    return {
+      ...base,
+      reason: typeof reason === "string" && SESSION_RESET_FAILURE_REASONS.has(reason)
+        ? reason
+        : SESSION_RESET_UNKNOWN_REASON,
+    };
+  }
+  const sessionId = payload.to_session_id;
+  if (sessionId === undefined || sessionId === null) return { ...base, toSessionId: null };
+  if (!boundedString(sessionId, MAX_PEER_RESET_SESSION_ID_BYTES)) return null;
+  return { ...base, toSessionId: sessionId };
+}
+
+function peerSessionResetErrorReason(payload: unknown): string {
+  if (isObject(payload)) {
+    const reason = (payload as { reason?: unknown }).reason;
+    if (typeof reason === "string" && PEER_SESSION_RESET_ERROR_REASONS.has(reason)) {
+      return reason;
+    }
+  }
+  return SESSION_RESET_UNKNOWN_REASON;
+}
+
+function peerSessionResetCallFrom(notice: PeerSessionResetNotice): PeerSessionResetCall {
+  return notice.ok
+    ? { outcome: "completed", requestId: notice.requestId, toSessionId: notice.toSessionId ?? null }
+    : { outcome: "failed", requestId: notice.requestId, reason: notice.reason ?? SESSION_RESET_UNKNOWN_REASON };
+}
 
 /** Pulls the server's `reason` out of a `session_reset_request` error reply
  *  (`{reason: "agent_busy"}`). Anything outside the closed vocabulary — an
@@ -1474,6 +1596,11 @@ export class ServerLink {
   #operatorInputModes: OperatorInputModesJoinRequest | null = null;
   #deliveryModesSettled = false;
   #workControlSupported = false;
+  #onPeerSessionResetResult: ((notice: PeerSessionResetNotice) => void) | undefined;
+  /** Requests whose own reply has not settled yet (issue #677). */
+  #peerResetInflight = 0;
+  readonly #peerResetWaiters = new Map<string, (notice: PeerSessionResetNotice) => void>();
+  readonly #peerResetEarly = new Map<string, PeerSessionResetNotice>();
   #deliveryIncarnation: string | null = null;
   /** Highest `delivery_ack` watermark issued since the last join "ok". */
   #deliveryAckIssued = 0;
@@ -1493,6 +1620,7 @@ export class ServerLink {
     socketFactory: ServerSocketFactory = createPhoenixSocket,
   ) {
     this.#agentId = agentId;
+    this.#onPeerSessionResetResult = options.onPeerSessionResetResult;
     this.#deliveryPolicy = options.deliveryPolicy;
     this.#policyJoin = this.#deliveryPolicy?.beginJoin() ?? 0;
     this.#onReplyBasisMode = options.onReplyBasisMode;
@@ -1809,6 +1937,11 @@ export class ServerLink {
     this.#bindServerEvent("session_reset_failed", (payload: unknown) => {
       const failure = sessionResetFailureFrom(payload);
       if (failure !== null) options.onSessionResetFailed?.(failure);
+    });
+    this.#bindServerEvent("peer_session_reset_result", (payload: unknown) => {
+      const notice = peerSessionResetNoticeFrom(payload);
+      if (notice === null) return;
+      this.#routePeerSessionResetNotice(notice);
     });
 
     // Re-announce the latest state and active tasks after a reconnect: the
@@ -2631,6 +2764,106 @@ export class ServerLink {
           reject(new Error("timeout"));
         });
     });
+  }
+
+  /** Asks the server to reset a PEER's session as its director (issue #677).
+   *  Unlike `requestSessionReset` this is sent at once: the requester is not
+   *  the process that gets replaced. Authority is the server's work grant,
+   *  never this wrapper's claim, so the only local gate is the work_control
+   *  negotiation. Rejects with a closed-vocabulary reason, `unknown_error`
+   *  for anything outside it, or `timeout` when the reply never came — the
+   *  last does NOT establish that no reset started; a later result then
+   *  reaches `onPeerSessionResetResult`. With `wait`, settles with the
+   *  terminal result, or `outcome: "timeout"` after
+   *  `PEER_SESSION_RESET_WAIT_MS`. */
+  requestPeerSessionReset(
+    request: PeerSessionResetRequestInput,
+    { wait }: { wait: boolean },
+  ): Promise<PeerSessionResetCall> {
+    if (!this.#workControlSupported) return Promise.reject(new Error("work_control_unavailable"));
+    return new Promise((resolve, reject) => {
+      this.#peerResetInflight += 1;
+      const settleInflight = (): void => {
+        this.#peerResetInflight -= 1;
+      };
+      this.#pushVersioned("peer_session_reset_request", {
+          agent_id: request.agentId,
+          mode: request.mode,
+          work_id: request.workId,
+          expected_authority_epoch: request.expectedAuthorityEpoch,
+          ...(request.reason !== undefined ? { reason: request.reason } : {}),
+        })
+        .receive("ok", (payload: unknown) => {
+          settleInflight();
+          const accepted = sessionResetAcceptedFrom(payload);
+          if (accepted === null) {
+            this.#flushPeerSessionResetNotices();
+            reject(new Error(SESSION_RESET_UNKNOWN_REASON));
+            return;
+          }
+          const early = this.#peerResetEarly.get(accepted.requestId);
+          this.#peerResetEarly.delete(accepted.requestId);
+          if (wait && early !== undefined) {
+            resolve(peerSessionResetCallFrom(early));
+          } else if (wait) {
+            const timer = setTimeout(() => {
+              this.#peerResetWaiters.delete(accepted.requestId);
+              resolve({ outcome: "timeout", requestId: accepted.requestId });
+            }, PEER_SESSION_RESET_WAIT_MS);
+            timer.unref?.();
+            this.#peerResetWaiters.set(accepted.requestId, (notice) => {
+              clearTimeout(timer);
+              resolve(peerSessionResetCallFrom(notice));
+            });
+          } else {
+            resolve({ outcome: "accepted", requestId: accepted.requestId });
+            if (early !== undefined) this.#onPeerSessionResetResult?.(early);
+          }
+          this.#flushPeerSessionResetNotices();
+        })
+        .receive("error", (payload: unknown) => {
+          settleInflight();
+          this.#flushPeerSessionResetNotices();
+          reject(new Error(peerSessionResetErrorReason(payload)));
+        })
+        .receive("timeout", () => {
+          settleInflight();
+          this.#flushPeerSessionResetNotices();
+          reject(new Error("timeout"));
+        });
+    });
+  }
+
+  #routePeerSessionResetNotice(notice: PeerSessionResetNotice): void {
+    const waiter = this.#peerResetWaiters.get(notice.requestId);
+    if (waiter !== undefined) {
+      this.#peerResetWaiters.delete(notice.requestId);
+      waiter(notice);
+      return;
+    }
+    if (this.#peerResetInflight > 0) {
+      if (this.#peerResetEarly.size >= MAX_EARLY_PEER_RESET_NOTICES) {
+        const oldest = this.#peerResetEarly.keys().next().value;
+        if (oldest !== undefined) {
+          const evicted = this.#peerResetEarly.get(oldest);
+          this.#peerResetEarly.delete(oldest);
+          if (evicted !== undefined) this.#onPeerSessionResetResult?.(evicted);
+        }
+      }
+      this.#peerResetEarly.set(notice.requestId, notice);
+      return;
+    }
+    this.#onPeerSessionResetResult?.(notice);
+  }
+
+  /** Hands held results nobody can claim any more to the adapter. Called
+   *  after a reply settled; while another request is still in flight the
+   *  held results may belong to it, so they stay. */
+  #flushPeerSessionResetNotices(): void {
+    if (this.#peerResetInflight > 0) return;
+    const held = [...this.#peerResetEarly.values()];
+    this.#peerResetEarly.clear();
+    for (const notice of held) this.#onPeerSessionResetResult?.(notice);
   }
 
   /** Sets this agent's own status line (issue 482). The server takes the agent

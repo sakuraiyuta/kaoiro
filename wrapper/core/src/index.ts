@@ -50,6 +50,7 @@ export { createPhoenixSocket } from "./phoenix_socket.js";
 export type { PhoenixSocketOptions } from "./phoenix_socket.js";
 export {
   MAX_REPLAY_IA_PUSH_BYTES,
+  PEER_SESSION_RESET_WAIT_MS,
   ServerLink,
   chunkReplayIaItems,
   hydrationVerdictFrom,
@@ -58,6 +59,9 @@ export type {
   AttachOpenMessage,
   HydrationVerdictMessage,
   InterAgentAcceptance,
+  PeerSessionResetCall,
+  PeerSessionResetNotice,
+  PeerSessionResetRequestInput,
   PermissionDecisionMessage,
   QuestionResponseMessage,
   ReplayIaItem,
