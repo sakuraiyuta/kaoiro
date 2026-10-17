@@ -125,6 +125,17 @@ describe("Antigravity CLI request_peer_session_reset (issue #677)", () => {
     expect(requests).toHaveLength(1);
   });
 
+  it("the existing request_session_reset still holds the same lease while it waits", async () => {
+    const { descriptors, sent, leases, linkOptions } = await compose();
+    const reset = descriptors.find((d) => d.name === "request_session_reset")!;
+    const call = reset.handler({ mode: "new" });
+    expect(leases).toEqual(["begin"]);
+    const requestId = (sent.find((e) => e.type === "permission_request")!.payload as { request_id: string }).request_id;
+    linkOptions.onPermissionDecision({ request_id: requestId, allow: false });
+    await call;
+    expect(leases).toEqual(["begin", "end"]);
+  });
+
   it("hands a result nobody waited for to the model as a root input", async () => {
     const { linkOptions, sends } = await compose();
     linkOptions.onPeerSessionResetResult({
