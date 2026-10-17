@@ -172,7 +172,7 @@ const REFUSAL_HINTS: Readonly<Record<string, string>> = {
   agent_busy:
     "The target is not idle. Nothing was changed or interrupted; yield its running work and retry once it is idle.",
   session_reset_pending:
-    "A reset of the target is already in progress. Do not request another; its result will reach you.",
+    "The target already has a reset in progress, and this call was not accepted. Do not request another; check the target's state (for example with list_agents). Only the original requester is told how that reset ends, not this call.",
   runner_unavailable: "The target's runner is not reachable. Nothing was changed.",
   unknown_error: "The server's answer was not understood. Do not assume anything happened.",
 };

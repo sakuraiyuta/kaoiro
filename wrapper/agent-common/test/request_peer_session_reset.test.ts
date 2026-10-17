@@ -108,6 +108,33 @@ describe("request_peer_session_reset descriptor", () => {
     expect(result.content[0]!.text).toContain(`refused: ${reason}.`);
   });
 
+  it("does not promise a result when the target already has a reset in progress", async () => {
+    const result = await tool(new Error("session_reset_pending")).descriptor.handler(VALID);
+    const text = result.content[0]!.text;
+    expect(result.isError).toBe(true);
+    expect(text).toContain("not accepted");
+    expect(text).toContain("list_agents");
+    // The server tells only the original requester; this call is not one.
+    expect(text).not.toMatch(/will reach you|reach you|you will be told|you will receive/i);
+  });
+
+  it("no refusal text promises a result: only an accepted request does", async () => {
+    for (const reason of [
+      "reset_not_authorized",
+      "work_control_unavailable",
+      "unknown_agent",
+      "unsupported_session_reset",
+      "agent_in_conversation",
+      "agent_busy",
+      "session_reset_pending",
+      "runner_unavailable",
+      "unknown_error",
+    ]) {
+      const result = await tool(new Error(reason)).descriptor.handler(VALID);
+      expect(result.content[0]!.text, reason).not.toMatch(/reach you/i);
+    }
+  });
+
   it("tells the director to yield first when the target is busy", async () => {
     const result = await tool(new Error("agent_busy")).descriptor.handler(VALID);
     expect(result.content[0]!.text).toContain("yield");
