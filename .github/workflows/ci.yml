@@ -172,6 +172,9 @@ jobs:
           node --test scripts/test/extract-session-reset-request-reply-vocabulary.test.mjs
           KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS="$(node scripts/extract-session-reset-request-reply-vocabulary.mjs)"
           export KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS
+          node --test scripts/test/extract-peer-session-reset-reply-vocabulary.test.mjs
+          KAOIRO_PEER_SESSION_RESET_REPLY_REASONS="$(node scripts/extract-peer-session-reset-reply-vocabulary.mjs)"
+          export KAOIRO_PEER_SESSION_RESET_REPLY_REASONS
           # RuntimeConfigTest also reads the repository's scripts/dev.sh and
           # docs/reference/configuration/server.md (the canonical DETS store
           # list, issue #307), and SessionPointerRecoveryTest reads
@@ -191,6 +194,7 @@ jobs:
             protocol/fixtures runner/test/fixtures | docker run --rm -i -w /w \
             -e CI \
             -e KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS \
+            -e KAOIRO_PEER_SESSION_RESET_REPLY_REASONS \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
               tar -xf - -C /w
@@ -218,6 +222,7 @@ jobs:
                 mix format --check-formatted
                 mix compile --warnings-as-errors
                 MIX_ENV=test mix run --no-start scripts/check_session_reset_request_reply_vocabulary.exs
+                MIX_ENV=test mix run --no-start scripts/check_peer_session_reset_reply_vocabulary.exs
 
                 # issue #282: permanent lightweight runner-stall probe.
                 # Samples the monotonic clock every 10ms around mix test;
