@@ -11,9 +11,13 @@ import {
   operatorApprovalGated,
   PermissionBroker,
   QuestionBroker,
+  REQUEST_PEER_SESSION_RESET_TOOL_FQN,
   REQUEST_SESSION_RESET_TOOL_FQN,
+  peerSessionResetRootInput,
+  requestPeerSessionResetDescriptor,
   requestSessionResetDescriptor,
   SessionResetCoordinator,
+  validateRequestPeerSessionResetInput,
   validateRequestSessionResetInput,
   type Envelope,
   type WhoamiSnapshot,
@@ -396,6 +400,13 @@ export async function runAntigravityCli(
       if (typeof host === "undefined") pendingWorkNotices.push(text);
       else instructionChain = instructionChain.then(() => host!.send(text)).catch(() => {});
     },
+    // issue #677: a director's peer reset result no tool call was waiting
+    // for (wait=false, or one that outlived the 70 s wait).
+    onPeerSessionResetResult: notice => {
+      const text = peerSessionResetRootInput(notice);
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host!.send(text)).catch(() => {});
+    },
     // issue #359 M1: negotiate permission_sync so the server seeds this
     // session's permission ledger and relays a durable control/next on
     // reconnect. Gates the supports_permission_switch advertisement.
@@ -475,6 +486,24 @@ export async function runAntigravityCli(
   ) {
     permissionSyncSupported = await link.waitForPermissionSyncNegotiation();
   }
+  // The bridge call blocks while the operator answers, so the turn watchdog
+  // must treat the wait as a lease rather than inactivity.
+  const decideBridgeToolPermission = async (
+    toolName: string,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => {
+    const permissionHost = host;
+    const turnToken = permissionHost?.activeInterAgentTurnToken();
+    const lease = permissionHost === undefined || turnToken === null || turnToken === undefined
+      ? null
+      : permissionHost.beginPermissionWaitLease(turnToken, "bridge");
+    try {
+      return await permissionBroker.decide(toolName, input, signal);
+    } finally {
+      if (lease !== null) permissionHost?.endPermissionWaitLease(lease);
+    }
+  };
   host = createHost(config, deliveryAcknowledgementRuntime.withHostOptions({
     cwd: process.cwd(),
     appendSystemPrompt,
@@ -660,18 +689,7 @@ export async function runAntigravityCli(
           offerCompact: false,
         }),
         {
-          decide: async (toolName, input, signal) => {
-            const permissionHost = host;
-            const turnToken = permissionHost?.activeInterAgentTurnToken();
-            const lease = permissionHost === undefined || turnToken === null || turnToken === undefined
-              ? null
-              : permissionHost.beginPermissionWaitLease(turnToken, "bridge");
-            try {
-              return await permissionBroker.decide(toolName, input, signal);
-            } finally {
-              if (lease !== null) permissionHost?.endPermissionWaitLease(lease);
-            }
-          },
+          decide: decideBridgeToolPermission,
           // Matches Codex: the approval dialog shows the SDK-side FQN
           // (`mcp__kaoiro__request_session_reset`), which differs from the
           // bridge's own tool name (`request_session_reset`,
@@ -679,6 +697,20 @@ export async function runAntigravityCli(
           // dialog shape regardless of engine.
           toolName: REQUEST_SESSION_RESET_TOOL_FQN,
           validate: validateRequestSessionResetInput,
+        },
+      ),
+      // issue #677: same approval class as request_session_reset (every call
+      // goes through the broker on this engine).
+      operatorApprovalGated(
+        requestPeerSessionResetDescriptor({
+          request: (request, options) => link
+            ? link.requestPeerSessionReset(request, options)
+            : Promise.reject(new Error("server link unavailable")),
+        }),
+        {
+          decide: decideBridgeToolPermission,
+          toolName: REQUEST_PEER_SESSION_RESET_TOOL_FQN,
+          validate: validateRequestPeerSessionResetInput,
         },
       ),
     ],

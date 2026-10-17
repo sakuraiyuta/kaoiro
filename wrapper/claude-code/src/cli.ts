@@ -62,8 +62,11 @@ import {
   requestCompactDescriptor,
 } from "./request_compact.js";
 import {
+  REQUEST_PEER_SESSION_RESET_INPUT_SHAPE,
   REQUEST_SESSION_RESET_INPUT_SHAPE,
   SessionResetCoordinator,
+  peerSessionResetRootInput,
+  requestPeerSessionResetDescriptor,
   requestSessionResetDescriptor,
 } from "@kaoiro/agent-common";
 import { PermissionBroker } from "@kaoiro/agent-common";
@@ -1047,6 +1050,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       if (typeof host === "undefined") pendingWorkNotices.push(text);
       else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
     },
+    // issue #677: a director's peer reset result no tool call was waiting
+    // for (wait=false, or one that outlived the 70 s wait). Same hand-off as
+    // a work notice: a conversation-free root input.
+    onPeerSessionResetResult: notice => {
+      const text = peerSessionResetRootInput(notice);
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
+    },
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),
@@ -1630,6 +1641,16 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
               reserve: (mode, reason) => sessionReset.reserve(mode, reason),
             }),
             inputShape: REQUEST_SESSION_RESET_INPUT_SHAPE,
+          },
+          {
+            // issue #677: same approval class as request_session_reset, so
+            // it stays out of READ_ONLY_TOOLS too.
+            descriptor: requestPeerSessionResetDescriptor({
+              request: (request, options) => link
+                ? link.requestPeerSessionReset(request, options)
+                : Promise.reject(new Error("server link unavailable")),
+            }),
+            inputShape: REQUEST_PEER_SESSION_RESET_INPUT_SHAPE,
           },
         ], id => nativeContinuations ? host.resolveToolOrigin(id) : host.toolOrigins.resolveBound(id)),
       },

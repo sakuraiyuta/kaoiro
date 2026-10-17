@@ -40,6 +40,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   SET_STATUS_LINE_TOOL_FQN,
   READ_STATUS_LINE_TOOL_FQN,
   // NOTE: mcp__kaoiro__request_compact (phase-28 B2) and
-  // mcp__kaoiro__request_session_reset (C2) are deliberately absent — their
-  // absence IS the approval gate. Do not add them.
+  // mcp__kaoiro__request_session_reset (C2) and
+  // mcp__kaoiro__request_peer_session_reset (issue #677) are deliberately
+  // absent — their absence IS the approval gate. Do not add them.
 ]);

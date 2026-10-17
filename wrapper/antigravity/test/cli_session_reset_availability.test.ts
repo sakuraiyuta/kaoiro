@@ -71,8 +71,10 @@ describe("Antigravity CLI session-reset availability (issue #396)", () => {
     let descriptors: ToolDescriptor[];
     try {
       ({ descriptors } = await compose());
-      expect(gate).toHaveBeenCalledTimes(1);
-      expect(gate.mock.calls[0]![1]).not.toHaveProperty("autonomous");
+      // request_session_reset and request_peer_session_reset (issue #677):
+      // every call on this engine goes through the broker, never autonomous.
+      expect(gate).toHaveBeenCalledTimes(2);
+      for (const call of gate.mock.calls) expect(call[1]).not.toHaveProperty("autonomous");
     } finally { gate.mockRestore(); }
     const names = descriptors.map((descriptor) => descriptor.name);
     expect(names).toContain("request_session_reset");

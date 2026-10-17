@@ -27,6 +27,7 @@ import {
   InterAgentTool,
   PermissionBroker,
   QuestionBroker,
+  REQUEST_PEER_SESSION_RESET_TOOL_FQN,
   REQUEST_SESSION_RESET_TOOL_FQN,
   SessionResetCoordinator,
   askUserQuestionDescriptor,
@@ -38,8 +39,11 @@ import {
   mergePendingDisplayNameSync,
   operatorApprovalGated,
   flagArgument,
+  peerSessionResetRootInput,
   personaOptInSource,
+  requestPeerSessionResetDescriptor,
   requestSessionResetDescriptor,
+  validateRequestPeerSessionResetInput,
   validateRequestSessionResetInput,
 } from "@kaoiro/agent-common";
 import type {
@@ -890,6 +894,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       if (typeof host === "undefined") pendingWorkNotices.push(text);
       else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
     },
+    // issue #677: a director's peer reset result no tool call was waiting
+    // for (wait=false, or one that outlived the 70 s wait).
+    onPeerSessionResetResult: notice => {
+      const text = peerSessionResetRootInput(notice);
+      if (typeof host === "undefined") pendingWorkNotices.push(text);
+      else instructionChain = instructionChain.then(() => host.send(text)).catch(() => {});
+    },
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),
@@ -1285,6 +1296,27 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           },
           onAutonomous: () => writeRedactedStderr(
             "request_session_reset: approved by the agent's approval setting (never); no operator dialog\n",
+          ),
+        },
+      ),
+      // issue #677: same approval class as request_session_reset.
+      operatorApprovalGated(
+        requestPeerSessionResetDescriptor({
+          request: (request, options) => link
+            ? link.requestPeerSessionReset(request, options)
+            : Promise.reject(new Error("server link unavailable")),
+        }),
+        {
+          decide: (toolName, input, signal) =>
+            permissionBroker!.decide(toolName, input, signal),
+          toolName: REQUEST_PEER_SESSION_RESET_TOOL_FQN,
+          validate: validateRequestPeerSessionResetInput,
+          autonomous: () => {
+            const approval = host.bridgeToolApproval(host.activeInterAgentTurnToken());
+            return !approval.blocked && approval.turn === "never" && approval.next === "never";
+          },
+          onAutonomous: () => writeRedactedStderr(
+            "request_peer_session_reset: approved by the agent's approval setting (never); no operator dialog\n",
           ),
         },
       ),
