@@ -739,7 +739,7 @@ export function reservedSessionResetMode(
 
 /** Who initiated a reset (protocol.md, ADR-0043 D1). Mirrors
  *  @kaoiro/protocol's SessionResetOrigin. */
-export type SessionResetOrigin = "operator" | "agent_self";
+export type SessionResetOrigin = "operator" | "agent_self" | "director";
 
 /** `history_reset` broadcast payload. The optional form records the v0
  * compatibility rule: omission means preserve structured IA history. */
@@ -2897,8 +2897,29 @@ export interface SessionResetStartedPayload {
    *  composer disabled with no matching Completed. */
   origin: SessionResetOrigin;
   previous_session_id?: string;
-  /** `agent_self` only, and only when the agent supplied one. */
+  /** `agent_self` and `director` only, and only when the agent supplied one. */
   reason?: string;
+  /** `director` only (issue #677): the requesting agent and the work grant
+   *  that authorized it. Kept only in its full valid shape. */
+  requested_by?: { kind: "agent"; id: string };
+  work_id?: string;
+}
+
+/** The sentence the dashboard shows next to a reset that a director started
+ *  (issue #677); null for every other origin. `nameOf` resolves an agent id
+ *  to its display name. A `director` payload whose attribution did not
+ *  survive parsing still says a director asked. */
+export function describeResetRequester(
+  payload: Pick<SessionResetStartedPayload, "origin" | "requested_by" | "work_id">,
+  nameOf: (agentId: string) => string,
+): string | null {
+  if (payload.origin !== "director") return null;
+  const who =
+    payload.requested_by === undefined
+      ? "director"
+      : `director ${nameOf(payload.requested_by.id)}`;
+  const work = payload.work_id === undefined ? "" : ` (work ${payload.work_id})`;
+  return `${who}${work} が要求`;
 }
 
 export interface SessionResetCompletedPayload {
@@ -3510,7 +3531,31 @@ function parseResetMode(value: unknown): SessionResetMode | null {
  *  reset WAS operator-initiated. Dropping the Started broadcast would strand
  *  the composer in its disabled state. */
 function parseResetOrigin(value: unknown): SessionResetOrigin {
-  return value === "agent_self" ? "agent_self" : "operator";
+  return value === "agent_self" || value === "director" ? value : "operator";
+}
+
+/** `requested_by` / `work_id` of a director-origin reset (issue #677). Both
+ *  or neither: a half-formed attribution would name a requester without the
+ *  grant that authorized it. */
+function parseResetAttribution(
+  origin: SessionResetOrigin,
+  p: Record<string, unknown>,
+): Pick<SessionResetStartedPayload, "requested_by" | "work_id"> {
+  if (origin !== "director") return {};
+  const by = p.requested_by;
+  if (
+    typeof by !== "object" || by === null ||
+    (by as Record<string, unknown>).kind !== "agent" ||
+    typeof (by as Record<string, unknown>).id !== "string" ||
+    (by as Record<string, unknown>).id === "" ||
+    typeof p.work_id !== "string" || p.work_id === ""
+  ) {
+    return {};
+  }
+  return {
+    requested_by: { kind: "agent", id: (by as { id: string }).id },
+    work_id: p.work_id,
+  };
 }
 
 function parseResetReason(value: unknown): SessionResetErrorReason | null {
@@ -3528,11 +3573,13 @@ export function parseSessionResetStarted(
   if (typeof p.request_id !== "string" || typeof p.agent_id !== "string") return null;
   const mode = parseResetMode(p.mode);
   if (mode === null) return null;
+  const origin = parseResetOrigin(p.origin);
   return {
     request_id: p.request_id,
     agent_id: p.agent_id,
     mode,
-    origin: parseResetOrigin(p.origin),
+    origin,
+    ...parseResetAttribution(origin, p),
     ...(typeof p.previous_session_id === "string"
       ? { previous_session_id: p.previous_session_id }
       : {}),

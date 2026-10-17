@@ -57,6 +57,7 @@
     connectKaoiro,
     decideWakeAction,
     defaultSocketUrl,
+    describeResetRequester,
     dispatchOnlineWake,
     dropLatestError,
     EMPTY_ERROR_INDEX,
@@ -168,7 +169,11 @@
   // value is the mode being reset ("new" | "clear"); presence in the
   // map means the reset is between started and completed/failed, which
   // the Composer uses to disable input and show a progress line.
-  let sessionResets = $state<Record<string, "new" | "clear">>({});
+  // `requester` is the "director X (work W) が要求" sentence of a
+  // director-origin reset (issue #677), else null.
+  let sessionResets = $state<
+    Record<string, { mode: "new" | "clear"; requester: string | null }>
+  >({});
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
@@ -1377,7 +1382,13 @@
         // unsupported_session_reset / session_reset_pending /
         // runner_unavailable / spawn_failed / rollback_failed / timeout).
         onSessionResetStarted: (payload) => {
-          sessionResets = { ...sessionResets, [payload.agent_id]: payload.mode };
+          sessionResets = {
+            ...sessionResets,
+            [payload.agent_id]: {
+              mode: payload.mode,
+              requester: describeResetRequester(payload, agentDisplayName),
+            },
+          };
         },
         onSessionResetCompleted: (payload) => {
           const { [payload.agent_id]: _drop, ...rest } = sessionResets;
@@ -2091,7 +2102,8 @@
           {connection}
           {manifest}
           sessions={runnerSessions}
-          resetMode={sessionResets[selectedEnvelope.agent_id] ?? null}
+          resetMode={sessionResets[selectedEnvelope.agent_id]?.mode ?? null}
+          resetRequester={sessionResets[selectedEnvelope.agent_id]?.requester ?? null}
           {origin}
           scrollToEntryKey={timelineScrollTarget?.entryKey ?? null}
           activeTaskCount={activeTaskCountForDetail(

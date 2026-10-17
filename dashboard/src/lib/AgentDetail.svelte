@@ -85,6 +85,7 @@
     manifest = null,
     sessions = null,
     resetMode = null,
+    resetRequester = null,
     origin = null,
     scrollToEntryKey = null,
     activeTaskCount = 0,
@@ -118,6 +119,9 @@
      *  flight for this agent ("new" | "clear"), else null. Sourced from
      *  App.svelte's sessionResets state, cleared on completed / failed. */
     resetMode?: SessionResetMode | null;
+    /** issue #677: who asked, when a director started the reset in flight
+     *  ("director X (work W) が要求"); null for every other origin. */
+    resetRequester?: string | null;
     /** Viewport centre of the originating tile, for the expand anim (#36). */
     origin?: { x: number; y: number } | null;
     /** Stable identity of the timeline row that opened this detail. It is
@@ -4323,7 +4327,9 @@
           {/if}
           {#if resetMode}
             <p class="reset-progress" role="status" aria-live="polite">
-              新しいsessionを開始中…(mode: {resetMode})
+              新しいsessionを開始中…(mode: {resetMode}{resetRequester
+                ? ` / ${resetRequester}`
+                : ""})
             </p>
           {/if}
           <form class="instruct" onsubmit={sendInstruction}>

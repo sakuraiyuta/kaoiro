@@ -60,6 +60,7 @@ import {
   SELECTABLE_SANDBOX_VALUES,
   parseSessionResetCompleted,
   parseSessionResetFailed,
+  describeResetRequester,
   parseSessionResetStarted,
   reservedSessionResetMode,
   sessionCapabilitiesFrom,
@@ -2986,6 +2987,99 @@ describe("parseSessionResetStarted (ADR-0036 F7, phase-17 17-9)", () => {
     }
   });
 
+  // issue #677: the server stamps a director-origin reset with who asked and
+  // under which grant. Without "director" in the origin vocabulary this
+  // parser would present it as an operator's own action.
+  it("keeps director origin, requested_by, work_id and reason (issue #677)", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_5",
+        agent_id: "a.1",
+        mode: "new",
+        origin: "director",
+        requested_by: { kind: "agent", id: "d.1" },
+        work_id: "wrk_1",
+        reason: "fresh start",
+      }),
+    ).toEqual({
+      request_id: "rs_5",
+      agent_id: "a.1",
+      mode: "new",
+      origin: "director",
+      requested_by: { kind: "agent", id: "d.1" },
+      work_id: "wrk_1",
+      reason: "fresh start",
+    });
+  });
+
+  it("an unknown origin still degrades to operator when a director shape is present (issue #677)", () => {
+    expect(
+      parseSessionResetStarted({
+        request_id: "rs_6",
+        agent_id: "a.1",
+        mode: "new",
+        origin: "Director",
+        requested_by: { kind: "agent", id: "d.1" },
+        work_id: "wrk_1",
+      }),
+    ).toEqual({
+      request_id: "rs_6",
+      agent_id: "a.1",
+      mode: "new",
+      origin: "operator",
+    });
+  });
+
+  it("drops a malformed attribution but keeps the director origin (issue #677)", () => {
+    for (const extra of [
+      {},
+      { requested_by: { kind: "agent", id: "d.1" } },
+      { work_id: "wrk_1" },
+      { requested_by: { kind: "user", id: "d.1" }, work_id: "wrk_1" },
+      { requested_by: { kind: "agent", id: "" }, work_id: "wrk_1" },
+      { requested_by: { kind: "agent", id: 7 }, work_id: "wrk_1" },
+      { requested_by: "d.1", work_id: "wrk_1" },
+      { requested_by: null, work_id: "wrk_1" },
+      { requested_by: { kind: "agent", id: "d.1" }, work_id: "" },
+      { requested_by: { kind: "agent", id: "d.1" }, work_id: 7 },
+    ]) {
+      expect(
+        parseSessionResetStarted({
+          request_id: "rs_7",
+          agent_id: "a.1",
+          mode: "new",
+          origin: "director",
+          ...extra,
+        }),
+      ).toEqual({
+        request_id: "rs_7",
+        agent_id: "a.1",
+        mode: "new",
+        origin: "director",
+      });
+    }
+  });
+
+  it("ignores requested_by and work_id on a non-director origin (issue #677)", () => {
+    for (const origin of ["operator", "agent_self"]) {
+      expect(
+        parseSessionResetStarted({
+          request_id: "rs_8",
+          agent_id: "a.1",
+          mode: "new",
+          origin,
+          requested_by: { kind: "agent", id: "d.1" },
+          work_id: "wrk_1",
+        }),
+      ).toEqual({
+        request_id: "rs_8",
+        agent_id: "a.1",
+        mode: "new",
+        origin,
+      });
+    }
+  });
+
   it("mode 不正は null (fail-closed)", () => {
     expect(
       parseSessionResetStarted({
@@ -4124,5 +4218,52 @@ describe("sessionCapabilitiesFrom — permission_switch_axes ceilings", () => {
     expect(capsWith({})?.permission_switch_axes).toEqual({});
     expect(capsWith(null)?.permission_switch_axes).toEqual({});
     expect(capsWith("broken")?.permission_switch_axes).toEqual({});
+  });
+});
+
+describe("describeResetRequester (issue #677)", () => {
+  const nameOf = (id: string) => (id === "d.1" ? "ひすい" : id);
+
+  it("names the director and the work", () => {
+    expect(
+      describeResetRequester(
+        {
+          origin: "director",
+          requested_by: { kind: "agent", id: "d.1" },
+          work_id: "wrk_1",
+        },
+        nameOf,
+      ),
+    ).toBe("director ひすい (work wrk_1) が要求");
+  });
+
+  it("falls back to the agent id when the directory has no name", () => {
+    expect(
+      describeResetRequester(
+        {
+          origin: "director",
+          requested_by: { kind: "agent", id: "gone.1" },
+          work_id: "wrk_1",
+        },
+        nameOf,
+      ),
+    ).toBe("director gone.1 (work wrk_1) が要求");
+  });
+
+  it("still says a director asked when the attribution did not survive", () => {
+    expect(describeResetRequester({ origin: "director" }, nameOf)).toBe(
+      "director が要求",
+    );
+  });
+
+  it("says nothing for the other origins", () => {
+    for (const origin of ["operator", "agent_self"] as const) {
+      expect(
+        describeResetRequester(
+          { origin, requested_by: { kind: "agent", id: "d.1" }, work_id: "w" },
+          nameOf,
+        ),
+      ).toBeNull();
+    }
   });
 });
