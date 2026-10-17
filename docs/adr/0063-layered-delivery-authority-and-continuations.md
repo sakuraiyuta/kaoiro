@@ -458,3 +458,56 @@ its D9 supplement; the rest of those records stands.
   this default, the next runner update changes the behavior of production
   Claude peers, so the rollout follows the
   [high-risk change procedure](../operations/high-risk-change-release.md).
+
+## Amendment (2026-10-17, third native acceptance result)
+
+The third native acceptance tranche ran on candidate commit 1810be55 with
+the method recorded above. Each run started a fresh test server, so no
+conversation or delivery state crossed runs, and no run stopped on ambiguous
+result ownership. Two readers of different model families judged the 41 runs
+independently from the raw records and agreed on every run: 26 pass, 15
+unmeasured, 0 fail. The director spot-checked the degrade, the lease-held stop
+and a Monitor admission in the records. Unmeasured runs are not counted as
+passes, and 0 fail does not mean every expectation was measured natively.
+
+- Unmeasured:
+  - Survival after an Agent interrupt (T3-3b, 3 runs). Each interrupt stopped
+    the Agent task and cancelled the child's pending request, so no surviving
+    child handed back a report.
+  - Batched completions at the product entry (T3-4 to T3-6, 9 runs, including
+    the legacy control). Completions reached the product's prompt hook one per
+    prompt. In one run the CLI put two notifications in one model request, yet
+    the product still received them as two prompts, so batch attribution and
+    the batch-basis-conflict refusal were not exercised.
+  - Monitor deny (T3-10, 2 runs). With Monitor denied, the CLI did not offer
+    the tool to the model, so no call reached the permission-denied path.
+  - One Monitor interrupt run (T3-3) in which the Monitor expired before the
+    test released its output. The other runs of that scenario passed, two with
+    `1`, three with the variable unset and the legacy control.
+- Reading rules:
+  - The automatic notice the host sends after an interrupt
+    (`peer error (interrupted)`) is not a product send. Counts cover only sends
+    from the event root under test; the notice adds one attempt, acceptance and
+    receipt to the raw counts and cannot turn an unmeasured run into a pass.
+  - A legacy control (`0`) passes on the difference it shows, not on native
+    success. The ordinary event-root send is refused with `unbound_tool_call`.
+    The ask control is denied by the test because its broker input carries no
+    native marker, so it does not show that the product refuses a permitted
+    Monitor event. The dispatch-tamper control damages the transcript only at a
+    later completion, so it does not compare the same dispatch span.
+- The lease boundary changed the expectation for tampering before a lease is
+  held (T3-8): the run closes native continuations with `acquisition_failed`,
+  refuses that call for good and ends the notification turn normally, instead
+  of fail-stopping the host. Both runs matched. Tampering while a lease is held
+  (T3-7) still fail-stops, and both native runs did. These runs add no ordinary
+  input after the degrade; that is covered by a separate real-SDK probe, where
+  an unreadable transcript with the variable unset gave one warning, no
+  fail-stop and a normal turn.
+- The second tranche measured the running-subagent limit above (T2-3). When a
+  peer's SendMessage reaches the child only after run1 completes, it starts
+  run2, which retires run1's capability; a reply from run1's report is then
+  refused before sending (`unbound_tool_call`). This is the designed refusal,
+  not a misdelivery. When the child's round has not ended (T2-3c), the message
+  reaches the child within run1 and the reply is admitted. The refusal is not
+  an evidence failure, so it does not close native continuations; that was read
+  from the code of this build, not re-run on it.
