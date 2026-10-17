@@ -121,3 +121,11 @@ test("rejects an empty reply vocabulary", async () => {
     /PEER_SESSION_RESET_ERROR_REASONS is empty/
   );
 });
+
+test("reads wrapper/core/src/transport.ts by default, as the CI step runs it", () => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const result = spawnSync(process.execPath, [extractor], { cwd: root, encoding: "utf8" });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), JSON.parse(extract(transport).stdout));
+});
