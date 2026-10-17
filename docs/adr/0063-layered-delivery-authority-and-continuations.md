@@ -443,6 +443,17 @@ its D9 supplement; the rest of those records stands.
   A scenario the readers find ambiguous is recorded here as unmeasured and
   does not block landing. Native runs with the variable unset and with `0` are
   part of this acceptance; every earlier native run set `1`.
+- With native on by default, an evidence failure must not end ordinary work.
+  The host fail-stops only while a native turn holds a lease, judged at the
+  moment the failure is detected; that span lasts as long as the native turn.
+  Any other failure, including one while an unowned root is still being
+  proved, closes native continuations for the rest of the wrapper lifetime:
+  the epoch is invalidated, the failed call is refused for good, and ordinary
+  input continues. Completion reports, including Bash and Workflow, cannot
+  send until the wrapper is relaunched, and the host says so in its warning
+  and the operator log. Restoring native coordination in place, by a new
+  epoch at a quiet boundary, is a separate design and not part of this
+  change.
 - Production rollout remains a separate operator gate. Once develop carries
   this default, the next runner update changes the behavior of production
   Claude peers, so the rollout follows the

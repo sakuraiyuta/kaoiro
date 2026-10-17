@@ -223,6 +223,10 @@ In the [Claude native continuation mode](../engines/claude-events.md#native-cont
 `native_evidence_damaged` and `stale_native_lease` are local refusals with
 `send_not_attempted: true`. No message was sent. Retrying in that continuation,
 changing conversation ID or supplying a ticket cannot create the missing native
-proof. Wait for a new confirmed input; when admission has fail-stopped, restore
-the wrapper after disconnection. A mixed snapshot batch is diagnosed as
+proof. `native_evidence_damaged` stops the host only while a native turn holds
+a lease; otherwise native continuations close for the rest of the wrapper
+lifetime, ordinary input continues, and a send from an unowned root returns
+`unbound_tool_call` at once. Wait for a new confirmed input; when admission
+has fail-stopped, or to restore native continuations, relaunch or restore the
+wrapper. A mixed snapshot batch is diagnosed as
 `batch-basis-conflict` and grants no owner or partial claim consumption.

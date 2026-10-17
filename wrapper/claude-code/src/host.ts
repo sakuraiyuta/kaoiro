@@ -384,9 +384,28 @@ export type {
   QuestionDecision,
 } from "@kaoiro/agent-common";
 
+/** Why native continuations closed for the rest of a host lifetime. */
+export type NativeUnavailableReason =
+  | "session_or_path_changed"
+  | "evidence_unreadable"
+  | "tool_session_mismatch"
+  | "acquisition_failed"
+  | "dispatch_evidence_unreadable"
+  | "terminal_origin_conflict";
+
+export function nativeUnavailableMessage(reason: NativeUnavailableReason): string {
+  return `[kaoiro] native continuations are unavailable for the rest of this wrapper lifetime (${reason}): ` +
+    "task and subagent completion reports cannot send; ordinary input continues; " +
+    "relaunch the wrapper to restore native coordination";
+}
+
 export interface AgentHostOptions {
   nativeContinuations?: boolean;
   nativeReplyBasis?: ReplyBasis;
+  /** Called once when native continuations close for the rest of this
+   *  lifetime because their evidence failed while no native turn held a
+   *  lease. Ordinary input continues. */
+  onNativeUnavailable?: (info: { reason: NativeUnavailableReason }) => void;
   deliveryPolicy?: DeliveryPolicyController;
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
@@ -814,6 +833,7 @@ export class AgentHost implements EngineAdapter {
   #nativeRegistry: ContinuationRegistry | undefined;
   #nativeProofs: ContinuationProofs | undefined;
   #nativeReader: NativeTranscriptReader | undefined;
+  #nativeUnavailable: NativeUnavailableReason | null = null;
   #nativeEpoch = 0;
   #pendingNative: { promptId: string; sessionId: string; prompt: string; basis: DetachedReplyBasis; controller: AbortController; claimsLive: () => boolean } | undefined;
   readonly #nativeCallDeadlines = new Map<string, number>();
@@ -2605,20 +2625,44 @@ export class AgentHost implements EngineAdapter {
     this.#nativeLeases.clear();
   }
 
+  #nativeLeaseHeld(): boolean {
+    const turn = this.#activeTurn;
+    return turn !== null && turn.kind === "sdk_notification" && this.#nativeLeases.has(turn.turnToken);
+  }
+
+  /** Every native evidence failure is judged by the state when it is
+   *  detected, never the state before an await: a native turn holding a lease
+   *  depends on this evidence, so the host stops; otherwise only native
+   *  continuations close and ordinary input continues (issue #426). */
+  #nativeEvidenceFailed(reason: NativeUnavailableReason, detail: string): void {
+    if (this.#nativeLeaseHeld()) { this.#failStopLive(detail); return; }
+    this.#degradeNative(reason);
+  }
+
+  #degradeNative(reason: NativeUnavailableReason): void {
+    // close() has already invalidated native; a failure it causes is no news.
+    if (this.#nativeUnavailable !== null || this.#admissionFailStopped || this.#closed) return;
+    this.#nativeUnavailable = reason;
+    this.#invalidateNative();
+    this.#warn(nativeUnavailableMessage(reason));
+    // The notice is diagnostic: its failure must not keep a refusal from completing.
+    try { this.#options.onNativeUnavailable?.({ reason }); } catch { /* reported by the warning above */ }
+  }
+
   async #observeNativeHook(input: HookInput): Promise<void> {
     if (!this.#options.nativeContinuations || input.agent_id || this.#closed || this.#admissionFailStopped ||
-        input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id) return;
+        this.#nativeUnavailable !== null || input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id) return;
     if (!this.#nativeRegistry) {
       this.#nativeRegistry = new ContinuationRegistry(input.session_id, this.#warn);
       if (this.#options.nativeReplyBasis) this.#nativeProofs = new ContinuationProofs(this.#nativeRegistry, this.#options.nativeReplyBasis);
       this.#nativeReader = new NativeTranscriptReader(input.transcript_path, input.session_id);
     }
     if (this.#nativeRegistry.sessionId !== input.session_id || this.#nativeReader?.path !== input.transcript_path) {
-      this.#failStopLive("native continuation session or transcript path changed"); return;
+      this.#nativeEvidenceFailed("session_or_path_changed", "native continuation session or transcript path changed"); return;
     }
     this.#nativeRegistry.tick(this.#activeTurn !== null || this.#foreignOccupancy !== null);
     try { await this.#nativeReader.capture(input.prompt_id); }
-    catch { this.#failStopLive("native transcript evidence damaged; restart required"); }
+    catch { this.#nativeEvidenceFailed("evidence_unreadable", "native transcript evidence damaged; restart required"); }
   }
 
   #reserveNativeFold(prompt: string, occurrence: string): void {
@@ -2668,7 +2712,9 @@ export class AgentHost implements EngineAdapter {
             if (!this.#nativeLeaseLive(turn.turnToken, epoch)) return "stale_native_lease";
             try { await reader.validate(anchor); }
             catch {
-              this.#failStopLive("native transcript evidence damaged before dispatch; restart required");
+              // The turn may have completed and dropped its lease during the await.
+              this.#nativeEvidenceFailed("dispatch_evidence_unreadable",
+                "native transcript evidence damaged before dispatch; restart required");
               return "native_evidence_damaged";
             }
             return this.#nativeLeaseLive(turn.turnToken, epoch) ? undefined : "stale_native_lease";
@@ -2691,7 +2737,7 @@ export class AgentHost implements EngineAdapter {
         });
       }
     } catch {
-      this.#failStopLive("native transcript acquisition failed; restart required");
+      this.#nativeEvidenceFailed("acquisition_failed", "native transcript acquisition failed; restart required");
     }
     this.toolOrigins.reject(callId);
     pending.controller.abort();
@@ -2717,9 +2763,20 @@ export class AgentHost implements EngineAdapter {
   async #nativePreTool(input: HookInput, callId: string | undefined, signal: AbortSignal): Promise<Record<string, unknown> | undefined> {
     if (!this.#options.nativeContinuations || input.hook_event_name !== "PreToolUse" || !callId || callId !== input.tool_use_id ||
         this.#admissionFailStopped || this.#closed) return undefined;
+    if (this.#nativeUnavailable !== null) {
+      // An unowned root can no longer earn a native origin: refuse its send
+      // now rather than let the origin wait out its deadline.
+      if (!input.agent_id && input.prompt_id && input.tool_name === INTER_AGENT_TOOL_FQN && !this.#promptOwners.has(input.prompt_id)) {
+        this.toolOrigins.reject(callId);
+        this.#warn("native continuation refused: native_unavailable");
+      }
+      return undefined;
+    }
     const registry = this.#nativeRegistry;
     if (!registry) return undefined;
-    if (input.session_id !== registry.sessionId) { this.#failStopLive("native tool session mismatch"); return undefined; }
+    if (input.session_id !== registry.sessionId) {
+      this.#nativeEvidenceFailed("tool_session_mismatch", "native tool session mismatch"); return undefined;
+    }
     if (!input.tool_input || typeof input.tool_input !== "object" || Array.isArray(input.tool_input)) return undefined;
     const toolInput = input.tool_input as Record<string, unknown>;
     registry.observeCall(callId, input.tool_name, toolInput);
@@ -2733,7 +2790,8 @@ export class AgentHost implements EngineAdapter {
   }
 
   #nativePostTool(input: HookInput): void {
-    if (!this.#options.nativeContinuations || (input.hook_event_name !== "PostToolUse" && input.hook_event_name !== "PostToolUseFailure") ||
+    if (!this.#options.nativeContinuations || this.#nativeUnavailable !== null ||
+        (input.hook_event_name !== "PostToolUse" && input.hook_event_name !== "PostToolUseFailure") ||
         input.session_id !== this.#nativeRegistry?.sessionId) return;
     if (!input.tool_input || typeof input.tool_input !== "object" || Array.isArray(input.tool_input)) return;
     const toolInput = input.tool_input as Record<string, unknown>;
@@ -3190,7 +3248,8 @@ export class AgentHost implements EngineAdapter {
           this.#pendingNative = undefined;
           const lease = this.#activeTurn ? this.#nativeLeases.get(this.#activeTurn.turnToken) : undefined;
           if (lease && !this.#nativeTerminalMatches(lease.origin, lease.sources, message)) {
-            this.#failStopLive("native continuation terminal origin conflicts with its opener");
+            // The active turn holds this lease, so the common decision stops the host here.
+            this.#nativeEvidenceFailed("terminal_origin_conflict", "native continuation terminal origin conflicts with its opener");
             continue;
           }
           const notificationResult = lease !== undefined || (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";

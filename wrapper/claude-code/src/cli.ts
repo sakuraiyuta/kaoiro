@@ -30,7 +30,7 @@ import {
   sessionLogPath,
   sessionSidecarPath,
 } from "./history.js";
-import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
+import { AgentHost, CLAUDE_EFFORT_LEVELS, nativeUnavailableMessage } from "./host.js";
 import type {
   SessionLifecycleKind,
   SessionLifecycleTrigger,
@@ -1330,6 +1330,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onState,
     nativeContinuations,
     ...(nativeContinuations ? { nativeReplyBasis: interAgent!.replyBasis } : {}),
+    // The host already wrote the warning; this puts it in the operator-visible log.
+    onNativeUnavailable: ({ reason }) => emitSystemLog(nativeUnavailableMessage(reason)),
     deliveryPolicy,
     pendingReceiptRootTimeoutMs,
     phase2RootScheduling: () => earlyNegotiated() || yieldNegotiated(),

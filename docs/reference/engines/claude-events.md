@@ -624,6 +624,23 @@ are allowed; replacement, deletion, truncation, malformed complete rows or prior
 byte changes invalidate the epoch. The actual send awaits this check again,
 then checks the live origin synchronously before dispatch.
 
+A failed check is judged by the state when it is detected, not before an
+await. While a native turn holds a lease, the host fail-stops with the native
+statement (for example `native transcript evidence damaged before dispatch;
+restart required`). Otherwise only native continuations close for the rest
+of the wrapper lifetime: the epoch is invalidated, prepared capabilities
+close, the failed call is refused for good, an unowned root keeps its
+occupancy until its terminal drains it, and ordinary operator and peer input
+continues. The host writes `[kaoiro] native continuations are unavailable for
+the rest of this wrapper lifetime (<reason>): ...` once, the CLI puts the same
+line into the operator-visible system log, and a later send from an unowned
+root is refused at once: the tool returns `unbound_tool_call` and the host
+writes `native continuation refused: native_unavailable`.
+Nothing restores native coordination within that lifetime and there is no
+fallback to the legacy matcher, so Agent, Monitor, Bash and Workflow
+completion reports cannot send until the wrapper is relaunched. Session,
+result-index and ownership conflicts keep their own fail-stops.
+
 Agent completion and Monitor event/completion blocks are parsed structurally, before scalar
 comparison. Escaped tag-looking payload remains data. One prompt may contain
 1–16 complete independently proved blocks; invalid siblings and incompatible

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HookInput, Options, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { InterAgentTool, INTER_AGENT_TOOL_FQN, type Envelope } from "@kaoiro/agent-common";
-import { AgentHost, type AgentHostOptions } from "../src/host.js";
+import { AgentHost, nativeUnavailableMessage, type AgentHostOptions } from "../src/host.js";
 import { escapeNativeScalar } from "../src/continuation_markers.js";
 import { ContinuationProofs } from "../src/continuation_proof.js";
 import { ContinuationRegistry } from "../src/continuation_registry.js";
@@ -72,12 +72,14 @@ describe("native continuation host and actual send path", () => {
     "peer-guard-quote", "agent-stop-success", "agent-stop-failure-hook", "agent-stop-unmeasured-result", "agent-stop-no-command-result",
     "agent-stop-other-id", "agent-stop-other-task-id", "agent-stop-interrupt-failure", "agent-stop-unflagged-failure", "agent-reset-in-validate", "agent-reset-and-damage-in-validate",
     "agent-permission-denied", "agent-permission-denied-other-session", "agent-host-stop-task",
+    "degrade-before-report", "agent-degrade-before-report", "bash-degrade-before-report", "workflow-degrade-before-report", "peer-degrade-before-report", "throwing-notice-degrade-before-report",
     ...tamperKinds.flatMap(kind => [`agent-tamper-bind-${kind}`, `agent-tamper-send-${kind}`])])("handles %s with its source-specific frozen basis", async variant => {
     const dir = await mkdtemp(join(tmpdir(), "kaoiro-426-host-")); scratch.push(dir);
     const path = join(dir, "native.jsonl");
     // An earlier row gives the tamper variants committed bytes that are not the opener itself.
     await writeFile(path, variant.startsWith("agent-tamper") ? '{"type":"assistant","text":"before"}\n' : "");
-    const outgoing: Envelope[] = [], warnings: string[] = [], starts: string[] = [], failStops: unknown[] = [];
+    const outgoing: Envelope[] = [], warnings: string[] = [], starts: string[] = [], failStops: unknown[] = [], unavailable: string[] = [];
+    let resolveMs = 0;
     const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
       sendInterAgent: async envelope => { outgoing.push(envelope); return { kind: "accepted", stamp: null }; } });
     let host!: AgentHost;
@@ -133,7 +135,7 @@ describe("native continuation host and actual send path", () => {
         await fire("UserPromptSubmit", { prompt_id: "parent", prompt: "launch", source: "sdk" });
         yield frame({ type: "system", subtype: "init", session_id: "s" });
         const peer = variant.startsWith("peer");
-        const source = peer || variant.startsWith("agent") ? "Agent" : variant.startsWith("bash") || variant === "timeout-bash" ? "Bash" : variant === "workflow" ? "Workflow" : "Monitor";
+        const source = peer || variant.startsWith("agent") ? "Agent" : variant.startsWith("bash") || variant === "timeout-bash" ? "Bash" : variant.startsWith("workflow") ? "Workflow" : "Monitor";
         const input = { command: "printf event", description: "watch", timeout_ms: 1000,
           ...(source === "Agent" ? { prompt: "report", subagent_type: "general-purpose", run_in_background: true } : {}) };
         const updated = await fire("PreToolUse", { prompt_id: "parent", tool_name: source, tool_use_id: "launch", tool_input: input, ...(variant === "child-launch" ? { agent_id: "child" } : {}) }, "launch") as { hookSpecificOutput?: { updatedInput?: Record<string, unknown> } };
@@ -219,11 +221,15 @@ describe("native continuation host and actual send path", () => {
           turnPosition: { promptIndex: 0 }, promptSource: variant === "non-system-row" ? "user" : "system", turnOrigin: peer ? "peer" : "task_notification",
           origin, message: { role: "user", content: peer ? peerData.row.message.content : prompt } }) + "\n";
         if (variant !== "delayed-row" && variant !== "missing-row") await appendFile(path, row);
+        // A complete row that is not JSON: the reader fails before any native turn holds a lease.
+        if (variant.endsWith("degrade-before-report")) await appendFile(path, "broken\n");
         await fire("UserPromptSubmit", { prompt_id: "return", prompt });
         const pending = fire("PreToolUse", { prompt_id: "return", tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: "send", tool_input: {} }, "send");
         if (variant === "delayed-row") { await new Promise(r => setTimeout(r, 60)); await appendFile(path, row); }
         await pending;
+        const resolveStart = performance.now();
         bound = await host.resolveToolOrigin("send");
+        resolveMs = performance.now() - resolveStart;
         if (variant === "stop-before-send") {
           await fire("PreToolUse", { prompt_id: "return", tool_name: "TaskStop", tool_use_id: "stop", tool_input: { task_id: "task" } }, "stop");
           yield frame({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", run_id: "run", tool_use_id: "launch", status: "stopped", summary: "watch" });
@@ -242,7 +248,7 @@ describe("native continuation host and actual send path", () => {
       return Object.assign(script(), { interrupt: async () => {}, stopTask: async () => {} }) as unknown as Query;
     }) as NonNullable<AgentHostOptions["queryFn"]>;
     host = new AgentHost(config, { queryFn, onState: () => {}, warn: message => warnings.push(message), nativeContinuations: true, nativeReplyBasis: tool.replyBasis,
-      onAdmissionFailStop: info => failStops.push(info),
+      onAdmissionFailStop: info => failStops.push(info), onNativeUnavailable: ({ reason }) => { unavailable.push(reason); if (variant.startsWith("throwing-notice")) throw Error("notice sink down"); },
       onTurnStart: ({ turnToken, kind }) => { starts.push(kind ?? "wrapper"); if (kind !== "sdk_notification") tool.replyBasis.begin(turnToken, [inbound(1)], undefined, true); },
       onPromptAdmitted: token => tool.confirmReplyInput(token), onTurnEnd: ({ turnToken }) => { if (turnToken) tool.endReplyInput(turnToken); } });
     try { await host.run("launch"); } finally { host.close(); }
@@ -250,26 +256,39 @@ describe("native continuation host and actual send path", () => {
     const heldStop = ["agent-stop-success", "agent-stop-unmeasured-result", "agent-stop-no-command-result", "agent-stop-other-id",
       "agent-stop-other-task-id", "agent-stop-interrupt-failure", "agent-stop-unflagged-failure"];
     const refusedPeer = ["peer-warning", "peer-unwrapped", "peer-two-frames"].includes(variant);
-    const refused = refusedPeer || variant === "unknown-source" || variant === "non-system-row" || variant.endsWith("damage-before-send") || variant === "child-launch" || variant === "missing-row" || variant === "agent-wrong-run" || variant === "agent-missing-producer" || variant === "agent-fold" || variant === "agent-fold-peer-own" || heldStop.includes(variant) || variant === "agent-permission-denied" || variant === "agent-host-stop-task" || variant.startsWith("agent-tamper") || variant.includes("-in-validate");
+    const refused = refusedPeer || variant === "unknown-source" || variant === "non-system-row" || variant.endsWith("damage-before-send") || variant === "child-launch" || variant === "missing-row" || variant === "agent-wrong-run" || variant === "agent-missing-producer" || variant === "agent-fold" || variant === "agent-fold-peer-own" || heldStop.includes(variant) || variant === "agent-permission-denied" || variant === "agent-host-stop-task" || variant.startsWith("agent-tamper") || variant.includes("-in-validate") || variant.endsWith("degrade-before-report");
     expect(outgoing).toHaveLength(refused ? 0 : 1);
     expect(sendResult?.isError).toBe(refused ? true : undefined);
     if (!refused) expect((outgoing[0]!.payload as { in_reply_to: number }).in_reply_to).toBe(["bash", "workflow", "timeout-bash"].includes(variant) ? 3 : 1);
-    expect(starts).toHaveLength(refusedPeer || variant.startsWith("agent-tamper-bind-") || ["agent-permission-denied", "agent-host-stop-task"].includes(variant) || ["unknown-source", "non-system-row", "child-launch", "missing-row", "agent-wrong-run", "agent-missing-producer", "agent-fold", "agent-fold-peer-own", ...heldStop, "agent-reset-in-validate", "agent-reset-and-damage-in-validate"].includes(variant) ? 1 : 2)
+    expect(starts).toHaveLength(refusedPeer || variant.startsWith("agent-tamper-bind-") || ["agent-permission-denied", "agent-host-stop-task"].includes(variant) || ["unknown-source", "non-system-row", "child-launch", "missing-row", "agent-wrong-run", "agent-missing-producer", "agent-fold", "agent-fold-peer-own", ...heldStop, "agent-reset-in-validate", "agent-reset-and-damage-in-validate"].includes(variant) || variant.endsWith("degrade-before-report") ? 1 : 2)
     if (variant === "agent-stop-success") expect(stopOutcomes).toEqual([["stop", true]]);
     if (variant === "agent-stop-failure-hook") expect(stopOutcomes).toEqual([["stop", false]]);
     if (heldStop.includes(variant) && variant !== "agent-stop-success") expect(stopOutcomes).toEqual([]);
     const statement = (text: string) => warnings.some(message => message.includes(text));
     if (variant.endsWith("damage-before-send") || variant.startsWith("agent-tamper-send-")) {
+      // The native turn still holds its lease when the damage is detected, so the host stops.
       expect(statement("[kaoiro] native transcript evidence damaged before dispatch; restart required")).toBe(true);
       expect(failStops.length).toBeGreaterThan(0);
+      expect(unavailable).toEqual([]);
     }
     if (variant === "agent-reset-and-damage-in-validate" || variant.startsWith("agent-tamper-bind-")) {
-      expect(statement("[kaoiro] native transcript acquisition failed; restart required")).toBe(true);
+      // No native turn holds a lease while the opener is still being proved: only native closes.
+      expect(statement(nativeUnavailableMessage("acquisition_failed"))).toBe(true);
+      expect(statement("native transcript acquisition failed; restart required")).toBe(false);
       expect(statement("native continuation proof acquisition refused; call cannot revive")).toBe(true);
-      expect(failStops.length).toBeGreaterThan(0);
+      expect(failStops).toHaveLength(0);
+      expect(unavailable).toEqual(["acquisition_failed"]);
+    }
+    if (variant.endsWith("degrade-before-report")) {
+      // Authority launched before the evidence failed closes with it, and the refusal does not wait out the deadline.
+      expect(unavailable).toEqual(["evidence_unreadable"]);
+      expect(statement(nativeUnavailableMessage("evidence_unreadable"))).toBe(true);
+      expect(statement("native continuation refused: native_unavailable")).toBe(true);
+      expect(failStops).toHaveLength(0);
+      expect(resolveMs).toBeLessThan(1000);
     }
     if (variant.includes("-in-validate")) expect(commits).toBe(0);
     if (variant === "agent-reset-in-validate") expect(failStops).toHaveLength(0);
-    if (variant === "agent-reset-and-damage-in-validate") expect(failStops.length).toBeGreaterThan(0);;
+    if (variant === "agent-reset-and-damage-in-validate") expect(failStops).toHaveLength(0);
   }, 10000);
 });

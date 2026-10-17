@@ -183,6 +183,9 @@ reactivations, and Monitor descriptions with wrapper-issued launch markers. It
 requires native transcript evidence before granting a new send origin. Unknown
 or unproved sources remain unable to send; Bash and Workflow completion policy
 is retained. It does not enable native Monitor tools or change tool permission.
+If the native transcript evidence becomes unusable while no native turn holds
+a lease, only native continuations close for the rest of that wrapper
+lifetime and ordinary input continues; relaunch the wrapper to restore them.
 
 Native is the default because peer coordination builds on it; `0` is the
 fallback for when native ownership must be withdrawn.
