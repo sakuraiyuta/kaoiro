@@ -34,8 +34,9 @@ it.each([
   {}, { agents: [{ agent_id: "self.agent", display_name: "Legacy" }], users: [] },
   { self: null }, { self: [] }, { self: { agent_id: "another.agent", display_name: "Wrong" } },
 ])("does not accept a legacy or mismatched self reply: %j", async reply => {
-  const { link } = await setup(() => reply);
+  const { server, link } = await setup(() => reply);
   expect(await link.requestSelfIdentity()).toBeNull();
+  expect(server.received.filter(x => x.event === "directory_request")).toHaveLength(1);
 });
 
 it.each([undefined, null, 1, "", "bad\nname", "x".repeat(65)])("omits an unusable name: %j", async display_name => {
