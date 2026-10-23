@@ -13,6 +13,28 @@ const SESSION = "fixture-session";
 const T0 = 1_760_000_000;
 const scratch: string[] = [];
 const previous = process.env.GROK_HOME;
+
+async function stage<T>(name: string, action: () => T | Promise<T>, timeoutMs = 10_000): Promise<T> {
+  const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  console.info(`[cli_history] ${name}: started`);
+  try {
+    const value = await Promise.race([
+      Promise.resolve().then(action),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs} ms`)), timeoutMs);
+      }),
+    ]);
+    console.info(`[cli_history] ${name}: completed (${Date.now() - started} ms)`);
+    return value;
+  } catch (error) {
+    console.error(`[cli_history] ${name}: failed (${Date.now() - started} ms)`);
+    throw new Error(`cli_history: ${name} failed`, { cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 afterEach(() => {
   for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true });
   if (previous === undefined) delete process.env.GROK_HOME;
@@ -62,7 +84,14 @@ async function run(options: { resume: boolean; replay: boolean; history?: string
   await vi.waitFor(() => expect(host?.state).toBe("waiting_input"), { timeout: 10_000 });
   return {
     server,
-    finish: async () => { host?.close(); await work; await server.close(); },
+    finish: async () => {
+      try {
+        await stage("host.close", async () => { host?.close(); await host?.closed; }, 5_000);
+        await stage("work", () => work, 5_000);
+      } finally {
+        await stage("server.close", () => server.close(), 5_000);
+      }
+    },
     sequence: () => server.received.map((x) => x.event).filter((e) =>
       ["history_reset", "history_replay_complete"].includes(e) || e === "envelope"),
   };
@@ -71,7 +100,8 @@ async function run(options: { resume: boolean; replay: boolean; history?: string
 it("replays a resumed session's transcript between the reset and the completion", async () => {
   const t = await run({ resume: true, replay: true, history: transcript });
   try {
-    await vi.waitFor(() => expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 });
+    await stage("history_replay_complete", () => vi.waitFor(() =>
+      expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 }));
     const events = t.server.received.map((x) => x);
     const reset = events.findIndex((x) => x.event === "history_reset");
     const complete = events.findIndex((x) => x.event === "history_replay_complete");
@@ -94,7 +124,8 @@ it("replays a resumed session's transcript between the reset and the completion"
 it("still sends the reset and the completion when the resumed session has no file", async () => {
   const t = await run({ resume: true, replay: true });
   try {
-    await vi.waitFor(() => expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 });
+    await stage("history_replay_complete", () => vi.waitFor(() =>
+      expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 }));
     const events = t.server.received;
     const reset = events.findIndex((x) => x.event === "history_reset");
     const complete = events.findIndex((x) => x.event === "history_replay_complete");
@@ -106,7 +137,8 @@ it("still sends the reset and the completion when the resumed session has no fil
 it("replays a resumed session for a legacy server that sends no verdict", async () => {
   const t = await run({ resume: true, replay: false, legacy: true, history: transcript });
   try {
-    await vi.waitFor(() => expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 });
+    await stage("history_replay_complete", () => vi.waitFor(() =>
+      expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 }));
     const events = t.server.received;
     const reset = events.findIndex((x) => x.event === "history_reset");
     const complete = events.findIndex((x) => x.event === "history_replay_complete");
@@ -126,7 +158,8 @@ it("replays nothing when the server does not ask", async () => {
 it("answers a replay request on a fresh session with an empty replay, whatever other sessions hold", async () => {
   const t = await run({ resume: false, replay: true, history: transcript, historyId: "an-older-session" });
   try {
-    await vi.waitFor(() => expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 });
+    await stage("history_replay_complete", () => vi.waitFor(() =>
+      expect(t.server.received.some((x) => x.event === "history_replay_complete")).toBe(true), { timeout: 10_000 }));
     const events = t.server.received;
     const reset = events.findIndex((x) => x.event === "history_reset");
     const complete = events.findIndex((x) => x.event === "history_replay_complete");
