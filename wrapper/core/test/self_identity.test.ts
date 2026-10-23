@@ -16,6 +16,7 @@ async function setup(response: () => Record<string, unknown> | Promise<Record<st
   } : undefined);
   cleanups.push(async () => { link.close(); await server.close(); });
   await vi.waitFor(() => expect(server.joins).toBe(1));
+  expect(await link.waitForReplyBasisMode()).toBe("legacy");
   return { server, link };
 }
 
