@@ -66,6 +66,7 @@ it("does not queue a self read while disconnected and reads anew after reconnect
   expect(await link.requestSelfIdentity()).toBeNull();
   name = "Renamed";
   await vi.waitFor(() => expect(server.joins).toBe(2), { timeout: 5000 });
+  expect(await link.waitForReplyBasisMode()).toBe("legacy");
   expect((await link.requestSelfIdentity())?.display_name).toBe(name);
   expect(server.received.filter(x => x.event === "directory_request")).toHaveLength(count + 1);
 });
