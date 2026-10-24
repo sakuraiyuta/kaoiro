@@ -822,8 +822,7 @@ export class AntigravityHost implements EngineAdapter {
     void this.#drainTurns();
   }
 
-  /** Starts the startup `/usage` probe (issue #660). All probe guards in
-   *  `#maybeStartUsageProbe` still decide whether it actually spawns. */
+  /** Starts the startup `/usage` probe unless its guards decline. */
   probeRateLimits(): void {
     this.#maybeStartUsageProbe();
   }
