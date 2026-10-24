@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
+  clipText,
   effectiveStatusEnvelopeFields,
   withAgentMarker,
   initialMachineState,
@@ -2362,7 +2363,11 @@ export class AntigravityHost implements EngineAdapter {
   #publishTerminalResult(event: AgyStreamEvent): void {
     for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
     const result = agyEventToResult(event);
-    if (result !== null) this.#options.onLog?.(makeResult(this.#config, this.#now(), result));
+    if (result === null) return;
+    // The result payload has no truncated flag; clip silently so the
+    // envelope stays under the server's size cap.
+    if (result.text !== undefined) result.text = clipText(result.text).text;
+    this.#options.onLog?.(makeResult(this.#config, this.#now(), result));
   }
 
   /** issue #377 Stage 1: the prompt travels over stdin as one NDJSON line

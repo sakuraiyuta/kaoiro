@@ -4081,3 +4081,45 @@ if (args[0] === "models") {
     });
   });
 });
+
+describe("AntigravityHost result text size cap", () => {
+  const MAX_BYTES = 16_384;
+
+  async function resultText(response: string): Promise<{ text: string; wireBytes: number }> {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(
+      `${JSON.stringify({ event: "result", result: { status: "SUCCESS", response } })}\n`,
+    );
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    const envelope = logs.find((e) => e.type === "result")!;
+    host.close();
+    return {
+      text: (envelope.payload as { text: string }).text,
+      wireBytes: Buffer.byteLength(JSON.stringify(envelope), "utf8"),
+    };
+  }
+
+  it("passes a reply of exactly the cap through unchanged", async () => {
+    const reply = "a".repeat(MAX_BYTES);
+    expect((await resultText(reply)).text).toBe(reply);
+  });
+
+  it("clips a reply one byte over the cap", async () => {
+    const { text } = await resultText("a".repeat(MAX_BYTES + 1));
+    expect(Buffer.byteLength(text, "utf8")).toBe(MAX_BYTES);
+  });
+
+  it("clips at a character boundary when a multi-byte character straddles the cap", async () => {
+    // 5462 three-byte characters = 16386 bytes; the cap falls inside the last one.
+    const { text } = await resultText("あ".repeat(5462));
+    expect(text).toBe("あ".repeat(5461));
+    expect(text).not.toContain("�");
+  });
+
+  it("keeps the result envelope under the server's 65536-byte limit for a very long reply", async () => {
+    const { wireBytes } = await resultText("b".repeat(200_000));
+    expect(wireBytes).toBeLessThan(65_536);
+  });
+});
