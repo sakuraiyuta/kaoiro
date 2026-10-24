@@ -239,6 +239,19 @@ describe("state_change publication", () => {
     const published = envelopes.slice(start).filter(e => e.type === "state_change");
     expect(published.map(e => e.display_name)).toEqual(["Renamed"]);
   });
+  it("publishes waiting_question once while the same question stays pending", async () => {
+    const { host, envelopes } = await started();
+    const received = vi.spyOn(events, "updateEvents");
+    const turn = host.send("hold-chunks");
+    await waitForHeldChunks(received);
+    const start = envelopes.length;
+    host.setPendingQuestion(pendingQuestion);
+    host.setPendingQuestion(pendingQuestion);
+    expect(states(envelopes, start).filter(s => s === "waiting_question")).toHaveLength(1);
+    host.setPendingQuestion(null);
+    await host.interrupt();
+    await turn;
+  });
 });
 describe("resident ACP host", () => {
   it("fails when stdout ends without exiting", async () => {
