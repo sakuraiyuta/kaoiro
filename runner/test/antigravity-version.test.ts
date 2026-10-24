@@ -48,10 +48,16 @@ describe("resolveAgyVersion (issue #387)", () => {
   const dirs: string[] = [];
 
   afterEach(() => {
+    const errors: unknown[] = [];
     for (const dir of dirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-      expect(existsSync(dir)).toBe(false);
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch (error) {
+        errors.push(error);
+      }
+      if (existsSync(dir)) errors.push(new Error(`temporary directory remains: ${dir}`));
     }
+    if (errors.length > 0) throw new AggregateError(errors, "temporary directory cleanup failed");
   });
 
   function makeTempDir(): string {
