@@ -1,6 +1,15 @@
 defmodule KaoiroServerWeb.DeliveryPolicyTest do
   use KaoiroServerWeb.ChannelCase, async: false
-  alias KaoiroServer.{AgentAcceptance, AgentDirectory, AgentStates, DeliveryPolicies, WorkStore}
+
+  alias KaoiroServer.{
+    AgentAcceptance,
+    AgentDirectory,
+    AgentStates,
+    DeliveryPolicies,
+    TestTimeouts,
+    WorkStore
+  }
+
   alias KaoiroServerWeb.{AgentsChannel, ClientSocket, WrapperChannel, WrapperSocket}
 
   # CI scales receive budgets; the elapsed-time assertions still reject the
@@ -290,13 +299,16 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     second = client(:admin)
     left = push(first, "set_delivery_policy", request(id, "off", 1))
     right = push(second, "set_delivery_policy", request(id, "off", 1))
-    assert_receive %Phoenix.Socket.Reply{ref: ^left, status: left_status, payload: left_payload}
+
+    assert_receive %Phoenix.Socket.Reply{ref: ^left, status: left_status, payload: left_payload},
+                   TestTimeouts.durable_reply()
 
     assert_receive %Phoenix.Socket.Reply{
-      ref: ^right,
-      status: right_status,
-      payload: right_payload
-    }
+                     ref: ^right,
+                     status: right_status,
+                     payload: right_payload
+                   },
+                   TestTimeouts.durable_reply()
 
     results = [{left_status, left_payload}, {right_status, right_payload}]
     assert {:ok, %{"revision" => 2, "status" => "pending"}} in results
@@ -680,9 +692,9 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
       end)
 
     monitor = Process.monitor(caller)
-    assert_receive {:row_durable, owner}
-    assert_receive {:caller_result, :timed_out}
-    assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}
+    assert_receive {:row_durable, owner}, TestTimeouts.store_step()
+    assert_receive {:caller_result, :timed_out}, TestTimeouts.out_of_band()
+    assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, TestTimeouts.out_of_band()
     send(owner, :release)
     assert_push "delivery_policy", %{"revision" => 2, "policy" => "off"}
     assert {:ok, %{revision: 2, policy: :off}} = DeliveryPolicies.get(id)
