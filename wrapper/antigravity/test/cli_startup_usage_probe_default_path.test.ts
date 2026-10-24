@@ -116,11 +116,18 @@ async function startup(usage: { stdout: string; code: number }, resume?: string,
       .map((line) => JSON.parse(line) as string[]).filter((args) => args[1] === "/usage");
     return { states: states(), whoami, usageCalls };
   } finally {
-    toolHost?.close();
-    await host?.close();
-    try { await work; } finally { await server.close(); }
-    spy.mockRestore();
-    rmSync(root, { force: true, recursive: true });
+    // Nested so that a throwing close or a rejected run still frees the server,
+    // restores stderr and removes the temp directory.
+    try {
+      toolHost?.close();
+      await host?.close();
+      await work;
+    } finally {
+      try { await server.close(); } finally {
+        spy.mockRestore();
+        rmSync(root, { force: true, recursive: true });
+      }
+    }
   }
 }
 
