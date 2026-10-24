@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-10-23
+last_updated: 2026-10-25
 ---
 
 # Security enforcement boundaries
@@ -262,8 +262,7 @@ search the current Node directory and `/usr/local/bin:/usr/bin:/bin`. The build
 profile's sole caller, `with-build-identity.mjs`, preserves a nonempty supplied
 `PATH` exactly so pnpm, version-manager shims and nested compiler commands use
 the selected toolchain; an absent or empty `PATH` uses the fixed search path.
-Other environment keys remain allow-listed. The retained runner worker still
-uses its explicit fixed `CHILD_PATH`. Git/SSH children exclude loader settings,
+Other environment keys remain allow-listed. Git/SSH children exclude loader settings,
 arbitrary Git environment settings, and HTTP tokens. Only gh receives its HTTP credential;
 Actions Git receives an explicitly constructed authorization header. User-manager
 connection keys, runner settings and build identity fields are carried only by

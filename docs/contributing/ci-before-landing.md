@@ -2,7 +2,7 @@
 title: CI before landing on develop
 description: Run and record CI on the exact candidate before a director lands it on develop.
 status: accepted
-last_updated: 2026-10-23
+last_updated: 2026-10-25
 ---
 
 # CI before landing on develop
@@ -63,7 +63,7 @@ The implementation reviewer records this evidence for the reviewed candidate:
   equality check.
 - Workflow event and overall conclusion.
 - Every job in `ci.yml` at that SHA and its conclusion. The current workflow
-  declares `release-identity` (Node 22 and 24 matrix entries), `wrapper`,
+  declares `wrapper`,
   `runner`, `server-deploy`, `test-isolation`, `server`, `dashboard`, and
   `server-image`; the workflow file at the candidate SHA is authoritative if
   that list changes.
@@ -88,8 +88,6 @@ Record the results in the review note or PR discussion, for example:
 
 | Job from `ci.yml` | Conclusion |
 | --- | --- |
-| `release-identity` (Node 22) | `success` |
-| `release-identity` (Node 24) | `success` |
 | `wrapper` | `success` |
 | `runner` | `success` |
 | `server-deploy` | `success` |

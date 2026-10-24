@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-10-22
+last_updated: 2026-10-25
 related: [deployment]
 ---
 
@@ -35,9 +35,12 @@ the old unit. A failed check leaves the old runner running. Updater success uses
 Legacy releases can attest their pinned physical build-info JSON.
 
 Detached enqueue is not completion. Record the actual worker result, registered
-identity and required Codex acceptance in the
-[release checkpoint](build-identity-and-release-tags.md). Existing retained
+identity and required Codex acceptance using the
+[deployment completion checks](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors). Existing retained
 rollback targets keep their native/state recovery contract.
+
+Legacy descriptors produce a fixed warning and are ignored; see
+[legacy descriptor handling](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
 
 ## 4.6 Migrate to the release profile and update thereafter (issue #219)
 
@@ -167,13 +170,6 @@ order. **Stopping happens only immediately before switching**; build and expansi
 never touch the active release. If build or expansion fails, it **never reaches
 stop** and the old runner keeps running.
 
-For a release completion receipt, use the dedicated delayed, retained worker in
-[Build identities and release tags](build-identity-and-release-tags.md#common-production-checkpoint)
-instead of the plain transient unit below. It preserves exit evidence until
-recorded completion, delays the cgroup check until the agent turn has ended,
-and refuses duplicate enqueue under one attempt/host. The ordinary update
-and rollback interfaces below keep their existing behavior.
-
 `--detach` queues the update as a transient **service** unit via
 `systemd-run --user --no-block`. **Always use it when running from an agent under
 the runner**; without it, stopping the runner kills the caller and later steps
@@ -181,13 +177,15 @@ never run.
 
 **The queued unit does not inherit the caller's environment.** A transient
 unit runs with the user manager's environment, not this shell's, so `--detach`
-forwards exactly two variables to it with `--setenv`: `PATH` (always) and
-`KAOIRO_NODE` (only when set in the calling shell). Nothing else is forwarded;
+forwards only its explicit `--setenv` values: `PATH` and `KAOIRO_RUNNER_DIR`
+always, plus `KAOIRO_RUNNER_CONFIG` and `KAOIRO_NODE` when set in the calling
+shell. Nothing else is forwarded;
 in particular `KAOIRO_RUNNER_TOKEN` never reaches the update unit. If the
 worker needs a Node or a `kaoiro-runner` binary that the user manager's default
 `PATH` does not resolve, export `PATH` / `KAOIRO_NODE` in the shell that runs
-`--detach`; a PATH that lacks them makes the detached run fail after the
-ENQUEUED line, visible only in the unit's journal below.
+`--detach`. Node availability is checked before submission; a missing Node
+refuses without ENQUEUED. Other worker failures remain visible in the unit's
+journal below.
 
 **The isolation is by cgroup, not process group.** The `systemd.kill(5)` default
 `KillMode=control-group` kills every process in a unit's cgroup when it stops. The

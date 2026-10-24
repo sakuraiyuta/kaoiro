@@ -13,6 +13,7 @@ import {
   realpathSync,
   rmdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -594,118 +595,6 @@ test("recovery property checker: a printed command that changes nothing is repor
     /no progress/);
 });
 
-test("recovery property: an enrolled server killed mid-rollback leaves both locks, and the printed steps recover it", (t) => {
-  const world = makeWorld(t);
-  world.faults([{ match: "^compose build", kind: "fail" }]);
-  world.update();
-  assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
-  const history = join(world.root, "history");
-  mkdirSync(history, { mode: 0o700 });
-  const serverDir = realpathSync(join(world.work, "server"));
-  // The authority descriptor requires a parent that only its owner can write.
-  chmodSync(serverDir, 0o755);
-  writeFileSync(join(serverDir, ".kaoiro-release-authority.json"), JSON.stringify({
-    schema: 1, install_root: serverDir, transport: "local", recording_hostname: hostname(),
-    root: realpathSync(history), tool_sha256: "a".repeat(64), exporter_path: process.execPath,
-    node_major: Number(process.versions.node.split(".")[0]), node_path: process.execPath,
-  }), { mode: 0o600 });
-  world.faults([{ match: "^start ", kind: "kill-after" }]);
-  const id = world.txId();
-  const rollback = () => world.cliRun("rollback", "--transaction", id, "--confirm-restore");
-  const killed = rollback();
-  assert.equal(killed.signal, "SIGKILL", killed.stderr);
-  assert.equal(world.locks().length, 1);
-  assert.ok(existsSync(join(realpathSync(history), ".lock.server")));
-  world.faults([]);
-
-  // One refusal names both locks, each with its own step.
-  const first = rollback();
-  const held = /^note: deploy lock (\S+) is held: /m.exec(first.stderr);
-  assert.ok(held, first.stderr);
-  assert.match(first.stderr, /^note: release lock \S+\/\.lock\.server is held: /m);
-  rmdirSync(held[1]);
-  const [inspect, recover, status] = parseNext(first.stderr);
-  assert.deepEqual([inspect.argv[2], recover.argv[2], status.argv[2]], ["inspect-residue", "recover-lock", "status"]);
-  const inspected = world.exec(inspect.argv);
-  assert.equal(inspected.status, 0, inspected.stderr);
-  const digest = JSON.parse(inspected.stdout).observed_sha256;
-  const recoverArgv = recover.argv.map((w) => (w === "<observed_sha256-from-inspect-residue>" ? digest
-    : w === "<reason>" ? "recovery property test" : w));
-  const recovered = world.exec(recoverArgv);
-  assert.equal(recovered.status, 0, recovered.stderr);
-  assert.equal(existsSync(join(realpathSync(history), ".lock.server")), false);
-
-  const printedStatus = world.exec(status.argv);
-  assert.equal(printedStatus.status, 0, printedStatus.stderr);
-  const report = JSON.parse(printedStatus.stdout);
-  assert.deepEqual(report.locks, []);
-  const candidates = report.unfinishedTransaction.recovery.filter((l) => l.argv !== null)
-    .map((l) => ({ argv: l.argv, optional: l.optional.map((o) => o.flag), command: l.command }));
-  const result = followHints(world, candidates, "rollback");
-  assert.equal(result.phase, PHASE.ROLLED_BACK);
-  assert.deepEqual(world.locks(), []);
-  assert.equal(world.serviceContainer().status, "running");
-});
-
-// Design NC8: an enrolled transaction prepared under a release attempt is
-// resumed by the printed `update` line, which carries the release context.
-// The exporter is a fake that echoes the context; the refusal of a resume
-// without it is the deploy CLI's own (assertServerResumeContext).
-test("recovery property: an enrolled update resume runs as printed with its release context, and is refused without it", (t) => {
-  const world = makeWorld(t);
-  mkdirSync(join(world.root, "history"), { mode: 0o700 });
-  const history = realpathSync(join(world.root, "history"));
-  const serverDir = realpathSync(join(world.work, "server"));
-  chmodSync(serverDir, 0o755);
-  const exporter = join(world.root, "bin", "release-exporter.mjs");
-  copyFileSync(join(here, "../test-support/fake-release-exporter.mjs"), exporter);
-  const descriptor = JSON.stringify({
-    schema: 1, install_root: serverDir, transport: "local", recording_hostname: hostname(),
-    root: history, tool_sha256: "a".repeat(64), exporter_path: exporter,
-    node_major: Number(process.versions.node.split(".")[0]), node_path: process.execPath,
-  });
-  writeFileSync(join(serverDir, ".kaoiro-release-authority.json"), descriptor, { mode: 0o600 });
-  const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-  const attempt = "11111111-2222-4333-8444-555555555555";
-  const plan = JSON.stringify({ authority: { server: { sha256: sha256(descriptor), root: serverDir } } });
-  mkdirSync(join(history, attempt), { mode: 0o700 });
-  writeFileSync(join(history, attempt, "attempt.json"), plan, { mode: 0o600 });
-  const context = ["--release-attempt", attempt, "--release-plan-sha256", sha256(plan)];
-
-  world.faults([{ match: "^compose build", kind: "fail" }]);
-  const failed = world.update(...context);
-  assert.notEqual(failed.status, 0);
-  assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
-  assert.deepEqual(world.journal().release_context, { attempt_uuid: attempt, plan_sha256: sha256(plan) });
-  world.faults([]);
-  const printed = parseNext(failed.stderr).find((c) => c.command === "update");
-  assert.ok(printed, failed.stderr);
-  assert.deepEqual(printed.argv.slice(printed.argv.indexOf("--release-attempt")), context);
-  assertAgrees(world, parseNext(failed.stderr));
-
-  // Control: the printed command without its release context is refused by
-  // the audit before any Docker call or phase change.
-  const contextFlags = new Set(["--release-attempt", "--release-plan-sha256"]);
-  const stripped = printed.argv.filter((w, i, a) => !contextFlags.has(w) && !contextFlags.has(a[i - 1]));
-  assert.equal(stripped.length, printed.argv.length - 4);
-  const before = world.calls();
-  const refused = world.exec([...stripped, ...UPDATE_APPROVED]);
-  assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /resume cannot change or omit its authoritative release attempt/);
-  assert.equal(world.calls(), before);
-  assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
-  assert.deepEqual(world.locks(), []);
-
-  const result = followHints(world, [printed], "update");
-  assert.equal(result.phase, PHASE.DONE);
-  assert.ok(result.steps[0].argv.includes("--release-attempt"));
-  assert.equal(world.serviceContainer().image === OLD_IMAGE, false);
-  assert.deepEqual(world.locks(), []);
-  assert.equal(existsSync(join(history, ".lock.server")), false);
-  const bound = JSON.parse(readFileSync(join(history, attempt, "server-audit.json"), "utf8"));
-  assert.equal(bound.transaction_dir, realpathSync(join(world.backupRoot, world.txId())));
-});
-
 test("recovery property: a non-destructive rollback refuses when the recorded container was replaced, even under the same name", (t) => {
   const world = makeWorld(t);
   world.faults(LATEST_LEFT_ON_TARGET);
@@ -845,7 +734,118 @@ test("actual CLI journals remain discoverable by the pinned pre-P3 reader withou
   assert.notEqual(failed.status, 0);
   const dir = join(world.backupRoot, world.txId()), journal = world.journal();
   assert.equal(journal.invocation.release_authority, null);
+  assert.equal(Object.hasOwn(journal, "release_context"), false);
+  assert.equal(Object.hasOwn(journal, "release_reconciliation"), false);
   assert.equal(old.isValidJournalShape(journal), true);
   assert.deepEqual(old.readJournal(dir), journal);
   assert.equal(transaction.findUnfinishedTransaction(world.backupRoot).id, world.txId());
+});
+
+
+test("retired server flags refuse before Docker or journal mutation with or without a descriptor", (t) => {
+  const world = makeWorld(t), descriptor = join(world.work, "server/.kaoiro-release-authority.json");
+  for (const present of [false, true]) {
+    if (present) writeFileSync(descriptor, "not JSON");
+    for (const flag of ["--release-authority", "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason"]) {
+      const before = world.calls();
+      const result = world.update(flag, "retired");
+      assert.equal(result.status, 64, result.stderr);
+      assert.match(result.stderr, /unknown argument/);
+      assert.equal(world.calls(), before);
+      assert.equal(existsSync(world.backupRoot), false);
+    }
+  }
+});
+
+test("legacy server descriptors and history are inert on every entrance", (t) => {
+  const world = makeWorld(t), server = join(world.work, "server");
+  const descriptor = join(server, ".kaoiro-release-authority.json");
+  const legacy = join(world.root, "legacy");
+  mkdirSync(legacy);
+  const old = join(legacy, "attempt.json"), lock = join(legacy, ".lock.server");
+  writeFileSync(old, "unfinished legacy bytes\n");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), "retained owner bytes\n");
+  const marker = join(world.root, "exporter-called"), exporter = join(world.root, "bin/exporter.mjs");
+  writeFileSync(exporter, `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'called');process.exit(1);`);
+  const commands = [["build", "--target", world.target, "--dry-run"], ["start", "--dry-run"], ["update", "--target", world.target, "--dry-run"], ["rollback", "--dry-run"], ["status"]];
+  const runEntrance = args => {
+    world.edit(state => { state.containers.find(container => container.service === "kaoiro").status = args[0] === "start" ? "exited" : "running"; });
+    return world.cliRun(...args);
+  };
+  const baseline = commands.map(runEntrance);
+  for (const index of [0, 1, 2, 4]) assert.equal(baseline[index].status, 0, baseline[index].stderr);
+  const decision = stdout => {
+    if (!stdout) return stdout;
+    const value = JSON.parse(stdout);
+    // Free disk space varies while sibling suites create owned fixtures.
+    if (value.capacity) {
+      assert.ok(value.capacity.free_bytes > value.capacity.threshold_bytes);
+      delete value.capacity.free_bytes;
+    }
+    return value;
+  };
+  for (const kind of ["invalid", "directory", "dangling", "exporter"]) {
+    if (kind === "directory") mkdirSync(descriptor);
+    else if (kind === "dangling") symlinkSync(join(legacy, "missing"), descriptor);
+    else writeFileSync(descriptor, kind === "invalid" ? "not JSON" : JSON.stringify({
+      schema: 1, install_root: server, transport: "local", recording_hostname: hostname(), root: legacy,
+      tool_sha256: "a".repeat(64), exporter_path: exporter, node_path: process.execPath, node_major: Number(process.versions.node.split(".")[0]),
+    }));
+    for (const [i, args] of commands.entries()) {
+      const result = runEntrance(args);
+      assert.equal(result.status, baseline[i].status, result.stderr);
+      assert.deepEqual(decision(result.stdout), decision(baseline[i].stdout));
+      assert.equal(result.stderr.split("kaoiro: enrollment is retired; legacy release descriptor ignored").length - 1, 1);
+      assert.equal(existsSync(marker), false);
+      assert.equal(readFileSync(old, "utf8"), "unfinished legacy bytes\n");
+      assert.equal(readFileSync(join(lock, "owner"), "utf8"), "retained owner bytes\n");
+    }
+    rmSync(descriptor, { recursive: true, force: true });
+  }
+});
+
+for (const kind of ["invalid", "directory", "dangling"]) test(`ordinary server update and rollback ignore a ${kind} legacy descriptor`, (t) => {
+  const world = makeWorld(t), descriptor = join(world.work, "server/.kaoiro-release-authority.json");
+  if (kind === "directory") mkdirSync(descriptor);
+  else if (kind === "dangling") symlinkSync(join(world.root, "missing-descriptor"), descriptor);
+  else writeFileSync(descriptor, "not JSON");
+  const before = digestDir(world.volumeDir);
+  const updated = world.update(...UPDATE_APPROVED);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.equal(world.journal().phase, PHASE.DONE);
+  assert.equal(updated.stderr.split("enrollment is retired; legacy release descriptor ignored").length - 1, 1);
+  const rolledBack = world.cliRun("rollback", "--transaction", world.txId(), "--confirm-restore");
+  assert.equal(rolledBack.status, 0, rolledBack.stderr);
+  assert.equal(rolledBack.stderr.split("enrollment is retired; legacy release descriptor ignored").length - 1, 1);
+  assert.equal(world.journal().phase, PHASE.ROLLED_BACK);
+  assertDestructive(world, before);
+  assert.deepEqual(world.locks(), []);
+});
+
+test("a descriptor metadata failure warns without restoring server admission", (t) => {
+  const world = makeWorld(t), preload = join(world.root, "metadata-failure.mjs");
+  writeFileSync(preload, `import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const original=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).endsWith('/.kaoiro-release-authority.json')){const e=new Error('fixture denied');e.code='EACCES';throw e}return original(path,...args)};syncBuiltinESMExports();`);
+  const result = world.exec(["node", "--import", preload, world.cli, "status", "--repo", world.work, "--config", world.config]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr.trim(), "kaoiro: enrollment is retired; legacy release descriptor ignored");
+  assert.equal(Object.hasOwn(JSON.parse(result.stdout), "lockAuthorityError"), false);
+});
+
+test("old retired metadata is ignored by actual printed resume while retained fields still bind", (t) => {
+  const world = makeWorld(t);
+  world.faults([{ match: "^compose build", kind: "fail" }]);
+  world.update();
+  const path = join(world.backupRoot, world.txId(), "journal.json"), journal = world.journal();
+  journal.invocation.release_authority = { invalid: "old metadata" };
+  journal.release_context = "invalid old metadata";
+  journal.release_reconciliation = { invalid: true };
+  writeFileSync(path, JSON.stringify(journal));
+  const next = statusRecovery(world);
+  assert.equal(next.some(line => line.argv.some(value => /^--(?:release-|skip-release)/.test(value))), false);
+  world.faults([]);
+  const result = followHints(world, next, "update");
+  assert.equal(result.phase, PHASE.DONE);
+  assert.equal(world.journal().release_context, journal.release_context);
+  assert.deepEqual(world.journal().invocation.release_authority, journal.invocation.release_authority);
 });

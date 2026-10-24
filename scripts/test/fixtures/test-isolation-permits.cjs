@@ -7,8 +7,6 @@ const grok = ["history", "inspect", "lifecycle", "mcp", "permission-answer", "pe
   "rate-limits", "resume", "sandbox"].map(name => [`wrapper/grok/test/native-${name}.test.ts`, ["network"]]);
 
 const table = {
-  "scripts/test/production-release-native.test.mjs": ["systemd"],
-  "scripts/test/production-release-unit.test.mjs": ["systemd"],
   "scripts/test/test-isolation.test.mjs": ["systemd"],
   "scripts/test/fixtures/test-isolation-permit-probe.cjs": ["systemd"],
   "scripts/test/runner-pairing.test.mjs": ["docker"],

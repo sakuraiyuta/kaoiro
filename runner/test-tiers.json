@@ -28,7 +28,6 @@
     "test/releaseBuildIdentity.test.ts",
     "test/releaseCleanup.test.ts",
     "test/releaseInstall.test.ts",
-    "test/releaseReconciliation.test.ts",
     "test/releaseSwitch.test.ts",
     "test/releaseUpdate.test.ts",
     "test/repoDirectWorkspace.test.ts",

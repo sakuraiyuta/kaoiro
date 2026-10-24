@@ -1,6 +1,6 @@
 {
   "typescript": "5.9.3",
-  "raw": 494,
+  "raw": 486,
   "problems": [],
   "rows": [
     {
@@ -1284,14 +1284,6 @@
       "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
-      "path": "runner/test/releaseReconciliation.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
       "path": "runner/test/releaseSwitch.test.ts",
       "imports": [
         "vitest"
@@ -1461,62 +1453,6 @@
     },
     {
       "path": "scripts/test/pre-gate.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release-authority.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release-native.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release-review.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release-state.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release-unit.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-release.test.mjs",
-      "imports": [
-        "node:test"
-      ],
-      "exception": null,
-      "firstImport": "./fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "scripts/test/production-runner-worker.test.mjs",
       "imports": [
         "node:test"
       ],

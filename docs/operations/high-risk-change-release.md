@@ -65,7 +65,6 @@ git diff --name-only <base>..<head> -- \
   'runner/deploy/**' \
   scripts/build-runner-tarball.sh scripts/build-release-manifest.mjs \
   scripts/build-identity.mjs scripts/with-build-identity.mjs \
-  scripts/production-release-tags.mjs \
   runner/src/spawn.ts runner/src/supervisor.ts runner/src/cli.ts \
   runner/src/runner-cli.ts runner/src/config.ts runner/src/config-watcher.ts \
   runner/src/transport.ts runner/src/args.ts runner/src/delivery-settings.ts \
@@ -365,11 +364,10 @@ and the restart kills the old wrappers (B7).
 - **C0.** The gate in section 3. Required for FS-class changes, recommended for
   TL-class changes.
 - **C1.** Switch and restart with [Subsequent updates](runner-update-and-rollback.md#462-subsequent-updates),
-  after confirming that every agent is idle and B7 holds. For a production release
-  receipt, use its [dedicated retained worker](build-identity-and-release-tags.md#common-production-checkpoint),
-  whose default 180-second delay permits the agent turn to end before cgroup
-  inspection. If peer input arrives between reset and stop, repeat preparation
-  or stop immediately after join. Do not restore anyone.
+  after confirming that every agent is idle and B7 holds. Use the ordinary
+  detached updater when the caller runs under the runner. If peer input arrives
+  between reset and stop, repeat preparation or stop immediately after join.
+  Do not restore anyone.
   Right after the restart, confirm that no old wrapper survived:
 
   ```sh

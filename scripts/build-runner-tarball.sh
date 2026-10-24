@@ -200,7 +200,6 @@ pnpm --filter=@kaoiro/runner --prod deploy "$stage_rel/$name" --legacy >/dev/nul
   exit 70
 }
 printf '%s\n' "$version_string" >"$stage/$name/VERSION"
-node "$root/scripts/production-release-tools.mjs" stage --source "$root" --destination "$stage/$name/deploy/release-tools" >/dev/null
 
 # MANIFEST.json — the runtime module closure, so a release with ONE missing
 # module is rejected before it starts (issue #219 round 2, ふじ 差し戻し

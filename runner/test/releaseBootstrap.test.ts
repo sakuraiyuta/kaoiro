@@ -25,6 +25,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -246,6 +247,31 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       // The ORIGINAL is untouched by the backup step itself.
       expect(readFileSync(join(configDir, "runner.env"), "utf8")).toBe(before);
     });
+  });
+
+  it.each(["invalid", "directory", "dangling"])("ignores a retired %s descriptor during bootstrap dry-run", (kind) => {
+    mkdirSync(root, { recursive: true });
+    const descriptor = join(root, "release-authority.json");
+    if (kind === "invalid") writeFileSync(descriptor, "not JSON");
+    else if (kind === "directory") mkdirSync(descriptor);
+    else symlinkSync(join(root, "missing-descriptor"), descriptor);
+    const archive = makeReleaseTarball(work, revisionOf("legacy-bootstrap"));
+    const result = bootstrap([archive, "--dry-run"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr.match(/enrollment is retired; legacy release descriptor ignored/g)).toHaveLength(1);
+    expect(existsSync(join(root, "current"))).toBe(false);
+    expect(readCalls()).toEqual([]);
+  });
+
+  it("a legacy-descriptor metadata failure warns without blocking bootstrap dry-run", () => {
+    const node = join(bin, "metadata-denied-node");
+    writeFileSync(node, "#!/bin/sh\nexit 1\n");
+    chmodSync(node, 0o755);
+    const archive = makeReleaseTarball(work, revisionOf("metadata-failure"));
+    const result = bootstrap([archive, "--dry-run"], { KAOIRO_NODE: node });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr.match(/enrollment is retired; legacy release descriptor ignored/g)).toHaveLength(1);
+    expect(readCalls()).toEqual([]);
   });
 
   describe("--dry-run", () => {

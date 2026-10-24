@@ -817,6 +817,50 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     expect(readdirSync(join(root, "releases"))).toContain(old1);
   });
 
+  it.each(["invalid", "directory", "dangling"])("ignores a legacy %s descriptor throughout an ordinary worker", kind => {
+    const descriptor = join(root, "release-authority.json");
+    if (kind === "directory") mkdirSync(descriptor);
+    else if (kind === "dangling") symlinkSync(join(root, "missing-legacy"), descriptor);
+    else writeFileSync(descriptor, "not JSON");
+    const history = join(root, "production-attempts");
+    mkdirSync(history);
+    writeFileSync(join(history, "attempt.json"), "unfinished legacy bytes");
+    mkdirSync(join(history, ".lock.server"));
+    const result = runUpdate(["--tarball", makeReleaseTarball(work, B)], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr.match(/kaoiro: enrollment is retired; legacy release descriptor ignored/g)).toHaveLength(2);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
+    expect(readFileSync(join(history, "attempt.json"), "utf8")).toBe("unfinished legacy bytes");
+    expect(existsSync(join(history, ".lock.server"))).toBe(true);
+  });
+
+  it("retired runner flags fail before queue, stop or link changes", () => {
+    const archive = makeReleaseTarball(work, B);
+    const flags = ["--release-repo", "--release-authority", "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason", "--expected-authority-sha256", "--release-target", "--release-alias", "--release-invocation", "--release-proof-sha256"];
+    const log = join(dir, "retired-flag-queue"), descriptor = join(root, "release-authority.json");
+    for (const present of [false, true]) {
+      if (present) writeFileSync(descriptor, "not JSON");
+      for (const entry of ["update", "switch", "bootstrap"]) for (const flag of flags) {
+        const script = fileURLToPath(new URL(`../deploy/kaoiro-runner-${entry}.sh`, import.meta.url));
+        const args = [flag, "retired", "--install-dir", root];
+        if (entry === "update") args.push("--tarball", archive, "--detach");
+        const result = runScript(script, args, {
+          KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+          KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
+        });
+        expect(result.status, result.stderr).toBe(64);
+        expect(result.stderr).toMatch(/unknown (option|argument)/);
+        expect(result.stderr).not.toContain("ENQUEUED");
+        expect(existsSync(log)).toBe(false);
+        expect(readCalls()).toEqual([]);
+        expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+      }
+    }
+  });
+
   // Titled for what it measures: argument validation, which happens long
   // before any pruning. The "current / previous survive an aggressive
   // --keep" property is pinned by the --keep 1 case above.

@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { execChildSync } from "../../runner/deploy/child-process-environment.mjs";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -39,8 +40,6 @@ import { entryActs, formatRecovery, OPERATION, recoveryFacts, renderRecovery, se
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
-import { auditServerRelease, bindServerReleaseAudit, assertServerResumeContext, acquireServerReleaseActivity, releaseServerReleaseActivity } from "./kaoiro-release-reconciliation.mjs";
-import { readReleaseAuthority } from "../../scripts/production-release-authority.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -1297,8 +1296,7 @@ export function pruneOldTransactions(backupRoot, config, protectedTransactionId,
   return { removed, skipped };
 }
 
-const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction", "--release-authority",
-  "--release-attempt", "--release-plan-sha256", "--skip-release-reconciliation", "--skip-reason"]);
+const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
 const BOOL_FLAGS = new Map([
   ["--dry-run", "dryRun"],
   ["--maintenance-approved", "maintenanceApproved"],
@@ -1619,6 +1617,8 @@ function prepareTarget({ bin, repo, serverDir, target, config, dir, journal, old
 
 export function runBuild(flags, config) {
   const { repo, target, dryRun } = normalizeBuildFlags(flags);
+  const serverDir = resolve(repo, "server");
+  warnIgnoredReleaseDescriptor(serverDir);
   const { overridden } = resolveDockerBin(config);
   if (dryRun) {
     const status = gitOutput(["status", "--porcelain"], repo);
@@ -1635,16 +1635,12 @@ export function runBuild(flags, config) {
     };
   }
 
-  const serverDir = resolve(repo, "server");
   const backupRoot = resolveBackupRoot(config);
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
-  let releaseActivityLock;
   try {
-    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     return buildUnderLock({ repo, target }, config);
   } finally {
-    try { releaseServerReleaseActivity(releaseActivityLock); }
-    finally { releaseLock(lockPath); }
+    releaseLock(lockPath);
   }
 }
 
@@ -1667,6 +1663,7 @@ export function runBuild(flags, config) {
 export function runStart(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = resolve(repo, "server");
+  warnIgnoredReleaseDescriptor(serverDir);
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
 
@@ -1708,9 +1705,7 @@ export function runStart(flags, config) {
   // reading OUTSIDE the lock, then mutating, would only move the race
   // rather than close it (the same reasoning as runRollback's own fix).
   const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
-  let releaseActivityLock;
   try {
-    releaseActivityLock = acquireServerReleaseActivity(serverDir);
     const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
     const result = classify(bin, serverDir, SERVICE, hasState);
 
@@ -1755,8 +1750,7 @@ export function runStart(flags, config) {
     assertSourceIdentity(repo, identity);
     return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
   } finally {
-    try { releaseServerReleaseActivity(releaseActivityLock); }
-    finally { releaseLock(lockPath); }
+    releaseLock(lockPath);
   }
 }
 
@@ -1835,18 +1829,27 @@ function appendRecoveryHint(err, dir, transactionId) {
   return err;
 }
 
+function warnIgnoredReleaseDescriptor(serverDir) {
+  try {
+    lstatSync(join(serverDir, ".kaoiro-release-authority.json"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+  }
+  process.stderr.write("kaoiro: enrollment is retired; legacy release descriptor ignored\n");
+}
+
 function invocationOf(flags, repo) {
   return {
     repo: realpathSync(repo),
     config: flags.config === undefined ? null : realpathSync(flags.config),
-    release_authority: flags.releaseAuthority === undefined ? null : realpathSync(flags.releaseAuthority),
+    // Permanent compatibility with pre-retirement journal readers.
+    release_authority: null,
   };
 }
 
 /** Locks left by a killed run, each with its own next step, and the read
  *  path (`status`, with the same --config) for the transaction's commands.
- *  Shared by both lock refusals and by `status`, so all three name both
- *  server locks (docs/plans/issue-695-transaction-state-table.md 3.3). */
+ *  Shared by lock refusals and `status`. */
 function heldLockSteps(backupRoot, serverDir, repo, flags) {
   const quote = (w) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(w) ? w : `'${w.replace(/'/g, "'\\''")}'`);
   const cli = ["node", join(repo, "server/deploy/kaoiro-server-deploy.mjs")];
@@ -1857,41 +1860,14 @@ function heldLockSteps(backupRoot, serverDir, repo, flags) {
     locks.push({ kind: "deploy", path: deployLock, next: [],
       note: "if no process holds it (docs/operations/server-update-and-rollback.md 4.4 (0a)), remove that directory" });
   }
-  let authority = null;
-  let authorityError = null;
-  try {
-    authority = readReleaseAuthority(serverDir, { role: "server" });
-  } catch (err) {
-    // The release lock cannot be located without the descriptor; say so
-    // instead of reporting an empty lock list.
-    authorityError = err.message;
-  }
-  if (authority?.status === "enrolled") {
-    const releaseLock = join(authority.descriptor.root, ".lock.server");
-    if (existsSync(releaseLock)) {
-      const tool = ["node", join(repo, "scripts/production-release-lifecycle.mjs")];
-      const selector = ["--root", authority.descriptor.root, "--entry", ".lock.server"];
-      locks.push({ kind: "release", path: releaseLock,
-        note: "a named live owner refuses; see docs/operations/build-identity-and-release-tags.md",
-        next: [[...tool, "inspect-residue", ...selector],
-          [...tool, "recover-lock", ...selector, "--observed-digest", "<observed_sha256-from-inspect-residue>", "--reason", "<reason>"]] });
-    }
-  }
   const status = [...cli, "status", "--repo", repo, ...config];
   const text = [
-    ...(authorityError === null ? [] : [`note: the release authority descriptor is unreadable, so a held release lock cannot be listed: ${authorityError}`]),
     ...locks.flatMap((l) => [`note: ${l.kind} lock ${l.path} is held: ${l.note}`, ...l.next.map((a) => `next: ${a.map(quote).join(" ")}`)]),
     `next: ${status.map(quote).join(" ")}`,
   ].join("\n");
-  return { locks, authorityError, status, text };
+  return { locks, status, text };
 }
 
-/** How scripts/production-release-files.mjs reports a held release lock
- *  (it throws a plain Error); a test pins this against that module. */
-export const RELEASE_LOCK_HELD_RE = /release lock held/;
-
-/** Both locks every mutator takes. A held lock may be left by a killed
- *  run; the refusal names every held lock with its own step. */
 function acquireDeploymentLocks(backupRoot, serverDir, repo, flags) {
   let lockPath;
   try {
@@ -1900,20 +1876,11 @@ function acquireDeploymentLocks(backupRoot, serverDir, repo, flags) {
     if (err instanceof LockError) err.message += `\n${heldLockSteps(backupRoot, serverDir, repo, flags).text}`;
     throw err;
   }
-  let releaseActivityLock;
-  try {
-    releaseActivityLock = acquireServerReleaseActivity(serverDir);
-  } catch (err) {
-    releaseLock(lockPath);
-    if (RELEASE_LOCK_HELD_RE.test(err.message)) err.message += `\n${heldLockSteps(backupRoot, serverDir, repo, flags).text}`;
-    throw err;
-  }
-  return { lockPath, releaseActivityLock };
+  return { lockPath };
 }
 
-function releaseDeploymentLocks({ lockPath, releaseActivityLock }) {
-  try { releaseServerReleaseActivity(releaseActivityLock); }
-  finally { releaseLock(lockPath); }
+function releaseDeploymentLocks({ lockPath }) {
+  releaseLock(lockPath);
 }
 
 // --- #303 capacity preflight ----------------------------------------------
@@ -2117,12 +2084,12 @@ export function runUpdate(flags, config) {
   }
   const target = flags.target;
   const serverDir = resolve(repo, "server");
+  warnIgnoredReleaseDescriptor(serverDir);
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
   const dryRun = flags.dryRun === true;
 
   checkComposeSelectors(serverDir);
-  const admissionAudit = auditServerRelease(flags, serverDir, repo);
 
   if (dryRun) {
     if (flags.transaction !== undefined) {
@@ -2148,7 +2115,6 @@ export function runUpdate(flags, config) {
       docker: overridden ? "fake" : "docker",
       container,
       target,
-      releaseReconciliation: admissionAudit,
       fetched,
       targetKnownLocally: targetKnownLocallyResult,
       unfinishedTransactionId: unfinished === null ? null : unfinished.id,
@@ -2182,7 +2148,6 @@ export function runUpdate(flags, config) {
   // colliding id must not borrow another transaction's hint.
   let hintDir;
   try {
-    const releaseAudit = auditServerRelease(flags, serverDir, repo);
     const unfinished = findUnfinishedTransaction(backupRoot);
     let journal;
     let oldImageId;
@@ -2210,9 +2175,6 @@ export function runUpdate(flags, config) {
       if (!entryActs(selectEntry(journal.phase, "update", recoveryFacts(journal)))) {
         fail(`transaction ${transactionId} cannot be resumed by update (phase: ${journal.phase})`);
       }
-      assertServerResumeContext(journal, releaseAudit);
-      bindServerReleaseAudit(releaseAudit, dir);
-      journal.release_reconciliation = releaseAudit;
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
       const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
       oldImageId = oldEntry.observation.old_image_id;
@@ -2342,8 +2304,6 @@ export function runUpdate(flags, config) {
       }
       journal = {
         schema_version: 1,
-        release_context: releaseAudit.release_context ?? null,
-        release_reconciliation: releaseAudit,
         transaction_id: transactionId,
         invocation: invocationOf(flags, repo),
         phase: PHASE.PREFLIGHT,
@@ -2357,7 +2317,6 @@ export function runUpdate(flags, config) {
       };
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
       hintDir = dir;
-      bindServerReleaseAudit(releaseAudit, dir);
 
       // クロエ round 1 review MF-2: retagged from the RUNNING container's
       // own image id, never from `latest` — `compose build` below is
@@ -2974,6 +2933,7 @@ function readRollbackDecision(dir, transactionId) {
 export function runRollback(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = resolve(repo, "server");
+  warnIgnoredReleaseDescriptor(serverDir);
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
 
@@ -3467,6 +3427,7 @@ function listDoneTransactionSummaries(backupRoot) {
 export function runStatus(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = resolve(repo, "server");
+  warnIgnoredReleaseDescriptor(serverDir);
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
   const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
@@ -3530,7 +3491,6 @@ export function runStatus(flags, config) {
     docker: overridden ? "fake" : "docker",
     container: containerState,
     locks: lockSteps.locks,
-    lockAuthorityError: lockSteps.authorityError,
     health,
     unfinishedTransaction:
       unfinishedError !== null

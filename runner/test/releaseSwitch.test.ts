@@ -55,6 +55,21 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it.each(["invalid", "directory", "dangling"])("a direct switch ignores a legacy %s descriptor", kind => {
+    seed(A); seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    const descriptor = join(root, "release-authority.json");
+    if (kind === "directory") mkdirSync(descriptor);
+    else if (kind === "dangling") symlinkSync(join(root, "missing-legacy"), descriptor);
+    else writeFileSync(descriptor, "not JSON");
+    const result = run(B);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr.split("\n").filter(line => line === "kaoiro: enrollment is retired; legacy release descriptor ignored")).toHaveLength(1);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(existsSync(join(root, ".lock.update"))).toBe(false);
+    expect(existsSync(join(root, ".lock.links"))).toBe(false);
+  });
+
   it("current を切り替え、旧 release を previous に残す", () => {
     seed(A);
     seed(B);

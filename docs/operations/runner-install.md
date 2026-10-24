@@ -2,7 +2,7 @@
 title: Runner install and distribution
 description: Build and distribute runner tarballs to agent hosts, install and switch releases, and run the runner as a systemd/launchd service.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-25
 related: [deployment]
 ---
 
@@ -330,12 +330,16 @@ location and `cd`s there).
 ./scripts/build-runner-tarball.sh --require-tagged --out /path/to/dir   # Change output destination
 ```
 
-Production builders wait for the exact HEAD landing tag and immutable claim
-before staging or downtime. The builder freezes one identity JSON and passes it
+Production builders require the exact HEAD landing pair or schema-2 release
+tag before staging or downtime. The builder freezes one identity JSON and passes it
 to every component. Omitting `--require-tagged` is for explicit development
 artifacts; production activation refuses `untagged` unless `--allow-dirty` is
 explicitly used for development. See
 [Build identity and release tags](build-identity-and-release-tags.md).
+
+Bootstrap and switch ignore any legacy `release-authority.json` descriptor,
+with a fixed stderr warning. Ordinary artifact, identity and native-state
+checks still apply; see [legacy descriptor handling](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
 
 Targets are `darwin-arm64` / `linux-x64` (the 2 architectures with actual
 demand). On other hosts (Intel mac, arm64 Linux), omitting an explicit

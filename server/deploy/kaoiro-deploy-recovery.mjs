@@ -132,9 +132,7 @@ export function entryActs(e) {
 export function isInvocation(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) &&
     typeof value.repo === "string" && value.repo.startsWith("/") &&
-    (value.config === null || (typeof value.config === "string" && value.config.startsWith("/"))) &&
-    (value.release_authority === null ||
-      (typeof value.release_authority === "string" && value.release_authority.startsWith("/")));
+    (value.config === null || (typeof value.config === "string" && value.config.startsWith("/")));
 }
 
 function recordedTarget(journal) {
@@ -146,7 +144,7 @@ function recordedTarget(journal) {
 }
 
 /** The argv prefix shared by every rendered command: the CLI path and the
- *  recorded `--repo` / `--config` / `--release-authority`. A journal that
+ *  recorded `--repo` / `--config`. A journal that
  *  predates invocation recording gets named placeholders instead. */
 function baseArgv(journal, command, placeholders) {
   const inv = isInvocation(journal.invocation) ? journal.invocation : null;
@@ -157,7 +155,6 @@ function baseArgv(journal, command, placeholders) {
     placeholders.push({ name: "--config <path>", meaning: "the --config file the transaction was prepared with, if any" });
   } else {
     if (inv.config !== null) argv.push("--config", inv.config);
-    if (inv.release_authority !== null) argv.push("--release-authority", inv.release_authority);
   }
   return argv;
 }
@@ -181,10 +178,6 @@ export function renderRecovery(transactionId, journal) {
       const target = recordedTarget(journal);
       argv.push("--target", target ?? "<target>");
       if (target === null) placeholders.push({ name: "<target>", meaning: "the target SHA this transaction prepared" });
-      const ctx = journal.release_context;
-      if (ctx && typeof ctx.attempt_uuid === "string") {
-        argv.push("--release-attempt", ctx.attempt_uuid, "--release-plan-sha256", ctx.plan_sha256);
-      }
       optional.push({ flag: "--maintenance-approved", when: "the operator has approved the maintenance window (the stop window opens)" });
     } else {
       argv.push("--confirm-restore");

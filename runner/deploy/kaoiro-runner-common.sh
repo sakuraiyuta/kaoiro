@@ -103,16 +103,16 @@ kaoiro_node() {
   printf '%s\n' "$node_bin"
 }
 
-kaoiro_release_gate() {
-  : "${deploy_dir:?physical deploy directory required}"
-  _release_operation=$1
-  _release_root=$2
-  shift 2
-  "$(kaoiro_node)" "$deploy_dir/release-gate.mjs" "$_release_operation" "$_release_root" "$@"
-}
-
-kaoiro_release_enrolled() {
-  [ -e "$1/release-authority.json" ] || [ -L "$1/release-authority.json" ]
+kaoiro_warn_retired_enrollment() {
+  _legacy_status=0
+  if _legacy_node=$(kaoiro_node 2>/dev/null); then
+    "$_legacy_node" -e 'try { require("node:fs").lstatSync(process.argv[1]); process.exit(10); } catch (e) { process.exit(e.code === "ENOENT" ? 0 : 10); }' \
+      "$1/release-authority.json" >/dev/null 2>&1 || _legacy_status=$?
+  else
+    _legacy_status=10
+  fi
+  [ "$_legacy_status" -eq 0 ] || printf '%s\n' 'kaoiro: enrollment is retired; legacy release descriptor ignored' >&2
+  return 0
 }
 
 # A value beginning with `-` can be parsed as an OPTION by whatever command it

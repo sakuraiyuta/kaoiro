@@ -1,7 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -19,8 +18,7 @@ import {
   renderRecovery,
   selectEntry,
 } from "../kaoiro-deploy-recovery.mjs";
-import { RELEASE_LOCK_HELD_RE, ROLLBACK_ELIGIBLE_PHASES, UNRESUMABLE_PHASES } from "../kaoiro-server-deploy.mjs";
-import { acquireReleaseLock, releaseReleaseLock } from "../../../scripts/production-release-files.mjs";
+import { ROLLBACK_ELIGIBLE_PHASES, UNRESUMABLE_PHASES } from "../kaoiro-server-deploy.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SHA = "a".repeat(40);
@@ -106,14 +104,13 @@ test("facts come from the journal: target needs both the recorded target and the
   assert.equal(recoveryFacts(journalAt(PHASE.OLD_IMAGE_SAVED, { containerId: null }))[CONDITION.LEGACY_NO_CONTAINER_ID], true);
 });
 
-test("rendered commands carry the recorded repo, config and release context", () => {
+test("rendered commands carry the recorded repo and config while ignoring retired release metadata", () => {
   const ctx = { attempt_uuid: "11111111-2222-4333-8444-555555555555", plan_sha256: "f".repeat(64) };
   const lines = renderRecovery(TX, journalAt(PHASE.OLD_IMAGE_SAVED, { releaseContext: ctx }));
   const update = lines.find((l) => l.command === "update");
   assert.deepEqual(update.argv, [
     "node", "/srv/kaoiro/server/deploy/kaoiro-server-deploy.mjs", "update", "--repo", "/srv/kaoiro",
     "--config", "/etc/kaoiro/deploy.json", "--transaction", TX, "--target", SHA,
-    "--release-attempt", ctx.attempt_uuid, "--release-plan-sha256", ctx.plan_sha256,
   ]);
   assert.deepEqual(update.placeholders, []);
   const rollback = lines.find((l) => l.command === "rollback");
@@ -165,21 +162,5 @@ test("a malformed recorded target or invocation is refused, never tolerated as a
   assert.equal(isValidJournalShape({ ...base, invocation: { repo: "/srv/kaoiro", config: null, release_authority: null } }), true);
   assert.equal(isValidJournalShape({ ...base, invocation: { repo: "relative", config: null, release_authority: null } }), false);
   assert.equal(isValidJournalShape({ ...base, invocation: { repo: "/srv/kaoiro", config: "deploy.json", release_authority: null } }), false);
-  assert.equal(isValidJournalShape({ ...base, invocation: { repo: "/srv/kaoiro", config: null, release_authority: "authority.json" } }), false);
-});
-
-// The lock refusal recognizes a held release lock by the release module's
-// message text; rewording that message would silently drop the lock steps.
-test("the release module's held-lock message is the one the lock refusal reads", () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "kaoiro-release-lock-")));
-  try {
-    const lock = acquireReleaseLock(dir, "server", "root");
-    try {
-      assert.throws(() => acquireReleaseLock(dir, "server", "root"), (err) => RELEASE_LOCK_HELD_RE.test(err.message));
-    } finally {
-      releaseReleaseLock(lock);
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.equal(isValidJournalShape({ ...base, invocation: { repo: "/srv/kaoiro", config: null, release_authority: "authority.json" } }), true);
 });

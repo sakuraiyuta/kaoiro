@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-10-23
+last_updated: 2026-10-25
 related: [deployment]
 ---
 
@@ -742,12 +742,9 @@ the lock records no owner, so `status` cannot tell a run that is still in
 flight from one that was killed, and it lists the lock the same way during a
 healthy `update`. The owner check above is mandatory before removing it.
 
-On an enrolled installation a killed run can also leave the release
-layer's `<authority_root>/.lock.server`. The refusal and `status` name it with
-two printed steps: `scripts/production-release-lifecycle.mjs inspect-residue`
-to read its observed digest, then `recover-lock` with that digest and a
-reason. A named live owner refuses
-([build-identity-and-release-tags.md](build-identity-and-release-tags.md)).
+Legacy release locks do not appear in status or block the ordinary deployment
+lock. Legacy descriptors produce a fixed stderr warning and are ignored; see
+[legacy descriptor and JSON compatibility](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
 
 **(1) The commit step failed before reaching `done`** (4.3 step 5 / step 5-c)
 
@@ -981,8 +978,8 @@ only by the next update's gate.
 fleet is stopped. Maintenance or restore approval does not imply it. Use the
 reviewed execution card to stop/revert incompatible runners/wrappers before
 rolling back a server that predates the reader bridge. Invalid target image
-identity is never waived. Server DONE alone does not authorize a release tag;
-complete the [joint release checkpoint](build-identity-and-release-tags.md).
+identity is never waived. Server DONE alone does not establish fleet completion;
+perform the [deployment completion checks](build-identity-and-release-tags.md#deployment-completion-and-legacy-descriptors).
 
 ### Compose overrides during updates and recovery
 

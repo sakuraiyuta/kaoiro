@@ -2,7 +2,7 @@
 title: Transactions and identity
 description: Build-identity provenance verification for a completed server/runner update -- what proves the running code matches the target commit.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-10-25
 related: [deployment]
 ---
 
@@ -34,14 +34,15 @@ a deploy-rejection condition (ADR-0053)—docs-only commits, backports, and roll
 windows can legitimately differ; equality is only the **success check for this
 runbook**.
 
-## Lockstep version and production completion
+## Lockstep version and deployment completion
 
 [ADR-0066](../../adr/0066-tag-derived-lockstep-build-identity.md) defines immutable
-landing tags and one frozen JSON for every build consumer. Build version and
-branch are not inferred from a short label. A completed server transaction is
-only the server leg of release completion: the common receipt also binds actual
-runner workers, registration, required Codex acceptance and the canary. See
-[Build identity and release tags](../../operations/build-identity-and-release-tags.md).
+build identities and one frozen JSON for every build consumer. Historical
+landing pairs and current release tags remain readable. Build version and
+branch are not inferred from a short label. A completed server transaction
+covers only the server operation: also verify actual runner registration,
+required wrapper acceptance and any high-risk canary before recording release
+tags and notes. See [Build identity and release tags](../../operations/build-identity-and-release-tags.md).
 
 ## Delivery policy placement artifact
 

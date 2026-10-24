@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { collectReleaseToolClosure } from "./production-release-tools.mjs";
 
 const LEGACY_CHILD_CALLS = {
   "runner/deploy/codex-service.mjs": 1,
@@ -12,19 +11,54 @@ const LEGACY_CHILD_CALLS = {
 const nativeCalls = /\b(?:execFileSync|execFile|execSync|spawnSync|spawn|fork)\s*\(/g;
 
 export const CHILD_ENVIRONMENT_SCOPE = [
-  "scripts/build-identity.mjs",
-  "scripts/production-release-authority.mjs",
-  "scripts/production-release-launcher.mjs", "scripts/production-release-reconciliation.mjs",
-  "scripts/production-release-tags.mjs", "scripts/production-release-unit.mjs",
-  "scripts/production-runner-worker.mjs",
-  "scripts/with-build-identity.mjs", "runner/deploy/release-gate.mjs",
-  "server/deploy/kaoiro-release-reconciliation.mjs", "server/deploy/kaoiro-server-deploy.mjs",
+  "scripts/build-identity.mjs", "scripts/with-build-identity.mjs",
+  "server/deploy/kaoiro-server-deploy.mjs",
 ];
+
+const SOURCE_DIRECTORIES = ["scripts", "scripts/lib", "server/deploy", "runner/deploy"];
+
+function checkedSource(root, name) {
+  if (!/^[A-Za-z0-9._/-]+$/.test(name) || name.startsWith("/") ||
+      name.split("/").some(part => !part || part === "." || part === "..")) {
+    throw new Error("child source escapes repository: " + name);
+  }
+  const path = join(root, name), stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(path) !== path) {
+    throw new Error("child source must be a regular unlinked file: " + name);
+  }
+  return path;
+}
+
+function collectChildSources(root) {
+  root = realpathSync(root);
+  const names = new Set();
+  for (const scope of SOURCE_DIRECTORIES) {
+    const directory = join(root, scope);
+    if (realpathSync(directory) !== directory) throw new Error("linked child source directory: " + scope);
+    for (const name of readdirSync(directory)) {
+      if ((scope !== "runner/deploy" && !/\.(mjs|sh)$/.test(name)) || /\.test\.mjs$/.test(name)) continue;
+      names.add(`${scope}/${name}`);
+    }
+  }
+  const pending = [...names];
+  for (let index = 0; index < pending.length; index++) {
+    if (names.size > 512) throw new Error("child source file bound");
+    const name = pending[index], path = checkedSource(root, name);
+    if (!name.endsWith(".mjs")) continue;
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)["'](\.[^"']+\.mjs)["']/g)) {
+      const next = relative(root, resolve(dirname(path), match[1]));
+      checkedSource(root, next);
+      if (!names.has(next)) { names.add(next); pending.push(next); }
+    }
+  }
+  return [...names].sort();
+}
 
 export function checkReleaseChildEnvironments(root, read = readFileSync) {
   let calls = 0;
-  const closure = collectReleaseToolClosure(root);
-  for (const { path } of closure.files.filter(item => item.path.endsWith(".mjs"))) {
+  const sources = collectChildSources(root);
+  for (const path of sources.filter(name => name.endsWith(".mjs"))) {
     if (path === "runner/deploy/child-process-environment.mjs") continue;
     const source = read(resolve(root, path), "utf8");
     const native = [...source.matchAll(nativeCalls)].length;
@@ -41,7 +75,7 @@ export function checkReleaseChildEnvironments(root, read = readFileSync) {
     if (!count) throw new Error("child scope has no checked call: " + name);
     calls += count;
   }
-  return { files: CHILD_ENVIRONMENT_SCOPE.length, calls, closure_files: closure.files.length,
+  return { files: CHILD_ENVIRONMENT_SCOPE.length, calls, closure_files: sources.length,
     unchanged_legacy_calls: Object.values(LEGACY_CHILD_CALLS).reduce((a, b) => a + b, 0) };
 }
 
