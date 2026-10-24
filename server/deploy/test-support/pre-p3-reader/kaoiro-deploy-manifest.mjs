@@ -1,0 +1,308 @@
+#!/usr/bin/env node
+// Deploy manifest: the durable record binding one deploy transaction's
+// artifacts together (issue #306, design per #303 comments 2026-09-06:
+// "a deploy manifest ... compose artifact path+SHA, env consistency
+// values, image ID, source/target SHA, volume ID, archive path+SHA,
+// required-entry set/ownership"). Read/write/validate only — callers
+// decide when a transaction writes one.
+//
+// Phase lives in the journal (kaoiro-deploy-journal.mjs), not here: the
+// manifest records FACTS about artifacts a transaction produced, the
+// journal records WHERE the transaction currently is. Splitting them
+// means a phase transition never has to rewrite (and re-validate) the
+// artifact facts that did not change.
+import { readFileSync } from "node:fs";
+import { isPlacementReference, readPlacementReference } from "./kaoiro-delivery-policy-placement.mjs";
+import { join } from "node:path";
+
+import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
+
+// Exported (not just module-local) so kaoiro-deploy-phase.mjs's
+// per-phase observation schemas (S1 item i, yuta ruling 2026-09-06) can
+// validate a journal entry's `old_sha`/`target_sha`/`image_id`/
+// `compose_artifact` against the SAME domains this file enforces on the
+// manifest — one definition of "what a SHA/image id looks like", not
+// two independently drifting ones.
+export const SHA256_RE = /^[0-9a-f]{64}$/;
+export const SHA_RE = /^[0-9a-f]{40}$/;
+export const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
+// クロエ round 1 review MF-2 / director ruling 2026-09-06: shared with
+// kaoiro-deploy-phase.mjs's OLD_IMAGE_SAVED schema (imported back from
+// here, not redefined) — one definition of what a rollback tag looks
+// like. Recorded on the manifest too (director ruling: retention's
+// docker-tag cleanup must read the tag to remove from the manifest,
+// never rediscover it by globbing docker's own image list).
+export const ROLLBACK_TAG_RE = /^kaoiro-server:rollback-[0-9a-f]{40}$/;
+const OWNER_RE = /^[0-9]+:[0-9]+$/;
+// クロエ round 1 review SF-7: `stat -c %a` omits the special-bits digit
+// when it is zero (a plain 644 file prints "644", but a setgid dir
+// prints "2755" — 4 digits, not 3) and prints a bare "0" for mode 000,
+// not "000". A fixed `0[0-7]{3}` shape can never represent either —
+// exactly 4 octal digits, no fixed leading zero, is what `%04a` (used at
+// the call site) actually produces.
+const MODE_RE = /^[0-7]{4}$/;
+
+export class ManifestError extends Error {}
+
+function fail(message) {
+  throw new ManifestError(message);
+}
+
+export function isPathSha(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof value.path === "string" &&
+    value.path !== "" &&
+    typeof value.sha256 === "string" &&
+    SHA256_RE.test(value.sha256)
+  );
+}
+
+/** One env-var's comparison record (ふじ design review M1 fixed the
+ *  per-key VALUE SHAPE; director ruling 2026-09-06, A-MF-1 fixed which
+ *  fields the computed `match` actually covers). Normally `match` is
+ *  `compose === container_effective`; a measured `never_existed` first
+ *  application is the sole exception. The bundled docker-compose.yaml sets every
+ *  canonical persistence-path var as a literal `environment:` entry
+ *  while `.env.example`/`mix kaoiro.env` emit the same vars commented
+ *  out, so a three-way check including `declared` (`.env`'s own line)
+ *  would read as a permanent mismatch on every correctly-configured
+ *  production host. `declared` is kept as a reference-only observation
+ *  (never gates `match`). `compose` is `null` when compose does not
+ *  declare this var at all (its own failure mode — the #217 class,
+ *  never comparable to any container value). `container_effective`
+ *  (クロエ round 5 review A-MF-2, replacing the original 2-way `container`
+ *  raw-env field) is never `null` — the running container's own env
+ *  value if set, else the image's own documented default path for that
+ *  store (`container_source` names which of the two it is), so a first
+ *  application (the old container never had the var set at all) is
+ *  compared against what it was ALREADY effectively reading, not
+ *  against an env value that structurally cannot exist before the very
+ *  deploy this check is gating recreates the container. The three optional
+ *  first-application fields bind an absent-file observation to that path;
+ *  older persisted entries without them remain valid.
+ *
+ *  `operator_accepted_new_store` (issue #339) records that the operator
+ *  named this store with `--accept-new-store`. This is the READ boundary:
+ *  it must stay compatible with entries the pre-#339 automatic admission
+ *  persisted (`first_application: "never_existed"` with no such field), so
+ *  absence is valid and a legacy journal or manifest still resumes. Only
+ *  the WRITE boundary (checkEnvConsistency) requires the acknowledgement,
+ *  by always attaching it to the entries it admits. When the field is
+ *  present it must be exactly `true` and sit on a first-application entry —
+ *  an acknowledgement with nothing to acknowledge, or a recorded refusal,
+ *  is not a shape any writer produces. */
+function isEnvConsistencyEntry(value) {
+  const probePathPresent = Object.hasOwn(value ?? {}, "file_probe_path");
+  const probeResultPresent = Object.hasOwn(value ?? {}, "file_probe_result");
+  const probeReasonPresent = Object.hasOwn(value ?? {}, "file_probe_reason");
+  const firstApplicationPresent = Object.hasOwn(value ?? {}, "first_application");
+  const acceptancePresent = Object.hasOwn(value ?? {}, "operator_accepted_new_store");
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value.declared === null || typeof value.declared === "string") &&
+    (value.compose === null || typeof value.compose === "string") &&
+    typeof value.container_effective === "string" &&
+    value.container_effective !== "" &&
+    (value.container_source === "env" || value.container_source === "default") &&
+    // issue #322 M5 follow-up (nit-1): records which image's own
+    // manifest actually supplied container_effective's fallback value
+    // (kaoiro-server-deploy.mjs's checkEnvConsistency, M5) — validated
+    // the same shape as container_source just above it.
+    (value.assumed_default_source === "old_image" || value.assumed_default_source === "target_image") &&
+    probePathPresent === probeResultPresent &&
+    (!probePathPresent ||
+      (value.file_probe_path === value.container_effective &&
+        (value.file_probe_result === "present" || value.file_probe_result === "absent" || value.file_probe_result === "undetermined"))) &&
+    (probeReasonPresent === (value.file_probe_result === "undetermined")) &&
+    (!probeReasonPresent ||
+      ["unexpected_output", "permission_denied", "probe_command_failed"].includes(value.file_probe_reason)) &&
+    (value.file_probe_result !== "undetermined" || value.match === false) &&
+    (!firstApplicationPresent ||
+      (value.first_application === "never_existed" && value.file_probe_result === "absent" && value.match === true)) &&
+    (value.file_probe_result !== "absent" || firstApplicationPresent) &&
+    (!acceptancePresent || (value.operator_accepted_new_store === true && firstApplicationPresent)) &&
+    typeof value.match === "boolean"
+  );
+}
+
+/** env_consistency is a discriminated union (issue #220 absorption,
+ *  director ruling 2026-09-06) — exported so
+ *  kaoiro-deploy-phase.mjs's ENV_CONSISTENCY_CHECKED observation schema
+ *  validates the SAME shape this file enforces on the manifest, one
+ *  definition rather than two independently drifting ones (the same
+ *  pattern as ROLLBACK_TAG_RE above).
+ *
+ *  `{skipped: true, reason}`: either the target image lacks the
+ *  persistence-path module entirely (issue #322 M5: decided by a
+ *  SEPARATE beam-file probe run BEFORE `eval` at all — never by `eval`'s
+ *  own exit code, which now throws DeployError instead of skipping when
+ *  the module IS present but eval still fails), or the module is
+ *  present but the OLD image's own manifest could not be trusted (M5
+ *  follow-up should-2: a shape violation there, not this transaction's
+ *  own defect). Recorded rather than silently treated as "no keys to
+ *  check", so an operator reading the manifest later can tell "checked,
+ *  found nothing to flag" apart from "never actually checked".
+ *
+ *  `{skipped: false, entries: {<env var name>: {declared, compose,
+ *  container_effective, container_source, assumed_default_source,
+ *  match}}}`: the target image's eval succeeded — one comparison per
+ *  canonical persistence-path key it reported, each entry validated by
+ *  isEnvConsistencyEntry below (see its own doc comment for what each
+ *  field means). A bare per-key map (the shape before this
+ *  discriminator existed) is no longer valid on its own; every writer
+ *  already produces the new shape, and silently accepting the old one
+ *  would make a writer bug indistinguishable from an intentional skip. */
+export function isValidEnvConsistency(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  if (value.skipped === true) {
+    return typeof value.reason === "string" && value.reason !== "";
+  }
+  if (value.skipped === false) {
+    if (typeof value.entries !== "object" || value.entries === null || Array.isArray(value.entries)) {
+      return false;
+    }
+    return Object.values(value.entries).every(isEnvConsistencyEntry);
+  }
+  return false;
+}
+
+export function isComposeIdentity(identity) {
+  return typeof identity === "object" && identity !== null &&
+    typeof identity.project_name === "string" && identity.project_name !== "" &&
+    Array.isArray(identity.services) && identity.services.every(service => typeof service === "string" && service !== "") &&
+    Array.isArray(identity.service_mounts) && identity.service_mounts.every(mount =>
+      typeof mount === "object" && mount !== null && typeof mount.type === "string" && typeof mount.source === "string");
+}
+
+export function isComposePlanBase(value) {
+  return typeof value === "object" && value !== null &&
+    typeof value.compose_sha256 === "string" && SHA256_RE.test(value.compose_sha256) &&
+    typeof value.env_sha256 === "string" && SHA256_RE.test(value.env_sha256) && isComposeIdentity(value.identity);
+}
+
+export function isComposePlan(value) {
+  if (!isComposePlanBase(value)) return false;
+  const files = value.compose_files;
+  if (!Array.isArray(files) || files.length > 2) return false;
+  if (files[0]?.source !== "docker-compose.yaml") return false;
+  if (files.length === 2 && !["docker-compose.override.yml", "docker-compose.override.yaml"].includes(files[1]?.source)) return false;
+  return files.every(file => typeof file === "object" &&
+    typeof file.path === "string" && file.path !== "" && typeof file.sha256 === "string" && SHA256_RE.test(file.sha256)) &&
+    new Set(files.map(file => file.path)).size === files.length;
+}
+
+// Historical plans were not validated during scans; reject unusable legacy plans only at use time.
+export function isComposePlanIfRecorded(value) {
+  return !Object.hasOwn(value ?? {}, "compose_files") || isComposePlan(value);
+}
+
+/** Validates the shape the operator decisions on #303 fixed. STRICT, like
+ *  verify-release.mjs's isBuildInfoShape: a manifest with any invalid
+ *  field is not trustworthy over the whole, so this returns false rather
+ *  than accepting the fields that happen to look fine. */
+export function isValidManifestShape(value) {
+  if (typeof value !== "object" || value === null) return false;
+  if (value.schema_version !== 1) return false;
+  if (typeof value.transaction_id !== "string" || value.transaction_id === "") {
+    return false;
+  }
+  if (!isPathSha(value.compose_artifact)) return false;
+  if (!isComposePlanIfRecorded(value.recovery_plan) || !isComposePlanIfRecorded(value.target_plan)) return false;
+  if (!isValidEnvConsistency(value.env_consistency)) return false;
+  if (Object.hasOwn(value, "policy_store_placement") && !isPlacementReference(value.policy_store_placement)) return false;
+  if (typeof value.image_id !== "string" || !IMAGE_ID_RE.test(value.image_id)) {
+    return false;
+  }
+  if (typeof value.source_sha !== "string" || !SHA_RE.test(value.source_sha)) {
+    return false;
+  }
+  if (typeof value.target_sha !== "string" || !SHA_RE.test(value.target_sha)) {
+    return false;
+  }
+  if (typeof value.volume_id !== "string" || value.volume_id === "") return false;
+  if (!isPathSha(value.archive)) return false;
+  if (!isValidRequiredEntries(value.required_entries)) return false;
+  if (typeof value.rollback_tag !== "string" || !ROLLBACK_TAG_RE.test(value.rollback_tag)) {
+    return false;
+  }
+  if (value.rollback_tag !== `kaoiro-server:rollback-${value.source_sha}`) return false;
+  return true;
+}
+
+/** Exported separately from isValidManifestShape (used directly by
+ *  kaoiro-deploy-phase.mjs's ARCHIVED observation schema) so the archive
+ *  phase's own required-entries check and the manifest's stay the SAME
+ *  domain rather than two independently drifting ones. */
+export function isValidRequiredEntries(value) {
+  if (!Array.isArray(value)) return false;
+  // Path uniqueness (ふじ design review M1) — a duplicate path is not a
+  // malformed entry on its own, but two entries claiming the same
+  // persistent-path record two different owner/mode expectations for
+  // one file, which cannot both hold.
+  const seenPaths = new Set();
+  for (const entry of value) {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      typeof entry.path !== "string" ||
+      entry.path === "" ||
+      seenPaths.has(entry.path) ||
+      typeof entry.owner !== "string" ||
+      !OWNER_RE.test(entry.owner) ||
+      typeof entry.mode !== "string" ||
+      !MODE_RE.test(entry.mode)
+    ) {
+      return false;
+    }
+    seenPaths.add(entry.path);
+  }
+  return true;
+}
+
+/** Writes manifest.json durably via writeFileDurably() (ふじ design
+ *  review M3: fsync the file before rename, fsync the directory after —
+ *  a reader never observes a partial write, and the write survives a
+ *  crash, not just a normal read). Refuses to write a manifest that
+ *  fails its own shape check: a manifest this file cannot read back is
+ *  worse than none. */
+export function writeManifest(dir, manifest) {
+  if (!isValidManifestShape(manifest)) {
+    fail("refusing to write a manifest that does not match the expected shape");
+  }
+  const target = join(dir, "manifest.json");
+  writeFileDurably(target, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** Reads and STRICTLY validates manifest.json. Never degrades a missing
+ *  or malformed file to a default — unlike build_info.ts's loadBuildInfo,
+ *  which exists to let a runner still start. A manifest this file cannot
+ *  trust must stop the caller: silently treating it as absent would let
+ *  an update proceed with no record of what it is about to replace. */
+export function readManifest(dir) {
+  const target = join(dir, "manifest.json");
+  let raw;
+  try {
+    raw = readFileSync(target, "utf8");
+  } catch (err) {
+    fail(`manifest.json is unreadable at ${target}: ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`manifest.json is not valid JSON at ${target}: ${err.message}`);
+  }
+  if (!isValidManifestShape(parsed)) {
+    fail(`manifest.json at ${target} does not match the expected shape`);
+  }
+  if (parsed.policy_store_placement !== undefined) {
+    readPlacementReference(dir, parsed.policy_store_placement, { transaction_id: parsed.transaction_id, image_id: parsed.image_id });
+  }
+  return parsed;
+}

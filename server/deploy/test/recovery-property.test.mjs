@@ -780,3 +780,72 @@ for (const mode of ["yml", "both", "directory"]) {
     }
   });
 }
+
+
+test("recovery property: ordinary rollback killed after start retains its lock and printed recovery completes", (t) => {
+  const world = makeWorld(t);
+  world.faults([{ match: "^compose build", kind: "fail" }]);
+  world.update();
+  assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
+  world.faults([{ match: "^start ", kind: "kill-after" }]);
+  const id = world.txId();
+  const rollback = () => world.cliRun("rollback", "--transaction", id, "--confirm-restore");
+  assert.equal(rollback().signal, "SIGKILL");
+  assert.equal(world.locks().length, 1);
+  world.faults([]);
+  const refused = rollback();
+  const held = /^note: deploy lock (\S+) is held: /m.exec(refused.stderr);
+  assert.ok(held, refused.stderr);
+  assert.notEqual(refused.status, 0);
+  rmdirSync(held[1]);
+  const status = parseNext(refused.stderr).find(command => command.command === "status");
+  assert.ok(status, refused.stderr);
+  const report = world.exec(status.argv);
+  assert.equal(report.status, 0, report.stderr);
+  const next = JSON.parse(report.stdout).unfinishedTransaction.recovery.filter(line => line.argv !== null)
+    .map(line => ({ ...line, optional: line.optional.map(option => option.flag) }));
+  const result = followHints(world, next, "rollback");
+  assert.equal(result.phase, PHASE.ROLLED_BACK);
+  assert.deepEqual(world.locks(), []);
+  assert.equal(world.serviceContainer().status, "running");
+});
+
+test("recovery property: ordinary resume executes its printed repo config target and transaction", (t) => {
+  const world = makeWorld(t);
+  world.faults([{ match: "^compose build", kind: "fail" }]);
+  const failed = world.update();
+  assert.notEqual(failed.status, 0);
+  assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
+  const printed = parseNext(failed.stderr).find(command => command.command === "update");
+  assert.ok(printed, failed.stderr);
+  for (const [flag, value] of [["--repo", world.work], ["--config", world.config], ["--target", world.target], ["--transaction", world.txId()]]) {
+    assert.equal(printed.argv[printed.argv.indexOf(flag) + 1], value);
+  }
+  assert.equal(printed.argv.some(value => /^--(?:release-|skip-release)/.test(value)), false);
+  world.faults([]);
+  const result = followHints(world, [printed], "update");
+  assert.equal(result.phase, PHASE.DONE);
+  assert.notEqual(world.serviceContainer().image, OLD_IMAGE);
+  assert.deepEqual(world.locks(), []);
+});
+
+test("actual CLI journals remain discoverable by the pinned pre-P3 reader without Git history", async (t) => {
+  const fixture = new URL("../test-support/pre-p3-reader/", import.meta.url);
+  const provenance = JSON.parse(readFileSync(new URL("provenance.json", fixture), "utf8"));
+  assert.equal(provenance.commit, "3dd4551c2b483932e09f47523157fb1749842685");
+  assert.equal(provenance.files.length, 8);
+  for (const { file, sha256 } of provenance.files) {
+    assert.equal(createHash("sha256").update(readFileSync(new URL(file, fixture))).digest("hex"), sha256, file);
+  }
+  const old = await import(new URL("kaoiro-deploy-journal.mjs", fixture));
+  const transaction = await import(new URL("kaoiro-deploy-transaction.mjs", fixture));
+  const world = makeWorld(t);
+  world.faults([{ match: "^compose build", kind: "fail" }]);
+  const failed = world.update();
+  assert.notEqual(failed.status, 0);
+  const dir = join(world.backupRoot, world.txId()), journal = world.journal();
+  assert.equal(journal.invocation.release_authority, null);
+  assert.equal(old.isValidJournalShape(journal), true);
+  assert.deepEqual(old.readJournal(dir), journal);
+  assert.equal(transaction.findUnfinishedTransaction(world.backupRoot).id, world.txId());
+});

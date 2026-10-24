@@ -1,0 +1,45 @@
+{
+  "commit": "3dd4551c2b483932e09f47523157fb1749842685",
+  "files": [
+    {
+      "file": "kaoiro-delivery-policy-placement.mjs",
+      "source": "server/deploy/kaoiro-delivery-policy-placement.mjs",
+      "sha256": "85d6bd5c4e8d5d65a2a0f6a987f131b8f7f6c35023ce7ded22b24bd9db3b59ac"
+    },
+    {
+      "file": "kaoiro-deploy-atomic-write.mjs",
+      "source": "server/deploy/kaoiro-deploy-atomic-write.mjs",
+      "sha256": "86f6f40491700b57ac630e04eb67e9b1787b388df77e72aa14c1998b6a3152eb"
+    },
+    {
+      "file": "kaoiro-deploy-docker.mjs",
+      "source": "server/deploy/kaoiro-deploy-docker.mjs",
+      "sha256": "2aba52fdc99d37d2157bb3ccefbd40a49b80626bf3dbbf3995407954db192a7d"
+    },
+    {
+      "file": "kaoiro-deploy-journal.mjs",
+      "source": "server/deploy/kaoiro-deploy-journal.mjs",
+      "sha256": "2a2b991dd1af981a37fc052b32d769ee9b929fc8de70576315bddef88645857f"
+    },
+    {
+      "file": "kaoiro-deploy-manifest.mjs",
+      "source": "server/deploy/kaoiro-deploy-manifest.mjs",
+      "sha256": "9da540480362f3193dc02cb4613d229c86f18393e50ed89543bd3f7991fb9b3a"
+    },
+    {
+      "file": "kaoiro-deploy-phase.mjs",
+      "source": "server/deploy/kaoiro-deploy-phase.mjs",
+      "sha256": "0ccab377e6af4bafb0e97831a06b2adbc4f6f90a2a37cd23908461e9d8ba8eec"
+    },
+    {
+      "file": "kaoiro-deploy-recovery.mjs",
+      "source": "server/deploy/kaoiro-deploy-recovery.mjs",
+      "sha256": "9124e958449ce06fae0ae8d3014a39b6afa8765757113845c1112f5112b22f9b"
+    },
+    {
+      "file": "kaoiro-deploy-transaction.mjs",
+      "source": "server/deploy/kaoiro-deploy-transaction.mjs",
+      "sha256": "b40493805fd0e341d95e7f0f099a3b8392137a51e5514cf97068570093537db2"
+    }
+  ]
+}

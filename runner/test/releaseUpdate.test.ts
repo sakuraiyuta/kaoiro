@@ -40,6 +40,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -220,6 +221,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       // caller's survival depends on.
       expect(argv).toContain("--user");
       expect(argv).toContain("--no-block");
+      expect(argv).toContain("--expand-environment=no");
       // A fixed unit name, so `systemctl --user status` has somewhere to
       // look: a detached run cannot report back, and the journal is the only
       // record of what happened.
@@ -298,6 +300,42 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       expect(result.status).toBe(70);
       expect(result.stderr).not.toContain("ENQUEUED");
       expect(result.stderr).toContain("nothing was started");
+    });
+
+    it("keeps literal detached argv and excludes ambient credentials", () => {
+      const archive = makeReleaseTarball(work, B);
+      const literal = join(dir, "archive with spaces $literal %s.tar.gz");
+      copyFileSync(archive, literal);
+      const log = join(dir, "literal-argv");
+      const result = runUpdate(["--tarball", literal, "--detach"], {
+        KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+        KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
+        KAOIRO_RUNNER_TOKEN: "inert-test-token",
+        EXTRA_SECRET: "inert-test-secret",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const argv = readFileSync(log, "utf8").trimEnd().split("\n");
+      const command = argv.slice(argv.indexOf("--") + 1);
+      expect(command[0]).toBe(updateScript);
+      expect(command[command.indexOf("--tarball") + 1]).toBe(literal);
+      expect(argv).toContain("--expand-environment=no");
+      expect(argv.some(value => /TOKEN|SECRET|inert-test/.test(value))).toBe(false);
+      expect(readCalls().some(value => / (stop|start) /.test(value))).toBe(false);
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
+    });
+
+    it("refuses a missing Node before reset, submission or stop", () => {
+      const archive = makeReleaseTarball(work, B), log = join(dir, "missing-node-argv");
+      const result = runUpdate(["--tarball", archive, "--detach"], {
+        KAOIRO_NODE: join(dir, "missing-node"),
+        KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+        KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).not.toContain("ENQUEUED");
+      expect(existsSync(log)).toBe(false);
+      expect(readCalls()).toEqual([]);
+      expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     });
 
     it("--allow-dirty は worker 側へ転送される", () => {
@@ -444,6 +482,21 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     expect(seen[stop]).toContain(`:: releases/${A}`);
     // ...and already the new one when it came back up.
     expect(seen[start]).toContain(`:: releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
+    expect(existsSync(join(root, ".lock.update"))).toBe(false);
+    expect(existsSync(join(root, ".lock.links"))).toBe(false);
+  });
+
+  it("a held ordinary update lock refuses before prepare or stop", () => {
+    mkdirSync(join(root, ".lock.update"));
+    const archive = makeReleaseTarball(work, B);
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+    expect(result.status).toBe(75);
+    expect(readCalls()).toEqual([]);
+    expect(existsSync(join(root, "releases", B))).toBe(false);
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
   });
 
   it("dirty な release の activation は、停止する前に拒否する", () => {
@@ -614,6 +667,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     const seen = readCalls();
     expect(seen.some((c) => c.includes(" stop "))).toBe(true);
     expect(seen.some((c) => c.includes(" start "))).toBe(true);
+    expect(seen.find((c) => c.includes(" start "))).toContain(`:: releases/${A}`);
   });
 
   it("起動後の identity が食い違えば rollback 手順を出して失敗する", () => {

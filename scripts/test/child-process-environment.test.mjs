@@ -78,7 +78,7 @@ test("coverage check rejects separate existing and new bypasses and its own disa
   const green = checkReleaseChildEnvironments(root);
   assert.equal(green.files, 11); assert.ok(green.calls >= 23);
   assert.equal(green.unchanged_legacy_calls, 4);
-  for (const target of ["scripts/production-release-authority.mjs", "scripts/build-identity.mjs",
+  for (const target of ["scripts/production-release-authority.mjs", "scripts/build-identity.mjs", "scripts/with-build-identity.mjs",
     "server/deploy/kaoiro-server-deploy.mjs"]) {
     assert.throws(() => checkReleaseChildEnvironments(root, (path, encoding) => {
       const source = readFileSync(path, encoding);
@@ -92,7 +92,7 @@ test("coverage pins import-only, spawn/fork, exact legacy count and both scope-p
     const source = readFileSync(path, encoding);
     return path.endsWith(target) ? transform(source) : source;
   });
-  for (const target of ["scripts/build-identity.mjs", "server/deploy/kaoiro-server-deploy.mjs"]) {
+  for (const target of ["scripts/build-identity.mjs", "scripts/with-build-identity.mjs", "server/deploy/kaoiro-server-deploy.mjs"]) {
     for (const extra of ["import cp from 'node:child_process';", "spawn('unsafe', []);", "fork('unsafe');"]) {
       assert.throws(mutate(target, source => source + "\n" + extra), /unmanaged/);
     }

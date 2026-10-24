@@ -9,17 +9,14 @@ const scratch: string[] = [];
 afterEach(() => scratch.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })));
 
 it.each([
-  { gateStatus: 0, failRemoval: "none" },
-  { gateStatus: 1, failRemoval: "none" },
-  { gateStatus: 0, failRemoval: "build" },
-  { gateStatus: 1, failRemoval: "build" },
-  { gateStatus: 0, failRemoval: "owner" },
-])("update cleanup retains recoverable ownership after $failRemoval removal failure and gate $gateStatus", ({ gateStatus, failRemoval }) => {
+  { failRemoval: "none" },
+  { failRemoval: "build" },
+  { failRemoval: "owner" },
+])("update cleanup retains recoverable ownership after $failRemoval removal failure", ({ failRemoval }) => {
   const root = mkdtempSync(join(tmpdir(), "fuji571-cleanup-"));
   scratch.push(root);
   const build = join(root, "build"), lock = join(root, ".lock.update"), links = join(root, ".lock.links");
   for (const path of [build, lock, links]) mkdirSync(path);
-  writeFileSync(join(lock, "release-owner.json"), "owned fixture");
   writeFileSync(join(lock, "codex-owner.json"), "owned fixture");
   const source = readFileSync(new URL("../deploy/kaoiro-runner-update.sh", import.meta.url), "utf8");
   const common = readFileSync(new URL("../deploy/kaoiro-runner-common.sh", import.meta.url), "utf8");
@@ -38,14 +35,10 @@ it.each([
       esac
       command rm "$@"
     }
-    kaoiro_release_gate() {
-      [ ! -e "$links_lock" ] || return 9
-      ${gateStatus === 0 ? 'command rm -f "$lock/release-owner.json"' : ""}
-      return ${gateStatus}
-    }
+
     cleanup
   `, "cleanup", root, lock, links, build], { encoding: "utf8" });
-  const failed = gateStatus !== 0 || failRemoval !== "none";
+  const failed = failRemoval !== "none";
   expect(result.status).toBe(failed ? 1 : 0);
   expect(existsSync(build)).toBe(failRemoval === "build");
   expect(existsSync(links)).toBe(false);
