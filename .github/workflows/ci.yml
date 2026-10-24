@@ -12,6 +12,7 @@ permissions:
 jobs:
   wrapper:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: wrapper
@@ -80,6 +81,7 @@ jobs:
   # TS2307).
   runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -103,6 +105,7 @@ jobs:
   # green `node --test` count was a LOCAL claim only).
   server-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     defaults:
       run:
         working-directory: server/deploy
@@ -120,6 +123,7 @@ jobs:
   # test scripts build first (wrapper, including antigravity and grok, and runner).
   test-isolation:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -158,6 +162,7 @@ jobs:
   # all ("argument 1: not an iolist term"), which is what surfaced the drift.
   server:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -286,6 +291,7 @@ jobs:
 
   dashboard:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
     defaults:
       run:
         working-directory: dashboard
@@ -310,6 +316,7 @@ jobs:
   # builds.
   server-image:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
