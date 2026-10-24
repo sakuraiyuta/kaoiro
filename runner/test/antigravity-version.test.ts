@@ -1,9 +1,9 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
 import { resolveAgyVersion } from "../src/antigravity-version.js";
 import { readPidMarker } from "./pid_marker.js";
@@ -45,6 +45,16 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe("resolveAgyVersion (issue #387)", () => {
+  let tempDir: string | undefined;
+
+  afterEach(() => {
+    const dir = tempDir;
+    tempDir = undefined;
+    if (dir === undefined) return;
+    rmSync(dir, { recursive: true, force: true });
+    expect(existsSync(dir)).toBe(false);
+  });
+
   it("uses a shell fixture that atomically publishes its PID before waiting", () => {
     expect(shellPidMarkerFixture("/tmp/fixture/pid")).toBe(
       [
@@ -63,6 +73,7 @@ describe("resolveAgyVersion (issue #387)", () => {
 
   it("成功時は stdout を trim して返す", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
+    tempDir = dir;
     const script = join(dir, "agy");
     writeFileSync(script, "#!/bin/sh\nprintf 'agy-cli 1.2.3\\n'\n");
     chmodSync(script, 0o755);
@@ -73,6 +84,7 @@ describe("resolveAgyVersion (issue #387)", () => {
 
   it("issue #387 review should2: 非ゼロ終了なら null を返す", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
+    tempDir = dir;
     const script = join(dir, "agy");
     writeFileSync(script, "#!/bin/sh\nexit 1\n");
     chmodSync(script, 0o755);
@@ -85,6 +97,7 @@ describe("resolveAgyVersion (issue #387)", () => {
     "issue #387 review should2: watchdog が期限切れで SIGTERM を無視する子を SIGKILL で止める",
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
+      tempDir = dir;
       const script = join(dir, "agy");
       const pidFile = join(dir, "pid");
       writeFileSync(script, shellPidMarkerFixture(pidFile));
@@ -99,12 +112,8 @@ describe("resolveAgyVersion (issue #387)", () => {
       expect(version).toBeNull();
       expect(elapsedMs).toBeLessThan(2_000);
 
-      try {
-        const pid = await readPidMarker(pidFile, 2_000);
-        await waitFor(() => !isAlive(pid), 3_000);
-      } finally {
-        rmSync(dir, { force: true, recursive: true });
-      }
+      const pid = await readPidMarker(pidFile, 2_000);
+      await waitFor(() => !isAlive(pid), 3_000);
     },
     10_000,
   );
