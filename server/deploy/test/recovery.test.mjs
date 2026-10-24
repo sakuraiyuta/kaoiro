@@ -106,7 +106,10 @@ test("facts come from the journal: target needs both the recorded target and the
 
 test("rendered commands carry the recorded repo and config while ignoring retired release metadata", () => {
   const ctx = { attempt_uuid: "11111111-2222-4333-8444-555555555555", plan_sha256: "f".repeat(64) };
-  const lines = renderRecovery(TX, journalAt(PHASE.OLD_IMAGE_SAVED, { releaseContext: ctx }));
+  const lines = renderRecovery(TX, journalAt(PHASE.OLD_IMAGE_SAVED, {
+    invocation: { repo: "/srv/kaoiro", config: "/etc/kaoiro/deploy.json", release_authority: "/srv/kaoiro/server/.kaoiro-release-authority.json" },
+    releaseContext: ctx,
+  }));
   const update = lines.find((l) => l.command === "update");
   assert.deepEqual(update.argv, [
     "node", "/srv/kaoiro/server/deploy/kaoiro-server-deploy.mjs", "update", "--repo", "/srv/kaoiro",
