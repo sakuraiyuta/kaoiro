@@ -102,6 +102,31 @@ describe("Antigravity usage probe parsing and process settlement", () => {
     },
   );
 
+  describe.each([
+    ["gemini", "gemini-5h", "5h", "gemini-weekly", "weekly", "seven_day"],
+    ["gemini", "gemini-weekly", "weekly", "gemini-5h", "5h", "five_hour"],
+    ["3p", "3p-5h", "5h", "3p-weekly", "weekly", "seven_day"],
+    ["3p", "3p-weekly", "weekly", "3p-5h", "5h", "five_hour"],
+  ] as const)("known id %s/%s declared with a window other than %s", (family, id, ownWindow, otherId, otherWindow, otherKey) => {
+    const wrongWindows = ["5h", "weekly", "monthly"].filter((window) => window !== ownWindow);
+    const response = (buckets: unknown[]): string => JSON.stringify({
+      status: "SUCCESS",
+      command: { name: "usage", data: { groups: [{ buckets }] } },
+    });
+    const valid = { id: otherId, window: otherWindow, remaining_fraction: 0.5, reset_time: "2026-10-04T12:00:00Z" };
+
+    it.each(wrongWindows)("ignores the bucket when it says %s", (window) => {
+      const mismatched = { id, window, remaining_fraction: 0, reset_time: "2026-10-05T12:00:00Z" };
+      expect(parseAgyUsageOutput(response([mismatched]), family)).toBeNull();
+      expect(parseAgyUsageOutput(response([mismatched, valid]), family)).toEqual(new Map([
+        [otherKey, { utilization: 0.5, resets_at: 1791115200 }],
+      ]));
+      expect(parseAgyUsageOutput(response([valid, mismatched]), family)).toEqual(new Map([
+        [otherKey, { utilization: 0.5, resets_at: 1791115200 }],
+      ]));
+    });
+  });
+
   it("treats a response with only the Argon bucket as an unusable sample", () => {
     expect(parseAgyUsageOutput(JSON.stringify({
       status: "SUCCESS",
