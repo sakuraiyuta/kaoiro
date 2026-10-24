@@ -147,8 +147,6 @@ interface Join {
   text: string;
   /** The UTF-8 size of `text`, as it will be when sent. */
   bytes: number;
-  /** Text arrived after the join was full and was not kept. */
-  dropped: boolean;
 }
 
 /**
@@ -180,23 +178,20 @@ export function reconstructHistory(
     if (!current) return;
     if (current.kind === "assistant") {
       const payload = logEntryToPayload({ kind: "assistant", text: current.text }, toolNames);
-      emit(current.ts, current.dropped ? { ...payload, truncated: true } : payload);
+      emit(current.ts, payload);
       return;
     }
     // The structured inter-agent envelope is the display source of truth.
     if (isFormattedInterAgentMessage(current.text)) return;
     const { text, truncated } = clipText(current.text);
-    emit(current.ts, truncated || current.dropped ? { kind: "user", text, truncated: true } : { kind: "user", text });
+    emit(current.ts, truncated ? { kind: "user", text, truncated: true } : { kind: "user", text });
   };
-  // A join stops taking text once it holds as much as a log line can show,
-  // and then says that it left text out.
+  // A join stops taking text once it holds more than a log line can show.
+  // Text is dropped only past the bound, so clipText then reports it.
   const chunk = (kind: Join["kind"], ts: string, key: unknown, text: string) => {
     if (join && (join.kind !== kind || join.key !== key)) flush();
-    join ??= { kind, ts, key, text: "", bytes: 0, dropped: false };
-    if (join.bytes >= MAX_LOG_BYTES) {
-      if (text !== "") join.dropped = true;
-      return;
-    }
+    join ??= { kind, ts, key, text: "", bytes: 0 };
+    if (join.bytes > MAX_LOG_BYTES) return;
     // A pair of surrogates split between two chunks is two replacement
     // characters (3 bytes each) apart and one character (4 bytes) together.
     const split = /[\ud800-\udbff]$/.test(join.text) && /^[\udc00-\udfff]/.test(text);

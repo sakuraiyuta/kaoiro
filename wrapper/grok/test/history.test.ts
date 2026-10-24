@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WrapperConfig } from "@kaoiro/agent-common";
+import { clipText, type WrapperConfig } from "@kaoiro/agent-common";
 import {
   groupName,
   MAX_HISTORY,
@@ -227,6 +227,13 @@ describe("what is skipped", () => {
     it("says it left text out when more text follows a full join", () => {
       expect(payloads([chunk("x".repeat(16 * 1024)), chunk("y")])).toEqual([entry("x".repeat(16 * 1024), true)]);
       expect(payloads([chunk("x".repeat(16 * 1024)), chunk("")])).toEqual([entry("x".repeat(16 * 1024), false)]);
+    });
+
+    it("clips like the live path when a full join ends in half a surrogate pair (issue #653)", () => {
+      const first = `${"x".repeat(16381)}\ud83d`;
+      const live = clipText(`${first}\ude00y`);
+      expect(live).toEqual({ text: "x".repeat(16381), truncated: true });
+      expect(payloads([chunk(first), chunk("\ude00y")])).toEqual([entry(live.text, true)]);
     });
   });
 
