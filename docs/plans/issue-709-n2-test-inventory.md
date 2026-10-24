@@ -1,7 +1,7 @@
 ---
 title: N2 — case-level test migration inventory
 status: proposed
-last_updated: 2026-10-22
+last_updated: 2026-10-25
 ---
 
 # N2 — case-level test migration inventory
@@ -264,6 +264,45 @@ the surviving semantic assertion in a mixed case.
 | L610: refuses an accepted forward | D | S15 abandon on accepted forward; completed is now directly prunable/restorable. |
 
 ## Enumeration check
+
+### Implementation-base reconciliation
+
+Implementation base: `d3a0801370a11c6e84d566f92a549154369dbac2`.
+The original six files contain 161 expanded cases / 128 declarations after
+N1: S adds one previous-manifest compatibility case; W adds three N1 cases
+and loses the S8 diagnostic-copy budget case. The four retired-file
+candidates differ only by their first-import isolation guards.
+These are source enumeration counts, not executed test results.
+
+`codexStateKeepSafety.test.ts` contributes 25 cases / seven declarations,
+making the base migration population 186 cases / 135 declarations:
+127 K and 59 D. Additions to the implementation are counted separately.
+The approved execution/commit plan is recorded in
+[the implementation plan](https://github.com/sakuraiyuta/kaoiro/issues/709#issuecomment-6387663385).
+
+| Current case group | Disposition / destination |
+|---|---|
+| S previous schema-1 manifest reader | K, S.snapshot/G12; keep old snapshot readability independently of record cutover |
+| S WAL and capacity rewrites | K, S.snapshot/capacity/G12/G14; retain real WAL/source-byte and old-reader checks, logical bytes/reserve/inodes; omit already-retired diagnostic accounting mutations |
+| W pre-existing foreign UID, SQLite without diagnostics, post-stop repopulation | Three K, W.stopped/source-recovery/G10/G21; no foreign-writer discovery or migration diagnostics |
+| W original L409 diagnostic-copy budget | Removed by N1/S8; no N2 replacement; sparse logical-size gate remains |
+| KeepSafety late-unknown/copy-fault/backup-fault/phase-fault (4) | K, W.source-recovery/snapshot-residue/G10/G21/G22; retain state, credentials, links, service result and usable recovery; rewrite old phase/dual-registry assertions |
+| KeepSafety stop-result faults (3), activity-read faults (2) | K, W.stopped/source-recovery/G10/G21; preserve exit status and absence of unsafe subsequent mutations |
+| KeepSafety late-link/late-release/links-held (3) | K, W.source-recovery/G10/G17/G19 |
+| KeepSafety late-config/late-home (2) | D/S9 identity refusals; replace with same-path config/inode success twins, W.path-agreement/G08 |
+| KeepSafety lost-owner (1) | D/S11; replace with durable-phase dead-worker recovery |
+| KeepSafety unsafe phases (4) | K, W.source-recovery/G02/G10; use corresponding forbidden/unknown v2 states; old names remain cutover inputs |
+| KeepSafety failed source startup/post-check (4) | K, W.source-recovery/forward/G20/G21 |
+| KeepSafety failed restore, initially active/inactive (2) | K, W.restore-resume/source-recovery/G09/G10/G21; admission-time release/state survive cancellation/retry |
+| N1's removed rejected-preflight owner-record nonmutation property | D/S11; owner record retires; this is a carried property, not an extra base case |
+| W original L554/L563 PID reuse/absence | D/S11/S15 owner authority; retained recovery invariant is the N2 section-8 dead-worker interruption group, W.source-recovery/restore-resume/G09/G10 |
+| P3 releaseCleanup owner-file-removal failure | D/S11; preserve the other two cleanup cases, failure propagation and lock retention |
+
+P3's eight removed release/enrollment test files are not resurrected.
+Its retained `acceptedForwardTransaction` export and direct receipt test
+retire with N2. `codexHomeClassification` and wrapper home tests stay.
+N1's frozen snapshot fixture stays. No old test is removed before its K
+replacement and corresponding guard mutation have passed.
 
 | File | Test declarations | Expanded cases |
 |---|---:|---:|
