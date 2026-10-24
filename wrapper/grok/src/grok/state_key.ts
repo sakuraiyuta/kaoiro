@@ -2,8 +2,9 @@ import type { Envelope } from "@kaoiro/agent-common";
 
 /** JSON with the keys of every object sorted, so values that differ only in
  *  key order give the same string. Keys holding `undefined` are dropped.
- *  The input must be plain JSON data: `toJSON` is not called, so a `Date`,
- *  `Map`, `Set` or other class instance compares as `{}`. */
+ *  The input must be plain JSON data. `toJSON` is not called, so a `Date`,
+ *  `Map` or `Set` compares as `{}` (its state is not in enumerable own
+ *  fields), and a class instance compares by its enumerable own fields only. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
