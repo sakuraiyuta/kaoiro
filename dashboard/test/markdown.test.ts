@@ -149,6 +149,31 @@ describe("renderMarkdown on nesting that is too deep", () => {
   });
 });
 
+describe("renderMarkdown checks depth before the parser and the sanitizer", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("skips the parser and the sanitizer for quotes and lists past the limit", () => {
+    const parse = vi.spyOn(marked, "parser");
+    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    expect(renderMarkdown(quote(MAX_NESTING_DEPTH + 1))).toBe(
+      `<p>${"&gt;".repeat(MAX_NESTING_DEPTH + 1)}</p>`,
+    );
+    const list = renderMarkdown(nestedList(MAX_NESTING_DEPTH + 1));
+    expect(list).not.toContain("<ul");
+    expect(list).toContain("- item");
+    expect(parse).not.toHaveBeenCalled();
+    expect(sanitize).not.toHaveBeenCalled();
+  });
+
+  it("calls the parser and the sanitizer once each within the limit", () => {
+    const parse = vi.spyOn(marked, "parser");
+    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    expect(renderMarkdown(quote(MAX_NESTING_DEPTH))).toContain("<blockquote");
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(sanitize).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("renderMarkdown when a stage of the pipeline throws", () => {
   afterEach(() => vi.restoreAllMocks());
 
