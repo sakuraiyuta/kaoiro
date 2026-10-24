@@ -265,6 +265,46 @@ describe("renderTextBlock / renderAttachmentBlock", () => {
     expect(block.text).toContain(`[...truncated, original ${bytes.byteLength} bytes]`);
   });
 
+  describe("decoded body budget for malformed UTF-8 (issue #634)", () => {
+    const prefix = "[file: raw.bin]\n";
+    function bodyOf(text: string): string {
+      const end = text.indexOf("\n\n[...truncated");
+      return text.slice(prefix.length, end === -1 ? undefined : end);
+    }
+
+    it.each([
+      ["below", Math.floor(TEXT_SDK_BYTE_LIMIT / 2)],
+      ["at", TEXT_SDK_BYTE_LIMIT],
+      ["above", TEXT_SDK_BYTE_LIMIT + 8],
+    ])("clips the decoded body %s the raw limit and adds the notice", (_, size) => {
+      const bytes = new Uint8Array(size).fill(0x80);
+      const block = renderTextBlock(meta_({ filename: "raw.bin" }), bytes);
+      const body = bodyOf(block.text);
+      expect(block.text).toContain(`[...truncated, original ${size} bytes]`);
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(TEXT_SDK_BYTE_LIMIT);
+      expect(body).toBe("�".repeat(Math.floor(TEXT_SDK_BYTE_LIMIT / 3)));
+    });
+
+    it("keeps a small malformed body whole without a notice", () => {
+      const bytes = new Uint8Array(100).fill(0x80);
+      const block = renderTextBlock(meta_({ filename: "raw.bin" }), bytes);
+      expect(block.text).toBe(`${prefix}${"�".repeat(100)}`);
+    });
+
+    it("renders valid UTF-8 of exactly the limit whole, and notes one byte more", () => {
+      const exact = new Uint8Array(TEXT_SDK_BYTE_LIMIT).fill(0x41);
+      const atLimit = renderTextBlock(meta_({ filename: "raw.bin" }), exact);
+      expect(atLimit.text).toBe(`${prefix}${"A".repeat(TEXT_SDK_BYTE_LIMIT)}`);
+
+      const over = new Uint8Array(TEXT_SDK_BYTE_LIMIT + 1).fill(0x41);
+      const overLimit = renderTextBlock(meta_({ filename: "raw.bin" }), over);
+      expect(bodyOf(overLimit.text)).toBe("A".repeat(TEXT_SDK_BYTE_LIMIT));
+      expect(overLimit.text).toContain(
+        `[...truncated, original ${TEXT_SDK_BYTE_LIMIT + 1} bytes]`,
+      );
+    });
+  });
+
   it("blockWireSize は image/document の base64 長と text の UTF-8 バイト長", () => {
     expect(
       blockWireSize({

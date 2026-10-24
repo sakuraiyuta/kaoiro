@@ -15,7 +15,7 @@ import { OfficeParser } from "officeparser";
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import type { FileUploadRejectReason } from "@kaoiro/protocol";
-import { utf8HeadEnd } from "@kaoiro/wrapper-core";
+import { clipUtf8Head, utf8HeadEnd } from "@kaoiro/wrapper-core";
 
 /** Allowed image MIMEs (file-upload spec). Render path: image content
  *  block (renderImageBlock). */
@@ -443,13 +443,15 @@ export function renderTextBlock(
   meta: UploadMeta,
   bytes: Uint8Array,
 ): TextContentBlock {
-  let truncatedNote = "";
-  let slice = bytes;
-  if (bytes.byteLength > TEXT_SDK_BYTE_LIMIT) {
-    slice = bytes.subarray(0, utf8HeadEnd(bytes, TEXT_SDK_BYTE_LIMIT));
-    truncatedNote = `\n\n[...truncated, original ${bytes.byteLength} bytes]\n`;
-  }
-  const body = new TextDecoder("utf-8").decode(slice);
+  const slice = bytes.subarray(0, utf8HeadEnd(bytes, TEXT_SDK_BYTE_LIMIT));
+  const decoded = new TextDecoder("utf-8").decode(slice);
+  // Each malformed byte decodes to U+FFFD (3 bytes), so the decoded body can
+  // exceed the budget even when the raw slice fits it (issue #634).
+  const body = clipUtf8Head(decoded, TEXT_SDK_BYTE_LIMIT);
+  const truncatedNote =
+    slice.byteLength < bytes.byteLength || body.length < decoded.length
+      ? `\n\n[...truncated, original ${bytes.byteLength} bytes]\n`
+      : "";
   return {
     type: "text",
     text: `[file: ${meta.filename}]\n${body}${truncatedNote}`,
