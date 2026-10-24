@@ -1,6 +1,7 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   AppServerConnectionError, AppServerRpc, type AppServerServerRequest, type RpcObject,
@@ -25,7 +26,7 @@ function rig(maxServerRequestIds?: number) {
 describe("AppServerRpc server requests", () => {
   it("does not start the stderr tail inside a surrogate pair (issue #630)", async () => {
     const { f, rpc } = rig();
-    f.child.stderr.write(`${"\u{1F600}".repeat(8192)}b`);
+    (f.child.stderr as PassThrough).write(`${"\u{1F600}".repeat(8192)}b`);
     await settle();
     expect(rpc.stderrTail).toBe(`${"\u{1F600}".repeat(8191)}b`);
     await rpc.close();
