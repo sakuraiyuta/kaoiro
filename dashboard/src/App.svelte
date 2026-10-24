@@ -32,7 +32,10 @@
     spriteStateFor,
     spriteUrlFor,
   } from "./lib/expression";
-  import { projectDirectoryName as projectDirectoryNameFromEntry } from "./lib/personaName";
+  import {
+    agentDisplayName as resolveAgentDisplayName,
+    projectDirectoryName as projectDirectoryNameFromEntry,
+  } from "./lib/personaName";
   import type {
     AuthMethods,
     ConnectionStatus,
@@ -811,7 +814,7 @@
   }
 
   function agentDisplayName(agentId: string): string {
-    return agents[agentId]?.display_name ?? agentId;
+    return resolveAgentDisplayName(agentId, agents, directory);
   }
 
   // Opens the client socket with the given auth and starts the cookie-slide
@@ -1920,7 +1923,7 @@
           class:current={envelope.agent_id === selected}
           data-state={expr.variant}
           aria-current={envelope.agent_id === selected ? "true" : undefined}
-          title="{envelope.display_name ?? envelope.agent_id} — {expr.label}"
+          title="{agentDisplayName(envelope.agent_id)} — {expr.label}"
           onclick={() => {
             origin = null;
             timelineScrollTarget = null;
@@ -2080,9 +2083,7 @@
 {#if statusHistoryAgentId !== null && connection !== null}
   <StatusLineHistoryDialog
     agentId={statusHistoryAgentId}
-    label={agents[statusHistoryAgentId]?.display_name ??
-      directory[statusHistoryAgentId]?.display_name ??
-      statusHistoryAgentId}
+    label={agentDisplayName(statusHistoryAgentId)}
     fetchHistory={connection.fetchStatusLineHistory}
     refreshKey={statusLines.stampOf(statusHistoryAgentId)}
     onClose={() => (statusHistoryAgentId = null)}
