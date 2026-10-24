@@ -45,14 +45,26 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe("resolveAgyVersion (issue #387)", () => {
-  let tempDir: string | undefined;
+  const dirs: string[] = [];
 
   afterEach(() => {
-    const dir = tempDir;
-    tempDir = undefined;
-    if (dir === undefined) return;
-    rmSync(dir, { recursive: true, force: true });
-    expect(existsSync(dir)).toBe(false);
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+      expect(existsSync(dir)).toBe(false);
+    }
+  });
+
+  function makeTempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it("registers every temporary directory for cleanup", () => {
+    const first = makeTempDir();
+    const second = makeTempDir();
+
+    expect(dirs).toEqual([first, second]);
   });
 
   it("uses a shell fixture that atomically publishes its PID before waiting", () => {
@@ -72,8 +84,7 @@ describe("resolveAgyVersion (issue #387)", () => {
   });
 
   it("成功時は stdout を trim して返す", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
-    tempDir = dir;
+    const dir = makeTempDir();
     const script = join(dir, "agy");
     writeFileSync(script, "#!/bin/sh\nprintf 'agy-cli 1.2.3\\n'\n");
     chmodSync(script, 0o755);
@@ -83,8 +94,7 @@ describe("resolveAgyVersion (issue #387)", () => {
   });
 
   it("issue #387 review should2: 非ゼロ終了なら null を返す", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
-    tempDir = dir;
+    const dir = makeTempDir();
     const script = join(dir, "agy");
     writeFileSync(script, "#!/bin/sh\nexit 1\n");
     chmodSync(script, 0o755);
@@ -96,8 +106,7 @@ describe("resolveAgyVersion (issue #387)", () => {
   it(
     "issue #387 review should2: watchdog が期限切れで SIGTERM を無視する子を SIGKILL で止める",
     async () => {
-      const dir = mkdtempSync(join(tmpdir(), "kaoiro-agy-version-"));
-      tempDir = dir;
+      const dir = makeTempDir();
       const script = join(dir, "agy");
       const pidFile = join(dir, "pid");
       writeFileSync(script, shellPidMarkerFixture(pidFile));
