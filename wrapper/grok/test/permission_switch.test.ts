@@ -448,6 +448,17 @@ describe("metadata of a loading generation (issue #633)", () => {
     expect(window.some(m => m.method === "session/update")).toBe(false);
     expect(window.some(m => m.method === "_x.ai/session/update")).toBe(false);
   });
+  it("calls onMetadata with session_start before onSessionId at startup and at a switch", async () => {
+    const order: string[] = [];
+    const { host } = await started({
+      onMetadata: m => { if (isStart(m)) order.push("start"); },
+      onSessionId: () => { order.push("session"); },
+    });
+    expect(order).toEqual(["start", "session"]);
+    await host.setPermission(choose(1));
+    await host.send("fresh");
+    expect(order).toEqual(["start", "session", "start", "session"]);
+  });
   for (const fault of ["exit", "close"]) {
     it(`drops the metadata of a generation that fails at readiness (${fault})`, async () => {
       const metadata: GrokWireMetadata[] = [];
