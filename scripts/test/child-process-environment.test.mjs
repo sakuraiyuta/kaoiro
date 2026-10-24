@@ -127,6 +127,7 @@ test("the checker enumerates every source directory and follows new relative dep
     symlinkSync(join(fixture, "runner/deploy/child-process-environment.mjs"), dependency);
     assert.throws(() => checkReleaseChildEnvironments(fixture), /regular unlinked file/);
     rmSync(dependency);
+    writeFileSync(dependency, "export const valid = true;\n");
     const scope = join(fixture, "scripts/lib");
     rmSync(scope, { recursive: true });
     symlinkSync(join(fixture, "extra"), scope);
