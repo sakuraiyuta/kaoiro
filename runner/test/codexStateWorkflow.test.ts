@@ -260,12 +260,16 @@ else if (args.includes('show')) {
     expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
   });
-  it("rejects a self-consistent snapshot with crossed release metadata before stop", () => {
+  it.each(["uuid", "home", "source-id", "source-native", "target-id"])("rejects self-consistent snapshot metadata with crossed %s before stop", (field) => {
     expect(update().status).toBe(0);
     const tx = forwardTransaction();
     const path = join(dir, "backup/manifest.json");
     const manifest = JSON.parse(readFileSync(path, "utf8"));
-    manifest.sourceRelease.id = B;
+    if (field === "uuid") manifest.uuid = "00000000-0000-4000-8000-000000000000";
+    if (field === "home") manifest.binding.home.path = join(dir, "other-home");
+    if (field === "source-id") manifest.sourceRelease.id = B;
+    if (field === "source-native") manifest.sourceRelease.sha256 = "0".repeat(64);
+    if (field === "target-id") manifest.targetRelease.id = A;
     writeFileSync(path, JSON.stringify(manifest));
     const refPath = join(root, "codex-state/backups", `${tx.uuid}.json`);
     const ref = JSON.parse(readFileSync(refPath, "utf8"));
