@@ -493,6 +493,7 @@ describe("listSessionsIn — summary (#73)", () => {
     prefer: "cccccccc-2222-3333-4444-555555555555",
     none: "dddddddd-2222-3333-4444-555555555555",
     long: "eeeeeeee-2222-3333-4444-555555555555",
+    pair: "ffffffff-2222-3333-4444-555555555555",
   };
   const jsonl = (lines: object[]): string =>
     `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`;
@@ -545,6 +546,12 @@ describe("listSessionsIn — summary (#73)", () => {
       { type: "user", message: { role: "user", content: "あ".repeat(200) } },
     ]),
   );
+  writeFileSync(
+    join(dir, `${ids.pair}.jsonl`),
+    jsonl([
+      { type: "user", message: { role: "user", content: "\u{1F600}".repeat(60) } },
+    ]),
+  );
 
   const byId = (): Record<string, { summary?: string }> =>
     Object.fromEntries(listSessionsIn(dir).map((s) => [s.session_id, s]));
@@ -566,6 +573,9 @@ describe("listSessionsIn — summary (#73)", () => {
     expect(s).toBeDefined();
     expect(s?.length).toBe(100);
     expect(s?.endsWith("...")).toBe(true);
+  });
+  it("does not split a surrogate pair when shortening (issue #630)", () => {
+    expect(byId()[ids.pair]?.summary).toBe(`${"\u{1F600}".repeat(48)}...`);
   });
 });
 

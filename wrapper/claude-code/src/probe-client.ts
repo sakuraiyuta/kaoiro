@@ -12,6 +12,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol";
+import { clipUtf16Head } from "@kaoiro/wrapper-core";
 
 /** Wall-clock cap on the child process itself. Slightly above the probe's own
  *  internal --timeout-ms so a stuck child (e.g. SDK deadlock past its own
@@ -181,8 +182,8 @@ export async function runClaudeProbe(
         ok: false,
         reason: "invalid_output",
         detail:
-          `exit=${code ?? "?"} stdout=${stdout.slice(0, 200)}` +
-          (stderr ? ` stderr=${stderr.slice(0, 200)}` : ""),
+          `exit=${code ?? "?"} stdout=${clipUtf16Head(stdout, 200)}` +
+          (stderr ? ` stderr=${clipUtf16Head(stderr, 200)}` : ""),
         elapsed_ms: Date.now() - start,
       });
     });

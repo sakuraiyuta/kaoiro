@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { boundErrorDetail } from "@kaoiro/agent-common";
+import { clipUtf16Tail } from "@kaoiro/wrapper-core";
 
 export const DEFAULT_CHILD_KILL_DEADLINE_MS = 4_000;
 const STDERR_TAIL_CHARS = 2_048;
@@ -40,11 +41,11 @@ export function spawnBoundedClaudeProcess(
     let tail = "";
     stderr?.on("data", (chunk: Buffer) => {
       const text = decoder.decode(chunk, { stream: true });
-      tail = (tail + text).slice(-STDERR_TAIL_CHARS);
+      tail = clipUtf16Tail(tail + text, STDERR_TAIL_CHARS);
       binding.stderr?.(text);
     });
     stderr?.once("end", () => {
-      tail = (tail + decoder.decode()).slice(-STDERR_TAIL_CHARS);
+      tail = clipUtf16Tail(tail + decoder.decode(), STDERR_TAIL_CHARS);
     });
     child.once("exit", (code, signal) => {
       if (!binding.hostAbort.aborted && code !== 0 && tail !== "") {

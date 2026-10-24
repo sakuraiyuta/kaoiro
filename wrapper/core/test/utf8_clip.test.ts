@@ -1,7 +1,13 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import { MAX_LOG_BYTES, clipText } from "../src/redact.js";
-import { clipUtf8Head, clipUtf8Tail, utf8HeadEnd } from "../src/utf8_clip.js";
+import {
+  clipUtf16Head,
+  clipUtf16Tail,
+  clipUtf8Head,
+  clipUtf8Tail,
+  utf8HeadEnd,
+} from "../src/utf8_clip.js";
 
 const bytesOf = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -124,5 +130,37 @@ describe("clipText (issue #624)", () => {
     expect(truncated).toBe(true);
     expect(bytesOf(text)).toBeLessThanOrEqual(MAX_LOG_BYTES);
     expect(text).not.toContain("�");
+  });
+});
+
+describe("clipUtf16Head / clipUtf16Tail (issue #630)", () => {
+  const PAIR = "\u{1F600}";
+  const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it("steps back from a head cut that splits a surrogate pair", () => {
+    expect(clipUtf16Head(`ab${PAIR}c`, 3)).toBe("ab");
+    expect(clipUtf16Head(`ab${PAIR}c`, 4)).toBe(`ab${PAIR}`);
+  });
+
+  it("steps forward from a tail cut that splits a surrogate pair", () => {
+    expect(clipUtf16Tail(`a${PAIR}bc`, 3)).toBe("bc");
+    expect(clipUtf16Tail(`a${PAIR}bc`, 4)).toBe(`${PAIR}bc`);
+  });
+
+  it("keeps text within the limit and returns empty for a limit of zero", () => {
+    expect(clipUtf16Head(PAIR, 2)).toBe(PAIR);
+    expect(clipUtf16Tail(PAIR, 2)).toBe(PAIR);
+    expect(clipUtf16Head("abc", 0)).toBe("");
+    expect(clipUtf16Tail("abc", -1)).toBe("");
+  });
+
+  it("never exceeds the limit or leaves a lone surrogate", () => {
+    const text = `a${PAIR.repeat(5)}b`;
+    for (let max = 1; max <= text.length; max += 1) {
+      for (const clipped of [clipUtf16Head(text, max), clipUtf16Tail(text, max)]) {
+        expect(clipped.length).toBeLessThanOrEqual(max);
+        expect(clipped).not.toMatch(LONE);
+      }
+    }
   });
 });

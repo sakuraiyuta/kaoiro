@@ -44,3 +44,29 @@ export function clipUtf8Tail(text: string, maxBytes: number): string {
   const bytes = Buffer.from(text, "utf8");
   return bytes.subarray(utf8TailStart(bytes, maxBytes)).toString("utf8");
 }
+
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
+function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff;
+}
+
+/** The longest prefix within maxUnits UTF-16 code units that does not end
+ *  between the two halves of a surrogate pair (issue #630). */
+export function clipUtf16Head(text: string, maxUnits: number): string {
+  if (maxUnits <= 0) return "";
+  if (text.length <= maxUnits) return text;
+  const end = isHighSurrogate(text.charCodeAt(maxUnits - 1)) ? maxUnits - 1 : maxUnits;
+  return text.slice(0, end);
+}
+
+/** The longest suffix within maxUnits UTF-16 code units that does not start
+ *  between the two halves of a surrogate pair (issue #630). */
+export function clipUtf16Tail(text: string, maxUnits: number): string {
+  if (maxUnits <= 0) return "";
+  if (text.length <= maxUnits) return text;
+  const start = text.length - maxUnits;
+  return text.slice(isLowSurrogate(text.charCodeAt(start)) ? start + 1 : start);
+}

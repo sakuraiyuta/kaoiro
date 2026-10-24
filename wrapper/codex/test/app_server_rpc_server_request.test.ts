@@ -23,6 +23,14 @@ function rig(maxServerRequestIds?: number) {
 }
 
 describe("AppServerRpc server requests", () => {
+  it("does not start the stderr tail inside a surrogate pair (issue #630)", async () => {
+    const { f, rpc } = rig();
+    f.child.stderr.write(`${"\u{1F600}".repeat(8192)}b`);
+    await settle();
+    expect(rpc.stderrTail).toBe(`${"\u{1F600}".repeat(8191)}b`);
+    await rpc.close();
+  });
+
   it("hands each request to the hook with a typed key and answers only through respond", async () => {
     const { f, rpc, requests, ask } = rig();
     ask(1); ask("1"); await settle();

@@ -46,6 +46,21 @@ describe("bounded Claude CLI spawn", () => {
     expect(warnings[0]).not.toContain("abcdef123456");
   });
 
+  it("does not start the stderr tail inside a surrogate pair (issue #630)", async () => {
+    const warnings: string[] = [];
+    const child = spawnBoundedClaudeProcess(
+      {
+        ...base,
+        args: ["-e", "process.stderr.write('\\u{1F600}'.repeat(1024) + 'b');process.exit(1)"],
+        signal: new AbortController().signal,
+      },
+      { hostAbort: new AbortController().signal, deadlineMs: 20, warn: (value) => warnings.push(value) },
+    );
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`stderr tail: ${"\u{1F600}".repeat(1023)}b`);
+  });
+
   it("does not send a late SIGKILL after a child exits before host abort", async () => {
     const controller = new AbortController();
     const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: ["pipe", "pipe", "pipe"] });

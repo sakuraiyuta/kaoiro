@@ -32,6 +32,7 @@ import { join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexHome } from "@kaoiro/codex";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
+import { clipUtf16Head } from "@kaoiro/wrapper-core";
 import { grokSessionExists, listGrokSessions } from "./grok_sessions.js";
 
 /** session_id rides a JSONL filename and the wrapper's `--resume` arg, so its
@@ -480,7 +481,7 @@ const SUMMARY_MAX_CHARS = 100;
 function toSummaryLabel(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length > SUMMARY_MAX_CHARS
-    ? `${oneLine.slice(0, SUMMARY_MAX_CHARS - 3)}...`
+    ? `${clipUtf16Head(oneLine, SUMMARY_MAX_CHARS - 3)}...`
     : oneLine;
 }
 

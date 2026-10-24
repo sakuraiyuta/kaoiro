@@ -43,7 +43,13 @@ export {
   redactCredentials,
   writeRedactedStderr,
 } from "./redact.js";
-export { clipUtf8Head, clipUtf8Tail, utf8HeadEnd } from "./utf8_clip.js";
+export {
+  clipUtf16Head,
+  clipUtf16Tail,
+  clipUtf8Head,
+  clipUtf8Tail,
+  utf8HeadEnd,
+} from "./utf8_clip.js";
 export { DeliveryPolicyController } from "./delivery_policy.js";
 export type { DeliveryPolicyAck, DeliveryPolicyDecision, DeliveryPolicyApplication } from "./delivery_policy.js";
 export { createPhoenixSocket } from "./phoenix_socket.js";

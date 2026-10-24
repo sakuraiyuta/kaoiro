@@ -29,6 +29,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
+import { clipUtf16Head } from "@kaoiro/wrapper-core";
 import type { ProbeRateLimits } from "./probe-client.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -306,7 +307,7 @@ export async function runProbe(
     output({
       ok: false,
       reason,
-      detail: detail.slice(0, 512),
+      detail: clipUtf16Head(detail, 512),
       elapsed_ms: Math.round(performance.now() - t0),
     });
     return 1;
@@ -347,11 +348,10 @@ if (
       emit({
         ok: false,
         reason: "cli_error",
-        detail:
-          `unhandled: ${err instanceof Error ? err.message : String(err)}`.slice(
-            0,
-            512,
-          ),
+        detail: clipUtf16Head(
+          `unhandled: ${err instanceof Error ? err.message : String(err)}`,
+          512,
+        ),
         elapsed_ms: 0,
       });
       process.exit(2);

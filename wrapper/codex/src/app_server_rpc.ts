@@ -4,6 +4,7 @@ import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withAgentMarker } from "@kaoiro/agent-common";
+import { clipUtf16Tail } from "@kaoiro/wrapper-core";
 
 export type RpcObject = Record<string, unknown>;
 export interface AppServerNotification { method: string; params: RpcObject }
@@ -126,7 +127,7 @@ export class AppServerRpc {
     this.#child.stdin.on("error", () => this.#fail(new AppServerConnectionError("App-server stdin failed")));
     this.#child.stderr.setEncoding("utf8");
     this.#child.stderr.on("data", (data: string) => {
-      this.#stderrTail = (this.#stderrTail + data).slice(-16_384);
+      this.#stderrTail = clipUtf16Tail(this.#stderrTail + data, 16_384);
     });
     this.#child.stderr.on("error", () => this.#fail(new AppServerConnectionError("App-server stderr failed")));
     // Child exit can precede delivery of the last stdout chunks. Only the reader ends routing.

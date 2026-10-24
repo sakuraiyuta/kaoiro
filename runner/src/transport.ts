@@ -7,7 +7,7 @@
 // HostRegistry keeps the host live.
 
 import type { Channel, Socket } from "phoenix";
-import { createPhoenixSocket } from "@kaoiro/wrapper-core";
+import { clipUtf16Head, createPhoenixSocket } from "@kaoiro/wrapper-core";
 import type {
   EngineCatalogResult,
   RunnerRegister,
@@ -103,7 +103,7 @@ function describeVersion(value: unknown): string {
   }
 
   return text.length > MAX_LOGGED_VERSION_CHARS
-    ? `${text.slice(0, MAX_LOGGED_VERSION_CHARS)}…(truncated)`
+    ? `${clipUtf16Head(text, MAX_LOGGED_VERSION_CHARS)}…(truncated)`
     : text;
 }
 

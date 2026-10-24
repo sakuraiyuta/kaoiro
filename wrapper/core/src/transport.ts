@@ -62,6 +62,7 @@ import {
   type WrapperBuildInfo,
 } from "./build_info.js";
 import { writeRedactedStderr } from "./redact.js";
+import { clipUtf16Head } from "./utf8_clip.js";
 import { DeliveryRecovery, type DeliveryResyncRequest, type DeliveryResyncReply } from "./delivery_recovery.js";
 import { createPhoenixSocket, type PhoenixSocketOptions } from "./phoenix_socket.js";
 import { DeliveryPolicyController, type DeliveryPolicyAck } from "./delivery_policy.js";
@@ -190,7 +191,7 @@ function describeVersion(value: unknown): string {
   if (value === undefined) return "(absent)";
   const text = typeof value === "string" ? JSON.stringify(value) : String(value);
   return text.length > MAX_LOGGED_VERSION_CHARS
-    ? text.slice(0, MAX_LOGGED_VERSION_CHARS) + "…"
+    ? clipUtf16Head(text, MAX_LOGGED_VERSION_CHARS) + "…"
     : text;
 }
 

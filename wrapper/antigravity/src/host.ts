@@ -28,6 +28,7 @@ import {
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
+import { clipUtf16Head } from "@kaoiro/wrapper-core";
 import type {
   EngineModelInfo,
   PermissionAxesExt,
@@ -2108,7 +2109,7 @@ export class AntigravityHost implements EngineAdapter {
         inFlight.faultKey = this.#faultKey(epoch.serial, inFlight.faultClass, stepIndex);
         const errorDetail = event.step_update.tool_info?.error?.message;
         const boundedDetail = typeof errorDetail === "string" ? boundErrorDetail(errorDetail) : "<missing>";
-        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${boundedDetail.slice(0, 320)}`);
+        this.#warn(`antigravity: unobserved tool completion: tool=${toolName} detail=${clipUtf16Head(boundedDetail, 320)}`);
         this.#tripGateBroken(
           inFlight.faultClass,
           toolName,
@@ -2921,7 +2922,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#seenGateFaultKeys.add(faultKey);
     const tripCount = ++this.#gateTripCount;
     const boundedDetail = boundErrorDetail(detail);
-    const safeToolName = validToolName(toolName) ? toolName.slice(0, 64) : "<unknown>";
+    const safeToolName = validToolName(toolName) ? clipUtf16Head(toolName, 64) : "<unknown>";
 
     if (this.#gateBroken) {
       if (faultClass === "customization_tampered") {

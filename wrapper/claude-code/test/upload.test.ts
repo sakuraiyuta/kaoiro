@@ -1,11 +1,13 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { zipSync } from "fflate";
+import { OfficeParser } from "officeparser";
 import {
   IMAGE_MIME_ALLOW,
   IMAGE_SDK_LONG_EDGE_MAX,
   IMAGE_SDK_RAW_LIMIT_BYTES,
+  OFFICE_MAX_OUTPUT_CHARS,
   OFFICE_MAX_UNCOMPRESSED_BYTES,
   OFFICE_MIME_ALLOW,
   PDF_MIME,
@@ -157,6 +159,22 @@ describe("officeWithinUncompressedBudget (decompression-bomb defense)", () => {
     const bombData = new Uint8Array(bombSize); // all zeros
     const zipped = zipSync({ "x": bombData });
     expect(officeWithinUncompressedBudget(zipped)).toBe(false);
+  });
+});
+
+describe("DefaultOfficeTextExtractor output cap (issue #630)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("does not end the kept text inside a surrogate pair", async () => {
+    const text = `${"a".repeat(OFFICE_MAX_OUTPUT_CHARS - 1)}\u{1F600}tail`;
+    vi.spyOn(OfficeParser, "parseOffice").mockResolvedValue(
+      { toText: () => text } as Awaited<ReturnType<typeof OfficeParser.parseOffice>>,
+    );
+    const out = await new DefaultOfficeTextExtractor().extract(
+      new Uint8Array([1]),
+      OFFICE_MIME_ALLOW.values().next().value!,
+    );
+    expect(out?.startsWith(`${"a".repeat(OFFICE_MAX_OUTPUT_CHARS - 1)}\n\n[...truncated`)).toBe(true);
   });
 });
 

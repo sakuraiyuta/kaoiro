@@ -39,7 +39,7 @@ import type {
   StatusLineSetResult,
   WrapperBuildIdentity,
 } from "@kaoiro/protocol";
-import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
+import { clipUtf16Head, type InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
 import { ReplyBasis, REPLY_TICKET_REQUIRED_GUIDANCE, REPLY_AUTHORIZATION_USAGE_GUIDANCE, FOLLOWUP_AUTHORIZATION_GUIDANCE, ordinaryPeerInput, bindToolResultHandoff, appendToolResultHandoff, type ReplyAttempt, type ReplyOrigin, type ReplyAuthorization, type ReplyTicketGuidance } from "./reply_basis.js";
 import type { ToolHandlerContext } from "./tooling.js";
@@ -2846,17 +2846,17 @@ export class InterAgentTool {
   }
 
   #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): InterAgentToolResult {
-    this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
+    this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: clipUtf16Head(acceptance.reason, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
     const isWorkRejection = operationId !== undefined ||
       acceptance.reason === "work_operation_deduplicated" ||
       acceptance.reason === "work_outcome_unknown" ||
       acceptance.reason === "work_applied_message_rejected";
     const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason) : undefined;
-    const fields = { error: acceptance.reason.slice(0, 128), message: workGuidance ?? (acceptance.reason === "work_operation_deduplicated"
+    const fields = { error: clipUtf16Head(acceptance.reason, 128), message: workGuidance ?? (acceptance.reason === "work_operation_deduplicated"
       ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
       : acceptance.reason === "work_outcome_unknown"
       ? "The message was not sent. Query work_op_result with this operation_id; if the operation was not applied, retry with the same operation_id."
-      : acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512)), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details,
+      : acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : clipUtf16Head(message, 512)), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details,
       ...(acceptance.details?.operation_id === undefined && operationId !== undefined ? { operation_id: operationId } : {}),
       ...(workGuidance === undefined ? {} : { guidance: workGuidance }) };
     if (acceptance.reason === "stale_reply_basis") {

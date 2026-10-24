@@ -1,4 +1,5 @@
 import { redactCredentials, writeRedactedStderr, type WrapperConfig } from "@kaoiro/agent-common";
+import { clipUtf16Head } from "@kaoiro/wrapper-core";
 import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
   AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject, serverRequestKey,
@@ -124,7 +125,7 @@ const INITIALIZE_RETRY_DELAY_MS: ReadonlyArray<readonly [number, number]> = [[10
 function sqliteSignatureLine(stderr: string): string | undefined {
   const lines = stderr.split("\n").filter(line => line.includes(SQLITE_INIT_SIGNATURE));
   const line = lines[lines.length - 1]?.trim();
-  return line === undefined ? undefined : redactCredentials(line).slice(0, 300);
+  return line === undefined ? undefined : clipUtf16Head(redactCredentials(line), 300);
 }
 
 /** Failure handling of one spawned child while `initialize` is unanswered. */
