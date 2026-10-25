@@ -1,0 +1,230 @@
+{
+  "schema": 1,
+  "status": "Gate 6 r2 measurement complete; independent review pending; not retirement approval",
+  "date": "2026-10-10",
+  "issue": 571,
+  "revises": {
+    "r1_markdown": {
+      "path": "tmp/reviews/issue-571/gate6-0.161.0/pin-0.161.0-gate6-2026-10-10.md",
+      "sha256": "199353939eb78e2e33bf1e9c7a96d458a88cdaa26ca156340154df0abea51a6a"
+    },
+    "r1_json": {
+      "path": "tmp/reviews/issue-571/gate6-0.161.0/pin-0.161.0-gate6-2026-10-10.json",
+      "sha256": "60050a4d15db3a747583ee97b567ab9538cfb528708c1b9617eaa604081f60bf"
+    },
+    "review": {
+      "path": "tmp/reviews/issue-571/gate6-0.161.0-review-kuroe.md",
+      "sha256": "88f157f0558b1c6b376c8de776bef25b58294dc9cd1d0022da46facdcddd9778",
+      "verdict": "request_changes",
+      "counts": {
+        "must": 2,
+        "should": 1,
+        "nit": 1
+      }
+    }
+  },
+  "target_artifact": {
+    "release_revision": "e82033393c5f99e586b7f7967f8780ccfc1a3d8e",
+    "release_version": "2026.10.10.1",
+    "branch": "develop",
+    "dirty": false,
+    "native_version": "0.161.0",
+    "native_path": "<home>/.local/share/kaoiro/releases/e82033393c5f99e586b7f7967f8780ccfc1a3d8e/node_modules/.pnpm/@openai+codex@0.161.0/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+    "native_sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c",
+    "source_commit": "e82033393c5f99e586b7f7967f8780ccfc1a3d8e",
+    "manifest_sha256": "7e8942f42cfb7cc112172f30cbe73828cc1279c555a0f6afc010189104ac5b41",
+    "build_info_sha256": "27ee983c44866324faaded28cb38d2812f1ee847cde3acb7292c47b13387e7c4",
+    "source_matches_installed": [
+      {
+        "path": "runner/deploy/kaoiro-runner-codex-state.mjs",
+        "sha256": "f34d86cb16d98f800886f7c53e6619175592682b2f1760d5c88acb9c15df79be"
+      },
+      {
+        "path": "runner/deploy/codex-snapshot.mjs",
+        "sha256": "bf0d4d5a5af15b34f61400e3c0fdcd62db0b348c70a86f495932d3f3d7385cb9"
+      },
+      {
+        "path": "runner/deploy/codex-service.mjs",
+        "sha256": "e2022f6f440f69aa4615101b0b2e7352aaa5afeeac7861baa26311691471976f"
+      },
+      {
+        "path": "runner/deploy/codex-native.mjs",
+        "sha256": "e811d9172786195e8d6f3817b2735839384d28e9cfefe4dec111a2ef024eb672"
+      },
+      {
+        "path": "runner/deploy/verify-release.mjs",
+        "sha256": "9e9ff68f7577ca31122dbab1e8d9e1cd0ff3be598bb27a6c19d21eaf33165058"
+      }
+    ]
+  },
+  "retirement_basis": {
+    "retained_snapshot_count": 5,
+    "historical_0160_migration_reference": "f5221dc5",
+    "basis": "Retiring the five references gives up older recovery points; the retained home remains on Codex 0.161.0. This 0.161.0 Gate 6 run exercises the current home's candidate-generated state, snapshot/restore, and fresh-home path, so it is the relevant version for all five retirements, including f5221dc5, which supported the earlier migration to 0.160.0.",
+    "decision_status": "Evidence basis recorded for Chloe's review; it does not set gate6 true or approve retirement by itself"
+  },
+  "environment": {
+    "scratch_root": "<scratch>",
+    "scratch_removed": true,
+    "candidate_release_copy": "<scratch>/install/releases/e82033393c5f99e586b7f7967f8780ccfc1a3d8e",
+    "candidate_copy_method": "scratch-local hard-linked release tree; all candidate files were read-only during measurement",
+    "home_codex_home_xdg_tmpdir_project_and_install_root": "all measurement state was under scratch_root",
+    "child_environment": "env -i with explicit HOME, CODEX_HOME, XDG_CONFIG_HOME, TMPDIR, PATH, and LANG; API-key variables absent",
+    "node_version": "v22.23.3",
+    "app_server_client": "AppServerRpc from the target release's @kaoiro/codex/dist/app_server_rpc.js",
+    "service_manager": "KAOIRO_SYSTEMCTL pointed to a scratch-only fake inactive service; no real systemd unit or production runner was read or changed",
+    "forward_record": "seeded only in scratch from target staticBinding/nativeIdentity so the deployed snapshot CLI could run without inspecting a live cgroup",
+    "real_prepare_measured": false,
+    "prepare_restore_measured": true,
+    "real_credentials": false,
+    "remote_model_calls": 0,
+    "local_provider_turns": 3,
+    "operator_login": false,
+    "production_state_touched": false
+  },
+  "measurements": {
+    "candidate_version": {
+      "command": "<candidate-codex> --version",
+      "stdout": "codex-cli 0.161.0",
+      "exit_code": 0,
+      "binary_sha256": "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c"
+    },
+    "strict_release_verification": {
+      "command": "node --experimental-vm-modules <scratch-release>/deploy/verify-release.mjs <scratch-release> --require-deploy-manifest --hash",
+      "stdout": "e82033393c5f99e586b7f7967f8780ccfc1a3d8e",
+      "exit_code": 0
+    },
+    "original_home": {
+      "dummy_auth_json": "{} followed by newline; no credential fields",
+      "dummy_auth_bytes": 3,
+      "dummy_auth_sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "first_turn_id": "01a1264d-df29-7102-9592-e4dfba91dd23",
+      "thread_id": "01a1264d-df10-7133-8a8d-ee4edc0e065b",
+      "status": "completed",
+      "first_prompt_and_local_answer_readable_before_snapshot": true,
+      "codex_state_database": "state_5.sqlite",
+      "persisted_rollout": "sessions/2026/10/10/rollout-2026-10-10T23-53-20-01a1264d-df10-7133-8a8d-ee4edc0e065b.jsonl"
+    },
+    "snapshot": {
+      "command": "node <scratch-release>/deploy/kaoiro-runner-codex-state.mjs snapshot <scratch-install> <forward-transaction>",
+      "exit_code": 0,
+      "manifest_sha256": "5505e24bdd9e813ad8f387df290a67d5ebe38dc625f8ecdfaa3e1f316a738e3a",
+      "state_entries": 94,
+      "credentials_omitted": [
+        "auth.json",
+        ".credentials.json",
+        "secrets",
+        "mcp-oauth-locks"
+      ],
+      "auth_json_in_manifest": false,
+      "auth_json_in_payload": false,
+      "source_state_matches_snapshot": true
+    },
+    "divergence_after_snapshot": {
+      "second_turn_id": "01a1264d-e8eb-74a0-b37f-8f7f9da001c3",
+      "second_turn_status": "completed",
+      "second_turn_readable_before_restore": true,
+      "config_edit": "model_reasoning_effort low -> high",
+      "divergent_state_sha256": "54b0d4ceb14a53706e8d866cf834628451779c691b87efc3a3ebe3b1c22a7f7c",
+      "dummy_auth_sha256_unchanged": true
+    },
+    "prepare_restore": {
+      "command": "node <scratch-release>/deploy/kaoiro-runner-codex-state.mjs prepare-restore <snapshot> <CODEX_HOME> <scratch-service> <release-id> <owned-pid>",
+      "exit_code": 0,
+      "transaction_id": "617c07ac-dde7-4cb6-8457-43b8568b5e98",
+      "used_deployed_helper": true,
+      "service_shape": "fake inactive unit; no live cgroup or production service"
+    },
+    "negative_controls": [
+      {
+        "name": "add dummy auth.json only to copied snapshot payload",
+        "exit_code": 78,
+        "stderr": "codex-state: Snapshot contains excluded entries",
+        "divergent_home_unchanged": true
+      },
+      {
+        "name": "modify config.toml only in copied snapshot payload",
+        "exit_code": 78,
+        "stderr": "codex-state: Snapshot payload mismatch",
+        "divergent_home_unchanged": true
+      },
+      {
+        "name": "corrupt one byte in state_5.sqlite only in copied snapshot payload",
+        "exit_code": 78,
+        "stderr": "codex-state: Snapshot payload mismatch",
+        "divergent_home_unchanged": true
+      }
+    ],
+    "restore": {
+      "command": "node <scratch-release>/deploy/kaoiro-runner-codex-state.mjs restore <scratch-install> <restore-transaction>",
+      "exit_code": 0,
+      "sameState_matches": true,
+      "post_snapshot_turn_and_config_edit_removed": true,
+      "config_reasoning_effort_restored_to": "low",
+      "dummy_auth_sha256_before_snapshot_and_after_restore": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "auth_moved_from_quarantine_to_restored_home": true,
+      "transaction_phase": "state-restored"
+    },
+    "history_after_restore": {
+      "thread_id": "01a1264d-df10-7133-8a8d-ee4edc0e065b",
+      "thread_read_turn_count": 1,
+      "first_turn_and_answer_readable": true,
+      "second_turn_and_answer_absent": true,
+      "read_method": "thread/read includeTurns=true"
+    },
+    "fresh_home": {
+      "same_canonical_scratch_codex_home_path": true,
+      "failed_home_preserved_inside_scratch": true,
+      "fresh_auth_entries": 0,
+      "hook_path": "<scratch>/codex-home/hooks/gate6-marker.sh",
+      "hook_key": "<scratch>/codex-home/config.toml:user_prompt_submit:0:0",
+      "hook_trusted_hash": "sha256:fa12feaa64ce69f5ff51ad9775212fa2f8121687892fcd9b80f4602c7e58a040",
+      "hooks_list_status": "trusted",
+      "hook_marker_path": "<scratch>/fresh-hook.marker",
+      "hook_marker_contents": "FRESH_HOME_HOOK_RAN",
+      "hook_marker_present": true,
+      "thread_id": "01a1264d-fdc9-7581-ae8b-81697739f960",
+      "previous_thread_id": "01a1264d-df10-7133-8a8d-ee4edc0e065b",
+      "thread_id_distinct": true,
+      "first_turn_id": "01a1264d-fdd7-7141-9550-739dff4f7869",
+      "first_turn_status": "completed",
+      "first_turn_readable": true
+    },
+    "provider_observations": {
+      "total_requests": 7,
+      "get_models_requests": 4,
+      "post_responses_turn_requests": 3,
+      "all_remote_addresses": "127.0.0.1",
+      "all_local": true,
+      "authorization_header_seen": false,
+      "turn_markers": [
+        "GATE6_FIRST_TURN_MARKER",
+        "GATE6_SECOND_TURN_MARKER",
+        "GATE6_FRESH_HOME_TURN_MARKER"
+      ]
+    },
+    "transient_capture": {
+      "scratch_path": "<scratch>/measurement-r2.json",
+      "sha256": "85cceb18f9d6511a66ad7b6109912ddb818dc2f48c707df6baf5eb8124a6b1bb",
+      "retained_outside_scratch": false
+    }
+  },
+  "discarded_harness_attempts": [
+    "A fake-active service prepare attempt exited 78 with 'Active runner has no cgroup'; it was scratch-only and excluded from the measurement.",
+    "An initial app-server launch used a scratch project path before that directory existed and did not complete initialize; the final run used a created scratch project.",
+    "An initial cross-process turn attempt did not resume the thread; it received 'thread not found'. The final run resumed the thread and completed the requested turns.",
+    "Harness-only checks were corrected after they confused snapshot-name UUID with transaction UUID and compared inode-sensitive inventory hashes instead of sameState.",
+    "One discarded initialize-only diagnostic inherited <home> as cwd, while HOME, CODEX_HOME, XDG_CONFIG_HOME and TMPDIR were scratch. It only returned initialize/config-warning output; it ran no turn and did not access ~/.local/share/kaoiro. The final measured app-server cwd was scratch."
+  ],
+  "unmeasured": [
+    "Real runner/systemd startup and actual live-cgroup prepare admission; prepare() was not exercised because no production unit/cgroup was used.",
+    "Real credentials and operator login; this belongs to Hisui's separate operator acceptance record, outside Gate 6.",
+    "Remote model/provider calls, old-version login, and opening a database migrated by an older Codex binary; the target Gate 6 plan excludes these."
+  ],
+  "references": [
+    "docs/plans/issue-468-codex-state-backup.md:646-651",
+    "docs/plans/issue-468-codex-state-backup.md:323-327",
+    "docs/operations/runner-update-and-rollback.md:524-530 (Retirement)",
+    "docs/operations/codex-home.md:254-259"
+  ]
+}

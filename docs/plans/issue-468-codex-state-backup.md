@@ -1,7 +1,7 @@
 ---
 title: Codex state backup around runner pin updates
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-25
 ---
 
 # Codex state backup around runner pin updates
@@ -649,6 +649,11 @@ Required evidence before implementation is called complete:
   session behavior. No old-version login, model turn, or old-opening-migrated-DB
   measurement is required. Existing old-version measurements are historical
   observations only. Bind new results to final binary and source hashes.
+  The Codex 0.161.0 Gate 6 record (r2), which supports retiring the five
+  pre-571 recovery points, is
+  [pin-0.161.0-gate6-2026-10-10-r2.md](../evidence/codex-app-server/pin-0.161.0-gate6-2026-10-10-r2.md)
+  (redacted; see the
+  [redaction note](../evidence/codex-app-server/pin-0.161.0-gate6-2026-10-10-r2-redaction.md)).
 - Rehearse failed switch recovery with the source pointer unchanged and with
   a pointer already moved to the recorded target. Recovery returns to the
   verified source or remains stopped with both recovery levels reported;
