@@ -16,9 +16,16 @@ test. It replaces units L2/L3 of the
 It does not build any state of the retired machine (issue-695 plan section
 5.4).
 
-Revision r2 answers design review r1 (must 2, should 4, nit 6). Both musts
-are one class: a declaration that no test ties to the code. r2 closes that
-class (section 1, N3-e), not the two instances.
+Revisions:
+
+- r2 answered design review r1 (must 2, should 4, nit 6).
+- r3 answers r2 (must 1, should 3, nit 3).
+
+All three musts belong to one class: a declared item that no test ties to
+the code. r3 closes the class without a hand-written tie table. Layer 1
+walks every field of every exported structure and requires a registered
+tie for each field kind it finds. No class is chosen by hand outside the
+branches and guards (section 1, N3-e).
 
 ## 1. Decisions
 
@@ -28,18 +35,41 @@ class (section 1, N3-e), not the two instances.
 | N3-b | One module, `runner/deploy/codex-state-recovery.mjs`, is the only source of hint text: `TABLE`, `GUARDS`, `REFUSALS` and `render()` | Hint strings at each site (R6 today) |
 | N3-c | New read-only helper action `next <root> [<uuid>]` (section 5.3) | The updater's `<uuid>` placeholder (`kaoiro-runner-update.sh:277`) |
 | N3-d | The runbook's recovery table is generated from the module, and a doc-equality test pins it | A hand-written runbook table |
-| N3-e | Close the class "declaration without an executable tie": every declared item has exactly one mechanical tie, and an untied item fails layer 1 (table below) | Fixing the cited instances only. That was the r1 pattern twice |
+| N3-e | Close the class "declared item without an executable tie" mechanically: layer 1 walks the exported structures, and every field kind it finds must have a registered tie (below). No refusal class is chosen outside a branch or a guard | A hand-written tie table, which r2 used and which missed `REFUSALS` classes |
 
-| Declared item | Its tie | What fails when it is missing |
-|---|---|---|
-| Phase | `TABLE` keys equal the exported `PHASES` | layer 1 inventory |
-| (phase, command) cell | at least one branch | layer 1 inventory |
-| Branch | a layer-2 recipe with the same id; layer 2 runs exactly the branch-id set | layer 2 refuses to start (missing recipe), and a completeness assertion fails after the run |
-| Refusal branch | its message key exists in `REFUSALS`, and the catalog class equals the branch class | layer 1 class equality |
-| Refusal message in code | exactly one `REFUSALS` entry, found by the fail-closed scan of section 4.1 | layer 1 scan |
-| Hint entry | its rendered option equals the cell's command key; its anchor exists | layer 1 rendering and anchors |
-| Runbook table | equal to `render --runbook` | layer 1 doc equality |
-| Cited N2 test | the cited title exists in the test sources | layer 1 citation check |
+**Field walk (layer 1).** The walker enumerates the field paths that occur
+in `TABLE`, `GUARDS`, `REFUSALS`, `SHELL_REFUSALS`, `RECIPES`, `RETHROWS`
+and `SHARED_MESSAGES`, for example `TABLE.<phase>.<command>[].message`. It
+looks each path pattern up in `TIES`, a registry in the test that maps a
+pattern to its check function.
+
+- A pattern that occurs but has no `TIES` entry fails, so a new field kind
+  cannot appear untied.
+- A `TIES` entry whose pattern never occurs fails, so the registry cannot
+  rot.
+
+The registry at r3:
+
+| Field pattern | Tie |
+|---|---|
+| `TABLE` keys | equal the exported `PHASES` |
+| `TABLE.<phase>.<command>` | at least one branch; the command is one of section 2's keys |
+| `…[].id`, `GUARDS[].id` | a `RECIPES` entry; layer 2's executed id set equals the declared set |
+| `…[].precondition` | a `PRECONDITIONS` predicate that layer 2 evaluates as true before running the command |
+| `…[].outcome` | the layer-2 outcome oracle |
+| `…[].message`, `GUARDS[].message` | a key found by the scan of section 4.1, and seen in the case's stderr |
+| `…[].class`, `GUARDS[].class` | the derived class of the message (section 5.1) and the layer-2 hint oracle |
+| `…[].hint` | the rendered option equals the cell's command key; its anchor exists |
+| `…[].pin` | the cited title exists in the test sources |
+| `…[].site`, `GUARDS[].site` | a `// codex-recovery-site: <id>` marker in the code, on a line that calls the guard function (r2 nit 3) |
+| `GUARDS[].entry` | layer 2 drives the case through that entry point |
+| `REFUSALS.<key>.files`, `SHELL_REFUSALS.<key>.file` | the scan finds the key in exactly those files |
+| `SHELL_REFUSALS.<key>.exit` | the exit status at the scanned `kaoiro_die` |
+| `RETHROWS[].site`, `.reason` | a marker at the rethrow; a non-empty reason |
+| `SHARED_MESSAGES[].message`, `.class`, `.reason` | the message is raised by two or more branches or guards; layer 2 expects `.class` for each of them |
+
+`REFUSALS` and `SHELL_REFUSALS` have **no class field**. Adding one is an
+unregistered pattern, so the walk fails (NC6).
 
 Director rulings recorded here:
 
@@ -78,27 +108,39 @@ Notation:
   - `settle`: the `run()` catch records `failed` and starts the source;
   - `held`: nonzero exit, with the phase unchanged after a stop;
   - `refuse`: zero mutation.
-- **Class** is the class of the refusal message (section 5.1).
+- **Class** is declared on branches and guards only. The catalog derives
+  each message's class from them, or from a fixed default (section 5.1).
 - **Pin** is the existing N2 test that drives the same path, or `—`. Layer 2
   drives every branch regardless, because no N2 test checks the rendered
   hint.
 
-### 3.1 Guards common to entry points
+### 3.1 Guards before the first mutation
 
-A guard is evaluated before the first mutation of each entry point listed.
-Layer 2 runs one refusal case per (guard, entry point) pair. A refusal is
-not repeated for every phase, because the guard is a single call in that
-entry point (cited by line).
+A guard row is one **call site**. The site id is the row's id, and it
+matches a `// codex-recovery-site:` marker in the code.
 
-| Guard | Message key | Class | Entry points (helper line at `2c5f34cc`) | Pin |
-|---|---|---|---|---|
-| G1 recorded tool | "Use the recorded physical updater tool" | `transaction` | `run` (L382) | — |
-| G2 another unfinished record | "Unresolved Codex transaction requires recovery" | `transaction` (renders the blocking UUID) | `guard`, `prepare`, `prepare-restore`, `run`, `prune` (L117 callers) | Workflow "refuses %s before its first mutation with a second unfinished operation" |
-| G3 current outside the operation | "Current is outside recorded operation" | `integrity` | `run` (L385), `guard` (L210) | Workflow "refuses %s before authorization" (`third-current`), Recovery "refuses a third current release before stop…" |
-| G4 home or unit disagreement | `codex-service.mjs` binding messages | `config` | `run`, `guard`, `admitRestore`, `prepare` | Workflow "refuses restore admission with requested %s disagreement before stop" |
-| G5 transitional activity | "Runner activity is transitional or unknown" | `transient` | every `runnerActivity` call | KeepSafety "handles %s without unsafe subsequent effects" |
-| G6 a held lock | `withLock` "Lock held" / updater lock-held / `kaoiro_lock_acquire` | `lock` | `resume`, `recover`, `prune` (L478–L479); updater L275; switch, install and updater links lock | Workflow "preserves a held %s and takes no other unowned lock" |
-| G7 old schema-1 record | "Resolve old Codex state records…" (L51) | `cutover` | every mutating action and `protected` | Workflow "blocks every remaining mutation entrance on an unresolved old %s" |
+- A guard row exists only where a refusal leaves zero mutation: before the
+  stop, or at an entry point that has not changed anything yet.
+- A guard function that is also called after the stop gets a phase branch
+  for that site instead (section 3.5), because its outcome there is
+  `settle` or `held`, not `refuse` (r2 should 1).
+- Each row is driven once in layer 2.
+- Lines refer to `2c5f34cc`, are for orientation only, and are not tied.
+  The marker is the tie.
+
+| Site id | Guard | Message key | Class | Entry and line | Pin |
+|---|---|---|---|---|---|
+| G1.run | recorded tool | "Use the recorded physical updater tool" | `transaction` | `run` L382 | — |
+| G2.guard, G2.prepare, G2.restore, G2.run, G2.prune | another unfinished record (`exclude`) | "Unresolved Codex transaction requires recovery" | `transaction` (blocking UUID) | first call in each entry | Workflow "refuses %s before its first mutation with a second unfinished operation" |
+| G3.run, G3.guard | current outside the operation | "Current is outside recorded operation" | `integrity` | L385, L210 | Workflow "refuses %s before authorization" (`third-current`) |
+| G4.run-pre, G4.guard-entry, G4.restore, G4.prepare | home or unit disagreement (`checkBinding` / `captureBinding`) | the `codex-service.mjs` binding messages | `config` | L386, L212 when reached from switch, L242, L153 | Workflow "refuses restore admission with requested %s disagreement before stop" |
+| G5.began, G5.pre-stop, G5.target-check, G5.resume-stop | transitional activity (`runnerActivity`) | "Runner activity is transitional or unknown" | `transient` | L380, L389, L401, L403 (all before `stopRunner`) | KeepSafety "handles %s without unsafe subsequent effects" |
+| G6.helper, G6.updater, G6.switch-links, G6.install-links, G6.updater-links | a held lock | `withLock` "Lock held"; updater lock-held; `kaoiro_lock_acquire` | `lock` | L478–L479; updater L275; `common.sh` L85 callers | Workflow "preserves a held %s and takes no other unowned lock" |
+| G7.guard, G7.prepare, G7.restore, G7.run, G7.prune, G7.protected | old schema-1 record (`cutover` through `records`) | "Resolve old Codex state records…" | `cutover` | first `records()` call in each entry | Workflow "blocks every remaining mutation entrance on an unresolved old %s" |
+
+To reach G5 at a specific site, layer 2 sets the fake manager to report
+`activating` from the n-th `ActiveState` query. The fixture's call log
+gives n for each site. This needs no product change.
 
 ### 3.2 Forward phases
 
@@ -162,26 +204,62 @@ have passed.
 | | UPD | F-UPD | after a copy fault | a new forward succeeds | — | added in N3 (issue #531 acceptance) |
 | | RBK | as `completed` | | | | |
 
+### 3.5 Guards after the stop (phase branches)
+
+These sites run after `stopRunner` or after a start, so a failure there is
+`settle` or `held`. Each is a branch with its own marker.
+
+- The fake manager's existing hooks (`late-config`, `late-populated`,
+  `late-unknown`, `remain-active`) or the record and rename checkpoints
+  produce the precondition at the stop or the start.
+- Because the outcome is not zero mutation, each branch gets a freshly
+  reached state.
+
+| Branch (= site id) | Phase / command | Site at `2c5f34cc` | Outcome | Pin |
+|---|---|---|---|---|
+| PS.snapshot | `prepared`, `snapshot-verified` RES | `takeSnapshot` L175 (`assertStopped`, `checkBinding`) | settle | KeepSafety "resumes source after %s with recoverable residue" (`late-unknown`) |
+| PS.guard-nested | `snapshot-verified` RES | nested switch `guard` L212/L214 | settle (no `start-intent` saved) | — |
+| PS.guard-nested-intent | `start-intent` RES, current = source | nested `guard` L212/L214 | held | — |
+| PS.stage | `restore-prepared` RES | `stageRestore` L261 | the `run()` catch restarts `from` only if admission began active | KeepSafety "restarts a failed restore only if admission began %s" |
+| PS.replace | `replace-intent` RES | `moveReplacement` L273/L274 | held | — |
+| PS.after-switch | `start-intent` RES | `run` L414 | held | — |
+| PS.post-start | `start-intent` RES | `postStart` L359/L361 | held | Workflow "refuses unsafe post-start %s even when version succeeds" |
+| PS.return-link | `prepared`, `snapshot-verified` REC | `returnSource` L333 | held; source not started; "source recovery refused" | KeepSafety "refuses source restart after %s" |
+| PS.return-binding | same | `returnSource` L334 | held | — |
+| PS.return-activity | same | `returnSource` L346 | held | — |
+| PS.cancel-activity | `restore-prepared` REC | cancellation L398 | held | — |
+| PS.catch-restore | `restore-prepared` RES failure, began active | `run()` catch L426/L427 | "source recovery refused"; held | — |
+
+PS.return-link raises "Source link changed before recovery" (L333). That
+gives the r2 NC6 message a branch (r2 must 1, item 3).
+
 ## 4. Property test
 
 ### 4.1 Layer 1, fast tier (`runner/test/codexStateRecoveryTable.test.ts`)
 
 These are pure checks; no process is started.
 
-- **Inventory.** The `TABLE` keys equal the exported `PHASES`, and every
-  cell has at least one branch. Branch ids are unique.
-- **Class equality.** For each refusal branch,
-  `REFUSALS[branch.message].class === branch.class`. A message raised by
-  branches of different classes is allowed only if it is listed in
-  `SHARED_MESSAGES`, with the reason.
+- **Field walk.** The walk and the `TIES` registry of section 1 (N3-e). It
+  covers inventory: phase rows, cells, unique ids, recipes, preconditions,
+  markers and citations.
+- **Class derivation.**
+  - Every scanned message key gets one rendered class:
+    - the class of the branches and guards that raise it;
+    - for a `SHARED_MESSAGES` entry, that entry's class;
+    - for a key that no branch or guard raises, the module default of
+      section 5.1.
+  - Two branches or guards that raise one message with different classes,
+    without a `SHARED_MESSAGES` entry, fail.
+  - The rendering function's class table is compared with this derivation
+    for every key.
 - **Rendering.** For each hint entry and a fixture record:
   - the rendered option equals the cell's command key;
   - argv[0] is `<root>/releases/<tool>/deploy/…` or the given interpreter;
   - the UUID is the record's;
   - quoting round-trips through `sh -c 'printf %s\\n "$@"'`.
 - **Fail-closed scan.**
-  - The closure is computed from the helper's static relative imports. At
-    `2c5f34cc` this adds `verify-release.mjs` and
+  - The closure is the **transitive** closure of the helper's static
+    relative imports. At `2c5f34cc` this adds `verify-release.mjs` and
     `child-process-environment.mjs` to the four files of r1.
   - Each file is parsed with the TypeScript compiler API, already a
     devDependency.
@@ -190,8 +268,14 @@ These are pure checks; no process is started.
     - a call to a declared thrower: `must`, `fail`, `failMissingArtifact`,
       `failMissingWorkspaceLink`;
     - a rethrow at a site listed in `RETHROWS`, with the reason.
+  - The definitions of the declared throwers are exempt. Their bodies
+    throw a parameter (r2 nit 1).
   - Any other `throw`, and any thrower call whose message is not a literal
     or template, fails the scan.
+  - Dynamic `import()` and `createRequire` into a release
+    (`codex-native.mjs` L20 and L35–L36, `verify-release.mjs` L667) cannot
+    be scanned. Each is listed in `RETHROWS` with a marker. Errors from
+    them reach `main()` and are rendered as `unclassified`.
   - A template contributes its literal prefix as the key.
   - Every key has exactly one `REFUSALS` entry, and every entry matches a
     site. Duplicate messages are listed in `SHARED_MESSAGES` (r1 nit 3).
@@ -215,10 +299,12 @@ its fake service manager. The fixture is created with a **distinct physical
 tool** (`toolId`), so `current/deploy` and `releases/<tool>/deploy` are
 different files (r1 should 3).
 
-- **Enumeration.** The case list is `TABLE`'s branch ids plus the
-  (guard, entry point) pairs of section 3.1. Each id needs a recipe from
-  `RECIPES`. A missing recipe throws before any case runs. After the run,
-  the executed id set must equal the declared set.
+- **Enumeration.** The case list is every branch id of sections 3.2–3.5
+  plus every guard site id of section 3.1.
+  - Each id needs a recipe from `RECIPES`, and each precondition needs a
+    `PRECONDITIONS` predicate. A missing one throws before any case runs.
+  - Before the command runs, the predicate must hold on the reached state.
+  - After the run, the executed id set must equal the declared set.
 - **Reaching a phase.** Through the real updater and `interruptStateWorker`,
   using the existing checkpoints: `{phase, when}`, the `promote` cut, and
   the H→Q rename cut. Terminal phases are reached by finishing.
@@ -243,10 +329,13 @@ different files (r1 should 3).
     - the final phase equals the declaration;
     - `settle` additionally requires `failed` and one source start;
     - `held` requires the unchanged phase and a nonzero exit;
-  - zero mutation, for `refuse`: the digest of `releases/` (names, types,
-    sizes, per-file sha256), `current`, `previous`, every record's bytes,
-    the home listing, and the fake service manager's call log are all
-    unchanged;
+  - zero mutation, for `refuse`: a digest of the **whole fixture directory
+    tree** is unchanged. The digest records each entry's names, types,
+    modes, sizes and sha256, and symlink targets. It covers the install
+    root, records, snapshots, staging, asides, lock directories, the home
+    with file contents, and the fake manager's state and call log (r2
+    should 2). Only the declared `VOLATILE` recorder files are excluded:
+    the cut marker and the test's own observation logs;
   - the message and the hint: stderr contains the declared message, and the
     rendered `next:` and `see:` lines equal `render()` for that class;
   - the start order: the fake service manager logs the record phase at each
@@ -268,21 +357,30 @@ different files (r1 should 3).
   rename hooks. The only kills are SIGKILL to PIDs that the test started and
   verified (start time checked). There are no timers other than the existing
   15 s deadline.
-- **Size and time (estimate).**
-  - About 55 phase branches and 20 guard pairs. About 20 of them are
-    progress branches that need a fresh state.
-  - Progress branches: 20 × ~12 s (the measured mean of
-    `codexStateRecovery` in CI run 40148732194: 680 s for 56 cases).
-  - Refusals on a reused state: 55 × ~2 s.
-  - So about 6 min of accumulated test time in a separate file that runs in
-    parallel with the others.
-- **Threshold (r1 nit 6).**
-  - Baseline: N2's landing run 40153723223, whose runner job took 14 min 42 s.
-  - If the N3 candidate's runner job takes more than 2 min longer, split
-    layer 2 into a progress file and a refusal file so that they run in
-    parallel.
-  - Branches are never dropped to meet the time.
-  - U5 also reports the comparison with run 39747478279 (11 min 25 s).
+- **Size and time (estimate, r2 nit 2).**
+  - Branches that need a fresh state: about 36 phase branches with
+    `→`, `settle` or `held` outcomes, plus 12 post-stop branches (section
+    3.5). That is about 48 cases at 12–19 s each (12 s is the measured mean
+    of `codexStateRecovery` in CI run 40148732194: 680 s for 56 cases), so
+    10–15 min accumulated.
+  - Refusals and guard sites on reused states: about 50, at ~2 s each, so
+    about 2 min.
+  - Layer 2 is split from the start into three files that run in parallel:
+    forward phases, restore and terminal phases, and refusals with guards.
+    Each is expected to take under 6 min.
+- **Threshold (r2 should 3).** The decision uses what N3 adds and vitest
+  measures directly, not job wall time. Wall time varied by 3 min 07 s
+  between two runs of the same product (CI runs 40152496802 and
+  40153723223).
+  - Each new file's reported duration must stay below the longest existing
+    integration file in the same CI run (Workflow: 758 s in run
+    40148732194). Above that, the new file becomes the job's critical path.
+  - If a file exceeds it, split that file further. Branches are never
+    dropped to meet the time.
+  - U5 reports the accumulated test time and the runner-job wall time as
+    the median of three runs on each side: the N3 candidate, and run
+    39747478279 together with two later runs on the same base. These are
+    reported, not used as a gate.
 - **Where it runs.** In the CI complete tier (integration list of
   `runner/test-tiers.json`). During development, on hakoniwa through
   `heavy-test-remote`.
@@ -302,6 +400,22 @@ command-line rule exception 5, with the N2 probe scripts (not committed):
 ## 5. Hint rendering
 
 ### 5.1 Classes
+
+A message's class is derived, never chosen in the catalog:
+
+- the class of the branches and guards that raise it (or its
+  `SHARED_MESSAGES` entry);
+- otherwise, a fixed default by origin:
+
+| Origin | Default |
+|---|---|
+| `codex-service.mjs` | `config` |
+| every other helper-closure module | `integrity` |
+| a shell `kaoiro_die` with exit 64 | `usage` |
+| any other shell line | `none` (message only) |
+
+A non-default class therefore requires a branch or a guard that layer 2
+drives (r2 must 1, item 2).
 
 | Class | Rendered after the message |
 |---|---|
@@ -425,7 +539,7 @@ Negative controls, each run separately and recorded red:
 | NC3 | a branch with no recipe | layer 2 start |
 | NC4 | an entry that renders REC for a RES cell | layer 1 rendered option = command key |
 | NC5 | the renderer uses `current` | layer 2 (distinct tool): the executed line runs the wrong tool and G1 refuses |
-| NC6 | a catalog entry whose class differs from the branch class (r1 example: "Source link changed before recovery" as `transient`) | layer 1 class equality |
+| NC6 | (a) a `class` field added to one `REFUSALS` entry; (b) a second branch that raises an existing message with another class, without `SHARED_MESSAGES`; (c) PS.return-link declared as `transient` | (a) field walk (untied pattern); (b) class derivation; (c) the layer-2 hint oracle for PS.return-link |
 | NC7 | a new `must()` message; a new `fail()` message in `verify-release.mjs`; a new bare `throw value` | layer 1 scan, each separately |
 | NC8 | a new `kaoiro_die` without an entry | layer 1 shell scan |
 | NC9 | a missing anchor; the runbook edited by hand; a cited title renamed | layer 1, each separately |
@@ -435,6 +549,9 @@ Negative controls, each run separately and recorded red:
 | NC13 | the source start before `failed` (N2 implementation review MY3) | layer 2 start-order oracle |
 | NC14 | the `main()` fallback removed | layer 2 unclassified case |
 | NC15 | a refuse branch that stops the service first | layer 2 zero-mutation oracle |
+| NC16 | a refuse path that removes an owned staging directory, or leaves a lock directory | layer 2 whole-tree digest |
+| NC17 | a guard site marker deleted, or moved to a line without the guard call | layer 1 marker tie |
+| NC18 | a `TIES` entry removed | layer 1 field walk |
 
 The scan checker itself:
 
@@ -453,10 +570,10 @@ Size (estimate):
 | Product: the module | ~260 |
 | Product: sites | ~70 |
 | Product: `next` | ~40 |
-| Tests: layer 1 | ~250 |
-| Tests: layer 2 and recipes | ~450 |
+| Tests: layer 1 | ~300 |
+| Tests: layer 2 and recipes | ~600 |
 | Docs | ~140 |
-| Total | ~1,200 |
+| Total | ~1,400 |
 
 Classification: **L**. Reasons:
 
@@ -470,7 +587,7 @@ Classification: **L**. Reasons:
 
 | Id | Premise | Settled by |
 |---|---|---|
-| N3-U1 | Layer 2 costs about 6 min accumulated, and the runner job grows by less than 2 min | The first candidate's CI, compared against the section 4.2 threshold |
+| N3-U1 | Layer 2 costs 12–17 min accumulated in three parallel files, each under the longest existing integration file | The first candidate's CI, against the section 4.2 threshold |
 | N3-U2 | `next` reads records safely without a lock | Read in code (`atomicJSON`, temporary-name filter); the paused-worker case of layer 2 |
 | N3-U3 | Every throw site is one of the scan's accepted forms | The fail-closed scan itself, on the first candidate. The design-time counts (`must` 144 and `new Error` 16 in four files; `fail()` and its variants in `verify-release.mjs`) are from grep, not from the parser |
-| N3-U4 | Each guard is evaluated once per entry point, so one pair per entry point pins it | Code reading of the cited lines; the layer-1 citation check keeps the lines current only through the test titles, so the implementer re-reads them on the candidate |
+| — | (r2's N3-U4 is withdrawn) | Code reading showed it was false: G4 and G5 are evaluated at several sites, some after the stop. Section 3.1 now declares one row per site, and section 3.5 covers the post-stop sites. The markers tie every site |
