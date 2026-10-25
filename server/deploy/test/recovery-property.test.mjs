@@ -691,6 +691,7 @@ test("recovery property: ordinary rollback killed after start retains its lock a
   assert.ok(status, refused.stderr);
   const report = world.exec(status.argv);
   assert.equal(report.status, 0, report.stderr);
+  assert.deepEqual(JSON.parse(report.stdout).locks, []);
   const next = JSON.parse(report.stdout).unfinishedTransaction.recovery.filter(line => line.argv !== null)
     .map(line => ({ ...line, optional: line.optional.map(option => option.flag) }));
   const result = followHints(world, next, "rollback");
@@ -707,6 +708,7 @@ test("recovery property: ordinary resume executes its printed repo config target
   assert.equal(world.journal().phase, PHASE.OLD_IMAGE_SAVED);
   const printed = parseNext(failed.stderr).find(command => command.command === "update");
   assert.ok(printed, failed.stderr);
+  assertAgrees(world, parseNext(failed.stderr));
   for (const [flag, value] of [["--repo", world.work], ["--config", world.config], ["--target", world.target], ["--transaction", world.txId()]]) {
     assert.equal(printed.argv[printed.argv.indexOf(flag) + 1], value);
   }
@@ -750,7 +752,7 @@ test("retired server flags refuse before Docker or journal mutation with or with
       const before = world.calls();
       const result = world.update(flag, "retired");
       assert.equal(result.status, 64, result.stderr);
-      assert.match(result.stderr, /unknown argument/);
+      assert.ok(result.stderr.includes(`unknown argument: ${flag}`), result.stderr);
       assert.equal(world.calls(), before);
       assert.equal(existsSync(world.backupRoot), false);
     }

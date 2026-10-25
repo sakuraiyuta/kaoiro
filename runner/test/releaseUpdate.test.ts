@@ -661,7 +661,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
       KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
     });
 
-    expect(result.status).not.toBe(0);
+    expect(result.status, result.stderr).toBe(70);
     expect(result.stderr).toContain("switch to");
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
     const seen = readCalls();
@@ -852,7 +852,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
           KAOIRO_SYSTEMD_RUN: recordingSystemdRun(log),
         });
         expect(result.status, result.stderr).toBe(64);
-        expect(result.stderr).toMatch(/unknown (option|argument)/);
+        expect(result.stderr).toContain(entry === "update" ? `unknown argument: ${flag}` : `unknown option: ${flag}`);
         expect(result.stderr).not.toContain("ENQUEUED");
         expect(existsSync(log)).toBe(false);
         expect(readCalls()).toEqual([]);

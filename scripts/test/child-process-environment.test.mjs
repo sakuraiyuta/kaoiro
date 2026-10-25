@@ -72,7 +72,7 @@ test("build children retain the exact selected toolchain PATH without ambient cr
 
 test("coverage check rejects separate existing and new bypasses and its own disabled guard", () => {
   const green = checkReleaseChildEnvironments(root);
-  assert.equal(green.files, 4); assert.ok(green.calls >= 13);
+  assert.equal(green.files, 4); assert.equal(green.calls, 13);
   assert.equal(green.unchanged_legacy_calls, 4);
   for (const target of ["scripts/build-identity.mjs", "scripts/with-build-identity.mjs",
     "server/deploy/kaoiro-server-deploy.mjs", "runner/deploy/kaoiro-runner-codex-state.mjs"]) {
