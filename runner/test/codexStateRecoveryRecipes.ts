@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";

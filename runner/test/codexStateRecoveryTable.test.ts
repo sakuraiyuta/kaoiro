@@ -1,3 +1,4 @@
+import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
