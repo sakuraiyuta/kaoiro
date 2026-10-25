@@ -47,6 +47,9 @@ type Recipe = {
   context?: string[];
   status?: number;
   shell?: boolean;
+  // Raised by the guard inside the run's switch child: that child prints the
+  // message only, and the run renders the hint for the state it leaves.
+  nested?: boolean;
 };
 
 const ok = (r: { status: number | null; stderr: string }) => expect(r.status, r.stderr).toBe(0);
@@ -149,19 +152,19 @@ export const RECIPES: Record<string, Recipe> = {
   "V-REC-missing": { state: "snapshot-verified", setup: c => rmSync(join(c.h.dir, "backup"), { recursive: true }) },
   "V-RST-own": { state: "snapshot-verified", line: c => quoted(recovery.argv("RST", c.tx(), context(c.h))) },
   "V-PRN": { state: "snapshot-verified" },
-  "PS.guard-nested": { state: "snapshot-verified", activity: window(7) },
+  "PS.guard-nested": { state: "snapshot-verified", activity: window(7), nested: true },
   "S-RES-source": { state: "start-intent" },
   "S-RES-target": { state: "start-intent-target" },
   "S-RES-attest": { state: "start-intent", setup: c => {
     const cli = readFileSync(join(c.h.root, "releases", c.h.B, "dist/cli.js"), "utf8");
     c.h.replace(c.h.B, { "dist/cli.js": cli.replace("...{}", `...{revision:${JSON.stringify(c.h.A)}}`), "node_modules/@openai/codex/vendor/fixture/bin/codex": sameNative(c.h) });
   } },
-  "S-RES-stale": { state: "start-intent", setup: c => writeFileSync(join(c.h.home, "sessions/old.jsonl"), "BOOT-WRITE") },
+  "S-RES-stale": { state: "start-intent", setup: c => writeFileSync(join(c.h.home, "sessions/old.jsonl"), "BOOT-WRITE"), nested: true },
   "S-REC-ok": { state: "start-intent" },
   "S-REC-nosnap": { state: "start-intent", setup: c => rewrite(c, tx => { tx.snapshot.status = "planned"; delete tx.snapshot.manifestHash; }), undo: restoreRecord },
   "S-RST-own": { state: "start-intent", line: c => quoted(recovery.argv("RST", c.tx(), context(c.h))) },
   "S-PRN": { state: "start-intent" },
-  "PS.guard-nested-intent": { state: "start-intent", activity: window(5) },
+  "PS.guard-nested-intent": { state: "start-intent", activity: window(5), nested: true },
   "PS.after-switch": { state: "start-intent", activity: window(7) },
   "PS.post-start-active": { state: "start-intent", setup: c => editControl(c.h, "fs.writeFileSync(dir+'/active','active'); child.unref();", "fs.writeFileSync(dir+'/active','inactive'); child.unref();") },
   "PS.post-start-binding": { state: "start-intent", setup: c => { mkdirSync(join(c.h.dir, "other-home"), { mode: 0o700 }); editControl(c.h, `CODEX_HOME:${JSON.stringify(c.h.home)}`, `CODEX_HOME:${JSON.stringify(join(c.h.dir, "other-home"))}`); } },
@@ -322,7 +325,7 @@ export async function drive(id: string, c: Run) {
     const cls = decl.class;
     if (cls && !recipe.shell) {
       const record = messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => r.stderr.includes(`requires recovery: ${x.uuid}`)) : after;
-      for (const l of recovery.render(cls, { tx: record, ...context(h) })) expect(r.stderr, out).toContain(`codex-state: ${l}`);
+      for (const l of recovery.render(recipe.nested ? "unclassified" : cls, { tx: record, ...context(h) })) expect(r.stderr, out).toContain(`codex-state: ${l}`);
     }
     // A settled record is not resumed by rerunning the same command.
     if (after && TERMINAL.includes(after.phase)) expect(r.stderr, out).not.toContain(recovery.render("transient")[0]);
