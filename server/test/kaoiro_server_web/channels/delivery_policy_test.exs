@@ -646,7 +646,8 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     :erlang.trace(operator.channel_pid, true, [:send, {:tracer, self()}])
     ref = push(operator, "set_delivery_policy", request(id, "on", 0))
 
-    assert_receive {:trace, _, :send, {:"$gen_call", _, {:run, :set_delivery_policy, _}}, ^worker},
+    assert_receive {:trace, _, :send, {:"$gen_call", _, {:run, :set_delivery_policy, _}},
+                    ^worker},
                    TestTimeouts.out_of_band()
 
     Application.put_env(:kaoiro_server, :client_tokens, "dp-operator:viewer,dp-viewer:viewer")
