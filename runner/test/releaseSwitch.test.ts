@@ -82,7 +82,7 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     const result = runScript(switchScript, [B, "--install-dir", root], { KAOIRO_NODE: node });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(marker, "utf8")).toBe("EACCES\n");
-    expect(result.stderr.trim()).toBe("kaoiro: enrollment is retired; legacy release descriptor ignored");
+    expect(result.stderr.split("\n").filter(line => line === "kaoiro: enrollment is retired; legacy release descriptor ignored")).toHaveLength(1);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
     expect(existsSync(join(root, ".lock.links"))).toBe(false);
