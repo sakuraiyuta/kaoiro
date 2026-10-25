@@ -211,11 +211,11 @@ export const RECIPES: Record<string, Recipe> = {
   "G4.guard-entry": { state: "prepared", cmd: "RBK", setup: c => { lock(c.h, ".lock.update"); env(c.h, c.h.ordinary); }, undo: c => { unlock(c.h, ".lock.update"); env(c.h, c.h.home); }, line: c => switchLine(c.h, [c.h.B, "--install-dir", c.h.root, "--codex-transaction", c.uuid]) },
   "G4.restore": { state: "completed", cmd: "RST", line: c => quoted(recovery.argv("RST", { ...c.tx(), home: c.h.ordinary }, context(c.h))) },
   "G4.prepare": { state: "completed", cmd: "UPD", setup: c => env(c.h, c.h.ordinary), undo: c => env(c.h, c.h.home), line: c => updater(c.h, forwardArgs(c.h, "upd")) },
-  "G5.began": { state: "prepared", cmd: "RES", activity: window(1, null), context: RA },
-  "G5.binding-run": { state: "prepared", cmd: "RES", activity: window(2, null), context: [...RA, ...S13, ...RA] },
-  "G5.pre-stop": { state: "prepared", cmd: "REC", activity: window(4, null), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
-  "G5.target-check": { state: "start-intent-target", cmd: "RES", activity: window(4, null), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
-  "G5.resume-stop": { state: "prepared", cmd: "RES", activity: window(4, null), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
+  "G5.began": { state: "prepared", cmd: "RES", activity: window(1), context: RA },
+  "G5.binding-run": { state: "prepared", cmd: "RES", activity: window(2), context: [...RA, ...S13, ...RA] },
+  "G5.pre-stop": { state: "prepared", cmd: "REC", activity: window(4), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
+  "G5.target-check": { state: "start-intent-target", cmd: "RES", activity: window(4), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
+  "G5.resume-stop": { state: "prepared", cmd: "RES", activity: window(4), context: [...RA, ...S13, ...RA, ...CAPTURE, ...RA] },
   "G6.helper": { state: "completed", cmd: "PRN", setup: c => lock(c.h, ".lock.update"), undo: c => unlock(c.h, ".lock.update") },
   "G6.updater": { state: "prepared", cmd: "RES", setup: c => lock(c.h, ".lock.update"), undo: c => unlock(c.h, ".lock.update"), status: 75, shell: true },
   "G6.switch-links": { state: "completed", cmd: "RBK", setup: c => lock(c.h, ".lock.links"), undo: c => unlock(c.h, ".lock.links"), status: 75, shell: true },
@@ -321,10 +321,11 @@ export async function drive(id: string, c: Run) {
     if (messages.length) expect(messages.some(m => recovery.keyPattern("${}" + m + "${}").test(r.stderr)), out).toBe(true);
     const cls = decl.class;
     if (cls && !recipe.shell) {
-      for (const advice of recovery.render(cls)) expect(r.stderr, out).toContain(`codex-state: ${advice}`);
       const record = messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => r.stderr.includes(`requires recovery: ${x.uuid}`)) : after;
-      if (record && ["transaction", "transient"].includes(cls)) for (const l of recovery.rowLines(record, context(h))) expect(r.stderr, out).toContain(`codex-state: ${l}`);
+      for (const l of recovery.render(cls, { tx: record, ...context(h) })) expect(r.stderr, out).toContain(`codex-state: ${l}`);
     }
+    // A settled record is not resumed by rerunning the same command.
+    if (after && TERMINAL.includes(after.phase)) expect(r.stderr, out).not.toContain(recovery.render("transient")[0]);
     if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
     if (recipe.context) {
       const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");

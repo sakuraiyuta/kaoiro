@@ -703,4 +703,8 @@ against the code while writing the recipes.
 | Rendered tool | RES and REC name the record's tool; RST, PRN and RBK name the tool that renders them | G1 binds only resume and recover, and a terminal record's tool release is not protected from pruning |
 | Quoting case | Layer 1 round-trips a root with a space and `'`; layer 2 runs every rendered line through a real shell parse | The state fixture's `runner.env` rejects `'` in the home path |
 | Layer-2 execution | A rendered line is split into argv by `/bin/sh`, then started directly | The test-isolation boundary refuses the updater named inside `sh -c` |
+| Implementation review r1 S3 | `run()` settles in its catch only after its first change (the stop, an admission, a cancellation cleanup or a post-start); a refusal before that rethrows unchanged | G5.binding-run, pre-stop and resume-stop are declared zero-mutation refusals; a one-shot transitional read there used to mark `prepared` failed through the catch. Nothing durable needs `failed` before the stop: the source was never touched |
+| Implementation review r1 S2 | The `transient` advice to rerun is rendered only while the record is unfinished | After a settle the record is `failed`, and its resume is a no-op |
+| Implementation review r1 S1 | G5 recipes inject a one-shot transitional read (`window(n, n)`) | With an open window, a neutralised site was covered by the next G5 site with the same message |
+| Implementation review r1 N2 | `next` prints the stale-lock anchor after the `lock present:` lines | An operator reading only `next` gets the procedure before removing a lock |
 

@@ -432,8 +432,9 @@ node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
 - `next <install-root>` prints each unfinished record's UUID and phase, then
   its `next (resume):` and `next (recover):` lines. A terminal record with a
   pending staging cleanup gets its `next (prune):` line. Each held
-  `.lock.update` or `.lock.links` is listed as `lock present:`; whether its
-  owner is alive is for you to inspect.
+  `.lock.update` or `.lock.links` is listed as `lock present:`, followed by
+  a `see:` line for [stale operation locks](#stale-operation-locks); whether
+  its owner is alive is for you to inspect.
 - `next <install-root> <uuid>` prints that record's whole row, including the
   `restore`, `prune` and `rollback` lines of a terminal record.
 - With an unresolved schema-1 record, `next` prints the old-record guidance
@@ -445,7 +446,10 @@ that printed them. Every argument is single-quoted (`'` is written `'\''`),
 so a line can be pasted into a POSIX shell as printed.
 
 A refusal prints its message, then the hint for its class: the record's
-`next` lines, `see:` an anchor of this runbook, or both. A failure inside a
+`next` lines, `see:` an anchor of this runbook, or both. A refusal before the
+run's first change leaves the record and the service as they were. A
+transitional service state asks for the same command again only while the
+record is still unfinished. A failure inside a
 resume or recover run always prints the record's lines as they are after the
 run settled, so a forward that returned to its source offers recovery, not
 resume.

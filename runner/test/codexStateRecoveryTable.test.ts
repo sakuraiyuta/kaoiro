@@ -116,6 +116,8 @@ describe("Codex recovery table: structure", () => {
     expect(recovery.render("config")).toEqual([`see: ${ANCHORS.config}`]);
     expect(recovery.render("lock", { report: ["lock present: /x"] })).toEqual([`see: ${ANCHORS.lock}`, "lock present: /x"]);
     expect(recovery.render("unclassified")).toEqual([`see: ${ANCHORS.table}`]);
+    expect(recovery.render("transient")).toHaveLength(1);
+    for (const phase of ["completed", "failed", "restored"]) expect(recovery.render("transient", { tx: { phase, uuid: "u", tool: "t", service: "s.service", home: "/h", snapshot: { path: "/b", status: "retired" } }, root: "/r", deploy: "/d" }).filter((l: string) => !l.startsWith("next ")), phase).toEqual([]);
   });
 });
 

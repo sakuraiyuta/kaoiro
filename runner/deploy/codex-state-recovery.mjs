@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 export const PHASES = ["prepared", "snapshot-verified", "start-intent", "completed", "failed", "restore-prepared", "replace-intent", "restored"];
 export const COMMANDS = ["RES", "REC", "RST", "PRN", "UPD", "RBK"];
+export const TERMINAL = ["completed", "failed", "restored"];
 export const LABELS = { RES: "resume", REC: "recover", RST: "restore", PRN: "prune", RBK: "rollback" };
 export const CLASSES = ["transaction", "config", "integrity", "transient", "lock", "cutover", "usage", "none", "unclassified"];
 export const CAUSAL = ["transaction", "config", "integrity", "transient", "lock", "cutover"];
@@ -568,7 +569,10 @@ const ADVICE = {
 // `next <root>` for the lock class.
 export function render(cls, { tx, row = false, report = [], ...context } = {}) {
   const own = tx && (row || ["transaction", "transient", "unclassified"].includes(cls)) ? rowLines(tx, context) : [];
-  return [...own, ...ADVICE[cls], ...(cls === "lock" ? report : [])];
+  // Once the run has settled the record, rerunning the same command does
+  // nothing; the record's own lines are the guidance.
+  const advice = cls === "transient" && TERMINAL.includes(tx?.phase) ? [] : ADVICE[cls];
+  return [...own, ...advice, ...(cls === "lock" ? report : [])];
 }
 
 export function runbook() {

@@ -46,6 +46,7 @@ describe.skipIf(process.platform !== "linux")("N3 recovery property: refusals an
       const uuid = c.h.records()[0]!.uuid;
       expect(listed).toContain(`${uuid} snapshot-verified`);
       expect(listed).toContain(`lock present: ${join(c.h.root, ".lock.update")}`);
+      expect(listed.trim().split("\n").at(-1)).toBe(`see: ${recovery.ANCHORS.lock}`);
     } finally { await c.h.close(); }
   });
 });
