@@ -522,7 +522,7 @@ function report(error, [action, rootArg, ...args]) {
   try { root = realpathSync(rootArg); } catch { /* no record to name */ }
   const candidates = [message.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)?.[0], ["guard", "preflight"].includes(action) ? args[1] : args[0]];
   // A restore selects its record by snapshot path.
-  if (action === "prepare-restore" && root) try { const named = records(root).filter(tx => tx.snapshot.path === args[0]); if (named.length === 1) candidates.unshift(named[0].uuid); } catch { /* records unreadable */ }
+  if (action === "prepare-restore" && root) try { const named = records(root).filter(tx => tx.snapshot.path === args[0]); if (named.length === 1) candidates.splice(1, 0, named[0].uuid); } catch { /* records unreadable */ }
   for (const uuid of candidates) {
     if (tx || !root || !UUID.test(uuid || "")) continue;
     try { tx = selected(root, uuid); } catch { /* not a record of this root */ }

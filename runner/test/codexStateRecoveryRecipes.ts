@@ -295,38 +295,46 @@ export async function drive(id: string, c: Run) {
   const rendered = recipe.line ? undefined : lineFor(c, cmd);
   recipe.setup?.(c);
   if (recipe.activity) writeFileSync(join(h.dir, "activity-fault"), JSON.stringify({ from: recipe.activity[0], to: recipe.activity[1] }));
-  if (decl.pre) expect(PRECONDITIONS[decl.pre]!(c), `${id}: precondition ${decl.pre}`).toBe(true);
-  const line = recipe.line?.(c) ?? rendered!;
-  rmSync(join(h.dir, "queries"), { force: true }); rmSync(join(h.dir, "activity-count"), { force: true });
-  const [file, ...args] = argvOf(line);
-  const r = spawnSync(file!, args, { env: h.env(), encoding: "utf8" });
-  const after = c.uuid ? c.tx() : undefined, out = `${id}\n${line}\n${r.stderr}`;
-  rmSync(join(h.dir, "activity-fault"), { force: true });
-  for (const name of ["late-populated", "late-env", "late-link"]) rmSync(join(h.dir, name), { force: true });
-  if (recipe.status !== undefined) expect(r.status, out).toBe(recipe.status);
-  else if (["refuse", "held", "settle"].includes(outcome)) expect(r.status, out).not.toBe(0);
-  else expect(r.status, out).toBe(0);
-  if (after) {
-    if (outcome === "settle") { expect(after.phase, out).toBe("failed"); expect(h.callLog().split("start").length, out).toBe(starts + 1); expect(readFileSync(join(h.dir, "start-record-phases"), "utf8").trim().split("\n").at(-1)!.split(","), out).toContain("failed"); }
-    else if (outcome === "held") expect(after.phase, out).toBe(decl.final ?? before.phase);
-    else if (["refuse", "noop"].includes(outcome)) expect(after.phase, out).toBe(before.phase);
-    else expect(after.phase, out).toBe(outcome);
+  let r!: ReturnType<typeof spawnSync>, after: any, out = id;
+  // Undo runs even when an assertion fails, so one red case cannot leave
+  // its perturbation on the state that the next refusal reuses.
+  try {
+    if (decl.pre) expect(PRECONDITIONS[decl.pre]!(c), `${id}: precondition ${decl.pre}`).toBe(true);
+    const line = recipe.line?.(c) ?? rendered!;
+    rmSync(join(h.dir, "queries"), { force: true }); rmSync(join(h.dir, "activity-count"), { force: true });
+    const [file, ...args] = argvOf(line);
+    r = spawnSync(file!, args, { env: h.env(), encoding: "utf8" });
+    after = c.uuid ? c.tx() : undefined; out = `${id}\n${line}\n${r.stderr}`;
+    rmSync(join(h.dir, "activity-fault"), { force: true });
+    for (const name of ["late-populated", "late-env", "late-link"]) rmSync(join(h.dir, name), { force: true });
+    if (recipe.status !== undefined) expect(r.status, out).toBe(recipe.status);
+    else if (["refuse", "held", "settle"].includes(outcome)) expect(r.status, out).not.toBe(0);
+    else expect(r.status, out).toBe(0);
+    if (after) {
+      if (outcome === "settle") { expect(after.phase, out).toBe("failed"); expect(h.callLog().split("start").length, out).toBe(starts + 1); expect(readFileSync(join(h.dir, "start-record-phases"), "utf8").trim().split("\n").at(-1)!.split(","), out).toContain("failed"); }
+      else if (outcome === "held") expect(after.phase, out).toBe(decl.final ?? before.phase);
+      else if (["refuse", "noop"].includes(outcome)) expect(after.phase, out).toBe(before.phase);
+      else expect(after.phase, out).toBe(outcome);
+    }
+    const messages: string[] = decl.messages ?? (decl.message ? [decl.message] : []);
+    if (messages.length) expect(messages.some(m => recovery.keyPattern("${}" + m + "${}").test(r.stderr)), out).toBe(true);
+    const cls = decl.class;
+    if (cls && !recipe.shell) {
+      for (const advice of recovery.render(cls)) expect(r.stderr, out).toContain(`codex-state: ${advice}`);
+      const record = messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => r.stderr.includes(`requires recovery: ${x.uuid}`)) : after;
+      if (record && ["transaction", "transient"].includes(cls)) for (const l of recovery.rowLines(record, context(h))) expect(r.stderr, out).toContain(`codex-state: ${l}`);
+    }
+    if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
+    if (recipe.context) {
+      const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");
+      expect(queries.slice(0, recipe.context.length), out).toEqual(recipe.context);
+      expect(queries.filter(q => q === "ActiveState").length, out).toBeGreaterThanOrEqual(recipe.activity![0]);
+    }
+  } finally {
+    recipe.undo?.(c);
+    rmSync(join(h.dir, "activity-fault"), { force: true });
+    for (const name of ["late-populated", "late-env", "late-link"]) rmSync(join(h.dir, name), { force: true });
   }
-  const messages: string[] = decl.messages ?? (decl.message ? [decl.message] : []);
-  if (messages.length) expect(messages.some(m => recovery.keyPattern("${}" + m + "${}").test(r.stderr)), out).toBe(true);
-  const cls = decl.class;
-  if (cls && !recipe.shell) {
-    for (const advice of recovery.render(cls)) expect(r.stderr, out).toContain(`codex-state: ${advice}`);
-    const record = cls === "transaction" && messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => x.uuid === c.saved.clone) : after;
-    if (record && ["transaction", "transient"].includes(cls)) for (const l of recovery.rowLines(record, context(h))) expect(r.stderr, out).toContain(`codex-state: ${l}`);
-  }
-  if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
-  if (recipe.context) {
-    const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");
-    expect(queries.slice(0, recipe.context.length), out).toEqual(recipe.context);
-    expect(queries.filter(q => q === "ActiveState").length, out).toBeGreaterThanOrEqual(recipe.activity![0]);
-  }
-  recipe.undo?.(c);
   if (outcome === "refuse") expect(digest(h.dir), out).toEqual(tree);
   if (after) invariants(c, after, asides, out);
   return r;
