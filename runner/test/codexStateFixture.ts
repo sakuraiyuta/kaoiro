@@ -126,9 +126,19 @@ fs.renameSync=(from,to)=>{
 syncBuiltinESMExports();
 `);
   nodeOptions += " --import=" + faultPreload;
+  // Managed children drop NODE_OPTIONS, so processes started through
+  // kaoiro_node inside them get the preloads from the interpreter pin instead.
+  const nodeWrapper = join(dir, "node-preloads.sh"), quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  writeFileSync(nodeWrapper, `#!/bin/sh
+[ ! -f ${quote(join(dir, "record-child-env"))} ] || ${quote(process.execPath)} -e 'require("node:fs").appendFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), env: process.env }) + "\\n")' -- ${quote(join(dir, "child-env.jsonl"))} "$@"
+case " \${NODE_OPTIONS:-} " in
+  *" --import=${faultPreload} "*) exec ${quote(process.execPath)} "$@" ;;
+esac
+exec ${quote(process.execPath)} ${quote("--import=" + preload)} ${quote("--import=" + faultPreload)} "$@"
+`, { mode: 0o755 });
   const workers: ChildProcess[] = [], workerCloses: Promise<void>[] = [];
   let workerOutput = "", workerStdout = "", closed = false;
-  const env = () => ({ ...process.env, HOME: ordinary, CODEX_HOME: home, KAOIRO_NODE: process.execPath, KAOIRO_RUNNER_DIR: conf, KAOIRO_RUNNER_ENV: join(conf,"runner.env"), KAOIRO_RUNNER_CONFIG: join(conf,"runner.config.json"), KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
+  const env = () => ({ ...process.env, HOME: ordinary, CODEX_HOME: home, KAOIRO_NODE: nodeWrapper, KAOIRO_RUNNER_DIR: conf, KAOIRO_RUNNER_ENV: join(conf,"runner.env"), KAOIRO_RUNNER_CONFIG: join(conf,"runner.config.json"), KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
   const helper = join(root, "releases", tool, "deploy/kaoiro-runner-codex-state.mjs");
   const updater = join(root, "releases", tool, "deploy/kaoiro-runner-update.sh");
   // Strict artifact derivation needs the flags supplied by the shipped launcher.

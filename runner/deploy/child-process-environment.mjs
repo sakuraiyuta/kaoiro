@@ -13,6 +13,8 @@ const PROFILES = {
   git: SESSION, "ci-git": SESSION, "ssh-git": [...SESSION, "GIT_SSH_COMMAND", "GIT_SSH_VARIANT", "GIT_ALLOW_PROTOCOL"],
   gh: ["GH_TOKEN", "GITHUB_TOKEN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"], ssh: ["SSH_AUTH_SOCK"],
   systemd: SESSION, authority: [], runner: [...SESSION, ...RUNNER], build: [...SESSION, ...BUILD],
+  "codex-switch": ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "KAOIRO_NODE", "KAOIRO_SYSTEMCTL"],
+  "codex-attest": ["KAOIRO_NODE", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "XDG_CONFIG_HOME"],
 };
 const prepared = new WeakMap();
 

@@ -2,7 +2,7 @@ import "../../scripts/test/fixtures/test-isolation.mjs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { absentHomeBoot } from "./codexBootFixture.js";
@@ -421,6 +421,63 @@ describe.skipIf(process.platform !== "linux")("post-start machine attestation", 
   });
 });
 
+
+describe.skipIf(process.platform !== "linux")("managed child environments", { timeout: 30_000 }, () => {
+  const lines = (name: string): any[] => existsSync(join(h.dir, name)) ? readFileSync(join(h.dir, name), "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+  const inert = { GH_TOKEN: "ambient-gh-inert", EXTRA_SECRET: "ambient-extra-inert", KAOIRO_RUNNER_TOKEN: "ambient-runner-token-inert" };
+  const recordAttestation = () => {
+    const cli=readFileSync(join(h.root,"releases",h.B,"dist/cli.js"),"utf8"),native=readFileSync(join(h.root,"releases",h.B,"node_modules/@openai/codex/vendor/fixture/bin/codex"),"utf8");
+    const site='if (process.argv.includes("--version")) {';
+    const changed=`import { appendFileSync as recordEnvironment } from "node:fs";\n`+cli.replace(site,`${site}\nrecordEnvironment(${JSON.stringify(join(h.dir,"attest-env.jsonl"))}, JSON.stringify({ argv: process.argv.slice(1), env: process.env }) + "\\n");`);
+    expect(changed).toContain(`${site}\nrecordEnvironment(`);
+    h.replace(h.B,{"dist/cli.js":changed,"node_modules/@openai/codex/vendor/fixture/bin/codex":native});
+  };
+  it("closes both helper children to their keys while the parent keeps the inherited secrets and loader", () => {
+    recordAttestation();
+    const marker=join(h.dir,"marker.cjs"),runtime=join(h.dir,"runtime"),xdg=join(h.dir,"xdg");
+    writeFileSync(marker,`require("node:fs").appendFileSync(${JSON.stringify(join(h.dir,"marker.jsonl"))}, JSON.stringify({ argv: process.argv.slice(1), secrets: process.env.EXTRA_SECRET === ${JSON.stringify(inert.EXTRA_SECRET)} }) + "\\n");\n`);
+    writeFileSync(join(h.dir,"record-child-env"),"");
+    const base=h.env();
+    // The ambient CODEX_HOME differs from runner.env's: the attestation shim
+    // sources runner.env, so its values are expected there and the ambient
+    // one is not.
+    const env: Record<string, string | undefined>={ ...base, ...inert, NODE_OPTIONS:`${base.NODE_OPTIONS} --require=${marker}`, BASH_ENV:join(h.dir,"bash-env"), ENV:join(h.dir,"sh-env"),
+      CODEX_HOME:join(h.dir,"ambient-codex-home"), XDG_RUNTIME_DIR:runtime, DBUS_SESSION_BUS_ADDRESS:`unix:path=${join(runtime,"bus")}`, XDG_CONFIG_HOME:xdg };
+    ok(runScript(h.updater, forwardArgs(), env));
+    expect(tx().phase).toBe("completed");
+    const parents=lines("marker.jsonl");
+    expect(parents.some(m=>m.argv[0]?.endsWith("/kaoiro-runner-codex-state.mjs") && m.argv[1]==="run" && m.secrets)).toBe(true);
+    expect(parents.filter(m=>["guard","promote"].includes(m.argv[1]) || m.argv[0]?.endsWith("/dist/cli.js"))).toEqual([]);
+    const closed=(child: any) => {
+      for (const value of Object.values(inert)) expect(JSON.stringify(child.env)).not.toContain(value);
+      expect(child.env.NODE_OPTIONS ?? "").not.toContain(marker);
+      for (const key of ["BASH_ENV","ENV","KAOIRO_RUNNER_CONFIG","KAOIRO_RUNNER_SERVER_URL"]) expect(child.env[key],key).toBeUndefined();
+    };
+    const nested=lines("child-env.jsonl").filter(c=>c.argv.some((a: string)=>a.endsWith("/kaoiro-runner-codex-state.mjs")) && ["guard","promote"].some(action=>c.argv.includes(action)));
+    expect(new Set(nested.map(c=>c.argv.find((a: string)=>["guard","promote"].includes(a))))).toEqual(new Set(["guard","promote"]));
+    for (const child of nested) {
+      closed(child);
+      expect(child.env).toMatchObject({ KAOIRO_SYSTEMCTL:h.ctl, KAOIRO_NODE:base.KAOIRO_NODE, XDG_RUNTIME_DIR:runtime, DBUS_SESSION_BUS_ADDRESS:env.DBUS_SESSION_BUS_ADDRESS });
+      for (const key of ["CODEX_HOME","KAOIRO_RUNNER_DIR","KAOIRO_RUNNER_ENV","XDG_CONFIG_HOME"]) expect(child.env[key],key).toBeUndefined();
+    }
+    const attested=lines("attest-env.jsonl");
+    expect(attested).toHaveLength(1);
+    closed(attested[0]);
+    expect(attested[0].env).toMatchObject({ KAOIRO_NODE:process.execPath, KAOIRO_RUNNER_DIR:h.conf, KAOIRO_RUNNER_ENV:join(h.conf,"runner.env"), XDG_CONFIG_HOME:xdg, CODEX_HOME:h.home });
+    for (const key of ["KAOIRO_SYSTEMCTL","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS"]) expect(attested[0].env[key],key).not.toBe(env[key]);
+  });
+  it.each(["KAOIRO_RUNNER_DIR","KAOIRO_RUNNER_ENV","XDG_CONFIG_HOME"] as const)("lets the attestation shim find runner.env through %s alone",selector=>{
+    const alt=join(h.dir,"alt-config"),recorder=join(h.dir,"selector-node.sh");
+    writeFileSync(recorder,`#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(h.dir,"selector.log")}'\nexec '${process.execPath}' "$@"\n`,{mode:0o755});
+    const env: Record<string, string | undefined>={ ...h.env() };
+    delete env.KAOIRO_RUNNER_DIR; delete env.KAOIRO_RUNNER_ENV; delete env.XDG_CONFIG_HOME;
+    const file=selector==="KAOIRO_RUNNER_DIR"?join(alt,"runner.env"):selector==="KAOIRO_RUNNER_ENV"?join(alt,"selected.env"):join(alt,"kaoiro/runner.env");
+    env[selector]=selector==="KAOIRO_RUNNER_ENV"?file:alt;
+    mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,`KAOIRO_NODE='${recorder}'\n`,{mode:0o600});
+    ok(runScript(h.updater, forwardArgs(), env));
+    expect(readFileSync(join(h.dir,"selector.log"),"utf8")).toMatch(/\/dist\/cli\.js --version --json$/m);
+  });
+});
 
 describe.skipIf(process.platform !== "linux")("common release-prune reader", { timeout: 45_000 }, () => {
   const exercise = async (mode: "state-aware" | "ordinary", action: "keep" | "replace" | "move-current" | "unreadable-current" | "fail-reader") => {

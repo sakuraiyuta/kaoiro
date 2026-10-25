@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpath
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execChildSync } from "./child-process-environment.mjs";
 import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
 import { CREDENTIALS, atomicJSON, capacity, digest, durableRename, hasEntry, identity, inside, inventory, must, prepareRestore, sameState, snapshot, stateEntries, syncDirectory, verifySnapshot } from "./codex-snapshot.mjs";
@@ -360,7 +360,7 @@ async function postStart(root, tx, expected, role = "completion") {
   must(current(root) === expected.id, "Current differs from startup target");
   await checkRelease(root, expected); captureBinding(root, tx.service, tx.home);
   try {
-    execFileSync("/bin/sh", ["-c", 'deploy_dir=$1; . "$deploy_dir/kaoiro-runner-common.sh"; kaoiro_read_machine_identity "$2" "$3" "$4"', "codex-state-attestation", deploy, join(root, "current"), expected.id.replace(/-dirty$/, ""), expected.id.endsWith("-dirty") || expected.id === "unknown" ? "yes" : "no"], { env: { ...process.env, KAOIRO_NODE: process.execPath }, stdio: ["ignore", "pipe", "pipe"] });
+    execChildSync("codex-attest", "/bin/sh", ["-c", 'deploy_dir=$1; . "$deploy_dir/kaoiro-runner-common.sh"; kaoiro_read_machine_identity "$2" "$3" "$4"', "codex-state-attestation", deploy, join(root, "current"), expected.id.replace(/-dirty$/, ""), expected.id.endsWith("-dirty") || expected.id === "unknown" ? "yes" : "no"], { env: { ...process.env, KAOIRO_NODE: process.execPath }, stdio: ["ignore", "pipe", "pipe"] });
   } catch { throw new Error("Runner artifact attestation failed after start"); }
   if (completing) { latest.phase = replacing(latest) ? "restored" : "completed"; await publish(root, latest); }
 }
@@ -408,7 +408,7 @@ async function run(root, uuid, mode, allowDirty = "no") {
     if (tx.phase === "restore-prepared") await stageRestore(root, tx);
     if (tx.phase === "replace-intent") await moveReplacement(root, tx);
     const target = replacing(tx) ? tx.source : tx.target;
-    execFileSync(join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { stdio: ["ignore", "pipe", "inherit"] });
+    execChildSync("codex-switch", join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { stdio: ["ignore", "pipe", "inherit"] });
     tx = selected(root, uuid);
     must(tx.phase === (replacing(tx) ? "replace-intent" : "start-intent"), "Startup phase changed after switch");
     assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
