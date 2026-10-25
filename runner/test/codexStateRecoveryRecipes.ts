@@ -327,7 +327,7 @@ export async function drive(id: string, c: Run) {
     if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
     if (recipe.context) {
       const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");
-      expect(queries.slice(0, recipe.context.length), out).toEqual(recipe.context);
+      expect(queries.slice(0, recipe.context.length), `${out}\nsite context`).toEqual(recipe.context);
       expect(queries.filter(q => q === "ActiveState").length, out).toBeGreaterThanOrEqual(recipe.activity![0]);
     }
   } finally {
