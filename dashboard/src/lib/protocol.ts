@@ -15,12 +15,12 @@ import type {
   SessionLifecycleEventList,
   SessionLifecycleEventView,
   SessionResetAttributionView,
-} from "../../../protocol/src/index";
+} from "@kaoiro/protocol";
 export type {
   SessionLifecycleEventList,
   SessionLifecycleEventView,
   SessionResetAttributionView,
-} from "../../../protocol/src/index";
+} from "@kaoiro/protocol";
 
 import { DeliveryPolicyError, parseDeliveryPolicy, parseLaunchDeliveryPolicy, policyObject, policyRevision,
   type DeliveryPolicy, type DeliveryPolicyView, type DeliveryPolicyAccepted, type LaunchDeliveryPolicy } from "./deliveryPolicy";

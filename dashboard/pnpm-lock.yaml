@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@kaoiro/protocol':
+        specifier: link:../protocol
+        version: link:../protocol
       dompurify:
         specifier: ^3.4.14
         version: 3.4.14
