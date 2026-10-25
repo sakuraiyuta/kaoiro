@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +23,7 @@ const wrapperToken = randomBytes(24).toString("hex");
 const port = 42786;
 const url = `http://127.0.0.1:${port}`;
 let server;
+let serverEnv;
 let serverLog = "";
 let browser;
 const sockets = [];
@@ -55,6 +56,7 @@ async function start() {
   };
   delete env.KAOIRO_WORK_NOMINATED_PER_PRINCIPAL;
   delete env.KAOIRO_WORK_ACTIVE_PER_ASSIGNEE;
+  serverEnv = env;
   server = spawn(release, ["start"], { env, stdio: ["ignore", "pipe", "pipe"] });
   server.stdout.on("data", data => { serverLog += data; });
   server.stderr.on("data", data => { serverLog += data; });
@@ -119,13 +121,14 @@ try {
   }
   const sender = links[0];
   await until(async () => (await sender.requestDirectory()).agents.some(agent => agent.agent_id === "capacity.recipient"), "real peer directory");
-  const tool = new InterAgentTool({
+  const createTool = sender => new InterAgentTool({
     config: { agent_id: "capacity.sender", persona: { id: "default", name: "Probe", sprite_set: "default" }, server_url: `${url}/wrapper` },
     getState: () => "idle", send: envelope => sender.send(envelope),
     sendInterAgent: envelope => sender.sendInterAgent(envelope),
     requestDirectory: () => sender.requestDirectory(),
     workTools: { workControlSupported: () => sender.workControlSupported() },
   });
+  const tool = createTool(sender);
   const nominate = () => tool.invoke({ to: "capacity.recipient", kind: "request", body: "Capacity probe", done: false,
     work_control: { op: "assign", title: "Live nomination" } });
   for (let index = 0; index < 16; index++) {
@@ -150,6 +153,13 @@ try {
   await until(() => operator.settings.some(value => value.revision === 1), "operator committed settings");
   await page.waitForTimeout(150);
   assert.equal(viewer.settings.length, 0, "intercept must exclude the real viewer socket after the operator observed commit");
+  const envRead = spawnSync(release, ["rpc", 'IO.puts("CAPACITY_ENV " <> Jason.encode!(%{nomination: System.get_env("KAOIRO_WORK_NOMINATED_PER_PRINCIPAL"), active: System.get_env("KAOIRO_WORK_ACTIVE_PER_ASSIGNEE"), config: Keyword.take(Application.fetch_env!(:kaoiro_server, :work_store), [:work_nominated_per_principal, :work_active_per_assignee]) |> Map.new()}))'], { env: serverEnv, encoding: "utf8", timeout: 15000 });
+  assert.equal(envRead.status, 0, `disposable release env read failed: ${envRead.stderr}`);
+  const envLine = envRead.stdout.split("\n").find(line => line.startsWith("CAPACITY_ENV "));
+  assert.ok(envLine, "release RPC must report its actual environment");
+  assert.deepEqual(JSON.parse(envLine.slice("CAPACITY_ENV ".length)), {
+    nomination: null, active: null, config: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+  }, "dashboard save must not mutate startup environment or application defaults");
   const admitted = await nominate();
   assert.ok(!admitted.isError, `UI-saved zero must affect live admission: ${JSON.stringify(admitted)}`);
   const activeInput = section.getByLabel("実行中の上限（担当者ごと）", { exact: true });
@@ -175,6 +185,35 @@ try {
   assert.equal(snapshot.response.changes.length, 2);
   const afterRestart = await push(rejoined.channel, "work_control", { work_control: operation() });
   assert.equal(afterRestart.response.reason, "work_capacity", "saved setting must enforce admission after full release restart");
+  await page.goto(url);
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await section.getByLabel("指名待ちの上限（依頼者・担当者ごと）", { exact: true }).waitFor();
+  const newViewer = await client(viewerContext, viewerToken);
+  for (const id of ["capacity.sender", "capacity.recipient"]) {
+    const link = new ServerLink(`${url.replace("http", "ws")}/wrapper`, id, {
+      personaId: "default", token: wrapperToken, workControl: "v1",
+    });
+    links.push(link);
+    await until(() => link.workControlSupported(), `reconnected wrapper ${id}`);
+    link.send({ version: "0", agent_id: id, persona: { id: "default", name: "Probe", sprite_set: "default" },
+      ts: new Date().toISOString(), type: "state_change", state: "idle", payload: {}, ext: {} });
+  }
+  const newTool = createTool(links[0]);
+  const corrupt = spawnSync(release, ["rpc", ':ok = :dets.insert(KaoiroServer.WorkStore, {{:settings, :work_capacity}, :bad}); :ok = :dets.sync(KaoiroServer.WorkStore)'], { env: serverEnv, encoding: "utf8", timeout: 15000 });
+  assert.equal(corrupt.status, 0, "disposable fault insertion must complete");
+  const rejectedUpdate = await push(rejoined.channel, "set_work_settings", { expected_revision: 2, changes: { work_nominated_per_principal: 1 } });
+  assert.equal(rejectedUpdate.response.reason, "work_settings_corrupt");
+  await until(() => rejoined.settings.some(value => value.state === "unavailable"), "operator unavailable notice");
+  await page.getByRole("alert").filter({ hasText: "Invalid saved work settings" }).waitFor();
+  assert.equal(await section.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
+  assert.equal(newViewer.settings.length, 0, "viewer must not receive invalid-settings diagnosis");
+  const corruptResult = await newTool.invoke({ to: "capacity.recipient", kind: "request", body: "Blocked probe", done: false,
+    work_control: { op: "assign", title: "Must stay blocked" } });
+  assert.equal(corruptResult.isError, true);
+  const corruptText = corruptResult.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+  console.log("MCP_INVALID_SETTINGS_REFUSAL", corruptText);
+  assert.match(corruptText, /work_settings_corrupt/);
+  assert.doesNotMatch(corruptText, /"capacity"/, "invalid settings are not a count-capacity diagnostic");
   console.log("WORK_CAPACITY_LIVE_PASS browser=save admission=live MCP=actual-channel restart=persistent viewer=excluded");
 } catch (error) {
   console.error(serverLog.replaceAll(token, "[redacted]").replaceAll(viewerToken, "[redacted]").replaceAll(wrapperToken, "[redacted]"));

@@ -236,6 +236,7 @@ defmodule KaoiroServer.WorkSettingsTest do
     )
 
     {_sup, name, _} = store()
+    assert {:ok, _} = WorkStore.set_settings(authorize(), 0, %{@nom => 0}, name)
     assert {:ok, _} = assign(name, "first")
 
     assert {:error, {:work_capacity, %{limit: "work_max_records", scope: "store", maximum: 1}}} =
@@ -723,6 +724,11 @@ defmodule KaoiroServer.WorkSettingsTest do
 
     for _ <- 1..16, do: assert({:ok, _} = assign(name, "target"))
     assert {:error, {:work_capacity, %{limit: @active, maximum: 16}}} = assign(name, "target")
+    for _ <- 1..16, do: assert({:ok, _} = nominate(name, "repair-director", "repair-target"))
+
+    assert {:error, {:work_capacity, %{limit: @nom, maximum: 16}}} =
+             nominate(name, "repair-director", "repair-target")
+
     :ok = Supervisor.terminate_child(sup, WorkStore)
     File.cp!(backup, path)
     {:ok, _} = Supervisor.restart_child(sup, WorkStore)
@@ -733,6 +739,41 @@ defmodule KaoiroServer.WorkSettingsTest do
   test "restoring an invalid pre-repair backup cannot be repaired by ordinary restart" do
     {sup, name, path} = store()
     assert {:ok, _} = assign(name, "retained")
+    assert {:ok, %{work: %{work_id: yielded}}} = nominate(name, "yield-director", "yield-target")
+    cid = hd(WorkStore.all(name)[yielded].links)
+
+    assert {:ok, %{work: active}} =
+             operate(name, yielded, "accept_assignment", %{}, agent("yield-target"), %{
+               recipient: "yield-director",
+               conversation_id: cid
+             })
+
+    assert {:ok, token} =
+             WorkStore.admit_yield(
+               agent("yield-director"),
+               "yield-target",
+               cid,
+               3,
+               yielded,
+               active.authority_epoch,
+               name
+             )
+
+    assert {:ok, %{granted: true}} =
+             WorkStore.claim(
+               agent("yield-target"),
+               %{
+                 "incarnation" => "repair-incarnation",
+                 "generation" => "repair-generation",
+                 "yield_token" => token.yield_token,
+                 "conversation_id" => cid,
+                 "turn_number" => 3,
+                 "work_id" => yielded,
+                 "authority_epoch" => active.authority_epoch
+               },
+               name
+             )
+
     neighbors = rows(name)
     :ok = Supervisor.terminate_child(sup, WorkStore)
     {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
@@ -747,6 +788,12 @@ defmodule KaoiroServer.WorkSettingsTest do
     :ok = :dets.close(name)
     {:ok, _} = Supervisor.restart_child(sup, WorkStore)
     assert rows(name) == neighbors
+
+    assert Enum.any?(
+             WorkStore.yield_tokens(yielded, name),
+             &(&1.yield_token == token.yield_token)
+           )
+
     :ok = Supervisor.terminate_child(sup, WorkStore)
     File.cp!(backup, path)
     restarted = Supervisor.restart_child(sup, WorkStore)
