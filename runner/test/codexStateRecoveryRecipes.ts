@@ -263,7 +263,7 @@ export const PRECONDITIONS: Record<string, (c: Run) => boolean> = {
   "credential-both": c => existsSync(join(c.tx().replacement.staging, "auth.json")) && existsSync(join(c.tx().replacement.aside, "auth.json")),
   "same-native": c => nativeOf(c, c.h.A) === nativeOf(c, c.h.B),
   "differing-native": c => nativeOf(c, c.h.A) !== nativeOf(c, c.h.B),
-  "pre-n2-target": c => !readFileSync(join(c.h.root, "releases", c.h.A, "deploy/kaoiro-runner-codex-state.mjs"), "utf8").includes("export const CODEX_STATE_SCHEMA = 2;"),
+  "pre-n2-target": c => !/^export const CODEX_STATE_SCHEMA = 2;$/m.test(readFileSync(join(c.h.root, "releases", c.h.A, "deploy/kaoiro-runner-codex-state.mjs"), "utf8")),
 };
 
 // The rendered line is split into argv by a real shell, then run directly so
@@ -287,13 +287,16 @@ const lineFor = (c: Run, key: string) => {
 // checks its outcome, hint and side effects against the declaration.
 export async function drive(id: string, c: Run) {
   const decl = declared(id), recipe = RECIPES[id]!, h = c.h;
-  const cmd = recipe.cmd ?? decl.cmds[0];
+  const cmd = recipe.cmd ?? decl.cmds?.[0];
   const before = c.uuid ? c.tx() : undefined, starts = h.callLog().split("start").length;
   const outcome = decl.outcome ?? "refuse", tree = digest(h.dir);
+  const asides = (before?.asides ?? []).map((e: any) => e.aside).filter((p: string) => existsSync(p));
+  // The line is rendered before the perturbation, as an operator reads it.
+  const rendered = recipe.line ? undefined : lineFor(c, cmd);
   recipe.setup?.(c);
   if (recipe.activity) writeFileSync(join(h.dir, "activity-fault"), JSON.stringify({ from: recipe.activity[0], to: recipe.activity[1] }));
   if (decl.pre) expect(PRECONDITIONS[decl.pre]!(c), `${id}: precondition ${decl.pre}`).toBe(true);
-  const line = recipe.line?.(c) ?? lineFor(c, cmd);
+  const line = recipe.line?.(c) ?? rendered!;
   rmSync(join(h.dir, "queries"), { force: true }); rmSync(join(h.dir, "activity-count"), { force: true });
   const [file, ...args] = argvOf(line);
   const r = spawnSync(file!, args, { env: h.env(), encoding: "utf8" });
@@ -317,7 +320,7 @@ export async function drive(id: string, c: Run) {
     const record = cls === "transaction" && messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => x.uuid === c.saved.clone) : after;
     if (record && ["transaction", "transient"].includes(cls)) for (const l of recovery.rowLines(record, context(h))) expect(r.stderr, out).toContain(`codex-state: ${l}`);
   }
-  if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (c.uuid) expect(r.stderr, out).toContain(c.uuid); }
+  if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
   if (recipe.context) {
     const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");
     expect(queries.slice(0, recipe.context.length), out).toEqual(recipe.context);
@@ -325,13 +328,16 @@ export async function drive(id: string, c: Run) {
   }
   recipe.undo?.(c);
   if (outcome === "refuse") expect(digest(h.dir), out).toEqual(tree);
-  if (after) invariants(c, after, out);
+  if (after) invariants(c, after, asides, out);
   return r;
 }
 
-function invariants(c: Run, tx: any, out: string) {
+// Asides are never removed, each credential has one location, and no
+// unrecorded staging remains.
+function invariants(c: Run, tx: any, asides: string[], out: string) {
   const h = c.h;
-  for (const entry of tx.asides ?? []) expect(existsSync(entry.aside), out).toBe(true);
+  for (const aside of asides) expect(existsSync(aside), `${out}
+aside removed: ${aside}`).toBe(true);
   for (const name of CREDENTIALS) {
     const places = [h.home, tx.replacement?.staging, tx.replacement?.aside].filter(Boolean).filter(p => existsSync(join(p, name)));
     if (existsSync(h.home) || tx.replacement) expect(places.length, `${out}\n${name}: ${places}`).toBe(1);
