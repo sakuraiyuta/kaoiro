@@ -1,6 +1,6 @@
 {
   "typescript": "5.9.3",
-  "raw": 486,
+  "raw": 491,
   "problems": [],
   "rows": [
     {
@@ -125,6 +125,14 @@
     },
     {
       "path": "dashboard/test/antigravityPermissionDisplay.integration.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/appAgentNameResolution.integration.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1012,39 +1020,15 @@
       "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "runner/test/codexBootFixture.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "runner/test/codexHomeClassification.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "runner/test/codexLegacy.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "runner/test/codexLineage.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "runner/test/codexLineagePending.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
-      "path": "runner/test/codexReceipt.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1060,7 +1044,23 @@
       "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "runner/test/codexStateFixture.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "runner/test/codexStateKeepSafety.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecovery.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1378,6 +1378,22 @@
       ],
       "exception": "setup-canary",
       "firstImport": "vitest"
+    },
+    {
+      "path": "runner/test/testTierSelection.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/testTiers.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
       "path": "runner/test/transport-reconnect.test.ts",
@@ -1820,6 +1836,22 @@
       "firstImport": "vitest"
     },
     {
+      "path": "wrapper/agent-common/test/whoami_contract.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "wrapper/agent-common/test/whoami_contract.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "wrapper/agent-common/test/work_tools.test.ts",
       "imports": [
         "vitest"
@@ -1917,6 +1949,14 @@
     },
     {
       "path": "wrapper/antigravity/test/cli_startup_usage_probe.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "wrapper/antigravity/test/cli_startup_usage_probe_default_path.test.ts",
       "imports": [
         "vitest"
       ],

@@ -125,6 +125,11 @@ describe("Codex state snapshots", () => {
     writeFileSync(join(dir, "backup/manifest.json"), JSON.stringify(manifest));
     expect(() => snap.verifySnapshot(join(dir, "backup"), result.sha256)).toThrow(/digest mismatch/);
   });
+  it("refuses hash-consistent malformed manifest JSON without exposing its content",async()=>{
+    await take(home,dir);const path=join(dir,"backup/manifest.json");writeFileSync(path,"PRIVATE_MANIFEST_SENTINEL");
+    const check=()=>snap.verifySnapshot(join(dir,"backup"),snap.digest(readFileSync(path)));
+    expect(check).toThrow("Malformed snapshot manifest");expect(check).not.toThrow(/PRIVATE_MANIFEST_SENTINEL/);
+  });
   it("does not delete current credentials after a failed credential move", async () => {
     const result = await take(home, dir);
     snap.prepareRestore(join(dir, "backup"), result.sha256, home, join(dir, "restore"));
@@ -284,9 +289,10 @@ describe("removed barrier repair action", () => {
   let root: string;
   beforeEach(() => { root = mkdtempSync(join(tmpdir(), "ao498-repair-")); });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
-  const run = () => spawnSync(process.execPath, [join(deploy, "kaoiro-runner-codex-state.mjs"), "repair-barrier", root, "00000000-0000-0000-0000-000000000000"], { encoding: "utf8" });
-  it("is an unknown action", () => {
-    const result = run();
+  let action="repair-barrier";
+  const run = () => spawnSync(process.execPath, [join(deploy, "kaoiro-runner-codex-state.mjs"), action, root, "00000000-0000-0000-0000-000000000000"], { encoding: "utf8" });
+  it.each(["repair-barrier","accept","retire","abandon","snapshot","before-start","started","prepare-recovery","restore","restart-source-check","restart-source-verify"])("rejects removed action %s before state mutation", removed => {
+    action=removed;const result = run();
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("codex-state: Unknown Codex state action");
     expect(existsSync(join(root, "codex-state"))).toBe(false);
@@ -302,5 +308,36 @@ describe("removed barrier repair action", () => {
     expect(readFileSync(join(root, held, "sentinel"), "utf8")).toBe("owner");
     expect(existsSync(join(root, other))).toBe(false);
     expect(existsSync(join(root, "codex-state"))).toBe(false);
+  });
+});
+
+
+describe("state durability boundaries",()=>{
+  let root:string;
+  beforeEach(()=>{root=mkdtempSync(join(tmpdir(),"fuji709-sync-"));});
+  afterEach(()=>rmSync(root,{recursive:true,force:true}));
+  it.each(["snapshot","restore"])("propagates %s state-file fsync failure before publication",mode=>{
+    const result=spawnSync(process.execPath,["--input-type=module","-e",`
+      import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';import {join} from 'node:path';
+      const snap=await import(process.argv[1]),root=process.argv[2],mode=process.argv[3],home=join(root,'home');
+      fs.mkdirSync(home,{mode:0o700});fs.mkdirSync(join(home,'sessions'));fs.writeFileSync(join(home,'sessions/old.jsonl'),'state');
+      const backup=join(root,'backup'),stage=join(root,'restore');let taken;
+      if(mode==='restore')taken=await snap.snapshot(home,backup,{uuid:'sync',staging:join(root,'.staging.codex-sync')});
+      const original=fs.fsyncSync;
+      fs.fsyncSync=fd=>{const path=fs.readlinkSync('/proc/self/fd/'+fd);if(path.endsWith('/sessions/old.jsonl'))throw Error('STATE_FSYNC_FAILURE');return original(fd)};syncBuiltinESMExports();
+      try{if(mode==='snapshot')await snap.snapshot(home,backup,{uuid:'sync',staging:join(root,'.staging.codex-sync')});else snap.prepareRestore(backup,taken.sha256,home,stage);}catch(e){console.log(e.message);process.exitCode=73;}
+      console.log(JSON.stringify({home:fs.readFileSync(join(home,'sessions/old.jsonl'),'utf8'),published:mode==='snapshot'&&fs.existsSync(backup)}));
+    `,snapshotModule,root,mode],{encoding:"utf8"});
+    expect(result.status,result.stderr).toBe(73);expect(result.stdout).toContain("STATE_FSYNC_FAILURE");expect(result.stdout).toContain('"home":"state"');expect(result.stdout).toContain('"published":false');
+  });
+  it("syncs both distinct parents after rename and propagates a sync failure",()=>{
+    const result=spawnSync(process.execPath,["--input-type=module","-e",`
+      import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';import {join} from 'node:path';
+      const root=process.argv[2],a=join(root,'a'),b=join(root,'b');fs.mkdirSync(a);fs.mkdirSync(b);fs.writeFileSync(join(a,'item'),'state');
+      const calls=[],original=fs.fsyncSync;fs.fsyncSync=fd=>{calls.push(fs.readlinkSync('/proc/self/fd/'+fd));return original(fd)};syncBuiltinESMExports();
+      const snap=await import(process.argv[1]);snap.durableRename(join(a,'item'),join(b,'item'));console.log(JSON.stringify(calls.map(p=>p.slice(root.length))));
+      fs.fsyncSync=()=>{throw Error('PARENT_FSYNC_FAILURE')};syncBuiltinESMExports();try{snap.durableRename(join(b,'item'),join(a,'item'));}catch(e){console.log(e.message);process.exitCode=73;}
+    `,snapshotModule,root],{encoding:"utf8"});
+    expect(result.status,result.stderr).toBe(73);expect(result.stdout).toContain('["/a","/b"]');expect(result.stdout).toContain("PARENT_FSYNC_FAILURE");
   });
 });

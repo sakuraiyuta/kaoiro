@@ -90,6 +90,23 @@ export function capacity(parent, entries) {
   must(fs.ffree >= entries.length + 10, "Insufficient snapshot/restore inodes");
   return { logicalBytes: bytes, reserveBytes: reserve, entries: entries.length };
 }
+export function syncDirectory(path) {
+  const fd = openSync(path, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+export function syncTree(path) {
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) syncTree(child);
+    else if (entry.isFile()) { const fd = openSync(child, "r"); try { fsyncSync(fd); } finally { closeSync(fd); } }
+  }
+  syncDirectory(path);
+}
+export function durableRename(from, to) {
+  renameSync(from, to);
+  syncDirectory(dirname(from));
+  if (dirname(to) !== dirname(from)) syncDirectory(dirname(to));
+}
 function copyEntries(source, dest, entries) {
   mkdirSync(dest, { mode: 0o700 });
   for (const e of stateEntries(entries)) {
@@ -118,14 +135,16 @@ export async function snapshot(home, destination, metadata) {
   must(sameState(entries, inventory(join(stage, "state"), true)), "Snapshot copy differs from source");
   must(sameState(entries, inventory(home, true)), "Source changed during snapshot");
   atomicJSON(join(stage, "manifest.json"), manifest);
-  renameSync(stage, destination);
+  syncTree(stage);
+  durableRename(stage, destination);
   return { manifest, sha256: digest(readFileSync(join(destination, "manifest.json"))) };
 }
 export function verifySnapshot(path, expectedHash) {
   identity(path);
   const bytes = readFileSync(join(path, "manifest.json"));
   must(digest(bytes) === expectedHash, "Snapshot manifest digest mismatch");
-  const manifest = JSON.parse(bytes);
+  let manifest;
+  try { manifest = JSON.parse(bytes); } catch { throw new Error("Malformed snapshot manifest"); }
   must(manifest.schema === 1 && manifest.classification === 1 && Array.isArray(manifest.entries), "Unsupported snapshot manifest");
   must(JSON.stringify(readdirSync(path).sort()) === JSON.stringify(["manifest.json", "state"]), "Unexpected snapshot entry");
   const actual = inventory(join(path, "state"), true);
@@ -140,6 +159,7 @@ export function prepareRestore(snapshotPath, expectedHash, home, stage) {
   capacity(dirname(home), manifest.entries);
   copyEntries(join(snapshotPath, "state"), stage, manifest.entries);
   must(sameState(inventory(stage, true), manifest.entries), "Restore staging mismatch");
+  syncTree(stage);
   return manifest;
 }
 export function promoteRestore(home, stage, quarantine, recordMove) {

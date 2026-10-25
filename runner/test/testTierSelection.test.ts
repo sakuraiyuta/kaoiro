@@ -36,6 +36,11 @@ function viaScript(name: string, inherited: string): string[] {
 }
 
 describe("runner test tiers", () => {
+  it("keeps native-state recovery in integration and outside fast",()=>{
+    expect(selected("integration")).toContain("test/codexStateRecovery.test.ts");
+    expect(selected("fast")).not.toContain("test/codexStateRecovery.test.ts");
+  },30_000);
+
   it("select what runner/test-tiers.json declares, and the tiers partition the complete selection", () => {
     expect(TIERS).toEqual(["complete", "fast", "integration", "native"]);
     const [complete, fast, integration, native] = TIERS.map(selected);

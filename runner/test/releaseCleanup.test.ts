@@ -11,13 +11,11 @@ afterEach(() => scratch.splice(0).forEach(path => rmSync(path, { recursive: true
 it.each([
   { failRemoval: "none" },
   { failRemoval: "build" },
-  { failRemoval: "owner" },
-])("update cleanup retains recoverable ownership after $failRemoval removal failure", ({ failRemoval }) => {
+])("update cleanup propagates $failRemoval removal result and retains failed build lock", ({ failRemoval }) => {
   const root = mkdtempSync(join(tmpdir(), "fuji571-cleanup-"));
   scratch.push(root);
   const build = join(root, "build"), lock = join(root, ".lock.update"), links = join(root, ".lock.links");
   for (const path of [build, lock, links]) mkdirSync(path);
-  writeFileSync(join(lock, "codex-owner.json"), "owned fixture");
   const source = readFileSync(new URL("../deploy/kaoiro-runner-update.sh", import.meta.url), "utf8");
   const common = readFileSync(new URL("../deploy/kaoiro-runner-common.sh", import.meta.url), "utf8");
   const cleanup = source.match(/^cleanup\(\) \{\n[\s\S]*?^\}/m)?.[0];
@@ -31,7 +29,6 @@ it.each([
     rm() {
       case "$*" in
         "-rf $build_dir") [ "${failRemoval}" != build ] || return 1 ;;
-        "-f $lock/codex-owner.json") [ "${failRemoval}" != owner ] || return 1 ;;
       esac
       command rm "$@"
     }
@@ -43,5 +40,4 @@ it.each([
   expect(existsSync(build)).toBe(failRemoval === "build");
   expect(existsSync(links)).toBe(false);
   expect(existsSync(lock)).toBe(failed);
-  expect(existsSync(join(lock, "codex-owner.json"))).toBe(failed);
 });

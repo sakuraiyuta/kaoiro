@@ -164,6 +164,7 @@ switch_to() {
     kaoiro_die "Codex state activation refused" 78
 
   if [ "$_old" = "releases/$_id" ]; then
+    [ -z "$codex_transaction" ] || kaoiro_codex_state promote "$root" "$codex_transaction"
     printf '%s: current already points at %s\n' "$prog" "$_id" >&2
     printf '%s\n' "$_id"
     return 0
@@ -174,6 +175,7 @@ switch_to() {
     kaoiro_symlink_swap "$root/previous" "$_old"
   fi
   kaoiro_symlink_swap "$root/current" "releases/$_id"
+  [ -z "$codex_transaction" ] || kaoiro_codex_state promote "$root" "$codex_transaction"
 
   printf '%s: current -> releases/%s\n' "$prog" "$_id" >&2
   printf '%s\n' "$_id"

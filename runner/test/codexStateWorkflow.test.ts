@@ -1,676 +1,719 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
-import { cgroupFixture } from "./codexCgroupFixture.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { requirePositiveSafePid } from "@kaoiro/wrapper-core";
-import { makeReleaseTarball, revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
-import { publishPidMarker, signalPidIfStartMatches } from "./pid_marker.js";
+import { gunzipSync } from "node:zlib";
+import { absentHomeBoot } from "./codexBootFixture.js";
+import { createStateFixture, interruptStateWorker, type StateFixture } from "./codexStateFixture.js";
+import { makeReleaseTarball, revisionOf, runScript } from "./releaseFixture.js";
 
-const wrapperCorePidHelper = fileURLToPath(new URL("../../wrapper/core/dist/pid.js", import.meta.url));
+let h: StateFixture;
+beforeEach(async () => { h = await createStateFixture(); });
+afterEach(async () => { await h?.close(); });
+const ok = (r: { status: number | null; stderr: string }) => expect(r.status, r.stderr).toBe(0);
+const tx = () => h.records()[0]!;
+const rewrite = (record: any) => writeFileSync(h.recordPath(record.uuid), JSON.stringify(record), { mode: 0o600 });
+const codeOnly = (id: string) => runScript(join(h.root, "releases", h.B, "deploy/kaoiro-runner-switch.sh"), [id, "--install-dir", h.root], h.env());
+const history = () => readFileSync(join(h.home, "sessions/old.jsonl"), "utf8");
+const restoreCommand = () => ["--install-dir", h.root, "--service", "kogane468-test", "--restore-codex-backup", join(h.dir, "backup"), "--codex-home", h.home];
 
-describe.skipIf(process.platform !== "linux")("state-aware updater control flow", () => {
-  let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string, nodeOptions: string;
-  const A = revisionOf("state-workflow-a"), B = revisionOf("state-workflow-b");
-  const fakeForeignProc = () => {
-    const pid = 900002, proc = join(dir, "fake-proc", String(pid));
-    const uid = process.getuid!() === 0 ? 1 : 0;
-    mkdirSync(proc, { recursive: true });
-    const fields = Array<string>(20).fill("0"); fields[0] = "S"; fields[19] = "1";
-    writeFileSync(join(proc, "stat"), `${pid} (fixture) ${fields.join(" ")}`);
-    writeFileSync(join(proc, "cgroup"), "0::/kaoiro-test\n");
-    writeFileSync(join(proc, "status"), `Name:\tforeign-helper\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
-    const preload = join(dir, "fake-proc-preload.mjs");
-    writeFileSync(preload, `
-import fs from 'node:fs';
-import {syncBuiltinESMExports} from 'node:module';
-const prefix='/proc/${pid}', base=${JSON.stringify(proc)}, original=fs.readFileSync;
-fs.readFileSync=(path,...args)=>typeof path==='string' && (path===prefix || path.startsWith(prefix+'/'))
-  ? original(base+path.slice(prefix.length),...args) : original(path,...args);
-syncBuiltinESMExports();
-`);
-    return preload;
-  };
-  beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), "kogane468-workflow-"));
-    const { preload } = cgroupFixture(dir);
-    nodeOptions = (process.env.NODE_OPTIONS || "") + " --import=" + preload;
-    root = join(dir, "install"); home = join(dir, "codex"); ordinary = join(dir, "ordinary"); conf = join(dir, "config");
-    for (const path of [root, home, ordinary, conf]) mkdirSync(path, { mode: 0o700 });
-    mkdirSync(join(home, "sessions")); writeFileSync(join(home, "sessions/old.jsonl"), "HISTORY");
-    writeFileSync(join(home, "auth.json"), "CURRENT_TOKEN");
-    writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${home}'\n`, { mode: 0o600 });
-    writeFileSync(join(dir, "unit"), "synthetic unit identity");
-    writeReleaseTree(join(root, "releases", A), A);
-    writeReleaseTree(join(root, "releases", B), B);
-    symlinkSync(`releases/${A}`, join(root, "current"));
-    mkdirSync(join(dir, "tarball")); archive = makeReleaseTarball(join(dir, "tarball"), B);
-    child = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { env: { PATH: process.env.PATH!, HOME: ordinary, CODEX_HOME: home }, stdio: "ignore" });
-    await new Promise<void>((ok, fail) => { child.once("spawn", ok); child.once("error", fail); });
-    const childPid = requirePositiveSafePid(child.pid);
-    const procStat = readFileSync(`/proc/${childPid}/stat`, "utf8");
-    const sourceStart = procStat.slice(procStat.lastIndexOf(")") + 2).split(" ")[19];
-    publishPidMarker(join(dir, "mainpid"), childPid, { writeFileSync, renameSync }, JSON.stringify({ pid: childPid, start: sourceStart }));
-    mkdirSync(join(dir, "owned-pids"));
-    writeFileSync(join(dir, "active"), "active"); calls = join(dir, "calls");
-    ctl = join(dir, "systemctl.mjs");
-    writeFileSync(ctl, `#!${process.execPath}
-import * as fs from 'node:fs';
-import { spawn } from 'node:child_process';
-import { requirePositiveSafePid } from ${JSON.stringify(wrapperCorePidHelper)};
-const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.stringify(root)};
-const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
-const active = fs.readFileSync(dir+'/active','utf8') === 'active';
-const signalPidIfStartMatches = ${signalPidIfStartMatches.toString()};
-const publishPidMarker = ${publishPidMarker.toString()};
-const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
-const ownerPid = requirePositiveSafePid(owner.pid);
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { signalPidIfStartMatches(ownerPid, owner.start, requirePositiveSafePid, pid=>fs.readFileSync('/proc/'+pid+'/stat','utf8'), (pid, value)=>process.kill(pid, value)); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs',''); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 0\\n'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); if(fs.existsSync(dir+'/late-populated')) { fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs','900002\\n'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 1\\n'); } }
-else if (args.includes('start')) {
- fs.appendFileSync(dir+'/calls','start\\n');
- const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
- child.on('spawn',()=>{
-  const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
-  const record={pid:child.pid,start:stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]};
-  publishPidMarker(dir+'/mainpid',record.pid,fs,JSON.stringify(record));
-  publishPidMarker(dir+'/owned-pids/'+record.pid+'.json',record.pid,fs,JSON.stringify(record));
-  fs.writeFileSync(dir+'/active','active'); child.unref();
- });
-}
-else if (args.includes('show-environment')) { console.log('HOME='+${JSON.stringify(ordinary)}+'\\nKAOIRO_RUNNER_DIR='+${JSON.stringify(conf)}); if(fs.existsSync(dir+'/manager-extra')) console.log(fs.readFileSync(dir+'/manager-extra','utf8')); }
-else if (args.includes('show')) {
- const shim=root+'/current/deploy/kaoiro-runner-launch.sh';
- const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(ownerPid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
- console.log(values[prop || 'ExecStart'] || '');
-}
-`, { mode: 0o755 });
+const interrupted = (args: string[], fault: Record<string, unknown>, boot?: () => void, whilePaused?: () => void) => interruptStateWorker(h,args,fault,boot,whilePaused);
+const forwardArgs = () => ["--install-dir", h.root, "--service", "kogane468-test", "--tarball", h.tarball(), "--codex-home", h.home, "--codex-backup-dir", join(h.dir, "backup")];
+
+describe.skipIf(process.platform !== "linux")("forward", { timeout: 30_000 }, () => {
+  it("runs the shipped helper between stop and switch/start and completes without acceptance", () => {
+    ok(h.forward());
+    expect(h.callLog()).toBe("stop\nstart\n"); expect(h.current()).toBe(h.B);
+    expect(tx()).toMatchObject({ schema: 2, phase: "completed", snapshot: { status: "retained" } });
+    expect(tx()).not.toHaveProperty("acceptance"); expect(tx()).not.toHaveProperty("owner");
+    expect(existsSync(join(h.dir, "backup/state/auth.json"))).toBe(false);
+    expect(readFileSync(join(h.dir, "backup/state/sessions/old.jsonl"), "utf8")).toBe("HISTORY");
   });
-  afterEach(async () => {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await new Promise<void>((ok) => child.once("exit", () => ok()));
+  it("uses the physical updater after symlink entry and keeps the cooperative-writer warning", () => {
+    const entry = join(h.root, "current/deploy/kaoiro-runner-update.sh");
+    const r = runScript(entry, forwardArgs(), h.env()); ok(r);
+    expect(r.stderr.match(/external Codex-home writers/g)).toHaveLength(1);expect(tx().tool).toBe(h.A);
+  });
+  it.each(["active", "next-path", "service"])("refuses unsafe post-start %s even when version succeeds", (fault) => {
+    const ctl = readFileSync(h.ctl, "utf8");
+    const changed = fault === "active" ? ctl.replace("fs.writeFileSync(dir+'/active','active'); child.unref();", "fs.writeFileSync(dir+'/active','inactive'); child.unref();")
+      : fault === "next-path" ? ctl.replace("fs.appendFileSync(dir+'/calls','start\\n');", "fs.appendFileSync(dir+'/calls','start\\n');fs.appendFileSync(" + JSON.stringify(join(h.conf,"runner.env")) + ",'CODEX_HOME=/missing\\n');")
+      : ctl.replace("MainPID:active?String(ownerPid):'0'", "MainPID:active && !fs.existsSync(dir+'/owned-pids/'+ownerPid+'.json')?String(ownerPid):'0'");
+    expect(changed).not.toBe(ctl); writeFileSync(h.ctl, changed);
+    const result=h.forward();expect(result.status).not.toBe(0);expect(tx().phase).toBe("start-intent");
+    if(fault==="active")expect(result.stderr).toContain("Runner did not become active with a positive MainPID");
+    if(fault==="service")expect(result.stderr).toContain("Runner activity is transitional or unknown");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("snapshot-binding", { timeout: 30_000 }, () => {
+  it.each(["uuid", "home", "source-home", "source-id", "source-native", "target-id", "target-native"])("rejects self-consistent snapshot metadata with crossed %s before stop", field => {
+    ok(h.forward()); const record = tx(), path = join(h.dir, "backup/manifest.json"), m = JSON.parse(readFileSync(path,"utf8"));
+    if (field === "uuid") m.uuid = "00000000-0000-4000-8000-000000000000";
+    if (field === "home") m.home = join(h.dir, "other-home");
+    if (field === "source-home") m.source.path = join(h.dir, "other-home");
+    if (field === "source-id") m.sourceRelease.id = h.B;
+    if (field === "source-native") m.sourceRelease.sha256 = "0".repeat(64);
+    if (field === "target-id") m.targetRelease.id = h.A;
+    if (field === "target-native") m.targetRelease.sha256 = "0".repeat(64);
+    writeFileSync(path, JSON.stringify(m)); record.snapshot.manifestHash = createHash("sha256").update(readFileSync(path)).digest("hex"); rewrite(record);
+    const before = h.callLog(); expect(h.restore().status).not.toBe(0); expect(h.callLog()).toBe(before); expect(h.current()).toBe(h.B);
+  });
+  it("refuses corrupt payload before stop or home replacement", () => {
+    ok(h.forward()); const before=h.callLog(), ino=statSync(h.home).ino;
+    writeFileSync(join(h.dir,"backup/state/sessions/old.jsonl"),"corrupt");
+    expect(h.restore().status).not.toBe(0); expect(h.callLog()).toBe(before); expect(statSync(h.home).ino).toBe(ino);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("path-agreement", { timeout: 30_000 }, () => {
+  it.each(["requested", "next", "empty", "unset"])("refuses %s home disagreement before stop", field => {
+    if (field === "requested") { const other=join(h.dir,"other"); mkdirSync(other,{mode:0o700}); writeFileSync(join(h.conf,"runner.env"),`CODEX_HOME='${other}'\n`,{mode:0o600}); }
+    if (field === "next") writeFileSync(join(h.conf,"runner.env"),"CODEX_HOME='/missing'\n",{mode:0o600});
+    if (field === "empty") writeFileSync(join(h.conf,"runner.env"),"CODEX_HOME=''\n",{mode:0o600});
+    if (field === "unset") writeFileSync(join(h.conf,"runner.env"),"",{mode:0o600});
+    const r=h.forward();expect(r.status).not.toBe(0);
+    if (["empty","unset"].includes(field)) expect(r.stderr).toContain("explicit next-start CODEX_HOME");
+    expect(h.callLog()).toBe(""); expect(h.current()).toBe(h.A);
+  });
+  it.each(["bytes", "config-inode", "home-inode"])("accepts same-path %s changes before restore", kind => {
+    ok(h.forward());
+    const env=join(h.conf,"runner.env");
+    if (kind === "bytes") writeFileSync(env,`CODEX_HOME='${h.home}'\nTOKEN=changed\n`,{mode:0o600});
+    if (kind === "config-inode") { renameSync(env,env+".old"); writeFileSync(env,`CODEX_HOME='${h.home}'\n`,{mode:0o600}); }
+    if (kind === "home-inode") { renameSync(h.home,h.home+".old"); mkdirSync(h.home,{mode:0o700}); writeFileSync(join(h.home,"auth.json"),"CURRENT"); }
+    ok(h.restore()); expect(h.current()).toBe(h.A); expect(history()).toBe("HISTORY");
+  });
+  it("refuses a path changed after preparation", () => {
+    const ctl=readFileSync(h.ctl,"utf8");
+    writeFileSync(h.ctl,ctl.replace("TOKEN=changed", "CODEX_HOME=/missing")); h.trigger("late-config");
+    expect(h.forward().status).not.toBe(0); expect(h.current()).toBe(h.A); expect(h.callLog()).toBe("stop\n");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("unfinished and locks", { timeout: 30_000 }, () => {
+  it("excludes rival forward, restore, switch and prune while retaining source/target/tool", async () => {
+    const tool=revisionOf("n2-physical-tool")+"-dirty";await h.close();h=await createStateFixture({toolId:tool});
+    await interrupted(forwardArgs(),{phase:"snapshot-verified",when:"after"}); const uuid=tx().uuid;
+    const before=h.callLog(); expect(h.forward("rival").status).not.toBe(0); expect(h.restore().status).not.toBe(0); expect(codeOnly(h.B).status).not.toBe(0); expect(h.state("prune",h.root,uuid).status).not.toBe(0);
+    expect(h.callLog()).toBe(before); const r=h.state("protected",h.root); ok(r); expect(new Set(r.stdout.trim().split("\n"))).toEqual(new Set([h.A,h.B,tool]));
+    ok(h.resume(uuid)); expect(tx().phase).toBe("completed");
+  });
+  it.each([".lock.update",".lock.links"])("preserves a held %s and takes no other unowned lock", lock => {
+    mkdirSync(join(h.root,lock)); const r=h.forward(); expect(r.status).not.toBe(0); expect(existsSync(join(h.root,lock))).toBe(true); expect(h.callLog()).toBe("");
+  });
+  it("protects retained source only after completion and allows a same-native update", () => {
+    ok(h.forward()); const r=h.state("protected",h.root); ok(r); expect(r.stdout.trim()).toBe(h.A); ok(h.forward("second"));
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("records and cutover", { timeout: 30_000 }, () => {
+  it.each(["schema","uuid","root","home","service","staging","snapshot-path","asides","cleanup","source-id","target-id","source-native","target-native","tool"])("rejects malformed selected %s before mutation", field => {
+    ok(h.forward()); const r=tx();
+    if(field==="schema")r.schema=3;
+    if(field==="uuid")r.uuid="00000000-0000-4000-8000-000000000000";
+    if(field==="root")r.root=h.dir;
+    if(field==="cleanup")r.cleanup={path:join(h.dir,"other-stage"),bytes:0,pending:true};
+    if(field==="snapshot-path")r.snapshot.path="relative";
+    if(field==="source-id")r.source.id="invalid";
+    if(field==="target-id")r.target.id="invalid";
+    if(field==="source-native")r.source.sha256="invalid";
+    if(field==="target-native")r.target.sha256="invalid";
+    if(field==="tool")r.tool="invalid";
+    if(field==="home")r.home="relative";
+    if(field==="service")r.service="other.service";
+    if(field==="staging")r.snapshot.staging=join(h.dir,"other-stage");
+    if(field==="asides")r.asides=[{attempt:r.uuid,aside:"/other"}];
+    const path=h.recordPath(tx().uuid);writeFileSync(path,JSON.stringify(r));
+    const before=h.callLog();expect(h.restore().status).not.toBe(0);expect(h.callLog()).toBe(before);
+    if(field!=="service") { const inspect=h.state("inspect",h.root,path.split("/").at(-1)!.replace(/\.json$/,""));expect(inspect.status).not.toBe(0);if(field==="snapshot-path")expect(inspect.stderr).toContain("Malformed snapshot path"); }
+  });
+  it.each(["phase","retention","source"])("refuses unclassifiable protection %s", field=>{
+    ok(h.forward());const r=tx();
+    if(field==="phase")r.phase="unknown";
+    if(field==="retention")r.snapshot.status="unknown";
+    if(field==="source")r.source.id="unknown-id";
+    rewrite(r);expect(h.state("protected",h.root).status).not.toBe(0);
+  });
+  it("does not scan optional historical diagnostics as authorization",()=>{
+    ok(h.forward());const r=tx();r.created={malformed:"old diagnostic"};r.updaterPid="not-a-pid";rewrite(r);
+    ok(h.state("protected",h.root));ok(h.forward("second"));
+  });
+  it.each(["prepared","stopped","snapshot-verified","switch-authorized","start-attempted","awaiting-acceptance","restore-prepared","restore-intent","quarantine-intent","quarantined","promote-intent","state-restored","code-recovery-prepared","credential-moved:auth.json","unknown"])("refuses old unfinished phase %s and changes no record bytes", phase=>{
+    const dir=join(h.root,"codex-state/transactions");mkdirSync(dir,{recursive:true,mode:0o700});const path=join(dir,"old.json");writeFileSync(path,JSON.stringify({schema:1,phase}),{mode:0o600});
+    const before=readFileSync(path);const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain("previous tool release");expect(h.callLog()).toBe("");expect(readFileSync(path)).toEqual(before);expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+    expect(h.state("protected",h.root).status).not.toBe(0);ok(h.state("inventory",h.root));
+  });
+  it.each([false,null,"yes"])("refuses old unretired backup %s", retired=>{
+    const dir=join(h.root,"codex-state/backups");mkdirSync(dir,{recursive:true,mode:0o700});writeFileSync(join(dir,"old.json"),JSON.stringify({retired}),{mode:0o600});
+    expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");
+  });
+  it("allows all-terminal retired old records despite obsolete receipt damage and ignores barriers",()=>{
+    for(const phase of ["completed","restored","retired"]){const dir=join(h.root,"codex-state/transactions");mkdirSync(dir,{recursive:true,mode:0o700});writeFileSync(join(dir,phase+".json"),JSON.stringify({phase,acceptance:"malformed"}),{mode:0o600});}
+    const dir=join(h.root,"codex-state/backups");mkdirSync(dir,{recursive:true,mode:0o700});writeFileSync(join(dir,"old.json"),JSON.stringify({retired:true}),{mode:0o600});
+    const barrier=join(h.root,"codex-state/barriers");mkdirSync(barrier,{mode:0o700});writeFileSync(join(barrier,"bad"),"invalid");symlinkSync("/missing",join(barrier,"dangling"));const ino=statSync(join(barrier,"bad")).ino;
+    ok(h.forward());ok(h.restore());ok(h.state("prune",h.root,tx().uuid));expect(existsSync(join(barrier,"bad"))).toBe(true);expect(readFileSync(join(barrier,"bad"),"utf8")).toBe("invalid");expect(statSync(join(barrier,"bad")).ino).toBe(ino);expect(readlinkSync(join(barrier,"dangling"))).toBe("/missing");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("prune and snapshot-residue", { timeout: 30_000 }, () => {
+  it("discards a corrupt owned snapshot explicitly and never deletes its record or aside",()=>{
+    ok(h.forward());ok(h.restore());const r=tx();writeFileSync(join(h.dir,"backup/state/sessions/old.jsonl"),"corrupt");
+    ok(h.state("prune",h.root,r.uuid));ok(h.state("prune",h.root,r.uuid));expect(tx().snapshot.status).toBe("retired");expect(existsSync(h.recordPath(r.uuid))).toBe(true);expect(existsSync(r.replacement.aside)).toBe(true);expect(existsSync(join(h.dir,"backup"))).toBe(false);
+  });
+  it.each(["same-root","absent-root","reused-root","symlink"])("retries durable prune intent with %s", layout=>{
+    ok(h.forward());const r=tx(),path=r.snapshot.path,st=statSync(path);r.prune={path,dev:st.dev,ino:st.ino,bytes:1,removed:false};r.snapshot.status="prune-intent";rewrite(r);
+    if(layout==="same-root")rmSync(join(path,"manifest.json"));
+    if(layout==="absent-root")rmSync(path,{recursive:true});
+    if(layout==="reused-root"){renameSync(path,path+".original");mkdirSync(path,{mode:0o700});}
+    if(layout==="symlink"){renameSync(path,join(h.dir,"original-record"));symlinkSync(join(h.dir,"original-record"),path);}
+    const result=h.state("prune",h.root,r.uuid);
+    if(["reused-root","symlink"].includes(layout)){expect(result.status).not.toBe(0);expect(existsSync(path)).toBe(true);expect(tx().snapshot.status).toBe("prune-intent");}
+    else{ok(result);expect(tx().snapshot.status).toBe("retired");expect(existsSync(path)).toBe(false);}
+  });
+  it("recovers an invalid published destination into planned/failed then prunes without payload verification",async()=>{
+    await interrupted(forwardArgs(),{to:"/backup",when:"after"});const r=tx();writeFileSync(join(h.dir,"backup/manifest.json"),"invalid");
+    ok(h.resume(r.uuid,"recover"));expect(tx()).toMatchObject({phase:"failed",snapshot:{status:"planned"}});ok(h.state("prune",h.root,r.uuid));expect(tx().snapshot.status).toBe("retired");
+  });
+  it("recovers a verified record with a missing snapshot without activating the candidate",async()=>{
+    await interrupted(forwardArgs(),{phase:"snapshot-verified",when:"after"});const uuid=tx().uuid;rmSync(join(h.dir,"backup"),{recursive:true});
+    expect(h.resume(uuid).status).not.toBe(0);ok(h.resume(uuid,"recover"));expect(tx()).toMatchObject({phase:"failed",snapshot:{status:"retired"}});expect(h.current()).toBe(h.A);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("pin-guard and old tools", { timeout: 30_000 }, () => {
+  it("refuses cross-native code-only switching with zero link mutations",()=>{
+    h.replace(h.B,{"node_modules/@openai/codex/vendor/fixture/bin/codex":"#!/bin/sh\n# different native\nexit 0\n"});
+    const before=readlinkSync(join(h.root,"current"));expect(codeOnly(h.B).status).not.toBe(0);expect(readlinkSync(join(h.root,"current"))).toBe(before);expect(existsSync(join(h.root,"previous"))).toBe(false);
+  });
+  it.each(["source","target"])("refuses pre-N2 %s before stopping a state-aware forward", which=>{
+    const id=which==="source"?h.A:h.B,helper=readFileSync(join(h.root,"releases",id,"deploy/kaoiro-runner-codex-state.mjs"),"utf8");
+    h.replace(id,{"deploy/kaoiro-runner-codex-state.mjs":helper.replace("export const CODEX_STATE_SCHEMA = 2;","export const CODEX_STATE_SCHEMA = 1;")});
+    const r=h.forward();expect(r.status).not.toBe(0);expect(h.callLog()).toBe("");expect(h.current()).toBe(h.A);
+  });
+  it("refuses a same-native pre-N2 activation while a v2 snapshot is retained",()=>{
+    h.replace(h.B,{});ok(h.forward());const helper=readFileSync(join(h.root,"releases",h.A,"deploy/kaoiro-runner-codex-state.mjs"),"utf8");
+    h.replace(h.A,{"deploy/kaoiro-runner-codex-state.mjs":helper.replace("export const CODEX_STATE_SCHEMA = 2;","export const CODEX_STATE_SCHEMA = 1;")});
+    expect(codeOnly(h.A).status).not.toBe(0);expect(h.current()).toBe(h.B);ok(h.state("prune",h.root,tx().uuid));ok(codeOnly(h.A));
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("capacity, classification and stopped service", { timeout: 30_000 }, () => {
+  it("refuses unclassified names before stopping or publishing a record",()=>{
+    writeFileSync(join(h.home,"unknown-token"),"secret");expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+  });
+  it("refuses an inactive source before a new forward",()=>{
+    writeFileSync(join(h.dir,"active"),"inactive");expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");
+  });
+  it("refuses missing unified cgroup v2 before stop or snapshot",()=>{
+    rmSync(join(h.dir,"fake-cgroup/cgroup.controllers"));const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain("unified cgroup v2");expect(h.callLog()).toBe("");
+  });
+  it("refuses a still-active service before copy/switch/start",()=>{
+    h.trigger("remain-active");const ino=statSync(h.home).ino;expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("stop\n");expect(h.current()).toBe(h.A);expect(statSync(h.home).ino).toBe(ino);expect(existsSync(join(h.dir,"backup"))).toBe(false);
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("live environment source", { timeout: 30_000 }, () => {
+  it("reads a live default from real child HOME rather than next-start HOME",async()=>{
+    await h.close(); h=await createStateFixture({liveDefault:true});
+    h.trigger("manager-extra","HOME=/different-next-home\n");ok(h.forward());expect(tx().home).toBe(join(h.ordinary,".codex"));
+  });
+  it("refuses unknown live HOME even when next-start has an explicit equal path",async()=>{
+    await h.close(); h=await createStateFixture({liveHomeMissing:true});const result=h.forward();expect(result.status).not.toBe(0);expect(result.stderr).toContain("Cannot establish running HOME");expect(h.callLog()).toBe("");
+  });
+  it("reads the manager-selected literal runner.env without executing its values",()=>{
+    const path=join(h.conf,"alternate.env");writeFileSync(path,`CODEX_HOME='${h.home}'\n`,{mode:0o600});h.trigger("manager-extra",`KAOIRO_RUNNER_ENV=${path}\n`);ok(h.forward());
+    writeFileSync(path,"CODEX_HOME='$(touch /not-executed)'\n",{mode:0o600});const before=h.callLog();expect(h.restore().status).not.toBe(0);expect(h.callLog()).toBe(before);
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("protection concurrency", { timeout: 45_000 }, () => {
+  it("serializes actual install replacement with record publication and preserves the in-flight tool",async()=>{
+    const tool=revisionOf("n2-physical-tool")+"-dirty";
+    await h.close();h=await createStateFixture({toolId:tool});
+    const out=join(h.dir,"tool-archive");mkdirSync(out);const archive=makeReleaseTarball(out,tool.replace(/-dirty$/,""),{dirty:true});
+    const install=()=>runScript(join(h.root,"releases",h.B,"deploy/kaoiro-runner-install.sh"),[archive,"--install-dir",h.root,"--allow-dirty"],h.env());
+    let contention: ReturnType<typeof install> | undefined;
+    await interrupted(forwardArgs(),{phase:"prepared",when:"after"},undefined,()=>{contention=install();});
+    expect(contention!.status,contention!.stderr).toBe(75);
+    const after=install();expect(after.status).not.toBe(0);expect(after.stderr).toContain("protected by a Codex backup");
+    const r=h.state("protected",h.root);ok(r);expect(new Set(r.stdout.trim().split("\n"))).toEqual(new Set([h.A,h.B,tool]));
+    ok(h.resume(tx().uuid));const terminal=h.state("protected",h.root);ok(terminal);expect(terminal.stdout.trim()).toBe(h.A);ok(install());
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("selected file privacy and capability grammar", { timeout: 30_000 }, () => {
+  it.each(["mode","symlink","uid","hardlink","malformed-json"])("refuses selected record %s without printing its contents",kind=>{
+    ok(h.forward());const path=h.recordPath(tx().uuid);
+    if(kind==="mode")chmodSync(path,0o644);
+    if(kind==="hardlink")linkSync(path,join(h.dir,"other-record-link"));
+    if(kind==="uid"){const preload=join(h.dir,"fault-preload.mjs");writeFileSync(preload,readFileSync(preload,"utf8")+`\nconst stat=fs.lstatSync;fs.lstatSync=(p,...a)=>{const st=stat(p,...a);if(String(p)===${JSON.stringify(path)})st.uid+=1;return st};syncBuiltinESMExports();\n`);}
+    if(kind==="symlink"){renameSync(path,join(h.dir,"original-record"));symlinkSync(join(h.dir,"original-record"),path);}
+    if(kind==="malformed-json")writeFileSync(path,"PRIVATE_SENTINEL_CONTENT");
+    const r=h.state("protected",h.root);expect(r.status).not.toBe(0);expect(r.stderr).not.toContain("PRIVATE_SENTINEL_CONTENT");
+  });
+  it("requires the explicitly requested snapshot path before any service call",()=>{
+    ok(h.forward());const before=h.callLog();const r=h.restore("different-selection");expect(r.status).not.toBe(0);expect(r.stderr).toContain("No unique retained snapshot matches selection");expect(h.callLog()).toBe(before);
+  });
+  it.each(["duplicate","format","unsupported"])("refuses source capability %s before stopping",form=>{
+    const helper=readFileSync(join(h.root,"releases",h.A,"deploy/kaoiro-runner-codex-state.mjs"),"utf8");
+    const line="export const CODEX_STATE_SCHEMA = 2;";
+    const replacement=form==="duplicate"?line+"\n"+line:form==="format"?"export const CODEX_STATE_SCHEMA=2;":"export const CODEX_STATE_SCHEMA = 3;";
+    h.replace(h.A,{"deploy/kaoiro-runner-codex-state.mjs":helper.replace(line,replacement)});
+    const r=h.forward();expect(r.status).not.toBe(0);expect(h.callLog()).toBe("");if(form==="duplicate")expect(r.stderr).toContain("Ambiguous Codex state capability");
+  });
+  it("accepts a CRLF capability line from the verified source without executing that source helper",()=>{
+    const helper=readFileSync(join(h.root,"releases",h.A,"deploy/kaoiro-runner-codex-state.mjs"),"utf8");
+    h.replace(h.A,{"deploy/kaoiro-runner-codex-state.mjs":helper.replace("export const CODEX_STATE_SCHEMA = 2;","export const CODEX_STATE_SCHEMA = 2;\r")+"\nthrow new Error('Source helper must not be executed during admission');\n"});ok(h.forward());
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("recursive prune interruption", { timeout: 45_000 }, () => {
+  it("persists prune intent before actual partial recursive deletion and completes without intact payload",async()=>{
+    ok(h.forward());const record=tx(),root=join(h.dir,"backup"),files=join(root,"state/sessions");
+    for(let i=0;i<10000;i++)writeFileSync(join(files,`partial-${String(i).padStart(5,"0")}`),"x");
+    const before=readdirSync(files).length;
+    const worker=h.spawnHelper(["prune",h.root,record.uuid]);
+    let partial=false;
+    const deadline=Date.now()+15000;
+    while(Date.now()<deadline && worker.exitCode===null){
+      if(existsSync(files)){const left=readdirSync(files).length;if(left>0 && left<before){partial=true;worker.kill("SIGKILL");break;}}
+      await new Promise(resolve=>setTimeout(resolve,1));
     }
-    const ownedPidDirectory = join(dir, "owned-pids");
-    const markers = readdirSync(ownedPidDirectory).filter((entry) =>
-      entry.endsWith(".json"),
-    );
-    for (const name of markers) {
-      const owned = JSON.parse(readFileSync(join(ownedPidDirectory, name), "utf8")) as {
-        pid: number;
-        start: string;
-      };
-      signalPidIfStartMatches(owned.pid, owned.start, requirePositiveSafePid,
-        (pid) => readFileSync(`/proc/${pid}/stat`, "utf8"),
-        (pid, signal) => process.kill(pid, signal));
+    if(worker.exitCode===null && worker.signalCode===null && !partial)worker.kill("SIGKILL");
+    await new Promise<void>(resolve=>{if(worker.exitCode!==null || worker.signalCode!==null)resolve();else worker.once("exit",()=>resolve());});
+    expect(partial).toBe(true);expect(existsSync(root)).toBe(true);expect(tx().snapshot.status).toBe("prune-intent");
+    for(const lock of [".lock.update",".lock.links"])rmSync(join(h.root,lock),{recursive:true});
+    ok(h.state("prune",h.root,record.uuid));expect(tx().snapshot.status).toBe("retired");expect(existsSync(root)).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("persisted deletion checkpoints", { timeout: 30_000 }, () => {
+  it("publishes prune intent before the actual recursive removal call",()=>{
+    ok(h.forward());ok(h.state("prune",h.root,tx().uuid));
+    const observations=readFileSync(join(h.dir,"removal-observations"),"utf8").trim().split("\n").map(s=>JSON.parse(s));
+    expect(observations.find(r=>!r.stage)).toMatchObject({pruneIntent:true});
+  });
+  it("publishes owned staging cleanup before the actual removal call",()=>{
+    const preload=join(h.dir,"fault-preload.mjs");writeFileSync(preload,readFileSync(preload,"utf8")+"\nfs.copyFileSync=()=>{throw new Error('copy fault')};syncBuiltinESMExports();\n");
+    expect(h.forward().status).not.toBe(0);const observations=readFileSync(join(h.dir,"removal-observations"),"utf8").trim().split("\n").map(s=>JSON.parse(s));
+    expect(observations.find(r=>r.stage)).toMatchObject({cleanupPending:true});expect(tx().cleanup.pending).toBe(false);expect(existsSync(tx().cleanup.path)).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("admission and mutation entrances", { timeout: 35_000 }, () => {
+  it("refuses a real live-home mismatch even though next-start and requested home agree",async()=>{
+    await h.close();h=await createStateFixture({liveDifferent:true});expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");
+  });
+  it("checks the recorded installed service on a resumed operation",()=>{
+    ok(h.forward());const record=tx();record.service="other.service";rewrite(record);const before=h.callLog();
+    expect(h.resume(record.uuid).status).not.toBe(0);expect(h.callLog()).toBe(before);
+  });
+  it.each(["transaction","backup"])("blocks every remaining mutation entrance on an unresolved old %s",kind=>{
+    ok(h.forward());const record=tx(),old=join(h.root,"codex-state",kind==="transaction"?"transactions":"backups");mkdirSync(old,{mode:0o700});
+    const path=join(old,"old.json");writeFileSync(path,JSON.stringify(kind==="transaction"?{phase:"prepared"}:{retired:false}),{mode:0o600});
+    const oldBytes=readFileSync(path),v2Bytes=readFileSync(h.recordPath(record.uuid)),before=h.callLog();
+    mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    for(const args of [["guard",h.root,h.B],["preflight",h.root,h.B,record.uuid],["prepare",h.root,h.B,h.home,join(h.dir,"rival"),"kogane468-test",h.B,"1"],["prepare-restore",h.root,record.snapshot.path,h.home,"kogane468-test",h.B],["run",h.root,record.uuid,"resume"],["protected",h.root]])expect(h.state(...args).status,args[0]).not.toBe(0);
+    rmSync(join(h.root,".lock.update"),{recursive:true});
+    for(const action of ["resume","recover","prune"])expect(h.state(action,h.root,record.uuid).status,action).not.toBe(0);
+    expect(readFileSync(path)).toEqual(oldBytes);expect(readFileSync(h.recordPath(record.uuid))).toEqual(v2Bytes);expect(h.callLog()).toBe(before);expect(h.current()).toBe(h.B);
+  });
+  it("refuses guard, preflight, run and prune with another unresolved operation",()=>{
+    ok(h.forward());const record=tx(),rival={...record,uuid:"00000000-0000-4000-8000-000000000001",phase:"prepared"};rewrite(rival);
+    const before=h.callLog(),bytes=readFileSync(h.recordPath(record.uuid));mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    for(const action of ["guard","preflight"])expect(h.state(action,h.root,h.B,record.uuid).status,action).not.toBe(0);
+    expect(h.state("run",h.root,record.uuid,"resume").status).not.toBe(0);rmSync(join(h.root,".lock.update"),{recursive:true});
+    expect(h.state("prune",h.root,record.uuid).status).not.toBe(0);expect(h.restore().status).not.toBe(0);expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);expect(h.callLog()).toBe(before);
+  });
+  it("preserves another worker's update lock for resume, recover and prune",()=>{
+    ok(h.forward());const bytes=readFileSync(h.recordPath(tx().uuid));mkdirSync(join(h.root,".lock.update"),{mode:0o700});writeFileSync(join(h.root,".lock.update/sentinel"),"held");
+    for(const action of ["resume","recover","prune"])expect(h.state(action,h.root,tx().uuid).status).not.toBe(0);
+    expect(readFileSync(join(h.root,".lock.update/sentinel"),"utf8")).toBe("held");expect(readFileSync(h.recordPath(tx().uuid))).toEqual(bytes);expect(existsSync(tx().snapshot.path)).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("post-start release and live-home checks", { timeout: 30_000 }, () => {
+  it.each(["current","artifact","live-home"])("does not settle a forward after post-start %s changes",fault=>{
+    let ctl=readFileSync(h.ctl,"utf8");
+    if(fault==="current")ctl=ctl.replace("fs.appendFileSync(dir+'/calls','start\\n');",`fs.appendFileSync(dir+'/calls','start\\n');fs.unlinkSync(root+'/current');fs.symlinkSync('releases/${h.A}',root+'/current');`);
+    if(fault==="artifact")ctl=ctl.replace("fs.appendFileSync(dir+'/calls','start\\n');",`fs.appendFileSync(dir+'/calls','start\\n');fs.appendFileSync(root+'/releases/${h.B}/dist/stub_dep.js','\\n// post-start artifact change\\n');`);
+    if(fault==="live-home")ctl=ctl.replace(`CODEX_HOME:${JSON.stringify(h.home)}`,`CODEX_HOME:${JSON.stringify(h.ordinary)}`);
+    expect(ctl).not.toBe(readFileSync(h.ctl,"utf8"));writeFileSync(h.ctl,ctl);
+    const result=h.forward();expect(result.status).not.toBe(0);expect(tx().phase).toBe("start-intent");
+    if(fault==="current")expect(result.stderr).toContain("Current differs from startup target");
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("capacity and stopped rechecks", { timeout: 30_000 }, () => {
+  it("checks capacity before stop and record publication",()=>{
+    const preload=join(h.dir,"fault-preload.mjs");writeFileSync(preload,readFileSync(preload,"utf8")+"\nconst statfs=fs.statfsSync;fs.statfsSync=p=>({...statfs(p),bavail:0});syncBuiltinESMExports();\n");
+    expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+  });
+  it.each(["mainpid","descendants"])("refuses stopped %s evidence before copy and switch",kind=>{
+    if(kind==="mainpid"){const ctl=readFileSync(h.ctl,"utf8");writeFileSync(h.ctl,ctl.replace("MainPID:active?String(ownerPid):'0'","MainPID:active?String(ownerPid):'123'"));}else h.trigger("late-populated");
+    const ino=statSync(h.home).ino;
+    expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe(kind==="descendants"?"stop\nstart\n":"stop\n");expect(existsSync(join(h.dir,"backup"))).toBe(false);expect(h.current()).toBe(h.A);
+    expect(statSync(h.home).ino).toBe(ino);expect(history()).toBe("HISTORY");expect(readFileSync(join(h.home,"auth.json"),"utf8")).toBe("CURRENT_TOKEN");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("per-entry unfinished exclusion", { timeout: 30_000 }, () => {
+  it.each(["guard","preflight","run","prepare","prepare-restore","prune"])("refuses %s before its first mutation with a second unfinished operation",action=>{
+    ok(h.forward());const record=tx(),rival={...record,uuid:"00000000-0000-4000-8000-000000000001",phase:"prepared",snapshot:{...record.snapshot,path:join(h.dir,"other-snapshot"),staging:join(h.dir,".staging.codex-00000000-0000-4000-8000-000000000001")}};rewrite(rival);
+    if(["guard","preflight","run"].includes(action)){record.phase="start-intent";rewrite(record);}
+    if(action==="guard")ok(spawnSync(h.ctl,["--user","stop","kogane468-test"],{encoding:"utf8"}));
+    const before=h.callLog(),bytes=readFileSync(h.recordPath(record.uuid)),rivalBytes=readFileSync(h.recordPath(rival.uuid));
+    if(action!=="prune")mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    if(action==="guard")mkdirSync(join(h.root,".lock.links"),{mode:0o700});
+    const args=action==="guard" || action==="preflight"?[action,h.root,h.B,record.uuid]:action==="prepare"?[action,h.root,h.B,h.home,join(h.dir,"rival"),"kogane468-test",h.B,"1"]:action==="prepare-restore"?[action,h.root,record.snapshot.path,h.home,"kogane468-test",h.B]:[action,h.root,record.uuid,"resume"];
+    const r=h.state(...args);expect(r.status,r.stderr).not.toBe(0);expect(r.stderr).toContain("Unresolved Codex transaction requires recovery");expect(h.callLog()).toBe(before);expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);expect(readFileSync(h.recordPath(rival.uuid))).toEqual(rivalBytes);expect(existsSync(record.snapshot.path)).toBe(true);expect(h.records()).toHaveLength(2);
+  });
+});
+
+
+describe.skipIf(process.platform !== "linux")("development activation option", { timeout: 35_000 }, () => {
+  it.each(["forward","resume"])("preserves explicit allow-dirty through a state-aware %s",async mode=>{
+    const native=readFileSync(join(h.root,"releases",h.B,"node_modules/@openai/codex/vendor/fixture/bin/codex"),"utf8");
+    const preload=join(h.dir,"fault-preload.mjs");writeFileSync(preload,readFileSync(preload,"utf8")+'\nglobalThis.fetch=async()=>new Response(JSON.stringify({status:"ok",build_identity_formats:["legacy-calver","landing-calver-v1"]}),{status:200});\n');
+    h.replace(h.B,{"dist/build-info.json":JSON.stringify({...JSON.parse(readFileSync(join(h.root,"releases",h.B,"dist/build-info.json"),"utf8")),version:"untagged",branch:"fixture"}),"node_modules/@openai/codex/vendor/fixture/bin/codex":native});
+    if(mode==="forward"){const rejected=h.forward();expect(rejected.status).not.toBe(0);expect(h.callLog()).toBe("");ok(h.resume(tx().uuid,"recover"));ok(h.forward("allowed",["--allow-dirty"]));}
+    else{await interrupted([...forwardArgs(),"--allow-dirty"],{phase:"start-intent",when:"after"});const uuid=tx().uuid;expect(h.resume(uuid).status).not.toBe(0);ok(h.resume(uuid,"resume",["--allow-dirty"]));}
+    expect(h.records().filter(r=>r.phase==="completed")).toHaveLength(1);expect(h.current()).toBe(h.B);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("pending owned cleanup", { timeout: 30_000 }, () => {
+  it("keeps failed staging cleanup named and retries it without discarding state",()=>{
+    const preload=join(h.dir,"fault-preload.mjs");
+    writeFileSync(preload,readFileSync(preload,"utf8")+`\nconst savedRemove=fs.rmSync;fs.rmSync=(path,...args)=>{if(String(path).includes('/.staging.codex-')&&!fs.existsSync(dir+'/cleanup-failed')){fs.writeFileSync(dir+'/cleanup-failed','once');throw Error('cleanup interrupted')}return savedRemove(path,...args)};fs.copyFileSync=()=>{throw Error('copy interrupted')};syncBuiltinESMExports();\n`);
+    expect(h.forward().status).not.toBe(0);const record=tx();expect(record.phase).toBe("failed");expect(record.cleanup.pending).toBe(true);expect(existsSync(record.cleanup.path)).toBe(true);expect(record.cleanup.path).toBe(record.snapshot.staging);expect(record.cleanup.bytes).toBeGreaterThanOrEqual(0);
+    ok(h.resume(record.uuid,"recover"));expect(tx().cleanup.pending).toBe(false);expect(existsSync(record.cleanup.path)).toBe(false);expect(history()).toBe("HISTORY");expect(readFileSync(join(h.home,"auth.json"),"utf8")).toBe("CURRENT_TOKEN");
+  });
+  it("does not adopt or remove an unrecorded orphan staging directory",()=>{
+    const path=join(h.dir,".staging.codex-00000000-0000-4000-8000-000000000000");mkdirSync(path,{mode:0o700});writeFileSync(join(path,"sentinel"),"orphan");
+    ok(h.forward());expect(readFileSync(join(path,"sentinel"),"utf8")).toBe("orphan");expect(tx().snapshot.staging).not.toBe(path);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("internal operation options", { timeout: 30_000 }, () => {
+  it("rejects unknown mode and development option before touching a completed operation",()=>{
+    ok(h.forward());const record=tx(),bytes=readFileSync(h.recordPath(record.uuid)),before=h.callLog();mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    for(const [mode,allow,message] of [["unknown","no","Unknown Codex operation mode"],["resume","unknown","Invalid development activation option"]] as const){
+      const r=h.state("run",h.root,record.uuid,mode,allow);expect(r.status).not.toBe(0);expect(r.stderr).toContain(message);
     }
-    rmSync(dir, { recursive: true, force: true });
+    expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);expect(h.callLog()).toBe(before);
   });
-  const update = (extra: string[] = []) => runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive, "--codex-home", home, "--codex-backup-dir", join(dir, "backup"), ...extra], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-  it("runs the shipped helper between stop and switch/start", () => {
-    const result = update();
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-    expect(readFileSync(join(dir, "backup/state/sessions/old.jsonl"), "utf8")).toBe("HISTORY");
-    expect(existsSync(join(dir, "backup/state/auth.json"))).toBe(false);
-    expect(result.stderr).toContain("awaiting actual Codex start/history acceptance");
+});
+
+describe.skipIf(process.platform !== "linux")("post-start machine attestation", { timeout: 30_000 }, () => {
+  it.each(["wrong-revision","malformed-json"])("retains start-intent when the actual CLI reports %s",fault=>{
+    const cli=readFileSync(join(h.root,"releases",h.B,"dist/cli.js"),"utf8"),native=readFileSync(join(h.root,"releases",h.B,"node_modules/@openai/codex/vendor/fixture/bin/codex"),"utf8");
+    const changed=fault==="wrong-revision"?cli.replace("...{}",`...{revision:${JSON.stringify(h.A)}}`):cli.replace("JSON.stringify(machine)",'"{malformed"');expect(changed).not.toBe(cli);
+    h.replace(h.B,{"dist/cli.js":changed,"node_modules/@openai/codex/vendor/fixture/bin/codex":native});
+    const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Runner artifact attestation failed after start");expect(tx().phase).toBe("start-intent");expect(h.current()).toBe(h.B);
   });
-  it("keeps stop failure in the same control flow as switch/start", () => {
-    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
-    const marker = join(dir, "switch-invocations");
-    const extraFiles = { "deploy/kaoiro-runner-switch.sh": original.replace("set -eu\n", `set -eu\nprintf 'switch\\n' >> '${marker}'\n`) };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "snapshot-failure-tarball"));
-    archive = makeReleaseTarball(join(dir, "snapshot-failure-tarball"), B, { extraFiles });
-    writeFileSync(join(dir, "late-unknown"), "trigger");
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(existsSync(join(dir, "backup"))).toBe(false);
-    expect(result.stderr).toContain("Codex state preparation failed");
-    expect(existsSync(marker)).toBe(false);
-    expect(result.stderr).not.toContain('"sourceHash"');
-    expect(result.stderr).not.toContain(join(conf, "runner.env"));
-    expect(result.stderr).toContain('"phase":"stopped"');
-  });
-  it("restores verified old state while retaining the current token", () => {
-    const forward = update();
-    expect(forward.status, forward.stderr).toBe(0);
-    writeFileSync(join(dir, "active"), "inactive");
-    writeFileSync(join(home, "sessions/old.jsonl"), "NEW_HISTORY");
-    writeFileSync(join(home, "auth.json"), "REFRESHED_TOKEN");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status, result.stderr).toBe(0);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
-    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("REFRESHED_TOKEN");
-    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\nstop\nstart\n");
-  });
-  const stateAction = (...args: string[]) => spawnSync(process.execPath, ["--experimental-vm-modules", join(root, "releases", B, "deploy/kaoiro-runner-codex-state.mjs"), ...args], { env: { ...process.env, KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions }, encoding: "utf8" });
-  const forwardTransaction = () => {
-    const file = readdirSync(join(root, "codex-state/transactions"))[0]!;
-    return JSON.parse(readFileSync(join(root, "codex-state/transactions", file), "utf8"));
+});
+
+
+describe.skipIf(process.platform !== "linux")("common release-prune reader", { timeout: 45_000 }, () => {
+  const exercise = async (mode: "state-aware" | "ordinary", action: "keep" | "replace" | "move-current" | "unreadable-current" | "fail-reader") => {
+    const C=revisionOf("n2-prune-tool")+"-dirty";
+    await h.close();h=await createStateFixture({toolId:C});ok(h.forward());
+    const original=tx(),script=join(h.root,"releases",C,"deploy/kaoiro-runner-update.sh");
+    const marker=join(h.dir,"prune-ready"),cont=join(h.dir,"prune-continue");
+    const text=readFileSync(script,"utf8"),site="# --- prune: only now, and never what current / previous point at. The runner";
+    expect(text).toContain(site);
+    writeFileSync(script,text.replace(site,`touch '${marker}'\nwhile [ ! -f '${cont}' ]; do sleep 0.02; done\n${site}`));
+    const generator=join(import.meta.dirname,"../../scripts/build-release-manifest.mjs");
+    expect(spawnSync(process.execPath,[generator,join(h.root,"releases",C)]).status).toBe(0);
+    const out=join(h.dir,"archives");mkdirSync(out);
+    const D=revisionOf("n2-prune-target"),native=readFileSync(join(h.root,"releases",h.B,"node_modules/@openai/codex/vendor/fixture/bin/codex"),"utf8");
+    const target=makeReleaseTarball(out,D,{extraFiles:{"node_modules/@openai/codex/vendor/fixture/bin/codex":native}});
+    const args=["--install-dir",h.root,"--service","kogane468-test","--tarball",target,"--keep","1"];
+    if(mode==="state-aware")args.push("--codex-home",h.home,"--codex-backup-dir",join(h.dir,"second"));
+    const worker=h.spawnWorker(args),closed=new Promise<void>(resolve=>worker.once("close",()=>resolve()));
+    try{
+      const deadline=Date.now()+20000;
+      while(!existsSync(marker) && Date.now()<deadline && worker.exitCode===null)await new Promise(resolve=>setTimeout(resolve,10));
+      expect(existsSync(marker),h.workerOutput()).toBe(true);expect(h.current()).toBe(D);
+      expect(h.records().every(record=>record.phase==="completed")).toBe(true);
+      const before=readdirSync(join(h.root,"releases")).sort();
+      if(action==="replace"){
+        const old=gunzipSync(readFileSync(join(import.meta.dirname,"fixtures/codex-state-d3a08013.mjs.gz")));
+        expect(createHash("sha256").update(old).digest("hex")).toBe("69256ebce16c669b3aeb2c0bc71089aa0eef258b0b66218f874ca7b159213f51");
+        const prior=makeReleaseTarball(out,C.slice(0,40),{dirty:true,extraFiles:{"deploy/kaoiro-runner-codex-state.mjs":old.toString("utf8")}});
+        ok(runScript(join(h.root,"releases",h.B,"deploy/kaoiro-runner-install.sh"),[prior,"--install-dir",h.root,"--allow-dirty"],h.env()));
+        expect(readFileSync(join(h.root,"releases",C,"deploy/kaoiro-runner-codex-state.mjs"))).toEqual(old);
+        const stale=spawnSync(process.execPath,[join(h.root,"releases",C,"deploy/kaoiro-runner-codex-state.mjs"),"protected",h.root],{env:h.env(),encoding:"utf8"});
+        expect(stale.status,stale.stderr).toBe(0);expect(stale.stdout.trim()).toBe("");
+        const currentReader=spawnSync(process.execPath,[join(h.root,"releases",D,"deploy/kaoiro-runner-codex-state.mjs"),"protected",h.root],{env:h.env(),encoding:"utf8"});
+        expect(currentReader.status,currentReader.stderr).toBe(0);expect(currentReader.stdout.trim().split("\n")).toContain(h.A);
+      }
+      if(action==="move-current")ok(runScript(join(h.root,"releases",h.B,"deploy/kaoiro-runner-switch.sh"),[h.B,"--install-dir",h.root],h.env()));
+      if(action==="unreadable-current"){rmSync(join(h.root,"current"));writeFileSync(join(h.root,"current"),"not a symlink");}
+      if(action==="fail-reader")writeFileSync(join(h.root,"releases",D,"deploy/kaoiro-runner-codex-state.mjs"),"process.exit(67);\n");
+      writeFileSync(cont,"continue");await closed;
+      expect(h.records().find(record=>record.uuid===original.uuid)?.snapshot.status).toBe("retained");
+      expect(existsSync(original.snapshot.path)).toBe(true);expect(existsSync(join(h.root,"releases",h.A))).toBe(true);
+      if(action==="move-current" || action==="unreadable-current"){
+        expect(worker.exitCode).toBe(75);expect(h.workerOutput()).toContain(`current is ${action==="move-current"?"releases/"+h.B:"<unreadable>"}; expected releases/${D}; release pruning skipped; a later update retries`);
+        expect(h.workerOutput()).not.toContain("is running release");
+      } else if(action==="fail-reader"){
+        expect(worker.exitCode).toBe(78);expect(h.workerOutput()).toContain("Cannot determine retained Codex releases");
+      } else expect(worker.exitCode,h.workerOutput()).toBe(0);
+      if(action==="keep"){
+        expect(existsSync(join(h.root,"releases",C))).toBe(false);
+        ok(runScript(join(h.root,"releases",D,"deploy/kaoiro-runner-update.sh"),["--install-dir",h.root,"--service","kogane468-test","--restore-codex-backup",original.snapshot.path,"--codex-home",h.home],h.env()));
+        expect(h.current()).toBe(h.A);expect(history()).toBe("HISTORY");
+      }
+      if(!["keep","replace"].includes(action)){
+        expect(readdirSync(join(h.root,"releases")).sort()).toEqual(before);expect(h.workerStdout()).toBe("");
+      }
+    }finally{writeFileSync(cont,"continue");await closed;}
   };
-  const acceptance = (tx: { uuid: string; target: { sha256: string } }) => {
-    const file = join(dir, "acceptance.json");
-    writeFileSync(file, JSON.stringify({ schema: 1, uuid: tx.uuid, nativeHash: tx.target.sha256, codexStart: true, history: true }), { mode: 0o600 });
-    return file;
-  };
-  it("publishes the accepted binding receipt only after explicit actual-start/history acceptance", () => {
-    const forward = update(); expect(forward.status, forward.stderr).toBe(0);
-    const tx = forwardTransaction();
-    expect(tx).toMatchObject({ bindingReceiptVersion: 1, phase: "awaiting-acceptance" });
-    expect(tx).not.toHaveProperty("acceptance");
-    expect(tx).not.toHaveProperty("sequence");
-    const evidence = acceptance(tx);
-    const result = stateAction("accept", root, tx.uuid, evidence);
-    expect(result.status, result.stderr).toBe(0);
-    const accepted = forwardTransaction();
-    expect(accepted).toMatchObject({ phase: "completed", sequence: 1 });
-    expect(accepted.acceptance).toEqual({ version: 1, evidenceHash: createHash("sha256").update(readFileSync(evidence)).digest("hex"), accepted: expect.any(String), binding: expect.any(Object) });
-    const { live, ...pre } = tx.binding;
-    expect(live).toEqual(expect.objectContaining({ pid: expect.any(Number) }));
-    expect(accepted.acceptance.binding).toEqual(pre);
-    expect(accepted.binding).toEqual(tx.binding);
-    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
+  it.each(["keep","replace"] as const)("preserves the retained source after state-aware completion with tool %s",action=>exercise("state-aware",action));
+  it.each(["keep","replace"] as const)("preserves the retained source after ordinary update with tool %s",action=>exercise("ordinary",action));
+  it.each(["move-current","unreadable-current"] as const)("skips pruning with 75 when %s is observed in the window",action=>exercise("ordinary",action));
+  it("refuses a failing activated reader with 78 before removing any release",()=>exercise("ordinary","fail-reader"));
+});
+
+
+describe.skipIf(process.platform !== "linux")("selected replacement and deletion metadata",()=>{
+  it.each(["replacement-from","prior-phase","recursive-phase","staging","aside","aside-unlisted","promoted","startRequested","credential-list","duplicate-credential","unknown-credential","digest","aside-attempt","aside-path","duplicate-aside","cleanup-pending","cleanup-bytes","cleanup-fraction","cleanup-path","prune-path","prune-dev","prune-ino","prune-bytes","prune-fraction","service","manifest-hash"])("refuses selected %s metadata without mutation",field=>{
+    const uuid="11111111-1111-4111-8111-111111111111",attempt="22222222-2222-4222-8222-222222222222",aside=join(h.dir,`.failed.codex-${attempt}`);
+    const record: any={schema:2,uuid,root:h.root,service:"kogane468-test.service",home:h.home,source:{id:h.A,sha256:"0".repeat(64)},target:{id:h.B,sha256:"1".repeat(64)},tool:h.B,phase:"replace-intent",snapshot:{path:join(h.dir,"backup"),staging:join(h.dir,`.staging.codex-${uuid}`),status:"retained",manifestHash:"2".repeat(64)},asides:[{attempt,aside}],replacement:{attempt,from:{id:h.B,sha256:"1".repeat(64)},priorPhase:"completed",staging:join(h.dir,`.restore.codex-${attempt}`),aside,promoted:false,startRequested:false,credentials:["auth.json"],stateDigest:"3".repeat(64)}};
+    if(["aside-attempt","aside-path","duplicate-aside"].includes(field))record.phase="completed";
+    if(field.startsWith("cleanup-"))record.cleanup={pending:true,bytes:0,path:record.snapshot.staging};
+    if(field.startsWith("prune-")){record.phase="completed";record.snapshot.status="prune-intent";record.prune={path:record.snapshot.path,dev:1,ino:1,bytes:0};}
+    mkdirSync(join(h.root,"codex-state/v2/records"),{recursive:true,mode:0o700});rewrite(record);
+    ok(h.state("inspect",h.root,uuid));
+    const r=record.replacement;
+    if(field==="replacement-from")r.from.sha256="invalid";
+    if(field==="prior-phase")r.priorPhase="unknown";
+    if(field==="recursive-phase")r.priorPhase="replace-intent";
+    if(field==="staging")r.staging=join(h.dir,"unowned-stage");
+    if(field==="aside")r.aside=join(h.dir,"unowned-aside");
+    if(field==="aside-unlisted")record.asides=[];
+    if(field==="promoted")r.promoted="false";
+    if(field==="startRequested")r.startRequested="false";
+    if(field==="credential-list")r.credentials="auth.json";
+    if(field==="duplicate-credential")r.credentials=["auth.json","auth.json"];
+    if(field==="unknown-credential")r.credentials=["arbitrary-name"];
+    if(field==="digest")r.stateDigest="invalid";
+    if(field==="aside-attempt"){record.asides[0].attempt="invalid";record.asides[0].aside=join(h.dir,".failed.codex-invalid");}
+    if(field==="aside-path")record.asides[0].aside=join(h.dir,"unowned-aside");
+    if(field==="duplicate-aside")record.asides.push({...record.asides[0]});
+    if(field==="cleanup-pending")record.cleanup.pending="true";
+    if(field==="cleanup-bytes")record.cleanup.bytes=-1;
+    if(field==="cleanup-fraction")record.cleanup.bytes=0.5;
+    if(field==="cleanup-path")record.cleanup.path=h.home;
+    if(field==="prune-path")record.prune.path=h.home;
+    if(field==="prune-dev")record.prune.dev="1";
+    if(field==="prune-ino")record.prune.ino="1";
+    if(field==="prune-bytes")record.prune.bytes=-1;
+    if(field==="prune-fraction")record.prune.bytes=0.5;
+    if(field==="service")record.service="../other.service";
+    if(field==="manifest-hash")record.snapshot.manifestHash="invalid";
+    rewrite(record);const bytes=readFileSync(h.recordPath(uuid)),result=h.state("inspect",h.root,uuid);
+    expect(result.status).not.toBe(0);expect(readFileSync(h.recordPath(uuid))).toEqual(bytes);expect(h.callLog()).toBe("");
   });
-  it("refuses acceptance without history evidence", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction(), file = acceptance(tx);
-    const proof = JSON.parse(readFileSync(file, "utf8")); proof.history = false;
-    writeFileSync(file, JSON.stringify(proof));
-    const result = stateAction("accept", root, tx.uuid, file);
-    expect(result.status).not.toBe(0);
-    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
-    const after = forwardTransaction();
-    expect(after.phase).toBe("awaiting-acceptance");
-    expect(after).not.toHaveProperty("acceptance");
-    expect(after).not.toHaveProperty("sequence");
+});
+
+
+describe.skipIf(process.platform !== "linux")("retained N1 integration successes",()=>{
+  it("starts after stopping a service with a pre-existing foreign-UID cgroup member",()=>{
+    const foreign=process.getuid!()===65534?65533:65534,proc=join(h.dir,"fake-proc/900002");
+    mkdirSync(proc,{recursive:true});writeFileSync(join(proc,"status"),`Name:\tforeign-fixture\nUid:\t${foreign}\t${foreign}\t${foreign}\t${foreign}\n`);
+    const preload=join(h.dir,"fault-preload.mjs");
+    writeFileSync(preload,readFileSync(preload,"utf8")+`\nconst foreignRead=fs.readFileSync;fs.readFileSync=(path,...args)=>foreignRead(String(path)==='/proc/900002/status'?${JSON.stringify(join(proc,"status"))}:path,...args);syncBuiltinESMExports();\n`);
+    writeFileSync(join(h.dir,"fake-cgroup/kaoiro-test/cgroup.procs"),"900002\n");writeFileSync(join(h.dir,"fake-cgroup/kaoiro-test/cgroup.events"),"populated 1\n");
+    expect(foreign).not.toBe(process.getuid!());expect(readFileSync(join(proc,"status"),"utf8")).toContain(`Uid:\t${foreign}`);
+    ok(h.forward());expect(h.callLog()).toBe("stop\nstart\n");expect(h.current()).toBe(h.B);expect(tx().phase).toBe("completed");
   });
-  it.each(["history", "new-session"])("retires an accepted snapshot with %s evidence and keeps its receipt", (basis) => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    const acceptanceFile = acceptance(tx);
-    if (basis === "new-session") {
-      const value = JSON.parse(readFileSync(acceptanceFile, "utf8"));
-      value.history = false; value.explicitNewSession = true;
-      writeFileSync(acceptanceFile, JSON.stringify(value));
+  it("starts with a real SQLite state database without writing migration diagnostics",()=>{
+    const database=join(h.home,"state_5.sqlite"),created=spawnSync(process.execPath,["--input-type=module","-e",`import {DatabaseSync} from 'node:sqlite';const db=new DatabaseSync(process.argv[1]);db.exec('CREATE TABLE _sqlx_migrations(version INTEGER, success INTEGER); INSERT INTO _sqlx_migrations VALUES(58,1);');db.close();`,database],{encoding:"utf8"});
+    expect(created.status,created.stderr).toBe(0);const bytes=readFileSync(database);
+    ok(h.forward());expect(h.callLog()).toBe("stop\nstart\n");expect(h.current()).toBe(h.B);expect(tx().phase).toBe("completed");
+    expect(readFileSync(database)).toEqual(bytes);expect(readFileSync(join(tx().snapshot.path,"state/state_5.sqlite"))).toEqual(bytes);
+    expect(tx()).not.toHaveProperty("estimate");expect(JSON.parse(readFileSync(join(tx().snapshot.path,"manifest.json"),"utf8"))).not.toHaveProperty("migrationLevels");
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("restore admission path arguments",()=>{
+  it.each(["home","service"])("refuses restore admission with requested %s disagreement before stop",field=>{
+    ok(h.forward());const other=join(h.dir,"other-home");mkdirSync(other,{mode:0o700});
+    const before=h.callLog(),ino=statSync(h.home).ino;
+    const result=runScript(h.updater,["--install-dir",h.root,"--service",field==="service"?"another-test":"kogane468-test","--restore-codex-backup",join(h.dir,"backup"),"--codex-home",field==="home"?other:h.home],h.env());
+    expect(result.status).not.toBe(0);expect(result.stderr).toContain("Restore home/service differs from selected record");
+    expect(h.callLog()).toBe(before);expect(h.current()).toBe(h.B);expect(statSync(h.home).ino).toBe(ino);expect(readdirSync(other)).toEqual([]);
+  });
+  it("refuses snapshot destination reuse before publishing another owner or stopping",()=>{
+    ok(h.forward());const first=tx(),bytes=readFileSync(join(first.snapshot.path,"manifest.json")),before=h.callLog();
+    expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe(before);expect(h.records()).toHaveLength(1);
+    expect(readFileSync(join(first.snapshot.path,"manifest.json"))).toEqual(bytes);expect(tx().uuid).toBe(first.uuid);
+  });
+  it("refuses a new snapshot under the state registry before stop",()=>{
+    const parent=join(h.root,"codex-state/probe-backups");mkdirSync(parent,{recursive:true,mode:0o700});
+    const result=runScript(h.updater,["--install-dir",h.root,"--service","kogane468-test","--tarball",h.tarball(),"--codex-home",h.home,"--codex-backup-dir",join(parent,"new")],h.env());
+    expect(result.status).not.toBe(0);expect(result.stderr).toContain("Snapshot overlaps protected state/releases");expect(h.callLog()).toBe("");expect(existsSync(join(parent,"new"))).toBe(false);expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("preflight operation boundaries",()=>{
+  it.each(["terminal-record","different-target","third-current","unready-phase"])("refuses %s before authorization",async field=>{
+    const C=revisionOf("outside-operation")+"-dirty";
+    if(field==="third-current"){await h.close();h=await createStateFixture({toolId:C});}
+    ok(h.forward());const record=tx();record.phase=field==="terminal-record"?"completed":field==="unready-phase"?"prepared":"start-intent";rewrite(record);
+    if(field==="third-current"){
+      rmSync(join(h.root,"current"));symlinkSync(`releases/${C}`,join(h.root,"current"));
     }
-    expect(stateAction("accept", root, tx.uuid, acceptanceFile).status).toBe(0);
-    const receipt = forwardTransaction().acceptance;
-    const proof = join(dir, "retire.json");
-    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: basis === "history", explicitNewSession: basis === "new-session", abandonRollback: true }), { mode: 0o600 });
-    const result = stateAction("retire", root, tx.uuid, proof);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).not.toHaveProperty("barriersRetained");
-    expect(existsSync(join(dir, "backup"))).toBe(false);
-    expect(existsSync(join(root, "codex-state/barriers"))).toBe(false);
-    expect(forwardTransaction()).toMatchObject({ phase: "retired", sequence: 1, acceptance: receipt });
+    mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    if(field==="unready-phase"){ok(spawnSync(h.ctl,["--user","stop","kogane468-test"],{env:h.env(),encoding:"utf8"}));mkdirSync(join(h.root,".lock.links"),{mode:0o700});}
+    const bytes=readFileSync(h.recordPath(record.uuid)),before=h.callLog(),link=readlinkSync(join(h.root,"current"));
+    const result=h.state(field==="unready-phase"?"guard":"preflight",h.root,field==="different-target"?h.A:h.B,record.uuid);
+    expect(result.status).not.toBe(0);expect(result.stderr).toContain(field==="terminal-record"?"Historical terminal record cannot authorize a switch":field==="different-target"?"Transaction target differs":field==="third-current"?"Current is outside recorded operation":"Forward is not ready for switching");
+    expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);expect(h.callLog()).toBe(before);expect(readlinkSync(join(h.root,"current"))).toBe(link);
   });
-  it("refuses retirement without either history or explicit new-session evidence", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-    const file = join(dir, "retire-missing.json");
-    writeFileSync(file, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: false, explicitNewSession: false, abandonRollback: true }), { mode: 0o600 });
-    expect(stateAction("retire", root, tx.uuid, file).status).not.toBe(0);
-    expect(existsSync(join(dir, "backup"))).toBe(true);
-    expect(forwardTransaction().phase).toBe("completed");
-  });
-  it("refuses retirement when the current release no longer verifies", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-    writeFileSync(join(root, "releases", B, "dist/stub_dep.js"), "tampered");
-    const proof = join(dir, "retire.json");
-    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: true, abandonRollback: true }), { mode: 0o600 });
-    const result = stateAction("retire", root, tx.uuid, proof);
-    expect(result.status).not.toBe(0);
-    expect(existsSync(join(dir, "backup"))).toBe(true);
-    expect(forwardTransaction().phase).toBe("completed");
-  });
-  it("refuses restoring an older retained reference before stopping", () => {
-    expect(update().status).toBe(0);
-    const first = forwardTransaction();
-    expect(stateAction("accept", root, first.uuid, acceptance(first)).status).toBe(0);
-    const secondUpdate = update(["--codex-backup-dir", join(dir, "backup-two")]);
-    expect(secondUpdate.status, secondUpdate.stderr).toBe(0);
-    const second = readdirSync(join(root, "codex-state/transactions")).map((file) => JSON.parse(readFileSync(join(root, "codex-state/transactions", file), "utf8"))).find((tx) => tx.uuid !== first.uuid)!;
-    expect(stateAction("accept", root, second.uuid, acceptance(second)).status).toBe(0);
-    const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Non-latest restore refused");
-    expect(readFileSync(calls, "utf8")).toBe(before);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-  });
-  it("refuses a corrupt backup before stop or state replacement", () => {
-    expect(update().status).toBe(0);
-    const before = readFileSync(calls, "utf8");
-    writeFileSync(join(dir, "backup/state/sessions/old.jsonl"), "CORRUPTION");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(calls, "utf8")).toBe(before);
-    expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-  });
-  it.each(["uuid", "home", "source-id", "source-native", "target-id"])("rejects self-consistent snapshot metadata with crossed %s before stop", (field) => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    const path = join(dir, "backup/manifest.json");
-    const manifest = JSON.parse(readFileSync(path, "utf8"));
-    if (field === "uuid") manifest.uuid = "00000000-0000-4000-8000-000000000000";
-    if (field === "home") manifest.binding.home.path = join(dir, "other-home");
-    if (field === "source-id") manifest.sourceRelease.id = B;
-    if (field === "source-native") manifest.sourceRelease.sha256 = "0".repeat(64);
-    if (field === "target-id") manifest.targetRelease.id = A;
-    writeFileSync(path, JSON.stringify(manifest));
-    const refPath = join(root, "codex-state/backups", `${tx.uuid}.json`);
-    const ref = JSON.parse(readFileSync(refPath, "utf8"));
-    ref.manifestHash = createHash("sha256").update(readFileSync(path)).digest("hex");
-    writeFileSync(refPath, JSON.stringify(ref));
-    const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--restore-codex-backup", join(dir, "backup"), "--codex-home", home], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("release/home binding differs");
-    expect(readFileSync(calls, "utf8")).toBe(before);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-  });
-  it("refuses malformed retention metadata instead of releasing protected code", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    const refPath = join(root, "codex-state/backups", `${tx.uuid}.json`);
-    const ref = JSON.parse(readFileSync(refPath, "utf8"));
-    ref.retired = "yes";
-    writeFileSync(refPath, JSON.stringify(ref));
-    const result = stateAction("protected", root);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("Malformed backup retention state");
-  });
-  it("rejects an otherwise valid wrong home before stop", () => {
-    const wrong = join(dir, "wrong"); mkdirSync(wrong, { mode: 0o700 });
-    const result = update(["--codex-home", wrong]);
-    expect(result.status).not.toBe(0);
-    expect(existsSync(calls)).toBe(false);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-  });
-  it("rejects a next-launch home mismatch even when the live home agrees", () => {
-    const wrong = join(dir, "wrong"); mkdirSync(wrong, { mode: 0o700 });
-    writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${wrong}'\n`, { mode: 0o600 });
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(existsSync(calls)).toBe(false);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-  });
-  it("rejects a live home mismatch despite agreement with next launch", () => {
-    const wrong = join(dir, "wrong"); mkdirSync(wrong, { mode: 0o700 });
-    writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${wrong}'\n`, { mode: 0o600 });
-    const result = update(["--codex-home", wrong]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Running CODEX_HOME differs");
-    expect(existsSync(calls)).toBe(false);
-  });
-  it("includes manager-selected runner.env in the next-launch binding", () => {
-    const wrong = join(dir, "wrong"); mkdirSync(wrong, { mode: 0o700 });
-    const alternate = join(conf, "alternate.env");
-    writeFileSync(alternate, `CODEX_HOME='${wrong}'\n`, { mode: 0o600 });
-    writeFileSync(join(dir, "manager-extra"), `KAOIRO_RUNNER_ENV=${alternate}`);
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Next launch CODEX_HOME differs");
-    expect(existsSync(calls)).toBe(false);
-  });
-  it("rejects runner.env changes after stopping even if the home stays the same", () => {
-    writeFileSync(join(dir, "late-config"), "trigger");
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("configuration changed after binding");
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-  });
-  it("continues with an explicit warning while an external process holds state", () => {
-    const fd = openSync(join(home, "sessions/old.jsonl"), "r");
-    try {
-      const result = update();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr.match(/external Codex-home writers are not inspected/g)).toHaveLength(1);
-      expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-    } finally { closeSync(fd); }
-  });
-  it("refuses a service still active after stop with no switch or start", async () => {
-    writeFileSync(join(dir, "remain-active"), "trigger");
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Runner is not fully stopped");
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(existsSync(join(dir, "backup"))).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(child.exitCode).toBeNull();
-    expect(child.signalCode).toBeNull();
-  });
-  it("starts after stopping a service with a pre-existing foreign-UID cgroup member", () => {
-    const previousOptions = nodeOptions;
-    const preload = fakeForeignProc();
-    nodeOptions += ` --import=${preload}`;
-    writeFileSync(join(dir, "fake-cgroup/kaoiro-test/cgroup.procs"), "900002\n");
-    writeFileSync(join(dir, "fake-cgroup/kaoiro-test/cgroup.events"), "populated 1\n");
-    try {
-      expect(readFileSync(join(dir, "fake-cgroup/kaoiro-test/cgroup.procs"), "utf8").trim()).toBe("900002");
-      const uid = /^Uid:\s*([0-9]+)/m.exec(readFileSync(join(dir, "fake-proc/900002/status"), "utf8"))?.[1];
-      expect(uid).toMatch(/^\d+$/);
-      expect(Number(uid)).not.toBe(process.getuid!());
-      const result = update();
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-      expect(forwardTransaction()).toMatchObject({ mode: "forward", phase: "awaiting-acceptance" });
-    } finally { nodeOptions = previousOptions; }
-  });
-  it("starts with a SQLite state database without writing migration diagnostics", async () => {
-    const databasePath = join(home, "state_5.sqlite");
-    const database = spawnSync(process.execPath, ["--input-type=module", "-e", `
-      import { DatabaseSync } from 'node:sqlite';
-      const db = new DatabaseSync(process.argv[1]);
-      db.exec("CREATE TABLE _sqlx_migrations(version INTEGER, success INTEGER); INSERT INTO _sqlx_migrations VALUES(58,1);");
-      db.close();
-    `, databasePath], { encoding: "utf8" });
-    expect(database.status, database.stderr).toBe(0);
-    const result = update();
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-    const tx = forwardTransaction();
-    expect(tx).toMatchObject({ mode: "forward", phase: "awaiting-acceptance" });
-    expect(tx.estimate).not.toHaveProperty("throughput");
-    expect(JSON.parse(readFileSync(join(tx.snapshot, "manifest.json"), "utf8"))).not.toHaveProperty("migrationLevels");
-  });
-  it("resumes the unchanged source when the runner cgroup repopulates after stop", async () => {
-    writeFileSync(join(dir, "late-populated"), "trigger");
-    const homeInode = statSync(home).ino;
-    const result = update();
-    expect(result.status).toBe(78);
-    expect(result.stderr).toContain("Runner descendants remain");
-    expect(result.stderr).toContain("unchanged source was resumed");
-    expect(readFileSync(calls, "utf8")).toBe("stop\nstart\n");
-    expect(readFileSync(join(dir, "active"), "utf8")).toBe("active");
-    expect(statSync(home).ino).toBe(homeInode);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(forwardTransaction()).toMatchObject({ mode: "forward", phase: "prepared" });
-    expect(existsSync(join(dir, "backup"))).toBe(false);
-  });
-  it.each(["before-move", "after-move", "start-attempted", "recovery-failure"])("handles switch failure %s without starting the candidate", (mode) => {
-    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
-    const failBefore = `if [ "$1" = "${B}" ]; then exit 70; fi\n`;
-    const changed = mode === "before-move" ? original.replace("set -eu\n", "set -eu\n" + failBefore)
-      : mode === "start-attempted" ? original + `\nif [ "$id" = "${B}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";const f=p+fs.readdirSync(p)[0];const t=JSON.parse(fs.readFileSync(f));t.phase="start-attempted";fs.writeFileSync(f,JSON.stringify(t));'\nexit 70\nfi\n`
-      : mode === "after-move" ? original + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`
-      : original.replace("set -eu\n", "set -eu\nexit 70\n");
-    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed, "node_modules/@openai/codex/vendor/fixture/bin/codex": "#!/bin/sh\n# different candidate native\nexit 0\n" };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "failure-tarball"));
-    archive = makeReleaseTarball(join(dir, "failure-tarball"), B, { extraFiles });
-    const inode = statSync(home).ino, credentialInode = statSync(join(home, "auth.json")).ino;
-    const result = update();
-    expect(result.status, result.stderr).not.toBe(0);
-    const quarantines = readdirSync(dir).filter((name) => name.startsWith(".failed.codex-"));
-    expect(quarantines).toHaveLength(mode === "start-attempted" ? 1 : 0);
-    if (mode === "start-attempted") expect(statSync(home).ino).not.toBe(inode);
-    else expect(statSync(home).ino).toBe(inode);
-    expect(statSync(join(home, "auth.json")).ino).toBe(credentialInode);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(readFileSync(join(home, "sessions/old.jsonl"), "utf8")).toBe("HISTORY");
-    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("CURRENT_TOKEN");
-    expect(readFileSync(calls, "utf8"), result.stderr).toBe(mode === "recovery-failure" ? "stop\n" : "stop\nstart\n");
-    expect(result.stderr).toContain(mode === "recovery-failure" ? "operator fresh setup" : "recorded source was restored and restarted");
-  });
-  it("refuses a host without unified cgroup v2 before snapshot or switch", () => {
-    const original = readFileSync(join(root, "releases", B, "deploy/codex-service.mjs"), "utf8");
-    const extraFiles = { "deploy/codex-service.mjs": original.replace('"/sys/fs/cgroup/cgroup.controllers"', JSON.stringify(join(dir, "missing-controllers"))) };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "cgroup-tarball"));
-    archive = makeReleaseTarball(join(dir, "cgroup-tarball"), B, { extraFiles });
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("requires unified cgroup v2");
-    expect(existsSync(calls)).toBe(false);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(existsSync(join(dir, "backup"))).toBe(false);
-  });
-  it.each(["before-switch", "before-start"])("refuses code-only recovery if its original startup proof changes %s", (boundary) => {
-    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
-    const corruptProof = `if [ "$1" = "${A}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";for(const f of fs.readdirSync(p)){const t=JSON.parse(fs.readFileSync(p+f));if(t.mode==="forward"){t.phase="start-attempted";fs.writeFileSync(p+f,JSON.stringify(t));}}'\nfi\n`;
-    const changed = (boundary === "before-switch" ? original.replace("set -eu\n", "set -eu\n" + corruptProof) : original + "\n" + corruptProof.replace('"$1"', '"$id"')) + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`;
-    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "proof-tarball"));
-    archive = makeReleaseTarball(join(dir, "proof-tarball"), B, { extraFiles });
-    const inode = statSync(home).ino;
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Cannot prove candidate never started");
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${boundary === "before-switch" ? B : A}`);
-    expect(statSync(home).ino).toBe(inode);
-    expect(readdirSync(dir).filter((name) => name.startsWith(".failed.codex-"))).toEqual([]);
-  });
-  it("refuses code-only recovery redirected away from the original source", () => {
-    const original = readFileSync(join(root, "releases", B, "deploy/kaoiro-runner-switch.sh"), "utf8");
-    const redirect = `if [ "$1" = "${A}" ]; then\n"${process.execPath}" -e 'const fs=require("node:fs");const p="${root}/codex-state/transactions/";const all=fs.readdirSync(p).map(f=>[f,JSON.parse(fs.readFileSync(p+f))]);const old=all.find(x=>x[1].mode==="forward")[1];for(const [f,t] of all){if(t.mode==="code-recovery"){t.target=old.target;fs.writeFileSync(p+f,JSON.stringify(t));}}'\nshift\nset -- "${B}" "$@"\nfi\n`;
-    const changed = original.replace("set -eu\n", "set -eu\n" + redirect) + `\nif [ "$id" = "${B}" ]; then exit 70; fi\n`;
-    const extraFiles = { "deploy/kaoiro-runner-switch.sh": changed };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "redirect-tarball"));
-    archive = makeReleaseTarball(join(dir, "redirect-tarball"), B, { extraFiles });
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Code recovery must return to original source");
-    expect(readFileSync(calls, "utf8")).toBe("stop\n");
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-  });
-  it("charges sparse files by logical size and rejects insufficient capacity before stop", () => {
-    const fs = statfsSync(dir);
-    const fd = openSync(join(home, "history.jsonl"), "w");
-    try { ftruncateSync(fd, fs.bavail * fs.bsize + 1024 ** 3); } finally { closeSync(fd); }
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Insufficient snapshot/restore disk capacity");
-    expect(existsSync(calls)).toBe(false);
-  });
-  it("rejects unclassified files before stopping the source", () => {
-    writeFileSync(join(home, "unknown-token"), "secret");
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(existsSync(calls)).toBe(false);
-  });
-  it("refuses an already stopped forward source", () => {
-    writeFileSync(join(dir, "active"), "inactive");
-    const result = update();
-    expect(result.status).not.toBe(0);
-    expect(existsSync(calls)).toBe(false);
-  });
-  it("refuses a differing-native update without a state backup before stopping", () => {
-    const extraFiles = { "node_modules/@openai/codex/vendor/fixture/bin/codex": "#!/bin/sh\n# different candidate native\nexit 0\n" };
-    rmSync(join(root, "releases", B), { recursive: true });
-    writeReleaseTree(join(root, "releases", B), B, { extraFiles });
-    mkdirSync(join(dir, "pin-tarball"));
-    archive = makeReleaseTarball(join(dir, "pin-tarball"), B, { extraFiles });
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", archive], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Codex pin transition requires an explicit state backup");
-    expect(existsSync(calls)).toBe(false);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${A}`);
-    expect(existsSync(join(root, "codex-state"))).toBe(false);
-  });
-  it("keeps a retained reference on the state-aware path for same-native code-only switching", () => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-    const links = { current: readlinkSync(join(root, "current")), previous: readlinkSync(join(root, "previous")) };
-    const result = runScript(join(root, "current/deploy/kaoiro-runner-switch.sh"), ["--rollback", "--install-dir", root]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Retained Codex state requires a state-aware update/restore");
-    expect({ current: readlinkSync(join(root, "current")), previous: readlinkSync(join(root, "previous")) }).toEqual(links);
-  });
-  it.each(["a token edit", "a changed CODEX_HOME"])("lets %s through the code-only update path once nothing is retained", (edit) => {
-    expect(update().status).toBe(0);
-    const tx = forwardTransaction();
-    expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-    const proof = join(dir, "retire.json");
-    writeFileSync(proof, JSON.stringify({ schema: 1, uuid: tx.uuid, gate6: true, productionCodexStart: true, productionHistory: true, abandonRollback: true }), { mode: 0o600 });
-    expect(stateAction("retire", root, tx.uuid, proof).status).toBe(0);
-    if (edit === "a token edit") writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${home}'\nTOKEN=changed\n`, { mode: 0o600 });
-    else { const other = join(dir, "other-home"); mkdirSync(other, { mode: 0o700 }); writeFileSync(join(conf, "runner.env"), `CODEX_HOME='${other}'\n`, { mode: 0o600 }); }
-    const C = revisionOf("state-workflow-c");
-    mkdirSync(join(dir, "code-only-tarball"));
-    const codeOnly = makeReleaseTarball(join(dir, "code-only-tarball"), C);
-    const before = readFileSync(calls, "utf8");
-    const result = runScript(join(root, "releases", B, "deploy/kaoiro-runner-update.sh"), ["--install-dir", root, "--service", "kogane468-test", "--tarball", codeOnly], { KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
-    expect(result.status, result.stderr).toBe(0);
-    expect(readlinkSync(join(root, "current"))).toBe(`releases/${C}`);
-    expect(readFileSync(calls, "utf8")).toBe(`${before}stop\nstart\n`);
-  });
+});
 
-  describe("abandon", () => {
-    const txPath = (uuid: string) => join(root, "codex-state/transactions", `${uuid}.json`);
-    const readTx = (uuid: string) => JSON.parse(readFileSync(txPath(uuid), "utf8"));
-    const rewrite = (uuid: string, edit: (tx: Record<string, unknown>) => void) => {
-      const tx = readTx(uuid); edit(tx); writeFileSync(txPath(uuid), JSON.stringify(tx));
-    };
-    // The operator restarts the runner on the current release after an abort.
-    const restart = () => {
-      if (readFileSync(join(dir, "active"), "utf8") !== "active") expect(spawnSync(ctl, ["--user", "start", "kogane468-test"]).status).toBe(0);
-      return JSON.parse(readFileSync(join(dir, "mainpid"), "utf8")) as { pid: number; start: string };
-    };
-    // Real aborts: remain-active fails the snapshot's stop check with the
-    // transaction still prepared; late-unknown fails its inventory after
-    // `stopped` is saved and before the staging directory exists.
-    const strand = (trigger: "remain-active" | "late-unknown") => {
-      writeFileSync(join(dir, trigger), "trigger");
-      const result = update();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Codex state preparation failed");
-      rmSync(join(dir, trigger));
-      return forwardTransaction();
-    };
-    const retried = (uuid: string) => {
-      const retry = update();
-      expect(retry.status, retry.stderr).toBe(0);
-      expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
-      const others = readdirSync(join(root, "codex-state/transactions")).map((f) => f.slice(0, -5)).filter((id) => id !== uuid);
-      expect(others.map((id) => readTx(id))).toEqual([expect.objectContaining({ mode: "forward", order: 2, phase: "awaiting-acceptance" })]);
-    };
+describe.skipIf(process.platform !== "linux")("stopped-proof component",()=>{
+  it.each(["transitional","mainpid","descendants"])("rejects %s independently in the shipped stopped proof",fault=>{
+    writeFileSync(join(h.dir,"active"),fault==="transitional"?"deactivating":"inactive");
+    let control=readFileSync(h.ctl,"utf8");
+    if(fault==="transitional")control=control.replace("ActiveState:active?'active':'inactive'","ActiveState:fs.readFileSync(dir+'/active','utf8')");
+    if(fault==="mainpid")control=control.replace("MainPID:active?String(ownerPid):'0'","MainPID:active?String(ownerPid):'123'");
+    writeFileSync(h.ctl,control);
+    if(fault==="descendants")writeFileSync(join(h.dir,"fake-cgroup/kaoiro-test/cgroup.events"),"populated 1\n");
+    const result=spawnSync(process.execPath,["--input-type=module","-e","const {assertStopped}=await import(process.argv[1]);assertStopped(process.argv[2],process.argv[3]);",join(h.root,"releases",h.B,"deploy/codex-service.mjs"),"kogane468-test",h.home],{env:h.env(),encoding:"utf8"});
+    expect(result.status).not.toBe(0);expect(result.stderr).toContain(fault==="descendants"?"Runner descendants remain":"Runner is not fully stopped");expect(h.callLog()).toBe("");
+  });
+});
 
-    it("abandons a forward stranded at prepared, after which the update retries", () => {
-      const tx = strand("remain-active");
-      expect(tx).toMatchObject({ mode: "forward", phase: "prepared" });
-      restart();
-      const stops = readFileSync(calls, "utf8");
-      const blocked = update();
-      expect(blocked.status).not.toBe(0);
-      expect(blocked.stderr).toContain("Recover or accept the previous Codex state transaction first");
-      expect(readFileSync(calls, "utf8")).toBe(stops);
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ abandoned: tx.uuid, phase: "prepared" });
-      const abandoned = readTx(tx.uuid);
-      expect(abandoned).toEqual({ ...tx, phase: "retired", abandonment: { version: 1, abandoned: expect.any(String), phase: "prepared", ownerStatus: expect.stringMatching(/^(absent|pid-reused)$/) } });
-      expect(existsSync(join(root, ".lock.update"))).toBe(false);
-      expect(existsSync(join(root, ".lock.links"))).toBe(false);
-      retried(tx.uuid);
-      expect(readTx(tx.uuid)).toEqual(abandoned);
-    });
+describe.skipIf(process.platform !== "linux")("additional guard boundaries", { timeout: 35_000 }, () => {
+  const fixtureRecord = () => ({schema:2,uuid:"00000000-0000-4000-8000-000000000000",root:h.root,home:h.home,service:"kogane468-test.service",source:{id:h.A,sha256:"0".repeat(64)},target:{id:h.B,sha256:"1".repeat(64)},tool:h.B,phase:"completed",snapshot:{path:join(h.dir,"backup"),staging:join(h.dir,".staging.codex-00000000-0000-4000-8000-000000000000"),status:"retired"},asides:[]});
+  const installRecord = (record: any, name=record.uuid+".json") => {mkdirSync(join(h.root,"codex-state/v2/records"),{recursive:true,mode:0o700});writeFileSync(join(h.root,"codex-state/v2/records",name),JSON.stringify(record),{mode:0o600});};
+  it("rejects an unknown record filename before protection output",()=>{
+    const record=fixtureRecord();record.uuid="not-a-uuid";installRecord(record,"not-a-uuid.json");const r=h.state("protected",h.root);expect(r.status).not.toBe(0);expect(r.stderr).toContain("Unknown state record filename");
+  });
+  it.each(["tool","target","from"])("rejects malformed protected %s on unfinished work",field=>{
+    const record:any=fixtureRecord();record.phase=field==="from"?"replace-intent":"prepared";record.snapshot.status="planned";
+    if(field==="tool")record.tool="invalid";else if(field==="target")record.target.id="invalid";else record.replacement={from:{id:"invalid"}};
+    installRecord(record);const r=h.state("protected",h.root);expect(r.status).not.toBe(0);expect(r.stderr).toContain(field==="tool"?"Invalid protected tool":"Invalid protected operation release");
+  });
+  it("rejects an invalid UUID argument before resolving its record",()=>{
+    const r=h.state("inspect",h.root,"not-a-uuid");expect(r.status).not.toBe(0);expect(r.stderr).toContain("Invalid transaction UUID");
+  });
+  it("rejects a non-array aside list with its selected-record error",()=>{
+    const record:any=fixtureRecord();record.asides={};installRecord(record);const r=h.state("inspect",h.root,record.uuid);expect(r.status).not.toBe(0);expect(r.stderr).toContain("Malformed aside list");
+  });
+  it("rejects a noncanonical absent home path",()=>{
+    const parent=join(h.dir,"canonical-parent");mkdirSync(parent,{mode:0o700});
+    const script=`const {homePath}=await import(${JSON.stringify(join(h.root,"releases",h.B,"deploy/codex-service.mjs"))});console.log(homePath(process.argv[1],true));`;
+    const r=spawnSync(process.execPath,["--input-type=module","-e",script,parent+"/../missing"],{env:h.env(),encoding:"utf8"});expect(r.status).not.toBe(0);expect(r.stderr).toContain("Home must use its canonical absolute path");
+  });
+  it("refuses restore across the home-parent device boundary before stop",()=>{
+    ok(h.forward());const before=h.callLog(),preload=join(h.dir,"fault-preload.mjs");
+    writeFileSync(preload,readFileSync(preload,"utf8")+`\nconst originalStat=fs.lstatSync;fs.lstatSync=(path,...args)=>{const result=originalStat(path,...args);if(String(path)===home)result.dev+=1;return result};syncBuiltinESMExports();\n`);
+    const r=h.restore();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Restore home and staging must share one filesystem");expect(h.callLog()).toBe(before);
+  });
+  it("requires current for a transaction preflight",()=>{
+    const record=fixtureRecord();installRecord(record);rmSync(join(h.root,"current"));const r=h.state("preflight",h.root,h.B,record.uuid);expect(r.status).not.toBe(0);expect(r.stderr).toContain("Transaction requires an existing release");
+  });
+  it("refuses initial activation of a pre-N2 reader while a snapshot is retained",async()=>{
+    await h.close();h=await createStateFixture({toolId:revisionOf("n2-initial-reader-tool")});ok(h.forward());const helper=readFileSync(join(h.root,"releases",h.B,"deploy/kaoiro-runner-codex-state.mjs"),"utf8");h.replace(h.B,{"deploy/kaoiro-runner-codex-state.mjs":helper.replace("export const CODEX_STATE_SCHEMA = 2;","export const CODEX_STATE_SCHEMA = 1;")});rmSync(join(h.root,"current"));
+    const r=h.state("preflight",h.root,h.B,"");expect(r.status).not.toBe(0);expect(r.stderr).toContain("A retained v2 snapshot forbids activating a pre-N2 tool");
+  });
+  it("refuses recovery from a snapshot not marked retained",()=>{
+    ok(h.forward());const record=tx();record.phase="start-intent";record.snapshot.status="planned";rewrite(record);const before=h.callLog();const r=h.resume(record.uuid,"recover");expect(r.status).not.toBe(0);expect(r.stderr).toContain("Snapshot is not retained");expect(h.callLog()).toBe(before);
+  });
+  it("refuses a different physical updater even for a terminal operation",async()=>{
+    const C=revisionOf("n2-wrong-tool");await h.close();h=await createStateFixture({toolId:C});ok(h.forward());const r=runScript(join(h.root,"releases",h.B,"deploy/kaoiro-runner-update.sh"),["--install-dir",h.root,"--resume-codex-transaction",tx().uuid],h.env());expect(r.status).not.toBe(0);expect(r.stderr).toContain("Use the recorded physical updater tool");
+  });
+  it.each(["phase","release"])("refuses a post-start record %s change",field=>{
+    const ctl=readFileSync(h.ctl,"utf8"),change=field==="phase"?'record.phase="completed";':'record.target=record.source;';
+    const hook=`const records=root+'/codex-state/v2/records';const file=records+'/'+fs.readdirSync(records).find(n=>n.endsWith('.json'));const record=JSON.parse(fs.readFileSync(file,'utf8'));${change}fs.writeFileSync(file,JSON.stringify(record));`;
+    writeFileSync(h.ctl,ctl.replace("fs.appendFileSync(dir+'/calls','start\\n');","fs.appendFileSync(dir+'/calls','start\\n');"+hook));const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain(field==="phase"?"Startup phase changed during service operation":"Startup release changed during service operation");
+  });
+});
 
-    it("abandons a forward stranded at stopped before its snapshot wrote anything", () => {
-      const tx = strand("late-unknown");
-      expect(tx).toMatchObject({ mode: "forward", phase: "stopped" });
-      expect(existsSync(tx.snapshot)).toBe(false);
-      expect(existsSync(tx.staging)).toBe(false);
-      rmSync(join(home, "unknown-token"));
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status, result.stderr).toBe(0);
-      expect(readTx(tx.uuid)).toMatchObject({ phase: "retired", abandonment: { phase: "stopped" } });
-      restart();
-      retried(tx.uuid);
-    });
+describe.skipIf(process.platform !== "linux")("guard recheck boundaries", { timeout: 40_000 }, () => {
+  const atStop = (code:string) => {const s=readFileSync(h.ctl,"utf8"),next=s.replace("fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive');","fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive');"+code);expect(next).not.toBe(s);writeFileSync(h.ctl,next);};
+  const preload = (code:string) => {const path=join(h.dir,"fault-preload.mjs");writeFileSync(path,readFileSync(path,"utf8")+"\n"+code+"\nsyncBuiltinESMExports();\n");};
+  it("compares a self-consistent source native binding with the installed native",()=>{
+    ok(h.forward());const record=tx(),path=join(record.snapshot.path,"manifest.json"),manifest=JSON.parse(readFileSync(path,"utf8"));record.source.sha256="0".repeat(64);manifest.sourceRelease.sha256=record.source.sha256;writeFileSync(path,JSON.stringify(manifest));record.snapshot.manifestHash=createHash("sha256").update(readFileSync(path)).digest("hex");rewrite(record);
+    const before=h.callLog(),r=h.restore();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Recorded native release changed");expect(h.callLog()).toBe(before);
+  });
+  it("refuses a source link moved during stop before taking a snapshot",()=>{
+    atStop(`fs.unlinkSync(root+'/current');fs.symlinkSync('releases/${h.B}',root+'/current');`);const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Pre-start source link changed");expect(h.callLog()).toBe("stop\n");expect(existsSync(join(h.dir,"backup"))).toBe(false);
+  });
+  it("refuses stale stopped state through the direct switch guard",async()=>{
+    await interrupted(forwardArgs(),{phase:"snapshot-verified",when:"after"});const record=tx();writeFileSync(join(h.home,"sessions/old.jsonl"),"LATER-SOURCE");mkdirSync(join(h.root,".lock.update"),{mode:0o700});
+    const r=runScript(join(h.root,"releases",h.B,"deploy/kaoiro-runner-switch.sh"),[h.B,"--install-dir",h.root,"--codex-transaction",record.uuid],h.env());expect(r.status).not.toBe(0);expect(r.stderr).toContain("Stopped state differs from verified snapshot; recover");expect(h.current()).toBe(h.A);expect(tx().phase).toBe("snapshot-verified");expect(history()).toBe("LATER-SOURCE");
+  });
+  it("refuses a second admission over an unfinished replacement",async()=>{
+    ok(h.forward());await interrupted(restoreCommand(),{phase:"replace-intent",when:"after",startRequested:false});const record=tx(),bytes=readFileSync(h.recordPath(record.uuid)),r=h.restore();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Replacement is already unfinished");expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);
+  });
+  it("refuses changed restore current before staging and source restart",()=>{
+    ok(h.forward());const before=h.callLog();atStop(`fs.unlinkSync(root+'/current');fs.symlinkSync('releases/${h.A}',root+'/current');`);const r=h.restore();expect(r.status).not.toBe(0);expect(r.stderr).toContain("Restore source link changed");expect(h.callLog()).toBe(before+"stop\n");expect(existsSync(tx().replacement.aside)).toBe(false);
+  });
+  it("refuses a published restore home under its admission release",async()=>{
+    ok(h.forward());await interrupted(restoreCommand(),{to:"/codex",when:"after"});rmSync(join(h.root,"current"));symlinkSync(`releases/${h.B}`,join(h.root,"current"));h.boot();const r=h.resume(tx().uuid);expect(r.status).not.toBe(0);expect(r.stderr).toContain("Published restore home requires its source release");expect(h.current()).toBe(h.B);expect(history()).toBe(`BOOT:${h.B}`);
+  });
+  it.each(["extra-home","unexpected-credential","invalid-credential"])("refuses %s before moving any current credential",async fault=>{
+    ok(h.forward());await interrupted(restoreCommand(),{from:"",when:"after"});const record=tx(),r=record.replacement;
+    if(fault==="extra-home")mkdirSync(h.home,{mode:0o700});
+    if(fault==="unexpected-credential"){r.credentials=r.credentials.filter((n:string)=>n!=="auth.json");rewrite(record);}
+    if(fault==="invalid-credential"){rmSync(join(r.aside,"auth.json"));const target=join(h.dir,"credential-target");writeFileSync(target,"CURRENT-CREDENTIAL");symlinkSync(target,join(r.aside,"auth.json"));}
+    const result=h.resume(record.uuid);expect(result.status).not.toBe(0);expect(result.stderr).toContain(fault==="extra-home"?"Inconsistent home/staging/aside layout":fault==="unexpected-credential"?"Unexpected credential during replacement":"Invalid credential entry");
+    for(const name of ["auth.json",".credentials.json","secrets","mcp-oauth-locks"]){expect(existsSync(join(r.aside,name))).toBe(true);expect(existsSync(join(r.staging,name))).toBe(false);}
+  });
+  it.each(["uid","entry"])("keeps an unsafe cleanup %s named instead of removing it",kind=>{
+    preload(`const make=fs.mkdirSync,stat=fs.lstatSync;fs.mkdirSync=(path,...args)=>{const result=make(path,...args);if(String(path).includes('/.staging.codex-')&&String(path).endsWith('/state')){${kind==="uid"?"fs.writeFileSync(String(path)+'/bad-cleanup','preserve');":""}}return result};${kind==="uid"?"fs.lstatSync=(path,...args)=>{const result=stat(path,...args);if(String(path).endsWith('/bad-cleanup'))result.uid+=1;return result};":""}`);
+    if(kind==="entry")preload(`import {execFileSync as makeFifo} from 'node:child_process';const priorMake=fs.mkdirSync;fs.mkdirSync=(path,...args)=>{const result=priorMake(path,...args);if(String(path).includes('/.staging.codex-')&&String(path).endsWith('/state'))makeFifo('mkfifo',[String(path)+'/bad-cleanup']);return result};`);
+    const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain(kind==="uid"?"Unsafe cleanup root":"Unsafe cleanup entry");expect(existsSync(join(tx().snapshot.staging,"state/bad-cleanup"))).toBe(true);
+  });
+  it.each(["phase","source-id","source-native"])("rereads %s before returning a stopped source",field=>{
+    const change=field==="phase"?'record.phase="start-intent";':field==="source-id"?`record.source.id=${JSON.stringify(h.B)};`:'record.source.sha256="0".repeat(64);';
+    preload(`const copy=fs.copyFileSync,removeStage=fs.rmSync,readRecord=fs.readFileSync;fs.copyFileSync=()=>{throw Error('copy checkpoint')};fs.rmSync=(path,...args)=>{const result=removeStage(path,...args);if(String(path).startsWith(dir+'/.staging.codex-'))fs.writeFileSync(dir+'/after-cleanup','ready');return result};fs.readFileSync=(path,...args)=>{const value=readRecord(path,...args);if(process.argv[2]==='run'&&String(path).startsWith(root+'/codex-state/v2/records/')&&fs.existsSync(dir+'/after-cleanup')){const record=JSON.parse(value);if(record.phase==='prepared'&&record.cleanup?.pending===false){fs.unlinkSync(dir+'/after-cleanup');${change}return JSON.stringify(record)}}return value};`);
+    const result=h.forward();expect(result.status).not.toBe(0);expect(result.stderr).toContain("Source return phase changed before restart");expect(h.callLog()).toBe("stop\n");
+  });
+  it("refuses cancellation when current differs from its admission release",async()=>{
+    ok(h.forward());await interrupted(restoreCommand(),{phase:"restore-prepared",when:"after"});const record=tx(),bytes=readFileSync(h.recordPath(record.uuid)),before=h.callLog();rmSync(join(h.root,"current"));symlinkSync(`releases/${h.A}`,join(h.root,"current"));const result=h.resume(record.uuid,"recover");expect(result.status).not.toBe(0);expect(result.stderr).toContain("Cancellation source link changed");expect(h.callLog()).toBe(before);expect(readFileSync(h.recordPath(record.uuid))).toEqual(bytes);
+  });
+  it.each(["phase","current"])("rereads %s after switch before starting the target",field=>{
+    const change=field==="phase"?'record.phase="completed";fs.writeFileSync(path,JSON.stringify(record));':`fs.unlinkSync(root+'/current');fs.symlinkSync('releases/${h.A}',root+'/current');`;
+    preload(`const readAfterSwitch=fs.readFileSync;fs.readFileSync=(path,...args)=>{const value=readAfterSwitch(path,...args);if(process.argv[2]==='promote'&&String(path).startsWith(root+'/codex-state/v2/records/')){const record=JSON.parse(value);if(record.phase==='start-intent'){${change}}}return value};`);
+    const result=h.forward();expect(result.status).not.toBe(0);expect(result.stderr).toContain(field==="phase"?"Startup phase changed after switch":"Switch did not reach recorded target");expect(h.callLog()).toBe("stop\n");
+  });
+  it.each(["ambiguous-home","changed-pid"])("refuses %s during live home observation",async kind=>{
+    await h.close();h=await createStateFixture({liveDefault:true});const pid=JSON.parse(readFileSync(join(h.dir,"mainpid"),"utf8")).pid;
+    preload(`const readLive=fs.readFileSync;fs.readFileSync=(path,...args)=>{const value=readLive(path,...args);if(String(path)===${JSON.stringify(`/proc/${pid}/environ`)}){${kind==="ambiguous-home"?"return Buffer.concat([value,Buffer.from('HOME=/different\\0')]);":"fs.writeFileSync(dir+'/live-read','ready');"}}return value};`);
+    if(kind==="changed-pid"){const ctl=readFileSync(h.ctl,"utf8");writeFileSync(h.ctl,ctl.replace("MainPID:active?String(ownerPid):'0'","MainPID:active&&!fs.existsSync(dir+'/live-read')?String(ownerPid):'0'"));}
+    const result=h.forward();expect(result.status).not.toBe(0);expect(result.stderr).toContain(kind==="ambiguous-home"?"Ambiguous running HOME":"Runner changed during home read");expect(h.callLog()).toBe("");expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+  });
+});
 
-    it("treats an owner PID reused by another process as gone", () => {
-      const tx = strand("remain-active");
-      const live = restart();
-      rewrite(tx.uuid, (t) => { t.owner = { pid: live.pid, start: `${live.start}0` }; });
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status, result.stderr).toBe(0);
-      expect(readTx(tx.uuid).abandonment).toMatchObject({ ownerStatus: "pid-reused" });
-    });
-
-    it("treats an owner PID with no /proc entry as absent", () => {
-      const tx = strand("remain-active");
-      const pidMax = Number(readFileSync("/proc/sys/kernel/pid_max", "utf8"));
-      rewrite(tx.uuid, (t) => { t.owner = { pid: pidMax + 1, start: "1" }; });
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status, result.stderr).toBe(0);
-      expect(readTx(tx.uuid).abandonment).toMatchObject({ ownerStatus: "absent" });
-    });
-
-    type Refusal = [string, (tx: { uuid: string; snapshot: string; staging: string }) => void, string];
-    const notForward = "Only a forward that stopped before its snapshot can be abandoned";
-    const refusals: Refusal[] = [
-      ["a live owner", (tx) => { const live = restart(); rewrite(tx.uuid, (t) => { t.owner = live; }); }, "State transaction owner is still running"],
-      ["a malformed owner", (tx) => rewrite(tx.uuid, (t) => { t.owner = { pid: "1188303" }; }), "Malformed state transaction owner"],
-      ...["snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "restored", "retired"].map((phase): Refusal =>
-        [`phase ${phase}`, (tx) => rewrite(tx.uuid, (t) => { t.phase = phase; }), notForward]),
-      ...["restore", "code-recovery"].map((mode): Refusal =>
-        [`mode ${mode}`, (tx) => rewrite(tx.uuid, (t) => { t.mode = mode; t.backupUUID = "00000000-0000-4000-8000-000000000000"; }), notForward]),
-      ["a staging path that is not its own", (tx) => rewrite(tx.uuid, (t) => { t.staging = join(dir, "elsewhere"); }), "Transaction staging path is not its own"],
-      ["an existing snapshot directory", (tx) => mkdirSync(tx.snapshot), "Snapshot or staging exists"],
-      ["a dangling symlink at the snapshot path", (tx) => symlinkSync(join(dir, "nowhere"), tx.snapshot), "Snapshot or staging exists"],
-      ["an existing staging directory", (tx) => mkdirSync(tx.staging), "Snapshot or staging exists"],
-      ["an existing backup reference", (tx) => writeFileSync(join(root, "codex-state/backups", `${tx.uuid}.json`), "{}", { mode: 0o600 }), "Snapshot or staging exists"],
-      ["a legacy record", (tx) => rewrite(tx.uuid, (t) => { delete t.bindingReceiptVersion; }), "Legacy Codex transaction requires operator recovery or retirement"],
-    ];
-    it.each(refusals)("refuses %s and leaves the record unchanged", (_name, setup, message) => {
-      const tx = strand("remain-active");
-      setup(tx);
-      const before = readFileSync(txPath(tx.uuid));
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status).toBe(78);
-      expect(result.stderr).toContain(message);
-      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
-    });
-
-    // A lock someone else holds stays; a lock this run took is released.
-    it.each([".lock.update", ".lock.links"])("refuses while %s is already held", (held) => {
-      const tx = strand("remain-active");
-      mkdirSync(join(root, held), { mode: 0o700 });
-      const before = readFileSync(txPath(tx.uuid));
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status).toBe(78);
-      expect(result.stderr).toContain("EEXIST");
-      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
-      for (const lock of [".lock.update", ".lock.links"]) expect(existsSync(join(root, lock))).toBe(lock === held);
-    });
-
-    it("refuses an accepted forward", () => {
-      expect(update().status).toBe(0);
-      const tx = forwardTransaction();
-      expect(stateAction("accept", root, tx.uuid, acceptance(tx)).status).toBe(0);
-      const before = readFileSync(txPath(tx.uuid));
-      const result = stateAction("abandon", root, tx.uuid);
-      expect(result.status).toBe(78);
-      expect(result.stderr).toContain(notForward);
-      expect(readFileSync(txPath(tx.uuid))).toEqual(before);
-    });
+describe.skipIf(process.platform !== "linux")("recovery command boundaries",()=>{
+  const uuid="00000000-0000-4000-8000-000000000000";
+  it.each([
+    {name:"missing value",args:["--resume-codex-transaction"],message:"needs a value"},
+    {name:"option-like value",args:["--resume-codex-transaction","--detach"],message:"must not begin with '-'"},
+    {name:"repeated mode",args:["--resume-codex-transaction",uuid,"--resume-codex-transaction",uuid],message:"repeated or conflicting recovery option"},
+    {name:"conflicting modes",args:["--resume-codex-transaction",uuid,"--recover-codex-transaction",uuid],message:"repeated or conflicting recovery option"},
+    {name:"forward input",args:["--resume-codex-transaction",uuid,"--tarball","unused"],message:"resume/recover excludes forward and restore inputs"},
+    {name:"restore input",args:["--recover-codex-transaction",uuid,"--restore-codex-backup","unused","--codex-home","unused"],message:"resume/recover excludes forward and restore inputs"},
+  ])("rejects $name before acquiring a lock",({args,message})=>{
+    const result=runScript(h.updater,["--install-dir",h.root,...args.map(value=>value==="unused"?join(h.dir,"unused"):value)],{...h.env(),KAOIRO_SYSTEMD_RUN:"/bin/false"});expect(result.status).toBe(64);expect(result.stderr).toContain(message);expect(h.callLog()).toBe("");expect(existsSync(join(h.root,".lock.update"))).toBe(false);expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
+  });
+  it.each(["resume","recover"])("queues %s with its UUID and physical updater intact",mode=>{
+    const stub=join(h.dir,"systemd-run.mjs"),argsPath=join(h.dir,"queued-args.json");writeFileSync(stub,`#!${process.execPath}\nimport fs from 'node:fs';fs.writeFileSync(${JSON.stringify(argsPath)},JSON.stringify(process.argv.slice(2)));\n`,{mode:0o700});
+    const result=runScript(h.updater,["--install-dir",h.root,`--${mode}-codex-transaction`,uuid,"--detach","--allow-dirty"],{...h.env(),KAOIRO_SYSTEMD_RUN:stub});ok(result);const queued=JSON.parse(readFileSync(argsPath,"utf8"));expect(queued).toContain(h.updater);expect(queued.slice(queued.indexOf(`--${mode}-codex-transaction`),queued.indexOf(`--${mode}-codex-transaction`)+2)).toEqual([`--${mode}-codex-transaction`,uuid]);expect(queued).toContain("--allow-dirty");expect(h.callLog()).toBe("");expect(existsSync(join(h.root,".lock.update"))).toBe(false);
   });
 });

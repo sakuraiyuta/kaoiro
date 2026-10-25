@@ -1,13 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { digest, hasEntry, identity, must } from "./codex-snapshot.mjs";
+import { basename, dirname, join, resolve } from "node:path";
+import { hasEntry, identity, must } from "./codex-snapshot.mjs";
 
 const KEYS = new Set(["HOME", "XDG_CONFIG_HOME", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "CODEX_HOME"]);
-function systemctl(service, ...args) {
+export function systemctl(service, ...args) {
   try {
     return execFileSync(process.env.KAOIRO_SYSTEMCTL || "systemctl", ["--user", ...args, ...(service ? [service] : [])], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024 }).trimEnd();
-  } catch { throw new Error("Cannot read required service-manager state"); }
+  } catch (error) {
+    const failure = new Error("Cannot read required service-manager state");
+    failure.serviceStatus = error.status;
+    throw failure;
+  }
 }
 function prop(service, name) { return systemctl(service, "show", `--property=${name}`, "--value"); }
 function words(input) {
@@ -70,9 +74,17 @@ function pidIdentity(pid) {
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
 }
-export function staticBinding(root, service, requestedHome) {
+export function homePath(path, allowAbsent = false) {
+  if (allowAbsent && !hasEntry(path)) {
+    identity(dirname(path));
+    must(join(realpathSync(dirname(path)), basename(path)) === path, "Home must use its canonical absolute path");
+    return path;
+  }
+  return identity(path).path;
+}
+export function staticBinding(root, service, requestedHome, allowAbsent = false) {
   must(process.platform === "linux", "State-aware updates require Linux systemd");
-  const home = identity(requestedHome);
+  const home = homePath(requestedHome, allowAbsent);
   must(prop(service, "Transient") === "no", "State-aware updates require an installed persistent unit");
   const start = prop(service, "ExecStart");
   const shim = `${root}/current/deploy/kaoiro-runner-launch.sh`;
@@ -92,48 +104,45 @@ export function staticBinding(root, service, requestedHome) {
     if (KEYS.has(key) && (value === undefined || env[key] === value)) delete env[key];
   }
   must(typeof env.HOME === "string" && env.HOME.startsWith("/"), "Cannot establish launch-user HOME");
-  const manager = { ...env };
   const configDir = env.KAOIRO_RUNNER_DIR || join(env.XDG_CONFIG_HOME || join(env.HOME, ".config"), "kaoiro");
   const config = env.KAOIRO_RUNNER_ENV || join(configDir, "runner.env");
   must(config.startsWith("/"), "runner.env path must be absolute");
-  let sourceHash = null, configIdentity = null;
   if (hasEntry(config)) {
     must(realpathSync(config) === resolve(config), "runner.env symlinks are unsupported for state updates");
     const st = lstatSync(config);
     must(st.isFile() && st.uid === process.getuid() && !(st.mode & 0o077), "runner.env must be a private owned file");
     const text = readFileSync(config, "utf8");
-    sourceHash = digest(text);
-    configIdentity = { dev: st.dev, ino: st.ino };
     Object.assign(env, parseRunnerEnvironment(text, env));
   }
-  const next = env.CODEX_HOME || join(env.HOME, ".codex");
-  must(next.startsWith("/") && JSON.stringify(identity(next)) === JSON.stringify(home), "Next launch CODEX_HOME differs from requested home");
+  must(typeof env.CODEX_HOME === "string" && env.CODEX_HOME.length > 0, "State-aware operations require explicit next-start CODEX_HOME");
+  must(homePath(env.CODEX_HOME, allowAbsent) === home, "Next launch CODEX_HOME differs from requested home");
   const unit = prop(service, "Id");
   must(/^[A-Za-z0-9_.@-]+\.service$/.test(unit), "Unsupported unit identity");
-  const fragment = prop(service, "FragmentPath");
-  const dropins = words(prop(service, "DropInPaths"));
-  const unitSources = [fragment, ...dropins].map((path) => ({ path, sha256: digest(readFileSync(path)) }));
-  return { home, unit, config, sourceHash, configIdentity, manager, effective: env, unitSources, execStart: start.split(" ; ignore_errors=")[0] };
+  return { home, unit };
 }
-export function captureBinding(root, service, home) {
-  const binding = staticBinding(root, service, home);
+export function captureBinding(root, service, home, allowAbsent = false) {
+  const binding = staticBinding(root, service, home, allowAbsent);
   const pid = Number(prop(service, "MainPID"));
   must(prop(service, "ActiveState") === "active" && Number.isSafeInteger(pid) && pid > 0, "Forward snapshot requires a running source runner");
   const start = pidIdentity(pid);
-  const values = readFileSync(`/proc/${pid}/environ`).toString().split("\0").filter((entry) => entry.startsWith("CODEX_HOME="));
-  must(values.length <= 1, "Ambiguous running CODEX_HOME");
-  const live = values[0]?.slice("CODEX_HOME=".length) || join(binding.effective.HOME, ".codex");
-  must(JSON.stringify(identity(live)) === JSON.stringify(binding.home), "Running CODEX_HOME differs from requested home");
-  must(Number(prop(service, "MainPID")) === pid && pidIdentity(pid) === start, "Runner changed during binding");
-  return { ...binding, live: { pid, start } };
+  const env = {};
+  for (const key of ["CODEX_HOME", "HOME"]) {
+    const values = readFileSync(`/proc/${pid}/environ`).toString().split("\0").filter((entry) => entry.startsWith(`${key}=`));
+    must(values.length <= 1, `Ambiguous running ${key}`);
+    env[key] = values[0]?.slice(key.length + 1);
+  }
+  must(env.CODEX_HOME || (typeof env.HOME === "string" && env.HOME.startsWith("/")), "Cannot establish running HOME");
+  const live = env.CODEX_HOME || join(env.HOME, ".codex");
+  must(homePath(live, allowAbsent) === binding.home, "Running CODEX_HOME differs from requested home");
+  must(Number(prop(service, "MainPID")) === pid && pidIdentity(pid) === start, "Runner changed during home read");
+  return binding;
 }
-export function checkBinding(root, service, binding, restored = false) {
-  const current = staticBinding(root, service, binding.home.path);
-  const expected = { ...binding };
-  delete expected.live;
-  if (restored) current.home = { ...current.home, dev: expected.home.dev, ino: expected.home.ino };
-  must(JSON.stringify(current) === JSON.stringify(expected), "Service/home configuration changed after binding");
+export function checkBinding(root, service, binding, allowAbsent = false) {
+  const current = staticBinding(root, service, binding.home, allowAbsent);
+  must(current.unit === binding.unit, "Selected installed service differs from record");
+  if (runnerActivity(service) === "active") captureBinding(root, service, binding.home, allowAbsent);
 }
+
 export function runnerActivity(service) {
   const state = prop(service, "ActiveState"), pid = prop(service, "MainPID");
   if (state === "active" && /^[1-9][0-9]*$/.test(pid) && Number.isSafeInteger(Number(pid))) return "active";

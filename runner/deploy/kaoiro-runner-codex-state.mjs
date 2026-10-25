@@ -2,513 +2,493 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, rmdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
-import { atomicJSON, capacity, digest, hasEntry, identity, inside, inventory, must, prepareRestore, promoteRestore, sameState, snapshot, verifySnapshot } from "./codex-snapshot.mjs";
-import { assertStopped, captureBinding, checkBinding, requireCgroupV2, runnerActivity, staticBinding } from "./codex-service.mjs";
+import { CREDENTIALS, atomicJSON, capacity, digest, durableRename, hasEntry, identity, inside, inventory, must, prepareRestore, sameState, snapshot, stateEntries, syncDirectory, verifySnapshot } from "./codex-snapshot.mjs";
+import { assertStopped, captureBinding, checkBinding, homePath, requireCgroupV2, runnerActivity, staticBinding, systemctl } from "./codex-service.mjs";
 
-const ID = /^[a-f0-9]{40}(?:-dirty)?$|^unknown$/;
-const UUID = /^[a-f0-9-]{36}$/;
-const TERMINAL = ["completed", "restored", "retired"];
-const LEGACY = "Legacy Codex transaction requires operator recovery or retirement";
-const PENDING = "Unresolved Codex recovery requires acceptance or operator recovery";
-const RECEIPT = "Malformed accepted binding receipt";
-const LINEAGE = "Invalid accepted Codex recovery lineage";
-const sha = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-const exact = (value, keys) => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join() === [...keys].sort().join();
-const canon = (value) => JSON.stringify(value, (_, v) => v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
-function privateDir(path) {
-  if (!hasEntry(path)) mkdirSync(path, { mode: 0o700 });
-  identity(path);
-}
-function readJSON(path) {
+export const CODEX_STATE_SCHEMA = 2;
+const ID = /^(?:[a-f0-9]{40}(?:-dirty)?|unknown)$/;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const HASH = /^[a-f0-9]{64}$/;
+const PHASES = ["prepared", "snapshot-verified", "start-intent", "completed", "failed", "restore-prepared", "replace-intent", "restored"];
+const TERMINAL = ["completed", "failed", "restored"];
+const RETENTION = ["planned", "retained", "prune-intent", "retired"];
+const OLD_TERMINAL = ["completed", "restored", "retired"];
+const deploy = dirname(fileURLToPath(import.meta.url));
+const recordDir = root => join(root, "codex-state/v2/records");
+const recordPath = (root, uuid) => join(recordDir(root), `${uuid}.json`);
+const binding = tx => ({ home: tx.home, unit: tx.service });
+const terminal = tx => TERMINAL.includes(tx.phase);
+const replacing = tx => ["restore-prepared", "replace-intent"].includes(tx.phase);
+const read = path => {
+  try { return JSON.parse(readFileSync(path, "utf8")); }
+  catch { throw new Error(`Unreadable state record: ${path}`); }
+};
+const nativeShape = n => n && ID.test(n.id) && HASH.test(n.sha256);
+
+function privateJSON(path) {
   const st = lstatSync(path);
-  must(st.isFile() && st.uid === process.getuid() && !(st.mode & 0o077) && st.nlink === 1, "Invalid private state record");
-  const record = JSON.parse(readFileSync(path, "utf8"));
-  must(record.schema === 1, "Unsupported state record schema");
-  return record;
+  must(st.isFile() && st.uid === process.getuid() && !(st.mode & 0o077) && st.nlink === 1, `Invalid private state record: ${path}`);
+  return read(path);
 }
-function paths(root) {
-  const base = join(root, "codex-state");
-  return { base, transactions: join(base, "transactions"), backups: join(base, "backups") };
+function directory(path) { identity(path); return path; }
+function filenames(path) {
+  if (!hasEntry(path)) return [];
+  directory(path);
+  return readdirSync(path).filter(name => !name.includes(".tmp-"));
 }
-function staticShape(b, live) {
-  const ints = (o, ...keys) => keys.every((key) => Number.isSafeInteger(o[key]));
-  const env = (m) => !!m && typeof m === "object" && !Array.isArray(m) && Object.entries(m).every(([k, v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && typeof v === "string");
-  const keys = ["home", "unit", "config", "sourceHash", "configIdentity", "manager", "effective", "unitSources", "execStart"];
-  return exact(b, live ? [...keys, "live"] : keys) &&
-    exact(b.home, ["path", "dev", "ino", "mode"]) && typeof b.home.path === "string" && resolve(b.home.path) === b.home.path && ints(b.home, "dev", "ino", "mode") &&
-    typeof b.unit === "string" && /^[A-Za-z0-9_.@-]+\.service$/.test(b.unit) && typeof b.config === "string" && b.config.startsWith("/") &&
-    (b.sourceHash === null ? b.configIdentity === null : sha(b.sourceHash) && exact(b.configIdentity, ["dev", "ino"]) && ints(b.configIdentity, "dev", "ino")) &&
-    env(b.manager) && env(b.effective) &&
-    Array.isArray(b.unitSources) && b.unitSources.every((s) => exact(s, ["path", "sha256"]) && typeof s.path === "string" && s.path.startsWith("/") && sha(s.sha256)) &&
-    typeof b.execStart === "string" &&
-    (!live || (exact(b.live, ["pid", "start"]) && Number.isSafeInteger(b.live.pid) && b.live.pid > 0 && typeof b.live.start === "string"));
-}
-function validateReceipt(record) {
-  const a = record.acceptance;
-  must(a && typeof a === "object" && !Array.isArray(a), RECEIPT);
-  must(a.version === undefined || a.version === 1, "Unsupported transaction binding receipt version");
-  must(exact(a, ["version", "evidenceHash", "accepted", "binding"]) && sha(a.evidenceHash) && typeof a.accepted === "string" && !Number.isNaN(Date.parse(a.accepted)) && staticShape(a.binding, false) && Number.isSafeInteger(record.sequence) && record.sequence > 0, RECEIPT);
-  const own = { ...record.binding };
-  delete own.live;
-  const expected = record.mode === "restore" ? { ...own, home: { ...own.home, dev: a.binding.home.dev, ino: a.binding.home.ino } } : own;
-  must(canon(expected) === canon(a.binding), RECEIPT);
-}
-// A transaction without the discriminator is legacy; one with it must be fully valid.
-function validateTransactionState(record) {
-  const a = record.acceptance;
-  if (!Object.hasOwn(record, "bindingReceiptVersion")) {
-    must(a === undefined || (!!a && typeof a === "object" && !("version" in a) && !("binding" in a)), RECEIPT);
-    return;
-  }
-  must(record.bindingReceiptVersion === 1, "Unsupported transaction binding receipt version");
-  must(staticShape(record.binding, true) && (record.mode === "forward" || UUID.test(record.backupUUID)), "Malformed state record binding");
-  const terminal = TERMINAL.includes(record.phase);
-  if (a !== undefined || record.sequence !== undefined) {
-    must(terminal && a !== undefined, RECEIPT);
-    validateReceipt(record);
-  } else must(!terminal || (record.mode === "forward" && record.phase !== "completed"), RECEIPT);
-  must(record.mode === "forward" || !terminal || record.phase === "restored", RECEIPT);
-}
-function validateRecord(record, root, kind, name) {
-  const native = (value) => value && typeof value.id === "string" && ID.test(value.id) && sha(value.sha256) && typeof value.path === "string" && !value.path.startsWith("/") && !value.path.split("/").includes("..");
-  const binding = record.binding;
-  must(binding && typeof binding.home?.path === "string" && binding.home.path.startsWith("/") && Number.isSafeInteger(binding.home.dev) && Number.isSafeInteger(binding.home.ino) && typeof binding.unit === "string" && /^[A-Za-z0-9_.@-]+\.service$/.test(binding.unit), "Malformed state record binding");
-  must(typeof record.uuid === "string" && UUID.test(record.uuid) && name === `${record.uuid}.json` && native(record.source) && native(record.target) && typeof record.tool === "string" && ID.test(record.tool) && typeof record.snapshot === "string" && record.snapshot.startsWith("/") && Number.isSafeInteger(record.order) && record.order > 0, "Malformed Codex state reference");
-  if (kind === "backups") {
-    must(typeof record.retired === "boolean" && typeof record.restored === "boolean" && sha(record.manifestHash), "Malformed backup retention state");
-  } else {
-    const phases = ["prepared", "stopped", "snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "completed", "restore-prepared", "code-recovery-prepared", "restore-intent", "quarantine-intent", "quarantined", "promote-intent", "state-restored", "restored", "retired"];
-    must(record.root === root && ["forward", "restore", "code-recovery"].includes(record.mode) && typeof record.phase === "string" && (phases.includes(record.phase) || /^credential-(?:intent|moved):(?:auth\.json|\.credentials\.json|secrets|mcp-oauth-locks)$/.test(record.phase)), "Malformed state transaction phase");
-    validateTransactionState(record);
+function cutover(root) {
+  const old = join(root, "codex-state");
+  if (!hasEntry(old)) return;
+  directory(old);
+  for (const kind of ["transactions", "backups"]) for (const name of filenames(join(old, kind))) {
+    const path = join(old, kind, name);
+    let ok = false;
+    try { const tx = privateJSON(path); ok = kind === "transactions" ? OLD_TERMINAL.includes(tx.phase) : tx.retired === true; } catch { /* Unclassifiable old records need the previous tool. */ }
+    must(ok, `Resolve old Codex state records with the previous tool release: ${path}; see docs/operations/runner-update-and-rollback.md`);
   }
 }
-function records(root, kind) {
-  const p = paths(root);
-  if (!hasEntry(p.base)) return [];
-  identity(p.base);
-  if (!hasEntry(p[kind])) return [];
-  identity(p[kind]);
-  return readdirSync(p[kind]).filter((name) => !name.includes(".tmp-") && !name.includes(".damaged-")).map((name) => {
-    must(/^[a-zA-Z0-9-]+\.json$/.test(name), "Unknown state record filename");
-    const record = readJSON(join(p[kind], name));
-    validateRecord(record, root, kind, name);
-    return record;
-  });
-}
-function init(root) { const p = paths(root); for (const key of ["base", "transactions", "backups"]) privateDir(p[key]); return p; }
-function currentRelease(root) {
-  const target = readlinkSync(join(root, "current"));
-  must(/^releases\/[^/]+$/.test(target) && ID.test(target.slice(9)), "Invalid current release link");
-  return target.slice(9);
-}
-async function releaseIdentity(root, id, strict = false) {
-  must(ID.test(id), "Invalid release identity");
-  const tree = join(root, "releases", id);
-  const verified = verifyRelease(tree, { requireManifest: true, requireDeployManifest: strict, hash: true });
-  must(verified.identity === id, "Release directory identity mismatch");
-  return { id, ...await nativeIdentity(tree) };
-}
-function liveOwner(owner) {
-  const pid = Number(owner);
-  must(Number.isSafeInteger(pid) && pid > 1, "Missing updater PID");
-  let ancestor = process.ppid;
-  while (ancestor > 1 && ancestor !== pid) {
-    const row = readFileSync(`/proc/${ancestor}/stat`, "utf8");
-    ancestor = Number(row.slice(row.lastIndexOf(")") + 2).split(" ")[1]);
+function projection(root, name) {
+  must(UUID.test(name.slice(0, -5)) && name.endsWith(".json"), `Unknown state record filename: ${name}`);
+  const tx = privateJSON(join(recordDir(root), name));
+  must(tx.schema === CODEX_STATE_SCHEMA && tx.uuid === name.slice(0, -5) && tx.root === root, `Invalid state identity: ${name}`);
+  must(PHASES.includes(tx.phase) && RETENTION.includes(tx.snapshot?.status), `Unclassifiable phase/retention: ${name}`);
+  if (["retained", "prune-intent"].includes(tx.snapshot.status) || !terminal(tx)) must(ID.test(tx.source?.id), `Invalid protected source: ${name}`);
+  if (!terminal(tx)) {
+    must(ID.test(tx.tool), `Invalid protected tool: ${name}`);
+    must(ID.test((replacing(tx) ? tx.replacement?.from : tx.target)?.id), `Invalid protected operation release: ${name}`);
   }
-  must(ancestor === pid, "Updater PID is not an ancestor");
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  return { pid, start: stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] };
-}
-function lockOwner(root, tx) {
-  const record = readJSON(join(root, ".lock.update", "codex-owner.json"));
-  must(record.uuid === tx.uuid && JSON.stringify(record.owner) === JSON.stringify(tx.owner), "State transaction does not own the update lock");
-  const stat = readFileSync(`/proc/${tx.owner.pid}/stat`, "utf8");
-  must(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] === tx.owner.start, "State transaction owner is gone");
-}
-function save(root, tx) { atomicJSON(join(paths(root).transactions, `${tx.uuid}.json`), tx); }
-function transaction(root, uuid) {
-  must(/^[a-f0-9-]{36}$/.test(uuid), "Invalid transaction UUID");
-  const tx = readJSON(join(paths(root).transactions, `${uuid}.json`));
-  validateRecord(tx, root, "transactions", `${uuid}.json`);
-  must(tx.root === root && tx.uuid === uuid, "Transaction belongs to another installation");
   return tx;
 }
-export function acceptedForwardTransaction(root, uuid, expectedRevision) {
-  const tx = transaction(root, uuid);
-  must(tx.mode === "forward" && tx.phase === "completed" && tx.target.id === expectedRevision && tx.bindingReceiptVersion === 1,
-    "Forward Codex acceptance is incomplete or targets another revision");
-  validateReceipt(tx);
-  return { transaction_id: tx.uuid, evidence_sha256: tx.acceptance.evidenceHash, accepted_at: tx.acceptance.accepted };
-}
-function reference(root, tx) {
-  const ref = readJSON(join(paths(root).backups, `${tx.uuid}.json`));
-  validateRecord(ref, root, "backups", `${tx.uuid}.json`);
-  return ref;
-}
-function verifiedReference(root, tx) {
-  const ref = reference(root, tx);
-  must(ref.snapshot === tx.snapshot && JSON.stringify(ref.source) === JSON.stringify(tx.source) && JSON.stringify(ref.target) === JSON.stringify(tx.target) && ref.tool === tx.tool && JSON.stringify(ref.binding) === JSON.stringify(tx.binding), "Backup reference differs from its transaction");
-  const manifest = verifySnapshot(ref.snapshot, ref.manifestHash);
-  must(manifest.uuid === tx.uuid && JSON.stringify(manifest.sourceRelease) === JSON.stringify(tx.source) && JSON.stringify(manifest.targetRelease) === JSON.stringify(tx.target) && JSON.stringify(manifest.binding) === JSON.stringify(tx.binding), "Snapshot release/home binding differs from its transaction");
-  return { ref, manifest };
-}
-function activeReferences(root) { return records(root, "backups").filter((r) => !r.retired); }
-const isLegacy = (tx) => !Object.hasOwn(tx, "bindingReceiptVersion");
-const requireModern = (tx) => must(!isLegacy(tx), LEGACY);
-function unresolved(root) { return records(root, "transactions").filter((tx) => !TERMINAL.includes(tx.phase)); }
-function ownPending(root, tx) {
-  const own = new Set([tx.uuid, ...(tx.mode === "forward" ? [] : [tx.backupUUID])]);
-  must(unresolved(root).every((other) => own.has(other.uuid)), PENDING);
-}
-function acceptedEvents(root) {
-  const events = records(root, "transactions").filter((tx) => tx.acceptance !== undefined);
-  must(events.every((e) => Number.isSafeInteger(e.sequence) && e.sequence > 0), RECEIPT);
-  must(new Set(events.map((e) => e.sequence)).size === events.length, "Ambiguous accepted Codex lineage sequence");
-  return events.sort((x, y) => x.sequence - y.sequence);
-}
-// Metadata only: the snapshot and releases of a retired original may be gone.
-function recoveryLineage(root, rec, settled) {
-  must(rec.mode !== "forward" && UUID.test(rec.backupUUID), LINEAGE);
-  const original = transaction(root, rec.backupUUID);
-  const ref = reference(root, original);
-  must(!isLegacy(original) && original.mode === "forward" && original.order < rec.order, LINEAGE);
-  must(ref.snapshot === original.snapshot && JSON.stringify(ref.source) === JSON.stringify(original.source) && JSON.stringify(ref.target) === JSON.stringify(original.target) && ref.tool === original.tool && canon(ref.binding) === canon(original.binding), LINEAGE);
-  must(rec.snapshot === original.snapshot && rec.target.id === original.source.id && rec.target.sha256 === original.source.sha256 && [original.source.id, original.target.id].includes(rec.source.id), LINEAGE);
-  if (settled) must(ref.restored === true && ["restored", "retired"].includes(original.phase), LINEAGE);
-  else {
-    const phases = rec.mode === "code-recovery" ? ["snapshot-verified", "switch-authorized"] : ["snapshot-verified", "switch-authorized", "start-attempted", "awaiting-acceptance", "completed"];
-    must(!ref.retired && [...phases, "restored"].includes(original.phase), LINEAGE);
-    must(!records(root, "transactions").some((r) => r.uuid !== rec.uuid && r.backupUUID === rec.backupUUID && r.acceptance !== undefined), LINEAGE);
+function records(root) { cutover(root); return filenames(recordDir(root)).map(name => projection(root, name)); }
+function selected(root, uuid) {
+  must(UUID.test(uuid), "Invalid transaction UUID");
+  cutover(root);
+  const tx = projection(root, `${uuid}.json`);
+  must(nativeShape(tx.source) && nativeShape(tx.target) && ID.test(tx.tool), "Malformed selected release identities");
+  must(typeof tx.service === "string" && /^[A-Za-z0-9_.@-]+\.service$/.test(tx.service), "Malformed selected service");
+  must(typeof tx.home === "string" && resolve(tx.home) === tx.home, "Malformed selected home");
+  const s = tx.snapshot;
+  must(typeof s.path === "string" && resolve(s.path) === s.path, "Malformed snapshot path");
+  must(s.staging === join(dirname(s.path), `.staging.codex-${uuid}`), "Snapshot staging path is not its own");
+  disjoint(root, tx.home, s.path);
+  if (["retained", "prune-intent"].includes(s.status)) must(HASH.test(s.manifestHash), "Malformed snapshot manifest hash");
+  must(Array.isArray(tx.asides), "Malformed aside list");
+  const attempts = new Set();
+  for (const entry of tx.asides) {
+    must(UUID.test(entry.attempt) && entry.aside === join(dirname(tx.home), `.failed.codex-${entry.attempt}`) && !attempts.has(entry.attempt), "Malformed aside entry");
+    attempts.add(entry.attempt);
   }
-  return { original, ref };
+  if (replacing(tx)) {
+    const r = tx.replacement;
+    must(r && UUID.test(r.attempt) && nativeShape(r.from) && PHASES.includes(r.priorPhase) && !["restore-prepared", "replace-intent"].includes(r.priorPhase), "Malformed replacement identity");
+    must(r.staging === join(dirname(tx.home), `.restore.codex-${r.attempt}`) && r.aside === join(dirname(tx.home), `.failed.codex-${r.attempt}`), "Malformed replacement paths");
+    must(tx.asides.some(e => e.attempt === r.attempt && e.aside === r.aside), "Replacement aside is not recorded");
+    must(typeof r.promoted === "boolean" && typeof r.startRequested === "boolean", "Malformed replacement checkpoints");
+    if (tx.phase === "replace-intent") must(Array.isArray(r.credentials) && new Set(r.credentials).size === r.credentials.length && r.credentials.every(n => CREDENTIALS.includes(n)) && HASH.test(r.stateDigest), "Malformed replacement state");
+  }
+  if (tx.cleanup) must(typeof tx.cleanup.pending === "boolean" && Number.isSafeInteger(tx.cleanup.bytes) && tx.cleanup.bytes >= 0 && ownedStage(tx, tx.cleanup.path), "Malformed cleanup ownership");
+  if (s.status === "prune-intent") must(tx.prune?.path === s.path && Number.isSafeInteger(tx.prune.dev) && Number.isSafeInteger(tx.prune.ino) && Number.isSafeInteger(tx.prune.bytes) && tx.prune.bytes >= 0, "Malformed prune ownership");
+  return tx;
 }
-// The restored home identity comes from the latest accepted transaction
-// for the home, never from a per-home file.
-function acceptedHome(root, old, current) {
-  const latest = acceptedEvents(root).filter((e) => e.binding.home.path === old.binding.home.path).at(-1);
-  if (!latest || latest.order < old.order) return old.binding;
-  requireModern(latest);
-  must(latest.target.id === current.id && latest.target.sha256 === current.sha256, "Latest accepted Codex lineage target mismatch");
-  must(latest.binding.unit === old.binding.unit, "Latest accepted Codex lineage unit mismatch");
-  if (latest.mode !== "forward") recoveryLineage(root, latest, true);
-  const { dev, ino } = latest.acceptance.binding.home;
-  return { ...old.binding, home: { ...old.binding.home, dev, ino } };
+function ownedStage(tx, path) { return path === tx.snapshot.staging || tx.asides.some(e => path === join(dirname(tx.home), `.restore.codex-${e.attempt}`)); }
+function disjoint(root, home, path) {
+  must(!inside(home, path) && !inside(path, home) && !inside(join(root, "releases"), path) && !inside(join(root, "codex-state"), path) && !inside(path, root), "Snapshot overlaps protected state/releases");
+}
+function requireUpdate(root) { directory(join(root, ".lock.update")); }
+function save(root, tx) {
+  directory(join(root, ".lock.links"));
+  for (const path of [join(root, "codex-state"), join(root, "codex-state/v2"), recordDir(root)]) {
+    if (!hasEntry(path)) { mkdirSync(path, { mode: 0o700 }); syncDirectory(dirname(path)); }
+    directory(path);
+  }
+  atomicJSON(recordPath(root, tx.uuid), tx);
+}
+async function withLock(root, name, fn) {
+  const path = join(root, name);
+  try { mkdirSync(path, { mode: 0o700 }); }
+  catch (error) { if (error.code === "EEXIST") throw new Error(`Lock held: ${path}; inspect the worker before removing stale locks, then use the physical updater --resume-codex-transaction or --recover-codex-transaction`); throw error; }
+  try { return await fn(); } finally { rmdirSync(path); }
+}
+const publish = (root, tx) => withLock(root, ".lock.links", () => save(root, tx));
+function exclude(root, uuid) { must(records(root).every(tx => terminal(tx) || tx.uuid === uuid), "Unresolved Codex transaction requires recovery"); }
+function current(root) {
+  const link = readlinkSync(join(root, "current"));
+  must(link.startsWith("releases/") && ID.test(link.slice(9)), "Invalid current release link");
+  return link.slice(9);
+}
+async function release(root, id) {
+  must(ID.test(id), "Invalid release identity");
+  const tree = join(root, "releases", id);
+  const v = verifyRelease(tree, { requireManifest: true, requireDeployManifest: true, hash: true });
+  must(v.identity === id, "Release directory identity mismatch");
+  const { sha256 } = await nativeIdentity(tree);
+  return { id, sha256 };
+}
+function capable(root, id) {
+  const text = readFileSync(join(root, "releases", id, "deploy/kaoiro-runner-codex-state.mjs"), "utf8");
+  const matches = text.match(/^export const CODEX_STATE_SCHEMA = 2;\r?$/gm) || [];
+  must(matches.length <= 1, "Ambiguous Codex state capability");
+  return matches.length === 1;
+}
+function needCapability(root, id) { must(capable(root, id), "Update to an N2 release with the same native first"); }
+async function checkRelease(root, expected) {
+  const actual = await release(root, expected.id);
+  must(actual.sha256 === expected.sha256, "Recorded native release changed");
+}
+function snapshotFor(tx) {
+  must(tx.snapshot.status === "retained", "Snapshot is not retained");
+  const m = verifySnapshot(tx.snapshot.path, tx.snapshot.manifestHash);
+  must(m.uuid === tx.uuid && m.source.path === tx.home && m.home === tx.home, "Snapshot UUID/home differs from record");
+  must(m.sourceRelease?.id === tx.source.id && m.sourceRelease?.sha256 === tx.source.sha256 && m.targetRelease?.id === tx.target.id && m.targetRelease?.sha256 === tx.target.sha256, "Snapshot release binding differs from record");
+  return m;
+}
+async function prepare(root, target, home, destination, service, tool, pid) {
+  requireUpdate(root); exclude(root);
+  const source = await release(root, current(root)), candidate = await release(root, target);
+  await release(root, tool); needCapability(root, source.id); needCapability(root, target);
+  const b = captureBinding(root, service, home);
+  requireCgroupV2();
+  must(resolve(destination) === destination && realpathSync(dirname(destination)) === dirname(destination) && !hasEntry(destination), "Backup destination must be new and canonical");
+  directory(dirname(destination)); disjoint(root, home, destination);
+  const entries = inventory(home);
+  capacity(dirname(destination), entries); capacity(dirname(home), entries);
+  const uuid = randomUUID();
+  const tx = { schema: CODEX_STATE_SCHEMA, uuid, root, service: b.unit, home: b.home, source, target: candidate, phase: "prepared", snapshot: { path: destination, staging: join(dirname(destination), `.staging.codex-${uuid}`), status: "planned" }, tool, updaterPid: Number(pid), created: new Date().toISOString(), asides: [] };
+  await publish(root, tx); return uuid;
+}
+async function reconcile(root, tx) {
+  if (tx.phase !== "prepared") return;
+  if (hasEntry(tx.snapshot.path)) {
+    const bytes = readFileSync(join(tx.snapshot.path, "manifest.json"));
+    const candidate = { ...tx, snapshot: { ...tx.snapshot, manifestHash: digest(bytes), status: "retained" } };
+    snapshotFor(candidate);
+    syncDirectory(dirname(tx.snapshot.path));
+    tx.snapshot = candidate.snapshot;
+    await publish(root, tx);
+  }
+}
+async function takeSnapshot(root, tx) {
+  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+  must(current(root) === tx.source.id, "Pre-start source link changed");
+  await checkRelease(root, tx.source);
+  if (tx.phase === "prepared") {
+    if (hasEntry(tx.snapshot.path)) await reconcile(root, tx);
+    else {
+      await cleanupStage(root, tx, tx.snapshot.staging);
+      const result = await snapshot(tx.home, tx.snapshot.path, { uuid: tx.uuid, staging: tx.snapshot.staging, home: tx.home, sourceRelease: tx.source, targetRelease: tx.target });
+      tx.snapshot.manifestHash = result.sha256; tx.snapshot.status = "retained";
+    }
+    tx.phase = "snapshot-verified"; await publish(root, tx);
+  }
+  must(sameState(inventory(tx.home, true), snapshotFor(tx).entries), "Stopped state differs from verified snapshot; recover and take a new snapshot");
 }
 export async function guard(root, target, uuid, preflight = false) {
+  exclude(root, uuid);
+  const candidate = await release(root, target);
+  const retained = records(root).some(tx => ["retained", "prune-intent"].includes(tx.snapshot.status));
   if (!hasEntry(join(root, "current"))) {
-    must(!uuid, "State transaction requires an existing release");
-    await releaseIdentity(root, target);
-    return;
+    must(!uuid, "Transaction requires an existing release");
+    must(!retained || capable(root, target), "A retained v2 snapshot forbids activating a pre-N2 tool"); return;
   }
-  const source = await releaseIdentity(root, currentRelease(root));
-  const candidate = await releaseIdentity(root, target);
-  const refs = activeReferences(root);
+  const now = await release(root, current(root));
   if (!uuid) {
-    must(!unresolved(root).length, "Unresolved Codex transaction requires recovery");
-    must(refs.length === 0, "Retained Codex state requires a state-aware update/restore");
-    must(source.sha256 === candidate.sha256, "Codex native pin differs: use state-aware backup/restore");
+    must(now.sha256 === candidate.sha256, "Codex native pin differs: use state-aware backup/restore");
+    must(!retained || capable(root, target), "A retained v2 snapshot forbids activating a pre-N2 tool"); return;
+  }
+  requireUpdate(root);
+  const tx = selected(root, uuid);
+  await checkRelease(root, tx.source);
+  must(!terminal(tx), "Historical terminal record cannot authorize a switch");
+  const restoring = tx.phase === "replace-intent";
+  const expected = restoring ? tx.source : tx.target;
+  must(target === expected.id && candidate.sha256 === expected.sha256, "Transaction target differs");
+  const from = restoring ? tx.replacement.from.id : tx.source.id;
+  must([from, expected.id].includes(now.id), "Current is outside recorded operation");
+  needCapability(root, target);
+  checkBinding(root, tx.service, binding(tx), restoring && !hasEntry(tx.home));
+  if (preflight) return;
+  assertStopped(tx.service, tx.home);
+  if (restoring) {
+    must(tx.replacement.startRequested, "Restore start intent is missing");
+    verifyReplacement(tx);
+  } else {
+    must(["snapshot-verified", "start-intent"].includes(tx.phase), "Forward is not ready for switching");
+    const manifest = snapshotFor(tx);
+    if (now.id === tx.source.id) must(sameState(inventory(tx.home, true), manifest.entries), "Stopped state differs from verified snapshot; recover");
+    tx.phase = "start-intent"; save(root, tx);
+  }
+}
+function stateDigest(entries) { return digest(JSON.stringify(stateEntries(entries).map(({ size, ...entry }) => entry.type === "file" ? { ...entry, size } : entry))); }
+function verifyReplacement(tx) {
+  const r = tx.replacement;
+  if (hasEntry(tx.home) && !hasEntry(r.staging) && hasEntry(r.aside) && r.startRequested) return;
+  must(!hasEntry(tx.home) && hasEntry(r.staging) && hasEntry(r.aside), "Inconsistent home/staging/aside layout; preserve objects for manual repair");
+  must(stateDigest(inventory(r.staging, true)) === r.stateDigest, "Replacement state digest mismatch");
+  for (const name of CREDENTIALS) {
+    must(!hasEntry(join(r.aside, name)), "Credential remains in aside before promotion");
+    must(hasEntry(join(r.staging, name)) === r.credentials.includes(name), "Credential location mismatch before promotion");
+  }
+}
+async function admitRestore(root, tx, home, service, tool) {
+  exclude(root, tx.uuid);
+  must(!replacing(tx), "Replacement is already unfinished");
+  must(!["prepared", "snapshot-verified"].includes(tx.phase), "Use never-started source recovery");
+  const manifest = snapshotFor(tx);
+  must(home === tx.home && service.replace(/(?:\.service)?$/, ".service") === tx.service, "Restore home/service differs from selected record");
+  checkBinding(root, tx.service, binding(tx));
+  const from = await release(root, current(root));
+  await checkRelease(root, tx.source); needCapability(root, tx.source.id); await release(root, tool);
+  capacity(dirname(home), manifest.entries); requireCgroupV2();
+  must(lstatSync(home).dev === lstatSync(dirname(home)).dev, "Restore home and staging must share one filesystem");
+  const attempt = randomUUID(), aside = join(dirname(home), `.failed.codex-${attempt}`);
+  tx.replacement = { attempt, from, priorPhase: tx.phase, staging: join(dirname(home), `.restore.codex-${attempt}`), aside, credentials: [], promoted: false, startRequested: false };
+  tx.asides.push({ attempt, aside }); tx.phase = "restore-prepared"; tx.tool = tool;
+  await publish(root, tx);
+}
+async function prepareRollback(root, path, home, service, tool) {
+  requireUpdate(root);
+  const choices = records(root).filter(tx => tx.snapshot.path === path && tx.snapshot.status === "retained");
+  must(choices.length === 1, "No unique retained snapshot matches selection");
+  const tx = selected(root, choices[0].uuid);
+  await admitRestore(root, tx, home, service, tool); return tx.uuid;
+}
+async function stageRestore(root, tx) {
+  const r = tx.replacement;
+  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+  must(current(root) === r.from.id, "Restore source link changed");
+  await checkRelease(root, r.from); await checkRelease(root, tx.source);
+  await cleanupStage(root, tx, r.staging);
+  snapshotFor(tx);
+  const manifest = prepareRestore(tx.snapshot.path, tx.snapshot.manifestHash, tx.home, r.staging);
+  r.credentials = inventory(tx.home).filter(e => CREDENTIALS.includes(e.path)).map(e => e.path);
+  r.stateDigest = stateDigest(manifest.entries);
+  tx.phase = "replace-intent"; await publish(root, tx);
+}
+async function moveReplacement(root, tx) {
+  const r = tx.replacement;
+  assertStopped(tx.service, tx.home);
+  checkBinding(root, tx.service, binding(tx), !hasEntry(tx.home));
+  if (hasEntry(tx.home) && !hasEntry(r.staging) && hasEntry(r.aside) && r.startRequested) {
+    must(current(root) === tx.source.id, "Published restore home requires its source release");
     return;
   }
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  ownPending(root, tx);
-  lockOwner(root, tx);
-  must(tx.target.id === target && tx.source.id === source.id && tx.source.sha256 === source.sha256 && tx.target.sha256 === candidate.sha256, "Transaction release binding mismatch");
-  checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
-  if (preflight) return;
-  assertStopped(tx.service, tx.binding.home.path);
-  const { ref, manifest } = verifiedReference(root, tx.mode !== "forward" ? transaction(root, tx.backupUUID) : tx);
-  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
-  must(tx.phase === (tx.mode === "restore" ? "state-restored" : tx.mode === "code-recovery" ? "code-recovery-prepared" : "snapshot-verified"), "State transaction is not ready for switching");
-  must(sameState(inventory(tx.binding.home.path, true), manifest.entries), "Stopped state differs from verified snapshot");
-  tx.phase = "switch-authorized";
-  save(root, tx);
+  if (hasEntry(tx.home) && hasEntry(r.staging) && !hasEntry(r.aside) && !r.startRequested) {
+    must(stateDigest(inventory(r.staging, true)) === r.stateDigest, "Replacement staging changed");
+    inventory(tx.home); durableRename(tx.home, r.aside);
+  }
+  must(!hasEntry(tx.home) && hasEntry(r.staging) && hasEntry(r.aside), "Inconsistent home/staging/aside layout; preserve objects for manual repair");
+  for (const name of CREDENTIALS) {
+    const a = join(r.aside, name), s = join(r.staging, name);
+    const inAside = hasEntry(a), inStage = hasEntry(s);
+    if (!r.credentials.includes(name)) { must(!inAside && !inStage, "Unexpected credential during replacement"); continue; }
+    must(inAside !== inStage, "Credential must exist in exactly one location");
+    if (inAside) {
+      const st = lstatSync(a); must(!st.isSymbolicLink() && st.uid === process.getuid() && (st.isDirectory() || (st.isFile() && st.nlink === 1)), "Invalid credential entry");
+      durableRename(a, s);
+    }
+  }
+  verifyReplacement(tx);
+  syncDirectory(r.staging); syncDirectory(r.aside); syncDirectory(dirname(tx.home));
+  r.startRequested = true; await publish(root, tx);
 }
-export async function validatedRecoverySwitch(root, target, uuid) {
-  if (!uuid) return false;
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  if (tx.mode === "forward") return false;
-  recoveryLineage(root, tx, false);
-  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
-  await guard(root, target, uuid, true);
-  return true;
+function promote(root, uuid) {
+  const tx = selected(root, uuid);
+  syncDirectory(root);
+  if (tx.phase !== "replace-intent") return;
+  requireUpdate(root); directory(join(root, ".lock.links"));
+  must(current(root) === tx.source.id, "Source must be selected before home promotion");
+  verifyReplacement(tx);
+  const r = tx.replacement;
+  if (!hasEntry(tx.home)) durableRename(r.staging, tx.home);
+  syncDirectory(dirname(tx.home));
+  r.promoted = true; save(root, tx);
 }
-export async function validateRestoreAdmission(root, snapshotPath, home, service) {
-  must(unresolved(root).every(tx => tx.mode === "forward" && tx.snapshot === snapshotPath), PENDING);
-  const refs = activeReferences(root);
-  const selected = refs.find(ref => ref.snapshot === snapshotPath && !ref.restored);
-  must(selected, "No retained reference matches this snapshot");
-  const old = transaction(root, selected.uuid);
-  requireModern(old);
-  must(old.mode === "forward" && old.service === service, LINEAGE);
-  const candidates = refs.filter(ref => !ref.restored && ref.binding.home.path === home).sort((a, b) => a.order - b.order);
-  must(candidates.at(-1)?.uuid === selected.uuid, "Non-latest restore admission refused");
-  const { manifest } = verifiedReference(root, old);
-  must(manifest.source.path === home && old.binding.home.path === home &&
-    [old.source.id, old.target.id].includes(currentRelease(root)), "Restore admission binding/lineage mismatch");
-  const target = await releaseIdentity(root, old.source.id);
-  must(target.sha256 === old.source.sha256, "Backup source native changed");
-  return { recovery: true, source_revision: old.source.id, backup_uuid: old.uuid };
+function logicalSize(path) {
+  let bytes = 0;
+  const st = lstatSync(path);
+  must(!st.isSymbolicLink() && st.uid === process.getuid(), "Unsafe cleanup root");
+  if (st.isFile()) return st.size;
+  must(st.isDirectory(), "Unsafe cleanup entry");
+  for (const entry of readdirSync(path)) {
+    const child = join(path, entry), info = lstatSync(child);
+    bytes += info.isSymbolicLink() ? 0 : logicalSize(child);
+  }
+  return bytes;
 }
-async function prepare(root, target, home, destination, service, tool, owner) {
-  must(process.platform === "linux", "State-aware operation requires Linux");
-  must(hasEntry(join(root, ".lock.update")), "Update lock is required");
-  must(!unresolved(root).length, "Recover or accept the previous Codex state transaction first");
-  for (const ref of activeReferences(root)) requireModern(transaction(root, ref.uuid));
-  const source = await releaseIdentity(root, currentRelease(root));
-  const candidate = await releaseIdentity(root, target, true);
-  await releaseIdentity(root, tool, true);
-  const binding = captureBinding(root, service, home);
-  must(!hasEntry(destination) && resolve(destination) === destination && realpathSync(dirname(destination)) === dirname(destination), "Backup destination must be new and canonical");
-  identity(dirname(destination));
-  must(!inside(home, destination) && !inside(destination, home) && !inside(join(root, "releases"), destination) && !inside(destination, root), "Backup destination overlaps protected state/releases");
-  const entries = inventory(home);
-  const estimate = { backup: capacity(dirname(destination), entries), restore: capacity(dirname(home), entries) };
-  requireCgroupV2();
-  const p = init(root);
-  const uuid = randomUUID();
-  const tx = { schema: 1, bindingReceiptVersion: 1, uuid, root, mode: "forward", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target: candidate, tool, binding, service, snapshot: destination, staging: join(dirname(destination), `.staging.codex-${uuid}`), estimate, created: new Date().toISOString(), phase: "prepared" };
-  atomicJSON(join(root, ".lock.update", "codex-owner.json"), { schema: 1, uuid, owner: tx.owner });
-  atomicJSON(join(p.transactions, `${uuid}.json`), tx);
-  return uuid;
+async function cleanupStage(root, tx, path) {
+  if (!hasEntry(path)) {
+    if (tx.cleanup?.path === path && tx.cleanup.pending) { syncDirectory(dirname(path)); tx.cleanup.pending = false; await publish(root, tx); }
+    return;
+  }
+  directory(path);
+  tx.cleanup = { path, bytes: logicalSize(path), pending: true }; await publish(root, tx);
+  try { rmSync(path, { recursive: true }); syncDirectory(dirname(path)); tx.cleanup.pending = false; await publish(root, tx); }
+  catch (error) { throw new Error(`Owned staging cleanup remains pending: ${path}: ${error.message}`); }
 }
-async function takeSnapshot(root, uuid) {
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  lockOwner(root, tx);
-  must(tx.phase === "prepared", "Transaction is not prepared");
-  checkBinding(root, tx.service, tx.binding);
-  assertStopped(tx.service, tx.binding.home.path);
-  tx.phase = "stopped"; save(root, tx);
-  const result = await snapshot(tx.binding.home.path, tx.snapshot, { uuid, staging: tx.staging, sourceRelease: tx.source, targetRelease: tx.target, binding: tx.binding, created: new Date().toISOString() });
-  atomicJSON(join(paths(root).backups, `${uuid}.json`), { schema: 1, uuid, snapshot: tx.snapshot, manifestHash: result.sha256, source: tx.source, target: tx.target, tool: tx.tool, binding: tx.binding, order: tx.order, created: tx.created, retired: false, restored: false });
-  tx.phase = "snapshot-verified"; save(root, tx);
+async function returnSource(root, tx) {
+  must(current(root) === tx.source.id, "Source link changed before recovery");
+  checkBinding(root, tx.service, binding(tx)); await checkRelease(root, tx.source);
+  if (tx.phase === "prepared") {
+    try { await reconcile(root, tx); }
+    catch { console.error(`codex-state: unverifiable snapshot left for explicit prune: ${tx.snapshot.path}`); }
+  }
+  if (!hasEntry(tx.snapshot.path)) tx.snapshot.status = "retired";
+  let cleanupError;
+  try { await cleanupStage(root, tx, tx.snapshot.staging); } catch (error) { cleanupError = error; }
+  await withLock(root, ".lock.links", async () => {
+    const latest = selected(root, tx.uuid);
+    must(["prepared", "snapshot-verified", "failed"].includes(latest.phase) && latest.source.id === tx.source.id && latest.source.sha256 === tx.source.sha256, "Source return phase changed before restart");
+    tx.phase = "failed"; save(root, tx);
+    const activity = runnerActivity(tx.service);
+    if (activity !== "active") systemctl(tx.service, "start");
+    await postStart(root, tx, tx.source, "source");
+  });
+  if (cleanupError) throw cleanupError;
 }
-async function beforeStart(root, uuid) {
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  ownPending(root, tx);
-  lockOwner(root, tx);
-  if (tx.mode === "code-recovery") assertNeverStarted(root, tx);
-  must(tx.phase === "switch-authorized" && currentRelease(root) === tx.target.id, "Switch did not reach the recorded target");
-  const current = await releaseIdentity(root, tx.target.id);
-  must(current.sha256 === tx.target.sha256, "Target native changed after switch");
-  checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
-  assertStopped(tx.service, tx.binding.home.path);
-  const { ref, manifest } = verifiedReference(root, tx.mode !== "forward" ? transaction(root, tx.backupUUID) : tx);
-  must(sameState(inventory(tx.binding.home.path, true), manifest.entries), "Stopped state changed before startup");
-  tx.phase = "start-attempted"; save(root, tx);
+async function postStart(root, tx, expected, role = "completion") {
+  const completing = role === "completion";
+  const latest = selected(root, tx.uuid);
+  must(latest.phase === tx.phase, "Startup phase changed during service operation");
+  // Cancellation may return to failed, whose original source is historical.
+  const recorded = completing ? (replacing(latest) ? latest.source : latest.target) : role === "source" ? latest.source : latest.phase === "restore-prepared" ? latest.replacement.from : expected;
+  must(recorded.id === expected.id && recorded.sha256 === expected.sha256, "Startup release changed during service operation");
+  must(runnerActivity(tx.service) === "active", "Runner did not become active with a positive MainPID");
+  must(current(root) === expected.id, "Current differs from startup target");
+  await checkRelease(root, expected); captureBinding(root, tx.service, tx.home);
+  try {
+    execFileSync("/bin/sh", ["-c", 'deploy_dir=$1; . "$deploy_dir/kaoiro-runner-common.sh"; kaoiro_read_machine_identity "$2" "$3" "$4"', "codex-state-attestation", deploy, join(root, "current"), expected.id.replace(/-dirty$/, ""), expected.id.endsWith("-dirty") || expected.id === "unknown" ? "yes" : "no"], { env: { ...process.env, KAOIRO_NODE: process.execPath }, stdio: ["ignore", "pipe", "pipe"] });
+  } catch { throw new Error("Runner artifact attestation failed after start"); }
+  if (completing) { latest.phase = replacing(latest) ? "restored" : "completed"; await publish(root, latest); }
 }
-function assertNeverStarted(root, tx) {
-  const original = transaction(root, tx.backupUUID);
-  must(original.mode === "forward" && ["snapshot-verified", "switch-authorized"].includes(original.phase), "Cannot prove candidate never started");
-  must(tx.target.id === original.source.id && tx.target.sha256 === original.source.sha256, "Code recovery must return to original source");
+function stopRunner(service) {
+  try { systemctl(service, "stop"); }
+  catch (error) {
+    if (Number.isInteger(error.serviceStatus) && error.serviceStatus > 0 && error.serviceStatus < 126) error.exitCode = error.serviceStatus;
+    throw error;
+  }
 }
-async function prepareRecovery(root, uuid, owner) {
-  const original = transaction(root, uuid);
-  requireModern(original);
-  lockOwner(root, original);
-  const neverStarted = original.mode === "forward" && ["snapshot-verified", "switch-authorized"].includes(original.phase);
-  return prepareRollback(root, original.snapshot, original.binding.home.path, original.service, original.tool, owner, neverStarted ? original.uuid : undefined);
+async function run(root, uuid, mode, allowDirty = "no") {
+  must(["resume", "recover"].includes(mode), "Unknown Codex operation mode");
+  must(["yes", "no"].includes(allowDirty), "Invalid development activation option");
+  requireUpdate(root); exclude(root, uuid);
+  let tx = selected(root, uuid);
+  const returningSource = mode === "recover" && ["prepared", "snapshot-verified", "failed"].includes(tx.phase);
+  const beganActive = runnerActivity(tx.service) === "active";
+  const tool = readFileSync(join(deploy, "../VERSION"), "utf8").trim();
+  must(tx.tool === tool, "Use the recorded physical updater tool");
+  try {
+    const admissible = replacing(tx) ? [tx.replacement.from.id, tx.source.id] : tx.phase === "start-intent" ? [tx.source.id, tx.target.id] : [tx.source.id];
+    if (!terminal(tx) || returningSource) must(admissible.includes(current(root)), "Current is outside recorded operation");
+    checkBinding(root, tx.service, binding(tx), tx.phase === "replace-intent" && !hasEntry(tx.home));
+    if (terminal(tx) && !returningSource) return;
+    if (returningSource) {
+      if (runnerActivity(tx.service) === "active") stopRunner(tx.service);
+      await returnSource(root, tx); return;
+    }
+    if (mode === "recover" && tx.phase === "restore-prepared") {
+      const r = tx.replacement;
+      must(current(root) === r.from.id, "Cancellation source link changed");
+      await checkRelease(root, r.from);
+      await cleanupStage(root, tx, r.staging);
+      tx.phase = r.priorPhase; delete tx.replacement;
+      await withLock(root, ".lock.links", async () => { save(root, tx); if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start"); await postStart(root, tx, r.from, "unchanged"); }); return;
+    }
+    if (mode === "recover" && tx.phase === "start-intent") await admitRestore(root, tx, tx.home, tx.service, tool);
+    if (tx.phase === "start-intent" && current(root) === tx.target.id && runnerActivity(tx.service) === "active") { await postStart(root, tx, tx.target); return; }
+    const priorPhase = tx.phase;
+    if (runnerActivity(tx.service) === "active") stopRunner(tx.service);
+    tx = selected(root, uuid);
+    must(tx.phase === priorPhase, "Phase changed during stop");
+    assertStopped(tx.service, tx.home);
+    if (["prepared", "snapshot-verified"].includes(tx.phase)) await takeSnapshot(root, tx);
+    if (tx.phase === "restore-prepared") await stageRestore(root, tx);
+    if (tx.phase === "replace-intent") await moveReplacement(root, tx);
+    const target = replacing(tx) ? tx.source : tx.target;
+    execFileSync(join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { stdio: ["ignore", "pipe", "inherit"] });
+    tx = selected(root, uuid);
+    must(tx.phase === (replacing(tx) ? "replace-intent" : "start-intent"), "Startup phase changed after switch");
+    assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+    must(current(root) === target.id, "Switch did not reach recorded target");
+    await checkRelease(root, target);
+    systemctl(tx.service, "start");
+    await postStart(root, tx, target);
+  } catch (error) {
+    tx = selected(root, uuid);
+    if (tx.phase === "restore-prepared" && beganActive) {
+      try {
+        const from = tx.replacement.from;
+        await withLock(root, ".lock.links", async () => {
+          must(current(root) === from.id, "Restore source link changed before restart");
+          checkBinding(root, tx.service, binding(tx)); await checkRelease(root, from);
+          if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start");
+          await postStart(root, tx, from, "unchanged");
+        });
+        console.error("codex-state: unchanged source was resumed");
+      } catch (recovery) { console.error(`codex-state: source recovery refused: ${recovery.message}`); }
+    }
+    if (["prepared", "snapshot-verified"].includes(tx.phase)) {
+      try { await returnSource(root, tx); console.error("codex-state: unchanged source was resumed"); }
+      catch (recovery) { console.error(`codex-state: source recovery refused: ${recovery.message}`); }
+    }
+    console.error(`codex-state: ${join(deploy, "kaoiro-runner-update.sh")} --install-dir "${root}" --resume-codex-transaction ${uuid}; or --recover-codex-transaction ${uuid}`);
+    throw error;
+  }
 }
-async function prepareRollback(root, snapshotPath, home, service, tool, owner, neverStartedUUID) {
-  must(unresolved(root).every((tx) => tx.mode === "forward" && tx.snapshot === snapshotPath), PENDING);
-  const refs = activeReferences(root);
-  const selected = refs.find((r) => r.snapshot === snapshotPath && !r.restored);
-  must(selected, "No retained reference matches this snapshot");
-  const old = transaction(root, selected.uuid);
-  requireModern(old);
-  // Defence in depth: only takeSnapshot writes backup references, always for a
-  // forward, so this fails only for a forged reference and transaction pair.
-  must(old.mode === "forward", LINEAGE);
-  const candidates = refs.filter((r) => !r.restored && r.binding.home.path === home).sort((a, b) => a.order - b.order);
-  must(candidates.at(-1)?.uuid === selected.uuid, `Non-latest restore refused; intervening transactions: ${candidates.filter((r) => r.order > selected.order).map((r) => r.uuid).join(", ")}`);
-  const { manifest: original } = verifiedReference(root, old);
-  must(original.source.path === home && old.binding.home.path === home, "Restore home binding mismatch");
-  const now = currentRelease(root);
-  must([old.source.id, old.target.id].includes(now), "Restore would skip release/state lineage");
-  const binding = staticBinding(root, service, home);
-  await releaseIdentity(root, tool, true);
-  const source = await releaseIdentity(root, now);
-  checkBinding(root, service, acceptedHome(root, old, source));
-  // A running restore must also prove the live environment, not just config.
-  try { assertStopped(service, home); } catch { captureBinding(root, service, home); }
-  const target = await releaseIdentity(root, old.source.id);
-  must(target.sha256 === old.source.sha256, "Backup source native changed");
-  capacity(dirname(home), original.entries);
-  requireCgroupV2();
-  const uuid = randomUUID();
-  const tx = { schema: 1, bindingReceiptVersion: 1, uuid, root, mode: neverStartedUUID ? "code-recovery" : "restore", order: Math.max(0, ...records(root, "transactions").map((r) => r.order || 0)) + 1, owner: liveOwner(owner), source, target, tool, binding: { ...binding, live: old.binding.live }, service, backupUUID: old.uuid, snapshot: snapshotPath, staging: join(dirname(home), `.restore.codex-${uuid}`), quarantine: join(dirname(home), `.failed.codex-${uuid}`), phase: neverStartedUUID ? "code-recovery-prepared" : "restore-prepared", created: new Date().toISOString() };
-  atomicJSON(join(root, ".lock.update", "codex-owner.json"), { schema: 1, uuid, owner: tx.owner });
-  save(root, tx);
-  return uuid;
-}
-async function restartSource(root, uuid, running = false) {
-  must(hasEntry(join(root, ".lock.links")), "Source restart requires the links lock");
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  ownPending(root, tx);
-  lockOwner(root, tx);
-  must((tx.mode === "forward" && ["prepared", "stopped"].includes(tx.phase)) || (tx.mode === "restore" && tx.phase === "restore-prepared"), "Source restart is unsafe after state preparation or target authorization");
-  must(currentRelease(root) === tx.source.id, "Source link changed before restart");
-  must(canon(await releaseIdentity(root, tx.source.id)) === canon(tx.source), "Source release changed before restart");
-  checkBinding(root, tx.service, tx.binding);
-  const activity = runnerActivity(tx.service);
-  if (running) must(activity === "active", "Source restart did not reach an active runner");
-  if (activity === "active") captureBinding(root, tx.service, tx.binding.home.path);
-  return tx.source.id;
-}
-function restore(root, uuid) {
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  lockOwner(root, tx);
-  if (tx.mode === "code-recovery") return;
-  must(tx.mode === "restore" && tx.phase === "restore-prepared", "Restore transaction is not prepared");
-  checkBinding(root, tx.service, tx.binding);
-  assertStopped(tx.service, tx.binding.home.path);
-  const { ref } = verifiedReference(root, transaction(root, tx.backupUUID));
-  prepareRestore(ref.snapshot, ref.manifestHash, tx.binding.home.path, tx.staging);
-  tx.phase = "restore-intent"; save(root, tx);
-  promoteRestore(tx.binding.home.path, tx.staging, tx.quarantine, (phase) => { tx.phase = phase; save(root, tx); });
+async function prune(root, uuid) {
+  const tx = selected(root, uuid); exclude(root, uuid);
+  must(terminal(tx), "Prune requires a terminal operation");
+  if (tx.cleanup?.pending) await cleanupStage(root, tx, tx.cleanup.path);
+  if (tx.snapshot.status === "retired") return;
+  await withLock(root, ".lock.links", () => {
+    const path = tx.snapshot.path;
+    disjoint(root, tx.home, path); directory(dirname(path));
+    if (hasEntry(path)) {
+      const st = lstatSync(path); directory(path);
+      if (tx.snapshot.status === "prune-intent") must(st.dev === tx.prune.dev && st.ino === tx.prune.ino, "Snapshot root identity changed during prune");
+      else { tx.prune = { path, dev: st.dev, ino: st.ino, bytes: logicalSize(path), removed: false }; tx.snapshot.status = "prune-intent"; save(root, tx); }
+      rmSync(path, { recursive: true });
+    }
+    syncDirectory(dirname(path));
+    if (tx.prune) tx.prune.removed = true;
+    tx.snapshot.status = "retired"; save(root, tx);
+  });
 }
 function protectedReleases(root) {
   const ids = new Set();
-  for (const ref of activeReferences(root)) {
-    must(ID.test(ref.source.id) && ID.test(ref.tool), "Invalid protected release record");
-    ids.add(ref.source.id); ids.add(ref.tool);
-  }
-  for (const tx of records(root, "transactions")) {
-    if (!["completed", "restored", "retired"].includes(tx.phase)) { ids.add(tx.source.id); ids.add(tx.tool); }
+  for (const tx of records(root)) {
+    if (["retained", "prune-intent"].includes(tx.snapshot.status)) ids.add(tx.source.id);
+    if (!terminal(tx)) { ids.add(tx.source.id); ids.add(replacing(tx) ? tx.replacement.from.id : tx.target.id); ids.add(tx.tool); }
+    if (tx.cleanup?.pending) console.error(`codex-state: pending owned staging cleanup: ${recordPath(root, tx.uuid)}`);
   }
   return [...ids].join("\n");
 }
-async function accept(root, uuid, evidenceFile) {
-  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Acceptance requires update and links locks");
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  must(tx.phase === "awaiting-acceptance", "Transaction has not reached startup checks");
-  const proof = async () => {
-    must(currentRelease(root) === tx.target.id, "Acceptance target is not current");
-    const native = await releaseIdentity(root, tx.target.id);
-    must(native.sha256 === tx.target.sha256, "Acceptance native mismatch");
-    const captured = captureBinding(root, tx.service, tx.binding.home.path);
-    checkBinding(root, tx.service, tx.binding, tx.mode === "restore");
-    const evidence = readJSON(evidenceFile);
-    must(evidence.uuid === uuid && evidence.nativeHash === native.sha256 && evidence.codexStart === true && (evidence.history === true || evidence.explicitNewSession === true), "Acceptance requires actual Codex start and history or explicit new-session evidence");
-    return { captured, evidenceHash: digest(readFileSync(evidenceFile)) };
-  };
-  const first = await proof();
-  const binding = { ...first.captured };
-  delete binding.live;
-  // checkBinding in proof() established live static binding == tx.binding
-  // (a restore may differ in home dev/ino), the relation validateReceipt
-  // enforces, so done is not re-validated: a persisted invalid receipt would
-  // make every records() scan refuse.
-  const done = { ...tx, acceptance: { version: 1, evidenceHash: first.evidenceHash, accepted: new Date().toISOString(), binding }, sequence: Math.max(0, ...records(root, "transactions").map((r) => r.sequence || 0)) + 1, phase: tx.mode !== "forward" ? "restored" : "completed" };
-  // Settlement comes first so a failed write leaves this transaction
-  // awaiting acceptance, and a rerun of accept finishes it.
-  if (tx.mode !== "forward") {
-    const { original, ref } = recoveryLineage(root, tx, false);
-    if (!ref.restored) { ref.restored = true; atomicJSON(join(paths(root).backups, `${ref.uuid}.json`), ref); }
-    if (original.phase !== "restored") { original.phase = "restored"; save(root, original); }
-  }
-  const last = await proof();
-  must(canon(last.captured) === canon(first.captured) && last.evidenceHash === first.evidenceHash, "Acceptance state changed during settlement");
-  save(root, done);
-}
-async function retire(root, uuid, evidenceFile) {
-  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Retirement requires both locks");
-  const tx = transaction(root, uuid), ref = reference(root, tx);
-  must(["completed", "restored"].includes(tx.phase), "Cannot retire an incomplete transaction");
-  await releaseIdentity(root, currentRelease(root));
-  must(!records(root, "transactions").some((r) => r.backupUUID === uuid && !["restored", "retired"].includes(r.phase)), "Recovery still depends on this snapshot");
-  if (!isLegacy(tx) && tx.phase === "restored") {
-    const recoveries = records(root, "transactions").filter((r) => r.backupUUID === uuid && r.acceptance !== undefined);
-    must(recoveries.length === 1, LINEAGE);
-    recoveryLineage(root, recoveries[0], true);
-  }
-  const evidence = readJSON(evidenceFile);
-  must(evidence.uuid === uuid && evidence.gate6 === true && evidence.productionCodexStart === true && (evidence.productionHistory === true || evidence.explicitNewSession === true) && evidence.abandonRollback === true, "Explicit accepted migration and rollback-retirement evidence is required");
-  if (!ref.retired) {
-    verifySnapshot(ref.snapshot, ref.manifestHash);
-    ref.retired = true; ref.retirementEvidence = digest(readFileSync(evidenceFile));
-    atomicJSON(join(paths(root).backups, `${uuid}.json`), ref);
-  }
-  if (hasEntry(ref.snapshot)) {
-    verifySnapshot(ref.snapshot, ref.manifestHash);
-    rmSync(ref.snapshot, { recursive: true });
-  }
-  tx.phase = "retired"; save(root, tx);
-  console.log(JSON.stringify({ retired: uuid, removedSnapshot: ref.snapshot, released: [ref.source.id, ref.tool] }));
-}
-// Without the update lock record, only /proc can prove the owner gone.
-function ownerState(owner) {
-  must(exact(owner, ["pid", "start"]) && Number.isSafeInteger(owner.pid) && owner.pid > 1 && typeof owner.start === "string", "Malformed state transaction owner");
-  let stat;
-  try { stat = readFileSync(`/proc/${owner.pid}/stat`, "utf8"); }
-  catch (error) { if (error.code === "ENOENT") return "absent"; throw error; }
-  must(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] !== owner.start, "State transaction owner is still running");
-  return "pid-reused";
-}
-// A forward that never wrote its snapshot changed nothing but its own record.
-// It ends as `retired`, which every released copy of this tool can still read.
-function abandon(root, uuid) {
-  must(process.platform === "linux", "State-aware operation requires Linux");
-  must(hasEntry(join(root, ".lock.update")) && hasEntry(join(root, ".lock.links")), "Abandonment requires both locks");
-  const tx = transaction(root, uuid);
-  requireModern(tx);
-  must(tx.mode === "forward" && ["prepared", "stopped"].includes(tx.phase), "Only a forward that stopped before its snapshot can be abandoned");
-  const ownerStatus = ownerState(tx.owner);
-  must(tx.staging === join(dirname(tx.snapshot), `.staging.codex-${uuid}`), "Transaction staging path is not its own");
-  const written = "Snapshot or staging exists; recover instead of abandoning";
-  must(!hasEntry(tx.snapshot), written);
-  must(!hasEntry(tx.staging), written);
-  must(!hasEntry(join(paths(root).backups, `${uuid}.json`)), written);
-  const phase = tx.phase;
-  tx.abandonment = { version: 1, abandoned: new Date().toISOString(), phase, ownerStatus };
-  tx.phase = "retired"; save(root, tx);
-  console.log(JSON.stringify({ abandoned: uuid, phase }));
-}
+const ACTIONS = ["guard", "preflight", "prepare", "prepare-restore", "run", "resume", "recover", "prune", "promote", "inspect", "inventory", "summary", "target", "protected", "classify"];
 async function main(argv) {
   const [action, rootArg, ...args] = argv;
+  must(ACTIONS.includes(action), "Unknown Codex state action");
   const root = realpathSync(rootArg);
   if (action === "guard" || action === "preflight") await guard(root, args[0], args[1] || undefined, action === "preflight");
   else if (action === "prepare") console.log(await prepare(root, ...args));
-  else if (action === "snapshot") await takeSnapshot(root, args[0]);
-  else if (action === "before-start") await beforeStart(root, args[0]);
-  else if (action === "started") { const tx = transaction(root, args[0]); requireModern(tx); lockOwner(root, tx); must(tx.phase === "start-attempted", "Invalid startup phase"); tx.phase = "awaiting-acceptance"; save(root, tx); }
-  else if (action === "prepare-recovery") console.log(await prepareRecovery(root, ...args));
-  else if (action === "summary") { const { uuid, mode, phase } = transaction(root, args[0]); console.log(JSON.stringify({ uuid, mode, phase })); }
   else if (action === "prepare-restore") console.log(await prepareRollback(root, ...args));
-  else if (action === "restore") restore(root, args[0]);
-  else if (action === "restart-source-check" || action === "restart-source-verify") console.log(await restartSource(root, args[0], action === "restart-source-verify"));
-  else if (action === "inspect") console.log(JSON.stringify(transaction(root, args[0]), null, 2));
-  else if (action === "target") console.log(transaction(root, args[0]).target.id);
+  else if (action === "run") await run(root, args[0], args[1], args[2]);
+  else if (action === "resume" || action === "recover") await withLock(root, ".lock.update", () => run(root, args[0], action, args[1]));
+  else if (action === "prune") await withLock(root, ".lock.update", () => prune(root, args[0]));
+  else if (action === "promote") promote(root, args[0]);
   else if (action === "protected") console.log(protectedReleases(root));
-  else if (action === "retire") await retire(root, ...args);
-  else if (action === "abandon") abandon(root, args[0]);
-  else if (action === "accept") await accept(root, ...args);
-  else if (action === "classify") console.log(JSON.stringify(inventory(root), null, 2));
-  else throw new Error("Unknown Codex state action");
+  else if (action === "inventory") console.log(JSON.stringify({ old: { transactions: filenames(join(root, "codex-state/transactions")), backups: filenames(join(root, "codex-state/backups")) }, records: filenames(recordDir(root)) }));
+  else if (action === "classify") console.log(JSON.stringify(inventory(root)));
+  else {
+    const tx = selected(root, args[0]);
+    if (action === "inspect") console.log(JSON.stringify(tx, null, 2));
+    else if (action === "target") console.log(replacing(tx) ? tx.source.id : tx.target.id);
+    else console.log(JSON.stringify({ uuid: tx.uuid, phase: tx.phase, snapshot: tx.snapshot.status }));
+  }
 }
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(import.meta.filename)) {
-  const argv = process.argv.slice(2);
-  const locked = [];
-  try {
-    if (["accept", "retire", "abandon"].includes(argv[0])) {
-      for (const name of [".lock.update", ".lock.links"]) {
-        const path = join(realpathSync(argv[1]), name);
-        mkdirSync(path, { mode: 0o700 }); locked.push(path);
-      }
-    }
-    await main(argv);
-  } catch (error) {
-    console.error(`codex-state: ${error.message}`); process.exitCode = 78;
-  } finally {
-    for (const path of locked.reverse()) rmdirSync(path);
-  }
+  try { await main(process.argv.slice(2)); }
+  catch (error) { console.error(`codex-state: ${error.message}`); process.exitCode = error.exitCode || 78; }
 }
