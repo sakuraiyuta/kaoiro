@@ -333,3 +333,30 @@ runner or wrapper connects. Health advertises `build_identity_formats`; the
 deploy compatibility guard reads a fresh bounded connected-fleet snapshot before
 STOPPING and before either rollback path. See
 [ADR-0066](../../adr/0066-tag-derived-lockstep-build-identity.md).
+
+### Work settings (version 0)
+
+| Direction | Event | Contract |
+|---|---|---|
+| client → server | `get_work_settings` | Operator/admin-only `{version:"0"}`; authoritative ready snapshot plus at most 100 changes, or blocked reason/message. |
+| client → server | `set_work_settings` | Operator/admin-only `{version:"0",expected_revision,changes}`. Nonempty patch of `work_nominated_per_principal` and/or `work_active_per_assignee`; integers 0..2147483647 override, null removes an override. Live credential is checked again inside WorkStore serialization. |
+| server → client | `work_settings` | Intercepted operator/admin-only join/live snapshot. Ready: `{version:"0",state:"ready",revision,overrides,effective,fallbacks,sources,last_change}`. Unavailable: `{version:"0",state:"unavailable",reason,message}`, no revision/values/audit. |
+
+Both inbound events use the existing operator receiver-version policy. The
+outbound event uses the checked client-version policy. Viewers receive neither
+ready nor unavailable branch. A ready-to-blocked notification is not an accepted
+update. Compare revisions only between ready snapshots; unavailable always wins,
+and reconnect clears prior state before a fresh snapshot.
+
+Request errors include `invalid_work_settings`, `revision_conflict` (with current
+`revision`) and `revision_exhausted`. Blocked errors are `work_settings_corrupt`
+and `work_settings_unknown`, with the fixed messages in
+[server configuration](../configuration/server.md#unavailable-settings). They
+also apply to operator work-control replies. Successful changes are persisted,
+synced and validated by readback before acknowledgement/broadcast; no-op changes
+do not advance revision or audit.
+
+Work-control capacity errors on both operator and wrapper channels keep
+`reason:"work_capacity"` and may include `details.capacity:{limit,scope,maximum}`.
+The transport and MCP preserve validated diagnostics; old replies without them
+and unknown future details remain refusals. See [capacity vocabulary](../inter-agent/work.md#admission-capacity-and-saved-settings).

@@ -229,8 +229,8 @@ defmodule KaoiroServer.WorkReducer do
         candidate.state == "active" and candidate.assignee == work.assignee
       end)
 
-    if active >= config[:work_active_per_assignee],
-      do: {:error, :work_capacity},
+    if limited?(active, config[:work_active_per_assignee]),
+      do: capacity(:work_active_per_assignee, :assignee, config[:work_active_per_assignee]),
       else: updated(work, works, %{state: "active", revision: 1})
   end
 
@@ -245,7 +245,7 @@ defmodule KaoiroServer.WorkReducer do
   defp apply_op(works, work, _principal, %{"op" => "hold", "reason" => reason}, config)
        when is_binary(reason) and reason != "" do
     if length(work.holds) >= config[:work_pending_transfers] * 2 do
-      {:error, :work_capacity}
+      capacity(:work_pending_transfers, :holds, config[:work_pending_transfers] * 2)
     else
       hold = %{hold_id: random_id("hold_"), reason: reason, set_at_revision: work.revision + 1}
 
@@ -312,7 +312,7 @@ defmodule KaoiroServer.WorkReducer do
         {:error, :work_state_conflict}
 
       length(work.verdicts) >= config[:work_verdicts_per_work] ->
-        {:error, :work_capacity}
+        capacity(:work_verdicts_per_work, :work, config[:work_verdicts_per_work])
 
       true ->
         verdict = %{
@@ -381,7 +381,11 @@ defmodule KaoiroServer.WorkReducer do
         {:error, :subject_mismatch}
 
       length(work.accepted_verdicts) >= config[:work_accepted_verdicts_per_work] ->
-        {:error, :work_capacity}
+        capacity(
+          :work_accepted_verdicts_per_work,
+          :work,
+          config[:work_accepted_verdicts_per_work]
+        )
 
       true ->
         ref = %{
@@ -459,7 +463,7 @@ defmodule KaoiroServer.WorkReducer do
 
       changed_writer? and
           Enum.count(work.transfers, &(&1.state == "pending")) >= config[:work_pending_transfers] ->
-        {:error, :work_capacity}
+        capacity(:work_pending_transfers, :transfers, config[:work_pending_transfers])
 
       true ->
         epoch = work.authority_epoch + 1
@@ -572,7 +576,7 @@ defmodule KaoiroServer.WorkReducer do
   defp link_capacity(work, %{new_conversation?: true, conversation_id: cid}) do
     if cid in work.links or length(work.links) < @max_links,
       do: :ok,
-      else: {:error, :work_capacity}
+      else: capacity(:work_links_per_work, :work, @max_links)
   end
 
   defp link_capacity(_work, _context), do: :ok
@@ -614,8 +618,20 @@ defmodule KaoiroServer.WorkReducer do
         acc + Enum.count(w.receipts, &(&1.principal == principal))
       end)
 
-    if per_work >= config[:work_receipts_per_work_principal] or
-         total >= config[:work_receipts_per_principal], do: {:error, :work_capacity}, else: :ok
+    cond do
+      per_work >= config[:work_receipts_per_work_principal] ->
+        capacity(
+          :work_receipts_per_work_principal,
+          :work_principal,
+          config[:work_receipts_per_work_principal]
+        )
+
+      total >= config[:work_receipts_per_principal] ->
+        capacity(:work_receipts_per_principal, :principal, config[:work_receipts_per_principal])
+
+      true ->
+        :ok
+    end
   end
 
   defp global_receipt_capacity(works, principal, config) do
@@ -624,7 +640,10 @@ defmodule KaoiroServer.WorkReducer do
         count + Enum.count(work.receipts, &(&1.principal == principal))
       end)
 
-    if total >= config[:work_receipts_per_principal], do: {:error, :work_capacity}, else: :ok
+    if total >= config[:work_receipts_per_principal],
+      do:
+        capacity(:work_receipts_per_principal, :principal, config[:work_receipts_per_principal]),
+      else: :ok
   end
 
   defp check_capacity(works, principal, assignee, config, operator?) do
@@ -639,20 +658,29 @@ defmodule KaoiroServer.WorkReducer do
 
     cond do
       map_size(works) >= config[:work_max_records] ->
-        {:error, :work_capacity}
+        capacity(:work_max_records, :store, config[:work_max_records])
 
-      operator? and active >= config[:work_active_per_assignee] ->
-        {:error, :work_capacity}
+      operator? and limited?(active, config[:work_active_per_assignee]) ->
+        capacity(:work_active_per_assignee, :assignee, config[:work_active_per_assignee])
 
-      not operator? and
-          (nominated_by >= config[:work_nominated_per_principal] or
-             nominated_to >= config[:work_nominated_per_principal]) ->
-        {:error, :work_capacity}
+      not operator? and limited?(nominated_by, config[:work_nominated_per_principal]) ->
+        capacity(:work_nominated_per_principal, :director, config[:work_nominated_per_principal])
+
+      not operator? and limited?(nominated_to, config[:work_nominated_per_principal]) ->
+        capacity(:work_nominated_per_principal, :assignee, config[:work_nominated_per_principal])
 
       true ->
         :ok
     end
   end
+
+  defp limited?(count, maximum), do: maximum != 0 and count >= maximum
+
+  defp capacity(limit, scope, maximum),
+    do:
+      {:error,
+       {:work_capacity,
+        %{limit: Atom.to_string(limit), scope: Atom.to_string(scope), maximum: maximum}}}
 
   defp review_authority(_works, _principal, nil), do: :ok
 

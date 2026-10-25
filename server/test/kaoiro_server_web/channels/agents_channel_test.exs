@@ -36,9 +36,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     before = map_size(WorkStore.all())
 
-    assert_reply push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
-                 :error,
-                 %{reason: "forbidden"}
+    assert_reply(
+      push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
+      :error,
+      %{reason: "forbidden"}
+    )
 
     assert map_size(WorkStore.all()) == before
   end
@@ -55,9 +57,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "requires_verdict" => false
     }
 
-    assert_reply push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
-                 :ok,
-                 %{"work_control_result" => %{work: %{work_id: work_id, state: "active"}}}
+    assert_reply(
+      push(socket, "work_control", %{"version" => "0", "work_control" => operation}),
+      :ok,
+      %{"work_control_result" => %{work: %{work_id: work_id, state: "active"}}}
+    )
 
     assert {:ok, %{work: %{work_id: ^work_id, state: "active"}}} =
              WorkStore.status(%{"kind" => "user", "id" => "operator"}, work_id)
@@ -86,17 +90,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       })
 
-    assert_reply push(wrapper, "envelope", %{
-                   "version" => "0",
-                   "agent_id" => assignee,
-                   "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
-                   "ts" => "2026-09-28T00:00:00Z",
-                   "type" => "state_change",
-                   "state" => "idle",
-                   "payload" => %{},
-                   "ext" => %{}
-                 }),
-                 :ok
+    assert_reply(
+      push(wrapper, "envelope", %{
+        "version" => "0",
+        "agent_id" => assignee,
+        "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
+        "ts" => "2026-09-28T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "payload" => %{},
+        "ext" => %{}
+      }),
+      :ok
+    )
 
     on_exit(fn -> DeliveryStates.delete(assignee) end)
     assert AgentStates.connected?(assignee)
@@ -112,8 +118,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "director" => %{"kind" => "agent", "id" => "work-notice-director-#{suffix}"}
     }
 
-    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
-                 :ok
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+      :ok
+    )
 
     assert_receive %Phoenix.Socket.Broadcast{
       topic: "wrapper:" <> ^assignee,
@@ -141,17 +149,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "work_control" => "v1"
       })
 
-    assert_reply push(wrapper, "envelope", %{
-                   "version" => "0",
-                   "agent_id" => old,
-                   "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
-                   "ts" => "2026-09-28T00:00:00Z",
-                   "type" => "state_change",
-                   "state" => "idle",
-                   "payload" => %{},
-                   "ext" => %{}
-                 }),
-                 :ok
+    assert_reply(
+      push(wrapper, "envelope", %{
+        "version" => "0",
+        "agent_id" => old,
+        "persona" => %{"id" => "mio", "name" => "Mio", "sprite_set" => "mio"},
+        "ts" => "2026-09-28T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "payload" => %{},
+        "ext" => %{}
+      }),
+      :ok
+    )
 
     operator = join_as(:operator)
 
@@ -163,9 +173,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "director" => %{"kind" => "agent", "id" => "r1-notice-director-#{suffix}"}
     }
 
-    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => assign}),
-                 :ok,
-                 %{"work_control_result" => %{work: %{work_id: work_id}}}
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => assign}),
+      :ok,
+      %{"work_control_result" => %{work: %{work_id: work_id}}}
+    )
 
     assert_receive %Phoenix.Socket.Broadcast{
       topic: "wrapper:" <> ^old,
@@ -181,8 +193,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "assignee" => replacement
     }
 
-    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => transfer}),
-                 :ok
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => transfer}),
+      :ok
+    )
 
     assert_receive %Phoenix.Socket.Broadcast{
       topic: "wrapper:" <> ^old,
@@ -207,8 +221,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "expected_revision" => 2
     }
 
-    assert_reply push(operator, "work_control", %{"version" => "0", "work_control" => revise}),
-                 :ok
+    assert_reply(
+      push(operator, "work_control", %{"version" => "0", "work_control" => revise}),
+      :ok
+    )
 
     assert_receive %Phoenix.Socket.Broadcast{
       topic: "wrapper:" <> ^old,
@@ -230,11 +246,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "assignee" => "r1-notice-third-#{suffix}"
     }
 
-    assert_reply push(operator, "work_control", %{
-                   "version" => "0",
-                   "work_control" => later_transfer
-                 }),
-                 :ok
+    assert_reply(
+      push(operator, "work_control", %{
+        "version" => "0",
+        "work_control" => later_transfer
+      }),
+      :ok
+    )
 
     assert_receive %Phoenix.Socket.Broadcast{
       topic: "wrapper:" <> ^old,
@@ -312,27 +330,31 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     operator = join_as(:operator)
     request = %{"version" => "0", "work_id" => work.work_id}
 
-    assert_reply push(operator, "work_yield_status", request), :ok, %{
+    assert_reply(push(operator, "work_yield_status", request), :ok, %{
       "claimed_yields" => [%{yield_token: issued, disposition: %{outcome: "unknown"}}]
-    }
+    })
 
     assert issued == token.yield_token
 
-    assert_reply push(
-                   operator,
-                   "work_yield_status",
-                   Map.put(request, "yield_token", token.yield_token)
-                 ),
-                 :ok,
-                 %{"claimed_yields" => [%{yield_token: ^issued}]}
+    assert_reply(
+      push(
+        operator,
+        "work_yield_status",
+        Map.put(request, "yield_token", token.yield_token)
+      ),
+      :ok,
+      %{"claimed_yields" => [%{yield_token: ^issued}]}
+    )
 
-    assert_reply push(
-                   operator,
-                   "work_yield_status",
-                   Map.put(request, "yield_token", "yld_missing")
-                 ),
-                 :ok,
-                 %{"claimed_yields" => [%{disposition: %{outcome: "expired"}}]}
+    assert_reply(
+      push(
+        operator,
+        "work_yield_status",
+        Map.put(request, "yield_token", "yld_missing")
+      ),
+      :ok,
+      %{"claimed_yields" => [%{disposition: %{outcome: "expired"}}]}
+    )
 
     :sys.replace_state(DeliveryStates, fn state ->
       entry = state.entries[assignee["id"]]
@@ -349,13 +371,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     end)
 
-    assert_reply push(operator, "work_yield_status", request), :ok, %{
+    assert_reply(push(operator, "work_yield_status", request), :ok, %{
       "claimed_yields" => [%{yield_token: ^issued, disposition: %{outcome: "expired"}}]
-    }
+    })
 
-    assert_reply push(join_as(:viewer), "work_yield_status", request), :error, %{
+    assert_reply(push(join_as(:viewer), "work_yield_status", request), :error, %{
       reason: "forbidden"
-    }
+    })
   end
 
   defp work_operation_id do
@@ -527,7 +549,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     :ok = AgentStates.put(envelope)
     _socket = join_as(:viewer)
 
-    assert_push "snapshot", %{"agents" => agents}
+    assert_push("snapshot", %{"agents" => agents})
     assert agents[agent_id] == envelope
   end
 
@@ -564,7 +586,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     _socket = join_as(:operator)
 
-    assert_push "snapshot", %{"agents" => agents, "snapshot_incomplete" => true}
+    assert_push("snapshot", %{"agents" => agents, "snapshot_incomplete" => true})
     assert map_size(agents) == 200
   end
 
@@ -658,20 +680,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     _socket = join_as(:operator)
 
-    assert_push "delivery_snapshot", %{
+    assert_push("delivery_snapshot", %{
       "deliveries" => deliveries,
       "snapshot_incomplete" => true
-    }
+    })
 
     assert map_size(deliveries) == TransportLimits.wire_projection_agents()
   end
 
   test "delivery_status の live 診断は operator にだけ届く" do
     _operator_socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     _viewer_socket = join_as(:viewer)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "delivery_status", %{
       "agent_id" => "test.delivery-operator-only",
@@ -682,20 +704,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     })
 
-    assert_push "delivery_status", %{
+    assert_push("delivery_status", %{
       "agent_id" => "test.delivery-operator-only",
       "delivery" => %{"issued_seq" => 3}
-    }
+    })
 
-    refute_push "delivery_status", %{}
+    refute_push("delivery_status", %{})
   end
 
   test "quagmire_notice reaches the operator only (issue #273)" do
     _operator_socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     _viewer_socket = join_as(:viewer)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", %{
       "kind" => "rally",
@@ -706,13 +728,209 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       "window_ms" => 86_400_000
     })
 
-    assert_push "quagmire_notice", %{
+    assert_push("quagmire_notice", %{
       "kind" => "rally",
       "participants" => ["test.a", "test.b"],
       "turns" => 18
-    }
+    })
 
-    refute_push "quagmire_notice", %{}
+    refute_push("quagmire_notice", %{})
+  end
+
+  describe "work admission settings" do
+    setup do
+      before = :sys.get_state(WorkStore)
+      saved = :dets.lookup(before.table, KaoiroServer.WorkSettings.key())
+      :ok = :dets.delete(before.table, KaoiroServer.WorkSettings.key())
+      :ok = :dets.sync(before.table)
+      :sys.replace_state(WorkStore, &%{&1 | settings: nil, settings_status: :ready})
+
+      on_exit(fn ->
+        :dets.delete(before.table, KaoiroServer.WorkSettings.key())
+        :dets.insert(before.table, saved)
+        :dets.sync(before.table)
+
+        :sys.replace_state(
+          WorkStore,
+          &%{&1 | settings: before.settings, settings_status: before.settings_status}
+        )
+      end)
+
+      :ok
+    end
+
+    test "operator commit is delivered once; viewer cannot read, write or receive broadcasts" do
+      operator = join_as(:operator)
+      assert_push("work_settings", %{"state" => "ready", "revision" => 0})
+      viewer = join_as(:viewer)
+
+      assert_reply(push(viewer, "get_work_settings", %{"version" => "0"}), :error, %{
+        reason: "forbidden"
+      })
+
+      refute_push("work_settings", %{})
+
+      patch = %{
+        "version" => "0",
+        "expected_revision" => 0,
+        "changes" => %{"work_nominated_per_principal" => 0}
+      }
+
+      assert_reply(push(viewer, "set_work_settings", patch), :error, %{reason: "forbidden"})
+      assert_reply(push(operator, "set_work_settings", patch), :ok, %{revision: 1})
+
+      assert_push("work_settings", %{
+        "state" => "ready",
+        "revision" => 1,
+        "effective" => %{"work_nominated_per_principal" => 0}
+      })
+
+      refute_push("work_settings", %{})
+
+      assert_reply(push(operator, "get_work_settings", %{"version" => "0"}), :ok, %{
+        changes: [%{actor: %{"kind" => "user"}}]
+      })
+    end
+
+    test "admin and operator error replies preserve each exact ordinary reason" do
+      operator = join_as(:admin)
+
+      assert_reply(
+        push(operator, "set_work_settings", %{
+          "version" => "0",
+          "expected_revision" => 0,
+          "changes" => %{"work_active_per_assignee" => 1}
+        }),
+        :ok,
+        %{revision: 1}
+      )
+
+      assert_reply(
+        push(operator, "set_work_settings", %{
+          "version" => "0",
+          "expected_revision" => 0,
+          "changes" => %{"work_active_per_assignee" => 2}
+        }),
+        :error,
+        %{reason: "revision_conflict", revision: 1}
+      )
+
+      assert_reply(
+        push(operator, "set_work_settings", %{
+          "version" => "0",
+          "expected_revision" => 1,
+          "changes" => %{"unknown" => 0}
+        }),
+        :error,
+        %{reason: "invalid_work_settings"}
+      )
+    end
+
+    test "real operator refusal retains active-capacity detail" do
+      operator = join_as(:operator)
+
+      assert_reply(
+        push(operator, "set_work_settings", %{
+          "version" => "0",
+          "expected_revision" => 0,
+          "changes" => %{"work_active_per_assignee" => 1}
+        }),
+        :ok,
+        %{revision: 1}
+      )
+
+      target = "capacity-target-#{System.unique_integer([:positive])}"
+
+      operation = %{
+        "op" => "assign",
+        "operation_id" => work_operation_id(),
+        "title" => "Capacity",
+        "assignee" => target,
+        "director" => %{"kind" => "user", "id" => "operator"}
+      }
+
+      assert_reply(
+        push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+        :ok,
+        %{}
+      )
+
+      operation = %{operation | "operation_id" => work_operation_id()}
+
+      assert_reply(
+        push(operator, "work_control", %{"version" => "0", "work_control" => operation}),
+        :error,
+        %{
+          reason: "work_capacity",
+          details: %{
+            capacity: %{
+              limit: "work_active_per_assignee",
+              scope: "assignee",
+              maximum: 1
+            }
+          }
+        }
+      )
+    end
+
+    test "invalid and unknown transitions are distinct, stable, operator-only diagnoses" do
+      for {stored, reason} <- [
+            {:bad, "work_settings_corrupt"},
+            {KaoiroServer.WorkSettings.empty(), "work_settings_unknown"}
+          ] do
+        :dets.delete(WorkStore, KaoiroServer.WorkSettings.key())
+        :sys.replace_state(WorkStore, &%{&1 | settings: nil, settings_status: :ready})
+        operator = join_as(:operator)
+        assert_push("work_settings", %{"state" => "ready"})
+        viewer = join_as(:viewer)
+
+        assert_reply(push(viewer, "get_work_settings", %{"version" => "0"}), :error, %{
+          reason: "forbidden"
+        })
+
+        refute_push("work_settings", %{})
+        :ok = :dets.insert(WorkStore, {KaoiroServer.WorkSettings.key(), stored})
+        :ok = :dets.sync(WorkStore)
+        pid = Process.whereis(WorkStore)
+        message = KaoiroServer.WorkSettings.message(String.to_existing_atom(reason))
+
+        assert_reply(
+          push(operator, "set_work_settings", %{
+            "version" => "0",
+            "expected_revision" => 0,
+            "changes" => %{"work_nominated_per_principal" => 0}
+          }),
+          :error,
+          %{reason: ^reason, message: ^message}
+        )
+
+        assert_push("work_settings", %{
+          "state" => "unavailable",
+          "reason" => ^reason,
+          "message" => ^message
+        })
+
+        refute_push("work_settings", %{})
+
+        assert_reply(push(operator, "get_work_settings", %{"version" => "0"}), :error, %{
+          reason: ^reason,
+          message: ^message
+        })
+
+        assert_reply(
+          push(operator, "work_control", %{"version" => "0", "work_control" => %{}}),
+          :error,
+          %{reason: ^reason, message: ^message}
+        )
+
+        assert Process.whereis(WorkStore) == pid
+        # The next iteration must not keep an extra operator subscriber.
+        Process.unlink(operator.channel_pid)
+        Process.unlink(viewer.channel_pid)
+        GenServer.stop(operator.channel_pid)
+        GenServer.stop(viewer.channel_pid)
+      end
+    end
   end
 
   describe "set_quagmire_settings (issue #307)" do
@@ -723,38 +941,38 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "an operator's pick is acknowledged and pushed to operators only" do
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       # Drain the operator's own join push; both sockets feed one mailbox, so
       # leaving it there would satisfy the refute below on its own.
-      assert_push "quagmire_settings", %{"source" => "default"}
+      assert_push("quagmire_settings", %{"source" => "default"})
 
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 40})
 
-      assert_reply ref, :ok, %{"rally_turns" => 40, "source" => "stored"}
-      assert_push "quagmire_settings", %{"rally_turns" => 40, "source" => "stored"}
-      refute_push "quagmire_settings", %{}
+      assert_reply(ref, :ok, %{"rally_turns" => 40, "source" => "stored"})
+      assert_push("quagmire_settings", %{"rally_turns" => 40, "source" => "stored"})
+      refute_push("quagmire_settings", %{})
     end
 
     test "null is the off switch and survives the round trip" do
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
 
-      assert_reply ref, :ok, %{"rally_turns" => nil, "source" => "stored"}
+      assert_reply(ref, :ok, %{"rally_turns" => nil, "source" => "stored"})
       assert QuagmireSettings.rally_turns() == :off
     end
 
     test "a viewer cannot change the threshold" do
       viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(viewer, "set_quagmire_settings", %{"rally_turns" => 40})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       assert %{source: :default} = QuagmireSettings.effective()
     end
 
@@ -762,7 +980,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # two means "turn rally detection off".
     test "an absent, out-of-range or non-integer value is rejected" do
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       for payload <- [
             %{},
@@ -773,7 +991,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             %{"rally_turns" => "16"}
           ] do
         ref = push(operator, "set_quagmire_settings", payload)
-        assert_reply ref, :error, %{reason: "invalid_rally_turns"}
+        assert_reply(ref, :error, %{reason: "invalid_rally_turns"})
       end
 
       assert %{source: :default} = QuagmireSettings.effective()
@@ -782,20 +1000,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "the list_conversations verdict follows the new threshold" do
       {a, b, _c} = rally_pair()
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ConversationStates.record_message("qs1", a, b, "x", 1, false, true)
       ConversationStates.record_message("qs2", a, b, "x", 1, false, true)
 
       ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
-      assert_reply ref, :ok, %{"rally_turns" => 2}
+      assert_reply(ref, :ok, %{"rally_turns" => 2})
 
       assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => true, "qs2" => true}
 
       # ∞ is not "a very large threshold": the verdict must go false, not
       # merely become harder to reach.
       ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
-      assert_reply ref, :ok, %{"rally_turns" => nil}
+      assert_reply(ref, :ok, %{"rally_turns" => nil})
 
       assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => false, "qs2" => false}
     end
@@ -812,20 +1030,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       {a, b, _c} = rally_pair()
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ConversationStates.record_message("qr1", a, b, "x", 1, false, true)
       ConversationStates.record_message("qr2", a, b, "x", 1, false, true)
 
       ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
-      assert_reply ref, :ok, %{"rally_turns" => 2}
+      assert_reply(ref, :ok, %{"rally_turns" => 2})
 
-      assert_push "quagmire_notice", %{
+      assert_push("quagmire_notice", %{
         "kind" => "rally",
         "participants" => [^a, ^b],
         "turns" => 2,
         "threshold" => 2
-      }
+      })
     end
 
     # クロエ review M-1: the store is a separate process, and this RPC is
@@ -833,7 +1051,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # distinguishes "fell back" from "the store happened to answer".
     test "list_conversations survives a stopped settings store" do
       operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, QuagmireSettings)
 
@@ -844,7 +1062,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       log =
         capture_log(fn ->
           ref = push(operator, "list_conversations", %{})
-          assert_reply ref, :ok, %{"conversations" => _}
+          assert_reply(ref, :ok, %{"conversations" => _})
         end)
 
       assert log =~ "quagmire settings unavailable"
@@ -855,18 +1073,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = QuagmireSettings.put_rally_turns(33)
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "quagmire_settings", %{"rally_turns" => 33, "source" => "stored"}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("quagmire_settings", %{"rally_turns" => 33, "source" => "stored"})
 
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-      refute_push "quagmire_settings", %{}
+      assert_push("snapshot", %{"agents" => _})
+      refute_push("quagmire_settings", %{})
     end
   end
 
   defp verdicts(socket, ids) do
     ref = push(socket, "list_conversations", %{})
-    assert_reply ref, :ok, %{"conversations" => conversations}
+    assert_reply(ref, :ok, %{"conversations" => conversations})
 
     conversations
     |> Enum.filter(&(Map.fetch!(&1, "conversation_id") in ids))
@@ -879,14 +1097,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # one's count. Every rally test therefore owns its own pair.
     {a, b, _c} = rally_pair()
     socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     ConversationStates.record_message("qc1", a, b, "x", 1, false, true)
     ConversationStates.record_message("qc2", a, b, "x", 1, false, true)
 
     ref = push(socket, "list_conversations", %{})
 
-    assert_reply ref, :ok, %{"conversations" => conversations}
+    assert_reply(ref, :ok, %{"conversations" => conversations})
 
     rows = Enum.filter(conversations, &(Map.fetch!(&1, "conversation_id") in ["qc1", "qc2"]))
     assert length(rows) == 2
@@ -912,14 +1130,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     on_exit(fn -> QuagmireSettings.clear() end)
 
     socket = join_as(:operator)
-    assert_push "snapshot", %{"agents" => _}
+    assert_push("snapshot", %{"agents" => _})
 
     ConversationStates.record_message("qt1", a, b, "x", 1, false, true)
     ConversationStates.record_message("qt2", a, b, "x", 1, false, true)
     ConversationStates.record_message("qt3", a, c, "x", 1, false, true)
 
     ref = push(socket, "list_conversations", %{})
-    assert_reply ref, :ok, %{"conversations" => conversations}
+    assert_reply(ref, :ok, %{"conversations" => conversations})
 
     verdicts =
       conversations
@@ -936,7 +1154,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.demote-1"
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
 
       # 稼働中に role を落とす (許可リスト行の編集に相当)。
@@ -945,7 +1163,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
 
       # handle_out の operator 限定 fan-out は snapshot を見続けるので、
       # 判定不一致を検知した時点で張り直させる。
@@ -956,7 +1174,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.demote-2"
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
 
       Application.put_env(:kaoiro_server, :client_tokens, "tok-other:operator")
@@ -964,7 +1182,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
 
@@ -972,13 +1190,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.demote-3"
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-operator"))
 
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 50
     end
 
@@ -986,7 +1204,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.demote-4"
       put_agent(agent_id)
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       @endpoint.subscribe(KaoiroServer.Auth.socket_id("tok-viewer"))
 
       Application.put_env(:kaoiro_server, :client_tokens, "tok-viewer:operator")
@@ -994,7 +1212,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
 
@@ -1018,7 +1236,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
         |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
 
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
       @endpoint.subscribe(socket_id)
 
       KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:ao:viewer\n")
@@ -1026,7 +1244,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
 
@@ -1059,14 +1277,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert {:error, %{reason: "forbidden"}} = result
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
-      refute_push "snapshot", %{"agents" => _}
-      refute_push "history", %{}
+      refute_push("snapshot", %{"agents" => _})
+      refute_push("history", %{})
     end
 
     test "role が変わっていない socket は通常どおり join できる" do
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{})
     end
   end
 
@@ -1083,9 +1301,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "text" => "テストを実行して"
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       # agent_id addresses the topic only; the payload drops it.
-      assert_broadcast "instruction", %{"text" => "テストを実行して"} = payload
+      assert_broadcast("instruction", %{"text" => "テストを実行して"} = payload)
       refute Map.has_key?(payload, "agent_id")
     end
 
@@ -1097,7 +1315,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent_id は unknown_agent" do
@@ -1109,7 +1327,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "text" => "x"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "text 欠落は missing key" do
@@ -1119,7 +1337,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "missing key: text"}
+      assert_reply(ref, :error, %{reason: "missing key: text"})
     end
 
     test "text の型不正・サイズ超過は invalid value" do
@@ -1128,14 +1346,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => 1})
-      assert_reply ref, :error, %{reason: "invalid value: text"}
+      assert_reply(ref, :error, %{reason: "invalid value: text"})
 
       huge = String.duplicate("a", 65_537)
 
       ref =
         push(socket, "instruction", %{"agent_id" => agent_id, "text" => huge})
 
-      assert_reply ref, :error, %{reason: "invalid value: text"}
+      assert_reply(ref, :error, %{reason: "invalid value: text"})
     end
 
     test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
@@ -1152,8 +1370,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "blob" => String.duplicate("a", 200_000)
         })
 
-      assert_reply ref, :error, %{reason: "payload_too_large"}
-      refute_broadcast "instruction", %{}
+      assert_reply(ref, :error, %{reason: "payload_too_large"})
+      refute_broadcast("instruction", %{})
     end
   end
 
@@ -1171,12 +1389,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "allow" => true
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "permission_decision", %{
+      assert_broadcast("permission_decision", %{
         "request_id" => "req-1",
         "allow" => true
-      }
+      })
     end
 
     test "viewer の決定は forbidden" do
@@ -1191,7 +1409,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "allow" => false
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "request_id 欠落は missing key" do
@@ -1205,7 +1423,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "allow" => true
         })
 
-      assert_reply ref, :error, %{reason: "missing key: request_id"}
+      assert_reply(ref, :error, %{reason: "missing key: request_id"})
     end
 
     test "allow が boolean でないものは境界で拒否される" do
@@ -1220,7 +1438,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "allow" => "yes"
         })
 
-      assert_reply ref, :error, %{reason: "invalid value: allow"}
+      assert_reply(ref, :error, %{reason: "invalid value: allow"})
     end
 
     test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
@@ -1238,8 +1456,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "blob" => String.duplicate("a", 200_000)
         })
 
-      assert_reply ref, :error, %{reason: "payload_too_large"}
-      refute_broadcast "permission_decision", %{}
+      assert_reply(ref, :error, %{reason: "payload_too_large"})
+      refute_broadcast("permission_decision", %{})
     end
   end
 
@@ -1257,12 +1475,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "answers" => %{"どれ?" => "A"}
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "question_response", %{
+      assert_broadcast("question_response", %{
         "request_id" => "q-1",
         "answers" => %{"どれ?" => "A"}
-      }
+      })
     end
 
     test "viewer の回答は forbidden" do
@@ -1277,7 +1495,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "answers" => %{}
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "request_id 欠落は missing key" do
@@ -1291,7 +1509,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "answers" => %{}
         })
 
-      assert_reply ref, :error, %{reason: "missing key: request_id"}
+      assert_reply(ref, :error, %{reason: "missing key: request_id"})
     end
 
     test "answers が map でないものは境界で拒否される" do
@@ -1306,7 +1524,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "answers" => "wrong"
         })
 
-      assert_reply ref, :error, %{reason: "invalid value: answers"}
+      assert_reply(ref, :error, %{reason: "invalid value: answers"})
     end
   end
 
@@ -1319,9 +1537,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "interrupt", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       # agent_id addresses the topic only; the payload drops it.
-      assert_broadcast "interrupt", payload
+      assert_broadcast("interrupt", payload)
       refute Map.has_key?(payload, "agent_id")
     end
 
@@ -1331,21 +1549,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "interrupt", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent_id は unknown_agent" do
       socket = join_as(:operator)
 
       ref = push(socket, "interrupt", %{"agent_id" => "test.interrupt-none"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "agent_id 欠落は missing_agent_id" do
       socket = join_as(:operator)
 
       ref = push(socket, "interrupt", %{})
-      assert_reply ref, :error, %{reason: "missing_agent_id"}
+      assert_reply(ref, :error, %{reason: "missing_agent_id"})
     end
 
     test "追加キーの巨大 blob は relay サイズ上限で拒否される (issue #26)" do
@@ -1360,8 +1578,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "blob" => String.duplicate("a", 200_000)
         })
 
-      assert_reply ref, :error, %{reason: "payload_too_large"}
-      refute_broadcast "interrupt", %{}
+      assert_reply(ref, :error, %{reason: "payload_too_large"})
+      refute_broadcast("interrupt", %{})
     end
   end
 
@@ -1374,8 +1592,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus[1m]"})
 
-      assert_reply ref, :ok
-      assert_broadcast "set_model", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("set_model", payload)
       assert payload["model"] == "opus[1m]"
       refute Map.has_key?(payload, "agent_id")
     end
@@ -1388,8 +1606,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "max"})
 
-      assert_reply ref, :ok
-      assert_broadcast "set_effort", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("set_effort", payload)
       assert payload["effort"] == "max"
       refute Map.has_key?(payload, "agent_id")
     end
@@ -1400,10 +1618,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
 
       ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "high"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "model 欠落は missing key、effort 非文字列は invalid value" do
@@ -1413,20 +1631,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "set_model", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "missing key: model"}
+      assert_reply(ref, :error, %{reason: "missing key: model"})
 
       ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => 5})
-      assert_reply ref, :error, %{reason: "invalid value: effort"}
+      assert_reply(ref, :error, %{reason: "invalid value: effort"})
 
-      refute_broadcast "set_model", %{}
-      refute_broadcast "set_effort", %{}
+      refute_broadcast("set_model", %{})
+      refute_broadcast("set_effort", %{})
     end
 
     test "未知 agent_id は unknown_agent" do
       socket = join_as(:operator)
 
       ref = push(socket, "set_model", %{"agent_id" => "test.setmodel-none", "model" => "opus"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
   end
 
@@ -1444,8 +1662,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "force" => true
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "refresh_engine_catalog", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("refresh_engine_catalog", payload)
       refute Map.has_key?(payload, "host_id")
       assert payload["version"] == "0"
       assert payload["engine"] == "claude-code"
@@ -1463,7 +1681,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "request_id" => "req-cat-2"
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "host_id 欠落は missing_host_id で拒否" do
@@ -1475,7 +1693,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "request_id" => "req-cat-3"
         })
 
-      assert_reply ref, :error, %{reason: reason}
+      assert_reply(ref, :error, %{reason: reason})
       assert reason in ["missing_host_id", "invalid_host_id"]
     end
   end
@@ -1489,8 +1707,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
-      assert_broadcast "refresh_models", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("refresh_models", payload)
       refute Map.has_key?(payload, "agent_id")
     end
 
@@ -1500,14 +1718,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent_id は unknown_agent" do
       socket = join_as(:operator)
 
       ref = push(socket, "refresh_models", %{"agent_id" => "test.refreshmodels-none"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "refresh_models payload の request_id は wrapper topic へそのまま relay される (ADR-0039 F9 v2)" do
@@ -1522,8 +1740,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "request_id" => "req-refresh-abc"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "refresh_models", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("refresh_models", payload)
       assert payload["request_id"] == "req-refresh-abc"
       refute Map.has_key?(payload, "agent_id")
     end
@@ -1549,8 +1767,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "plan"})
 
-      assert_reply ref, :ok
-      assert_broadcast "set_permission_mode", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("set_permission_mode", payload)
       assert payload["mode"] == "plan"
       refute Map.has_key?(payload, "agent_id")
 
@@ -1564,7 +1782,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "auto"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知の mode は invalid value で broadcast されず永続化もされない" do
@@ -1574,9 +1792,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "yolo"})
-      assert_reply ref, :error, %{reason: "invalid value: mode"}
+      assert_reply(ref, :error, %{reason: "invalid value: mode"})
 
-      refute_broadcast "set_permission_mode", %{}
+      refute_broadcast("set_permission_mode", %{})
       # The validation rejects before the cast is enqueued, so polling here
       # is overkill — but match the success-path style for symmetry.
       assert KaoiroServer.PermissionModes.get(agent_id) == nil
@@ -1671,10 +1889,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested}
+      assert_reply(ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested})
       assert requested == %{"sandbox" => "workspace-write", "network_access" => false}
 
-      assert_broadcast "set_permission", payload
+      assert_broadcast("set_permission", payload)
 
       assert payload == %{
                "version" => "0",
@@ -1698,7 +1916,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "capability metadata 未到着 (ext 空) は permission_not_ready" do
@@ -1709,7 +1927,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "permission_not_ready"}
+      assert_reply(ref, :error, %{reason: "permission_not_ready"})
     end
 
     test "supports_permission_switch=false は unsupported_permission_switch" do
@@ -1720,7 +1938,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
     end
 
     # ADR-0057 F4c: Antigravity stays launch-fixed for Stage A — its
@@ -1742,7 +1960,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
     end
 
     # issue #359 (ADR-0057 F4c Stage B0): approval is a mutable axis only when
@@ -1762,9 +1980,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
 
-      assert_reply ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested}
+      assert_reply(ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested})
       assert requested["approval"] == "local"
-      assert_broadcast "set_permission", payload
+      assert_broadcast("set_permission", payload)
       assert payload["approval"] == "local"
 
       entry = KaoiroServer.PermissionSettings.get(agent_id)
@@ -1784,7 +2002,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "never"})
 
-      assert_reply ref, :error, %{reason: "exceeds_launch_ceiling"}
+      assert_reply(ref, :error, %{reason: "exceeds_launch_ceiling"})
     end
 
     test "an agent not advertising approval as mutable (Codex) is unsupported_permission_switch" do
@@ -1795,7 +2013,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
 
-      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
     end
 
     test "sandbox is clamped to the advertised ceiling; over is exceeds_launch_ceiling" do
@@ -1815,12 +2033,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "danger-full-access"
         })
 
-      assert_reply over, :error, %{reason: "exceeds_launch_ceiling"}
+      assert_reply(over, :error, %{reason: "exceeds_launch_ceiling"})
 
       within =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply within, :ok, %{"status" => "pending"}
+      assert_reply(within, :ok, %{"status" => "pending"})
     end
 
     # ADR-0064 (issue #367): Codex's app-server backend advertises a closed
@@ -1845,7 +2063,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "on-request"})
 
-      assert_reply ref, :ok, %{"status" => "pending", "requested" => requested}
+      assert_reply(ref, :ok, %{"status" => "pending", "requested" => requested})
       assert requested["approval"] == "on-request"
 
       assert KaoiroServer.PermissionSettings.get(agent_id).control.requested.approval ==
@@ -1865,7 +2083,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
 
-      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
     end
 
     test "Codex approval axis: sandbox and network keep switching freely" do
@@ -1886,7 +2104,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "network_access" => true
         })
 
-      assert_reply ref, :ok, %{"status" => "pending"}
+      assert_reply(ref, :ok, %{"status" => "pending"})
     end
 
     # A malformed `values` makes the whole approval axis launch-fixed, even for
@@ -1909,7 +2127,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         socket = join_as(:operator)
 
         ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "untrusted"})
-        assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+        assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
       end
     end
 
@@ -1940,7 +2158,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
         payload = Map.merge(%{"agent_id" => agent_id}, unquote(Macro.escape(patch)))
         ref = push(socket, "set_permission", payload)
-        assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+        assert_reply(ref, :error, %{reason: "unsupported_permission_switch"})
       end
     end
 
@@ -1960,7 +2178,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       :ok =
         wait_until_permission(fn ->
@@ -2011,7 +2229,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       socket = join_as(:operator)
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       assert KaoiroServer.PermissionSettings.get(agent_id) == before
 
@@ -2026,7 +2244,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "agent_unavailable"}
+      assert_reply(ref, :error, %{reason: "agent_unavailable"})
     end
 
     test "unknown agent は unknown_agent" do
@@ -2038,7 +2256,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "PermissionSettings に baseline が無いうちは permission_not_ready" do
@@ -2049,7 +2267,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "permission_not_ready"}
+      assert_reply(ref, :error, %{reason: "permission_not_ready"})
     end
 
     test "AgentAcceptance の内部失敗は set_permission では persistence_failed に写す" do
@@ -2073,7 +2291,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         capture_log(fn ->
           with_session_resets_unavailable(fn ->
             :ok = :sys.resume(accept_pid)
-            assert_reply ref, :error, %{reason: "persistence_failed"}
+            assert_reply(ref, :error, %{reason: "persistence_failed"})
           end)
         end)
       after
@@ -2094,7 +2312,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
 
       :ok = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -2116,7 +2334,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
         payload = Map.merge(%{"agent_id" => agent_id}, unquote(Macro.escape(payload_extra)))
         ref = push(socket, "set_permission", payload)
-        assert_reply ref, :error, %{reason: "invalid_payload"}
+        assert_reply(ref, :error, %{reason: "invalid_payload"})
       end
     end
 
@@ -2130,9 +2348,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "network_access" => false})
 
-      assert_reply ref, :ok, %{
+      assert_reply(ref, :ok, %{
         "requested" => %{"sandbox" => "workspace-write", "network_access" => false}
-      }
+      })
     end
 
     test "set_permission は permission_requested audit event を actor 付きで記録する" do
@@ -2144,7 +2362,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       :ok =
         wait_until_permission(fn ->
@@ -2170,7 +2388,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref1 =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref1, :ok, %{"revision" => 1}
+      assert_reply(ref1, :ok, %{"revision" => 1})
 
       effective = %{
         "session_id" => "s1",
@@ -2202,7 +2420,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "danger-full-access"
         })
 
-      assert_reply ref2, :ok, %{"revision" => 2}
+      assert_reply(ref2, :ok, %{"revision" => 2})
 
       :ok =
         wait_until_permission(fn ->
@@ -2271,8 +2489,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         Process.sleep(2)
         :ok = :sys.resume(accept_pid)
 
-        assert_reply first_ref, :ok, %{"revision" => first_revision}
-        assert_reply second_ref, :ok, %{"revision" => second_revision}
+        assert_reply(first_ref, :ok, %{"revision" => first_revision})
+        assert_reply(second_ref, :ok, %{"revision" => second_revision})
         assert MapSet.new([first_revision, second_revision]) == MapSet.new([1, 2])
 
         assert :ok ==
@@ -2351,7 +2569,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       entry = KaoiroServer.PermissionSettings.get(agent_id)
       assert entry.control.actor["id"] == http_user.id
@@ -2369,12 +2587,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       actor_id = KaoiroServer.PermissionSettings.get(agent_id).control.actor["id"]
 
       ref2 = push(socket, "list_users", %{})
-      assert_reply ref2, :ok, %{"users" => users}
+      assert_reply(ref2, :ok, %{"users" => users})
       assert Enum.any?(users, &(&1.id == actor_id))
     end
 
@@ -2390,7 +2608,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       actor_id = KaoiroServer.PermissionSettings.get(agent_id).control.actor["id"]
 
@@ -2429,7 +2647,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
       entry = KaoiroServer.PermissionSettings.get(agent_id)
       assert entry.control.actor["id"] == http_user.id
@@ -2473,7 +2691,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "sandbox" => "workspace-write"
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     # issue #305 M1 round 2 (クロエ should-fix): `Users.get_or_create/4` is
@@ -2516,7 +2734,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "sandbox" => "workspace-write"
             })
 
-          assert_reply ref, :error, %{reason: "persistence_failed"}
+          assert_reply(ref, :error, %{reason: "persistence_failed"})
         end)
 
       # S-B (director round-2, issue #305 M-B): the log line itself must
@@ -2536,7 +2754,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref2 =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref2, :ok, %{"revision" => 1}
+      assert_reply(ref2, :ok, %{"revision" => 1})
     end
   end
 
@@ -2571,12 +2789,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # a disconnected one, so restore the state this test is about.
       put_disconnected(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
-      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
+      assert_broadcast("agent_deleted", %{"agent_id" => ^agent_id})
       refute AgentStates.known?(agent_id)
       assert AgentDirectory.get(agent_id) == nil
       assert SessionPointers.get(agent_id) == nil
@@ -2607,12 +2825,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       SessionPointers.record(agent_id, "sess-del-do", "/home/user/proj")
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
-      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
+      assert_broadcast("agent_deleted", %{"agent_id" => ^agent_id})
       assert AgentDirectory.get(agent_id) == nil
       assert SessionPointers.get(agent_id) == nil
     end
@@ -2629,7 +2847,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
 
       assert_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^peer_id,
@@ -2641,7 +2859,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       }
 
-      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_broadcast("agent_deleted", %{"agent_id" => ^agent_id})
       refute PlannedDisconnects.active?(agent_id)
     end
 
@@ -2840,11 +3058,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.del-2"
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "not_disconnected"}
+      assert_reply(ref, :error, %{reason: "not_disconnected"})
       assert AgentStates.known?(agent_id)
     end
 
@@ -2859,10 +3077,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "not_disconnected"}
+      assert_reply(ref, :error, %{reason: "not_disconnected"})
 
       # denylist 反映を待って照合 — DETS write 経路と同じ GenServer.call
       # を通すことで in-flight があれば必ず観測できる。
@@ -2871,8 +3089,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       # broadcast 到達を短い timeout で refute (Phoenix.PubSub は同期的に
       # ローカル配送するので、即時 refute で十分観測できる)。
-      refute_broadcast "revoked", %{}, 100
-      refute_broadcast "agent_deleted", %{"agent_id" => ^agent_id}, 100
+      refute_broadcast("revoked", %{}, 100)
+      refute_broadcast("agent_deleted", %{"agent_id" => ^agent_id}, 100)
 
       # agent state は無変化。
       assert AgentStates.known?(agent_id)
@@ -2882,18 +3100,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.del-3"
       put_disconnected(agent_id)
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent は unknown_agent" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => "test.del-none"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     # M3 (ふじ #72 must-fix, 2026-07-23): purge_agent_records の
@@ -2910,10 +3128,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # wrapper:<id> topic を subscribe して broadcast を捕捉。
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
 
       # order pin: revoke が store purge より先に走っているので、
       # broadcast + revoked? が :ok reply の時点で確定している。
@@ -2922,12 +3140,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       # revoked broadcast reason="agent_deleted" が飛ぶ (revoke_wrapper_token
       # と同じ topic だが reason で区別できる、監査用)。
-      assert_broadcast "revoked", %{
+      assert_broadcast("revoked", %{
         "reason" => "agent_deleted",
         "revoked_at" => _
-      }
+      })
 
-      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_broadcast("agent_deleted", %{"agent_id" => ^agent_id})
       refute AgentStates.known?(agent_id)
       assert AgentDirectory.get(agent_id) == nil
     end
@@ -2941,10 +3159,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
 
       # 削除直後、pre-revoke に mint された token を用いて再 join を試行
       # → denylist gate で unauthorized。
@@ -2965,20 +3183,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok, %{"revoked_at" => revoked_at}
+      assert_reply(ref, :ok, %{"revoked_at" => revoked_at})
       assert is_binary(revoked_at)
       # DETS 反映を待ってから照合。
       _ = TokenDenylist.all()
       assert TokenDenylist.revoked?(agent_id) == true
 
-      assert_broadcast "revoked", %{
+      assert_broadcast("revoked", %{
         "reason" => "operator_revoke",
         "revoked_at" => ^revoked_at
-      }
+      })
     end
 
     test "disconnected agent の revoke も通る (再接続を封じる恒久対策)" do
@@ -2989,11 +3207,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       on_exit(fn -> TokenDenylist.restore(agent_id) end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok, %{}
+      assert_reply(ref, :ok, %{})
       _ = TokenDenylist.all()
       assert TokenDenylist.revoked?(agent_id) == true
     end
@@ -3002,10 +3220,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.revoke-viewer"
       put_agent(agent_id)
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "revoke_wrapper_token", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       # denylist にも入らない (副作用なし)。
       _ = TokenDenylist.all()
       refute TokenDenylist.revoked?(agent_id)
@@ -3013,12 +3231,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "未知 agent の revoke は unknown_agent" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref =
         push(socket, "revoke_wrapper_token", %{"agent_id" => "test.revoke-none"})
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
   end
 
@@ -3030,7 +3248,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "あお(改名)"})
 
@@ -3038,19 +3256,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # revision 2 (not 1): AgentDirectory.record/4's baseline is
       # @initial_revision = 1 (issue #209 MF-2), so the first rename bumps
       # a freshly-recorded entry from 1 to 2.
-      assert_reply ref, :ok, %{"display_name" => "あお(改名)", "revision" => 2}
+      assert_reply(ref, :ok, %{"display_name" => "あお(改名)", "revision" => 2})
 
       # issue #209 D22: DUAL-emit at the same revision — legacy
       # `persona_sync` (old wrapper builds) and new `display_name_sync`
       # (new wrapper builds), both version-stamped (ADR-0015, issue #187
       # 段階3 ふじ MF-1 レビュー指摘).
-      assert_broadcast "persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 2}
+      assert_broadcast("persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 2})
 
-      assert_broadcast "display_name_sync", %{
+      assert_broadcast("display_name_sync", %{
         "version" => "0",
         "display_name" => "あお(改名)",
         "revision" => 2
-      }
+      })
 
       assert %{display_name: "あお(改名)", revision: 2, persona_id: "ao"} =
                AgentDirectory.get(agent_id)
@@ -3069,15 +3287,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
-      assert_reply push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => at_limit}),
-                   :ok,
-                   %{"display_name" => ^at_limit}
+      assert_reply(
+        push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => at_limit}),
+        :ok,
+        %{"display_name" => ^at_limit}
+      )
 
-      assert_reply push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => oversized}),
-                   :error,
-                   %{reason: "invalid_name"}
+      assert_reply(
+        push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => oversized}),
+        :error,
+        %{reason: "invalid_name"}
+      )
 
       assert %{display_name: ^at_limit, revision: 2} = AgentDirectory.get(agent_id)
     end
@@ -3088,12 +3310,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "オフライン改名"})
 
       # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
-      assert_reply ref, :ok, %{"revision" => 2}
+      assert_reply(ref, :ok, %{"revision" => 2})
       assert %{display_name: "オフライン改名"} = AgentDirectory.get(agent_id)
     end
 
@@ -3102,15 +3324,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       # baseline @initial_revision = 1 (issue #209 MF-2), so 2 renames land
       # at 2 then 3, not 1 then 2.
       ref1 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "一回目"})
-      assert_reply ref1, :ok, %{"revision" => 2}
+      assert_reply(ref1, :ok, %{"revision" => 2})
 
       ref2 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "二回目"})
-      assert_reply ref2, :ok, %{"revision" => 3}
+      assert_reply(ref2, :ok, %{"revision" => 3})
 
       assert %{display_name: "二回目", revision: 3} = AgentDirectory.get(agent_id)
     end
@@ -3120,11 +3342,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "乗っ取り"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       # revision 1: fresh-record baseline @initial_revision (issue #209
       # MF-2), unchanged since the rejected rename never mutates it.
       assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
@@ -3132,10 +3354,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "未知 agent は unknown_agent" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_agent", %{"agent_id" => "test.rename-none", "name" => "x"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): rename_agent は
@@ -3148,7 +3370,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
@@ -3160,7 +3382,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             })
 
           # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
-          assert_reply ref, :ok, %{"revision" => 2}
+          assert_reply(ref, :ok, %{"revision" => 2})
         end)
 
       assert log =~ "client declared protocol version"
@@ -3172,13 +3394,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
           ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
           # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
-          assert_reply ref, :ok, %{"revision" => 2}
+          assert_reply(ref, :ok, %{"revision" => 2})
         end)
 
       assert log =~ "client declared protocol version (absent)"
@@ -3189,7 +3411,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
@@ -3201,7 +3423,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             })
 
           # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
-          assert_reply ref, :ok, %{"revision" => 2}
+          assert_reply(ref, :ok, %{"revision" => 2})
         end)
 
       refute log =~ "client declared protocol version"
@@ -3212,11 +3434,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       for bad_name <- ["", "   ", String.duplicate("a", 65), "bad" <> <<0x01>> <> "name"] do
         ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => bad_name})
-        assert_reply ref, :error, %{reason: "invalid_name"}
+        assert_reply(ref, :error, %{reason: "invalid_name"})
       end
 
       # revision 1: fresh-record baseline @initial_revision (issue #209
@@ -3233,10 +3455,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "display_name" => nil})
-      assert_reply ref, :error, %{reason: "invalid_name"}
+      assert_reply(ref, :error, %{reason: "invalid_name"})
 
       assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
@@ -3246,7 +3468,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref =
         push(socket, "rename_agent", %{
@@ -3255,7 +3477,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "name" => "改名済み"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_name"}
+      assert_reply(ref, :error, %{reason: "invalid_name"})
 
       assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
@@ -3268,20 +3490,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
 
       operator_socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "directory", %{"entries" => _}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("directory", %{"entries" => _})
 
       viewer_socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(operator_socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
-      assert_reply ref, :ok, %{}
+      assert_reply(ref, :ok, %{})
 
-      assert_push "directory", %{"entries" => entries}
+      assert_push("directory", %{"entries" => entries})
       assert %{"display_name" => "改名済み"} = entries[agent_id]
 
       # viewer 側の socket には "directory" が一切来ない (join 時も rename 後も)。
-      refute_push "directory", %{}
+      refute_push("directory", %{})
       _ = viewer_socket
     end
   end
@@ -3290,11 +3512,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "operator は既存 user を rename でき、更新後の public entry を返す" do
       {:ok, user} = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-1"}, "user", "R")
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "あお(user)"})
 
-      assert_reply ref, :ok, %{id: id, kind: "user", display_name: "あお(user)"}
+      assert_reply(ref, :ok, %{id: id, kind: "user", display_name: "あお(user)"})
       assert id == user.id
 
       assert KaoiroServer.Users.get(user.id) == %{
@@ -3314,12 +3536,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-canonical"}, "user", "R")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref =
         push(socket, "rename_user", %{"user_id" => user.id, "display_name" => "あお(canonical)"})
 
-      assert_reply ref, :ok, %{id: id, kind: "user", display_name: "あお(canonical)"}
+      assert_reply(ref, :ok, %{id: id, kind: "user", display_name: "あお(canonical)"})
       assert id == user.id
     end
 
@@ -3333,14 +3555,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       display_name = String.duplicate("á̂", 64)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       assert String.length(display_name) == 64
       assert byte_size(display_name) == 320
 
-      assert_reply push(socket, "rename_user", %{"user_id" => user.id, "name" => display_name}),
-                   :ok,
-                   %{display_name: ^display_name}
+      assert_reply(
+        push(socket, "rename_user", %{"user_id" => user.id, "name" => display_name}),
+        :ok,
+        %{display_name: ^display_name}
+      )
     end
 
     test "viewer の rename_user は forbidden" do
@@ -3348,28 +3572,28 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
 
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "乗っ取り"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
       assert KaoiroServer.Users.get(user.id).display_name == "R"
     end
 
     test "未知 user は unknown_user" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_user", %{"user_id" => "no-such-user", "name" => "x"})
-      assert_reply ref, :error, %{reason: "unknown_user"}
+      assert_reply(ref, :error, %{reason: "unknown_user"})
     end
 
     test "charset 違反の user_id は invalid_user_id" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "rename_user", %{"user_id" => "has space", "name" => "x"})
-      assert_reply ref, :error, %{reason: "invalid_user_id"}
+      assert_reply(ref, :error, %{reason: "invalid_user_id"})
     end
 
     # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): rename_agent と
@@ -3379,7 +3603,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmismatch"}, "user", "R")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
@@ -3390,7 +3614,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          assert_reply ref, :ok, %{display_name: "改名済み"}
+          assert_reply(ref, :ok, %{display_name: "改名済み"})
         end)
 
       assert log =~ "client declared protocol version"
@@ -3402,12 +3626,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vabsent"}, "user", "R")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
           ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => "改名済み"})
-          assert_reply ref, :ok, %{display_name: "改名済み"}
+          assert_reply(ref, :ok, %{display_name: "改名済み"})
         end)
 
       assert log =~ "client declared protocol version (absent)"
@@ -3418,7 +3642,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmatch"}, "user", "R")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       log =
         capture_log(fn ->
@@ -3429,7 +3653,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "0"
             })
 
-          assert_reply ref, :ok, %{display_name: "改名済み"}
+          assert_reply(ref, :ok, %{display_name: "改名済み"})
         end)
 
       refute log =~ "client declared protocol version"
@@ -3440,11 +3664,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.Users.get_or_create({:oauth, "github", "rename-invalid"}, "user", "R")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       for bad_name <- ["", String.duplicate("a", 65), "bad" <> <<0x01>> <> "name"] do
         ref = push(socket, "rename_user", %{"user_id" => user.id, "name" => bad_name})
-        assert_reply ref, :error, %{reason: "invalid_name"}
+        assert_reply(ref, :error, %{reason: "invalid_name"})
       end
 
       assert KaoiroServer.Users.get(user.id).display_name == "R"
@@ -3514,7 +3738,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "interrupt", %{"agent_id" => "bad*id"})
-      assert_reply ref, :error, %{reason: "invalid_agent_id"}
+      assert_reply(ref, :error, %{reason: "invalid_agent_id"})
     end
   end
 
@@ -3541,7 +3765,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "state_change"
       assert pushed["state"] == "waiting_permission"
       assert pushed["payload"] == %{}
@@ -3558,11 +3782,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         permission_envelope(agent_id)
       )
 
-      assert_push "envelope", %{
+      assert_push("envelope", %{
         "type" => "state_change",
         "state" => "waiting_permission",
         "payload" => %{}
-      }
+      })
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", %{
         "version" => "0",
@@ -3576,7 +3800,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       })
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["state"] == "waiting_permission"
       refute Map.has_key?(pushed, "ext")
       refute inspect(pushed) =~ "secret"
@@ -3589,10 +3813,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", %{
+      assert_push("envelope", %{
         "type" => "permission_request",
         "payload" => %{"input" => %{"command" => _}}
-      }
+      })
     end
 
     test "viewer への snapshot も合成 state_change に置換される (grid 整合維持)" do
@@ -3600,7 +3824,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.put(permission_envelope(agent_id))
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       entry = agents[agent_id]
       assert entry["type"] == "state_change"
       assert entry["state"] == "waiting_permission"
@@ -3641,7 +3865,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "state_change"
       assert pushed["state"] == "waiting_question"
       assert pushed["payload"] == %{}
@@ -3655,10 +3879,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", %{
+      assert_push("envelope", %{
         "type" => "question_request",
         "payload" => %{"questions" => [_ | _]}
-      }
+      })
     end
 
     test "viewer への snapshot も合成 state_change に置換される" do
@@ -3666,7 +3890,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.put(question_envelope(agent_id))
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       entry = agents[agent_id]
       assert entry["type"] == "state_change"
       assert entry["state"] == "waiting_question"
@@ -3704,16 +3928,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope",
-                  %{
-                    "type" => "session_boundary",
-                    "payload" => %{
-                      "mode" => "new",
-                      "request_id" => "rs_boundary_1",
-                      "previous_session_id" => "sess-old-xyz",
-                      "to_session_id" => "sess-new-abc"
-                    }
-                  }
+      assert_push(
+        "envelope",
+        %{
+          "type" => "session_boundary",
+          "payload" => %{
+            "mode" => "new",
+            "request_id" => "rs_boundary_1",
+            "previous_session_id" => "sess-old-xyz",
+            "to_session_id" => "sess-new-abc"
+          }
+        }
+      )
     end
 
     test "viewer は marker envelope を safe payload のみ受信する (session ID 群 drop)" do
@@ -3722,7 +3948,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       # 境界の存在 (mode) は viewer にも表示、ID 群は drop、ext も削除。
       assert pushed["type"] == "session_boundary"
       assert pushed["state"] == "idle"
@@ -3761,7 +3987,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      refute_push "envelope", %{}
+      refute_push("envelope", %{})
     end
 
     test "operator には inter_agent_message を payload ごと配信する" do
@@ -3770,14 +3996,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope",
-                  %{
-                    "type" => "inter_agent_message",
-                    "payload" => %{
-                      "kind" => "propose",
-                      "body" => "ベンチ結果から CSV 出力で合意したい"
-                    }
-                  }
+      assert_push(
+        "envelope",
+        %{
+          "type" => "inter_agent_message",
+          "payload" => %{
+            "kind" => "propose",
+            "body" => "ベンチ結果から CSV 出力で合意したい"
+          }
+        }
+      )
     end
   end
 
@@ -3791,11 +4019,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.admin-inbound"
       put_agent(agent_id)
       socket = join_as(:admin)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "x"})
 
-      assert_reply ref, :ok, _
+      assert_reply(ref, :ok, _)
     end
 
     test "operator 限定 outbound (history_reset) を admin が受け取る" do
@@ -3806,7 +4034,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "agent_id" => agent_id
       })
 
-      assert_push "history_reset", %{"agent_id" => ^agent_id}
+      assert_push("history_reset", %{"agent_id" => ^agent_id})
     end
 
     test "viewer が落とす envelope allow-list を admin は通過する" do
@@ -3815,7 +4043,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", %{"type" => "inter_agent_message"}
+      assert_push("envelope", %{"type" => "inter_agent_message"})
     end
 
     test "join 時の task_snapshot に admin でも tasks キーが入る" do
@@ -3827,7 +4055,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:admin)
 
-      assert_push "task_snapshot", %{"tasks" => tasks}
+      assert_push("task_snapshot", %{"tasks" => tasks})
       assert %{"test.task-snap-admin" => %{"t1" => stored}} = tasks
       assert stored["payload"]["task_id"] == "t1"
     end
@@ -3848,7 +4076,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "agent_id" => agent_id
       })
 
-      assert_push "history_reset", %{"agent_id" => ^agent_id}
+      assert_push("history_reset", %{"agent_id" => ^agent_id})
     end
 
     test "viewer には history_reset を配信しない (fail-closed)" do
@@ -3858,7 +4086,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "agent_id" => "test.reset-vw"
       })
 
-      refute_push "history_reset", %{}
+      refute_push("history_reset", %{})
     end
 
     test "operator は history_replay_complete を受け取る" do
@@ -3870,10 +4098,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "replay_id" => "replay-1"
       })
 
-      assert_push "history_replay_complete", %{
+      assert_push("history_replay_complete", %{
         "agent_id" => ^agent_id,
         "replay_id" => "replay-1"
-      }
+      })
     end
 
     test "viewer には history_replay_complete を配信しない (fail-closed)" do
@@ -3884,7 +4112,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "replay_id" => "replay-1"
       })
 
-      refute_push "history_replay_complete", %{}
+      refute_push("history_replay_complete", %{})
     end
 
     # ふじ 30-10 must-fix M2: 復元 IA は pane を名乗る専用 event で届く。
@@ -3898,10 +4126,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "envelope" => %{"type" => "inter_agent_message", "agent_id" => "test.peer"}
       })
 
-      assert_push "history_replay_envelope", %{
+      assert_push("history_replay_envelope", %{
         "pane_agent_id" => ^agent_id,
         "envelope" => %{"agent_id" => "test.peer"}
-      }
+      })
     end
 
     test "viewer には history_replay_envelope を配信しない (fail-closed)" do
@@ -3912,7 +4140,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "envelope" => %{"type" => "inter_agent_message", "agent_id" => "test.peer"}
       })
 
-      refute_push "history_replay_envelope", %{}
+      refute_push("history_replay_envelope", %{})
     end
   end
 
@@ -3943,15 +4171,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope",
-                  %{
-                    "type" => "refresh_models_result",
-                    "payload" => %{
-                      "request_id" => "req-refresh-vw-1",
-                      "ok" => true,
-                      "models_count" => 3
-                    }
-                  }
+      assert_push(
+        "envelope",
+        %{
+          "type" => "refresh_models_result",
+          "payload" => %{
+            "request_id" => "req-refresh-vw-1",
+            "ok" => true,
+            "models_count" => 3
+          }
+        }
+      )
     end
 
     test "viewer には refresh_models_result を配信しない (fail-closed drop)" do
@@ -3965,7 +4195,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      refute_push "envelope", %{"type" => "refresh_models_result"}
+      refute_push("envelope", %{"type" => "refresh_models_result"})
       # snapshot も汚さないことは wrapper_channel_test の store no-op test
       # で pin 済み (ADR-0039 F9 v2 must-fix 1)。ここでは配信面のみ扱う。
     end
@@ -3997,7 +4227,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         state_with_ext(agent_id)
       )
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "state_change"
       refute Map.has_key?(pushed, "ext")
     end
@@ -4012,7 +4242,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         state_with_ext(agent_id)
       )
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["ext"]["cwd"] == "/home/user/secret-project"
     end
 
@@ -4021,7 +4251,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.put(state_with_ext(agent_id))
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       refute Map.has_key?(agents[agent_id], "ext")
     end
 
@@ -4045,7 +4275,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "state_change"
       assert pushed["payload"] == %{}
       refute Map.has_key?(pushed, "ext")
@@ -4077,7 +4307,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.put(state_with_pending(agent_id, "req-A"))
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       entry = agents[agent_id]
       assert entry["type"] == "state_change"
       assert entry["state"] == "waiting_permission"
@@ -4093,7 +4323,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.put(state_with_pending(agent_id, "req-B"))
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       entry = agents[agent_id]
       assert entry["type"] == "state_change"
       assert entry["state"] == "waiting_permission"
@@ -4110,7 +4340,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         state_with_pending(agent_id, "req-C")
       )
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert get_in(pushed, ["ext", "pending_permission", "request_id"]) == "req-C"
     end
   end
@@ -4139,7 +4369,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         future_envelope
       )
 
-      refute_push "envelope", %{}
+      refute_push("envelope", %{})
     end
 
     test "operator は未知 type の envelope を素通しで受け取る" do
@@ -4161,7 +4391,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         future_envelope
       )
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "hypothetical_future_type"
     end
 
@@ -4180,7 +4410,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => agents})
       refute Map.has_key?(agents, agent_id)
     end
 
@@ -4188,41 +4418,41 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.hc-1"
       put_agent(agent_id)
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
         "session_id" => "s1"
       })
 
-      refute_push "history_cleared", %{}
+      refute_push("history_cleared", %{})
     end
 
     test "history_cleared は operator に届く" do
       agent_id = "test.hc-2"
       put_agent(agent_id)
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "history_cleared", %{
         "agent_id" => agent_id,
         "session_id" => "s1"
       })
 
-      assert_push "history_cleared", %{"agent_id" => ^agent_id}
+      assert_push("history_cleared", %{"agent_id" => ^agent_id})
     end
 
     test "agent_deleted は viewer にも届く (grid 整合のため)" do
       agent_id = "test.ad-1"
       put_agent(agent_id)
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
         "agent_id" => agent_id
       })
 
-      assert_push "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_push("agent_deleted", %{"agent_id" => ^agent_id})
     end
   end
 
@@ -4260,7 +4490,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         task_envelope("test.task-viewer", "t1")
       )
 
-      refute_push "envelope", %{}
+      refute_push("envelope", %{})
     end
 
     test "live broadcast: operator には素通しで届く" do
@@ -4272,7 +4502,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         task_envelope("test.task-operator", "t1")
       )
 
-      assert_push "envelope", pushed
+      assert_push("envelope", pushed)
       assert pushed["type"] == "task"
       assert pushed["payload"]["summary"] == "content-bearing progress text"
     end
@@ -4283,7 +4513,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:operator)
 
-      assert_push "task_snapshot", %{"tasks" => tasks}
+      assert_push("task_snapshot", %{"tasks" => tasks})
       # M1 fix-round: TaskStates is now keyed agent_id => %{task_id =>
       # envelope}.
       assert %{"test.task-snap-op" => %{"t1" => stored}} = tasks
@@ -4296,7 +4526,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:viewer)
 
-      assert_push "task_snapshot", %{"tasks" => tasks}
+      assert_push("task_snapshot", %{"tasks" => tasks})
       assert tasks == %{}
     end
 
@@ -4307,7 +4537,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:viewer)
 
-      assert_push "delivery_snapshot", %{"deliveries" => deliveries}
+      assert_push("delivery_snapshot", %{"deliveries" => deliveries})
       assert deliveries == %{}
     end
 
@@ -4364,8 +4594,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => agents}
-      assert_push "task_snapshot", %{"tasks" => tasks}
+      assert_push("snapshot", %{"agents" => agents})
+      assert_push("task_snapshot", %{"tasks" => tasks})
       assert agents[agent_id]["state"] == "disconnected"
       # 交差の実物: disconnected な agent の task がまだ snapshot に
       # 残っている — これが収束を broadcast 側に依存させている理由。
@@ -4378,7 +4608,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       # 新規 join した client も (join/3 で購読は snapshot push より前に
       # 確立済みなので) この broadcast を確実に受け取る。
-      assert_push "envelope", %{"agent_id" => ^agent_id, "state" => "disconnected"}
+      assert_push("envelope", %{"agent_id" => ^agent_id, "state" => "disconnected"})
 
       _ = socket
     end
@@ -4450,8 +4680,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.append_log(log_envelope(agent_id, "やります"))
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
     end
 
@@ -4487,8 +4717,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       on_exit(fn -> Enum.each(watermark_ids, &ClearWatermarks.delete/1) end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", payload
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", payload)
 
       assert payload["history_incomplete"] == true
       assert retained = payload["agents"][agent_id]
@@ -4512,8 +4742,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", payload
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", payload)
       assert payload["projection_epoch"] == AgentStates.projection_epoch()
       assert is_binary(payload["projection_epoch"])
     end
@@ -4542,8 +4772,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
 
       entries = agents[agent_id]
       assert length(entries) == 200
@@ -4572,8 +4802,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
 
       entries = agents[agent_id]
       assert length(entries) == 200
@@ -4602,8 +4832,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_agent(agent_id)
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", payload
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", payload)
       assert payload["history_projection"] == "per-pane-v1"
     end
 
@@ -4617,8 +4847,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(AgentStates.histories(), agent_id)
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       assert agents[agent_id] == [ia]
       assert agents[peer_id] == [ia]
     end
@@ -4632,8 +4862,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.upsert_ia(agent_id, stamp, ia)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       assert agents[agent_id] == [ia]
     end
 
@@ -4658,12 +4888,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
-      assert_push "history", %{
+      assert_push("history", %{
         "agents" => agents,
         "clear_watermarks" => watermarks
-      }
+      })
 
       # sender pane: watermark 以前の old は落ちる、new のみ残る。
       assert agents[agent_id] == [new]
@@ -4705,8 +4935,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       # 両 pane から drop。
       refute Map.has_key?(agents, agent_id)
       refute Map.has_key?(agents, peer_id)
@@ -4719,8 +4949,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _ = seed_ia(env)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents, "clear_watermarks" => watermarks}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents, "clear_watermarks" => watermarks})
       # sender + receiver 両方に届く (server pre-fanOut)、drop は無し。
       assert agents[agent_id] == [env]
       assert agents[peer_id] == [env]
@@ -4761,8 +4991,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
 
       # sender pane: legacy iso 以前の old は drop、後の new のみ残る。
       assert agents[agent_id] == [new]
@@ -4807,8 +5037,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # 後も env は sender pane から drop される (promotion 後も semantics
       # が保存されることを pin)。
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       refute Map.has_key?(agents, agent_id)
     end
 
@@ -4830,8 +5060,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       refute Map.has_key?(agents, agent_id)
       assert agents[peer_id] == [env]
     end
@@ -4864,20 +5094,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => before_agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => before_agents})
       assert env in (before_agents[agent_id] || [])
 
       Process.sleep(1)
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
-      assert_broadcast "history_cleared", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok)
+      assert_broadcast("history_cleared", %{"agent_id" => ^agent_id})
 
       # 再 join (reload シミュレーション): env は sender pane に残る
       # (clear_history は境界を advance しないので filter は inert)。
       _socket2 = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => after_agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => after_agents})
       assert env in (after_agents[agent_id] || [])
       # 境界も未 seed のまま。
       assert ClearWatermarks.get(agent_id) == nil
@@ -4904,20 +5134,20 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
-      assert_broadcast "history_cleared", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok)
+      assert_broadcast("history_cleared", %{"agent_id" => ^agent_id})
 
       Process.sleep(1)
       later = durable_inter_agent_envelope(agent_id, peer_id, 42)
       _ = seed_ia(later)
 
       _socket2 = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => after_agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => after_agents})
       assert later in (after_agents[agent_id] || [])
     end
 
@@ -4949,21 +5179,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => before}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => before})
       assert old in (before[agent_id] || [])
       assert current in (before[agent_id] || [])
 
-      assert_reply push(socket, "clear_history", %{"agent_id" => agent_id}), :ok
+      assert_reply(push(socket, "clear_history", %{"agent_id" => agent_id}), :ok)
 
-      assert_broadcast "history_cleared", %{
+      assert_broadcast("history_cleared", %{
         "agent_id" => ^agent_id,
         "clear_watermark" => ^display
-      }
+      })
 
       _reload = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => after_clear}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => after_clear})
       refute old in (after_clear[agent_id] || [])
       assert current in (after_clear[agent_id] || [])
     end
@@ -4999,14 +5229,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => _}
-      assert_reply push(socket, "clear_history", %{"agent_id" => agent_id}), :ok
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => _})
+      assert_reply(push(socket, "clear_history", %{"agent_id" => agent_id}), :ok)
       assert ClearWatermarks.get(agent_id) == before
 
       _reload = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => histories}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => histories})
       refute old in (histories[agent_id] || [])
     end
 
@@ -5034,8 +5264,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "history", %{"agents" => agents}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("history", %{"agents" => agents})
       # wire ts (2099-...) > display (2026-...) だが、ingress order は
       # watermark 以前なので sender pane から dropped。
       refute Map.has_key?(agents, agent_id)
@@ -5047,15 +5277,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.append_log(log_envelope(agent_id, "secret"))
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"agents" => _}
-      refute_push "history", %{}
+      assert_push("snapshot", %{"agents" => _})
+      refute_push("history", %{})
     end
 
     test "log の live broadcast は operator へ届く" do
       agent_id = "test.hist-3"
       put_agent(agent_id)
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -5063,14 +5293,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         log_envelope(agent_id, "live")
       )
 
-      assert_push "envelope", %{"type" => "log", "payload" => %{"text" => "live"}}
+      assert_push("envelope", %{"type" => "log", "payload" => %{"text" => "live"}})
     end
 
     test "log の live broadcast は viewer には届かない" do
       agent_id = "test.hist-4"
       put_agent(agent_id)
       _socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -5078,14 +5308,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         log_envelope(agent_id, "live")
       )
 
-      refute_push "envelope", %{"type" => "log"}
+      refute_push("envelope", %{"type" => "log"})
     end
 
     test "result の live broadcast は operator へ届く" do
       agent_id = "test.hist-5"
       put_agent(agent_id)
       _socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -5093,14 +5323,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         result_envelope(agent_id, "完了")
       )
 
-      assert_push "envelope", %{"type" => "result", "payload" => %{"text" => "完了"}}
+      assert_push("envelope", %{"type" => "result", "payload" => %{"text" => "完了"}})
     end
 
     test "result の live broadcast は viewer には届かない" do
       agent_id = "test.hist-6"
       put_agent(agent_id)
       _socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -5108,7 +5338,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         result_envelope(agent_id, "完了")
       )
 
-      refute_push "envelope", %{"type" => "result"}
+      refute_push("envelope", %{"type" => "result"})
     end
   end
 
@@ -5143,11 +5373,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentStates.append_log(log_with_session(agent_id, "old", "s1"))
       :ok = AgentStates.append_log(log_with_session(agent_id, "cur", "s2"))
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       # 実機検収 2 (2026-07-23 マスター指示): clear_history は IA
       # visibility boundary を advance しなくなった (境界前進は
       # SessionResets.confirm_connection と外部 switch_session 経由の
@@ -5155,11 +5385,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # display ISO」の audit hint に意味 shift 済み — 境界が未設定
       # なら空文字列を送る (wire は据置)。この test では ClearWatermarks
       # は未 seed なので空文字列を assert。
-      assert_broadcast "history_cleared", %{
+      assert_broadcast("history_cleared", %{
         "agent_id" => ^agent_id,
         "session_id" => "s2",
         "clear_watermark" => ""
-      }
+      })
 
       # ClearWatermarks には何も書き込まれない (境界前進なし)。
       assert ClearWatermarks.get(agent_id) == nil
@@ -5185,15 +5415,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert ClearWatermarks.get(agent_id) == nil
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "history_cleared", %{
+      assert_broadcast("history_cleared", %{
         "agent_id" => ^agent_id,
         "clear_watermark" => ^existing_display
-      }
+      })
 
       assert {^existing_order, ^existing_display, nil} =
                ClearWatermarks.get(agent_id)
@@ -5220,7 +5450,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServer.SessionStarts.advance_transition(agent_id, "s-current")
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       # Suspending the fsync-gated watermark store makes the channel stop
       # exactly between CAS clear and broadcast. Reversing either boundary
@@ -5236,16 +5466,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                  end
                end)
 
-      refute_broadcast "history_cleared", %{"agent_id" => ^agent_id}
+      refute_broadcast("history_cleared", %{"agent_id" => ^agent_id})
 
       :ok = :sys.resume(ClearWatermarks)
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "history_cleared", %{
+      assert_broadcast("history_cleared", %{
         "agent_id" => ^agent_id,
         "clear_watermark" => ^display
-      }
+      })
 
       assert {_, ^display, nil} = ClearWatermarks.get(agent_id)
     end
@@ -5254,18 +5484,18 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "test.clear-2"
       :ok = AgentStates.put(state_with_session(agent_id, "s2"))
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent_id は unknown_agent" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => "test.clear-none"})
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "現在の session_id が無ければ no_current_session" do
@@ -5273,10 +5503,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # put_agent stores a state envelope WITHOUT session_id.
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "clear_history", %{"agent_id" => agent_id})
-      assert_reply ref, :error, %{reason: "no_current_session"}
+      assert_reply(ref, :error, %{reason: "no_current_session"})
     end
   end
 
@@ -5295,12 +5525,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         })
 
       # The allocated agent_id comes back in the reply for UI correlation.
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
       assert String.starts_with?(agent_id, host_id <> ".")
 
       # host_id addresses the topic only and is not in the payload; the server
       # resolves the persona id to the full object and mints the token.
-      assert_broadcast "spawn", payload
+      assert_broadcast("spawn", payload)
       refute Map.has_key?(payload, "host_id")
       assert payload["agent_id"] == agent_id
       assert payload["persona"] == @ao
@@ -5336,12 +5566,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "name" => "早すぎる join"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
 
       # broadcast が届いた時点で読む — record がまだ mailbox に cast の
       # まま滞留していれば、ここで entry が見えない (旧実装の race を
       # 再現し得るタイミング)。
-      assert_broadcast "spawn", _payload
+      assert_broadcast("spawn", _payload)
 
       assert %{persona_id: "ao", display_name: "早すぎる join"} =
                AgentDirectory.get(agent_id)
@@ -5360,7 +5590,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/seed"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
       # The cast is enqueued before the reply, so the pointer is set by now.
       assert SessionPointers.get(agent_id) ==
                %{
@@ -5390,8 +5620,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "network_access" => true
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
+      assert_broadcast("spawn", payload)
       assert payload["engine"] == "codex"
       assert payload["model"] == "gpt-5.6-sol"
       assert payload["effort"] == "low"
@@ -5417,8 +5647,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "approval" => "local"
         })
 
-      assert_reply ref, :ok, %{}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{})
+      assert_broadcast("spawn", payload)
       assert payload["engine"] == "antigravity"
       assert payload["sandbox"] == "workspace-write"
       assert payload["approval"] == "local"
@@ -5438,8 +5668,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "engine" => "antigravity"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
+      assert_broadcast("spawn", payload)
       assert payload["agent_id"] == agent_id
       assert payload["engine"] == "antigravity"
       refute Map.has_key?(payload, "approval")
@@ -5460,8 +5690,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "approval" => "on-failure"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_approval"}
-      refute_broadcast "spawn", _payload
+      assert_reply(ref, :error, %{reason: "invalid_approval"})
+      refute_broadcast("spawn", _payload)
     end
 
     test "operator の spawn: antigravity で明示 approval=null は key absent と区別して error reply する (round 3 MF-R3-3)" do
@@ -5479,8 +5709,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "approval" => nil
         })
 
-      assert_reply ref, :error, %{reason: "invalid_approval"}
-      refute_broadcast "spawn", _payload
+      assert_reply(ref, :error, %{reason: "invalid_approval"})
+      refute_broadcast("spawn", _payload)
     end
 
     test "operator の spawn: permission_mode を relay + PermissionModes に永続 (phase-15 15-12)" do
@@ -5498,8 +5728,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "permission_mode" => "plan"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
+      assert_broadcast("spawn", payload)
       assert payload["permission_mode"] == "plan"
       # Priority "explicit spawn wins over store": the spawn-time pick is
       # recorded so the after_join push reinforces (not overwrites) it.
@@ -5521,8 +5751,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "permission_mode" => "yolo"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => agent_id}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{"agent_id" => agent_id})
+      assert_broadcast("spawn", payload)
       refute Map.has_key?(payload, "permission_mode")
       _ = KaoiroServer.PermissionModes.all()
       assert KaoiroServer.PermissionModes.get(agent_id) == nil
@@ -5541,7 +5771,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "engine" => "codex"
         })
 
-      assert_reply ref, :error, %{reason: "engine_not_supported"}
+      assert_reply(ref, :error, %{reason: "engine_not_supported"})
     end
 
     test "operator の spawn: 未知 engine 値は invalid_engine" do
@@ -5557,7 +5787,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "engine" => "gemini"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_engine"}
+      assert_reply(ref, :error, %{reason: "invalid_engine"})
     end
 
     test "operator の spawn: initial_prompt を payload に載せる" do
@@ -5574,8 +5804,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "initial_prompt" => "最初の指示"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", %{"initial_prompt" => "最初の指示"}
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", %{"initial_prompt" => "最初の指示"})
     end
 
     test "operator の spawn: 任意 name は display_name のみに反映され persona は不変 (#22, revised issue #209 D19)" do
@@ -5592,10 +5822,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "name" => "  レビュー担当  "
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
       # name は trim され display_name (新規 top-level field) のみに反映
       # される; persona (canonical) は issue #209 D19 のとおり不変。
-      assert_broadcast "spawn", %{"persona" => persona, "display_name" => "レビュー担当"}
+      assert_broadcast("spawn", %{"persona" => persona, "display_name" => "レビュー担当"})
       assert persona == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
     end
 
@@ -5613,8 +5843,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "name" => "   "
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert payload["persona"] == @ao
       # 未指定/空白は persona 自身の canonical name が display_name の
       # 既定値になる (issue #209 D20 — created-time persistence)。
@@ -5636,10 +5866,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "name" => bad
           })
 
-        assert_reply ref, :error, %{reason: "invalid_name"}
+        assert_reply(ref, :error, %{reason: "invalid_name"})
       end
 
-      refute_broadcast "spawn", %{}
+      refute_broadcast("spawn", %{})
     end
 
     test "spawn enforces the display_name byte cap without changing the grapheme rule" do
@@ -5656,26 +5886,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       @endpoint.subscribe("runner:" <> host_id)
       socket = join_as(:operator)
 
-      assert_reply push(socket, "spawn", %{
-                     "host_id" => host_id,
-                     "persona" => "ao",
-                     "cwd" => "/home/user/proj",
-                     "name" => at_limit
-                   }),
-                   :ok
+      assert_reply(
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "name" => at_limit
+        }),
+        :ok
+      )
 
-      assert_broadcast "spawn", %{"display_name" => ^at_limit}
+      assert_broadcast("spawn", %{"display_name" => ^at_limit})
 
-      assert_reply push(socket, "spawn", %{
-                     "host_id" => host_id,
-                     "persona" => "ao",
-                     "cwd" => "/home/user/proj",
-                     "name" => oversized
-                   }),
-                   :error,
-                   %{reason: "invalid_name"}
+      assert_reply(
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "name" => oversized
+        }),
+        :error,
+        %{reason: "invalid_name"}
+      )
 
-      refute_broadcast "spawn", %{}
+      refute_broadcast("spawn", %{})
     end
 
     # issue #209 MF-3 (クロエ実測検証): a JSON `null` for `display_name`
@@ -5700,8 +5934,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "display_name" => nil
         })
 
-      assert_reply ref, :error, %{reason: "invalid_name"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "invalid_name"})
+      refute_broadcast("spawn", %{})
     end
 
     test "operator の spawn: display_name が null で name が有効値でも invalid_name (legacy name を受理しない)" do
@@ -5719,8 +5953,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "name" => "レビュー担当"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_name"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "invalid_name"})
+      refute_broadcast("spawn", %{})
     end
 
     test "operator の stop / restart / enumerate_sessions を runner topic へ relay する" do
@@ -5735,8 +5969,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             {"enumerate_sessions", %{"agent_id" => "lab-pc-2.a", "cwd" => "/home/user/p"}}
           ] do
         ref = push(socket, event, Map.put(extra, "host_id", host_id))
-        assert_reply ref, :ok
-        assert_broadcast ^event, payload
+        assert_reply(ref, :ok)
+        assert_broadcast(^event, payload)
         refute Map.has_key?(payload, "host_id")
         assert payload["version"] == "0"
       end
@@ -5763,8 +5997,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "stop", %{"host_id" => host_id, "agent_id" => agent_id})
-      assert_reply ref, :ok
-      assert_broadcast "stop", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok)
+      assert_broadcast("stop", %{"agent_id" => ^agent_id})
 
       assert :ok = AgentStates.record_disconnect_intent(agent_id, "runner", "stop")
 
@@ -5786,8 +6020,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "restart", %{"host_id" => host_id, "agent_id" => agent_id})
-      assert_reply ref, :ok
-      assert_broadcast "restart", %{"agent_id" => ^agent_id, "request_id" => request_id}
+      assert_reply(ref, :ok)
+      assert_broadcast("restart", %{"agent_id" => ^agent_id, "request_id" => request_id})
       assert is_binary(request_id) and request_id != ""
 
       assert %{
@@ -5797,12 +6031,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              } = PlannedDisconnects.get(agent_id)
 
       duplicate = push(socket, "restart", %{"host_id" => host_id, "agent_id" => agent_id})
-      assert_reply duplicate, :error, %{reason: "agent_busy"}
-      refute_broadcast "restart", _
+      assert_reply(duplicate, :error, %{reason: "agent_busy"})
+      refute_broadcast("restart", _)
 
       stop = push(socket, "stop", %{"host_id" => host_id, "agent_id" => agent_id})
-      assert_reply stop, :ok
-      assert_broadcast "stop", %{"agent_id" => ^agent_id}
+      assert_reply(stop, :ok)
+      assert_broadcast("stop", %{"agent_id" => ^agent_id})
       refute PlannedDisconnects.active?(agent_id)
     end
 
@@ -5819,14 +6053,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       wrong_restart =
         push(socket, "restart", %{"host_id" => wrong_host, "agent_id" => agent_id})
 
-      assert_reply wrong_restart, :error, %{reason: "agent_not_owned"}
-      refute_broadcast "restart", _
+      assert_reply(wrong_restart, :error, %{reason: "agent_not_owned"})
+      refute_broadcast("restart", _)
       refute PlannedDisconnects.active?(agent_id)
 
       @endpoint.subscribe("runner:" <> owner_host)
       control = push(socket, "restart", %{"host_id" => owner_host, "agent_id" => agent_id})
-      assert_reply control, :ok
-      assert_broadcast "restart", %{"agent_id" => ^agent_id, "request_id" => request_id}
+      assert_reply(control, :ok)
+      assert_broadcast("restart", %{"agent_id" => ^agent_id, "request_id" => request_id})
       assert %{transition_id: ^request_id} = PlannedDisconnects.get(agent_id)
 
       bounced_peer = "lab-pc-lifecycle-stop-peer"
@@ -5837,8 +6071,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                PlannedDisconnects.track_bounce(agent_id, bounced_cid, bounced_peer)
 
       wrong_stop = push(socket, "stop", %{"host_id" => wrong_host, "agent_id" => agent_id})
-      assert_reply wrong_stop, :error, %{reason: "agent_not_owned"}
-      refute_broadcast "stop", _
+      assert_reply(wrong_stop, :error, %{reason: "agent_not_owned"})
+      refute_broadcast("stop", _)
       assert %{transition_id: ^request_id} = PlannedDisconnects.get(agent_id)
 
       refute_received %Phoenix.Socket.Broadcast{
@@ -5847,8 +6081,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
 
       control_stop = push(socket, "stop", %{"host_id" => owner_host, "agent_id" => agent_id})
-      assert_reply control_stop, :ok
-      assert_broadcast "stop", %{"agent_id" => ^agent_id}
+      assert_reply(control_stop, :ok)
+      assert_broadcast("stop", %{"agent_id" => ^agent_id})
       refute PlannedDisconnects.active?(agent_id)
 
       assert_received %Phoenix.Socket.Broadcast{
@@ -5879,12 +6113,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       assert log =~ "client declared protocol version"
       assert log =~ "\"99\""
-      assert_broadcast "stop", payload
+      assert_broadcast("stop", payload)
       assert payload["version"] == "0"
     end
 
@@ -5900,11 +6134,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       log =
         capture_log(fn ->
           ref = push(socket, "stop", %{"host_id" => host_id, "agent_id" => "lab-pc-2w.a"})
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       assert log =~ "client declared protocol version (absent)"
-      assert_broadcast "stop", payload
+      assert_broadcast("stop", payload)
       assert payload["version"] == "0"
     end
 
@@ -5925,11 +6159,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "0"
             })
 
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       refute log =~ "client declared protocol version"
-      assert_broadcast "stop", payload
+      assert_broadcast("stop", payload)
       assert payload["version"] == "0"
     end
 
@@ -5939,7 +6173,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for event <- ["spawn", "stop", "restart", "enumerate_sessions"] do
         ref = push(socket, event, %{"host_id" => host_id, "agent_id" => "x"})
-        assert_reply ref, :error, %{reason: "forbidden"}
+        assert_reply(ref, :error, %{reason: "forbidden"})
       end
     end
 
@@ -5947,14 +6181,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "stop", %{"agent_id" => "x"})
-      assert_reply ref, :error, %{reason: "missing_host_id"}
+      assert_reply(ref, :error, %{reason: "missing_host_id"})
     end
 
     test "不正な文字種の host_id は invalid_host_id" do
       socket = join_as(:operator)
 
       ref = push(socket, "stop", %{"host_id" => "bad*host", "agent_id" => "x"})
-      assert_reply ref, :error, %{reason: "invalid_host_id"}
+      assert_reply(ref, :error, %{reason: "invalid_host_id"})
     end
 
     test "未登録 host への spawn は unknown_host" do
@@ -5967,7 +6201,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_host"}
+      assert_reply(ref, :error, %{reason: "unknown_host"})
     end
 
     test "host が申告していない persona は unknown_persona" do
@@ -5982,7 +6216,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_persona"}
+      assert_reply(ref, :error, %{reason: "unknown_persona"})
     end
 
     test "予約 default ペルソナは accept-all host で spawn できる (#35, ADR-0031)" do
@@ -6000,8 +6234,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :ok, %{"agent_id" => _}
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok, %{"agent_id" => _})
+      assert_broadcast("spawn", payload)
 
       assert payload["persona"] == %{
                "id" => "default",
@@ -6023,8 +6257,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/etc"
         })
 
-      assert_reply ref, :error, %{reason: "cwd_not_allowed"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "cwd_not_allowed"})
+      refute_broadcast("spawn", %{})
     end
   end
 
@@ -6063,8 +6297,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert {:ok, %{policy: :off, revision: 1}} = KaoiroServer.DeliveryPolicies.get(agent_id)
       refute Map.has_key?(payload, "delivery_policy")
       # Same agent_id (revive in place), resume the recorded session under cwd,
@@ -6088,8 +6322,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "engine_not_supported"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "engine_not_supported"})
+      refute_broadcast("spawn", %{})
     end
 
     test "session pointer が無ければ no_session" do
@@ -6099,7 +6333,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "no_session"}
+      assert_reply(ref, :error, %{reason: "no_session"})
     end
 
     test "未知 agent の restore は unknown_agent" do
@@ -6107,7 +6341,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => "lab-pc-1.ghost"})
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "稼働中 agent の restore は not_disconnected で拒否(D5、サーバ早期拒否)" do
@@ -6121,8 +6355,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "not_disconnected"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "not_disconnected"})
+      refute_broadcast("spawn", %{})
     end
 
     # issue #209 D21 acceptance pin: restore は既存どおり unknown persona
@@ -6153,8 +6387,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "unknown_persona"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "unknown_persona"})
+      refute_broadcast("spawn", %{})
     end
 
     test "viewer の restore は forbidden" do
@@ -6162,7 +6396,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => "lab-pc-1.rev3"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "session_id nil pointer + snapshot → resume_session_id なし apply_resume_snapshot=true で fresh-restore (phase-25 25-3)" do
@@ -6186,8 +6420,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert payload["agent_id"] == agent_id
       assert payload["cwd"] == "/home/user/proj"
       assert payload["apply_resume_snapshot"] == true
@@ -6212,8 +6446,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert payload["apply_resume_snapshot"] == true
       refute Map.has_key?(payload, "resume_session_id")
       refute Map.has_key?(payload, "resume_snapshot")
@@ -6226,7 +6460,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "no_session"}
+      assert_reply(ref, :error, %{reason: "no_session"})
     end
 
     test "cwd 欠落 pointer は no_session 維持 (fresh-restore に cwd は必須)" do
@@ -6240,7 +6474,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "no_session"}
+      assert_reply(ref, :error, %{reason: "no_session"})
     end
 
     test "resume_disconnected は pointer.session_id が nil でも operator 指定 sid で通る (phase-25 25-4)" do
@@ -6272,8 +6506,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "operator-picked-sess"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       # operator の明示 session pick を尊重、apply_resume_snapshot は付かない。
       assert payload["resume_session_id"] == "operator-picked-sess"
       assert payload["cwd"] == "/home/user/proj"
@@ -6301,8 +6535,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "restore", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert payload["agent_id"] == agent_id
       assert payload["persona"] == @ao
       assert payload["resume_session_id"] == "sess-after-restart"
@@ -6324,8 +6558,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "switch_session", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("switch_session", payload)
       assert payload["agent_id"] == agent_id
       assert payload["resume_session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
@@ -6336,7 +6570,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              } = PlannedDisconnects.get(agent_id)
 
       assert payload["request_id"] == transition_id
-      refute_broadcast "spawn", %{}
+      refute_broadcast("spawn", %{})
     end
 
     test "switch_session の AgentActivity setup が exit しても planned intent を残さない" do
@@ -6395,8 +6629,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "switch_session", %{}
+      assert_reply(ref, :ok)
+      assert_broadcast("switch_session", %{})
       # 次の wrapper join は replay を要求する。
       assert {:required, _} = AgentStates.hydration_verdict(agent_id, self())
     end
@@ -6431,8 +6665,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "new-sess-1"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "spawn", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("spawn", payload)
       assert {:ok, %{policy: :off, revision: 1}} = KaoiroServer.DeliveryPolicies.get(agent_id)
       refute Map.has_key?(payload, "delivery_policy")
       # payload の session_id を使う(SessionPointers の値ではなく)
@@ -6440,7 +6674,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # cwd は SessionPointers を引き継ぐ
       assert payload["cwd"] == "/home/user/proj"
       assert payload["agent_id"] == agent_id
-      refute_broadcast "switch_session", %{}
+      refute_broadcast("switch_session", %{})
     end
 
     test "切断済み agent の resume_session: host が pointer の engine を宣言しなければ engine_not_supported" do
@@ -6472,8 +6706,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "new-sess"
         })
 
-      assert_reply ref, :error, %{reason: "engine_not_supported"}
-      refute_broadcast "spawn", %{}
+      assert_reply(ref, :error, %{reason: "engine_not_supported"})
+      refute_broadcast("spawn", %{})
     end
 
     test "切断済みで session pointer に cwd が無ければ no_session" do
@@ -6501,7 +6735,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "new-sess-1"
         })
 
-      assert_reply ref, :error, %{reason: "no_session"}
+      assert_reply(ref, :error, %{reason: "no_session"})
     end
 
     test "session_id 欠落は missing_session_id" do
@@ -6511,7 +6745,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "resume_session", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "missing_session_id"}
+      assert_reply(ref, :error, %{reason: "missing_session_id"})
     end
 
     test "session_id charset 違反は invalid_session_id" do
@@ -6525,7 +6759,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "../evil"
         })
 
-      assert_reply ref, :error, %{reason: "invalid_session_id"}
+      assert_reply(ref, :error, %{reason: "invalid_session_id"})
     end
 
     test "未知 agent の resume_session は unknown_agent" do
@@ -6537,7 +6771,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "some-sess"
         })
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "viewer の resume_session は forbidden" do
@@ -6551,7 +6785,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "some-sess"
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
   end
 
@@ -6572,8 +6806,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "agent_id" => agent_id
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "enumerate_sessions", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("enumerate_sessions", payload)
       assert payload["cwd"] == "/home/user/proj"
       assert payload["agent_id"] == agent_id
       refute Map.has_key?(payload, "host_id")
@@ -6591,8 +6825,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/proj"
         })
 
-      assert_reply ref, :ok
-      assert_broadcast "enumerate_sessions", payload
+      assert_reply(ref, :ok)
+      assert_broadcast("enumerate_sessions", payload)
       assert payload["cwd"] == "/home/user/proj"
     end
 
@@ -6609,8 +6843,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "engine" => "codex"
         })
 
-      assert_reply ref, :error, %{reason: "engine_not_supported"}
-      refute_broadcast "enumerate_sessions", %{}
+      assert_reply(ref, :error, %{reason: "engine_not_supported"})
+      refute_broadcast("enumerate_sessions", %{})
     end
 
     test "SessionPointers に cwd 記録が無ければ no_session" do
@@ -6626,7 +6860,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "agent_id" => agent_id
         })
 
-      assert_reply ref, :error, %{reason: "no_session"}
+      assert_reply(ref, :error, %{reason: "no_session"})
     end
 
     test "cwd も agent_id も無ければ invalid_cwd" do
@@ -6636,7 +6870,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "enumerate_sessions", %{"host_id" => host_id})
 
-      assert_reply ref, :error, %{reason: "invalid_cwd"}
+      assert_reply(ref, :error, %{reason: "invalid_cwd"})
     end
   end
 
@@ -6652,15 +6886,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         )
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "hosts", %{"hosts" => hosts}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("hosts", %{"hosts" => hosts})
       assert Map.has_key?(hosts, host_id)
     end
 
     test "viewer は join 時に hosts push を受けない" do
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-      refute_push "hosts", %{}
+      assert_push("snapshot", %{"agents" => _})
+      refute_push("hosts", %{})
     end
 
     test "join 時 operator は directory push を受ける (ADR-0030 D4)" do
@@ -6669,8 +6903,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _ = AgentDirectory.get(agent_id)
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "directory", %{"entries" => entries}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("directory", %{"entries" => entries})
       # issue #209 D19/spec-gate: wire shape is the JOINED entry —
       # canonical `persona` (fresh-joined against PersonaAssets, not a
       # stored snapshot) plus `display_name`, both string-keyed (the
@@ -6698,8 +6932,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       on_exit(fn -> KaoiroServer.WrapperBuildInfos.delete(agent_id, owner) end)
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "wrapper_build_info", %{"builds" => builds}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("wrapper_build_info", %{"builds" => builds})
       assert builds[agent_id] == info
     end
 
@@ -6734,8 +6968,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "wrapper_build_info", payload
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("wrapper_build_info", payload)
 
       refute payload["build_info_incomplete"]
       assert map_size(payload["builds"]) == length(agent_ids)
@@ -6754,8 +6988,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :ok = AgentDirectory.record(agent_id, "nonexistent-pack-xyz", "消えたパックの通称")
 
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "directory", %{"entries" => entries}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("directory", %{"entries" => entries})
 
       assert entries[agent_id] == %{
                "persona" => %{"id" => "nonexistent-pack-xyz"},
@@ -6766,8 +7000,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "oversized directory push is truncated within the production frame budget" do
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "directory", %{"entries" => _}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("directory", %{"entries" => _})
 
       entries =
         Map.new(1..130, fn n ->
@@ -6782,7 +7016,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "directory", %{"entries" => entries})
 
-      assert_push "directory", payload
+      assert_push("directory", payload)
       assert payload["directory_incomplete"] == true
       assert map_size(payload["entries"]) < map_size(entries)
       assert_production_push_frame_fits("directory", payload)
@@ -6790,13 +7024,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
-      refute_push "directory", %{}
+      assert_push("snapshot", %{"agents" => _})
+      refute_push("directory", %{})
     end
 
     test "runner_sessions / spawn_result / hosts / wrapper_build_info の live broadcast は operator に届く" do
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       for event <- [
             "runner_sessions",
@@ -6806,14 +7040,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "wrapper_build_info"
           ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
-        assert_push ^event, %{"host_id" => "h"}
+        assert_push(^event, %{"host_id" => "h"})
       end
     end
 
     test "oversized hosts push is truncated within the production frame budget" do
       _operator = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
-      assert_push "hosts", %{"hosts" => _}
+      assert_push("snapshot", %{"agents" => _})
+      assert_push("hosts", %{"hosts" => _})
 
       hosts =
         Map.new(1..130, fn n ->
@@ -6822,7 +7056,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => hosts})
 
-      assert_push "hosts", payload
+      assert_push("hosts", payload)
       assert payload["hosts_incomplete"] == true
       assert map_size(payload["hosts"]) < map_size(hosts)
       assert_production_push_frame_fits("hosts", payload)
@@ -6830,7 +7064,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     test "runner_sessions / spawn_result / hosts / wrapper_build_info は viewer には届かない (fail-closed)" do
       _viewer = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       for event <- [
             "runner_sessions",
@@ -6840,7 +7074,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "wrapper_build_info"
           ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
-        refute_push ^event, %{}
+        refute_push(^event, %{})
       end
     end
   end
@@ -6868,9 +7102,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "chunks" => 1
         })
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "attach_open", payload
+      assert_broadcast("attach_open", payload)
       refute Map.has_key?(payload, "agent_id")
       assert payload["upload_id"] == "u1"
       assert payload["mime"] == "image/png"
@@ -6891,7 +7125,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "chunks" => 1
         })
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "attach_open の必須キー欠落は invalid_value" do
@@ -6900,7 +7134,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "attach_open", %{"agent_id" => agent_id, "upload_id" => "u1"})
-      assert_reply ref, :error, %{reason: reason}
+      assert_reply(ref, :error, %{reason: reason})
       assert reason =~ "missing key"
     end
 
@@ -6912,7 +7146,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       # No prior attach_open -> route table empty -> unknown_upload
       ref = push(socket, "attach_close", %{"agent_id" => agent_id, "upload_id" => "unknown"})
-      assert_reply ref, :error, %{reason: "unknown_upload"}
+      assert_reply(ref, :error, %{reason: "unknown_upload"})
     end
 
     test "attach_open 登録後の attach_close は relay 成功" do
@@ -6931,12 +7165,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "chunks" => 1
         })
 
-      assert_reply open_ref, :ok
-      assert_broadcast "attach_open", _
+      assert_reply(open_ref, :ok)
+      assert_broadcast("attach_open", _)
 
       close_ref = push(socket, "attach_close", %{"agent_id" => agent_id, "upload_id" => "u5"})
-      assert_reply close_ref, :ok
-      assert_broadcast "attach_close", %{"upload_id" => "u5"} = close_payload
+      assert_reply(close_ref, :ok)
+      assert_broadcast("attach_close", %{"upload_id" => "u5"} = close_payload)
       refute Map.has_key?(close_payload, "agent_id")
     end
 
@@ -6961,13 +7195,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "chunks" => 1
         })
 
-      assert_reply open_ref, :ok
-      assert_broadcast "attach_open", _
+      assert_reply(open_ref, :ok)
+      assert_broadcast("attach_open", _)
 
       close_ref =
         push(socket, "attach_close", %{"agent_id" => agent_b, "upload_id" => "uX"})
 
-      assert_reply close_ref, :ok
+      assert_reply(close_ref, :ok)
       # ルートが A なので A 側に届くべき(B 側には出ない)。
       assert_received %Phoenix.Socket.Broadcast{
         topic: topic,
@@ -6999,8 +7233,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "chunks" => 1
         })
 
-      assert_reply open_ref, :ok
-      assert_broadcast "attach_open", _
+      assert_reply(open_ref, :ok)
+      assert_broadcast("attach_open", _)
 
       data = build_chunk_payload("u6", 0, <<1, 2, 3, 4>>)
 
@@ -7010,7 +7244,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # construct the tuple shape directly.
       push(socket, "attach_chunk", {:binary, data})
 
-      assert_broadcast "attach_chunk", {:binary, ^data}
+      assert_broadcast("attach_chunk", {:binary, ^data})
     end
 
     test "binary attach_chunk の upload_id が未登録ならドロップ (broadcast 無し)" do
@@ -7022,7 +7256,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       data = build_chunk_payload("unregistered", 0, <<9>>)
       push(socket, "attach_chunk", {:binary, data})
 
-      refute_broadcast "attach_chunk", _
+      refute_broadcast("attach_chunk", _)
     end
 
     test "viewer の binary attach_chunk はドロップ" do
@@ -7034,7 +7268,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       data = build_chunk_payload("u8", 0, <<1>>)
       push(socket, "attach_chunk", {:binary, data})
 
-      refute_broadcast "attach_chunk", _
+      refute_broadcast("attach_chunk", _)
     end
 
     test "malformed binary frame (header truncated) はドロップ" do
@@ -7046,7 +7280,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # 100 byte upload_id を宣言しつつ 4 byte しか送らない
       push(socket, "attach_chunk", {:binary, <<100::big-32>>})
 
-      refute_broadcast "attach_chunk", _
+      refute_broadcast("attach_chunk", _)
     end
   end
 
@@ -7098,30 +7332,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
 
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "session_reset_started",
-                       %{
-                         "agent_id" => ^agent_id,
-                         "mode" => "new",
-                         "origin" => "operator",
-                         "previous_session_id" => "sess-prev",
-                         "request_id" => request_id
-                       }
+      assert_broadcast(
+        "session_reset_started",
+        %{
+          "agent_id" => ^agent_id,
+          "mode" => "new",
+          "origin" => "operator",
+          "previous_session_id" => "sess-prev",
+          "request_id" => request_id
+        }
+      )
 
       assert String.starts_with?(request_id, "rs_")
 
       # phase-17 17-5 must-1: reset_session payload には detach 前の
       # session_id (AgentStates snapshot 由来) を previous_session_id で
       # 載せる。runner の rollback branch がこの値を使う。
-      assert_broadcast "reset_session",
-                       %{
-                         "agent_id" => ^agent_id,
-                         "mode" => "new",
-                         "request_id" => ^request_id,
-                         "version" => "0",
-                         "previous_session_id" => "sess-prev"
-                       }
+      assert_broadcast(
+        "reset_session",
+        %{
+          "agent_id" => ^agent_id,
+          "mode" => "new",
+          "request_id" => ^request_id,
+          "version" => "0",
+          "previous_session_id" => "sess-prev"
+        }
+      )
 
       assert %{origin: :operator} = :sys.get_state(KaoiroServer.SessionResets).pending[agent_id]
 
@@ -7152,7 +7390,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         capture_log(fn ->
           with_session_resets_unavailable(fn ->
             :ok = :sys.resume(accept_pid)
-            assert_reply ref, :error, %{reason: "timeout"}
+            assert_reply(ref, :error, %{reason: "timeout"})
           end)
         end)
       after
@@ -7168,9 +7406,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "reset_session", %{"agent_id" => ^agent_id} = payload
+      assert_broadcast("reset_session", %{"agent_id" => ^agent_id} = payload)
       refute Map.has_key?(payload, "previous_session_id")
     end
 
@@ -7197,17 +7435,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "reset_session",
-                       %{
-                         "agent_id" => ^agent_id,
-                         "resume_snapshot" => %{
-                           "sandbox" => "danger-full-access",
-                           "network_access" => true,
-                           "permission_mode" => "bypassPermissions"
-                         }
-                       }
+      assert_broadcast(
+        "reset_session",
+        %{
+          "agent_id" => ^agent_id,
+          "resume_snapshot" => %{
+            "sandbox" => "danger-full-access",
+            "network_access" => true,
+            "permission_mode" => "bypassPermissions"
+          }
+        }
+      )
     end
 
     # issue #397 S1 (kohaku round-1 should-fix): the troubleshooting doc
@@ -7295,7 +7535,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
 
       envelope_ref = push(wrapper_socket, "envelope", envelope)
-      assert_reply envelope_ref, :ok
+      assert_reply(envelope_ref, :ok)
 
       :ok =
         wait_until(fn ->
@@ -7308,12 +7548,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       reset_ref =
         push(operator_socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
 
-      assert_reply reset_ref, :ok
+      assert_reply(reset_ref, :ok)
 
-      assert_broadcast "reset_session", %{
+      assert_broadcast("reset_session", %{
         "agent_id" => ^agent_id,
         "resume_snapshot" => %{"approval" => "local"}
-      }
+      })
     end
 
     # Negative control for the pin above: a narrowing revision that never
@@ -7375,7 +7615,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
 
       envelope_ref = push(wrapper_socket, "envelope", envelope)
-      assert_reply envelope_ref, :ok
+      assert_reply(envelope_ref, :ok)
 
       :ok =
         wait_until(fn ->
@@ -7388,12 +7628,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       reset_ref =
         push(operator_socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
 
-      assert_reply reset_ref, :ok
+      assert_reply(reset_ref, :ok)
 
-      assert_broadcast "reset_session", %{
+      assert_broadcast("reset_session", %{
         "agent_id" => ^agent_id,
         "resume_snapshot" => %{"approval" => "never"}
-      }
+      })
     end
 
     test "SessionPointers に snapshot が無い agent の reset_session に resume_snapshot は載らない" do
@@ -7408,9 +7648,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :ok
+      assert_reply(ref, :ok)
 
-      assert_broadcast "reset_session", %{"agent_id" => ^agent_id} = payload
+      assert_broadcast("reset_session", %{"agent_id" => ^agent_id} = payload)
       refute Map.has_key?(payload, "resume_snapshot")
     end
 
@@ -7420,7 +7660,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "未知 agent は unknown_agent" do
@@ -7429,7 +7669,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "session_reset", %{"agent_id" => "sess-reset.none", "mode" => "new"})
 
-      assert_reply ref, :error, %{reason: "unknown_agent"}
+      assert_reply(ref, :error, %{reason: "unknown_agent"})
     end
 
     test "invalid mode は invalid_mode" do
@@ -7440,7 +7680,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "restart"})
 
-      assert_reply ref, :error, %{reason: "invalid_mode"}
+      assert_reply(ref, :error, %{reason: "invalid_mode"})
     end
 
     test "capability 未 stamp (旧 wrapper) は unsupported_session_reset" do
@@ -7449,7 +7689,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      assert_reply(ref, :error, %{reason: "unsupported_session_reset"})
     end
 
     test "supports_session_reset=false は unsupported_session_reset" do
@@ -7458,7 +7698,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      assert_reply(ref, :error, %{reason: "unsupported_session_reset"})
     end
 
     test "supports=true + modes に mode 非対応は unsupported_session_reset" do
@@ -7467,7 +7707,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "clear"})
-      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      assert_reply(ref, :error, %{reason: "unsupported_session_reset"})
     end
 
     test "supports=true + 空 modes は unsupported_session_reset (fail-closed)" do
@@ -7476,7 +7716,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      assert_reply(ref, :error, %{reason: "unsupported_session_reset"})
     end
 
     test "busy 状態 (thinking) は agent_busy" do
@@ -7485,7 +7725,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "agent_busy"}
+      assert_reply(ref, :error, %{reason: "agent_busy"})
     end
 
     test "既存 pending 中の重複 reset は session_reset_pending" do
@@ -7494,10 +7734,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref1 = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref1, :ok
+      assert_reply(ref1, :ok)
 
       ref2 = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "clear"})
-      assert_reply ref2, :error, %{reason: "session_reset_pending"}
+      assert_reply(ref2, :error, %{reason: "session_reset_pending"})
     end
 
     test "別 lifecycle の planned intent と競合した reset は取得済み lock を cancel する" do
@@ -7508,9 +7748,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
-      assert_reply ref, :error, %{reason: "agent_busy"}
+      assert_reply(ref, :error, %{reason: "agent_busy"})
       refute KaoiroServer.SessionResets.pending?(agent_id)
-      refute_broadcast "reset_session", _
+      refute_broadcast("reset_session", _)
       assert %{transition_id: "restart-won"} = PlannedDisconnects.get(agent_id)
     end
 
@@ -7533,7 +7773,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       )
 
-      refute_push "session_reset_started", _payload
+      refute_push("session_reset_started", _payload)
     end
 
     test "viewer には session_reset_completed が push されない" do
@@ -7551,7 +7791,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       )
 
-      refute_push "session_reset_completed", _payload
+      refute_push("session_reset_completed", _payload)
     end
 
     test "viewer には session_reset_failed も push されない" do
@@ -7568,7 +7808,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       )
 
-      refute_push "session_reset_failed", _payload
+      refute_push("session_reset_failed", _payload)
     end
 
     test "operator には session_reset_started / _completed / _failed が push される" do
@@ -7582,7 +7822,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         %{"request_id" => "op_st", "agent_id" => "op.st.a", "mode" => "new"}
       )
 
-      assert_push "session_reset_started", %{"request_id" => "op_st"}
+      assert_push("session_reset_started", %{"request_id" => "op_st"})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -7595,7 +7835,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       )
 
-      assert_push "session_reset_completed", %{"request_id" => "op_ok"}
+      assert_push("session_reset_completed", %{"request_id" => "op_ok"})
 
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -7608,7 +7848,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       )
 
-      assert_push "session_reset_failed", %{"request_id" => "op_ng"}
+      assert_push("session_reset_failed", %{"request_id" => "op_ng"})
     end
   end
 
@@ -7621,8 +7861,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/new"})
 
-      assert_reply ref, :error, %{reason: "reserved_session_command"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "reserved_session_command"})
+      refute_broadcast("instruction", _)
     end
 
     test "exact /clear は reserved_session_command で reject" do
@@ -7633,8 +7873,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "/clear"})
 
-      assert_reply ref, :error, %{reason: "reserved_session_command"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "reserved_session_command"})
+      refute_broadcast("instruction", _)
     end
 
     test "exact /reset (the CLI's alias of /clear) は reserved_session_command で reject" do
@@ -7645,8 +7885,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => " /reset\n"})
 
-      assert_reply ref, :error, %{reason: "reserved_session_command"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "reserved_session_command"})
+      refute_broadcast("instruction", _)
     end
 
     # The CLI runs `/reset now` as `/clear` with an argument, so an argument
@@ -7671,8 +7911,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
         ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => unquote(text)})
 
-        assert_reply ref, :error, %{reason: "reserved_session_command"}
-        refute_broadcast "instruction", _
+        assert_reply(ref, :error, %{reason: "reserved_session_command"})
+        refute_broadcast("instruction", _)
       end
     end
 
@@ -7695,8 +7935,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
         ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => unquote(text)})
 
-        assert_reply ref, :ok
-        assert_broadcast "instruction", %{"text" => unquote(text)}
+        assert_reply(ref, :ok)
+        assert_broadcast("instruction", %{"text" => unquote(text)})
       end
     end
 
@@ -7708,8 +7948,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "  /new\n"})
 
-      assert_reply ref, :error, %{reason: "reserved_session_command"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "reserved_session_command"})
+      refute_broadcast("instruction", _)
     end
 
     # The wrapper puts the text after the attachments and the CLI reads the
@@ -7728,8 +7968,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "attachment_ids" => ["u1"]
           })
 
-        assert_reply ref, :error, %{reason: "reserved_session_command"}
-        refute_broadcast "instruction", _
+        assert_reply(ref, :error, %{reason: "reserved_session_command"})
+        refute_broadcast("instruction", _)
       end
     end
 
@@ -7747,8 +7987,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "attachment_ids" => ["u1"]
           })
 
-        assert_reply ref, :ok
-        assert_broadcast "instruction", %{"text" => unquote(text)}
+        assert_reply(ref, :ok)
+        assert_broadcast("instruction", %{"text" => unquote(text)})
       end
     end
   end
@@ -7794,8 +8034,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("instruction", _)
 
       # cleanup for next test
       _ = KaoiroServer.SessionResets.delete(agent_id)
@@ -7811,8 +8051,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("instruction", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7825,8 +8065,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "m"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "set_model", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("set_model", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7839,8 +8079,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "refresh_models", %{"agent_id" => agent_id})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "refresh_models", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("refresh_models", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7861,8 +8101,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "session_id" => "11111111-2222-3333-4444-555555555555"
         })
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "switch_session", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("switch_session", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7875,8 +8115,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "set_effort", %{"agent_id" => agent_id, "effort" => "max"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "set_effort", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("set_effort", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7890,8 +8130,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "set_permission_mode", %{"agent_id" => agent_id, "mode" => "plan"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "set_permission_mode", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("set_permission_mode", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7904,7 +8144,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       acquire_reset_lock(agent_id)
       @endpoint.subscribe("wrapper:" <> agent_id)
       socket = join_as(:viewer)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       # snapshot は viewer のまま operator へ昇格させる。guard が snapshot を
       # 見ていると viewer 扱いで素通りし、relay 側は live の operator と
@@ -7913,8 +8153,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
 
-      assert_reply ref, :error, %{reason: "session_reset_pending"}
-      refute_broadcast "instruction", _
+      assert_reply(ref, :error, %{reason: "session_reset_pending"})
+      refute_broadcast("instruction", _)
 
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
@@ -7923,12 +8163,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       agent_id = "gp.demoted"
       put_agent(agent_id)
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       Application.put_env(:kaoiro_server, :client_tokens, "tok-operator:viewer")
 
       ref = push(socket, "instruction", %{"agent_id" => agent_id, "text" => "hi"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
 
       # guard_instruction/1 は成功時に last_dispatch を stamp する。降格済み
       # socket の指示でそれが入ると、正当な reset の cooldown が延びる。
@@ -8058,7 +8298,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "launch_defaults", %{})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "既知 agent が無ければ空 defaults" do
@@ -8066,7 +8306,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "launch_defaults", %{})
 
-      assert_reply ref, :ok, %{"defaults" => %{}}
+      assert_reply(ref, :ok, %{"defaults" => %{}})
     end
 
     test "実ストア経由で同一 persona 複数 agent の最新 effort が返る" do
@@ -8100,7 +8340,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "launch_defaults", %{})
 
-      assert_reply ref, :ok, %{"defaults" => defaults}
+      assert_reply(ref, :ok, %{"defaults" => defaults})
       assert defaults["gp.ld-persona"] == "high"
     end
   end
@@ -8111,7 +8351,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_conversations", %{})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "operator は ConversationStates の内容を受け取る" do
@@ -8123,7 +8363,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "list_conversations", %{})
 
-      assert_reply ref, :ok, %{"conversations" => conversations}
+      assert_reply(ref, :ok, %{"conversations" => conversations})
 
       assert %{
                "conversation_id" => ^cid,
@@ -8160,10 +8400,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "list_conversations", %{})
 
-      assert_reply ref, :ok, %{
+      assert_reply(ref, :ok, %{
         "conversations" => projected,
         "conversations_incomplete" => true
-      }
+      })
 
       assert projected == Enum.sort_by(projected, & &1["started_at"], :desc)
       assert length(projected) < map_size(conversations)
@@ -8179,7 +8419,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_conversations", %{})
 
-      assert_reply ref, :ok, %{"conversations" => conversations}
+      assert_reply(ref, :ok, %{"conversations" => conversations})
       assert is_list(conversations)
     end
   end
@@ -8190,7 +8430,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_users", %{})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "operator は Users.all_with_role/1 の内容を受け取る (id/kind/display_name/role)" do
@@ -8204,7 +8444,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "list_users", %{})
 
-      assert_reply ref, :ok, %{"users" => users}
+      assert_reply(ref, :ok, %{"users" => users})
 
       entry = Enum.find(users, &(&1.id == user.id))
       assert %{id: id, kind: "user", display_name: "R", role: :viewer} = entry
@@ -8224,7 +8464,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_users", %{})
 
-      assert_reply ref, :ok, %{"users" => users}
+      assert_reply(ref, :ok, %{"users" => users})
       assert is_list(users)
     end
   end
@@ -8409,7 +8649,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             {"permission", "host-a.permission"}
           ] do
         ref = push(socket, "list_session_events", %{"version" => "0", "agent_id" => id})
-        assert_reply ref, :ok, reply
+        assert_reply(ref, :ok, reply)
         assert lifecycle_fixture_wire(:ok, reply) == fixture[name]
       end
 
@@ -8418,14 +8658,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref =
         push(socket, "list_session_events", %{"version" => "0", "agent_id" => "host-a.legacy"})
 
-      assert_reply ref, :ok, loaded
+      assert_reply(ref, :ok, loaded)
       assert lifecycle_fixture_wire(:ok, loaded) == fixture["legacy"]
       viewer = join_as(:viewer)
 
       ref =
         push(viewer, "list_session_events", %{"version" => "0", "agent_id" => "host-a.target"})
 
-      assert_reply ref, :error, denied
+      assert_reply(ref, :error, denied)
       assert lifecycle_fixture_wire(:error, denied) == fixture["viewer"]
     end
 
@@ -8458,7 +8698,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-viewer"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "operator は agent の session_lifecycle timeline を newest-first で受け取る" do
@@ -8478,7 +8718,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "list_session_events", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok, %{"events" => events}
+      assert_reply(ref, :ok, %{"events" => events})
 
       assert events == [
                %{
@@ -8503,7 +8743,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-admin"})
 
-      assert_reply ref, :ok, %{"events" => []}
+      assert_reply(ref, :ok, %{"events" => []})
     end
 
     test "agent_id 欠落は missing_agent_id" do
@@ -8511,7 +8751,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_session_events", %{})
 
-      assert_reply ref, :error, %{reason: "missing_agent_id"}
+      assert_reply(ref, :error, %{reason: "missing_agent_id"})
     end
 
     test "agent_id の charset 違反は invalid_agent_id" do
@@ -8519,7 +8759,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_session_events", %{"agent_id" => "bad id!"})
 
-      assert_reply ref, :error, %{reason: "invalid_agent_id"}
+      assert_reply(ref, :error, %{reason: "invalid_agent_id"})
     end
 
     test "未知の agent_id は error ではなく空配列を返す (existence check 無し)" do
@@ -8527,7 +8767,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-never-existed"})
 
-      assert_reply ref, :ok, %{"events" => []}
+      assert_reply(ref, :ok, %{"events" => []})
     end
 
     # delete_agent の purge_agent_records/1 は SessionLifecycleEvents を
@@ -8542,28 +8782,28 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       sync_lifecycle_store()
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok, %{}, @purge_reply_timeout
-      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      assert_reply(ref, :ok, %{}, @purge_reply_timeout)
+      assert_broadcast("agent_deleted", %{"agent_id" => ^agent_id})
       refute AgentStates.known?(agent_id)
       assert AgentDirectory.get(agent_id) == nil
 
       ref2 = push(socket, "list_session_events", %{"agent_id" => agent_id})
 
-      assert_reply ref2, :ok, %{
+      assert_reply(ref2, :ok, %{
         "events" => [%{"kind" => "conversation_reset", "trigger" => nil, "at" => _}]
-      }
+      })
     end
 
     test "returns session_lifecycle_unavailable instead of an empty list when SessionLifecycleEvents store is unreachable or times out (issue #682)" do
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       # Healthy empty store returns %{"events" => []} (events_incomplete omitted)
       empty_ref = push(socket, "list_session_events", %{"agent_id" => "host-a.empty-ok"})
-      assert_reply empty_ref, :ok, empty_payload
+      assert_reply(empty_ref, :ok, empty_payload)
       assert empty_payload == %{"events" => []}
       refute Map.has_key?(empty_payload, "events_incomplete")
 
@@ -8578,7 +8818,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ExUnit.CaptureLog.capture_log(fn ->
         dead_ref = push(socket, "list_session_events", %{"agent_id" => "host-a.target"})
-        assert_reply dead_ref, :error, %{reason: "session_lifecycle_unavailable"}
+        assert_reply(dead_ref, :error, %{reason: "session_lifecycle_unavailable"})
       end)
 
       # Timed-out store (:timeout)
@@ -8601,7 +8841,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ExUnit.CaptureLog.capture_log(fn ->
         slow_ref = push(socket, "list_session_events", %{"agent_id" => "host-a.target"})
-        assert_reply slow_ref, :error, %{reason: "session_lifecycle_unavailable"}
+        assert_reply(slow_ref, :error, %{reason: "session_lifecycle_unavailable"})
       end)
 
       :sys.resume(slow_pid)
@@ -8726,10 +8966,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       sync_lifecycle_store()
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       ref = push(socket, "list_session_events", %{"agent_id" => agent_id})
-      assert_reply ref, :ok, %{"events" => events} = reply
+      assert_reply(ref, :ok, %{"events" => events} = reply)
       refute Map.has_key?(reply, "events_incomplete")
 
       assert [
@@ -8805,7 +9045,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ExUnit.CaptureLog.capture_log(fn ->
         ref_fallback = push(socket, "list_session_events", %{"agent_id" => agent_id})
-        assert_reply ref_fallback, :ok, %{"events" => [fallback_newest | _]}
+        assert_reply(ref_fallback, :ok, %{"events" => [fallback_newest | _]})
         assert fallback_newest["details"]["work_id"] == active_work.work_id
         refute Map.has_key?(fallback_newest["details"], "work_title")
       end)
@@ -8815,10 +9055,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # After delete_agent, session_reset_started attribution and work_title remain queryable
       put_disconnected(agent_id)
       del_ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply del_ref, :ok, %{}, @purge_reply_timeout
+      assert_reply(del_ref, :ok, %{}, @purge_reply_timeout)
 
       after_del_ref = push(socket, "list_session_events", %{"agent_id" => agent_id})
-      assert_reply after_del_ref, :ok, %{"events" => [after_del_newest | _]}
+      assert_reply(after_del_ref, :ok, %{"events" => [after_del_newest | _]})
       assert after_del_newest["details"]["work_title"] == "Active director work"
     end
 
@@ -8880,11 +9120,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end)
 
       socket = join_as(:operator)
-      assert_push "snapshot", %{"agents" => _}
+      assert_push("snapshot", %{"agents" => _})
 
       # 1. 200 rows with 256-byte work_title (~91 KiB > 64 KiB) fits within 8 MB budget without truncation
       ref_200 = push(socket, "list_session_events", %{"agent_id" => agent_id})
-      assert_reply ref_200, :ok, %{"events" => reply_200} = payload_200
+      assert_reply(ref_200, :ok, %{"events" => reply_200} = payload_200)
       assert length(reply_200) == 200
       refute Map.has_key?(payload_200, "events_incomplete")
       assert hd(reply_200)["details"]["work_title"] == max_title
@@ -8909,12 +9149,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref_over = push(socket, "list_session_events", %{"agent_id" => agent_id})
 
-      assert_reply ref_over,
-                   :ok,
-                   %{
-                     "events" => projected,
-                     "events_incomplete" => true
-                   } = payload_over
+      assert_reply(
+        ref_over,
+        :ok,
+        %{
+          "events" => projected,
+          "events_incomplete" => true
+        } = payload_over
+      )
 
       assert length(projected) < 20_000
       assert length(projected) > 10_000
@@ -8961,7 +9203,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "close_conversation", %{"conversation_id" => "c"})
 
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     test "operator の close は :ok を返し、両 participants へ conversation_closed 通知を broadcast する" do
@@ -8976,22 +9218,22 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "close_conversation", %{"conversation_id" => cid})
 
-      assert_reply ref, :ok, %{}
+      assert_reply(ref, :ok, %{})
 
       # deliver_conversation_closed (issue #211 の GC 経路と同じ関数) が
       # 各 participant の wrapper トピックへ synth envelope を broadcast
       # する — kind=done / meta.done=true が wrapper 側の "server 発
       # closed" 判定 (agent-common receiveInbound) の契約 (SynthEnvelope
       # のモジュール doc)。
-      assert_broadcast "envelope", %{
+      assert_broadcast("envelope", %{
         "agent_id" => "server",
         "payload" => %{"to" => ^a, "conversation_id" => ^cid, "kind" => "done"}
-      }
+      })
 
-      assert_broadcast "envelope", %{
+      assert_broadcast("envelope", %{
         "agent_id" => "server",
         "payload" => %{"to" => ^b, "conversation_id" => ^cid, "kind" => "done"}
-      }
+      })
 
       assert %{status: :closed, reason: :operator_closed} = ConversationStates.get(cid)
     end
@@ -9006,21 +9248,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       ref = push(socket, "close_conversation", %{"conversation_id" => cid})
 
-      assert_reply ref, :error, %{reason: "conversation_closed"}
+      assert_reply(ref, :error, %{reason: "conversation_closed"})
     end
 
     test "存在しない conversation_id への close は unknown_conversation_id" do
       socket = join_as(:operator)
       ref = push(socket, "close_conversation", %{"conversation_id" => "no-such-cid"})
 
-      assert_reply ref, :error, %{reason: "unknown_conversation_id"}
+      assert_reply(ref, :error, %{reason: "unknown_conversation_id"})
     end
 
     test "conversation_id 欠落は missing_conversation_id" do
       socket = join_as(:operator)
       ref = push(socket, "close_conversation", %{})
 
-      assert_reply ref, :error, %{reason: "missing_conversation_id"}
+      assert_reply(ref, :error, %{reason: "missing_conversation_id"})
     end
   end
 
@@ -9124,11 +9366,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       log =
         capture_log(fn ->
           ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       assert log =~ "set_model: client declared protocol version (absent)"
-      assert_broadcast "set_model", payload
+      assert_broadcast("set_model", payload)
       assert payload["version"] == "0"
       assert payload["model"] == "opus"
     end
@@ -9148,13 +9390,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       assert log =~ "client declared protocol version"
       assert log =~ "\"99\""
       # ベストエフォート受理: 不一致でも relay は止まらない。
-      assert_broadcast "set_model", payload
+      assert_broadcast("set_model", payload)
       assert payload["version"] == "0"
     end
 
@@ -9175,11 +9417,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "0"
             })
 
-          assert_reply ref, :ok
+          assert_reply(ref, :ok)
         end)
 
       refute log =~ "client declared protocol version"
-      assert_broadcast "set_model", payload
+      assert_broadcast("set_model", payload)
       assert payload["version"] == "0"
     end
 
@@ -9196,7 +9438,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           ref = push(socket, "clear_history", %{"agent_id" => agent_id, "version" => "99"})
           # 検査は受理可否に影響しない (この agent には current session が
           # 無いので no_current_session で返る) — warn されることが主題。
-          assert_reply ref, :error, _
+          assert_reply(ref, :error, _)
         end)
 
       assert log =~ "clear_history: client declared protocol version"
@@ -9219,7 +9461,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          assert_reply ref, :error, %{reason: "forbidden"}
+          assert_reply(ref, :error, %{reason: "forbidden"})
         end)
 
       refute log =~ "client declared protocol version"
@@ -9255,8 +9497,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "blob" => :binary.copy("a", exact_len)
         })
 
-      assert_reply ref, :error, %{reason: "payload_too_large"}
-      refute_broadcast "set_model", %{}
+      assert_reply(ref, :error, %{reason: "payload_too_large"})
+      refute_broadcast("set_model", %{})
     end
   end
 
@@ -9274,7 +9516,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for event <- @non_map_events do
         ref = push(socket, event, "not-a-map")
-        assert_reply ref, :error, %{reason: reason}, TestTimeouts.slow_path()
+        assert_reply(ref, :error, %{reason: reason}, TestTimeouts.slow_path())
         assert reason == "missing_agent_id", "#{event}: got #{inspect(reason)}"
       end
     end
@@ -9290,7 +9532,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for event <- @non_map_events do
         ref = push(socket, event, "not-a-map")
-        assert_reply ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path()
+        assert_reply(ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path())
       end
     end
 
@@ -9302,7 +9544,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:viewer)
 
       ref = push(socket, "set_model", %{"agent_id" => agent_id, "model" => "opus"})
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     end
 
     # list / 数値も map ではない。binary だけを弾く実装に縮退していないこと。
@@ -9311,7 +9553,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for payload <- [["a"], 42, nil] do
         ref = push(socket, "attach_open", payload)
-        assert_reply ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path()
+        assert_reply(ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path())
       end
     end
   end
@@ -9404,7 +9646,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _socket = join_as(:operator)
 
       for event <- ~w(snapshot task_snapshot delivery_snapshot history hosts directory) do
-        assert_push ^event, %{"version" => "0"}
+        assert_push(^event, %{"version" => "0"})
       end
     end
 
@@ -9418,7 +9660,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             {"history_replay_complete", %{"agent_id" => "t4.complete"}}
           ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, payload)
-        assert_push ^event, %{"version" => "0"}
+        assert_push(^event, %{"version" => "0"})
       end
     end
 
@@ -9431,19 +9673,19 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             wrapper_build_info
           ) do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"request_id" => "t4"})
-        assert_push ^event, %{"version" => "0"}
+        assert_push(^event, %{"version" => "0"})
       end
     end
 
     test "T4-4: agent_deleted は viewer 配信を保ち version を stamp する" do
       _socket = join_as(:viewer)
-      assert_push "snapshot", %{"version" => "0"}
+      assert_push("snapshot", %{"version" => "0"})
 
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "agent_deleted", %{
         "agent_id" => "t4.deleted"
       })
 
-      assert_push "agent_deleted", %{"agent_id" => "t4.deleted", "version" => "0"}
+      assert_push("agent_deleted", %{"agent_id" => "t4.deleted", "version" => "0"})
     end
 
     test "T4-5: history_replay_envelope は flat version を stamp する" do
@@ -9454,7 +9696,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "envelope" => %{"agent_id" => "t4.peer"}
       })
 
-      assert_push "history_replay_envelope", %{"version" => "0"}
+      assert_push("history_replay_envelope", %{"version" => "0"})
     end
 
     test "T4-6: envelope は frame version を server が確定する" do
@@ -9468,13 +9710,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "state" => "idle"
       })
 
-      assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
+      assert_push("envelope", %{"version" => "0", "agent_id" => "t4.envelope"})
     end
 
-    test "T4-7: policy は28種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は29種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 28
+      assert MapSet.size(policy) == 29
       assert MapSet.member?(policy, "quagmire_notice")
       assert MapSet.member?(policy, "quagmire_settings")
 
@@ -9535,7 +9777,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     seed_permission_baseline(id)
     socket = join_as(:operator)
     ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
-    assert_reply ref, :ok, %{"revision" => 1}
+    assert_reply(ref, :ok, %{"revision" => 1})
     env = AgentStates.snapshot() |> Map.fetch!(id)
     assert get_in(env, ["ext", "permission_control", "revision"]) == 1
   end
@@ -9546,7 +9788,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     seed_permission_baseline(id)
     socket = join_as(:operator)
     ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
-    assert_reply ref, :ok, %{"revision" => 1}
+    assert_reply(ref, :ok, %{"revision" => 1})
 
     # An unrelated wrapper state_change (a heartbeat/tool-progress
     # update) lands before the wrapper's own envelope ever catches up
@@ -9572,8 +9814,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     try do
       ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
-      assert_reply ref, :error, %{reason: "persistence_failed"}
-      refute_broadcast "set_permission", _
+      assert_reply(ref, :error, %{reason: "persistence_failed"})
+      refute_broadcast("set_permission", _)
       assert ps.get(id).control.revision == 0
     after
       :sys.replace_state(ps, fn state -> %{state | table: original} end)
@@ -9621,8 +9863,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       reset_ref = push(reset_socket, "session_reset", %{"agent_id" => id, "mode" => "new"})
       refute_receive %Phoenix.Socket.Reply{ref: ^reset_ref}, 200
       :sys.resume(ps)
-      assert_reply ref, :ok, %{"revision" => 1}
-      assert_reply reset_ref, :ok
+      assert_reply(ref, :ok, %{"revision" => 1})
+      assert_reply(reset_ref, :ok)
     after
       :sys.resume(ps)
       KaoiroServer.SessionResets.delete(id)
@@ -9670,7 +9912,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       })
 
-    assert_reply env_ref, :ok
+    assert_reply(env_ref, :ok)
 
     seed_permission_baseline(id)
     perm_socket = join_as(:operator)
@@ -9694,8 +9936,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       reset_ref = push(wrapper_socket, "session_reset_request", %{"mode" => "new"})
       refute_receive %Phoenix.Socket.Reply{ref: ^reset_ref}, 500
       :sys.resume(ps)
-      assert_reply perm_ref, :ok, %{"revision" => 1}
-      assert_reply reset_ref, :ok, %{request_id: _}
+      assert_reply(perm_ref, :ok, %{"revision" => 1})
+      assert_reply(reset_ref, :ok, %{request_id: _})
     after
       :sys.resume(ps)
       KaoiroServer.SessionResets.delete(id)
@@ -9732,7 +9974,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         }
       })
 
-    assert_reply env_ref, :ok
+    assert_reply(env_ref, :ok)
 
     accept_pid = agent_acceptance_worker(id)
     :sys.suspend(accept_pid)
@@ -9753,7 +9995,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       capture_log(fn ->
         with_session_resets_unavailable(fn ->
           :ok = :sys.resume(accept_pid)
-          assert_reply reset_ref, :error, %{reason: "agent_busy"}
+          assert_reply(reset_ref, :error, %{reason: "agent_busy"})
         end)
       end)
     after
@@ -9813,7 +10055,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       :sys.resume(accept_pid)
 
-      assert_reply perm_ref, :ok, %{"revision" => 1}
+      assert_reply(perm_ref, :ok, %{"revision" => 1})
 
       # The reset's `check_and_acquire/4` runs INSIDE the shared choke
       # point strictly after the permission's own `guard_instruction/1`
@@ -9822,7 +10064,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # (session_resets.ex `@dispatch_cooldown_ms`), not raced ahead of
       # it. A stale/unordered read here would let the reset slip through
       # as :ok instead — exactly the M7 hazard this closes.
-      assert_reply reset_ref, :error, %{reason: "agent_busy"}
+      assert_reply(reset_ref, :error, %{reason: "agent_busy"})
     after
       :sys.resume(accept_pid)
       KaoiroServer.SessionResets.delete(id)
@@ -9878,7 +10120,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # (the withdrawn design), this would still succeed on the
       # already-resolved actor. Resolving it live, immediately before
       # persist, correctly refuses the now-rotated token instead.
-      assert_reply ref, :error, %{reason: "forbidden"}
+      assert_reply(ref, :error, %{reason: "forbidden"})
     after
       :sys.resume(accept_pid)
     end
@@ -9906,12 +10148,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "network_access" => true
       })
 
-    assert_reply ref, :ok, %{
+    assert_reply(ref, :ok, %{
       "revision" => 1,
       "requested" => %{"sandbox" => "read-only", "network_access" => true}
-    }
+    })
 
-    assert_broadcast "set_permission", payload
+    assert_broadcast("set_permission", payload)
 
     assert payload == %{
              "version" => "0",
@@ -9921,6 +10163,6 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
            }
 
     ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "danger-full-access"})
-    assert_reply ref, :error, %{reason: "exceeds_launch_ceiling"}
+    assert_reply(ref, :error, %{reason: "exceeds_launch_ceiling"})
   end
 end

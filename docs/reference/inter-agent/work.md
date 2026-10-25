@@ -75,3 +75,35 @@ epoch, and the server answers any authority failure with
 
 See [delivery](delivery.md) for `delivery_intent` and yield claims, and
 [channel contracts](../protocol/channels.md) for request and reply shapes.
+
+## Admission capacity and saved settings
+
+Operators can configure nomination and active-work admission limits; 0 disables
+only the selected check. Defaults remain 16 and the nomination TTL remains 24
+hours. Closing a conversation does not decline its nominated work. Storage,
+receipt and subordinate collection caps remain finite. Lowering a cap preserves
+existing work and healthy idempotent receipts.
+
+`work_capacity` retains its wire meaning. An optional `details.capacity` has
+`limit`, `scope` and positive integer `maximum`, without identities or occupancy.
+The first failing check is reported: records before admission before global
+receipts, outgoing nominations before incoming, per-work receipts before total.
+
+| limit | scope |
+|---|---|
+| `work_max_records` | `store` |
+| `work_nominated_per_principal` | `director` or `assignee` |
+| `work_active_per_assignee` | `assignee` |
+| `work_receipts_per_work_principal` | `work_principal` |
+| `work_receipts_per_principal` | `principal` |
+| `work_pending_transfers` | `holds` (twice its configured value) or `transfers` |
+| `work_verdicts_per_work` | `work` |
+| `work_accepted_verdicts_per_work` | `work` |
+| `work_links_per_work` | `work` (32) |
+
+Unknown/malformed diagnostics are ignored without changing the refusal; old
+servers may omit them. Assigning an already-linked conversation still returns
+`work_link_conflict`, without capacity details. Invalid/uncertain saved settings
+instead return `work_settings_corrupt`/`work_settings_unknown`, never a fabricated
+capacity refusal. They close mutation and authority grants while the store stays
+alive. See [configuration and recovery](../configuration/server.md#unavailable-settings).

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { onMount, untrack } from "svelte";
   import AgentCard from "./lib/AgentCard.svelte";
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
@@ -427,6 +428,11 @@
   // issue #307: the threshold in force. Held here rather than in the drawer
   // so a change from another dashboard also clears banners the operator is
   // looking at right now, whether or not the drawer is open.
+  let workSettings = $state<WorkSettingsSnapshot | null>(null);
+  function applyWorkSettings(next: WorkSettingsSnapshot): void {
+    if (next.state === "ready" && workSettings?.state === "ready" && next.revision < workSettings.revision) return;
+    workSettings = next;
+  }
   let quagmireSettings = $state<QuagmireSettings | null>(null);
 
   // A raised threshold has to take the banners with it. The server only
@@ -858,10 +864,11 @@
     connection = connectKaoiro(
       defaultSocketUrl(location),
       {
-        onStatus: (next) => { status = next; if (next !== "connected") policyStore.disconnect(); },
+        onStatus: (next) => { status = next; if (next !== "connected") { policyStore.disconnect(); workSettings = null; } },
         onDeliveryPolicyControl: (available) => { policyStore.available = available; if (!available) policyStore.disconnect(); },
         onDeliveryPolicyChanged: (id, view) => policyStore.event(id, view),
         onJoined: () => {
+          workSettings = null;
           sessionLifecycleAgentId = null;
           sessionLifecycleRefreshSeq = 0;
           policyStore.reset();
@@ -926,6 +933,7 @@
         onTaskSnapshot: (next) => (tasks = next),
         onQuagmireNotice: recordQuagmire,
         onQuagmireSettings: applyQuagmireSettings,
+        onWorkSettings: applyWorkSettings,
         onStatusLineSnapshot: (rows, incomplete) => statusLines.applySnapshot(rows, incomplete),
         onStatusLine: (agentId, row) => statusLines.applyLive(agentId, row),
         onStatusLineSettings: (next) => (statusLineSettings = next),
@@ -1566,6 +1574,7 @@
     // this tab has not seen them, and the detector re-announces on its own.
     quagmireNotices = [];
     quagmireSettings = null;
+    workSettings = null;
     statusLines.reset();
     statusLineSettings = null;
     statusHistoryAgentId = null;
@@ -2062,6 +2071,9 @@
     {agents}
     {directory}
     {quagmireSettings}
+    {isOperator}
+    {workSettings}
+    onWorkSettings={applyWorkSettings}
     {statusLineSettings}
   />
 {/if}

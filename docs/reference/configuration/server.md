@@ -116,3 +116,120 @@ before maintenance: the actual constructor's effective path must lie on the
 writable named state volume backed up for this transaction, with no deeper
 mount or symlink. Image VOLUME at or below the state target is refused even
 with an explicit compose override.
+
+## Work admission settings
+
+`KAOIRO_WORK_NOMINATED_PER_PRINCIPAL` and
+`KAOIRO_WORK_ACTIVE_PER_ASSIGNEE` accept ASCII decimal integers from 0 to
+2147483647. Unset means 16; empty strings, signs, whitespace, fractions and
+out-of-range values fail startup. Zero disables only that admission check.
+The nomination limit applies independently to outgoing director and incoming
+assignee nominations. Total records, receipts, subordinate collections and
+expiry remain bounded. Existing active-count predicates and transfer behavior
+are unchanged; reducing a limit never evicts work.
+
+Edit the deployment's `.env`, then recreate the service with the same image:
+`docker compose up -d --no-build --force-recreate kaoiro`. `docker compose restart`
+and restarting BEAM inside the existing container do **not** reload `env_file`.
+A standalone process must start anew with the edited variables exported.
+
+Operators and admins can change these limits live in dashboard settings.
+The order is saved dashboard override, startup configuration, then default.
+“Use server configuration” removes the override, rather than saving the current
+fallback. The UI displays all three: effective value, fallback and source.
+Healthy settings can be changed even when admission capacity is full; changing
+settings does not require a work item. Viewers cannot read settings or audit
+history, submit changes, or receive settings broadcasts.
+
+WorkStore serializes admission and settings changes. Its existing DETS file
+holds one `{:settings, :work_capacity}` object, separate from work/receipt/yield
+records, containing schema 1, revision, overrides and at most 100 accepted
+changes (time, authenticated operator, old/new overrides and effective values).
+Revision starts at 0 and cannot exceed 9007199254740991. Updates require the
+current revision; conflicts require reading again and explicit resubmission.
+A no-op neither advances revision nor appends audit. At the ceiling a real
+change returns `revision_exhausted`. Success requires insert, sync and validated
+exact readback; it is not an optimistic acknowledgement.
+
+An older binary ignores this object and enforces its own defaults/configuration.
+It does not enforce these overrides. Upgrading again validates the retained
+object. Downgrade is not corruption repair.
+
+### Unavailable settings
+
+A missing object is normal. An invalid or unsupported object is preserved and
+closes admission with `work_settings_corrupt`. An unreadable or uncertain write
+outcome closes admission with `work_settings_unknown`. WorkStore stays alive;
+it does not repeatedly restart under the permanent supervisor child. Both
+states block work/settings writes, receipts, claims, checks, transfers, yield
+admission and other authority grants, and suppress expiry writes, including
+read-triggered maintenance. Bounded diagnostic reads and volatile connection
+registration remain available. No background retry or automatic fallback to
+configuration/zero is performed.
+
+The fixed invalid-state diagnostic is:
+
+> Work admission is closed because {:settings, :work_capacity} is invalid or has an unsupported schema. The only repair is the offline one-key deletion procedure in docs/reference/configuration/server.md#repair-invalid-work-capacity-settings. Dashboard changes, environment overrides and restoring the pre-repair whole-file backup do not repair it.
+
+The fixed unknown-state diagnostic is:
+
+> Work admission is closed because the persisted work settings cannot be determined. Do not retry the update or delete the settings object. Perform a controlled server restart and read the authoritative settings; use the invalid-settings repair only if the object is then diagnosed as invalid.
+
+The server logs the reason and fixed message once on entering the state.
+Operator get/set/work-control replies carry that same reason and message.
+An operator-only `work_settings` unavailable push has no revision, effective
+values or audit; it disables editing even after a high-revision ready snapshot.
+Wrapper work refusals retain the reason through MCP and contain no capacity
+diagnostic. Neither saved data nor exception details appear in these messages.
+
+| Attempted remedy | Invalid saved object | Unknown outcome |
+|---|---|---|
+| Dashboard set/reset/zero | Refused; not repair | Refused; do not retry blindly |
+| Environment finite/zero/unset | Cannot override it | Cannot determine the saved value |
+| Controlled restart | Same invalid object stays blocked | Classifies actual saved state: valid/absent ready, invalid corrupt, unreadable unknown |
+| Restore pre-repair whole-file backup | Restores the invalid object too | Separate operator data-loss decision, not readback |
+| Restore a known-good backup for physical file damage | Revalidate restored settings | Revalidate restored settings |
+| Older binary | Bypasses the tag, does not repair it | Does not implement this contract |
+| Offline one-key deletion | Selected repair below | Forbidden until invalidity is established |
+
+A client timeout alone does not prove either server state. Reconnect and read
+authoritative settings; never automatically replay a timed-out write. Physical
+whole-file damage or invalid unrelated records use the existing whole-store
+recovery procedure, followed by settings validation.
+
+### Repair invalid work capacity settings
+
+Only the human operator performs this production procedure. It intentionally
+loses the saved overrides and their bounded audit tail, preserving other rows.
+
+1. In the existing deployment Compose context, run `docker compose stop kaoiro`.
+   Verify the service is stopped and no other process owns its WorkStore file.
+   With `restart: unless-stopped`, killing BEAM inside the container can relaunch
+   it; **do not do that**, and do not use `docker compose restart` before the
+   checks below pass. For non-Compose deployment stop its actual supervisor and
+   prevent automatic restart throughout offline repair.
+2. Back up the closed **entire** WorkStore file privately and verify its checksum.
+   Label this as containing the invalid object, not as a repaired replacement.
+   Restoring it later restores corruption and any old work state too.
+3. Use the **same release runtime**, without starting its application/supervisor.
+   Open the selected file with `:dets.open_file(name, file: String.to_charlist(path))`
+   using **only** the `file:` option; do not override type, keypos or repair mode.
+   Stop on any open failure and use whole-store recovery instead. Require the
+   invalid object at `{:settings, :work_capacity}`; record all neighboring rows
+   privately. Delete exactly that key using `:dets.delete/2`; require `:ok` from
+   deletion, `:dets.sync/1` and `:dets.close/1`. Reopen with the same file-only
+   options and require the key to be absent and all other rows unchanged, then
+   close successfully. Never truncate/delete the file or call `delete_all_objects`.
+4. Unset **only** `KAOIRO_WORK_NOMINATED_PER_PRINCIPAL` and
+   `KAOIRO_WORK_ACTIVE_PER_ASSIGNEE`. Preserve the image, `config.exs`, other
+   `:work_store` values and unrelated environment. With the settings key absent
+   the compiled defaults are 16/16.
+5. Only after successful offline checks, perform a controlled verification boot:
+   `docker compose up -d --no-build --force-recreate kaoiro`. Keep ordinary
+   admissions paused operationally. Require an authorized settings read showing
+   ready, revision 0, no overrides, defaults 16/16 and empty change log. Verify
+   existing work/receipt/yield records and actual default-cap enforcement.
+   A failed check means stop the service again; do not declare repair complete.
+6. Reconnect clients, discard old snapshots/drafts and never replay timed-out
+   writes. Record the operator, backup, lost-history boundary and verification
+   privately. Only then resume ordinary use and explicitly set desired overrides.

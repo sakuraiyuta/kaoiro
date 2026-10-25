@@ -3065,6 +3065,19 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     expect(acks).toEqual([[9, 1]]);
   });
 
+  it("preserves bounded capacity diagnostics and ignores malformed or future details", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
+    const capacity = { limit: "work_nominated_per_principal", scope: "director", maximum: 16 };
+    for (const details of [capacity, undefined, { ...capacity, maximum: 0 }, { ...capacity, scope: "future" }, { ...capacity, limit: "future" }, { ...capacity, maximum: "16" }]) {
+      const pending = link.sendInterAgent(interAgentEnvelope());
+      mock.lastPush?.receivers.get("error")?.({ reason: "work_capacity", details: { capacity: details } });
+      await expect(pending).resolves.toEqual({ kind: "rejected", reason: "work_capacity", ...(details === capacity ? { details: { capacity } } : {}) });
+    }
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({ reason: "work_settings_corrupt" });
+    await expect(pending).resolves.toEqual({ kind: "rejected", reason: "work_settings_corrupt" });
+  });
+
   it("decodes advisory fields additively and normalizes unknown mechanisms", async () => {
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
     const pending = link.sendInterAgent(interAgentEnvelope());

@@ -150,3 +150,58 @@ describe("App.svelte rally threshold operator gate (issue #307)", () => {
     expect(section()).toBeNull();
   });
 });
+
+describe("App.svelte work admission settings", () => {
+  const workSection = () => document.querySelector('section[aria-label="Work admission settings"]');
+  const ready = {
+    version: "0" as const, state: "ready" as const, revision: 42,
+    overrides: {},
+    effective: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+    fallbacks: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+    sources: { work_nominated_per_principal: "default" as const, work_active_per_assignee: "default" as const },
+    last_change: null,
+  };
+  it("does not render work settings in the viewer DOM", async () => {
+    const h = await mountApp();
+    h.onStatus("connected");
+    h.onWorkSettings?.(ready);
+    await tick();
+    await openSettings();
+    expect(workSection()).toBeNull();
+  });
+  it("unavailable notice overrides a higher revision and reconnect clears the diagnosis", async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false);
+    h.onStatus("connected");
+    h.onWorkSettings?.(ready);
+    await tick();
+    await openSettings();
+    expect(workSection()).not.toBeNull();
+    const save = () => Array.from(workSection()!.querySelectorAll("button")).find(button => button.textContent === "保存")!;
+    expect(save().disabled).toBe(false);
+    h.onWorkSettings?.({ version: "0", state: "unavailable", reason: "work_settings_corrupt", message: "Offline one-key repair is required." });
+    await tick();
+    expect(workSection()?.textContent).toContain("Invalid saved work settings");
+    expect(save().disabled).toBe(true);
+    h.onStatus("disconnected");
+    await tick();
+    expect(workSection()?.textContent).not.toContain("Offline one-key repair");
+    expect(save().disabled).toBe(true);
+  });
+  it("zero is valid but empty, signed and fractional input cannot be saved", async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false);
+    h.onStatus("connected");
+    h.onWorkSettings?.(ready);
+    await tick();
+    await openSettings();
+    const input = workSection()!.querySelector<HTMLInputElement>("input")!;
+    const save = () => Array.from(workSection()!.querySelectorAll("button")).find(button => button.textContent === "保存")!;
+    for (const [text, valid] of [["0", true], ["1", true], ["2147483647", true], ["", false], ["-1", false], ["1.5", false], ["+1", false], [" 1", false], ["2147483648", false]] as const) {
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      expect(save().disabled, text).toBe(!valid);
+    }
+  });
+});

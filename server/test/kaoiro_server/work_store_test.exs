@@ -645,7 +645,7 @@ defmodule KaoiroServer.WorkStoreTest do
           work
         end
 
-      assert {:error, :work_capacity} =
+      assert {:error, {:work_capacity, _}} =
                WorkStore.apply(
                  director,
                  %{
@@ -751,7 +751,7 @@ defmodule KaoiroServer.WorkStoreTest do
                  )
       end
 
-      assert {:error, :work_capacity} =
+      assert {:error, {:work_capacity, _}} =
                WorkStore.apply(
                  assignee,
                  %{
@@ -833,7 +833,7 @@ defmodule KaoiroServer.WorkStoreTest do
       {:ok, %{work: before}} = WorkStore.status(first_director, first.work_id, name)
       oldest = Enum.find(Enum.reverse(before.receipts), &(&1.principal == assignee))
 
-      assert {:error, :work_capacity} =
+      assert {:error, {:work_capacity, _}} =
                WorkStore.apply(
                  assignee,
                  %{
@@ -970,7 +970,7 @@ defmodule KaoiroServer.WorkStoreTest do
                  name
                )
 
-      assert {:error, :work_capacity} =
+      assert {:error, {:work_capacity, _}} =
                WorkStore.apply(
                  recipient,
                  %{
@@ -1926,7 +1926,7 @@ defmodule KaoiroServer.WorkStoreTest do
       assert length(links) == 32
       overflow_id = operation_id()
 
-      assert {:error, :work_capacity} =
+      assert {:error, {:work_capacity, _}} =
                WorkStore.apply(
                  director,
                  %{

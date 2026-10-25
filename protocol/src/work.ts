@@ -1,3 +1,4 @@
+import type { WorkCapacityDiagnostic } from "./work-settings.js";
 /** Wire vocabulary for ADR-0063 phase 1. The server owns every grant and receipt. */
 export type DeliveryIntent = "normal" | "early" | "yield";
 export type WorkId = string;
@@ -83,6 +84,7 @@ export interface InterAgentSendRejection {
   reason: string;
   send_not_attempted?: true;
   details?: {
+    capacity?: WorkCapacityDiagnostic;
     operation_id?: string;
     delivery?: "recorded" | "not_recorded" | "unknown";
     work_control_result?: WorkControlResult;
@@ -276,6 +278,8 @@ export type WorkErrorCode =
   | "operation_id_expired"
   | "unknown_operation"
   | "work_capacity"
+  | "work_settings_corrupt"
+  | "work_settings_unknown"
   | "transfer_pending"
   | "verdict_not_effective"
   | "work_outcome_unknown"

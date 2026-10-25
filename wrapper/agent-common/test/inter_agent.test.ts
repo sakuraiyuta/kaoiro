@@ -2552,6 +2552,18 @@ describe("work-control send rejection receipts", () => {
     work_control: { op: "assign" as const, title: "task" },
   };
 
+  it.each([false, true])("retains capacity and corrupt-settings refusal in MCP text (captured=%s)", async captured => {
+    const capacity = { limit: "work_nominated_per_principal", scope: "director", maximum: 16 };
+    for (const reason of ["work_capacity", "work_settings_corrupt"]) {
+      const { tool } = makeRejectedTool(reason, reason === "work_capacity" ? { capacity } : undefined, captured);
+      const result = await tool.invoke(args, captured ? { origin: { token: "tool-turn" } } : undefined);
+      expect(result.isError).toBe(true);
+      const body = JSON.parse(result.content[0]!.text);
+      expect(body.error).toBe(reason);
+      expect(body.capacity).toEqual(reason === "work_capacity" ? capacity : undefined);
+    }
+  });
+
   it.each([false, true])("preserves generated operation id, applied result and delivery on partial rejection (captured=%s)", async captured => {
     const { tool, operationIds } = makeRejectedTool(
       "work_applied_message_rejected",

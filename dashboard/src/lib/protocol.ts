@@ -1,3 +1,5 @@
+import type { WorkSettingsSnapshot, WorkCapacityPatch } from "@kaoiro/protocol";
+import { parseWorkSettings } from "./workSettings";
 import { hasValidBuildBranch, isLandingBuildVersion, isValidBuildVersion } from "./buildIdentityDomain";
 import { agentDisplayName } from "./personaName";
 // kaoiro public-protocol client — plain TS, no Svelte dependency
@@ -2848,6 +2850,7 @@ export interface KaoiroHandlers {
   onQuagmireNotice?: (notice: QuagmireNotice) => void;
   /** Rally threshold in force (issue #307). Pushed on join and again on
    *  every operator change, so several dashboards agree. Operator-only. */
+  onWorkSettings?: (settings: WorkSettingsSnapshot) => void;
   onQuagmireSettings?: (settings: QuagmireSettings) => void;
   /** Every agent's committed status line, pushed right after the join
    *  snapshot frames (issue 482). A viewer receives only agents in its own
@@ -3129,6 +3132,8 @@ export interface KaoiroConnection {
    *  `invalid_rally_turns` outside 1..MAX_RALLY_TURNS. The effective value
    *  comes back as a `quagmire_settings` push rather than in the ack, so
    *  every open dashboard agrees rather than only the one that asked. */
+  getWorkSettings: () => Promise<WorkSettingsSnapshot>;
+  setWorkSettings: (revision: number, changes: WorkCapacityPatch) => Promise<WorkSettingsSnapshot>;
   setQuagmireSettings: (rallyTurns: number | null) => Promise<void>;
   /** An agent's status line change log, newest first, with the full texts
    *  (issue 482). Open to every role; the server answers `unknown_agent` for
@@ -4495,6 +4500,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   delivery_status: "checked",
   quagmire_notice: "checked",
   quagmire_settings: "checked",
+  work_settings: "checked",
   session_reset_started: "checked",
   session_reset_completed: "checked",
   session_reset_failed: "checked",
@@ -4574,6 +4580,23 @@ function pushAsyncReply(
       .receive("error", (reason: { reason?: string } | undefined) =>
         reject(new Error(reason?.reason ?? "error")),
       )
+      .receive("timeout", () => reject(new Error("timeout")));
+  });
+}
+
+function pushWorkSettings(channel: Channel, event: string, payload: Record<string, unknown>): Promise<WorkSettingsSnapshot> {
+  return new Promise((resolve, reject) => {
+    const accept = (reply: unknown): void => {
+      const settings = parseWorkSettings(reply);
+      if (settings) resolve(settings); else reject(new Error("invalid_reply"));
+    };
+    pushVersioned(channel, event, payload)
+      .receive("ok", accept)
+      .receive("error", (reply: { reason?: string; message?: string } | undefined) => {
+        if (reply?.reason === "work_settings_corrupt" || reply?.reason === "work_settings_unknown") {
+          accept({ ...reply, state: "unavailable" });
+        } else reject(new Error(reply?.reason ?? "error"));
+      })
       .receive("timeout", () => reject(new Error("timeout")));
   });
 }
@@ -4911,6 +4934,10 @@ export function connectKaoiro(
     bindServerEvent(c, "quagmire_notice", (payload: unknown) => {
       const notice = parseQuagmireNotice(payload);
       if (notice !== null) handlers.onQuagmireNotice?.(notice);
+    });
+    bindServerEvent(c, "work_settings", (payload: unknown) => {
+      const settings = parseWorkSettings(payload);
+      if (settings !== null) handlers.onWorkSettings?.(settings);
     });
     bindServerEvent(c, "quagmire_settings", (payload: unknown) => {
       const settings = parseQuagmireSettings(payload);
@@ -5593,6 +5620,8 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
+    getWorkSettings: () => pushWorkSettings(channel, "get_work_settings", {}),
+    setWorkSettings: (expected_revision, changes) => pushWorkSettings(channel, "set_work_settings", { expected_revision, changes }),
     setQuagmireSettings: (rallyTurns) =>
       pushAsync(channel, "set_quagmire_settings", { rally_turns: rallyTurns }),
     fetchStatusLineHistory: async (agentId) => {

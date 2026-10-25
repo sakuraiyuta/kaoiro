@@ -282,3 +282,15 @@ Heartbeats use the Channels built-in provided by the client library.
   optional `ext.disconnect = {origin, reason}`. The closed pairs are `operator/stop`,
   `runner/stop`, `agent_self/(stop|quota_exhausted|crash)`, and
   `unplanned/socket_lost`. A planned restart omits this terminal attribution.
+
+Work admission settings (`get_work_settings`, `set_work_settings`) are restricted
+to operators/admins on `agents:lobby`; viewers and wrappers have no settings API.
+The server derives audit identity from the live credential, rechecks it at the
+serialized WorkStore update boundary, and never accepts a payload actor.
+`work_settings` broadcasts are intercepted and role-filtered, including both
+ready values/audit and unavailable notices. The dashboard omits the entire
+control for viewers. Changing healthy settings requires no work item, so full
+admission capacity cannot lock the operator out of changing its limits.
+Invalid/unknown stored settings refuse mutations and grants without crashing the
+owner; [offline repair](../configuration/server.md#repair-invalid-work-capacity-settings)
+is operator-only and is not a dashboard authorization bypass.

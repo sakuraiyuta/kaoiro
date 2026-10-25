@@ -1,3 +1,5 @@
+import type { WorkCapacityDiagnostic } from "@kaoiro/protocol";
+import { parseWorkCapacityDiagnostic } from "./work_capacity.js";
 // Server link — pushes envelopes to the kaoiro server over Phoenix Channels
 // (ADR-0009: Channels only, wire vsn=2.0.0, which the official client speaks).
 // The phoenix client owns reconnect/heartbeat; pushes made while disconnected
@@ -145,7 +147,7 @@ interface PendingDeliveryStage {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { capacity?: WorkCapacityDiagnostic; conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -1483,6 +1485,8 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
     result.details = { conversation_id: reply.conversation_id, expected_peer_turn: reply.expected_peer_turn as number, supplied_basis: reply.supplied_basis as number };
   }
   const details = isObject(reply.details) ? reply.details : null;
+  const capacity = reason === "work_capacity" ? parseWorkCapacityDiagnostic(details?.capacity) : null;
+  if (capacity) result.details = { ...(result.details ?? {}), capacity };
   const workResult = details && isObject(details.work_control_result) ? details.work_control_result : null;
   if (workResult && typeof workResult.op === "string" && typeof workResult.operation_id === "string" && workResult.outcome === "applied") {
     result.details = {

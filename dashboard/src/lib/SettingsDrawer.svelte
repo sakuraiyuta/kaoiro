@@ -1,4 +1,6 @@
 <script lang="ts">
+  import WorkCapacitySettings from "./WorkCapacitySettings.svelte";
+  import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   // Client-side settings drawer (#85): notification sound on/off + volume.
   // Slides in from the right; every change writes straight to localStorage
   // via updateSettings() (no separate save step, the value set is small).
@@ -38,6 +40,9 @@
     onOpenSessionLifecycle = undefined,
     connection = undefined,
     quagmireSettings = null,
+    workSettings = null,
+    isOperator = false,
+    onWorkSettings = () => {},
     statusLineSettings = null,
     agents = {},
     directory = {},
@@ -49,6 +54,9 @@
     onBulkResetSummary = () => {},
   }: {
     onClose: () => void;
+    workSettings?: WorkSettingsSnapshot | null;
+    isOperator?: boolean;
+    onWorkSettings?: (snapshot: WorkSettingsSnapshot) => void;
     onOpenSessionLifecycle?: ((agentId: string) => void) | undefined;
     /** Logout relay (phase-31 31-7): on smartphone the header hides its
      *  logout button, so the drawer carries the affordance. Rendered at
@@ -779,6 +787,9 @@
     エージェント詳細のログでツール呼び出しなどを非表示
   </label>
 
+  {#if isOperator}
+    <WorkCapacitySettings {connection} generation={appConnectionGeneration} snapshot={workSettings} onSnapshot={onWorkSettings} />
+  {/if}
   {#if connection}
     {#if onOpenSessionLifecycle}
       <section class="session-lifecycle">

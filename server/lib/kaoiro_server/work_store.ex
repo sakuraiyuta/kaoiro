@@ -11,15 +11,26 @@ defmodule KaoiroServer.WorkStore do
 
   require Logger
 
-  alias KaoiroServer.WorkReducer
+  alias KaoiroServer.{WorkReducer, WorkSettings}
 
   @doc "Starts the store. The opts-only :test_after_apply_sync seam pins crash recovery at the durable commit boundary."
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     path = Keyword.get(opts, :path, default_path())
     after_apply_sync = Keyword.get(opts, :test_after_apply_sync)
-    GenServer.start_link(__MODULE__, {name, path, after_apply_sync}, name: name)
+    settings_io = Keyword.get(opts, :test_settings_io, &:erlang.apply(:dets, &1, &2))
+    candidate = Keyword.get(opts, :test_settings_candidate, &Function.identity/1)
+
+    GenServer.start_link(__MODULE__, {name, path, after_apply_sync, settings_io, candidate},
+      name: name
+    )
   end
+
+  def get_settings(authorize, server \\ __MODULE__),
+    do: GenServer.call(server, {:get_settings, authorize})
+
+  def set_settings(authorize, revision, changes, server \\ __MODULE__),
+    do: GenServer.call(server, {:set_settings, authorize, revision, changes})
 
   def lookup(principal, operation_id, digest, server \\ __MODULE__) do
     GenServer.call(server, {:lookup, principal, operation_id, digest})
@@ -167,7 +178,7 @@ defmodule KaoiroServer.WorkStore do
   def sweep(server \\ __MODULE__), do: GenServer.call(server, :sweep)
 
   @impl true
-  def init({name, path, after_apply_sync}) do
+  def init({name, path, after_apply_sync, settings_io, candidate}) do
     KaoiroServer.DetsStorePath.prepare_parent!(path)
     {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
     _ = File.chmod(path, 0o600)
@@ -178,6 +189,12 @@ defmodule KaoiroServer.WorkStore do
     state =
       %{
         table: name,
+        settings_status: :ready,
+        settings: nil,
+        settings_fallbacks: WorkSettings.fallbacks(config()),
+        settings_configured: Application.get_env(:kaoiro_server, :work_capacity_configured, []),
+        settings_io: settings_io,
+        settings_candidate: candidate,
         works: works,
         receipts: receipt_index(works),
         claim_states: claim_states,
@@ -190,6 +207,12 @@ defmodule KaoiroServer.WorkStore do
         path: path
       }
 
+    state =
+      case WorkSettings.load(name, settings_io) do
+        {:ok, object} -> %{state | settings: object}
+        {:error, reason} -> block_settings(state, reason, false)
+      end
+
     {:ok, sweep_works(sweep_yield_tokens(state))}
   end
 
@@ -197,6 +220,42 @@ defmodule KaoiroServer.WorkStore do
   def terminate(_reason, state), do: :dets.close(state.table)
 
   @impl true
+  def handle_call({:get_settings, authorize}, _from, state) do
+    reply =
+      with {:ok, _actor} <- authorize.(),
+           :ok <- settings_ready(state),
+           do: {:ok, settings_snapshot(state, true)}
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:set_settings, authorize, revision, patch}, _from, state) do
+    with {:ok, actor} <- authorize.(),
+         :ok <- settings_ready(state) do
+      set_settings_reply(state, revision, patch, actor)
+    else
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  # Receipt lookups can authorize duplicate delivery; they are not diagnostic reads.
+  def handle_call(request, _from, %{settings_status: status} = state)
+      when status != :ready and
+             (request == :sweep or
+                elem(request, 0) in [
+                  :apply,
+                  :lookup,
+                  :note_delivery,
+                  :check,
+                  :transfer_ack,
+                  :admit_yield,
+                  :authorize_peer_reset,
+                  :claim,
+                  :drop_yield
+                ]) do
+    {:reply, {:error, WorkSettings.reason(status)}, state}
+  end
+
   def handle_call(:all, _from, state), do: {:reply, state.works, state}
 
   def handle_call(:sweep, _from, state) do
@@ -543,7 +602,13 @@ defmodule KaoiroServer.WorkStore do
         {:reply, {:duplicate, receipt}, state}
 
       {:error, :unknown_operation} ->
-        case WorkReducer.reduce(state.works, principal, operation, context, config()) do
+        case WorkReducer.reduce(
+               state.works,
+               principal,
+               operation,
+               context,
+               effective_config(state)
+             ) do
           {:ok, next_works, work_id, result} ->
             now = System.system_time(:millisecond)
 
@@ -836,6 +901,8 @@ defmodule KaoiroServer.WorkStore do
     end
   end
 
+  defp sweep_yield_tokens(%{settings_status: status} = state) when status != :ready, do: state
+
   defp sweep_yield_tokens(state) do
     now = System.system_time(:millisecond)
     lifetime = delivery_config()[:yield_token_ttl_ms]
@@ -860,6 +927,8 @@ defmodule KaoiroServer.WorkStore do
       end
     end)
   end
+
+  defp sweep_works(%{settings_status: status} = state) when status != :ready, do: state
 
   defp sweep_works(state) do
     now = System.system_time(:millisecond)
@@ -1010,6 +1079,105 @@ defmodule KaoiroServer.WorkStore do
     :ok = :dets.insert(table, {{:work, work_id}, work})
     :ok = :dets.sync(table)
   end
+
+  defp settings_ready(%{settings_status: :ready}), do: :ok
+  defp settings_ready(state), do: {:error, WorkSettings.reason(state.settings_status)}
+
+  defp settings_snapshot(state, history? \\ false) do
+    case state.settings_status do
+      :ready ->
+        WorkSettings.snapshot(
+          state.settings || WorkSettings.empty(),
+          state.settings_fallbacks,
+          state.settings_configured,
+          history?
+        )
+
+      status ->
+        WorkSettings.unavailable(status)
+    end
+  end
+
+  defp effective_config(state) do
+    effective =
+      WorkSettings.effective(state.settings || WorkSettings.empty(), state.settings_fallbacks)
+
+    Keyword.merge(
+      config(),
+      Enum.map(effective, fn {key, value} -> {String.to_existing_atom(key), value} end)
+    )
+  end
+
+  defp block_settings(state, reason, publish? \\ true) do
+    status = if reason == :work_settings_corrupt, do: :blocked_invalid, else: :blocked_unknown
+    next = %{state | settings_status: status}
+
+    if state.settings_status != status do
+      Logger.error("#{reason}: #{WorkSettings.message(reason)}")
+      if publish?, do: publish_settings(next)
+    end
+
+    next
+  end
+
+  defp publish_settings(state) do
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "work_settings", settings_snapshot(state))
+  end
+
+  defp set_settings_reply(state, revision, patch, actor) do
+    if WorkSettings.valid_patch?(revision, patch) do
+      case WorkSettings.load(state.table, state.settings_io) do
+        {:ok, saved} when saved == state.settings ->
+          build_settings_reply(state, revision, patch, actor)
+
+        {:ok, _} ->
+          settings_failure(state, :work_settings_unknown)
+
+        {:error, reason} ->
+          settings_failure(state, reason)
+      end
+    else
+      {:reply, {:error, :invalid_work_settings}, state}
+    end
+  end
+
+  defp build_settings_reply(state, revision, patch, actor) do
+    old = state.settings || WorkSettings.empty()
+
+    case WorkSettings.update(old, revision, patch, actor, state.settings_fallbacks) do
+      {:ok, ^old} ->
+        {:reply, {:ok, settings_snapshot(state, true)}, state}
+
+      {:ok, candidate} ->
+        candidate = state.settings_candidate.(candidate)
+
+        case WorkSettings.validate(candidate) do
+          :ok ->
+            case WorkSettings.persist(state.table, candidate, state.settings_io) do
+              :ok ->
+                next = %{state | settings: candidate}
+                publish_settings(next)
+                {:reply, {:ok, settings_snapshot(next, true)}, next}
+
+              {:error, reason} ->
+                settings_failure(state, reason)
+            end
+
+          _ ->
+            Logger.error("work settings candidate invariant failed before insert")
+            settings_failure(state, :work_settings_unknown)
+        end
+
+      {:error, :revision_conflict} ->
+        {:reply, {:error, {:revision_conflict, old.revision}}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp settings_failure(state, reason),
+    do: {:reply, {:error, reason}, block_settings(state, reason)}
 
   defp config, do: Application.get_env(:kaoiro_server, :work_store, [])
 

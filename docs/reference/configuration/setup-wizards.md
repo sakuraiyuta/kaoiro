@@ -148,3 +148,10 @@ startup**.
   token allocation at spawn
 - Guide: the deployment guide (#137) is the source of truth for manual steps
 - [Multi-host deployment architecture](../../architecture/deployment.md#setup-wizards).
+
+The server environment wizard also emits optional hints for
+`KAOIRO_WORK_NOMINATED_PER_PRINCIPAL` and `KAOIRO_WORK_ACTIVE_PER_ASSIGNEE`.
+Both default to 16 and accept 0 for unlimited admission. Saved dashboard
+values take precedence. Apply env-file edits by recreating the existing service
+with the same image, not `docker compose restart`; see
+[work admission settings](server.md#work-admission-settings).

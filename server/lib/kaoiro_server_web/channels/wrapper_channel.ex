@@ -695,6 +695,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:error, %{reason: _} = details} ->
         {:reply, {:error, details}, socket}
 
+      {:error, {:work_capacity, capacity}} ->
+        {:reply, {:error, %{reason: "work_capacity", details: %{capacity: capacity}}}, socket}
+
       {:error, {:disconnected, disconnect}} ->
         {:reply, {:error, %{reason: "disconnected", disconnect: disconnect}}, socket}
 
