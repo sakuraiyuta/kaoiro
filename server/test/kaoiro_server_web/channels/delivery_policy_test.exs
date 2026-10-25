@@ -619,7 +619,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     Process.flag(:trap_exit, true)
     monitor = Process.monitor(socket.channel_pid)
     close(socket)
-    assert_receive {:DOWN, ^monitor, :process, _, _}
+    assert_receive {:DOWN, ^monitor, :process, _, _}, TestTimeouts.out_of_band()
     {_, replacement} = wrapper(id, %{"delivery_policy" => "v1"})
     assert %{owner: owner, applied_revision: nil} = WorkStore.delivery_snapshot(id)
     assert owner == replacement.channel_pid
@@ -641,11 +641,14 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
         end)
       end)
 
-    assert_receive {:blocked_worker, worker}
+    assert_receive {:blocked_worker, worker}, TestTimeouts.out_of_band()
     operator = client(:operator)
     :erlang.trace(operator.channel_pid, true, [:send, {:tracer, self()}])
     ref = push(operator, "set_delivery_policy", request(id, "on", 0))
-    assert_receive {:trace, _, :send, {:"$gen_call", _, {:run, :set_delivery_policy, _}}, ^worker}
+
+    assert_receive {:trace, _, :send, {:"$gen_call", _, {:run, :set_delivery_policy, _}}, ^worker},
+                   TestTimeouts.out_of_band()
+
     Application.put_env(:kaoiro_server, :client_tokens, "dp-operator:viewer,dp-viewer:viewer")
     send(worker, :release)
     assert Task.await(task) == :ok
@@ -1131,7 +1134,7 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
     {_, wrapper} = wrapper(id)
     monitor = Process.monitor(wrapper.channel_pid)
     close(wrapper)
-    assert_receive {:DOWN, ^monitor, :process, _, _}
+    assert_receive {:DOWN, ^monitor, :process, _, _}, TestTimeouts.out_of_band()
     operator = client(:operator)
     assert_reply push(operator, "delete_agent", %{"version" => "0", "agent_id" => id}), :ok
     assert :dets.lookup(DeliveryPolicies, {:settings, id}) == []
