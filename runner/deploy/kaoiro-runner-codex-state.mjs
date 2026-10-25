@@ -420,7 +420,7 @@ async function run(root, uuid, mode, allowDirty = "no") {
     if (tx.phase === "restore-prepared") await stageRestore(root, tx);
     if (tx.phase === "replace-intent") await moveReplacement(root, tx);
     const target = replacing(tx) ? tx.source : tx.target;
-    execChildSync("codex-switch", join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { stdio: ["ignore", "pipe", "inherit"] });
+    execChildSync("codex-switch", join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { env: { ...process.env, KAOIRO_CODEX_NESTED: "1" }, stdio: ["ignore", "pipe", "inherit"] });
     tx = selected(root, uuid);
     must(tx.phase === (replacing(tx) ? "replace-intent" : "start-intent"), "Startup phase changed after switch");
     assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx)); // codex-recovery-site: PS.after-switch
@@ -528,6 +528,9 @@ async function main(argv) {
 // to read the record or render it only drops lines.
 function report(error, [action, rootArg, ...args]) {
   const message = String(error?.message ?? error), cls = classify(message), lines = [message];
+  // Inside a run's switch the run itself renders the hint for the state it
+  // leaves; a hint from here would describe the record before that run settles.
+  if (process.env.KAOIRO_CODEX_NESTED === "1") { console.error(`codex-state: ${message}`); return; }
   let root, tx, held = [];
   try { root = realpathSync(rootArg); } catch { /* no record to name */ }
   const candidates = [message.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)?.[0], ["guard", "preflight"].includes(action) ? args[1] : args[0]];

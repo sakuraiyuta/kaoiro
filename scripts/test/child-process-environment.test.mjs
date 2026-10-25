@@ -39,14 +39,14 @@ test("each operation's explicit keys preserve only its intended authority", () =
   for (const [key, value] of Object.entries(runnerKeys)) assert.equal(runner[key], value);
   assert.equal(runner.KAOIRO_RELEASE_RETAINED_UNIT, undefined);
   const codexKeys = { ...runnerKeys, KAOIRO_RUNNER_ENV: "/fixture/runner.env", XDG_CONFIG_HOME: "/fixture/xdg",
-    KAOIRO_SYSTEMCTL: "/fixture/systemctl", KAOIRO_RUNNER_CONFIG: "/fixture/config.json", KAOIRO_UNAME: "Darwin",
+    KAOIRO_SYSTEMCTL: "/fixture/systemctl", KAOIRO_CODEX_NESTED: "1", KAOIRO_RUNNER_CONFIG: "/fixture/config.json", KAOIRO_UNAME: "Darwin",
     KAOIRO_RUNNER_INSTALL_DIR: "/fixture/install", XDG_DATA_HOME: "/fixture/data", KAOIRO_SYSTEMD_RUN: "/fixture/run",
     CODEX_HOME: "/fixture/codex", KAOIRO_RUNNER_TOKEN: "inert-token", HOME: "/fixture/home", USER: "fixture",
     LOGNAME: "fixture", TMPDIR: "/fixture/tmp", SSH_AUTH_SOCK: "/fixture/socket",
     XDG_RUNTIME_DIR: "/fixture/runtime", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" };
   const base = ["HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "TMPDIR", "TZ", "USER"];
   for (const [profile, kept] of Object.entries({
-    "codex-switch": ["DBUS_SESSION_BUS_ADDRESS", "KAOIRO_NODE", "KAOIRO_SYSTEMCTL", "XDG_RUNTIME_DIR"],
+    "codex-switch": ["DBUS_SESSION_BUS_ADDRESS", "KAOIRO_CODEX_NESTED", "KAOIRO_NODE", "KAOIRO_SYSTEMCTL", "XDG_RUNTIME_DIR"],
     "codex-attest": ["KAOIRO_NODE", "KAOIRO_RUNNER_DIR", "KAOIRO_RUNNER_ENV", "XDG_CONFIG_HOME"],
   })) {
     const env = childEnvironment(profile, { ...hostile, ...codexKeys });

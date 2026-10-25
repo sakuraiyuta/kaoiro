@@ -161,7 +161,8 @@ switch_to() {
   fi
 
   kaoiro_codex_state guard "$root" "$_id" "$codex_transaction" || {
-    [ -z "$codex_transaction" ] || kaoiro_codex_state next "$root" "$codex_transaction" >&2 || true
+    [ -z "$codex_transaction" ] || [ -n "${KAOIRO_CODEX_NESTED:-}" ] ||
+      kaoiro_codex_state next "$root" "$codex_transaction" >&2 || true
     kaoiro_die "Codex state activation refused" 78
   }
 
