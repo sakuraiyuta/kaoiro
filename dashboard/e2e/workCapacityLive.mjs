@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { ServerLink } from "../wrapper/core/dist/transport.js";
-import { InterAgentTool } from "../wrapper/agent-common/dist/inter_agent.js";
+import { childEnvironment } from "../../scripts/child-process-environment.mjs";
+import { ServerLink } from "../../wrapper/core/dist/transport.js";
+import { InterAgentTool } from "../../wrapper/agent-common/dist/inter_agent.js";
 
 // The browser, Phoenix client and wrapper connect to the same disposable release.
 const requireDashboard = createRequire(resolve("dashboard/package.json"));
@@ -47,7 +48,9 @@ async function until(predicate, label, ms = 30000) {
   throw new Error(`timed out: ${label}`);
 }
 async function start() {
-  const env = { ...process.env, TMPDIR: state, PHX_SERVER: "true", PORT: String(port),
+  // Never inherit another installation's store paths or credentials.
+  const env = { ...childEnvironment("authority", { HOME: root, TMPDIR: state }),
+    LANG: "C.UTF-8", LC_ALL: "C.UTF-8", ERL_FLAGS: "+S 2:2", PHX_SERVER: "true", PORT: String(port),
     PHX_HOST: "127.0.0.1", KAOIRO_PLAIN_HTTP: "true",
     SECRET_KEY_BASE: randomBytes(64).toString("hex"),
     KAOIRO_CLIENT_TOKENS: `${token}:operator,${viewerToken}:viewer`,

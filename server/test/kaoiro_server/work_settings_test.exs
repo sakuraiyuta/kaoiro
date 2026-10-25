@@ -62,7 +62,7 @@ defmodule KaoiroServer.WorkSettingsTest do
     Process.unlink(sup)
 
     on_exit(fn ->
-      if Process.alive?(sup), do: Supervisor.stop(sup)
+      KaoiroServer.TestTeardown.stop_quietly(sup)
       File.rm_rf!(root)
     end)
 
@@ -406,6 +406,9 @@ defmodule KaoiroServer.WorkSettingsTest do
                name
              )
 
+    tracker = String.to_atom("work_settings_conversations_#{System.unique_integer([:positive])}")
+    start_supervised!({KaoiroServer.ConversationStates, name: tracker})
+
     assert :ok =
              KaoiroServer.ConversationStates.record_message(
                original,
@@ -414,10 +417,11 @@ defmodule KaoiroServer.WorkSettingsTest do
                "nomination",
                1,
                false,
-               true
+               true,
+               tracker
              )
 
-    assert {:ok, _} = KaoiroServer.ConversationStates.close_by_operator(original)
+    assert {:ok, _} = KaoiroServer.ConversationStates.close_by_operator(original, tracker)
     assert WorkStore.all(name)[id].state == "nominated"
 
     assert {:ok, _} =
