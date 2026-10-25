@@ -48,6 +48,21 @@ defmodule KaoiroServerWeb.EndpointTransportTest do
     end
   end
 
+  test "rejects HTTP/1.1 requests with userinfo in the absolute-form URI", %{port: port} do
+    with_socket(port, fn socket ->
+      :ok = :inet.setopts(socket, packet: :http_bin)
+
+      :ok =
+        :gen_tcp.send(socket, [
+          "GET http://user@evil.example/api/health HTTP/1.1\r\n",
+          "Host: localhost\r\n\r\n"
+        ])
+
+      assert {:ok, {:http_response, _version, 400, _reason}} =
+               :gen_tcp.recv(socket, 0, @timeout)
+    end)
+  end
+
   test "the same listener serves HTTP/1.1 health and closes h2c without sending bytes", %{
     port: port
   } do
