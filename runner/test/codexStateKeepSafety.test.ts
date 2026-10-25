@@ -52,11 +52,14 @@ describe.skipIf(process.platform !== "linux")("kept source-recovery safeguards",
   });
   it.each(["fail-start","no-start","no-mainpid","bad-live"])("reports %s as failed source recovery", fault => {
     h.trigger("late-unknown");
-    if (fault === "fail-start") atStart("process.exit(66);");
+    // The source start must be requested only after `failed` is durable.
+    atStart("{const records=root+'/codex-state/v2/records';fs.appendFileSync(dir+'/start-phases',fs.readdirSync(records).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(fs.readFileSync(records+'/'+n,'utf8')).phase).join(',')+'\\n');}"
+      + (fault === "fail-start" ? "process.exit(66);" : ""));
     if (fault === "no-start") editControl(s=>s.replace("fs.writeFileSync(dir+'/active','active'); child.unref();", "fs.writeFileSync(dir+'/active','inactive'); child.unref();"));
     if (fault === "no-mainpid") editControl(s=>s.replace("MainPID:active?String(ownerPid):'0'", "MainPID:active&&!fs.existsSync(dir+'/owned-pids/'+ownerPid+'.json')?String(ownerPid):'0'"));
     if (fault === "bad-live") { const other=join(h.dir,"other-home");mkdirSync(other,{mode:0o700}); editControl(s=>s.replace(`CODEX_HOME:${JSON.stringify(h.home)}`,`CODEX_HOME:${JSON.stringify(other)}`)); }
     const r=h.forward(); expect(r.status).not.toBe(0); expect(h.callLog()).toBe("stop\nstart\n"); expect(r.stderr).not.toContain("unchanged source was resumed");
+    expect(readFileSync(join(h.dir,"start-phases"),"utf8")).toBe("failed\n"); expect(record().phase).toBe("failed");
   });
   it.each(["active","inactive"])("restarts a failed restore only if admission began %s", activity => {
     const forward=h.forward(); expect(forward.status,forward.stderr).toBe(0);
