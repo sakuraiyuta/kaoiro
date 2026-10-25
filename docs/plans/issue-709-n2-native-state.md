@@ -478,6 +478,21 @@ forward in in-flight protection (source-only once terminal).
 No server recovery, publication workflow, enrollment, native pin, package
 lock or production configuration is changed by N2.
 
+The helper's two child processes go through `execChildSync` with closed
+profiles ([design delta](https://github.com/sakuraiyuta/kaoiro/issues/709#issuecomment-6391542536)).
+The physical switch uses `codex-switch`: `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` for the nested guard's `systemctl --user`,
+`KAOIRO_SYSTEMCTL` so that the nested guard reads the same service manager
+as the parent, and `KAOIRO_NODE`. The post-start attestation uses
+`codex-attest`: `KAOIRO_NODE`, which is still set to the helper's own
+interpreter, and the `KAOIRO_RUNNER_DIR`, `KAOIRO_RUNNER_ENV` and
+`XDG_CONFIG_HOME` selectors. Through these selectors, the launch shim sources
+the same runner.env as the updater's own attestation. Both profiles also keep
+the common keys. `NODE_OPTIONS`, shell loaders and credentials do not reach
+either child. The helper is in the checker's managed scope. Test fixtures
+reach processes nested in the switch through their own `KAOIRO_NODE` wrapper,
+not through `NODE_OPTIONS`.
+
 The [case-level test migration inventory](issue-709-n2-test-inventory.md)
 is required before deleting/replacing tests. Each retained row names a
 surviving test group and its guard mutation; create those replacements first,
