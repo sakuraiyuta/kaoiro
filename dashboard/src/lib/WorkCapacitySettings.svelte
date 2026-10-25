@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { WorkCapacityKey, WorkCapacityPatch, WorkSettingsSnapshot } from "@kaoiro/protocol";
   import { WORK_CAPACITY_KEYS, isWorkCapacityValue } from "./workSettings";
   import type { KaoiroConnection } from "./protocol";
@@ -11,6 +12,8 @@
   } = $props();
   let drafts = $state<Record<WorkCapacityKey, string>>({ work_nominated_per_principal: "", work_active_per_assignee: "" });
   let pending = $state(false);
+  let dirty = $state(false);
+  let newerSettings = $state(false);
   let uncertain = $state(false);
   let error = $state<string | null>(null);
   const labels: Record<WorkCapacityKey, string> = {
@@ -20,15 +23,20 @@
   const sourceLabels = { dashboard: "ダッシュボード", config: "サーバー設定", default: "既定値" };
   $effect(() => {
     if (snapshot?.state === "ready") {
-      drafts = { work_nominated_per_principal: String(snapshot.effective.work_nominated_per_principal), work_active_per_assignee: String(snapshot.effective.work_active_per_assignee) };
+      if (untrack(() => dirty)) newerSettings = true;
+      else drafts = { work_nominated_per_principal: String(snapshot.effective.work_nominated_per_principal), work_active_per_assignee: String(snapshot.effective.work_active_per_assignee) };
       uncertain = false;
     } else {
+      dirty = false;
+      newerSettings = false;
       drafts = { work_nominated_per_principal: "", work_active_per_assignee: "" };
     }
   });
   $effect(() => {
     void generation;
     void connection;
+    dirty = false;
+    newerSettings = false;
     pending = false;
     uncertain = false;
     error = null;
@@ -70,7 +78,11 @@
     error = null;
     try {
       const value = await requestConnection.setWorkSettings(revision, changes);
-      if (current() && !(latestSnapshot()?.state === "unavailable" && value.state === "ready")) onSnapshot(value);
+      if (current() && !(latestSnapshot()?.state === "unavailable" && value.state === "ready")) {
+        dirty = false;
+        newerSettings = false;
+        onSnapshot(value);
+      }
     }
     catch (cause) {
       if (!current()) return;
@@ -98,7 +110,7 @@
     <p>設定未取得、未接続、またはサーバーがこの設定に対応していません。</p>
   {/if}
   {#each WORK_CAPACITY_KEYS as key}
-    <label>{labels[key]}<input aria-label={labels[key]} inputmode="numeric" type="text" bind:value={drafts[key]} disabled={!enabled} /></label>
+    <label>{labels[key]}<input aria-label={labels[key]} inputmode="numeric" type="text" bind:value={drafts[key]} oninput={() => { dirty = true; }} disabled={!enabled} /></label>
     {#if snapshot?.state === "ready"}
       <p>適用値: {snapshot.effective[key] === 0 ? "無制限 (0)" : snapshot.effective[key]} / 設定元: {sourceLabels[snapshot.sources[key]]} / サーバー設定: {snapshot.fallbacks[key]}</p>
     {/if}
@@ -106,6 +118,7 @@
   {/each}
   <button onclick={() => save()} disabled={!enabled || !valid}>保存</button>
   <button onclick={refresh} disabled={!connection || pending}>設定・変更履歴を読み直す</button>
+  {#if newerSettings}<p role="status">サーバーの設定が更新されました。入力は保持しています。適用値を確認してから保存してください。</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
   {#if uncertain}<p role="alert">結果が不明です。保存を繰り返さず、設定を読み直してください。</p>{/if}
   {#if snapshot?.state === "ready" && snapshot.last_change}

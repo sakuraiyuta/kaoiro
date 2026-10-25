@@ -275,6 +275,193 @@ defmodule KaoiroServer.WorkSettingsTest do
              )
   end
 
+  defp operate(
+         name,
+         id,
+         operation,
+         extra \\ %{},
+         principal \\ @actor,
+         context \\ %{operator: true}
+       ) do
+    work = WorkStore.all(name)[id]
+
+    args =
+      Map.merge(
+        %{
+          "op" => operation,
+          "operation_id" => opid(),
+          "work_id" => id,
+          "expected_revision" => work.revision,
+          "basis_revision" => work.revision
+        },
+        extra
+      )
+
+    WorkStore.apply(principal, args, context, name)
+  end
+
+  test "each bounded collection emits its own capacity diagnostic with admission unlimited" do
+    cfg = Application.fetch_env!(:kaoiro_server, :work_store)
+
+    Application.put_env(
+      :kaoiro_server,
+      :work_store,
+      Keyword.merge(cfg,
+        work_nominated_per_principal: 0,
+        work_active_per_assignee: 0,
+        work_pending_transfers: 1,
+        work_verdicts_per_work: 1,
+        work_accepted_verdicts_per_work: 1
+      )
+    )
+
+    {_sup, name, _} = store()
+    assert {:ok, %{work: %{work_id: held}}} = assign(name, "held")
+    for _ <- 1..2, do: assert({:ok, _} = operate(name, held, "hold", %{"reason" => "pause"}))
+
+    assert {:error,
+            {:work_capacity, %{limit: "work_pending_transfers", scope: "holds", maximum: 2}}} =
+             operate(name, held, "hold", %{"reason" => "pause"})
+
+    assert {:ok, %{work: %{work_id: moved}}} = assign(name, "first")
+    assert {:ok, _} = operate(name, moved, "transfer", %{"assignee" => "second"})
+
+    assert {:error,
+            {:work_capacity, %{limit: "work_pending_transfers", scope: "transfers", maximum: 1}}} =
+             operate(name, moved, "transfer", %{"assignee" => "third"})
+
+    assert {:ok, %{work: %{work_id: target}}} = assign(name, "author")
+
+    assert {:ok, _} =
+             operate(
+               name,
+               target,
+               "submit",
+               %{"subject" => %{"hash" => "hash", "label" => "candidate"}},
+               agent("author")
+             )
+
+    assert {:ok, %{work: %{work_id: review}}} =
+             WorkStore.apply(
+               @actor,
+               %{
+                 "op" => "assign",
+                 "operation_id" => opid(),
+                 "title" => "Review",
+                 "assignee" => "reviewer",
+                 "director" => @actor,
+                 "reviews" => target
+               },
+               %{operator: true},
+               name
+             )
+
+    verdict = %{"subject" => %{"work_id" => target, "hash" => "hash"}, "outcome" => "approve"}
+    assert {:ok, _} = operate(name, review, "verdict", verdict, agent("reviewer"))
+
+    assert {:error,
+            {:work_capacity, %{limit: "work_verdicts_per_work", scope: "work", maximum: 1}}} =
+             operate(name, review, "verdict", verdict, agent("reviewer"))
+
+    verdict_id = hd(WorkStore.all(name)[review].verdicts).verdict_id
+
+    accepted = %{
+      "verdict_ref" => %{"work_id" => review, "verdict_id" => verdict_id},
+      "subject_hash" => "hash"
+    }
+
+    assert {:ok, _} = operate(name, target, "accept_verdict", accepted)
+
+    assert {:error,
+            {:work_capacity,
+             %{limit: "work_accepted_verdicts_per_work", scope: "work", maximum: 1}}} =
+             operate(name, target, "accept_verdict", accepted)
+
+    Application.put_env(
+      :kaoiro_server,
+      :work_store,
+      Keyword.put(cfg, :work_receipts_per_work_principal, 1)
+    )
+
+    {_sup, name, _} = store()
+    assert {:ok, %{work: %{work_id: id}}} = assign(name, "receipt")
+
+    assert {:error,
+            {:work_capacity,
+             %{limit: "work_receipts_per_work_principal", scope: "work_principal", maximum: 1}}} =
+             operate(name, id, "revise")
+  end
+
+  test "link capacity is distinct from assign-link conflict and conversation closure does not decline" do
+    {_sup, name, _} = store()
+    assert {:ok, %{work: %{work_id: id}}} = nominate(name, "director", "target")
+    original = hd(WorkStore.all(name)[id].links)
+
+    assert {:error, :work_link_conflict} =
+             WorkStore.apply(
+               agent("director"),
+               %{"op" => "assign", "operation_id" => opid(), "title" => "Conflicting link"},
+               %{recipient: "target", conversation_id: original, turn_number: 1},
+               name
+             )
+
+    assert :ok =
+             KaoiroServer.ConversationStates.record_message(
+               original,
+               "director",
+               "target",
+               "nomination",
+               1,
+               false,
+               true
+             )
+
+    assert {:ok, _} = KaoiroServer.ConversationStates.close_by_operator(original)
+    assert WorkStore.all(name)[id].state == "nominated"
+
+    assert {:ok, _} =
+             operate(name, id, "accept_assignment", %{}, agent("target"), %{
+               recipient: "director",
+               conversation_id: original
+             })
+
+    for _ <- 1..31 do
+      assert {:ok, _} =
+               operate(name, id, "revise", %{}, agent("director"), %{
+                 recipient: "target",
+                 conversation_id: opid(),
+                 new_conversation?: true
+               })
+    end
+
+    assert length(WorkStore.all(name)[id].links) == 32
+
+    assert {:error, {:work_capacity, %{limit: "work_links_per_work", scope: "work", maximum: 32}}} =
+             operate(name, id, "revise", %{}, agent("director"), %{
+               recipient: "target",
+               conversation_id: opid(),
+               new_conversation?: true
+             })
+  end
+
+  test "declining a nomination frees its slot while the terminal record is retained" do
+    {_sup, name, _} = store()
+    assert {:ok, _} = WorkStore.set_settings(authorize(), 0, %{@nom => 1}, name)
+    assert {:ok, %{work: %{work_id: id}}} = nominate(name, "director", "target")
+    assert {:error, {:work_capacity, _}} = nominate(name, "director", "other")
+    cid = hd(WorkStore.all(name)[id].links)
+
+    assert {:ok, _} =
+             operate(name, id, "decline", %{}, agent("target"), %{
+               recipient: "director",
+               conversation_id: cid
+             })
+
+    assert {:ok, _} = nominate(name, "director", "other")
+    assert WorkStore.all(name)[id].state == "declined"
+    assert map_size(WorkStore.all(name)) == 2
+  end
+
   test "finite active assignment counts IDs; acceptance counts complete assignee maps" do
     cfg = Application.fetch_env!(:kaoiro_server, :work_store)
 
@@ -478,7 +665,17 @@ defmodule KaoiroServer.WorkSettingsTest do
       reason =
         if fault == :invalid_readback, do: :work_settings_corrupt, else: :work_settings_unknown
 
-      assert {:error, ^reason} = WorkStore.set_settings(authorize(), 0, %{@nom => 0}, name)
+      result =
+        try do
+          WorkStore.set_settings(authorize(), 0, %{@nom => 0}, name)
+        catch
+          :exit, failure -> {:owner_exited, failure}
+        end
+
+      assert Process.alive?(pid) and Process.whereis(name) == pid,
+             "settings I/O failure must preserve the original owner PID"
+
+      assert {:error, ^reason} = result
       before = rows(name)
       assert {:error, ^reason} = assign(name, "target")
       assert {:error, ^reason} = WorkStore.set_settings(authorize(), 0, %{@nom => nil}, name)

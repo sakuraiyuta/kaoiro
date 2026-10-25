@@ -14,6 +14,8 @@ import type { KaoiroHandlers } from "../src/lib/protocol";
 
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
+  getWorkSettings: vi.fn(),
+  setWorkSettings: vi.fn(),
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -33,6 +35,8 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         deleteAgent: async () => {},
         renameAgent: async () => {},
         setPermission: async () => null,
+        getWorkSettings: captured.getWorkSettings,
+        setWorkSettings: captured.setWorkSettings,
         setQuagmireSettings: async () => ({ rallyTurns: 16, source: "default" }),
         // SettingsDrawer fetches both lists as soon as it has a
         // connection; `listConversations` also carries `.incomplete`.
@@ -90,6 +94,8 @@ const section = () => document.querySelector("section.quagmire");
 
 beforeEach(() => {
   captured.handlers = null;
+  captured.getWorkSettings.mockReset();
+  captured.setWorkSettings.mockReset();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown) => {
@@ -204,4 +210,58 @@ describe("App.svelte work admission settings", () => {
       expect(save().disabled, text).toBe(!valid);
     }
   });
+  it("keeps edited drafts across another tab's update and uses the latest revision", async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
+    await tick(); await openSettings();
+    const input = workSection()!.querySelector<HTMLInputElement>("input")!;
+    input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true })); await tick();
+    h.onWorkSettings?.({ ...ready, revision: 43, effective: { ...ready.effective, work_nominated_per_principal: 1 } });
+    await tick();
+    expect(input.value).toBe("0");
+    expect(workSection()!.textContent).toContain("入力は保持しています");
+    captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 44 });
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!.click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(43, {
+      work_nominated_per_principal: 0, work_active_per_assignee: 16,
+    }));
+  });
+  it("rereads conflict/unknown outcomes without replay; reset removes only the selected override", async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
+    await tick(); await openSettings();
+    const save = () => Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!;
+    captured.setWorkSettings.mockRejectedValueOnce(new Error("revision_conflict"));
+    captured.getWorkSettings.mockResolvedValueOnce({ ...ready, revision: 43 });
+    save().click();
+    await vi.waitFor(() => expect(workSection()!.textContent).toContain("別の変更が保存されました"));
+    expect(captured.setWorkSettings).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(save().disabled).toBe(false));
+    captured.setWorkSettings.mockRejectedValueOnce(new Error("timeout"));
+    captured.getWorkSettings.mockRejectedValueOnce(new Error("disconnected"));
+    save().click();
+    await vi.waitFor(() => expect(workSection()!.textContent).toContain("結果が不明です"));
+    expect(save().disabled).toBe(true);
+    expect(captured.setWorkSettings).toHaveBeenCalledTimes(2);
+    captured.getWorkSettings.mockResolvedValueOnce({ ...ready, revision: 44 });
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent?.startsWith("設定・変更履歴"))!.click();
+    await vi.waitFor(() => expect(save().disabled).toBe(false));
+    captured.setWorkSettings.mockResolvedValueOnce({ ...ready, revision: 45 });
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent?.startsWith("サーバー設定に戻す"))!.click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenLastCalledWith(44, { work_nominated_per_principal: null }));
+  });
+  it("ignores an old connection's successful reply after disconnect", async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
+    await tick(); await openSettings();
+    let complete!: (value: typeof ready) => void;
+    captured.setWorkSettings.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!.click();
+    await tick();
+    h.onStatus("disconnected"); await tick();
+    complete({ ...ready, revision: 43 }); await tick(); await tick();
+    expect(workSection()!.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+    expect(workSection()!.textContent).not.toContain("適用値:");
+  });
+
 });
