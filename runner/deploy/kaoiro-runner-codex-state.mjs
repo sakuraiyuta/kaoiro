@@ -8,12 +8,12 @@ import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
 import { CREDENTIALS, atomicJSON, capacity, digest, durableRename, hasEntry, identity, inside, inventory, must, prepareRestore, sameState, snapshot, stateEntries, syncDirectory, verifySnapshot } from "./codex-snapshot.mjs";
 import { assertStopped, captureBinding, checkBinding, homePath, requireCgroupV2, runnerActivity, staticBinding, systemctl } from "./codex-service.mjs";
+import { PHASES, classify, render, rowLines } from "./codex-state-recovery.mjs";
 
 export const CODEX_STATE_SCHEMA = 2;
 const ID = /^(?:[a-f0-9]{40}(?:-dirty)?|unknown)$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
-const PHASES = ["prepared", "snapshot-verified", "start-intent", "completed", "failed", "restore-prepared", "replace-intent", "restored"];
 const TERMINAL = ["completed", "failed", "restored"];
 const RETENTION = ["planned", "retained", "prune-intent", "retired"];
 const OLD_TERMINAL = ["completed", "restored", "retired"];
@@ -48,7 +48,7 @@ function cutover(root) {
     const path = join(old, kind, name);
     let ok = false;
     try { const tx = privateJSON(path); ok = kind === "transactions" ? OLD_TERMINAL.includes(tx.phase) : tx.retired === true; } catch { /* Unclassifiable old records need the previous tool. */ }
-    must(ok, `Resolve old Codex state records with the previous tool release: ${path}; see docs/operations/runner-update-and-rollback.md`);
+    must(ok, `Resolve old Codex state records with the previous tool release: ${path}`);
   }
 }
 function projection(root, name) {
@@ -109,12 +109,15 @@ function save(root, tx) {
 }
 async function withLock(root, name, fn) {
   const path = join(root, name);
-  try { mkdirSync(path, { mode: 0o700 }); }
-  catch (error) { if (error.code === "EEXIST") throw new Error(`Lock held: ${path}; inspect the worker before removing stale locks, then use the physical updater --resume-codex-transaction or --recover-codex-transaction`); throw error; }
+  try { mkdirSync(path, { mode: 0o700 }); } // codex-recovery-site: G6.helper
+  catch (error) { if (error.code === "EEXIST") throw new Error(`Lock held: ${path}`); throw error; } // codex-recovery-rethrow: lock-create
   try { return await fn(); } finally { rmdirSync(path); }
 }
 const publish = (root, tx) => withLock(root, ".lock.links", () => save(root, tx));
-function exclude(root, uuid) { must(records(root).every(tx => terminal(tx) || tx.uuid === uuid), "Unresolved Codex transaction requires recovery"); }
+function exclude(root, uuid) {
+  const blocking = records(root).find(tx => !terminal(tx) && tx.uuid !== uuid);
+  must(!blocking, `Unresolved Codex transaction requires recovery: ${blocking?.uuid}`);
+}
 function current(root) {
   const link = readlinkSync(join(root, "current"));
   must(link.startsWith("releases/") && ID.test(link.slice(9)), "Invalid current release link");
@@ -147,10 +150,10 @@ function snapshotFor(tx) {
   return m;
 }
 async function prepare(root, target, home, destination, service, tool, pid) {
-  requireUpdate(root); exclude(root);
+  requireUpdate(root); exclude(root); // codex-recovery-site: G2.prepare G7.prepare
   const source = await release(root, current(root)), candidate = await release(root, target);
   await release(root, tool); needCapability(root, source.id); needCapability(root, target);
-  const b = captureBinding(root, service, home);
+  const b = captureBinding(root, service, home); // codex-recovery-site: G4.prepare
   requireCgroupV2();
   must(resolve(destination) === destination && realpathSync(dirname(destination)) === dirname(destination) && !hasEntry(destination), "Backup destination must be new and canonical");
   directory(dirname(destination)); disjoint(root, home, destination);
@@ -172,7 +175,7 @@ async function reconcile(root, tx) {
   }
 }
 async function takeSnapshot(root, tx) {
-  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx)); // codex-recovery-site: PS.snapshot-stopped PS.snapshot-binding
   must(current(root) === tx.source.id, "Pre-start source link changed");
   await checkRelease(root, tx.source);
   if (tx.phase === "prepared") {
@@ -187,7 +190,7 @@ async function takeSnapshot(root, tx) {
   must(sameState(inventory(tx.home, true), snapshotFor(tx).entries), "Stopped state differs from verified snapshot; recover and take a new snapshot");
 }
 export async function guard(root, target, uuid, preflight = false) {
-  exclude(root, uuid);
+  exclude(root, uuid); // codex-recovery-site: G2.guard G7.guard
   const candidate = await release(root, target);
   const retained = records(root).some(tx => ["retained", "prune-intent"].includes(tx.snapshot.status));
   if (!hasEntry(join(root, "current"))) {
@@ -207,9 +210,9 @@ export async function guard(root, target, uuid, preflight = false) {
   const expected = restoring ? tx.source : tx.target;
   must(target === expected.id && candidate.sha256 === expected.sha256, "Transaction target differs");
   const from = restoring ? tx.replacement.from.id : tx.source.id;
-  must([from, expected.id].includes(now.id), "Current is outside recorded operation");
+  must([from, expected.id].includes(now.id), "Current is outside recorded operation"); // codex-recovery-site: G3.guard
   needCapability(root, target);
-  checkBinding(root, tx.service, binding(tx), restoring && !hasEntry(tx.home));
+  checkBinding(root, tx.service, binding(tx), restoring && !hasEntry(tx.home)); // codex-recovery-site: G4.guard-entry PS.guard-nested PS.guard-nested-intent
   if (preflight) return;
   assertStopped(tx.service, tx.home);
   if (restoring) {
@@ -234,12 +237,12 @@ function verifyReplacement(tx) {
   }
 }
 async function admitRestore(root, tx, home, service, tool) {
-  exclude(root, tx.uuid);
+  exclude(root, tx.uuid); // codex-recovery-site: G2.restore
   must(!replacing(tx), "Replacement is already unfinished");
   must(!["prepared", "snapshot-verified"].includes(tx.phase), "Use never-started source recovery");
   const manifest = snapshotFor(tx);
   must(home === tx.home && service.replace(/(?:\.service)?$/, ".service") === tx.service, "Restore home/service differs from selected record");
-  checkBinding(root, tx.service, binding(tx));
+  checkBinding(root, tx.service, binding(tx)); // codex-recovery-site: G4.restore
   const from = await release(root, current(root));
   await checkRelease(root, tx.source); needCapability(root, tx.source.id); await release(root, tool);
   capacity(dirname(home), manifest.entries); requireCgroupV2();
@@ -251,14 +254,15 @@ async function admitRestore(root, tx, home, service, tool) {
 }
 async function prepareRollback(root, path, home, service, tool) {
   requireUpdate(root);
-  const choices = records(root).filter(tx => tx.snapshot.path === path && tx.snapshot.status === "retained");
+  const choices = records(root).filter( // codex-recovery-site: G7.restore
+    tx => tx.snapshot.path === path && tx.snapshot.status === "retained");
   must(choices.length === 1, "No unique retained snapshot matches selection");
   const tx = selected(root, choices[0].uuid);
   await admitRestore(root, tx, home, service, tool); return tx.uuid;
 }
 async function stageRestore(root, tx) {
   const r = tx.replacement;
-  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+  assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx)); // codex-recovery-site: PS.stage
   must(current(root) === r.from.id, "Restore source link changed");
   await checkRelease(root, r.from); await checkRelease(root, tx.source);
   await cleanupStage(root, tx, r.staging);
@@ -270,8 +274,8 @@ async function stageRestore(root, tx) {
 }
 async function moveReplacement(root, tx) {
   const r = tx.replacement;
-  assertStopped(tx.service, tx.home);
-  checkBinding(root, tx.service, binding(tx), !hasEntry(tx.home));
+  assertStopped(tx.service, tx.home); // codex-recovery-site: PS.replace-stopped
+  checkBinding(root, tx.service, binding(tx), !hasEntry(tx.home)); // codex-recovery-site: PS.replace-binding
   if (hasEntry(tx.home) && !hasEntry(r.staging) && hasEntry(r.aside) && r.startRequested) {
     must(current(root) === tx.source.id, "Published restore home requires its source release");
     return;
@@ -330,11 +334,11 @@ async function cleanupStage(root, tx, path) {
   catch (error) { throw new Error(`Owned staging cleanup remains pending: ${path}: ${error.message}`); }
 }
 async function returnSource(root, tx) {
-  must(current(root) === tx.source.id, "Source link changed before recovery");
-  checkBinding(root, tx.service, binding(tx)); await checkRelease(root, tx.source);
+  must(current(root) === tx.source.id, "Source link changed before recovery"); // codex-recovery-site: PS.return-link
+  checkBinding(root, tx.service, binding(tx)); await checkRelease(root, tx.source); // codex-recovery-site: PS.return-binding
   if (tx.phase === "prepared") {
     try { await reconcile(root, tx); }
-    catch { console.error(`codex-state: unverifiable snapshot left for explicit prune: ${tx.snapshot.path}`); }
+    catch { console.error(`codex-state: unverifiable snapshot left for explicit prune: ${tx.snapshot.path}`); for (const line of rowLines(tx, context(root), ["PRN"])) console.error(`codex-state: ${line}`); }
   }
   if (!hasEntry(tx.snapshot.path)) tx.snapshot.status = "retired";
   let cleanupError;
@@ -343,11 +347,11 @@ async function returnSource(root, tx) {
     const latest = selected(root, tx.uuid);
     must(["prepared", "snapshot-verified", "failed"].includes(latest.phase) && latest.source.id === tx.source.id && latest.source.sha256 === tx.source.sha256, "Source return phase changed before restart");
     tx.phase = "failed"; save(root, tx);
-    const activity = runnerActivity(tx.service);
+    const activity = runnerActivity(tx.service); // codex-recovery-site: PS.return-activity
     if (activity !== "active") systemctl(tx.service, "start");
     await postStart(root, tx, tx.source, "source");
   });
-  if (cleanupError) throw cleanupError;
+  if (cleanupError) throw cleanupError; // codex-recovery-rethrow: source-cleanup
 }
 async function postStart(root, tx, expected, role = "completion") {
   const completing = role === "completion";
@@ -356,9 +360,9 @@ async function postStart(root, tx, expected, role = "completion") {
   // Cancellation may return to failed, whose original source is historical.
   const recorded = completing ? (replacing(latest) ? latest.source : latest.target) : role === "source" ? latest.source : latest.phase === "restore-prepared" ? latest.replacement.from : expected;
   must(recorded.id === expected.id && recorded.sha256 === expected.sha256, "Startup release changed during service operation");
-  must(runnerActivity(tx.service) === "active", "Runner did not become active with a positive MainPID");
+  must(runnerActivity(tx.service) === "active", "Runner did not become active with a positive MainPID"); // codex-recovery-site: PS.post-start-active
   must(current(root) === expected.id, "Current differs from startup target");
-  await checkRelease(root, expected); captureBinding(root, tx.service, tx.home);
+  await checkRelease(root, expected); captureBinding(root, tx.service, tx.home); // codex-recovery-site: PS.post-start-binding
   try {
     execChildSync("codex-attest", "/bin/sh", ["-c", 'deploy_dir=$1; . "$deploy_dir/kaoiro-runner-common.sh"; kaoiro_read_machine_identity "$2" "$3" "$4"', "codex-state-attestation", deploy, join(root, "current"), expected.id.replace(/-dirty$/, ""), expected.id.endsWith("-dirty") || expected.id === "unknown" ? "yes" : "no"], { env: { ...process.env, KAOIRO_NODE: process.execPath }, stdio: ["ignore", "pipe", "pipe"] });
   } catch { throw new Error("Runner artifact attestation failed after start"); }
@@ -368,25 +372,25 @@ function stopRunner(service) {
   try { systemctl(service, "stop"); }
   catch (error) {
     if (Number.isInteger(error.serviceStatus) && error.serviceStatus > 0 && error.serviceStatus < 126) error.exitCode = error.serviceStatus;
-    throw error;
+    throw error; // codex-recovery-rethrow: stop-status
   }
 }
 async function run(root, uuid, mode, allowDirty = "no") {
   must(["resume", "recover"].includes(mode), "Unknown Codex operation mode");
   must(["yes", "no"].includes(allowDirty), "Invalid development activation option");
-  requireUpdate(root); exclude(root, uuid);
+  requireUpdate(root); exclude(root, uuid); // codex-recovery-site: G2.run G7.run
   let tx = selected(root, uuid);
   const returningSource = mode === "recover" && ["prepared", "snapshot-verified", "failed"].includes(tx.phase);
-  const beganActive = runnerActivity(tx.service) === "active";
+  const beganActive = runnerActivity(tx.service) === "active"; // codex-recovery-site: G5.began
   const tool = readFileSync(join(deploy, "../VERSION"), "utf8").trim();
-  must(tx.tool === tool, "Use the recorded physical updater tool");
+  must(tx.tool === tool, "Use the recorded physical updater tool"); // codex-recovery-site: G1.run
   try {
     const admissible = replacing(tx) ? [tx.replacement.from.id, tx.source.id] : tx.phase === "start-intent" ? [tx.source.id, tx.target.id] : [tx.source.id];
-    if (!terminal(tx) || returningSource) must(admissible.includes(current(root)), "Current is outside recorded operation");
-    checkBinding(root, tx.service, binding(tx), tx.phase === "replace-intent" && !hasEntry(tx.home));
+    if (!terminal(tx) || returningSource) must(admissible.includes(current(root)), "Current is outside recorded operation"); // codex-recovery-site: G3.run
+    checkBinding(root, tx.service, binding(tx), tx.phase === "replace-intent" && !hasEntry(tx.home)); // codex-recovery-site: G4.run-pre G5.binding-run
     if (terminal(tx) && !returningSource) return;
     if (returningSource) {
-      if (runnerActivity(tx.service) === "active") stopRunner(tx.service);
+      if (runnerActivity(tx.service) === "active") stopRunner(tx.service); // codex-recovery-site: G5.pre-stop
       await returnSource(root, tx); return;
     }
     if (mode === "recover" && tx.phase === "restore-prepared") {
@@ -395,15 +399,15 @@ async function run(root, uuid, mode, allowDirty = "no") {
       await checkRelease(root, r.from);
       await cleanupStage(root, tx, r.staging);
       tx.phase = r.priorPhase; delete tx.replacement;
-      await withLock(root, ".lock.links", async () => { save(root, tx); if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start"); await postStart(root, tx, r.from, "unchanged"); }); return;
+      await withLock(root, ".lock.links", async () => { save(root, tx); if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start"); await postStart(root, tx, r.from, "unchanged"); }); return; // codex-recovery-site: PS.cancel-activity
     }
     if (mode === "recover" && tx.phase === "start-intent") await admitRestore(root, tx, tx.home, tx.service, tool);
-    if (tx.phase === "start-intent" && current(root) === tx.target.id && runnerActivity(tx.service) === "active") { await postStart(root, tx, tx.target); return; }
+    if (tx.phase === "start-intent" && current(root) === tx.target.id && runnerActivity(tx.service) === "active") { await postStart(root, tx, tx.target); return; } // codex-recovery-site: G5.target-check
     const priorPhase = tx.phase;
-    if (runnerActivity(tx.service) === "active") stopRunner(tx.service);
+    if (runnerActivity(tx.service) === "active") stopRunner(tx.service); // codex-recovery-site: G5.resume-stop
     tx = selected(root, uuid);
     must(tx.phase === priorPhase, "Phase changed during stop");
-    assertStopped(tx.service, tx.home);
+    assertStopped(tx.service, tx.home); // codex-recovery-site: PS.stopped
     if (["prepared", "snapshot-verified"].includes(tx.phase)) await takeSnapshot(root, tx);
     if (tx.phase === "restore-prepared") await stageRestore(root, tx);
     if (tx.phase === "replace-intent") await moveReplacement(root, tx);
@@ -411,7 +415,7 @@ async function run(root, uuid, mode, allowDirty = "no") {
     execChildSync("codex-switch", join(deploy, "kaoiro-runner-switch.sh"), [target.id, "--install-dir", root, "--codex-transaction", uuid, ...(allowDirty === "yes" ? ["--allow-dirty"] : [])], { stdio: ["ignore", "pipe", "inherit"] });
     tx = selected(root, uuid);
     must(tx.phase === (replacing(tx) ? "replace-intent" : "start-intent"), "Startup phase changed after switch");
-    assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx));
+    assertStopped(tx.service, tx.home); checkBinding(root, tx.service, binding(tx)); // codex-recovery-site: PS.after-switch
     must(current(root) === target.id, "Switch did not reach recorded target");
     await checkRelease(root, target);
     systemctl(tx.service, "start");
@@ -424,7 +428,7 @@ async function run(root, uuid, mode, allowDirty = "no") {
         await withLock(root, ".lock.links", async () => {
           must(current(root) === from.id, "Restore source link changed before restart");
           checkBinding(root, tx.service, binding(tx)); await checkRelease(root, from);
-          if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start");
+          if (runnerActivity(tx.service) !== "active") systemctl(tx.service, "start"); // codex-recovery-site: PS.catch-restore
           await postStart(root, tx, from, "unchanged");
         });
         console.error("codex-state: unchanged source was resumed");
@@ -434,12 +438,11 @@ async function run(root, uuid, mode, allowDirty = "no") {
       try { await returnSource(root, tx); console.error("codex-state: unchanged source was resumed"); }
       catch (recovery) { console.error(`codex-state: source recovery refused: ${recovery.message}`); }
     }
-    console.error(`codex-state: ${join(deploy, "kaoiro-runner-update.sh")} --install-dir "${root}" --resume-codex-transaction ${uuid}; or --recover-codex-transaction ${uuid}`);
-    throw error;
+    throw error; // codex-recovery-rethrow: run-failure
   }
 }
 async function prune(root, uuid) {
-  const tx = selected(root, uuid); exclude(root, uuid);
+  const tx = selected(root, uuid); exclude(root, uuid); // codex-recovery-site: G7.prune G2.prune
   must(terminal(tx), "Prune requires a terminal operation");
   if (tx.cleanup?.pending) await cleanupStage(root, tx, tx.cleanup.path);
   if (tx.snapshot.status === "retired") return;
@@ -459,14 +462,36 @@ async function prune(root, uuid) {
 }
 function protectedReleases(root) {
   const ids = new Set();
-  for (const tx of records(root)) {
+  for (const tx of records(root)) { // codex-recovery-site: G7.protected
     if (["retained", "prune-intent"].includes(tx.snapshot.status)) ids.add(tx.source.id);
     if (!terminal(tx)) { ids.add(tx.source.id); ids.add(replacing(tx) ? tx.replacement.from.id : tx.target.id); ids.add(tx.tool); }
-    if (tx.cleanup?.pending) console.error(`codex-state: pending owned staging cleanup: ${recordPath(root, tx.uuid)}`);
+    if (tx.cleanup?.pending) for (const line of [`pending owned staging cleanup: ${recordPath(root, tx.uuid)}`, ...rowLines(tx, context(root), ["PRN"])]) console.error(`codex-state: ${line}`);
   }
   return [...ids].join("\n");
 }
-const ACTIONS = ["guard", "preflight", "prepare", "prepare-restore", "run", "resume", "recover", "prune", "promote", "inspect", "inventory", "summary", "target", "protected", "classify"];
+const ACTIONS = ["guard", "preflight", "prepare", "prepare-restore", "run", "resume", "recover", "prune", "promote", "inspect", "inventory", "summary", "target", "protected", "classify", "next"];
+const RUNS = ["run", "resume", "recover"];
+const context = root => ({ root, deploy, interpreter: process.execPath });
+// Read-only: takes no lock and writes nothing. Records are published by
+// atomic rename and temporary names are filtered, so a paused worker's
+// record is either the old or the new version.
+function next(root, uuid) {
+  if (uuid) { const tx = selected(root, uuid); return [`${tx.uuid} ${tx.phase}`, ...rowLines(tx, context(root)).map(line => `  ${line}`)]; }
+  const lines = [];
+  for (const tx of records(root)) {
+    if (!terminal(tx)) lines.push(`${tx.uuid} ${tx.phase}`, ...rowLines(tx, context(root)).map(line => `  ${line}`));
+    else if (tx.cleanup?.pending) lines.push(`${tx.uuid} ${tx.phase} cleanup pending`, ...rowLines(tx, context(root), ["PRN"]).map(line => `  ${line}`));
+  }
+  for (const name of [".lock.update", ".lock.links"]) if (hasEntry(join(root, name))) lines.push(`lock present: ${join(root, name)}`);
+  return lines;
+}
+function nextAction(root, uuid) {
+  try { console.log(next(root, uuid).join("\n")); }
+  catch (error) {
+    if (classify(error.message) !== "cutover") throw error; // codex-recovery-rethrow: next-read
+    for (const line of [error.message, ...render("cutover")]) console.log(line);
+  }
+}
 async function main(argv) {
   const [action, rootArg, ...args] = argv;
   must(ACTIONS.includes(action), "Unknown Codex state action");
@@ -481,6 +506,7 @@ async function main(argv) {
   else if (action === "protected") console.log(protectedReleases(root));
   else if (action === "inventory") console.log(JSON.stringify({ old: { transactions: filenames(join(root, "codex-state/transactions")), backups: filenames(join(root, "codex-state/backups")) }, records: filenames(recordDir(root)) }));
   else if (action === "classify") console.log(JSON.stringify(inventory(root)));
+  else if (action === "next") nextAction(root, args[0]);
   else {
     const tx = selected(root, args[0]);
     if (action === "inspect") console.log(JSON.stringify(tx, null, 2));
@@ -488,7 +514,22 @@ async function main(argv) {
     else console.log(JSON.stringify({ uuid: tx.uuid, phase: tx.phase, snapshot: tx.snapshot.status }));
   }
 }
+// The hint is advice printed after the refusal has been decided, so a failure
+// to read the record or render it only drops lines.
+function report(error, [action, rootArg, ...args]) {
+  const message = String(error?.message ?? error), cls = classify(message), lines = [message];
+  let root, tx, held = [];
+  try { root = realpathSync(rootArg); } catch { /* no record to name */ }
+  const candidates = [message.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)?.[0], ["guard", "preflight"].includes(action) ? args[1] : args[0]];
+  for (const uuid of candidates) {
+    if (tx || !root || !UUID.test(uuid || "")) continue;
+    try { tx = selected(root, uuid); } catch { /* not a record of this root */ }
+  }
+  if (cls === "lock" && root) try { held = next(root); } catch { /* records unreadable */ }
+  try { lines.push(...render(cls, { tx, row: RUNS.includes(action), report: held, ...context(root) })); } catch { /* unrenderable record */ }
+  for (const line of lines) console.error(`codex-state: ${line}`);
+}
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(import.meta.filename)) {
   try { await main(process.argv.slice(2)); }
-  catch (error) { console.error(`codex-state: ${error.message}`); process.exitCode = error.exitCode || 78; }
+  catch (error) { report(error, process.argv.slice(2)); process.exitCode = error.exitCode || 78; }
 }

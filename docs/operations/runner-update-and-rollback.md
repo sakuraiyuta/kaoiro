@@ -420,18 +420,163 @@ neither their prefix nor zero-byte contents authorize disposal.
 
 ### Resume and recover
 
-Use the recorded physical tool release, not a `current` symlink that may have
-changed. Select the operation by UUID:
+Ask the helper for the commands instead of composing them. `next` is
+read-only: it takes no lock and writes nothing.
 
 ```sh
+node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" next "$install_root"
 node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
-  inspect "$install_root" "$transaction_uuid"
-"$tool_release/deploy/kaoiro-runner-update.sh" \
-  --install-dir "$install_root" --resume-codex-transaction "$transaction_uuid"
-# Or choose recovery instead:
-"$tool_release/deploy/kaoiro-runner-update.sh" \
-  --install-dir "$install_root" --recover-codex-transaction "$transaction_uuid"
+  next "$install_root" "$transaction_uuid"
 ```
+
+- `next <install-root>` prints each unfinished record's UUID and phase, then
+  its `next (resume):` and `next (recover):` lines. A terminal record with a
+  pending staging cleanup gets its `next (prune):` line. Each held
+  `.lock.update` or `.lock.links` is listed as `lock present:`; whether its
+  owner is alive is for you to inspect.
+- `next <install-root> <uuid>` prints that record's whole row, including the
+  `restore`, `prune` and `rollback` lines of a terminal record.
+- With an unresolved schema-1 record, `next` prints the old-record guidance
+  and exits 0.
+
+Resume and recover always run from the record's physical tool release, not
+from a `current` symlink that may have changed; the other lines name the tool
+that printed them. Every argument is single-quoted (`'` is written `'\''`),
+so a line can be pasted into a POSIX shell as printed.
+
+A refusal prints its message, then the hint for its class: the record's
+`next` lines, `see:` an anchor of this runbook, or both. A failure inside a
+resume or recover run always prints the record's lines as they are after the
+run settled, so a forward that returned to its source offers recovery, not
+resume.
+
+#### Recovery table
+
+The table is generated from `runner/deploy/codex-state-recovery.mjs`
+(`node runner/deploy/codex-state-recovery.mjs --runbook`). Outcomes:
+`settle` records `failed` and starts the unchanged source; `held` exits
+nonzero with the phase kept (or the phase in parentheses); `refuse` changes
+nothing; `noop` succeeds without changing the record.
+
+<!-- recovery-table:begin -->
+| Phase | Command | Branch | Precondition | Outcome | Class |
+|---|---|---|---|---|---|
+| `prepared` | RES | P-RES-ok | current-source | completed | — |
+| `prepared` | RES | P-RES-copy | copy-fault | settle | — |
+| `prepared` | REC | P-REC-ok | current-source | failed | — |
+| `prepared` | RST | P-RST-own | — | refuse | transaction |
+| `prepared` | RES | PS.stopped | late-populated | settle | transient |
+| `prepared` | PRN | P-PRN | — | refuse | transaction |
+| `prepared` | UPD | P-UPD | — | refuse (G2.prepare) | — |
+| `prepared` | RBK | P-RBK | — | refuse (G2.guard) | — |
+| `prepared`, `snapshot-verified` | RES | PS.snapshot-stopped | activity-window | settle | transient |
+| `prepared`, `snapshot-verified` | RES | PS.snapshot-binding | activity-window | settle | transient |
+| `prepared`, `snapshot-verified` | REC | PS.return-link | late-link | held | integrity |
+| `prepared`, `snapshot-verified` | REC | PS.return-binding | late-home | held | config |
+| `prepared`, `snapshot-verified` | REC | PS.return-activity | activity-window | held (failed) | transient |
+| `snapshot-verified` | RES | V-RES-ok | state-equal | completed | — |
+| `snapshot-verified` | RES | V-RES-stale | state-differs | settle | — |
+| `snapshot-verified` | REC | V-REC-ok | current-source | failed | — |
+| `snapshot-verified` | REC | V-REC-missing | snapshot-missing | failed | — |
+| `snapshot-verified` | RST | V-RST-own | — | refuse | transaction |
+| `snapshot-verified` | PRN | V-PRN | — | refuse | transaction |
+| `snapshot-verified` | UPD | V-UPD | — | refuse (G2.prepare) | — |
+| `snapshot-verified` | RBK | V-RBK | — | refuse (G2.guard) | — |
+| `snapshot-verified` | RES | PS.guard-nested | activity-window | settle | transient |
+| `start-intent` | RES | S-RES-source | current-source | completed | — |
+| `start-intent` | RES | S-RES-target | current-target | completed | — |
+| `start-intent` | RES | S-RES-attest | attest-fault | held | transaction |
+| `start-intent` | RES | S-RES-stale | state-differs | held | transaction |
+| `start-intent` | REC | S-REC-ok | snapshot-retained | restored | — |
+| `start-intent` | REC | S-REC-nosnap | snapshot-unretained | refuse | integrity |
+| `start-intent` | RST | S-RST-own | snapshot-retained | restored | — |
+| `start-intent` | PRN | S-PRN | — | refuse | transaction |
+| `start-intent` | UPD | S-UPD | — | refuse (G2.prepare) | — |
+| `start-intent` | RBK | S-RBK | — | refuse (G2.guard) | — |
+| `start-intent` | RES | PS.guard-nested-intent | activity-window | held | transient |
+| `start-intent` | RES | PS.after-switch | activity-window | held | transient |
+| `start-intent` | RES | PS.post-start-active | no-start | held | transient |
+| `start-intent` | RES | PS.post-start-binding | bad-live | held | config |
+| `completed`, `restored` | RES, REC | T-noop | — | noop | — |
+| `completed`, `restored` | RST | T-RST-ok | snapshot-retained | restored | — |
+| `completed`, `restored` | RST | T-RST-retired | snapshot-retired | refuse | transaction |
+| `completed`, `restored` | PRN | T-PRN | snapshot-retained | noop | — |
+| `completed`, `restored` | UPD | T-UPD | — | noop | — |
+| `completed`, `failed`, `restored` | RBK | T-RBK-ok | same-native | noop | — |
+| `completed`, `failed`, `restored` | RBK | T-RBK-native | differing-native | refuse | config |
+| `completed`, `failed`, `restored` | RBK | T-RBK-pre-n2 | pre-n2-target | refuse | config |
+| `failed` | RES | F-RES | — | noop | — |
+| `failed` | REC | F-REC-ok | current-source | failed | — |
+| `failed` | REC | F-REC-moved | current-moved | refuse | integrity |
+| `failed` | RST | F-RST | snapshot-retained | restored | — |
+| `failed` | PRN | F-PRN | snapshot-retained | failed | — |
+| `failed` | PRN | F-PRN-cleanup | cleanup-pending | failed | — |
+| `failed` | UPD | F-UPD | copy-fault | noop | — |
+| `restore-prepared` | RES | R-RES-ok | current-from | restored | — |
+| `restore-prepared` | RES | R-RES-fail | late-link | held | transaction |
+| `restore-prepared` | REC | R-REC-cancel | current-from | completed | — |
+| `restore-prepared` | REC | R-REC-moved | current-source | refuse | integrity |
+| `restore-prepared` | RST | R-RST | — | refuse | transaction |
+| `restore-prepared` | PRN | R-PRN | — | refuse | transaction |
+| `restore-prepared` | UPD | R-UPD | — | refuse (G2.prepare) | — |
+| `restore-prepared` | RBK | R-RBK | — | refuse (G2.guard) | — |
+| `restore-prepared` | RES | PS.stage | activity-window | held | transient |
+| `restore-prepared` | RES | PS.replace-stopped | activity-window | held (replace-intent) | transient |
+| `restore-prepared` | RES | PS.replace-binding | activity-window | held (replace-intent) | transient |
+| `restore-prepared` | REC | PS.cancel-activity | activity-window | held (completed) | transient |
+| `restore-prepared` | RES | PS.catch-restore | activity-window | held | transient |
+| `replace-intent` | RES, REC | Q-L1 | layout-L1 | restored | — |
+| `replace-intent` | RES, REC | Q-L2 | layout-L2 | restored | — |
+| `replace-intent` | RES, REC | Q-L3 | layout-L3 | restored | — |
+| `replace-intent` | RES, REC | Q-L4 | layout-L4 | restored | — |
+| `replace-intent` | RES, REC | Q-bad | staging-corrupt | refuse | integrity |
+| `replace-intent` | RES, REC | Q-cred | credential-both | refuse | integrity |
+| `replace-intent` | RST | Q-RST | — | refuse | transaction |
+| `replace-intent` | PRN | Q-PRN | — | refuse | transaction |
+| `replace-intent` | UPD | Q-UPD | — | refuse (G2.prepare) | — |
+| `replace-intent` | RBK | Q-RBK | — | refuse (G2.guard) | — |
+
+| Site | Class | Message |
+|---|---|---|
+| G1.run | transaction | "Use the recorded physical updater tool" |
+| G2.guard | transaction | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.prepare | transaction | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.restore | transaction | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.run | transaction | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.prune | transaction | "Unresolved Codex transaction requires recovery: ${}" |
+| G3.run | integrity | "Current is outside recorded operation" |
+| G3.guard | integrity | "Current is outside recorded operation" |
+| G4.run-pre | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.guard-entry | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.restore | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.prepare | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G5.began | transient | "Runner activity is transitional or unknown" |
+| G5.binding-run | transient | "Runner activity is transitional or unknown" |
+| G5.pre-stop | transient | "Runner activity is transitional or unknown" |
+| G5.target-check | transient | "Runner activity is transitional or unknown" |
+| G5.resume-stop | transient | "Runner activity is transitional or unknown" |
+| G6.helper | lock | "Lock held: ${}" |
+| G6.updater | lock | "another run holds" |
+| G6.switch-links | lock | "another run holds" |
+| G6.install-links | lock | "another run holds" |
+| G7.guard | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.prepare | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.restore | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.run | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.prune | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.protected | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+
+| Phase | `next` lines |
+|---|---|
+| `prepared` | resume, recover |
+| `snapshot-verified` | resume, recover |
+| `start-intent` | resume, recover |
+| `completed` | restore, prune, rollback |
+| `failed` | recover, restore, prune, rollback |
+| `restore-prepared` | resume, recover |
+| `replace-intent` | resume, recover |
+| `restored` | restore, prune, rollback |
+<!-- recovery-table:end -->
 
 `resume` continues the recorded operation without reinstalling or rebuilding.
 `recover` returns a never-started forward to its unchanged source, cancels a
@@ -488,12 +633,9 @@ receipt, owner-PID authorization or automatic abandonment.
 
 ### Prune and owned staging cleanup
 
-Explicitly discard a terminal operation's snapshot with:
-
-```sh
-node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
-  prune "$install_root" "$transaction_uuid"
-```
+Explicitly discard a terminal operation's snapshot with the `next (prune):`
+line that `next <install-root> <uuid>` prints (see the
+[recovery table](#recovery-table)).
 
 Prune requires no history evidence and can remove a corrupt owned snapshot.
 It records durable `prune-intent`, the exact path, root device/inode and logical
@@ -518,7 +660,8 @@ update/install/switch/helper you started remains alive and that the detached
 `<service>-update.service` is not running. A build-directory cleanup failure
 can deliberately retain `.lock.update`; inspect and preserve that directory
 before clearing the lock. PID reuse or absence is not a state transition.
-Then run the recorded physical updater's resume or recover command.
+Then run the lines that `next <install-root>` prints (see the
+[recovery table](#recovery-table)).
 
 ```sh
 rmdir "$install_root/.lock.update"

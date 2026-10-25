@@ -138,7 +138,7 @@ switch_to() {
   # cannot run while switch holds it, and if install already deleted
   # `$_target` before switch's turn, switch's own verify (now correctly
   # inside the lock) fails cleanly instead of activating nothing.
-  kaoiro_lock_acquire "$links_lock"
+  kaoiro_codex_lock_acquire "$links_lock" "$root" # codex-recovery-site: G6.switch-links
   links_held=yes
 
   [ -d "$_target" ] || kaoiro_die "no such release: $_id (looked in $root/releases)" 78
@@ -160,8 +160,10 @@ switch_to() {
     _old=$(readlink "$root/current")
   fi
 
-  kaoiro_codex_state guard "$root" "$_id" "$codex_transaction" ||
+  kaoiro_codex_state guard "$root" "$_id" "$codex_transaction" || {
+    [ -z "$codex_transaction" ] || kaoiro_codex_state next "$root" "$codex_transaction" >&2 || true
     kaoiro_die "Codex state activation refused" 78
+  }
 
   if [ "$_old" = "releases/$_id" ]; then
     [ -z "$codex_transaction" ] || kaoiro_codex_state promote "$root" "$codex_transaction"
@@ -190,7 +192,7 @@ if [ "$rollback" = yes ]; then
   # `previous` itself — so the read that DECIDES what to verify and write
   # has to be inside the same critical section as the write, or an install
   # or update could still race between deciding and acting.
-  kaoiro_lock_acquire "$links_lock"
+  kaoiro_codex_lock_acquire "$links_lock" "$root" # codex-recovery-site: G6.switch-links
   links_held=yes
 
   [ -L "$root/previous" ] || kaoiro_die "no previous release recorded under $root" 78
@@ -214,7 +216,7 @@ if [ "$rollback" = yes ]; then
   fi
 
   kaoiro_codex_state guard "$root" "$prev_id" "" ||
-    kaoiro_die "Codex state rollback refused; use the state-aware updater" 78
+    kaoiro_die "Codex state rollback refused; use the state-aware updater; see docs/operations/runner-update-and-rollback.md#codex-state-backup" 78
 
   # The rollback itself goes first. A run that dies right after it leaves
   # `current` rolled back — the outcome that was asked for — with `previous`

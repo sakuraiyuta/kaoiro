@@ -99,7 +99,7 @@ function lstatType(path) {
     st = lstatSync(path);
   } catch (err) {
     if (err.code === "ENOENT") return "missing";
-    throw err;
+    throw err; // codex-recovery-rethrow: lstat-type
   }
   if (st.isSymbolicLink()) return "symlink";
   if (st.isDirectory()) return "dir";
@@ -409,7 +409,7 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
   // intermediate ancestor of a nested leaf beneath it) is never
   // legitimately a symlink in any topology this file supports (see
   // walkAncestors's own doc comment).
-  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false);
+  walkAncestors(pkgRoot, realRoot, segments, label, (message) => fail(message), false); // codex-recovery-rethrow: anomaly-forward
   const target = join(pkgRoot, leafRel);
   // Captured BEFORE resolving: distinguishes "the leaf itself is simply
   // absent" (build-fixable) from "the leaf is an EXISTING symlink whose
@@ -528,7 +528,7 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
     realRoot,
     linkParts,
     linkRel,
-    (message) => fail(message),
+    (message) => fail(message), // codex-recovery-rethrow: anomaly-forward
     true,
   );
   if (!ancestorsPresent) {
@@ -664,7 +664,7 @@ function codexRuntimeFiles(root, realRoot) {
     realRoot,
     "node_modules/@kaoiro/codex/dist/cli.js",
   );
-  const runtimeRequire = createRequire(wrapperCli);
+  const runtimeRequire = createRequire(wrapperCli); // codex-recovery-rethrow: runtime-require
   const wrapperPackagePath = join(dirname(dirname(wrapperCli)), "package.json");
   let wrapperPackage;
   try {
@@ -1331,7 +1331,7 @@ function main(argv) {
             : 70,
       );
     }
-    throw err;
+    throw err; // codex-recovery-rethrow: verify-cli
   }
 }
 

@@ -23,7 +23,7 @@ export function must(condition, message) { if (!condition) throw new Error(messa
 // A dangling link is a present, invalid entry, never an empty installation.
 export function hasEntry(path) {
   try { lstatSync(path); return true; }
-  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; } // codex-recovery-rethrow: lstat
 }
 export function identity(path) {
   must(isAbsolute(path) && realpathSync(path) === resolve(path), "Directory must use its original canonical absolute path");

@@ -85,8 +85,17 @@ kaoiro_config_dir() {
 kaoiro_lock_acquire() {
   mkdir -m 700 "$1" 2>/dev/null && return 0
   printf '%s: another run holds %s\n' "$prog" "$1" >&2
-  printf '%s: wait for it, or remove a stale lock dir\n' "$prog" >&2
+  printf '%s: inspect that worker before removing a stale lock dir\n' "$prog" >&2
+  printf '%s: see: docs/operations/runner-update-and-rollback.md#stale-operation-locks\n' "$prog" >&2
   exit 75 # EX_TEMPFAIL
+}
+
+# A held lock under a Codex install root also lists that root's unfinished
+# records and locks, so the hint names the command to run once the lock is gone.
+kaoiro_codex_lock_acquire() {
+  (kaoiro_lock_acquire "$1") && return 0
+  kaoiro_codex_state next "$2" >&2 || true
+  exit 75
 }
 
 kaoiro_lock_release() {

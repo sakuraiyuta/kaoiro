@@ -57,13 +57,23 @@ import { requirePositiveSafePid } from ${JSON.stringify(wrapperCorePidHelper)};
 const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.stringify(root)};
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
+const query = ['stop','start','show-environment'].find(verb=>args.includes(verb)) || (args.includes('show') ? (prop || 'ExecStart') : args.join(' '));
+fs.appendFileSync(dir+'/queries', query+'\n');
+let activating = false;
+if (query === 'ActiveState' && fs.existsSync(dir+'/activity-fault')) {
+ const count = (fs.existsSync(dir+'/activity-count') ? Number(fs.readFileSync(dir+'/activity-count','utf8')) : 0) + 1;
+ fs.writeFileSync(dir+'/activity-count', String(count));
+ const window = JSON.parse(fs.readFileSync(dir+'/activity-fault','utf8'));
+ activating = count >= window.from && (window.to === null || count <= window.to);
+}
 const signalPidIfStartMatches = ${signalPidIfStartMatches.toString()};
 const publishPidMarker = ${publishPidMarker.toString()};
 const owner = JSON.parse(fs.readFileSync(dir+'/mainpid','utf8'));
 const ownerPid = requirePositiveSafePid(owner.pid);
-if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { signalPidIfStartMatches(ownerPid, owner.start, requirePositiveSafePid, pid=>fs.readFileSync('/proc/'+pid+'/stat','utf8'), (pid, value)=>process.kill(pid, value)); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs',''); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 0\\n'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); if(fs.existsSync(dir+'/late-populated')) { fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs','900002\\n'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 1\\n'); } }
+if (args.includes('stop')) { fs.appendFileSync(dir+'/calls','stop\\n'); if(fs.existsSync(dir+'/reject-stop')) process.exit(77); if(!fs.existsSync(dir+'/remain-active')) { try { signalPidIfStartMatches(ownerPid, owner.start, requirePositiveSafePid, pid=>fs.readFileSync('/proc/'+pid+'/stat','utf8'), (pid, value)=>process.kill(pid, value)); } catch(e) { if(!['ENOENT','ESRCH'].includes(e.code)) throw e; } } fs.writeFileSync(dir+'/active',fs.existsSync(dir+'/remain-active')?'active':'inactive'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs',''); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 0\\n'); if(fs.existsSync(dir+'/late-unknown')) fs.writeFileSync(${JSON.stringify(home)}+'/unknown-token','secret'); if(fs.existsSync(dir+'/late-config')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env','TOKEN=changed\\n'); if(fs.existsSync(dir+'/late-populated')) { fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.procs','900002\\n'); fs.writeFileSync(dir+'/fake-cgroup/kaoiro-test/cgroup.events','populated 1\\n'); } if(fs.existsSync(dir+'/late-env')) fs.appendFileSync(${JSON.stringify(conf)}+'/runner.env',fs.readFileSync(dir+'/late-env','utf8')); if(fs.existsSync(dir+'/late-link')) { fs.unlinkSync(root+'/current'); fs.symlinkSync('releases/'+fs.readFileSync(dir+'/late-link','utf8'),root+'/current'); } }
 else if (args.includes('start')) {
  fs.appendFileSync(dir+'/calls','start\\n');
+ { const records=root+'/codex-state/v2/records'; fs.appendFileSync(dir+'/start-record-phases',(fs.existsSync(records)?fs.readdirSync(records).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(fs.readFileSync(records+'/'+n,'utf8')).phase).join(','):'')+'\\n'); }
  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{env:{PATH:process.env.PATH,HOME:${JSON.stringify(ordinary)},CODEX_HOME:${JSON.stringify(home)}},stdio:'ignore'});
  child.on('spawn',()=>{
   const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
@@ -77,6 +87,7 @@ else if (args.includes('show-environment')) { console.log('HOME='+${JSON.stringi
 else if (args.includes('show')) {
  const shim=root+'/current/deploy/kaoiro-runner-launch.sh';
  const values={ Transient:'no', ExecStart:'{ path='+shim+' ; argv[]='+shim+' ; ignore_errors=no }', KillMode:'control-group', MainPID:active?String(ownerPid):'0', ActiveState:active?'active':'inactive', Id:'kogane468-test.service', FragmentPath:dir+'/unit', ControlGroup:'/kaoiro-test' };
+ if (activating) values.ActiveState = 'activating';
  console.log(values[prop || 'ExecStart'] || '');
 }
 `, { mode: 0o755 });

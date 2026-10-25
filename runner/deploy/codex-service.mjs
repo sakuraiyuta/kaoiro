@@ -10,7 +10,7 @@ export function systemctl(service, ...args) {
   } catch (error) {
     const failure = new Error("Cannot read required service-manager state");
     failure.serviceStatus = error.status;
-    throw failure;
+    throw failure; // codex-recovery-rethrow: service-manager
   }
 }
 function prop(service, name) { return systemctl(service, "show", `--property=${name}`, "--value"); }

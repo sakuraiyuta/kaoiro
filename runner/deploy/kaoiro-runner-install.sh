@@ -199,12 +199,12 @@ if [ -e "$target" ]; then
   # landing between the snapshot and the delete could activate the very
   # release this run is about to remove. Nothing else this script does needs
   # the lock, so it is released again immediately after.
-  kaoiro_lock_acquire "$links_lock"
+  kaoiro_codex_lock_acquire "$links_lock" "$root" # codex-recovery-site: G6.install-links
   links_held=yes
   codex_protected=$(kaoiro_codex_state protected "$root") ||
-    kaoiro_die "Cannot determine retained Codex releases" 78
+    kaoiro_die "Cannot determine retained Codex releases; see docs/operations/runner-update-and-rollback.md#recovery-table" 78
   for protected_id in $codex_protected; do
-    [ "$protected_id" != "$id" ] || kaoiro_die "release is protected by a Codex backup" 78
+    [ "$protected_id" != "$id" ] || kaoiro_die "release is protected by a Codex backup; see docs/operations/runner-update-and-rollback.md#prune-and-owned-staging-cleanup" 78
   done
   for link in current previous; do
     if [ -L "$root/$link" ] && [ "$(readlink "$root/$link")" = "releases/$id" ]; then

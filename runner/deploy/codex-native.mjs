@@ -17,7 +17,7 @@ function contained(root, path) {
 export async function nativeIdentity(release) {
   const root = realpathSync(release);
   const cli = contained(root, join(root, "node_modules/@kaoiro/codex/dist/cli.js"));
-  const fromWrapper = createRequire(cli);
+  const fromWrapper = createRequire(cli); // codex-recovery-rethrow: sdk-require
   const sdkManifest = (fromWrapper.resolve.paths("@openai/codex-sdk") ?? [])
     .map((dir) => join(dir, "@openai/codex-sdk/package.json"))
     .find((path) => hasEntry(path));
@@ -32,8 +32,8 @@ export async function nativeIdentity(release) {
   // Resolution executes trusted release code. Hash/manifest verification
   // detects accidental corruption; it does not sandbox an untrusted archive.
   const [{ Codex }, { resolveAppServerBinary }] = await Promise.all([
-    import(pathToFileURL(sdkEntry).href),
-    import(pathToFileURL(rpcEntry).href),
+    import(pathToFileURL(sdkEntry).href), // codex-recovery-rethrow: sdk-import
+    import(pathToFileURL(rpcEntry).href), // codex-recovery-rethrow: sdk-import
   ]);
   // Both pinned SDKs resolve in the constructor without spawning. This
   // intentionally fails if that inspected private interface ever changes.
