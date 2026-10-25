@@ -816,18 +816,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         Enum.reduce(0..99, WorkSettings.empty(), fn revision, object ->
           {:ok, next} =
             WorkSettings.update(
-              object, revision, %{"work_active_per_assignee" => rem(revision, 2)}, actor, fallback
+              object,
+              revision,
+              %{"work_active_per_assignee" => rem(revision, 2)},
+              actor,
+              fallback
             )
 
           next
         end)
 
       ceiling = 9_007_199_254_740_991
+
       saved = %{
         saved
         | revision: ceiling,
           changes: Enum.map(saved.changes, &%{&1 | revision: &1.revision + ceiling - 100})
       }
+
       assert :ok = WorkSettings.validate(saved)
       :ok = :dets.insert(state.table, {WorkSettings.key(), saved})
       :ok = :dets.sync(state.table)
