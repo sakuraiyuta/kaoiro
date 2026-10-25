@@ -788,11 +788,12 @@ test("legacy server descriptors and history are inert on every entrance", (t) =>
     return value;
   };
   for (const kind of ["invalid", "directory", "dangling", "exporter"]) {
+    if (kind === "exporter") chmodSync(server, 0o755);
     if (kind === "directory") mkdirSync(descriptor);
     else if (kind === "dangling") symlinkSync(join(legacy, "missing"), descriptor);
     else writeFileSync(descriptor, kind === "invalid" ? "not JSON" : JSON.stringify({
       schema: 1, install_root: server, transport: "local", recording_hostname: hostname(), root: legacy,
-      tool_sha256: "a".repeat(64), exporter_path: exporter, node_path: process.execPath, node_major: Number(process.versions.node.split(".")[0]),
+      tool_sha256: "a".repeat(64), exporter_path: exporter, node_path: process.execPath, node_major: 22,
     }), { mode: 0o600 });
     for (const [i, args] of commands.entries()) {
       const result = runEntrance(args);

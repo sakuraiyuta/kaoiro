@@ -65,12 +65,13 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     else if (kind === "dangling") symlinkSync(join(root, "missing-legacy"), descriptor);
     else if (kind === "invalid") writeFileSync(descriptor, "not JSON");
     else {
+      chmodSync(root, 0o755);
       const exporter = join(root, "legacy-exporter.mjs");
       writeFileSync(exporter, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);`);
       writeFileSync(descriptor, JSON.stringify({
         schema: 1, install_root: realpathSync(root), transport: "local", recording_hostname: hostname(),
         root: realpathSync(root), tool_sha256: "a".repeat(64), exporter_path: exporter,
-        node_path: realpathSync(process.execPath), node_major: Number(process.versions.node.split(".")[0]),
+        node_path: realpathSync(process.execPath), node_major: 22,
       }), { mode: 0o600 });
     }
     const result = run(B);
