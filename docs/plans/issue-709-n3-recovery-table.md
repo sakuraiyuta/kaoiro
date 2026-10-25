@@ -1,6 +1,6 @@
 ---
 title: N3 — runner recovery table, hint rendering and property test
-status: proposed
+status: in-progress
 last_updated: 2026-10-25
 ---
 
@@ -38,6 +38,10 @@ r5 bounds the mechanical closure instead (N3-e):
 The meta-verification of r3 and r4 is removed: the namespace roots of the
 test module, `TIES` counterexamples, `RECORDERS`, and the export rule. No
 branch is removed.
+
+r5 was approved (must 0, should 2, nit 2). The director made the four
+findings implementation acceptance conditions; section 10 records how the
+implementation meets them and the corrections the code required.
 
 ## 1. Decisions
 
@@ -142,8 +146,8 @@ matches a `// codex-recovery-site:` marker in the code.
 | G2.guard, G2.prepare, G2.restore, G2.run, G2.prune | another unfinished record (`exclude`) | "Unresolved Codex transaction requires recovery" | `transaction` (blocking UUID) | first call in each entry | Workflow "refuses %s before its first mutation with a second unfinished operation" |
 | G3.run, G3.guard | current outside the operation | "Current is outside recorded operation" | `integrity` | L385, L210 | Workflow "refuses %s before authorization" (`third-current`) |
 | G4.run-pre, G4.guard-entry, G4.restore, G4.prepare | home or unit disagreement (`checkBinding` / `captureBinding`) | the `codex-service.mjs` binding messages | `config` | L386, L212 when reached from switch, L242, L153 | Workflow "refuses restore admission with requested %s disagreement before stop" |
-| G5.began, G5.pre-stop, G5.target-check, G5.resume-stop | transitional activity (`runnerActivity`) | "Runner activity is transitional or unknown" | `transient` | L380, L389, L401, L403 (all before `stopRunner`) | KeepSafety "handles %s without unsafe subsequent effects" |
-| G6.helper, G6.updater, G6.switch-links, G6.install-links, G6.updater-links | a held lock | `withLock` "Lock held"; updater lock-held; `kaoiro_lock_acquire` | `lock` | L478–L479; updater L275; `common.sh` L85 callers | Workflow "preserves a held %s and takes no other unowned lock" |
+| G5.began, G5.binding-run, G5.pre-stop, G5.target-check, G5.resume-stop | transitional activity (`runnerActivity`) | "Runner activity is transitional or unknown" | `transient` | L380, L386 (inside `checkBinding`, L143), L389, L401, L403 (all before `stopRunner`) | KeepSafety "handles %s without unsafe subsequent effects" |
+| G6.helper, G6.updater, G6.switch-links, G6.install-links | a held lock | `withLock` "Lock held"; `kaoiro_lock_acquire` | `lock` | L478–L479; updater L275; switch and install links locks | Workflow "preserves a held %s and takes no other unowned lock" |
 | G7.guard, G7.prepare, G7.restore, G7.run, G7.prune, G7.protected | old schema-1 record (`cutover` through `records`) | "Resolve old Codex state records…" | `cutover` | first `records()` call in each entry | Workflow "blocks every remaining mutation entrance on an unresolved old %s" |
 
 To reach G5 at a specific site, layer 2 sets the fake manager to report
@@ -159,16 +163,23 @@ The site is identified independently, by two things:
 The expected context of each site is fixed from the code at `2c5f34cc` and
 the normal path, not derived from n:
 
-| Site | Context |
-|---|---|
-| G5.began (L380) | the first `ActiveState` query of the invocation, before any `checkBinding` query |
-| G5.pre-stop (L389) | a `recover` of a pre-start phase; after the L386 `checkBinding` property queries (`Transient`, `ExecStart`, … `show-environment`) |
-| G5.target-check (L401) | `start-intent` with current = target; after the same `checkBinding` queries; no `stop` in the call log |
-| G5.resume-stop (L403) | any other resumable phase; after L401's activity query, or without it when L401's condition is false |
+The context is the exact query prefix, from code, through the refusal (r5
+should 2). `S13` is `staticBinding`'s 13 queries (`Transient` … `Id`), `RA`
+is `runnerActivity` (`ActiveState`, `MainPID`), and `CB` is
+`captureBinding` (`S13`, `MainPID`, `ActiveState`, `MainPID`):
 
-These four rows stay separate. They are merged only if review confirms that
-their observable recovery contract is equal. A merged row then drops the
-per-site guarantee.
+| Site | Mode, phase and current | Query prefix through the refusal |
+|---|---|---|
+| G5.began (L380) | any | `RA` |
+| G5.binding-run (L386 → L143) | any | `RA`, `S13`, `RA` |
+| G5.pre-stop (L389) | `recover` of `prepared`, `snapshot-verified` or `failed` | `RA`, `S13`, `RA`, `CB`, `RA` |
+| G5.target-check (L401) | `start-intent`, current = target | the same as L389 |
+| G5.resume-stop (L403) | every other run | the same as L389 |
+
+The five rows stay separate. The last three share one query prefix; the code
+selects exactly one of them from mode, phase and current (L379, L401), and
+layer 2 drives each in that state. They are merged only if review confirms
+that their observable recovery contract is equal.
 
 ### 3.2 Forward phases
 
@@ -245,7 +256,8 @@ These sites run after `stopRunner` or after a start, so a failure there is
 
 | Branch (= site id) | Phase / command | Site at `2c5f34cc` | Outcome | Pin |
 |---|---|---|---|---|
-| PS.snapshot-stopped | `prepared`, `snapshot-verified` RES | `takeSnapshot` L175 `assertStopped` | settle | KeepSafety "resumes source after %s with recoverable residue" (`late-unknown`) |
+| PS.stopped | every RES run | `run` L406 `assertStopped` | settle (pre-start) | KeepSafety "restarts a failed restore only if admission began %s" |
+| PS.snapshot-stopped | `prepared`, `snapshot-verified` RES | `takeSnapshot` L175 `assertStopped` | settle | — |
 | PS.snapshot-binding | same | `takeSnapshot` L175 `checkBinding` | settle | — |
 | PS.guard-nested | `snapshot-verified` RES | nested switch `guard` L212/L214 | settle (no `start-intent` saved) | — |
 | PS.guard-nested-intent | `start-intent` RES, current = source | nested `guard` L212/L214 | held | — |
@@ -299,6 +311,10 @@ These are pure checks; no process is started.
   - argv[0] is `<root>/releases/<tool>/deploy/…` or the given interpreter;
   - the UUID is the record's;
   - quoting round-trips through `sh -c 'printf %s\\n "$@"'`.
+- **Scanner fixtures (r5 should 1).** Three fixture tests run in every CI:
+  an unknown throw form fails, an uncataloged message fails (in an existing
+  file and in a newly imported one), and a clean fixture passes. The
+  guard-removal control runs once at acceptance.
 - **Fail-closed scan.**
   - The closure is the **transitive** closure of the helper's static
     relative imports. At `2c5f34cc` this adds `verify-release.mjs` and
@@ -318,7 +334,10 @@ These are pure checks; no process is started.
     (`codex-native.mjs` L20 and L35–L36, `verify-release.mjs` L667) cannot
     be scanned. Each is listed in `RETHROWS` with a marker. Errors from
     them reach `main()` and are rendered as `unclassified`.
-  - A template contributes its literal prefix as the key.
+  - A template is keyed by its text with each substitution written `${}`
+    (several `verify-release.mjs` templates begin with a substitution).
+  - A thrower call that forwards a parameter (`(message) => fail(message)`)
+    carries a rethrow marker.
   - Every key has exactly one `REFUSALS` entry, and every entry matches a
     site. Duplicate messages are listed in `SHARED_MESSAGES` (r1 nit 3).
 - **Shell scan.**
@@ -386,8 +405,11 @@ different files (r1 should 3).
       `running-helper` marker, and the test's own recorder logs.
     - No other declaration can exclude a file. A new output that is not
       listed is digested by default.
-    - Layer 1 rejects any overlap between `EXCLUDED` and the protected
-      state paths above;
+    - Layer 1 rejects any overlap between `EXCLUDED` and every digested
+      root (r5 nit 2): the install root, its releases, records, and lock
+      directories, the home, the snapshots, staging, asides, the
+      configuration, the fake service state (`active`, `mainpid`,
+      `owned-pids/`, the fake cgroup) and `calls`;
   - the message and the hint: stderr contains the declared message, and the
     rendered `next:` and `see:` lines equal `render()` for that class;
   - the site, for guard rows that claim one (G5): the phase, mode and
@@ -615,7 +637,7 @@ Negative controls, each run separately and recorded red:
 | NC17 | `EXCLUDED` gains `calls` or `active` | layer 1 overlap check |
 | NC18 | a precondition predicate that returns true without reading the state | layer 2: a recipe that fails to reach its state must fail the predicate. One such recipe per predicate kind is run at acceptance |
 | NC19 | a G5 fault injected at an earlier site than the row's (for example L380 for G5.pre-stop) | layer 2: the site's context assertion itself fails, not the outcome |
-| NC20 | outcome, hint and digest assertions each disabled in turn | layer 2, each separately, at acceptance |
+| NC20 | each oracle paired with a product mutant (r5 nit 1): outcome with NC4 or NC12, hint with NC11, digest with NC15 or NC16 | layer 2: the mutant is red with the oracle and survives with that oracle disabled |
 
 Each control is recorded with the failing assertion's text. A run that fails
 with a `TypeError` or an unrelated error is not counted, and the control is
@@ -663,5 +685,22 @@ Classification: **L**. Reasons:
 | N3-U5 | The CI runner has about 3 vitest workers | Recorded by U5 on the candidate; saturation is accepted (section 4.2) |
 | N3-U2 | `next` reads records safely without a lock | Read in code (`atomicJSON`, temporary-name filter); the paused-worker case of layer 2 |
 | N3-U3 | Every throw site is one of the scan's accepted forms | The fail-closed scan itself, on the first candidate. The design-time counts (`must` 144 and `new Error` 16 in four files; `fail()` and its variants in `verify-release.mjs`) are from grep, not from the parser |
-| N3-U6 | The four G5 contexts of section 3.1 are distinct in the query log | Read from code at `2c5f34cc`; measured on the candidate by NC19 |
+| N3-U6 | The G5 sites are told apart by query prefix, mode, phase and current | Read from code; measured on the candidate by NC19. Code reading already shows that L389, L401 and L403 share one query prefix (section 3.1) |
 | — | (r2's N3-U4 is withdrawn) | Code reading showed it was false: G4 and G5 are evaluated at several sites, some after the stop. Section 3.1 now declares one row per site, and section 3.5 covers the post-stop sites. The markers tie every site |
+
+## 10. Implementation notes
+
+The implementation follows sections 1–9 with these corrections, each found
+against the code while writing the recipes.
+
+| Item | Correction | Why |
+|---|---|---|
+| r5 should 2 | G5.binding-run is a row, not merged with G5.pre-stop | One refusal case keeps the per-site claim; merging would drop it |
+| G6.updater-links | Removed as a guard row; the lock still renders `lock` | The update's prune lock is taken after the switch, so a refusal there is not zero mutation, and a lock held from the start fails the switch first |
+| PS.stopped (L406) | Added | `run` asserts the stop at L406 before `takeSnapshot`; a late cgroup fault fails there, not at L175 |
+| PS.snapshot-stopped, PS.snapshot-binding, PS.stage, PS.replace-* | Reached by a one-query activity window | No fixture hook acts between L406 and these sites |
+| PS.return-activity | Held with final phase `failed` | `returnSource` saves `failed` before the activity check (N2 MY3 order) |
+| Rendered tool | RES and REC name the record's tool; RST, PRN and RBK name the tool that renders them | G1 binds only resume and recover, and a terminal record's tool release is not protected from pruning |
+| Quoting case | Layer 1 round-trips a root with a space and `'`; layer 2 runs every rendered line through a real shell parse | The state fixture's `runner.env` rejects `'` in the home path |
+| Layer-2 execution | A rendered line is split into argv by `/bin/sh`, then started directly | The test-isolation boundary refuses the updater named inside `sh -c` |
+

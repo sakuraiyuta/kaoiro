@@ -1,7 +1,7 @@
 ---
 title: Transaction state table for server deploy and runner update
 status: accepted
-last_updated: 2026-10-20
+last_updated: 2026-10-25
 ---
 
 # Transaction state table for server deploy and runner update
@@ -768,8 +768,8 @@ Each unit gets its own issue when it starts; L1 first.
 |---|---|---|---|---|
 | L1 | server table, rendering, `invocation` / `target_sha`, S1-S4, harness, enrolled fixture | — | all server rows `closed` except the four `rollback_*` rows `deferred(L1b)` | 584; 681 state/message |
 | L1b | destructive rollback steps and resume (5.3), live fleet admission on resume, audit-only fleet record | L1 | no server row deferred | — |
-| L2 | runner table, `snapshot()` cleanup, `recover` (with `recovery.completed`), `next` read path, `retire` rerun (R7), hints, runner harness and cut points | — (independent of L1b) | forward rows `closed`; restore / code-recovery rows `deferred(L3)` | 531 |
-| L3 | R4, own design round, option (b) first | L2 | no runner row deferred | — |
+| L2 | superseded by [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709) N2 and N3 ([N3 plan](issue-709-n3-recovery-table.md)) | — | — | — |
+| L3 | superseded by issue #709 N2 (restore phases) and N3 | — | — | — |
 | L4 | verified 5-b acknowledgement | L1 (table, rendering, harness) | `build_prepared` 5-b case progresses | 553 |
 | L5 | compose file set with override hashes | L1 (harness; the 681 recipe flips from "recoverable" to "admitted") | 681 recipe completes forward | 681 root |
 

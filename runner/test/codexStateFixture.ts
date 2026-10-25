@@ -58,7 +58,7 @@ const args = process.argv.slice(2), dir = ${JSON.stringify(dir)}, root = ${JSON.
 const prop = (args.find(a=>a.startsWith('--property=')) || '').slice(11);
 const active = fs.readFileSync(dir+'/active','utf8') === 'active';
 const query = ['stop','start','show-environment'].find(verb=>args.includes(verb)) || (args.includes('show') ? (prop || 'ExecStart') : args.join(' '));
-fs.appendFileSync(dir+'/queries', query+'\n');
+fs.appendFileSync(dir+'/queries', query+'\\n');
 let activating = false;
 if (query === 'ActiveState' && fs.existsSync(dir+'/activity-fault')) {
  const count = (fs.existsSync(dir+'/activity-count') ? Number(fs.readFileSync(dir+'/activity-count','utf8')) : 0) + 1;

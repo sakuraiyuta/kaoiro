@@ -93,6 +93,9 @@ home-root `cache` is disposable and is re-fetched after restore. Snapshots remai
 private because plugin/configuration content can include sensitive values.
 Every pin update requires the candidate classifier's pre-stop check; see
 [Codex state backup](runner-update-and-rollback.md#codex-state-backup).
+After an interrupted or refused operation, the
+[recovery table](runner-update-and-rollback.md#recovery-table) lists what
+each command does in each phase.
 
 ### Hooks
 
