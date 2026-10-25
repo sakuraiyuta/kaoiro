@@ -749,7 +749,17 @@ defmodule KaoiroServer.WorkSettingsTest do
     assert rows(name) == neighbors
     :ok = Supervisor.terminate_child(sup, WorkStore)
     File.cp!(backup, path)
-    {:ok, pid} = Supervisor.restart_child(sup, WorkStore)
+    restarted = Supervisor.restart_child(sup, WorkStore)
+
+    pid =
+      case restarted do
+        {:ok, pid} -> pid
+        _ -> nil
+      end
+
+    assert is_pid(pid) and Process.alive?(pid),
+           "blocked owner must start once and retain its PID"
+
     assert {:error, :work_settings_corrupt} = assign(name, "after-backup-restore")
     assert Process.whereis(name) == pid
     assert [{_, :bad}] = :dets.lookup(name, WorkSettings.key())
