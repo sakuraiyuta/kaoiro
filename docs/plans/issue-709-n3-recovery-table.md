@@ -20,15 +20,24 @@ Revisions:
 
 - r2 answered design review r1 (must 2, should 4, nit 6).
 - r3 answered r2 (must 1, should 3, nit 3).
-- r4 answers r3 (must 1, nit 3).
+- r4 answered r3 (must 1, nit 3).
+- r5 follows the stop-valve ruling after r4 (must 0, should 3): issue 709
+  comment 6392858765.
 
-All four musts belong to one class: a declared item that no test ties to
-the code. r4 closes it at every level that was still open:
+All four musts and the three r4 shoulds belong to one class: a declared item
+that no test ties to the code. From r3 on, the fixes extended the ties from
+the product table to the verifier's own lists, and each new list needed a
+tie of its own.
 
-- the walk's roots come from module namespaces, not from a list;
-- every tie must fail on its own counterexample;
-- the only default class makes no causal claim;
-- the excluded files of the digest are derived from the recorders.
+r5 bounds the mechanical closure instead (N3-e):
+
+- the product contract is tied by execution and static checks;
+- the verifier's meaning is left to review and to the positive and negative
+  controls of the checker concerned.
+
+The meta-verification of r3 and r4 is removed: the namespace roots of the
+test module, `TIES` counterexamples, `RECORDERS`, and the export rule. No
+branch is removed.
 
 ## 1. Decisions
 
@@ -38,57 +47,36 @@ the code. r4 closes it at every level that was still open:
 | N3-b | One module, `runner/deploy/codex-state-recovery.mjs`, is the only source of hint text: `TABLE`, `GUARDS`, `REFUSALS` and `render()` | Hint strings at each site (R6 today) |
 | N3-c | New read-only helper action `next <root> [<uuid>]` (section 5.3) | The updater's `<uuid>` placeholder (`kaoiro-runner-update.sh:277`) |
 | N3-d | The runbook's recovery table is generated from the module, and a doc-equality test pins it | A hand-written runbook table |
-| N3-e | Close the class "declared item without an executable tie" mechanically: layer 1 walks the exported structures, and every field kind it finds must have a registered tie (below). No refusal class is chosen outside a branch or a guard | A hand-written tie table, which r2 used and which missed `REFUSALS` classes |
+| N3-e | **Bound the mechanical closure.** Layer 1 checks the structural consistency of the recovery contract. Layer 2 checks, for each declared input condition, that the outcome, the hint and the side effects agree with the contract. Review decides the verifier's meaning, the sufficiency of the contract and its inputs, and the boundary between state and observation; each checker's positive and negative controls support that review. The verifier's own data and internals are not proved recursively | Tying every declared item, including the verifier's own lists, by execution (r3 and r4). Each tie added a new declaration, so the fix regressed one level outward per round (stop-valve ruling) |
 
-**Field walk (layer 1).**
+**Rule.** A check that would need a new declaration only to verify another
+declaration is not built; that item goes to review. A new concrete
+counterexample against the product is still handled. That the next list is
+not proven either does not, by itself, reopen the class.
 
-- **Roots.** The walk has two roots, both found through a module namespace
-  (`import * as`), not through a list of names (r3 must 1, fix 1):
-  - every non-function export of `codex-state-recovery.mjs`;
-  - every non-function export of the test declaration module
-    `runner/test/codexStateRecoveryDecl.ts`, which holds `RECIPES`,
-    `PRECONDITIONS`, `RECORDERS` and `TIES`. `RECIPES` and `PRECONDITIONS`
-    are objects of functions, and their keys are walked.
-- **Fields.** Under each root the walker enumerates the field paths that
-  occur, for example `TABLE.<phase>.<command>[].message`, and looks each
-  path pattern up in `TIES`.
-- **Failures:**
-  - an export that has no root entry in `TIES`;
-  - a pattern that occurs but has no `TIES` entry;
-  - a `TIES` entry whose pattern never occurs.
-- **Counterexamples (r3 nit 2).** Every `TIES` entry carries
-  `counterexample(declarations)`, which returns a modified copy that
-  violates exactly that tie. The layer-1 self-test runs each entry's check
-  on its counterexample and requires that check to fail. A check that
-  passes everything (`() => true`) is therefore red. The walk also requires
-  each entry to have a counterexample, so this rule has no exceptions.
+**Where each item is tied.** "1" is a static check in layer 1, "2" is
+execution in layer 2, and "review" is the independent design and
+implementation review.
 
-The registry at r4. This table is a copy for the reader; the test module
-is the source:
+| Item | Tied in | What is claimed | What is not claimed |
+|---|---|---|---|
+| `TABLE` keys and `PHASES`; cell commands; branch and guard ids; `RECIPES` and `PRECONDITIONS` ids | 1 | schema and field allowlist of each exported structure of `codex-state-recovery.mjs`; unknown fields rejected; two-way correspondence of table, phase, recipe and precondition ids | that a precondition describes its intended state |
+| Refusal sites and catalog keys | 1 | the known-syntax scan of section 4.1, within the static import closure, finds exactly the catalog keys and sites | causes raised by modules outside the closure (rendered `unclassified`) |
+| Rendered command shape, anchors, generated runbook, cited test titles, site markers | 1 | the form and existence of each | that the cited test asserts the claim, or that a marked line ran |
+| Class derivation | 1 | each key gets the class of its branches and guards, or `unclassified`; a causal class only on a key that a branch or guard raises; the renderer's output is fixed for every class | that a chosen class is the right advice |
+| Branch reachability and precondition | 2 | the precondition predicate holds on the real reached state before the command | — |
+| Executing the printed `next` line; outcome; hint | 2 | the line that `next` printed runs; the final phase and stderr agree with the declaration | — |
+| Side effects, ordering and zero mutation | 2 | whole-tree digest (section 4.2); start order; no code-only return; credentials and asides | — |
+| Call-site identity, where a branch or guard claims a site | 2 | the observed query context at the refusal equals the context fixed from code (section 3.1) | — |
+| N2 invariants; real native and real service manager | 2 and section 4.3 | as in N2 | — |
+| Choice of classes and anchors; sufficiency of branches and inputs; scanner boundary; fake and recorder semantics; which files are observations | review | decided in review and recorded in this document | not checked by another checker |
 
-| Field pattern | Tie |
-|---|---|
-| `TABLE` keys | equal the exported `PHASES` |
-| `TABLE.<phase>.<command>` | at least one branch; the command is one of section 2's keys |
-| `…[].id`, `GUARDS[].id` | a `RECIPES` entry; layer 2's executed id set equals the declared set |
-| `…[].precondition` | a `PRECONDITIONS` predicate that layer 2 evaluates as true before running the command |
-| `…[].outcome` | the layer-2 outcome oracle |
-| `…[].message`, `GUARDS[].message` | a key found by the scan of section 4.1, and seen in the case's stderr |
-| `…[].class`, `GUARDS[].class` | the derived class of the message (section 5.1) and the layer-2 hint oracle |
-| `…[].hint` | the rendered option equals the cell's command key; its anchor exists |
-| `…[].pin` | the cited title exists in the test sources |
-| `…[].site`, `GUARDS[].site` | a `// codex-recovery-site: <id>` marker in the code, on a line that calls the guard function (r2 nit 3) |
-| `GUARDS[].entry` | layer 2 drives the case through that entry point |
-| `REFUSALS.<key>.files`, `SHELL_REFUSALS.<key>.file` | the scan finds the key in exactly those files |
-| `SHELL_REFUSALS.<key>.exit` | the exit status at the scanned `kaoiro_die` |
-| `RETHROWS[].site`, `.reason` | a marker at the rethrow; a non-empty reason |
-| `SHARED_MESSAGES[].message`, `.class`, `.reason` | the message is raised by two or more branches or guards; layer 2 expects `.class` for each of them |
-| `RECORDERS.<id>.file`, `.writer` | the file name occurs as the write target in the named recorder's source (the fault preload, the fake manager, the node wrapper); it does not match any product name (`codex-state/`, `releases/`, `current`, `previous`, `.lock.*`, `.staging.*`, `.restore.*`, `.failed.*`, the snapshot directories, the home) |
-| `RECIPES.<id>`, `PRECONDITIONS.<id>` | the id is a declared branch or guard id, or precondition name, and the reverse |
-| `TIES.<pattern>` | the pattern occurs, and its counterexample fails its check |
-
-`REFUSALS` and `SHELL_REFUSALS` have **no class field**. Adding one is an
-unregistered pattern, so the walk fails (NC6).
+Each negative control in section 8 runs **on the real path of its layer's
+checker**, and counts only when that checker's assertion or diagnostic
+fails. A `TypeError` from a malformed input does not count (r4 should 1).
+r4's claim that a pure layer-1 self-test covers every layer (NC20) is
+withdrawn. The rule that every top-level data binding must be exported is
+dropped.
 
 Director rulings recorded here:
 
@@ -159,8 +147,28 @@ matches a `// codex-recovery-site:` marker in the code.
 | G7.guard, G7.prepare, G7.restore, G7.run, G7.prune, G7.protected | old schema-1 record (`cutover` through `records`) | "Resolve old Codex state records…" | `cutover` | first `records()` call in each entry | Workflow "blocks every remaining mutation entrance on an unresolved old %s" |
 
 To reach G5 at a specific site, layer 2 sets the fake manager to report
-`activating` from the n-th `ActiveState` query. The fixture's call log
-gives n for each site. This needs no product change.
+`activating` from the n-th `ActiveState` query. n only selects where the
+fault is injected. It is not evidence of the site (r4 should 2).
+
+The site is identified independently, by two things:
+
+- the phase, mode and current at the refusal;
+- the service-manager query context before it. The fake manager writes
+  every query to an observation log (section 4.2).
+
+The expected context of each site is fixed from the code at `2c5f34cc` and
+the normal path, not derived from n:
+
+| Site | Context |
+|---|---|
+| G5.began (L380) | the first `ActiveState` query of the invocation, before any `checkBinding` query |
+| G5.pre-stop (L389) | a `recover` of a pre-start phase; after the L386 `checkBinding` property queries (`Transient`, `ExecStart`, … `show-environment`) |
+| G5.target-check (L401) | `start-intent` with current = target; after the same `checkBinding` queries; no `stop` in the call log |
+| G5.resume-stop (L403) | any other resumable phase; after L401's activity query, or without it when L401's condition is false |
+
+These four rows stay separate. They are merged only if review confirms that
+their observable recovery contract is equal. A merged row then drops the
+per-site guarantee.
 
 ### 3.2 Forward phases
 
@@ -267,9 +275,12 @@ renders `unclassified`, which makes no causal claim.
 
 These are pure checks; no process is started.
 
-- **Field walk.** The walk and the `TIES` registry of section 1 (N3-e). It
-  covers inventory: phase rows, cells, unique ids, recipes, preconditions,
-  markers and citations.
+- **Schema and correspondence.** Each exported structure of
+  `codex-state-recovery.mjs` has a fixed field allowlist, and an unknown
+  field fails. The `TABLE` keys equal the exported `PHASES`. Every cell has
+  a branch. Ids are unique. Branch and guard ids correspond both ways with
+  the test's `RECIPES`, and precondition names with its `PRECONDITIONS`.
+  The test structures themselves are not walked further (N3-e).
 - **Class derivation.**
   - Every scanned message key gets one rendered class:
     - the class of the branches and guards that raise it;
@@ -365,15 +376,23 @@ different files (r1 should 3).
     modes, sizes and sha256, and symlink targets. It covers the install
     root, records, snapshots, staging, asides, lock directories, the home
     with file contents, and the fake manager's state and call log (r2
-    should 2). The excluded files are not declared by hand. They are
-    exactly the `RECORDERS` outputs, and the `RECORDERS` tie checks each
-    one against its writer's source and against every product name (r3
-    must 1, fix 4);
+    should 2).
+    - The fake service state (`active`, `mainpid`, `owned-pids/`, the
+      fake cgroup) and the start/stop `calls` log are always digested
+      (r4 should 3).
+    - Only observation outputs are excluded, through `EXCLUDED`: a small,
+      fixed list of exact relative paths that review approves. They are
+      the query log of section 3.1, the cut marker and the
+      `running-helper` marker, and the test's own recorder logs.
+    - No other declaration can exclude a file. A new output that is not
+      listed is digested by default.
+    - Layer 1 rejects any overlap between `EXCLUDED` and the protected
+      state paths above;
   - the message and the hint: stderr contains the declared message, and the
     rendered `next:` and `see:` lines equal `render()` for that class;
-  - the site, for sites that share one message and outcome (G5): the fake
-    manager's `ActiveState` query count at the refusal equals the recipe's
-    n, so a recipe that reaches another G5 site fails (r3 nit 1);
+  - the site, for guard rows that claim one (G5): the phase, mode and
+    current, and the observed query context, equal the expectation fixed
+    for that site in section 3.1;
   - the start order: the fake service manager logs the record phase at each
     start request, and no source start happens before `failed` or
     `startRequested` is durable;
@@ -577,40 +596,36 @@ Negative controls, each run separately and recorded red:
 
 | Id | Mutation | Must fail |
 |---|---|---|
-| NC1 | delete a phase row | layer 1 inventory |
-| NC2 | add a phase to `PHASES` without a row | layer 1 inventory, and the import assertion |
-| NC3 | a branch with no recipe | layer 2 start |
+| NC1 | delete a phase row | layer 1 correspondence (assertion) |
+| NC2 | add a phase to `PHASES` without a row | layer 1 correspondence, and the import assertion |
+| NC3 | a branch with no recipe | layer 1 two-way id correspondence |
 | NC4 | an entry that renders REC for a RES cell | layer 1 rendered option = command key |
 | NC5 | the renderer uses `current` | layer 2 (distinct tool): the executed line runs the wrong tool and G1 refuses |
-| NC6 | (a) a `class` field added to one `REFUSALS` entry; (b) a second branch that raises an existing message with another class, without `SHARED_MESSAGES`; (c) PS.return-link declared as `transient` | (a) field walk (untied pattern); (b) class derivation; (c) the layer-2 hint oracle for PS.return-link |
+| NC6 | (a) an unknown field (`class`) added to one `REFUSALS` entry; (b) a second branch that raises an existing message with another class, without `SHARED_MESSAGES`; (c) PS.return-link declared as `transient` | (a) layer 1 schema allowlist; (b) layer 1 class derivation; (c) layer 2 hint oracle, against the class that review fixed (`integrity`) |
 | NC7 | a new `must()` message; a new `fail()` message in `verify-release.mjs`; a new bare `throw value` | layer 1 scan, each separately |
 | NC8 | a new `kaoiro_die` without an entry | layer 1 shell scan |
-| NC9 | a missing anchor; the runbook edited by hand; a cited title renamed | layer 1, each separately |
+| NC9 | a missing anchor; the runbook edited by hand; a cited title renamed; a marker deleted | layer 1, each separately |
 | NC10 | the updater lock-held message back to `<uuid>` | layer 2 G6 |
 | NC11 | `exclude()` without the UUID | layer 2 G2 hint oracle |
 | NC12 | REC on `start-intent` routed to source return | layer 2 no-code-return oracle |
 | NC13 | the source start before `failed` (N2 implementation review MY3) | layer 2 start-order oracle |
 | NC14 | the `main()` fallback removed | layer 2 unclassified case |
-| NC15 | a refuse branch that stops the service first | layer 2 zero-mutation oracle |
-| NC16 | a refuse path that removes an owned staging directory, or leaves a lock directory | layer 2 whole-tree digest |
-| NC17 | a guard site marker deleted, or moved to a line without the guard call | layer 1 marker tie |
-| NC18 | a `TIES` entry removed | layer 1 field walk |
-| NC19 | a new non-function export added to `codex-state-recovery.mjs`, and separately to the declaration module | layer 1 root check, each separately |
-| NC20 | one `TIES` check replaced by `() => true` | layer 1 counterexample self-test |
-| NC21 | a `RECORDERS` entry naming a product file (for example a record file name), and separately one whose writer does not write it | layer 1 `RECORDERS` tie, each separately |
-| NC22 | a helper message given a causal class without a branch (for example through a new `SHARED_MESSAGES` entry with one raiser) | layer 1 class derivation and the `SHARED_MESSAGES` tie |
-| NC23 | a G5 recipe aimed at L389 that reaches L380 | layer 2 query-count oracle |
+| NC15 | a refuse branch that stops the service first (and the final state is restored) | layer 2 digest, through the `calls` log and the fake service state, on the execution path |
+| NC16 | a refuse path that removes an owned staging directory, or leaves a lock directory | layer 2 whole-tree digest, on the execution path |
+| NC17 | `EXCLUDED` gains `calls` or `active` | layer 1 overlap check |
+| NC18 | a precondition predicate that returns true without reading the state | layer 2: a recipe that fails to reach its state must fail the predicate. One such recipe per predicate kind is run at acceptance |
+| NC19 | a G5 fault injected at an earlier site than the row's (for example L380 for G5.pre-stop) | layer 2: the site's context assertion itself fails, not the outcome |
+| NC20 | outcome, hint and digest assertions each disabled in turn | layer 2, each separately, at acceptance |
 
-Every `TIES` pattern has a counterexample, by the walk's own rule. The
-patterns that r3 listed without a control (`…[].precondition`,
-`SHELL_REFUSALS.<key>.exit`, `REFUSALS.<key>.files`, `RETHROWS[].site`)
-are covered by NC20's self-test, one counterexample each.
+Each control is recorded with the failing assertion's text. A run that fails
+with a `TypeError` or an unrelated error is not counted, and the control is
+repaired and rerun. The layer-2 controls run once at implementation
+acceptance, not in every CI run.
 
 The scan checker itself:
 
 - An unrecorded message is added in an existing closure file, and
   separately in a newly imported file. Each must fail on its own.
-- With the scan's own guard removed, its self-test must fail.
 - A clean control (comments only) must pass.
 
 Also: runner typecheck; exact-head CI with all 7 jobs; section 4.3; and U5
@@ -620,13 +635,17 @@ Size (estimate):
 
 | Part | Lines |
 |---|---|
-| Product: the module | ~260 |
+| Product: the module | ~240 |
 | Product: sites | ~70 |
 | Product: `next` | ~40 |
-| Tests: layer 1 | ~300 |
-| Tests: layer 2 and recipes | ~600 |
+| Tests: layer 1 | ~180 |
+| Tests: layer 2, recipes and the query log | ~560 |
 | Docs | ~140 |
-| Total | ~1,400 |
+| Total | ~1,230 |
+
+These are estimates, not measurements. Compared with r4, the
+meta-verification is gone, but the branches and the query-context
+identification stay.
 
 Classification: **L**. Reasons:
 
@@ -644,4 +663,5 @@ Classification: **L**. Reasons:
 | N3-U5 | The CI runner has about 3 vitest workers | Recorded by U5 on the candidate; saturation is accepted (section 4.2) |
 | N3-U2 | `next` reads records safely without a lock | Read in code (`atomicJSON`, temporary-name filter); the paused-worker case of layer 2 |
 | N3-U3 | Every throw site is one of the scan's accepted forms | The fail-closed scan itself, on the first candidate. The design-time counts (`must` 144 and `new Error` 16 in four files; `fail()` and its variants in `verify-release.mjs`) are from grep, not from the parser |
+| N3-U6 | The four G5 contexts of section 3.1 are distinct in the query log | Read from code at `2c5f34cc`; measured on the candidate by NC19 |
 | — | (r2's N3-U4 is withdrawn) | Code reading showed it was false: G4 and G5 are evaluated at several sites, some after the stop. Section 3.1 now declares one row per site, and section 3.5 covers the post-stop sites. The markers tie every site |
