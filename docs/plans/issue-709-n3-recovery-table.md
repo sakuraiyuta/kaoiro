@@ -19,13 +19,16 @@ It does not build any state of the retired machine (issue-695 plan section
 Revisions:
 
 - r2 answered design review r1 (must 2, should 4, nit 6).
-- r3 answers r2 (must 1, should 3, nit 3).
+- r3 answered r2 (must 1, should 3, nit 3).
+- r4 answers r3 (must 1, nit 3).
 
-All three musts belong to one class: a declared item that no test ties to
-the code. r3 closes the class without a hand-written tie table. Layer 1
-walks every field of every exported structure and requires a registered
-tie for each field kind it finds. No class is chosen by hand outside the
-branches and guards (section 1, N3-e).
+All four musts belong to one class: a declared item that no test ties to
+the code. r4 closes it at every level that was still open:
+
+- the walk's roots come from module namespaces, not from a list;
+- every tie must fail on its own counterexample;
+- the only default class makes no causal claim;
+- the excluded files of the digest are derived from the recorders.
 
 ## 1. Decisions
 
@@ -37,18 +40,31 @@ branches and guards (section 1, N3-e).
 | N3-d | The runbook's recovery table is generated from the module, and a doc-equality test pins it | A hand-written runbook table |
 | N3-e | Close the class "declared item without an executable tie" mechanically: layer 1 walks the exported structures, and every field kind it finds must have a registered tie (below). No refusal class is chosen outside a branch or a guard | A hand-written tie table, which r2 used and which missed `REFUSALS` classes |
 
-**Field walk (layer 1).** The walker enumerates the field paths that occur
-in `TABLE`, `GUARDS`, `REFUSALS`, `SHELL_REFUSALS`, `RECIPES`, `RETHROWS`
-and `SHARED_MESSAGES`, for example `TABLE.<phase>.<command>[].message`. It
-looks each path pattern up in `TIES`, a registry in the test that maps a
-pattern to its check function.
+**Field walk (layer 1).**
 
-- A pattern that occurs but has no `TIES` entry fails, so a new field kind
-  cannot appear untied.
-- A `TIES` entry whose pattern never occurs fails, so the registry cannot
-  rot.
+- **Roots.** The walk has two roots, both found through a module namespace
+  (`import * as`), not through a list of names (r3 must 1, fix 1):
+  - every non-function export of `codex-state-recovery.mjs`;
+  - every non-function export of the test declaration module
+    `runner/test/codexStateRecoveryDecl.ts`, which holds `RECIPES`,
+    `PRECONDITIONS`, `RECORDERS` and `TIES`. `RECIPES` and `PRECONDITIONS`
+    are objects of functions, and their keys are walked.
+- **Fields.** Under each root the walker enumerates the field paths that
+  occur, for example `TABLE.<phase>.<command>[].message`, and looks each
+  path pattern up in `TIES`.
+- **Failures:**
+  - an export that has no root entry in `TIES`;
+  - a pattern that occurs but has no `TIES` entry;
+  - a `TIES` entry whose pattern never occurs.
+- **Counterexamples (r3 nit 2).** Every `TIES` entry carries
+  `counterexample(declarations)`, which returns a modified copy that
+  violates exactly that tie. The layer-1 self-test runs each entry's check
+  on its counterexample and requires that check to fail. A check that
+  passes everything (`() => true`) is therefore red. The walk also requires
+  each entry to have a counterexample, so this rule has no exceptions.
 
-The registry at r3:
+The registry at r4. This table is a copy for the reader; the test module
+is the source:
 
 | Field pattern | Tie |
 |---|---|
@@ -67,6 +83,9 @@ The registry at r3:
 | `SHELL_REFUSALS.<key>.exit` | the exit status at the scanned `kaoiro_die` |
 | `RETHROWS[].site`, `.reason` | a marker at the rethrow; a non-empty reason |
 | `SHARED_MESSAGES[].message`, `.class`, `.reason` | the message is raised by two or more branches or guards; layer 2 expects `.class` for each of them |
+| `RECORDERS.<id>.file`, `.writer` | the file name occurs as the write target in the named recorder's source (the fault preload, the fake manager, the node wrapper); it does not match any product name (`codex-state/`, `releases/`, `current`, `previous`, `.lock.*`, `.staging.*`, `.restore.*`, `.failed.*`, the snapshot directories, the home) |
+| `RECIPES.<id>`, `PRECONDITIONS.<id>` | the id is a declared branch or guard id, or precondition name, and the reverse |
+| `TIES.<pattern>` | the pattern occurs, and its counterexample fails its check |
 
 `REFUSALS` and `SHELL_REFUSALS` have **no class field**. Adding one is an
 unregistered pattern, so the walk fails (NC6).
@@ -109,7 +128,8 @@ Notation:
   - `held`: nonzero exit, with the phase unchanged after a stop;
   - `refuse`: zero mutation.
 - **Class** is declared on branches and guards only. The catalog derives
-  each message's class from them, or from a fixed default (section 5.1).
+  each message's class from them. A message that no branch or guard raises
+  renders as `unclassified` (section 5.1).
 - **Pin** is the existing N2 test that drives the same path, or `—`. Layer 2
   drives every branch regardless, because no N2 test checks the rendered
   hint.
@@ -217,13 +237,16 @@ These sites run after `stopRunner` or after a start, so a failure there is
 
 | Branch (= site id) | Phase / command | Site at `2c5f34cc` | Outcome | Pin |
 |---|---|---|---|---|
-| PS.snapshot | `prepared`, `snapshot-verified` RES | `takeSnapshot` L175 (`assertStopped`, `checkBinding`) | settle | KeepSafety "resumes source after %s with recoverable residue" (`late-unknown`) |
+| PS.snapshot-stopped | `prepared`, `snapshot-verified` RES | `takeSnapshot` L175 `assertStopped` | settle | KeepSafety "resumes source after %s with recoverable residue" (`late-unknown`) |
+| PS.snapshot-binding | same | `takeSnapshot` L175 `checkBinding` | settle | — |
 | PS.guard-nested | `snapshot-verified` RES | nested switch `guard` L212/L214 | settle (no `start-intent` saved) | — |
 | PS.guard-nested-intent | `start-intent` RES, current = source | nested `guard` L212/L214 | held | — |
 | PS.stage | `restore-prepared` RES | `stageRestore` L261 | the `run()` catch restarts `from` only if admission began active | KeepSafety "restarts a failed restore only if admission began %s" |
-| PS.replace | `replace-intent` RES | `moveReplacement` L273/L274 | held | — |
+| PS.replace-stopped | `replace-intent` RES | `moveReplacement` L273 `assertStopped` | held | — |
+| PS.replace-binding | `replace-intent` RES | `moveReplacement` L274 `checkBinding` | held | — |
 | PS.after-switch | `start-intent` RES | `run` L414 | held | — |
-| PS.post-start | `start-intent` RES | `postStart` L359/L361 | held | Workflow "refuses unsafe post-start %s even when version succeeds" |
+| PS.post-start-active | `start-intent` RES | `postStart` L359 (active and MainPID) | held | Workflow "refuses unsafe post-start %s even when version succeeds" (`active`) |
+| PS.post-start-binding | `start-intent` RES | `postStart` L361 `captureBinding` | held | same title (`next-path`, `service`) |
 | PS.return-link | `prepared`, `snapshot-verified` REC | `returnSource` L333 | held; source not started; "source recovery refused" | KeepSafety "refuses source restart after %s" |
 | PS.return-binding | same | `returnSource` L334 | held | — |
 | PS.return-activity | same | `returnSource` L346 | held | — |
@@ -232,6 +255,11 @@ These sites run after `stopRunner` or after a start, so a failure there is
 
 PS.return-link raises "Source link changed before recovery" (L333). That
 gives the r2 NC6 message a branch (r2 must 1, item 3).
+
+A site that calls two guard functions has one branch per function (r3
+must 1, fix 3), so each function's messages get their own causal class. A
+further message raised at the same site by a function that has no branch
+renders `unclassified`, which makes no causal claim.
 
 ## 4. Property test
 
@@ -246,8 +274,11 @@ These are pure checks; no process is started.
   - Every scanned message key gets one rendered class:
     - the class of the branches and guards that raise it;
     - for a `SHARED_MESSAGES` entry, that entry's class;
-    - for a key that no branch or guard raises, the module default of
-      section 5.1.
+    - for a key that no branch or guard raises: `unclassified` for helper
+      messages, and for shell lines `usage` (exit 64) or `none`.
+  - A causal class (`transaction`, `config`, `integrity`, `transient`,
+    `lock`, `cutover`) appears only on keys that a layer-2 branch or guard
+    raises. Layer 1 asserts this for every key.
   - Two branches or guards that raise one message with different classes,
     without a `SHARED_MESSAGES` entry, fail.
   - The rendering function's class table is compared with this derivation
@@ -334,10 +365,15 @@ different files (r1 should 3).
     modes, sizes and sha256, and symlink targets. It covers the install
     root, records, snapshots, staging, asides, lock directories, the home
     with file contents, and the fake manager's state and call log (r2
-    should 2). Only the declared `VOLATILE` recorder files are excluded:
-    the cut marker and the test's own observation logs;
+    should 2). The excluded files are not declared by hand. They are
+    exactly the `RECORDERS` outputs, and the `RECORDERS` tie checks each
+    one against its writer's source and against every product name (r3
+    must 1, fix 4);
   - the message and the hint: stderr contains the declared message, and the
     rendered `next:` and `see:` lines equal `render()` for that class;
+  - the site, for sites that share one message and outcome (G5): the fake
+    manager's `ActiveState` query count at the refusal equals the recipe's
+    n, so a recipe that reaches another G5 site fails (r3 nit 1);
   - the start order: the fake service manager logs the record phase at each
     start request, and no source start happens before `failed` or
     `startRequested` is durable;
@@ -359,10 +395,10 @@ different files (r1 should 3).
   15 s deadline.
 - **Size and time (estimate, r2 nit 2).**
   - Branches that need a fresh state: about 36 phase branches with
-    `→`, `settle` or `held` outcomes, plus 12 post-stop branches (section
-    3.5). That is about 48 cases at 12–19 s each (12 s is the measured mean
+    `→`, `settle` or `held` outcomes, plus 15 post-stop branches (section
+    3.5). That is about 51 cases at 12–19 s each (12 s is the measured mean
     of `codexStateRecovery` in CI run 40148732194: 680 s for 56 cases), so
-    10–15 min accumulated.
+    10–16 min accumulated.
   - Refusals and guard sites on reused states: about 50, at ~2 s each, so
     about 2 min.
   - Layer 2 is split from the start into three files that run in parallel:
@@ -381,6 +417,12 @@ different files (r1 should 3).
     the median of three runs on each side: the N3 candidate, and run
     39747478279 together with two later runs on the same base. These are
     reported, not used as a gate.
+  - Worker saturation (r3 nit 3). The number of vitest workers on the CI
+    runner is not measured (inferred to be about 3). U5 records it on the
+    candidate. If saturation lengthens the job, the increase is accepted:
+    N3 does not drop or merge branches for wall time. If the median grows by
+    more than 5 min, the director decides on a follow-up issue for CI
+    sharding of the runner suite. That issue is outside N3.
 - **Where it runs.** In the CI complete tier (integration list of
   `runner/test-tiers.json`). During development, on hakoniwa through
   `heavy-test-remote`.
@@ -405,17 +447,18 @@ A message's class is derived, never chosen in the catalog:
 
 - the class of the branches and guards that raise it (or its
   `SHARED_MESSAGES` entry);
-- otherwise, a fixed default by origin:
+- otherwise, one default that claims no cause (r3 must 1, fix 2):
 
 | Origin | Default |
 |---|---|
-| `codex-service.mjs` | `config` |
-| every other helper-closure module | `integrity` |
+| any helper-closure module | `unclassified` |
 | a shell `kaoiro_die` with exit 64 | `usage` |
 | any other shell line | `none` (message only) |
 
-A non-default class therefore requires a branch or a guard that layer 2
-drives (r2 must 1, item 2).
+A causal class therefore requires a branch or a guard that layer 2 drives.
+Examples: B5 after the stop is `transient` only through
+PS.snapshot-stopped and PS.replace-stopped; a classification refusal stays
+`unclassified` unless a branch is added.
 
 | Class | Rendered after the message |
 |---|---|
@@ -552,6 +595,16 @@ Negative controls, each run separately and recorded red:
 | NC16 | a refuse path that removes an owned staging directory, or leaves a lock directory | layer 2 whole-tree digest |
 | NC17 | a guard site marker deleted, or moved to a line without the guard call | layer 1 marker tie |
 | NC18 | a `TIES` entry removed | layer 1 field walk |
+| NC19 | a new non-function export added to `codex-state-recovery.mjs`, and separately to the declaration module | layer 1 root check, each separately |
+| NC20 | one `TIES` check replaced by `() => true` | layer 1 counterexample self-test |
+| NC21 | a `RECORDERS` entry naming a product file (for example a record file name), and separately one whose writer does not write it | layer 1 `RECORDERS` tie, each separately |
+| NC22 | a helper message given a causal class without a branch (for example through a new `SHARED_MESSAGES` entry with one raiser) | layer 1 class derivation and the `SHARED_MESSAGES` tie |
+| NC23 | a G5 recipe aimed at L389 that reaches L380 | layer 2 query-count oracle |
+
+Every `TIES` pattern has a counterexample, by the walk's own rule. The
+patterns that r3 listed without a control (`…[].precondition`,
+`SHELL_REFUSALS.<key>.exit`, `REFUSALS.<key>.files`, `RETHROWS[].site`)
+are covered by NC20's self-test, one counterexample each.
 
 The scan checker itself:
 
@@ -587,7 +640,8 @@ Classification: **L**. Reasons:
 
 | Id | Premise | Settled by |
 |---|---|---|
-| N3-U1 | Layer 2 costs 12–17 min accumulated in three parallel files, each under the longest existing integration file | The first candidate's CI, against the section 4.2 threshold |
+| N3-U1 | Layer 2 costs 12–18 min accumulated (about 51 fresh-state cases) in three parallel files, each under the longest existing integration file | The first candidate's CI, against the section 4.2 threshold |
+| N3-U5 | The CI runner has about 3 vitest workers | Recorded by U5 on the candidate; saturation is accepted (section 4.2) |
 | N3-U2 | `next` reads records safely without a lock | Read in code (`atomicJSON`, temporary-name filter); the paused-worker case of layer 2 |
 | N3-U3 | Every throw site is one of the scan's accepted forms | The fail-closed scan itself, on the first candidate. The design-time counts (`must` 144 and `new Error` 16 in four files; `fail()` and its variants in `verify-release.mjs`) are from grep, not from the parser |
 | — | (r2's N3-U4 is withdrawn) | Code reading showed it was false: G4 and G5 are evaluated at several sites, some after the stop. Section 3.1 now declares one row per site, and section 3.5 covers the post-stop sites. The markers tie every site |
