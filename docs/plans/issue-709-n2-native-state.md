@@ -1,7 +1,7 @@
 ---
 title: N2 — minimal native-state transactions and recovery
-status: proposed
-last_updated: 2026-10-22
+status: accepted
+last_updated: 2026-10-25
 ---
 
 # N2 — minimal native-state transactions and recovery
@@ -9,8 +9,9 @@ last_updated: 2026-10-22
 Tracking: [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709).
 Parent: [release reduction, sections 4 and 7](issue-709-release-reduction.md).
 Baseline: `8986936d9136fb7c7c7545f808543ceffe91dffd`.
-This is a design submission, not implementation or deployment approval.
-N1 and P3 must land before implementation is integrated. N3 owns the final
+This approved design does not approve implementation integration or deployment.
+The implementation base after N1 and P3 is
+`d3a0801370a11c6e84d566f92a549154369dbac2`. N3 owns the final
 recovery-table renderer and exhaustive phase property test; N2 must already
 provide working recovery commands and interruption tests.
 
@@ -31,6 +32,8 @@ The maintenance contract is cooperative: the updater exclusively owns the
 managed service's stop/start and managed home mutations until recovery ends.
 Independent Codex writers, manual starts during maintenance, modifications
 of an operation's files, and concurrent use of an old tool are unsupported.
+Replacing an installed release with `--allow-dirty` while an updater run
+is queued or holds `.lock.update` is unsupported.
 Boot starts of the enabled unit are in scope: a persisted intent must precede
 exposing a release/home pair that may run. An empty managed cgroup does not
 establish absence of independent writers.
@@ -358,6 +361,31 @@ Once terminal, the tool and target cease to be state-derived protection. Current
 protection remains the install/updater's independent rule. Do not protect
 every release ever mentioned by a historical record.
 
+The updater's common release-prune block, reached by both state-aware
+forward and ordinary update, takes `.lock.links` and then requires
+`readlink "$root/current"` to equal `releases/$id`, the release activated by
+this run. If it differs or cannot be read, remove no releases, report that
+the actual current link target (or an explicit unreadable marker), the
+expected `releases/$id`, and that pruning was skipped (a later update
+retries). Stop through the existing `kaoiro_die` path with exit 75, matching
+failure to acquire the links lock; do not print `$id` on stdout or reach
+the trailing "is running release" message. The message must not claim that
+the activated release is still running. This check precedes the
+protected-set read and every deletion. Execute the reader at the fixed
+physical path
+`$root/releases/$id/deploy/kaoiro-runner-codex-state.mjs`, not through
+`current` or the original physical tool directory. Keep the lock through
+the read and deletion: install replacement checks the same lock and cannot
+replace the checked current release. Reader failure remains exit 78 with
+nothing deleted. In an ordinary update the target reader may be pre-N2;
+this is safe because N2 preflight/guard refuse to activate a pre-N2 target
+while a retained v2 snapshot exists, subject to section 1's unsupported
+concurrent tool-replacement limit. Keep the original pinned tool for every
+in-flight state action; terminal source-only protection does not change. The running shell
+continues reading its already-open updater script safely because install
+removes and recreates a release directory rather than overwriting that
+script in place.
+
 Record publication and removal of protection happen under `.lock.links`,
 the same lock held by install replacement and release prune. Exercise two
 real concurrent contenders, including install versus snapshot publication,
@@ -522,12 +550,48 @@ project's runner typecheck and full test suite in the remote test environment:
   snapshot publication, no protection gap; completed target/tool becomes
   prunable but snapshot source does not. Pre-N2 tool capability must refuse
   with a retained snapshot even when native hashes match.
+- Common release-prune reader controls, using shipped updater/install code
+  with a recording manager: (1) after a state-aware forward completes,
+  replace a third dirty physical tool with an archive containing the actual
+  pre-N2 helper before prune; (2) repeat with an ordinary update and a
+  retained snapshot from an earlier forward. In each case compare an
+  unchanged-tool control, require the installer to succeed, and preserve
+  the retained snapshot and its source release. For each path separately,
+  mutating the reader back to the original tool must fail the source
+  preservation assertion. (3) Move current away from this run's activated
+  release before the prune lock is acquired: exit 75 with the skip message
+  and no release deletion; removing the current check must make this test
+  fail. (4) Make the selected physical reader fail: exit 78 and no release
+  deletion; treating failure as an empty protected set must make this test
+  fail. Retain existing unfinished tool/target protection and terminal
+  source-only projection tests. These are reader-selection checks, not
+  evidence about native execution or service-manager lifetimes.
 - Mutate one new guard/phase-ordering branch or caller wiring at a time;
   corresponding tests must fail, then restore and rerun. At minimum remove
   the durable-intent write, the path comparison, the prune identity guard,
   and the pre-v2 source/activation checks separately. Run mutations remotely.
 
 ## 9. Observation and limits
+
+The development-only `--allow-dirty` replacement excluded by section 1 is
+not mechanically refused throughout an updater run. These fresh reads of
+the physical tool remain within that documented limit:
+
+- Ordinary update: nested install, preflight, and switch (including the
+  switch helper's guard). A third tool release need not be current,
+  previous or protected by a state record during these reads.
+- State-aware update before `prepare` / `prepare-restore` records the tool:
+  nested install, the tool's `VERSION`, and the prepare helper itself.
+  In-flight record protection starts only after preparation is published.
+
+Review inferred, without measuring these earlier-read windows, that replacing
+the ordinary tool with pre-N2 code could bypass the N2 preflight/guard,
+activate a pre-N2 target, and let that target's prune reader under-report v2
+protection. How a pre-N2 helper handles state-aware prepare arguments was
+not established and may fail closed. The shared prune reader rule is defence
+in depth; it does not establish safety for every unsupported replacement
+window. A mechanical prohibition on replacing an installed release while an
+updater owns `.lock.update` is outside N2's scope.
 
 Measured on 2026-10-22 with the appendix recipe, using the production
 `codex-snapshot.mjs` functions and the real shell `kaoiro_lock_acquire` from

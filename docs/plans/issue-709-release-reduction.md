@@ -322,7 +322,7 @@ unprotected by design.
 
 | Id | Invariant | Why start/resume depends on it |
 |---|---|---|
-| B1 | The runner refuses Codex launches when `CODEX_HOME` is unusable, with a reason | otherwise every wrapper crash-loops (`codex-home.md`) |
+| B1 | The runner refuses Codex launches when `CODEX_HOME` is unusable, with a reason; state-aware operations require explicit next-start `CODEX_HOME`, and an absent explicit home refuses Codex spawn during replacement | otherwise every wrapper crash-loops (`codex-home.md`) |
 | B2 | A switch to a release with a different Codex native hash happens only in one of three forms: (a) **safe forward**: a verified snapshot of the stopped home exists, then the candidate's native opens the home; (b) **never-started return**: the candidate's start was never requested, so the source restarts on the untouched home; (c) **restore**: the candidate's start was requested or its state is unknown, so the home is restored from the snapshot before the source starts. Any other differing-native switch refuses | an older binary on state that a newer binary may have migrated is the start/resume risk (U1); the code-only return in (b) is safe only when the candidate never had the chance to open the home |
 | B3 | Restore never brings back older credentials (`auth.json`, `.credentials.json`, `secrets/`, `mcp-oauth-locks/`); the current entries are moved, not copied or read | an older refresh token can be revoked, and the wrapper then cannot authenticate |
 | B4 | A snapshot never includes credentials, and unknown home entries refuse rather than being copied blindly | an unrecognized credential-bearing file would be rolled back by restore (B3) |
@@ -375,8 +375,8 @@ Codex peers.
 | S13 | Code-only recovery for a never-started candidate; unchanged-source restart (`restartSource`) | B2, B9 | simplify (N2) | one rule over the durable phase: `prepared` or `snapshot-verified` (start never requested) → restart the source on the untouched home; `start-intent` without `completed` (started or unknown) → restore from the snapshot. An updater death is classified by the saved phase alone |
 | S14 | Legacy (pre-receipt) record handling and ignored `barriers/` | none | retire (N2) | the new helper refuses while any old record is non-terminal or any old reference is unretired (section 4.4) |
 | S15 | Retirement with a gate-6 evidence file; `abandon` with owner-state checks | none | simplify (N2) | `prune <root> <uuid>` deletes a retained snapshot and marks it retired, no evidence file. A forward that failed before writing its snapshot is `failed` and does not block the next update, so `abandon` disappears |
-| S16 | Release prune protection for references and unfinished transactions (`protected`) | B9 | keep (N2) | narrowed to retained snapshots' source releases and an in-flight replacement |
-| S17 | `acceptedForwardTransaction` export for the completion collector | none | retire (N2, after P3) | removed with P3 |
+| S16 | Release prune protection for references and unfinished transactions (`protected`) | B9 | keep (N2) | narrowed to retained snapshots' source releases; unfinished forwards additionally protect source, target and physical tool, and unfinished restores protect source, admission release and tool; terminal records release historical target/tool protection |
+| S17 | `acceptedForwardTransaction` export for the completion collector | none | retire (N2, after P3) | P3 removes the collector consumers; N2 removes the export and its direct test |
 | S18 | Snapshot privacy (0700/0600, same user), restore at the original canonical path | B3, B8 | keep | |
 
 The result keeps nine invariants with one small record type, and drops the

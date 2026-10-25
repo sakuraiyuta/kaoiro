@@ -170,6 +170,20 @@ order. **Stopping happens only immediately before switching**; build and expansi
 never touch the active release. If build or expansion fails, it **never reaches
 stop** and the old runner keeps running.
 
+Exit 75 after the start step means activation and startup already happened,
+but release pruning was skipped: either `.lock.links` was busy or `current`
+no longer named this run's activated release when prune acquired that lock.
+For a changed `current`, the error reports its observed link target and the
+expected target; it does not report the expected release as still running.
+Check `readlink "$install_root/current"` and the normal runner identity
+checks before choosing the next operation. A later update retries pruning.
+The updater stops on its error path, so it does not print a successful
+release ID on stdout in either exit-75 case.
+Distinguish the pre-work exit 75 for a held `.lock.update` by the lock name
+in stderr: a post-start skip instead names `.lock.links` or reports changed
+current. An ordinary update has already printed its starting-service line;
+a state-aware forward has already recorded `completed`.
+
 `--detach` queues the update as a transient **service** unit via
 `systemd-run --user --no-block`. **Always use it when running from an agent under
 the runner**; without it, stopping the runner kills the caller and later steps
@@ -235,16 +249,18 @@ this operation. Prepare a verified physical tool-release path before updating:
   --restore-codex-backup "$snapshot_dir" --codex-home "$codex_home" --detach
 ```
 
-Same-native, code-only switching remains possible with the new guarded switch
-when there are no retained state references or incomplete transactions. See
-[the same-native command](production.md#5-rollback). A failed switch with a
-verified snapshot and a forward phase of `snapshot-verified` or
-`switch-authorized` uses code-only source recovery: the candidate has not been
-started, so home and credentials stay in place. The original phase, state,
-release and home bindings are checked again by the switch guard. If startup
-absence cannot be proved, recovery restores the verified snapshot. Both paths
-restart the recorded source only after verification and report a failed update. A snapshot or recovery failure leaves the service stopped. Never
-restart old code against potentially migrated state.
+Same-native code-only switching remains possible when no operation is
+unfinished, including when a v2 snapshot is retained. A retained v2 snapshot
+forbids activating a pre-N2 tool even with the same native hash. First install
+an N2-capable release with the same native; source and target must both carry
+N2 capability before a state-aware forward. See
+[the same-native command](production.md#5-rollback).
+
+Before durable `start-intent`, recovery returns only to the recorded source
+without replacing its home. Once that intent exists, recovery restores the
+verified snapshot even if the candidate might not actually have started.
+Never restart old code against potentially migrated state. Preserve the named
+home/staging/aside trees after failure and use the recovery commands below.
 
 ### Second-level recovery: fresh setup
 
@@ -267,7 +283,7 @@ old binary against the failed migrated database. For a new installation root,
 reinstall the unit with `ExecStart` pointing to that root's `current` launch
 shim, run `systemctl --user daemon-reload`, and verify static unit/environment
 home binding before startup and MainPID home binding afterward. Do not reuse
-the former installation's acceptance or binding records.
+the former installation's operation records as authority for the new home.
 
 Before restarting, the operator must preserve the recorded source/tool releases
 and archive the installation's `codex-state` registry into a private diagnostic
@@ -275,7 +291,7 @@ directory under both update/links locks. This manual registry reset is allowed
 only after confirming that the installation's records all belong to this
 home/unit. If that scope cannot be established, preserve the entire old
 installation and provision a fresh installation instead. Do not edit hashes,
-phases or receipts, or claim that an old acceptance certifies the new home.
+or phases to authorize the new home.
 Recreate configuration, instruction links and hook trust, then have the
 operator log in. Start Codex peers as explicitly new sessions and verify their
 first turn and hook/profile marker; old session IDs must remain visibly missing.
@@ -322,35 +338,42 @@ the updater never takes its target from inherited `CODEX_HOME`:
 ```
 
 The helper requires unified cgroup v2 before stop. After stop it requires the unit
-to be inactive and `MainPID` to be 0, and checks for `populated 0` when the unit's
+to be inactive or failed with `MainPID` 0, and checks for `populated 0` when the unit's
 `ControlGroup` has a `cgroup.events` file. A failed check refuses the update and
 attempts to resume the unchanged source when its recorded phase permits. Keep apt,
 add-apt-repository and other root operations outside the runner's cgroup. Do not
 use pattern-based kill pipelines or automatic sudo cleanup.
 
-Forward backup requires the source runner to be active for live home binding.
-A snapshot failure means a nonzero worker exit and no switch. If this worker
-stopped an active source and the transaction is still `prepared`, `stopped`, or
-`restore-prepared`, it attempts to resume that unchanged source under the update
-and links locks. Restart requires the original current link, verified release,
-home identity and service/environment binding. The worker verifies active state,
-MainPID, live home binding and release identity after start. A successful recovery
-still fails the update and reports `unchanged source was resumed`; a stop failure
-with the source still running reports `unchanged source remains running` without
-a duplicate start. A restore that began stopped is not started on an abort.
-Recovery refusal, failed start or failed verification requires operator inspection;
-it is never reported as successful recovery. After restore intent, home or
-credential replacement, switch authorization or possible target startup, use the
-existing state-aware recovery procedure instead of ordinary source restart.
-Inspect
-the journal and private `codex-state/transactions/<uuid>.json`. A forward that
-stopped before its snapshot wrote anything blocks every later update until it
-is [abandoned](#abandoning-a-forward-that-never-wrote-its-snapshot). A post-start
-failure requires state-aware recovery. Directory replacement and code switching
-are separate operations: retain staging/quarantine trees and transaction
-records after interruption, especially if credentials have moved. Do not use a
-recursive scratch cleanup on these paths. Use `inspect <install-root> <uuid>`
-with the fixed state helper to read the recorded recovery paths.
+Forward backup requires an active source runner. State-aware operations
+require explicit nonempty next-start `CODEX_HOME`; the canonical requested,
+live and next-start paths must agree. A live default uses the running
+process's actual `HOME`, not the next-start environment. The selected unit ID
+must also agree. A token, comment or file-inode change at the same home path
+does not invalidate a retained snapshot. The helper interprets supported
+literal unit/environment settings and refuses unsupported shell expressions.
+
+The operation record is private
+`codex-state/v2/records/<uuid>.json`. The forward phases are `prepared`,
+`snapshot-verified`, `start-intent`, then `completed`; a never-started return
+records `failed` before restarting the source. The updater marks `completed`
+only after verifying active state, positive MainPID, current release, verified
+artifact and live/next-start home agreement. This verifies the runner start,
+not a Codex turn or history resume. Perform those checks separately.
+
+A pre-start snapshot failure returns a nonzero worker result and attempts to
+resume the unchanged source. It verifies the source link/artifact and home
+path before restart, then verifies the running service. A failed start or
+post-start check is not reported as successful recovery. A restore aborted
+before replacement restarts its admission release only if admission began
+active; a restore that began stopped stays stopped on that abort. A stop
+failure preserves its nonzero service-manager status. Transitional or unknown
+activity refuses subsequent mutation.
+
+Inspect the worker journal and selected record. Directory replacement and
+code selection have separate checkpoints. Keep snapshot, staging, aside and
+record paths after interruption; never remove them as scratch. `updaterPid`
+is diagnostic and does not authorize recovery. An unfinished operation blocks
+rival forward, restore, switch and prune operations.
 
 The snapshot excludes `auth.json`, `.credentials.json`, `secrets/` and
 `mcp-oauth-locks/`. Restore moves their current entries without reading or
@@ -395,209 +418,116 @@ the next update at preflight **and full state restore** when the current home is
 inventoried before promotion. Unknown temporary names also remain fail closed;
 neither their prefix nor zero-byte contents authorize disposal.
 
-Successful runner startup leaves the transaction `awaiting-acceptance`.
-Perform actual Codex startup and applicable pre-existing history checks, or
-explicitly verify a new session after accepting history loss. Record their
-observed result in a private mode-0600 JSON file with `schema: 1`, the transaction
-`uuid`, its `nativeHash`, `codexStart: true`, and either `history: true` or
-`explicitNewSession: true`. Then run:
+### Resume and recover
+
+Use the recorded physical tool release, not a `current` symlink that may have
+changed. Select the operation by UUID:
 
 ```sh
-node --experimental-vm-modules \
-  "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
-  accept "$install_root" "$transaction_uuid" "$acceptance_file"
+node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
+  inspect "$install_root" "$transaction_uuid"
+"$tool_release/deploy/kaoiro-runner-update.sh" \
+  --install-dir "$install_root" --resume-codex-transaction "$transaction_uuid"
+# Or choose recovery instead:
+"$tool_release/deploy/kaoiro-runner-update.sh" \
+  --install-dir "$install_root" --recover-codex-transaction "$transaction_uuid"
 ```
 
-Acceptance publishes one self-contained receipt in the accepted transaction
-record: `bindingReceiptVersion: 1`, a unique `sequence`, and an `acceptance`
-object with `version`, `evidenceHash`, `accepted` and the static `binding`
-captured after startup, including the observed home device/inode. The receipt,
-the terminal phase and the sequence are saved in one atomic write, so a failed
-acceptance leaves the transaction `awaiting-acceptance` with no receipt. The
-evidence file is an operator attestation, not a model turn performed by the
-helper. The helper independently checks current release/hash and live/static
-home binding. Subsequent updates require both backup arguments while any
-reference is retained.
+`resume` continues the recorded operation without reinstalling or rebuilding.
+`recover` returns a never-started forward to its unchanged source, cancels a
+`restore-prepared` attempt before replacement, or restores an unfinished forward in
+`start-intent`. Both commands use the recorded service and home; they do not
+select a new target from current configuration. `--detach` remains available.
 
-No other record carries the accepted home identity. The helper never reads,
-writes, repairs or deletes `codex-state/barriers`; files left there by older
-tools, well-formed or not, are ignored and stay untouched, and the
-`repair-barrier` action is rejected as an unknown action. Run every state
-action from a verified physical tool release that contains this behavior: an
-older pinned tool still runs its old code, and installing a new release does
-not change a tool path already in use.
+Restore explicitly selects any retained snapshot with
+`--restore-codex-backup`. There is no newest-only rule or historical receipt
+chain. Verify the payload, UUID, canonical home and original source/target
+release IDs/hashes before stopping. The snapshot's source release must still
+verify. Each admitted restore appends a new attempt and aside path to the
+same operation record. Consecutive and repeated selected restores are allowed.
 
-The native pin comparison does not depend on any state record. A differing
-pin is refused by the switch and the updater with no registry at all, and a
-retained reference still forces the state-aware path.
-
-### Restore lineage and receipts
-
-Restore takes the newest not-yet-restored reference for the home. A managed
-restore replaces the home directory, so the next restore needs the identity the
-previous one produced. The helper takes it from the latest accepted transaction
-for that home, ordered by `sequence`. That receipt is used only when its
-transaction is the selected one or was prepared after it, its target release
-and native hash equal the current verified release, its unit is the selected
-snapshot's unit and, for a recovery, its original forward and backup reference
-are settled. Only the home device/inode come from the receipt. Every other
-field is compared with the selected snapshot's own recorded binding, so a
-replaced home, another unit or a changed `runner.env` is refused before the
-runner stops. After A to B to C, restoring C to B and accepting it admits B to
-A with no extra file. A newer accepted event that does not match is never
-skipped in favor of an older one.
-
-Retirement keeps the receipt of a retired forward, and the releases named only
-by retired history need not exist for the receipt to be read.
-
-Accepting a restore or code recovery first marks its backup reference
-restored, then its original forward transaction, and only then publishes its
-own receipt. If a step fails, the recovery stays `awaiting-acceptance` without
-a receipt. Until the same `accept` command is run again while the runner is
-running the recorded target, these entry points refuse, each with its own
-message:
-
-| Entry point | Message |
-|---|---|
-| Forward update | `Recover or accept the previous Codex state transaction first` |
-| Code-only switch and updater preflight | `Unresolved Codex transaction requires recovery` |
-| New restore, and the guard and pre-start check of another transaction | `Unresolved Codex recovery requires acceptance or operator recovery` |
-| Retirement of the original reference | `Recovery still depends on this snapshot` |
-
-If an `accept` run reports a failure but the recovery already shows `restored`
-with a receipt, do not accept it again; the sequence is assigned once.
+`restore-prepared` builds a verified sibling staging directory. After
+`replace-intent`, rename the live home aside and move current credential
+entries into staging. If an expected credential exists in both locations or
+neither, preserve both trees and refuse. Save `startRequested` while the home
+is absent; select the source release under the links lock before publishing
+the staged home. An absent explicit home makes the runner refuse Codex spawn.
+Once the home has been published, a boot may write it: resume does not repeat
+replacement or compare mutable state/credential contents against staging.
+Successful post-start checks mark `restored`. All earlier asides remain named,
+including after cancellation, another restore and prune.
 
 ### Editing the runner environment
 
-With no retained reference and no unresolved transaction, editing `runner.env`
-does not block a same-native code-only update. Code-only preflight does not
-detect a changed `CODEX_HOME`; moving the home is a separately approved
-operation. State-aware prepare proves the requested and live home itself, and
-an in-flight transaction's binding stays strict, so do not edit the file while
-a transaction is unresolved.
+A same-native code-only update requires no unfinished operation, and does not
+prove home-path agreement. State-aware admission and resume compare the
+canonical requested/recorded path with live and next-start settings. Editing
+`runner.env` in place or by rename is allowed when those paths and the
+selected service still agree. A new inode at the same canonical home path is
+also allowed; this check does not authenticate historical directory identity.
+Moving homes remains a separately approved relocation. Do not edit records
+or snapshot hashes to bypass a mismatch.
 
-With a retained reference, restoring an older snapshot needs every recorded
-static binding field to be exactly restorable. `sourceHash` covers the whole
-file, so a token, comment or formatting change counts, and so does the file's
-device/inode. An editor that writes a temporary file and renames it changes the
-inode, and restoring the old text later does not restore the old inode. Only an
-in-place revert that keeps the inode and every other field passes; do not rely
-on an ordinary undo. Never edit snapshot or transaction fields to excuse a
-mismatch.
+### Old records and barriers
 
-Before editing, decide whether to keep the rollback points. To keep them, leave
-the file and its identity unchanged until those references are restored or
-retired. There is no rebind command. If the edit is needed, take a new
-state-aware forward snapshot under the new configuration, accept it, then
-retire each older reference that can no longer be restored; retirement does not
-compare configuration. The new snapshot covers only the later state. If the
-forward cannot be verified or recovered, keep the runner stopped and use the
-fresh setup above.
+N2 does not convert schema-1 records. Before first activation on a host,
+resolve every old unfinished transaction and retire every old retained backup
+with its previous physical tool. The new reader examines only old `phase`
+and `retired`: all transactions must be `completed`, `restored` or `retired`,
+and all backups must have `retired: true`. Obsolete receipt damage does not
+block that projection. Unknown, unreadable, unfinished or retained old records
+refuse mutation and release-protection output with the filename and previous
+tool guidance. Read-only `inventory <install-root>` lists old and v2 filenames.
+Old directories remain untouched. The first N2 deployment must use the same
+native hash; a pre-N2 source cannot enter an N2 state-aware forward.
 
-### Legacy records
+Files under `codex-state/barriers` are inert: the helper never reads, writes,
+repairs or deletes them. `accept`, `retire`, `abandon`, `repair-barrier` and
+the old per-step actions are unknown actions. There is no acceptance evidence,
+receipt, owner-PID authorization or automatic abandonment.
 
-Transactions written before receipts have no `bindingReceiptVersion`. They stay
-readable and still count for the unresolved and retained-reference checks, but
-they never supply a restored-home identity and are never converted. State-aware
-prepare refuses while a legacy reference is retained. Restoring a legacy
-reference, accepting a legacy transaction, recovering legacy unfinished work,
-and restoring when the latest accepted event for the home is legacy and was
-prepared after the selected snapshot all refuse before the runner stops
-(`Legacy Codex transaction requires operator recovery or retirement`). An older
-legacy event does not apply: the snapshot's own recorded binding is used
-unchanged. A record that claims the receipt version but has an incomplete or
-unknown receipt is corruption, not legacy, and every scan refuses it.
+### Prune and owned staging cleanup
 
-The exits are: explicit retirement of a terminal legacy reference (below),
-after which a new independent forward snapshot captures its own binding; or,
-when the lineage cannot be abandoned or recovered, the operator-approved fresh
-setup above. A corrupt modern record cannot be retired either; its exit is the
-scoped full-registry archive or a fresh installation. Preserve diagnostic
-records and releases, and never edit fields to make a record pass.
-
-### Retirement
-
-Retirement requires accepted gate-6 snapshot/fresh-setup recovery results
-(not old-binary compatibility with migrated databases), actual production
-startup, applicable history or explicit new-session checks, and explicit
-abandonment of rollback. Supply a private JSON record
-with `schema: 1`, `uuid`, and true `gate6`, `productionCodexStart`,
-`abandonRollback`, plus either `productionHistory: true` or
-`explicitNewSession: true`, to
-`retire <install-root> <uuid> <evidence-file>`. The helper acquires update/link
-locks, refuses while a recovery still depends on the snapshot, marks the
-reference retired before deleting its named snapshot, and keeps the
-transaction record and its receipt. Releases needed by other references stay
-protected from prune/replacement. Manual deletion of protected releases is
-prohibited.
-
-### Abandoning a forward that never wrote its snapshot
-
-A state-aware update can abort after `prepare` and before its snapshot exists,
-for example when the stopped runner's cgroup still holds a process. The updater
-reports a failed update and whether the unchanged source was resumed, remains
-running, or could not safely be restarted. Every later update refuses before stopping the runner with
-`Recover or accept the previous Codex state transaction first`. When
-`summary <install-root> <uuid>` shows mode `forward` and phase `prepared` or
-`stopped`, the transaction changed nothing but its own record, and `abandon`
-retires it:
-
-1. Inspect the worker journal, transaction and source service status, then remove
-   the cause of the abort. If the worker already verified source recovery, no
-   manual start is needed. If it remains stopped, establish that the current
-   release, home and configuration are unchanged and no state replacement or
-   target startup was attempted before starting the source manually
-   (`systemctl --user start kaoiro-runner`). The retried forward backup needs it active.
-2. Install, without activating it, a release whose tool has `abandon`; the
-   release you are updating to will do. Installing does not consult
-   unresolved transactions, so the stranded one does not block it.
-3. Abandon the transaction with that release's tool:
-
-   ```sh
-   node --experimental-vm-modules \
-     "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
-     abandon "$install_root" "$transaction_uuid"
-   ```
-
-4. Check that `summary` reports phase `retired`, and that `inspect` shows the
-   `abandonment` entry: the phase it left and its `ownerStatus`, `absent` or
-   `pid-reused` (the PID now belongs to another process).
-5. Retry the update with the same tool release.
-
-`abandon` takes the update and links locks, and refuses everything else: a mode
-other than forward, any other phase, a live owner (its PID running with the
-recorded start time), a staging path other than the one `prepare` assigned,
-and an existing snapshot, staging directory or backup reference. Those cases
-may hold state and are outside `abandon`; never edit or move the record to make
-it pass. A `stopped` forward whose snapshot copy failed leaves only its staging
-directory: the snapshot reads the home and never writes it, so the home is
-unchanged, but no helper action clears that transaction. Report it to the
-operator, who decides between moving the staging directory, unmodified, to
-private storage and then running `abandon`, and the fresh setup.
-
-If `abandon` refuses with `EEXIST` on `.lock.update` or `.lock.links`, an
-updater may have died (SIGKILL, host restart) without releasing the lock.
-When `.lock.update` contains only `codex-owner.json`, first check for a
-surviving build directory: cleanup deliberately keeps the update lock if
-removing that directory failed, even after the release records were moved.
-Before removing it, confirm that the detached update unit
-(`<service>-update.service`, `kaoiro-runner-update.service` for the default
-service) is not running, that no update, install or switch you started and no
-`kaoiro-runner-codex-state.mjs` process is still running, and that no process
-has the `owner.pid` recorded in `.lock.update/codex-owner.json`, if that file
-exists. Then remove it and run `abandon` again:
+Explicitly discard a terminal operation's snapshot with:
 
 ```sh
-rm -r "$install_root/.lock.update"   # may still hold codex-owner.json
+node "$tool_release/deploy/kaoiro-runner-codex-state.mjs" \
+  prune "$install_root" "$transaction_uuid"
+```
+
+Prune requires no history evidence and can remove a corrupt owned snapshot.
+It records durable `prune-intent`, the exact path, root device/inode and logical
+size before recursive removal. Retry after partial deletion without expecting
+an intact payload: an absent root completes retirement, while a symlink or
+reused root refuses. It keeps the operation record and every aside. Retained
+snapshots protect only their source release; unfinished operations additionally
+protect source, target/from and the physical tool. Historical terminal target
+and tool releases do not remain protected solely by that record.
+
+Owned staging removal is separately recorded with path, size and a pending
+flag before deletion. A failed removal remains visible and retryable through
+recovery/prune. Unrecorded orphan directories are not silently adopted or
+deleted. Manual removal of protected releases is prohibited.
+
+### Stale operation locks
+
+Operations acquire `.lock.update`, then `.lock.links` for record/link changes.
+A held lock is never stolen. After worker death or boot, inspect the exact
+worker/unit and paths before removing only its stale locks. Confirm that no
+update/install/switch/helper you started remains alive and that the detached
+`<service>-update.service` is not running. A build-directory cleanup failure
+can deliberately retain `.lock.update`; inspect and preserve that directory
+before clearing the lock. PID reuse or absence is not a state transition.
+Then run the recorded physical updater's resume or recover command.
+
+```sh
+rmdir "$install_root/.lock.update"
 rmdir "$install_root/.lock.links"
 ```
 
-Removing `.lock.update` also discards its release owner, audit and proof
-files. Preserve them privately first when investigating an interrupted update;
-completed runs retain their evidence under `<install-root>/release-audits/`.
-
-Remove only the lock that `abandon` reported. A lock directory is not a state
-record, so removing it does not edit Codex state.
+A lock directory is not an operation record. Preserve every named snapshot,
+staging and aside tree while investigating; removing a stale lock does not
+settle an operation or justify changing its phase.
 
 ## See Also
 

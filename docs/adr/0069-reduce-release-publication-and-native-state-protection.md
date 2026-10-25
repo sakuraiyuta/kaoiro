@@ -66,7 +66,12 @@ Proposed; the inventory, boundary, landing units and measurements are in the
    migration diagnostics, file-identity binding of the unit and `runner.env`
    (the home path checks stay), and evidence-gated retirement and
    abandonment. The phase machine shrinks to eight states and records move to
-   `codex-state/v2/`; old records are never converted.
+   `codex-state/v2/`; old records are never converted. State-aware operations
+   require explicit next-start `CODEX_HOME`; an absent explicit home refuses
+   Codex spawn during replacement. Retained snapshots protect their source;
+   unfinished forwards also protect target/tool, and restores protect the
+   admission release/tool. Explicit terminal snapshot prune keeps records and
+   every aside, with retryable durable deletion intent.
 
 ## Consequences
 
@@ -82,8 +87,9 @@ Proposed; the inventory, boundary, landing units and measurements are in the
   Editing `runner.env` without changing the home path no longer strands
   rollback points. Restoring an older
   snapshot is allowed and quarantines newer threads.
-- The six slow runner files are deleted or reduced to about 15 workflow
-  cases; the CI effect is measured after the native units land.
+- The four receipt/lineage/legacy suites retire after their retained invariants
+  pass in replacement tests, including interruption and boot boundaries. The
+  CI effect is measured after the native units land.
 - [Issue #707](https://github.com/sakuraiyuta/kaoiro/issues/707) should not start; closing or re-scoping it is proposed. Its target is retired only when N2 lands.
   [Issue #695](https://github.com/sakuraiyuta/kaoiro/issues/695) L1b, L4 and L5
   are unaffected by the boundary; L2 and L3 are re-scoped to the smaller

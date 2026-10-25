@@ -1,6 +1,6 @@
 ---
 title: N2 — case-level test migration inventory
-status: proposed
+status: accepted
 last_updated: 2026-10-25
 ---
 
@@ -15,10 +15,16 @@ its destination/guard, even if it also removes receipt/lineage assertions.
 **D** removes a retired contract and explains why. Internal loops/assertions
 are included in the row's disposition; they are not additional Vitest cases.
 
-`W` means `runner/test/codexStateWorkflow.test.ts`; `S` means
-`runner/test/codexState.test.ts`. The suffixes name intended describe groups,
-not new test files. Keep `codexHomeClassification.test.ts` and wrapper home
-validation tests unchanged; add explicit-home integration coverage in W.
+`W` names the workflow integration destinations and `S` the primitive
+`runner/test/codexState.test.ts` destinations. Most W groups live in
+`runner/test/codexStateWorkflow.test.ts`; restore-selection, source-recovery,
+restore-resume, boot ordering, credential movement and restore cancellation
+live in `runner/test/codexStateRecovery.test.ts`. Both files remain in the
+integration tier. `codexStateKeepSafety.test.ts` retains N1's source-recovery
+fault controls. The suffixes below are logical destinations; the final
+implementation evidence must identify the concrete test names and results.
+Keep `codexHomeClassification.test.ts` and wrapper home validation tests
+unchanged; add explicit-home integration coverage in W.
 Reconcile new/changed cases from N1/P3 before implementation deletes anything.
 In particular, N1's surviving S13 restart, stop-failure and pre-stop activity
 cases must join W.source-recovery/W.stopped and the G10/G21 mutations.
@@ -59,7 +65,7 @@ Positive-only cases also name their paired negative control here.
 | G11 | S.ignored-barriers: reconnect a stale-barrier read/authority or removal at a state action; valid/damaged/dangling barrier twins must detect effects and preserve old objects |
 | G12 | S.snapshot/W.snapshot-binding: independently bypass payload and manifest hash verification, omit WAL copying, or probe migration DB in place; corruption refusal and original-byte checks must fail |
 | G13 | S.classification/W.classification: omit unknown-name, credential-symlink, external-session checks separately; drop migration-state classification or include runtime locks; corresponding classification assertion must fail |
-| G14 | S.capacity/W.capacity: omit logical bytes, reserve, diagnostic-copy bytes/inodes, or post-stop recheck separately; refuse before the next copy/stop boundary specified in each case; sparse controls must not perform giant copies |
+| G14 | S.capacity/W.capacity: omit logical bytes, reserve, snapshot/restore copy bytes/inodes, or post-stop recheck separately; refuse before the next copy/stop boundary specified in each case; sparse controls must not perform giant copies |
 | G15 | S.path-parser/W.path-agreement: skip unsupported-expression refusal or ignore manager-selected environment file; literal and alternate-file twins must fail without executing shell payloads |
 | G16 | S.pin-guard/W.pin-guard/W.same-pin: bypass native equality or backup requirement; cross-pin actions must fail with zero links/stop, same-pin terminal snapshots do not force state-aware update |
 | G17 | S.artifact: bypass dangling-current, resolver agreement, native uniqueness/existence and required-runtime-member checks separately; each corresponding negative control fails, prose-only edits pass |

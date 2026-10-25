@@ -44,6 +44,15 @@ covers only the server operation: also verify actual runner registration,
 required wrapper acceptance and any high-risk canary before recording release
 tags and notes. See [Build identity and release tags](../../operations/build-identity-and-release-tags.md).
 
+## Runner Codex state operations
+
+Runner native-state records use schema 2 in `codex-state/v2/records/`.
+`completed` and `restored` mean the updater's runner start checks passed;
+neither proves a Codex model turn or history resume. There is no completion
+receipt or acceptance evidence. The durable phase distinguishes never-started
+source recovery from snapshot replacement after possible native startup.
+See [resume and recover](../../operations/runner-update-and-rollback.md#resume-and-recover).
+
 ## Delivery policy placement artifact
 
 A prepare targeting the delivery policy store records

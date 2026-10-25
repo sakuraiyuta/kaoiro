@@ -69,6 +69,12 @@ host user's `~/.claude` credentials and Codex home (`~/.codex`, or the
 directory `CODEX_HOME` names in `runner.env`; see [Codex home for production](codex-home.md)) and spawns wrappers inside that user's repositories
 ([ADR-0023](../adr/0023-host-runner-architecture.md)).
 
+State-aware Codex updates require explicit nonempty `CODEX_HOME` in the
+next-start environment and the same canonical path in the running service.
+For a first N2 activation, use the same native hash and resolve old unfinished
+transactions/retained backups with the previous physical tool first. See
+[Codex state backup](runner-update-and-rollback.md#codex-state-backup).
+
 **Do not write tokens in the unit/plist**. The launch shim reads from a 0600 env file.
 `token` is also masked as `token=<REDACTED>` in Phoenix transport logs.
 
