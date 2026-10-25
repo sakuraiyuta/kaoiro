@@ -546,6 +546,7 @@ defmodule KaoiroServer.WorkSettingsTest do
       assert {:ok, %{restart: :permanent}} = :supervisor.get_childspec(sup, WorkStore)
       assert {:error, :work_settings_corrupt} = WorkStore.get_settings(authorize(), name)
       assert WorkSettings.message(:work_settings_corrupt) == @corrupt
+      assert {:error, :work_settings_corrupt} = assign(name, "blocked-new-assignment")
 
       assert {:error, :work_settings_corrupt} =
                WorkStore.set_settings(authorize(), 0, %{@nom => 0}, name)
@@ -727,5 +728,31 @@ defmodule KaoiroServer.WorkSettingsTest do
     {:ok, _} = Supervisor.restart_child(sup, WorkStore)
     assert {:error, :work_settings_corrupt} = assign(name, "target")
     assert rows(name) == Enum.sort([neighbor, invalid])
+  end
+
+  test "restoring an invalid pre-repair backup cannot be repaired by ordinary restart" do
+    {sup, name, path} = store()
+    assert {:ok, _} = assign(name, "retained")
+    neighbors = rows(name)
+    :ok = Supervisor.terminate_child(sup, WorkStore)
+    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+    :ok = :dets.insert(name, {WorkSettings.key(), :bad})
+    :ok = :dets.sync(name)
+    :ok = :dets.close(name)
+    backup = path <> ".invalid-backup"
+    File.cp!(path, backup)
+    {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+    :ok = :dets.delete(name, WorkSettings.key())
+    :ok = :dets.sync(name)
+    :ok = :dets.close(name)
+    {:ok, _} = Supervisor.restart_child(sup, WorkStore)
+    assert rows(name) == neighbors
+    :ok = Supervisor.terminate_child(sup, WorkStore)
+    File.cp!(backup, path)
+    {:ok, pid} = Supervisor.restart_child(sup, WorkStore)
+    assert {:error, :work_settings_corrupt} = assign(name, "after-backup-restore")
+    assert Process.whereis(name) == pid
+    assert [{_, :bad}] = :dets.lookup(name, WorkSettings.key())
+    assert rows(name) == Enum.sort([{WorkSettings.key(), :bad} | neighbors])
   end
 end
