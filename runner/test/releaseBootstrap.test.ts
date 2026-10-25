@@ -24,11 +24,12 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -249,18 +250,29 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
     });
   });
 
-  it.each(["invalid", "directory", "dangling"])("ignores a retired %s descriptor during bootstrap dry-run", (kind) => {
+  it.each(["invalid", "directory", "dangling", "exporter"])("ignores a retired %s descriptor during bootstrap dry-run", (kind) => {
     mkdirSync(root, { recursive: true });
     const descriptor = join(root, "release-authority.json");
+    const marker = join(root, "exporter-called");
     if (kind === "invalid") writeFileSync(descriptor, "not JSON");
     else if (kind === "directory") mkdirSync(descriptor);
-    else symlinkSync(join(root, "missing-descriptor"), descriptor);
+    else if (kind === "dangling") symlinkSync(join(root, "missing-descriptor"), descriptor);
+    else {
+      const exporter = join(root, "legacy-exporter.mjs");
+      writeFileSync(exporter, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);`);
+      writeFileSync(descriptor, JSON.stringify({
+        schema: 1, install_root: realpathSync(root), transport: "local", recording_hostname: hostname(),
+        root: realpathSync(root), tool_sha256: "a".repeat(64), exporter_path: exporter,
+        node_path: realpathSync(process.execPath), node_major: Number(process.versions.node.split(".")[0]),
+      }), { mode: 0o600 });
+    }
     const archive = makeReleaseTarball(work, revisionOf("legacy-bootstrap"));
     const result = bootstrap([archive, "--dry-run"]);
     expect(result.status).toBe(0);
     expect(result.stderr.match(/enrollment is retired; legacy release descriptor ignored/g)).toHaveLength(1);
     expect(existsSync(join(root, "current"))).toBe(false);
     expect(readCalls()).toEqual([]);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("a legacy-descriptor metadata failure warns without blocking bootstrap dry-run", () => {

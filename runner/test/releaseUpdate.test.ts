@@ -47,12 +47,13 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -817,11 +818,21 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     expect(readdirSync(join(root, "releases"))).toContain(old1);
   });
 
-  it.each(["invalid", "directory", "dangling"])("ignores a legacy %s descriptor throughout an ordinary worker", kind => {
+  it.each(["invalid", "directory", "dangling", "exporter"])("ignores a legacy %s descriptor throughout an ordinary worker", kind => {
     const descriptor = join(root, "release-authority.json");
+    const marker = join(root, "exporter-called");
     if (kind === "directory") mkdirSync(descriptor);
     else if (kind === "dangling") symlinkSync(join(root, "missing-legacy"), descriptor);
-    else writeFileSync(descriptor, "not JSON");
+    else if (kind === "invalid") writeFileSync(descriptor, "not JSON");
+    else {
+      const exporter = join(root, "legacy-exporter.mjs");
+      writeFileSync(exporter, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);`);
+      writeFileSync(descriptor, JSON.stringify({
+        schema: 1, install_root: realpathSync(root), transport: "local", recording_hostname: hostname(),
+        root: realpathSync(root), tool_sha256: "a".repeat(64), exporter_path: exporter,
+        node_path: realpathSync(process.execPath), node_major: Number(process.versions.node.split(".")[0]),
+      }), { mode: 0o600 });
+    }
     const history = join(root, "production-attempts");
     mkdirSync(history);
     writeFileSync(join(history, "attempt.json"), "unfinished legacy bytes");
@@ -835,6 +846,7 @@ describe("kaoiro-runner-update.sh (issue #219)", () => {
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
     expect(readFileSync(join(history, "attempt.json"), "utf8")).toBe("unfinished legacy bytes");
     expect(existsSync(join(history, ".lock.server"))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("retired runner flags fail before queue, stop or link changes", () => {

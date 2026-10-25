@@ -16,11 +16,12 @@ import {
   mkdtempSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -55,19 +56,30 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(["invalid", "directory", "dangling"])("a direct switch ignores a legacy %s descriptor", kind => {
+  it.each(["invalid", "directory", "dangling", "exporter"])("a direct switch ignores a legacy %s descriptor", kind => {
     seed(A); seed(B);
     symlinkSync(`releases/${A}`, join(root, "current"));
     const descriptor = join(root, "release-authority.json");
+    const marker = join(root, "exporter-called");
     if (kind === "directory") mkdirSync(descriptor);
     else if (kind === "dangling") symlinkSync(join(root, "missing-legacy"), descriptor);
-    else writeFileSync(descriptor, "not JSON");
+    else if (kind === "invalid") writeFileSync(descriptor, "not JSON");
+    else {
+      const exporter = join(root, "legacy-exporter.mjs");
+      writeFileSync(exporter, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);`);
+      writeFileSync(descriptor, JSON.stringify({
+        schema: 1, install_root: realpathSync(root), transport: "local", recording_hostname: hostname(),
+        root: realpathSync(root), tool_sha256: "a".repeat(64), exporter_path: exporter,
+        node_path: realpathSync(process.execPath), node_major: Number(process.versions.node.split(".")[0]),
+      }), { mode: 0o600 });
+    }
     const result = run(B);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr.split("\n").filter(line => line === "kaoiro: enrollment is retired; legacy release descriptor ignored")).toHaveLength(1);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     expect(existsSync(join(root, ".lock.update"))).toBe(false);
     expect(existsSync(join(root, ".lock.links"))).toBe(false);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("current を切り替え、旧 release を previous に残す", () => {
