@@ -22,6 +22,9 @@ true = config[:work_receipts_per_principal] == 1024
 id = fn -> "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}" end
 for {key, mode} <- [{"work_nominated_per_principal", :nomination}, {"work_active_per_assignee", :active}] do
   maximum = settings.effective[key]
+  variable = if mode == :active, do: "KAOIRO_WORK_ACTIVE_PER_ASSIGNEE", else: "KAOIRO_WORK_NOMINATED_PER_PRINCIPAL"
+  expected = case System.get_env(variable) do nil -> 16; value -> String.to_integer(value) end
+  if maximum != expected, do: raise("runtime env-to-effective mismatch: #{variable} expected=#{expected} actual=#{maximum}")
   for index <- 1..17 do
     principal = if mode == :active, do: actor, else: %{"kind" => "agent", "id" => "director"}
     operation = %{"op" => "assign", "title" => "Release admission", "operation_id" => id.(), "assignee" => "active-target", "director" => actor}
