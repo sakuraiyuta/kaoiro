@@ -804,6 +804,49 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       )
     end
 
+    test "settings revision exhaustion is preserved at the channel reply boundary" do
+      operator = join_as(:operator)
+      assert_push("work_settings", %{"revision" => 0})
+      alias KaoiroServer.WorkSettings
+      state = :sys.get_state(WorkStore)
+      fallback = state.settings_fallbacks
+      actor = %{"kind" => "user", "id" => "ceiling-operator"}
+
+      saved =
+        Enum.reduce(0..99, WorkSettings.empty(), fn revision, object ->
+          {:ok, next} =
+            WorkSettings.update(
+              object, revision, %{"work_active_per_assignee" => rem(revision, 2)}, actor, fallback
+            )
+
+          next
+        end)
+
+      ceiling = 9_007_199_254_740_991
+      saved = %{
+        saved
+        | revision: ceiling,
+          changes: Enum.map(saved.changes, &%{&1 | revision: &1.revision + ceiling - 100})
+      }
+      assert :ok = WorkSettings.validate(saved)
+      :ok = :dets.insert(state.table, {WorkSettings.key(), saved})
+      :ok = :dets.sync(state.table)
+      :sys.replace_state(WorkStore, &%{&1 | settings: saved})
+
+      assert_reply(
+        push(operator, "set_work_settings", %{
+          "version" => "0",
+          "expected_revision" => ceiling,
+          "changes" => %{"work_active_per_assignee" => 2}
+        }),
+        :error,
+        %{reason: "revision_exhausted"}
+      )
+
+      assert :dets.lookup(state.table, WorkSettings.key()) == [{WorkSettings.key(), saved}]
+      refute_push("work_settings", %{})
+    end
+
     test "queued settings update rechecks the actual token before writing" do
       for token_config <- [
             "tok-operator:viewer,tok-viewer:viewer",
