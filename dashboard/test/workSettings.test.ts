@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { describe, expect, it } from "vitest";
 import { parseWorkSettings } from "../src/lib/workSettings";
 
