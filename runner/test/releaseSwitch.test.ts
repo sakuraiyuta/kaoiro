@@ -15,6 +15,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -67,6 +68,23 @@ describe("kaoiro-runner-switch.sh (issue #219)", () => {
     expect(result.stderr.split("\n").filter(line => line === "kaoiro: enrollment is retired; legacy release descriptor ignored")).toHaveLength(1);
     expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
     expect(existsSync(join(root, ".lock.update"))).toBe(false);
+    expect(existsSync(join(root, ".lock.links"))).toBe(false);
+  });
+
+  it("a descriptor metadata failure warns without blocking a direct switch", () => {
+    seed(A); seed(B);
+    symlinkSync(`releases/${A}`, join(root, "current"));
+    const preload = join(root, "metadata-failure.mjs"), marker = join(root, "metadata-denied"), node = join(root, "metadata-node");
+    writeFileSync(preload, `import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const original=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).endsWith('/release-authority.json')){fs.appendFileSync(${JSON.stringify(marker)},'EACCES\\n');const e=new Error('fixture denied');e.code='EACCES';throw e}return original(path,...args)};syncBuiltinESMExports();`);
+    const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+    writeFileSync(node, `#!/bin/sh\nexec ${quote(process.execPath)} --import ${quote(preload)} "$@"\n`);
+    chmodSync(node, 0o755);
+    const result = runScript(switchScript, [B, "--install-dir", root], { KAOIRO_NODE: node });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("EACCES\n");
+    expect(result.stderr.trim()).toBe("kaoiro: enrollment is retired; legacy release descriptor ignored");
+    expect(readlinkSync(join(root, "current"))).toBe(`releases/${B}`);
+    expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
     expect(existsSync(join(root, ".lock.links"))).toBe(false);
   });
 

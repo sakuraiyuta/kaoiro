@@ -834,6 +834,17 @@ test("a descriptor metadata failure warns without restoring server admission", (
   assert.equal(Object.hasOwn(JSON.parse(result.stdout), "lockAuthorityError"), false);
 });
 
+test("a descriptor metadata failure warns without blocking server build dry-run", (t) => {
+  const world = makeWorld(t), preload = join(world.root, "metadata-failure.mjs"), marker = join(world.root, "metadata-denied");
+  writeFileSync(preload, `import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const original=fs.lstatSync;fs.lstatSync=(path,...args)=>{if(String(path).endsWith('/.kaoiro-release-authority.json')){fs.appendFileSync(${JSON.stringify(marker)},'EACCES\\n');const e=new Error('fixture denied');e.code='EACCES';throw e}return original(path,...args)};syncBuiltinESMExports();`);
+  const result = world.exec(["node", "--import", preload, world.cli, "build", "--target", world.target, "--dry-run", "--repo", world.work, "--config", world.config]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(marker, "utf8"), "EACCES\n");
+  assert.equal(result.stderr.trim(), "kaoiro: enrollment is retired; legacy release descriptor ignored");
+  assert.equal(JSON.parse(result.stdout).dryRun, true);
+  assert.equal(existsSync(world.backupRoot), false);
+});
+
 test("old retired metadata is ignored by actual printed resume while retained fields still bind", (t) => {
   const world = makeWorld(t);
   world.faults([{ match: "^compose build", kind: "fail" }]);
