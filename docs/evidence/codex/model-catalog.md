@@ -358,7 +358,7 @@ is not proof of actual entitlement for every account or plan.
 ### Pre-design native measurement
 
 On baseline `5526a42a825bd2787a6cf511d1f61a06d2b6afd8`, Node 24.3.0 and the
-0.161.0 native above, fuji ran `runCodexCli()` with its production factories
+0.161.0 native above, the measurement used `runCodexCli()` with its production factories
 on both exec and app-server. The outer Phoenix peer was a local loopback;
 RPC observers forwarded to the original implementation. Terra was declared
 through the existing extra-model mechanism, without injecting its default
