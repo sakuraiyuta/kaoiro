@@ -9,10 +9,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 export const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-locks"];
 // Prior references (rust-v0.156.1, rust-v0.159.3, rust-v0.160.0): state/src/sqlite.rs,
 // rollout/src, message-history/src/lib.rs, config/src, skills/src/lib.rs.
-// Lock/cache review (rust-v0.160.0, rust-v0.161.0): state/src/runtime/reclamation.rs;
-// cloud-config/src/cache.rs (excluded). The 0.161.0 root-writer review covers the
-// Rust delta, not every runtime path. Extension trees have no copy-all exemption;
-// their classification needs separate review.
+// Lock/cache references (rust-v0.164.0): state/src/runtime/reclamation.rs,
+// state/src/sqlite.rs, core/src/config/mod.rs, cloud-config/src/service.rs
+// and cloud-config/src/cache.rs (excluded). Native local-provider measurements
+// cover both backends, not every runtime path. Extension trees have no copy-all
+// exemption; their classification needs separate review.
 const DBS = ["state_5", "logs_2", "goals_1", "memories_1", "memories_v2_1", "queue_1", "thread_history_1"];
 const STATE_DIRS = new Set(["sessions", "archived_sessions", "db-backups", "memories", "memories_v2", "memories_extensions", "rules", "skills", "agents", "hooks", "model-profiles", "plugins"]);
 const STATE_FILES = new Set(["config.toml", "managed_config.toml", "AGENTS.md", "AGENTS.override.md", "history.jsonl", "session_index.jsonl", "installation_id", "hooks.json", ".sandbox_migration"]);

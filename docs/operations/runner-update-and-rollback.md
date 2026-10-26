@@ -388,10 +388,11 @@ plugin state separately and do not infer history loss from an empty catalog.
 
 The exact home-root name `.sqlite-maintenance.lock` is disposable, alongside
 `thread-writer-locks`. Codex uses it to elect one background reclamation worker
-per SQLite home (`sqlite_home`, which defaults to `CODEX_HOME`); this classification
-applies only to the name at the Codex home root. Both
-[0.160.0](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/state/src/runtime/reclamation.rs#L115-L130)
-and [0.161.0](https://github.com/openai/codex/blob/rust-v0.161.0/codex-rs/state/src/runtime/reclamation.rs#L26-L78)
+per target database parent directory. With no explicit `log_dir` or
+`sqlite_home`, the databases and their maintenance lock remain directly under
+`CODEX_HOME`; this classification applies only to that exact root name.
+[0.164.0 reclamation](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/state/src/runtime/reclamation.rs#L75-L148)
+and [database placement](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/state/src/sqlite.rs#L190-L219)
 create the file as needed and retain a kernel lock after acquiring ownership,
 without using its contents as persisted state. Snapshots omit it from both
 manifest and payload. Forward backup leaves its inode/content intact; full
@@ -399,20 +400,35 @@ restore leaves it in quarantine, and Codex recreates it in the restored home
 at its next ownership attempt. Replacing an active lock's inode can admit
 competing reclamation workers: do not delete or rename it to bypass refusal.
 
+An isolated, credential-free local-provider
+[measurement on 2026-10-27](https://github.com/sakuraiyuta/kaoiro/issues/817#issuecomment-6428858413)
+found the same 28 home-root names on 0.161.0 and 0.164.0 with both `exec` and
+`app-server`.
+Each case persisted a thread and completed turn; the existing classifier accepted
+all entries (23 state, 5 disposable), including the lock at the home root.
+Cloud-cache, daemon and plugin writer paths were not exercised by this check;
+the source-based exclusions and separate reviews below still apply.
+
 Use the recorded physical tool release whose classifier recognizes this lock
 for every state-aware operation, including rollback. Helpers without that
 classification refuse a lock-bearing home; switching back to older application
 code does not justify switching to an older, incompatible state helper or
 removing the lock.
 
+An explicitly configured `log_dir` can move the logs database and its lock
+([0.164.0 configuration](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/config/mod.rs#L4245-L4267)).
+Do not place it inside a disposable Codex home subtree such as `log`: that
+subtree classification would omit the logs database from the snapshot.
+Review custom database/log placement separately before changing configuration.
+
 `cloud-config-bundle-cache.json` and random home-root `.tmp` staging files remain
 unclassified. This exclusion assumes stored ChatGPT-token authentication with
 an ineligible workspace, without `CODEX_ACCESS_TOKEN`, workload identity, PAT,
-or agent identity overrides. Before logging into a Business/Edu/Enterprise
-workspace, migrating organizations, or selecting alternate authentication that
-could enable the cloud cache, complete a separate source-based classification
-review and install its compatible tool release. The
-[cache eligibility predicate](https://github.com/openai/codex/blob/rust-v0.161.0/codex-rs/cloud-config/src/service.rs#L52-L60)
+or agent identity overrides. Before logging into a Business/Edu/Enterprise or
+Sci/SciPlus workspace, migrating organizations, or selecting alternate
+authentication that could enable the cloud cache, complete a separate
+source-based classification review and install its compatible tool release. The
+[cache eligibility predicate](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/cloud-config/src/service.rs#L52-L64)
 guards both startup and background refresh. An unclassified cache can refuse
 the next update at preflight **and full state restore** when the current home is
 inventoried before promotion. Unknown temporary names also remain fail closed;
