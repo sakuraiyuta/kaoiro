@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog reference
 status: accepted
-last_updated: 2026-10-08
+last_updated: 2026-10-27
 related: [codex-exec-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -15,8 +15,9 @@ For model-change procedures, see [Codex model settings](../../operations/codex-m
 ## Advertised catalog
 
 [The plan table](../../evidence/codex/model-catalog.md#plan--available-model-2026-07-11-astra-column-added-2026-09-05-sol6luna6-columns-added-2026-09-23) is an **upstream availability snapshot**, not kaoiro's advertised
-catalog. The current kaoiro snapshot advertises Sol6.1 / Astra / Sol6 / Luna6 /
-Sol / Terra / Luna for ChatGPT Plus and above, Terra for Free/Go, and additionally
+catalog. The current kaoiro snapshot advertises Sol6.1 / Astra / Terra6.1 / Sol6 /
+Luna6 / Sol5.6 / Terra5.6 / Luna5.6 for ChatGPT Plus and above, Terra5.6 for
+Free/Go, and additionally
 only `gpt-5.5` and `gpt-5.4-mini` for API-key authentication. It deliberately
 does not advertise `gpt-5.3-codex-spark` or non-mini `gpt-5.4`; an operator
 can still declare an unadvertised model through `codex.extra_models`.
@@ -37,6 +38,14 @@ resynchronize its metadata.
 
 The advertised set is then filtered by the bundled Codex CLI version: an
 entry whose `minimal_client_version` is newer is not offered.
+
+`gpt-6.1-terra` comes from the signed-in remote catalog rather than bundled
+`models.json`. It supports `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`,
+with default effort `low`. Its `minimal_client_version=0.161.0` is kaoiro's
+verified floor for both exec and app-server, not an upstream minimum. The
+existing shared paid catalog also includes it for API-key authentication;
+actual entitlement remains account-dependent. See the
+[dated Terra evidence](../../evidence/codex/model-catalog.md#signed-in-remote-catalog-2026-10-27).
 
 ## Bundled 0.161.0 baseline
 

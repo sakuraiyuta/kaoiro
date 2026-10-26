@@ -1,7 +1,7 @@
 ---
 title: Codex model settings
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-27
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -47,8 +47,10 @@ Codex CLI help:
 - One-off override: `codex -m gpt-6.1-sol "..."`
 - Dot notation: `codex -c model="gpt-5.6-luna" "..."`
 
-`gpt-6.1-sol` is in kaoiro's curated catalog and can be selected directly; it
-does not need an `extra_models` declaration.
+`gpt-6.1-sol` and `gpt-6.1-terra` are in kaoiro's curated catalog for paid
+ChatGPT plans and API-key authentication and can be selected directly. They
+do not need an `extra_models` declaration. Terra 6.1 requires the bundled CLI
+to be at least 0.161.0; Free/Go continue to advertise `gpt-5.6-terra` only.
 
 The same flags pass to subcommands such as `codex exec` / `codex mcp-server`
 (and to kaoiro through `@openai/codex-sdk`). Under ChatGPT auth, however,

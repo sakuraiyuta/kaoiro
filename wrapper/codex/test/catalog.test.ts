@@ -11,6 +11,20 @@ import {
   resolveCodexCatalog,
 } from "../src/catalog.js";
 
+const terraRemoteSnapshot = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/terra_remote_2026-10-27.json", import.meta.url),
+    "utf8",
+  ),
+) as {
+  model: {
+    slug: string;
+    description: string;
+    default_reasoning_level: string;
+    supported_reasoning_levels: { effort: string }[];
+  };
+};
+
 const values = (authMode: "chatgpt" | "apikey" | "unknown", plan?:
   | "free"
   | "go"
@@ -37,6 +51,10 @@ describe("resolveCodexCatalog", () => {
       {
         value: "gpt-6-astra",
         description: "Frontier intelligence for the most demanding work.",
+      },
+      {
+        value: "gpt-6.1-terra",
+        description: "GPT-6.1 Terra Codex model.",
       },
       {
         value: "gpt-6-sol",
@@ -108,6 +126,51 @@ describe("resolveCodexCatalog", () => {
     },
   );
 
+  it("matches Terra metadata and advertised efforts to the signed-in remote capture", () => {
+    const catalog = resolveCodexCatalog("chatgpt", "plus");
+    const captured = terraRemoteSnapshot.model;
+    const efforts = captured.supported_reasoning_levels.map(
+      ({ effort }) => effort,
+    );
+    expect(catalog[2]).toMatchObject({
+      value: captured.slug,
+      display_name: "GPT-6.1-Terra",
+      description: captured.description,
+      effort_levels: efforts,
+      default_effort: captured.default_reasoning_level,
+      minimal_client_version: "0.161.0",
+    });
+    expect(effortLevelsForModel(catalog, captured.slug)).toEqual(efforts);
+  });
+
+  it.each([
+    ["0.160.0", false],
+    ["0.161.0", true],
+  ] as const)("gates Terra at CLI %s (included=%s)", (version, included) => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      for (const authMode of ["chatgpt", "apikey"] as const) {
+        const catalog = resolveCodexCatalog(authMode, "plus", undefined, version);
+        expect(
+          catalog.some(({ value }) => value === "gpt-6.1-terra"),
+        ).toBe(included);
+      }
+      if (included) {
+        expect(() =>
+          assertCuratedModelCompatible("gpt-6.1-terra", undefined, version),
+        ).not.toThrow();
+      } else {
+        expect(() =>
+          assertCuratedModelCompatible("gpt-6.1-terra", undefined, version),
+        ).toThrow(CodexClientVersionTooOldError);
+      }
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it.each(["free", "go"] as const)("ChatGPT %s は Terra のみ", (plan) => {
     expect(values("chatgpt", plan)).toEqual(["gpt-5.6-terra"]);
   });
@@ -115,11 +178,12 @@ describe("resolveCodexCatalog", () => {
   it.each(
     ["plus", "pro", "prolite", "promax", "business", "enterprise"] as const,
   )(
-    "ChatGPT %s は Sol6.1 / Astra / Sol6 / Luna6 / Sol / Terra / Luna (upstream priority順)",
+    "ChatGPT %s follows remote priority for paid models",
     (plan) => {
       expect(values("chatgpt", plan)).toEqual([
         "gpt-6.1-sol",
         "gpt-6-astra",
+        "gpt-6.1-terra",
         "gpt-6-sol",
         "gpt-6-luna",
         "gpt-5.6-sol",
@@ -133,6 +197,7 @@ describe("resolveCodexCatalog", () => {
     expect(values("apikey")).toEqual([
       "gpt-6.1-sol",
       "gpt-6-astra",
+      "gpt-6.1-terra",
       "gpt-6-sol",
       "gpt-6-luna",
       "gpt-5.6-sol",
@@ -232,6 +297,7 @@ describe("resolveCodexCatalog", () => {
     ["gpt-5.6-luna", "0.144.0"],
     ["gpt-6-astra", "0.153.0"],
     ["gpt-6.1-sol", "0.153.0"],
+    ["gpt-6.1-terra", "0.161.0"],
     ["gpt-6-sol", "0.155.0"],
     ["gpt-6-luna", "0.155.0"],
     ["gpt-5.5", "0.124.0"],

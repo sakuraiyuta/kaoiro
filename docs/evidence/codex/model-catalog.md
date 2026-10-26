@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog evidence
 status: accepted
-last_updated: 2026-10-01
+last_updated: 2026-10-27
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -317,3 +317,73 @@ The three rollout JSONL files above have SHA-256 values, in direct/exec/app-serv
 order: `b44b4479578887c0c497f370af7ecced64ea0374b1123c280606612e95bae871`,
 `47fb63012ddda5bf699f30d69924dbb64fd3756828d17a91b6812029897c4838`, and
 `6d65e0d77c9f421991029222c04a82b619ee8c599fadeb229c57c0626fe0d951`.
+
+
+## Signed-in remote catalog (2026-10-27)
+
+Source: signed-in ChatGPT `codex debug models`, retrieved at
+2026-10-26 20:01:50.726 UTC (2026-10-27 JST), using npm Codex CLI 0.161.0.
+The native SHA-256 was
+`9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c`.
+The Terra row's selected public fields are preserved in
+[`terra_remote_2026-10-27.json`](../../../wrapper/codex/test/fixtures/terra_remote_2026-10-27.json),
+SHA-256 `ae1e4b44e7a4b6ee939c902bf1b82f49dcc233eec789cf4687353c8f7f7244f2`.
+Tests compare ordered effort values and the default against this independent
+capture rather than a constructed model row or an effort count.
+
+| Slug | Remote priority | Remote default effort | Description |
+|---|---:|---|---|
+| `gpt-6.1-sol` | 1 | low | Latest workhorse model for coding and everyday work. |
+| `gpt-6-astra` | 2 | medium | Frontier intelligence for the most demanding work. |
+| `gpt-6.1-terra` | 3 | low | GPT-6.1 Terra Codex model. |
+| `gpt-6-sol` | 4 | medium | Previous generation workhorse model. |
+| `gpt-6-luna` | 5 | medium | Fast and affordable model for easier tasks. |
+| `gpt-5.6-sol` | 6 | low | Older generation workhorse model. |
+| `gpt-5.6-terra` | 8 | medium | Older balanced model for straightforward work. |
+| `gpt-5.6-luna` | 9 | medium | Older fast and efficient model. |
+
+Terra 6.1 has `visibility=list`, ordered supported efforts
+`[low, medium, high, xhigh, max, ultra]`, and no upstream
+`minimal_client_version`. It is absent from bundled `models.json` at the
+0.161.0 and 0.164.0 tags. Only its new curated row uses this remote metadata;
+existing rows retain their previous bundled source. Remote Astra now defaults
+to `medium`, while its curated default remains `low`; synchronizing that
+default is outside this catalog addition. The legacy Terra description is
+unchanged in this capture.
+
+kaoiro advertises Terra 6.1 to Plus-and-above and through the same shared list
+to API-key authentication. Free/Go retain only Terra 5.6. Catalog inclusion
+is not proof of actual entitlement for every account or plan.
+
+### Pre-design native measurement
+
+On baseline `5526a42a825bd2787a6cf511d1f61a06d2b6afd8`, Node 24.3.0 and the
+0.161.0 native above, fuji ran `runCodexCli()` with its production factories
+on both exec and app-server. The outer Phoenix peer was a local loopback;
+RPC observers forwarded to the original implementation. Terra was declared
+through the existing extra-model mechanism, without injecting its default
+effort. Each backend completed this five-stage sequence in one session:
+
+| Stage | Observed result |
+|---|---|
+| Luna baseline, effort unspecified | Nonce-matched assistant final |
+| Select Terra, effort unspecified | Nonce-matched assistant final; native model Terra |
+| Terra, explicit `medium` | Nonce-matched assistant final; native effort medium |
+| Unknown slug | HTTP 400 / `model_not_found`; `switch_error.rolled_back_to` was Terra |
+| Next turn without selecting a model again | Nonce-matched assistant final; same session, native Terra / medium |
+
+The final exec run was 19:52:57.592–19:53:10.598 UTC on October 26;
+app-server was 19:53:11.572–19:53:20.777 UTC. Each had four completed turns
+and one intended failure. App-server resolved the unspecified Terra effort
+through `config/read` (no configured effort), then the live `model/list`
+Terra `defaultReasoningEffort=low`; `turn/start` and native `turn_context`
+both recorded `low`. The live response also independently returned the same
+ordered effort array. Exec did not expose its unspecified effort in the native
+context, so that value is not claimed.
+
+Authentication used an approved owner-only isolated copy of ChatGPT sign-in
+state; config, sessions and databases were not copied. No auth-file update
+was observed before, during or after the run. The isolated state was deleted
+afterward. These observations support 0.161.0 as a kaoiro-verified floor for
+both backends, independent of the separate pin update; they do not establish
+an upstream minimum or incompatibility below 0.161.0.

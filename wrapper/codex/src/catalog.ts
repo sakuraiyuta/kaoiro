@@ -15,16 +15,11 @@ export type ChatGptPlan =
   | "business"
   | "enterprise";
 
-// Snapshot from openai/codex main (2026-07-13, gpt-6-astra added from a
-// 2026-09-05 re-fetch — issue #292, gpt-6-sol/gpt-6-luna added and existing
-// rows' descriptions re-synced from a 2026-09-23 re-fetch — issue #399).
-// Fetched 2026-09-30 and re-fetched 2026-10-01 00:08:06 UTC; both
-// openai/codex models.json snapshots have SHA-256
-// fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b.
-// openai_models.rs defines the ReasoningEffort wire vocabulary and ModelInfo
-// fields; per-model values live in codex-rs/models-manager/models.json and
-// are copied here so catalog advertisement never depends on a runtime
-// model/list probe (ADR-0035 H3).
+// Existing rows use the bundled models.json snapshot documented in
+// docs/evidence/codex/model-catalog.md (SHA-256 fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b).
+// TERRA_61 uses the signed-in remote catalog captured on 2026-10-27;
+// it is absent from bundled models.json. Advertisement stays static so it
+// never requires a runtime model/list probe (ADR-0035 H3).
 const SOL: EngineModelInfo = {
   value: "gpt-5.6-sol",
   display_name: "GPT-5.6-Sol",
@@ -70,6 +65,16 @@ const SOL_61: EngineModelInfo = {
   minimal_client_version: "0.153.0",
 };
 
+// The remote row declares no minimum; this floor is kaoiro's verified baseline.
+const TERRA_61: EngineModelInfo = {
+  value: "gpt-6.1-terra",
+  display_name: "GPT-6.1-Terra",
+  description: "GPT-6.1 Terra Codex model.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
+  minimal_client_version: "0.161.0",
+};
+
 const SOL_6: EngineModelInfo = {
   value: "gpt-6-sol",
   display_name: "GPT-6-Sol",
@@ -88,10 +93,9 @@ const LUNA_6: EngineModelInfo = {
   minimal_client_version: "0.155.0",
 };
 
-// Ordered by upstream models.json `priority` (Sol 6.1 1, Astra 2, Sol 6 3,
-// Luna 6 4, gpt-5.6-sol 5, gpt-5.6-terra 8, gpt-5.6-luna 9). This
-// transcription follows that source order.
-const CHATGPT_PLUS_MODELS = [SOL_61, ASTRA, SOL_6, LUNA_6, SOL, TERRA, LUNA];
+// Remote priority: Sol 6.1 1, Astra 2, Terra 6.1 3, Sol 6 4, Luna 6 5,
+// gpt-5.6-sol 6, gpt-5.6-terra 8, gpt-5.6-luna 9.
+const CHATGPT_PLUS_MODELS = [SOL_61, ASTRA, TERRA_61, SOL_6, LUNA_6, SOL, TERRA, LUNA];
 // kaoiro advertises only Terra on Free/Go; paid plans share the curated
 // catalog. See docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];
