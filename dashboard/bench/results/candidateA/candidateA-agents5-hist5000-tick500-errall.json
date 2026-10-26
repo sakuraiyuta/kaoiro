@@ -61,7 +61,7 @@
       "before": 1135,
       "after": 1135
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-before.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-before.zip",
     "typingError": null,
     "readFailed": false,
     "keystrokes": {
@@ -126,7 +126,7 @@
       "before": 1135,
       "after": 1135
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-after.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-after.zip",
     "typingError": null,
     "readFailed": false,
     "keystrokes": {

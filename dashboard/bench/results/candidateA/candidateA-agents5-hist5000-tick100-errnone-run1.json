@@ -62,7 +62,7 @@
       "before": 1134,
       "after": 1254
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-before.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-before.zip",
     "typingError": null,
     "readFailed": false,
     "keystrokes": {
@@ -127,7 +127,7 @@
       "before": 1134,
       "after": 1259
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-after.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-after.zip",
     "typingError": null,
     "readFailed": false,
     "keystrokes": {

@@ -61,7 +61,7 @@
       "before": 1163,
       "after": 1163
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-before.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-before.zip",
     "typingError": null,
     "keystrokes": {
       "completed": 30,
@@ -125,7 +125,7 @@
       "before": 1163,
       "after": 1163
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-after.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-after.zip",
     "typingError": "locator.type: Timeout 120000ms exceeded.\nCall log:\n  - waiting for locator('textarea').first()\n    - locator resolved to <textarea rows=\"2\" class=\"svelte-1scy0gf\" aria-label=\"instruction for agent-viewed\" placeholder=\"指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)\"></textarea>\n  - elementHandle.type(\"a\")\n",
     "keystrokes": {
       "completed": 4,

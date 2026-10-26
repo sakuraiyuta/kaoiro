@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // resolveHealthUrl), which tracks whatever the operator actually
   // configured. An explicit override still wins.
   health_url: null,
-  // Clean-stop expectation (S1 / yuta ruling 2026-09-06): "measured on a
+  // Clean-stop expectation (S1 / operator ruling 2026-09-06): "measured on a
   // dev host, not assumed" (docs/operations/server-update-and-rollback.md 4.3
   // step 5). `null` here is
   // deliberate — until commit (e)'s dev-host self-test fixes a real

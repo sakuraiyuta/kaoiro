@@ -61,7 +61,7 @@
       "before": 1134,
       "after": 1134
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-before.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-before.zip",
     "typingError": null,
     "keystrokes": {
       "completed": 30,
@@ -125,7 +125,7 @@
       "before": 1134,
       "after": 1134
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-after.zip",
+    "tracePath": "dashboard/bench/results/candidateA/trace-after.zip",
     "typingError": null,
     "keystrokes": {
       "completed": 30,

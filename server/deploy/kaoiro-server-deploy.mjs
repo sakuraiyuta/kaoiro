@@ -6,7 +6,7 @@
 // gate) — the no-downtime steps, ending right before the stop window.
 // The COMMIT half (stop/archive/up/health-poll/retention) and
 // `rollback`/`status` land in later commits (commit split agreed with
-// yuta 2026-09-06).
+// operator 2026-09-06).
 import { createHash } from "node:crypto";
 import { execChildSync } from "../../runner/deploy/child-process-environment.mjs";
 import {
@@ -2071,7 +2071,7 @@ function checkCapacity(bin, container, backupRoot, config) {
  *  transaction that already reached ENV_CONSISTENCY_CHECKED keeps its
  *  recorded observation and the flag is ignored for it.
  *
- *  CHECKPOINT-BEFORE-MUTATION (S1 item ii, yuta ruling 2026-09-06):
+ *  CHECKPOINT-BEFORE-MUTATION (S1 item ii, operator ruling 2026-09-06):
  *  every fact this function learns is written durably via advancePhase()
  *  — which itself calls writeJournal()'s writeFileDurably() (M3) —
  *  BEFORE the next step runs, so the COMMIT half's real Docker mutations

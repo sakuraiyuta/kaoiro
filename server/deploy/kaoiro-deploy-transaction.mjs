@@ -21,7 +21,7 @@ const TERMINAL_PHASES = new Set(["done", "rolled_back"]);
  *  scan's only job is finding an in-progress transaction of THIS CLI's
  *  own making.
  *
- *  TWO things stop the scan outright instead of being skipped (yuta
+ *  TWO things stop the scan outright instead of being skipped (operator
  *  ruling 2026-09-06, S1 items iii/iv): a directory name disagreeing
  *  with its own journal's `transaction_id`, and a journal that fails
  *  the state-machine check (unknown phase, bad observation shape,

@@ -51,7 +51,7 @@ describe("agy stream-json adapter", () => {
       kind: "tool_use",
       tool_use_id: "agy:ca0121a0-4da1-4069-8aa5-58b3b4ea62f2:2",
       tool_name: "list_dir",
-      input: { DirectoryPath: "/home/yuta/.gemini/antigravity-cli" },
+      input: { DirectoryPath: "/home/user/.gemini/antigravity-cli" },
     });
     expect(events.flatMap(agyEventToLogs)).toContainEqual({
       kind: "tool_result",

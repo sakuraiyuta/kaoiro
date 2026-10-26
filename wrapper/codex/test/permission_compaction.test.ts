@@ -22,8 +22,9 @@ describe("permission observations across real compaction records", () => {
     try {
       process.env.CODEX_HOME = hostile;
       // A fresh process uses the production homedir root and the compiled
-      // reader. The recorded SDK contexts are replayed byte-for-byte; no
-      // permission resolver or observation result is injected.
+      // reader. The recorded SDK contexts are replayed as stored (only the
+      // home prefix is synthetic, see the fixture README); no permission
+      // resolver or observation result is injected.
       const source = `
         import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs';
         import { join } from 'node:path';

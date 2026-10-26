@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 
 // Exported (not just module-local) so kaoiro-deploy-phase.mjs's
-// per-phase observation schemas (S1 item i, yuta ruling 2026-09-06) can
+// per-phase observation schemas (S1 item i, operator ruling 2026-09-06) can
 // validate a journal entry's `old_sha`/`target_sha`/`image_id`/
 // `compose_artifact` against the SAME domains this file enforces on the
 // manifest — one definition of "what a SHA/image id looks like", not

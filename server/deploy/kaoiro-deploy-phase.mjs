@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Canonical phase list and transition table for `update` (issue #306,
-// yuta ruling 2026-09-06, S1 items iii/iv). The generic journal schema
+// operator ruling 2026-09-06, S1 items iii/iv). The generic journal schema
 // (kaoiro-deploy-journal.mjs) deliberately keeps `phase` a free-form
 // string — the phase LIST is a state-machine concern, not a storage-
 // format one, and belongs here instead.

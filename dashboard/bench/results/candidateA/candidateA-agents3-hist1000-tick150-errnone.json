@@ -57,7 +57,7 @@
       "before": 1121,
       "after": 1121
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-before.zip"
+    "tracePath": "dashboard/bench/results/candidateA/trace-before.zip"
   },
   "after": {
     "rafLatencyMs": {
@@ -112,6 +112,6 @@
       "before": 1121,
       "after": 1121
     },
-    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-after.zip"
+    "tracePath": "dashboard/bench/results/candidateA/trace-after.zip"
   }
 }
