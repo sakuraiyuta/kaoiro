@@ -1153,8 +1153,10 @@ defmodule KaoiroServer.DeliveryStates do
   # and starts empty after a restart, when a channel of the same agent and
   # generation that bound earlier still holds a token the entry no longer
   # carries (issue #512); so the token decides, and the pid must only not
-  # contradict a bind this process has seen. The bare-term shape keeps the
-  # pre-token rule and is never accepted on an empty `owners`.
+  # contradict a bind this process has seen. The bare pid shape keeps the
+  # pre-token rule and is never accepted on an empty `owners`; any other
+  # term is not an owner at all (an empty `owners` would otherwise equal a
+  # bare `nil`).
   defp owns_recovery?(state, id, generation, {owner, token}) when is_pid(owner) do
     case state.entries[id] do
       %{generation: ^generation, resync: true, binding_token: expected}
@@ -1166,12 +1168,14 @@ defmodule KaoiroServer.DeliveryStates do
     end
   end
 
-  defp owns_recovery?(state, id, generation, owner) do
+  defp owns_recovery?(state, id, generation, owner) when is_pid(owner) do
     case state.entries[id] do
       %{generation: ^generation, resync: true} -> state.owners[id] == owner
       _ -> false
     end
   end
+
+  defp owns_recovery?(_state, _id, _generation, _owner), do: false
 
   defp valid_ranges?(ranges, cutoff, issued)
        when is_list(ranges) and is_integer(cutoff) and cutoff >= 0 and cutoff <= issued do

@@ -1906,15 +1906,44 @@ defmodule KaoiroServer.DeliveryStatesTest do
     } do
       token = bound_with_issued(name)
       restart_ledger(name, path)
+      before = DeliveryStates.get("recipient", name)
 
-      assert {:error, :stale_delivery_owner} =
-               DeliveryStates.acknowledge("recipient", @gen, self(), 1, name)
+      # A bare `nil` equals the empty owner cache and must not count as the
+      # recorded owner; neither may any other non-pid term.
+      for owner <- [self(), nil, :not_an_owner, "owner", {nil, token}, {:not_a_pid, token}] do
+        assert {:error, :stale_delivery_owner} =
+                 DeliveryStates.acknowledge("recipient", @gen, owner, 1, name)
 
-      assert {:error, :stale_delivery_owner} =
-               DeliveryStates.acknowledge("recipient", @gen, {nil, token}, 1, name)
+        assert {:error, :stale_delivery_owner} =
+                 DeliveryStates.resync("recipient", @gen, owner, 3, [[2, 2]], name)
 
-      assert {:error, :stale_delivery_owner} =
-               DeliveryStates.acknowledge("recipient", @gen, {:not_a_pid, token}, 1, name)
+        assert {:error, :stale_delivery_owner} =
+                 DeliveryStates.retire_owned_generation("recipient", @gen, owner, name)
+
+        refute DeliveryStates.owns_delivery?(
+                 "recipient",
+                 @gen,
+                 owner,
+                 DeliveryStates.incarnation("recipient", name),
+                 name
+               )
+      end
+
+      assert DeliveryStates.get("recipient", name) == before
+      assert :sys.get_state(name).owners["recipient"] == nil
+    end
+
+    test "a bare nil or atom is rejected while an owner is recorded", %{name: name} do
+      _token = bound_with_issued(name)
+      before = DeliveryStates.get("recipient", name)
+
+      for owner <- [nil, :not_an_owner] do
+        assert {:error, :stale_delivery_owner} =
+                 DeliveryStates.acknowledge("recipient", @gen, owner, 1, name)
+      end
+
+      assert DeliveryStates.get("recipient", name) == before
+      assert %{acked_seq: 1} = DeliveryStates.acknowledge("recipient", @gen, self(), 1, name)
     end
 
     test "a recorded live owner rejects another pid even with the right token", %{name: name} do
