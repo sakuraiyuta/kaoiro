@@ -1797,9 +1797,14 @@ defmodule KaoiroServer.DeliveryStatesTest do
   describe "binding token (issue #512)" do
     @gen "generation"
 
+    # Restarts the isolated ledger the way `setup` started it (linked, not
+    # supervised): a test here restarts it more than once, and a supervised
+    # child would be restarted by the test supervisor on the first stop and
+    # then collide with the next start. `setup`'s `on_exit` stops the last one.
     defp restart_ledger(name, path) do
       GenServer.stop(Process.whereis(name))
-      start_supervised!({DeliveryStates, name: name, path: path})
+      {:ok, _pid} = DeliveryStates.start_link(name: name, path: path)
+      :ok
     end
 
     defp bound_with_issued(name, owner \\ self()) do
