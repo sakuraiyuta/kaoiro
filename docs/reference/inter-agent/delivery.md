@@ -62,6 +62,17 @@ boundary that lost the old process memory, so the server atomically abandons old
 gaps with `acked_seq := issued_seq`. The sequence remains monotonic; nothing is
 resent to the new process.
 
+A skip-v1 bind also mints a server-held binding token, persisted with the
+recipient entry and returned only to the binding channel, which presents it
+on every acknowledgement, resync, stage report, yield claim and terminate-time
+retirement. A restart of the ledger process keeps the entry and the token, so
+the bound channel continues without rejoining, while a channel of the same
+agent and generation whose bind was superseded holds a token the entry no
+longer carries and is rejected. A row written before the token existed, or
+written back by an older server, carries no token and is rejected until the
+wrapper rejoins. A call that lands while the ledger process is absent still
+exits, and the wrapper reconnects.
+
 ### Negotiated gap recovery
 
 An additional join capability, `delivery_resync: "skip-v1"`, enables explicit

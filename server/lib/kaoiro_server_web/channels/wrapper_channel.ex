@@ -141,7 +141,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
       _ = KaoiroServer.DeliveryPolicies.ensure(agent_id)
-      delivery = bind_delivery(agent_id, params)
+      {delivery, binding_token} = bind_delivery(agent_id, params)
 
       modes =
         if(valid_delivery_modes?(params["inter_agent_delivery_modes"]),
@@ -230,6 +230,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
        |> assign(:notice_attribution, params["notice_attribution"] == "v1")
        |> assign(:activity_replay_id, nil)
        |> assign(:delivery_generation, params["delivery_generation"])
+       |> assign(:delivery_binding_token, binding_token)
        |> assign(:delivery_resync, delivery != nil and params["delivery_resync"] == "skip-v1")
        |> assign(:work_control, params["work_control"] == "v1")
        |> assign(
@@ -261,14 +262,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
     if params["delivery_resync"] == "skip-v1" do
       DeliveryStates.bind_resync(agent_id, generation, self())
     else
-      DeliveryStates.bind(agent_id, generation)
+      {DeliveryStates.bind(agent_id, generation), nil}
     end
   end
 
   defp bind_delivery(agent_id, _params) do
     :ok = DeliveryStates.disarm(agent_id)
-    nil
+    {nil, nil}
   end
+
+  # What this channel presents on every fenced ledger call: its pid and the
+  # token its own bind minted. The token, not the pid, is what the ledger
+  # can still verify after it restarted (issue #512).
+  defp delivery_owner(socket), do: {self(), socket.assigns[:delivery_binding_token]}
 
   # `PermissionSyncJoinRequest` (issue #305, protocol.md "Persistence,
   # join synchronization, and resume"): a wrapper that supports the
@@ -876,7 +882,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp handle_wrapper_in("delivery_stage", %{"generation" => generation} = payload, socket) do
     if socket.assigns[:delivery_modes] && socket.assigns.delivery_modes["stage_reports"] do
-      case DeliveryStates.report_stage(socket.assigns.agent_id, generation, self(), payload) do
+      case DeliveryStates.report_stage(
+             socket.assigns.agent_id,
+             generation,
+             delivery_owner(socket),
+             payload
+           ) do
         :ok -> {:reply, :ok, socket}
         {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
       end
@@ -948,7 +959,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
          socket
        ) do
     owner? =
-      DeliveryStates.owns_delivery?(socket.assigns.agent_id, generation, self(), incarnation)
+      DeliveryStates.owns_delivery?(
+        socket.assigns.agent_id,
+        generation,
+        delivery_owner(socket),
+        incarnation
+      )
 
     pair? =
       case DeliveryStates.message_status(nil, request["conversation_id"], request["turn_number"]) do
@@ -996,7 +1012,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         DeliveryStates.acknowledge(
           socket.assigns.agent_id,
           socket.assigns.delivery_generation,
-          self(),
+          delivery_owner(socket),
           seq
         )
       else
@@ -1027,10 +1043,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
     result =
       case payload["reason"] do
         nil ->
-          DeliveryStates.resync(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+          DeliveryStates.resync(
+            socket.assigns.agent_id,
+            generation,
+            delivery_owner(socket),
+            cutoff,
+            ranges
+          )
 
         "interrupted" ->
-          DeliveryStates.retire(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+          DeliveryStates.retire(
+            socket.assigns.agent_id,
+            generation,
+            delivery_owner(socket),
+            cutoff,
+            ranges
+          )
 
         _ ->
           {:error, :invalid_delivery_resync}
@@ -2579,7 +2607,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           case DeliveryStates.retire_owned_generation(
                  agent_id,
                  socket.assigns.delivery_generation,
-                 self()
+                 delivery_owner(socket)
                ) do
             {:ok, _status} -> broadcast_delivery_status(agent_id)
             {:error, :stale_delivery_owner} -> :ok

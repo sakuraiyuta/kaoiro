@@ -63,7 +63,12 @@ defmodule KaoiroServer.DeliveryStates do
     GenServer.call(server, {:bind, agent_id, generation})
   end
 
-  @doc "Binds resynchronization to the current channel owner and process generation."
+  @doc """
+  Binds resynchronization to the current channel owner and process
+  generation. Returns `{visible_state, token}`: the token is minted by this
+  bind, persisted with the entry and shown back by the channel as
+  `{pid, token}` on every fenced call; it is not part of the visible state.
+  """
   def bind_resync(agent_id, generation, owner, server \\ __MODULE__) do
     GenServer.call(server, {:bind_resync, agent_id, generation, owner})
   end
@@ -295,10 +300,11 @@ defmodule KaoiroServer.DeliveryStates do
         })
       end
       |> Map.put(:resync, true)
+      |> Map.put(:binding_token, :crypto.strong_rand_bytes(32))
 
     persist(state.table, agent_id, entry)
 
-    {:reply, public(entry),
+    {:reply, {public(entry), entry.binding_token},
      %{
        state
        | entries: Map.put(state.entries, agent_id, entry),
@@ -1142,6 +1148,24 @@ defmodule KaoiroServer.DeliveryStates do
     }
   end
 
+  # A channel presents `{pid, token}`: the token its bind minted and the
+  # entry persisted. `owners` is only this process's memory of the last bind
+  # and starts empty after a restart, when a channel of the same agent and
+  # generation that bound earlier still holds a token the entry no longer
+  # carries (issue #512); so the token decides, and the pid must only not
+  # contradict a bind this process has seen. The bare-term shape keeps the
+  # pre-token rule and is never accepted on an empty `owners`.
+  defp owns_recovery?(state, id, generation, {owner, token}) when is_pid(owner) do
+    case state.entries[id] do
+      %{generation: ^generation, resync: true, binding_token: expected}
+      when is_binary(token) and token == expected ->
+        state.owners[id] in [nil, owner]
+
+      _ ->
+        false
+    end
+  end
+
   defp owns_recovery?(state, id, generation, owner) do
     case state.entries[id] do
       %{generation: ^generation, resync: true} -> state.owners[id] == owner
@@ -1204,6 +1228,7 @@ defmodule KaoiroServer.DeliveryStates do
     {agent_id, entry.generation, entry.issued_seq, entry.acked_seq, entry.pending_since,
      Map.take(entry, [
        :schema_version,
+       :binding_token,
        :incarnation,
        :metadata,
        :early_pending,

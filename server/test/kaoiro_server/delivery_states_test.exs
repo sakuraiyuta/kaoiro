@@ -955,7 +955,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
     :ok = :dets.close(table)
     start_supervised!({DeliveryStates, name: name, path: path})
 
-    assert %{issued_seq: 3, acked_seq: 1} =
+    assert {%{issued_seq: 3, acked_seq: 1}, _token} =
              DeliveryStates.bind_resync("recipient", "generation", self(), name)
 
     assert {:ok, %{acked_seq: 3, lost_count: 2, last_loss: %{reason: "untraceable"}}} =
@@ -1086,7 +1086,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
                  DeliveryStates.retire(recipient, "old", owner, 1, [[1, 1]], name)
       end
 
-      assert %{issued_seq: 1, acked_seq: 1} =
+      assert {%{issued_seq: 1, acked_seq: 1}, _token} =
                DeliveryStates.bind_resync(recipient, "new", owner, name)
 
       assert {:error, :stale_delivery_owner} =
@@ -1398,7 +1398,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
     GenServer.stop(Process.whereis(name))
     {:ok, _} = DeliveryStates.start_link(name: name, path: path)
 
-    assert %{uncertain_count: 1, last_uncertain: %{reason: "turn_steer_timeout"}} =
+    assert {%{uncertain_count: 1, last_uncertain: %{reason: "turn_steer_timeout"}}, _token} =
              DeliveryStates.bind_resync(recipient, "new-generation", owner, name)
 
     expired_at = DateTime.utc_now() |> DateTime.add(-7_200, :second) |> DateTime.to_iso8601()
@@ -1422,7 +1422,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
 
     assert :ok = DeliveryStates.delete(recipient, name)
 
-    assert %{uncertain_count: 0, last_uncertain: nil} =
+    assert {%{uncertain_count: 0, last_uncertain: nil}, _token} =
              DeliveryStates.bind_resync(recipient, "fresh", owner, name)
   end
 
@@ -1433,7 +1433,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
     recipient = "phase3-old-format"
     owner = self()
 
-    assert %{uncertain_count: 0} =
+    assert {%{uncertain_count: 0}, _token} =
              DeliveryStates.bind_resync(recipient, "generation", owner, name)
 
     GenServer.stop(Process.whereis(name))
@@ -1454,7 +1454,7 @@ defmodule KaoiroServer.DeliveryStatesTest do
 
     {:ok, _} = DeliveryStates.start_link(name: name, path: path)
 
-    assert %{uncertain_count: 0, last_uncertain: nil} =
+    assert {%{uncertain_count: 0, last_uncertain: nil}, _token} =
              DeliveryStates.bind_resync(recipient, "generation", owner, name)
   end
 
@@ -1792,5 +1792,172 @@ defmodule KaoiroServer.DeliveryStatesTest do
     GenServer.stop(Process.whereis(name))
     raw(name, path, &:dets.insert(&1, before_retirement))
     loss
+  end
+
+  describe "binding token (issue #512)" do
+    @gen "generation"
+
+    defp restart_ledger(name, path) do
+      GenServer.stop(Process.whereis(name))
+      start_supervised!({DeliveryStates, name: name, path: path})
+    end
+
+    defp bound_with_issued(name, owner \\ self()) do
+      {%{issued_seq: 0}, token} = DeliveryStates.bind_resync("recipient", @gen, owner, name)
+      assert is_binary(token) and byte_size(token) == 32
+
+      assert 1 =
+               DeliveryStates.issue_synthetic(
+                 "recipient",
+                 %{sender: "sender", conversation_id: "cid", turn_number: 1, kind: "request"},
+                 name
+               )
+
+      assert 2 = DeliveryStates.issue("recipient", name)
+      assert 3 = DeliveryStates.issue("recipient", name)
+      token
+    end
+
+    defp stage_report(name, seq, stage) do
+      %{
+        "version" => "0",
+        "generation" => @gen,
+        "incarnation" => DeliveryStates.incarnation("recipient", name),
+        "delivery_seq" => seq,
+        "stage" => stage,
+        "at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+        "handoff" => "tool_result"
+      }
+    end
+
+    test "the bound channel's token is accepted after a restart and leaves no owner", %{
+      name: name,
+      path: path
+    } do
+      token = bound_with_issued(name)
+      restart_ledger(name, path)
+      assert :sys.get_state(name).owners == %{}
+
+      assert %{acked_seq: 1} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), token}, 1, name)
+
+      assert :sys.get_state(name).owners["recipient"] == nil
+    end
+
+    test "a wrong token is rejected after a restart and changes nothing", %{
+      name: name,
+      path: path
+    } do
+      _token = bound_with_issued(name)
+      restart_ledger(name, path)
+      before = DeliveryStates.get("recipient", name)
+      wrong = :crypto.strong_rand_bytes(32)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), wrong}, 1, name)
+
+      assert DeliveryStates.get("recipient", name) == before
+    end
+
+    test "a persisted row without a token rejects the tuple shape until a rebind", %{
+      name: name,
+      path: path
+    } do
+      token = bound_with_issued(name)
+      GenServer.stop(Process.whereis(name))
+      {:ok, ^name} = :dets.open_file(name, file: String.to_charlist(path))
+      [row] = :dets.lookup(name, "recipient")
+      assert Map.has_key?(elem(row, 5), :binding_token)
+      :ok = :dets.insert(name, put_elem(row, 5, Map.delete(elem(row, 5), :binding_token)))
+      :ok = :dets.sync(name)
+      :ok = :dets.close(name)
+      start_supervised!({DeliveryStates, name: name, path: path})
+      refute Map.has_key?(:sys.get_state(name).entries["recipient"], :binding_token)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), token}, 1, name)
+
+      {%{issued_seq: 3}, fresh} = DeliveryStates.bind_resync("recipient", @gen, self(), name)
+
+      assert %{acked_seq: 1} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), fresh}, 1, name)
+    end
+
+    test "every bind mints a new token and the previous one stops working", %{name: name} do
+      first = bound_with_issued(name)
+      {%{issued_seq: 3}, second} = DeliveryStates.bind_resync("recipient", @gen, self(), name)
+      refute first == second
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), first}, 1, name)
+
+      assert %{acked_seq: 1} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), second}, 1, name)
+    end
+
+    test "the bare pid shape and a non-pid tuple are never accepted on an empty owners", %{
+      name: name,
+      path: path
+    } do
+      token = bound_with_issued(name)
+      restart_ledger(name, path)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, self(), 1, name)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {nil, token}, 1, name)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {:not_a_pid, token}, 1, name)
+    end
+
+    test "a recorded live owner rejects another pid even with the right token", %{name: name} do
+      other = spawn(fn -> receive do: (:stop -> :ok) end)
+      on_exit(fn -> send(other, :stop) end)
+      token = bound_with_issued(name, other)
+
+      assert {:error, :stale_delivery_owner} =
+               DeliveryStates.acknowledge("recipient", @gen, {self(), token}, 1, name)
+
+      assert %{acked_seq: 1} =
+               DeliveryStates.acknowledge("recipient", @gen, {other, token}, 1, name)
+    end
+
+    test "each fenced call accepts the tuple shape after a restart", %{name: name, path: path} do
+      token = bound_with_issued(name)
+      restart_ledger(name, path)
+      owner = {self(), token}
+
+      assert :ok =
+               DeliveryStates.report_stage(
+                 "recipient",
+                 @gen,
+                 owner,
+                 stage_report(name, 1, "submitted"),
+                 name
+               )
+
+      incarnation = DeliveryStates.incarnation("recipient", name)
+      stages = :sys.get_state(name).stages
+      assert stages[{"recipient", incarnation}][1].last_stage == "submitted"
+      assert 1 in :sys.get_state(name).entries["recipient"].resolved
+      assert DeliveryStates.owns_delivery?("recipient", @gen, owner, incarnation, name)
+      refute DeliveryStates.owns_delivery?("recipient", @gen, owner, "other-incarnation", name)
+
+      assert {:ok, %{lost_count: 1}} =
+               DeliveryStates.resync("recipient", @gen, owner, 3, [[2, 2]], name)
+
+      restart_ledger(name, path)
+
+      assert {:ok, %{lost_count: 2}} =
+               DeliveryStates.retire("recipient", @gen, owner, 3, [[3, 3]], name)
+
+      assert 4 = DeliveryStates.issue("recipient", name)
+      restart_ledger(name, path)
+
+      assert {:ok, %{acked_seq: 4, lost_count: 3}} =
+               DeliveryStates.retire_owned_generation("recipient", @gen, owner, name)
+    end
   end
 end
