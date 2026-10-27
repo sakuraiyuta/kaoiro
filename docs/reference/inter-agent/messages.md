@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-10-08
+last_updated: 2026-10-27
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -123,9 +123,9 @@ Only the `type` value and `payload` schema are new.
 | `delivery_intent` | optional | `normal` (default), `early`, or `yield`; the requested delivery mode. Non-normal values require negotiated delivery modes. |
 | `work_id` | MUST with `delivery_intent: "yield"` | Work targeted by the yield; work operations also carry their own `work_id`. |
 | `expected_authority_epoch` | MUST with `delivery_intent: "yield"` | Caller-supplied expectation, normally copied from an observed work stamp. The wrapper checks presence and numeric shape, then copies it unchanged; it does not prove the caller observed it. The server enforces the expected epoch against the current grant. |
-| `work_control` | optional | One typed operation with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. |
+| `work_control` | optional | One typed operation with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. The wrapper issues `operation_id` when the caller omits it; a caller supplies one only to retry the same operation, because the server rejects an id whose embedded time is outside its validity window (`operation_id_expired`). |
 | `delivery_authority` | server-owned | Requested and granted intent, downgrade, and a `yield_token` only for a granted yield. A sender-supplied value is rejected. |
-| `work` | server-owned | `{work_id, revision, authority_epoch, state}` at admission for a linked conversation. A sender-supplied value is rejected. |
+| `work` | server-owned | `{work_id, revision, authority_epoch, state}` at admission for a linked conversation. A sender-supplied value is rejected. The receiving wrapper renders a well-formed stamp to its model (see [Send and wait](send-and-wait.md)). |
 | `work_control_result` | server-owned | `{op, operation_id, outcome}` replaces an applied `work_control` in the relayed payload. A sender-supplied value is rejected. |
 
 The work and delivery fields are additive v0 wire shapes from

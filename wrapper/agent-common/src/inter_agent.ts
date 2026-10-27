@@ -31,6 +31,8 @@ import type {
   DeliveryModes,
   InterAgentDeliveryStatus,
   WorkControl,
+  WorkControlOp,
+  WorkState,
   WorkCheckResult,
   WorkOpResult,
   WorkStatusResult,
@@ -428,7 +430,11 @@ const WORK_PRINCIPAL_SCHEMA = z.object({ kind: z.enum(["agent", "user"]), id: z.
 const WORK_SUBJECT_SCHEMA = z.object({ hash: z.string().min(1).max(256), label: z.string().min(1).max(256) }).strict();
 const WORK_VERDICT_REF_SCHEMA = z.object({ work_id: z.string().min(1).max(128), verdict_id: z.string().min(1).max(128) }).strict();
 const OPERATION_ID = z.string().regex(/^op_[0-9]{1,16}_[A-Za-z0-9_-]{22}$/);
-const OPERATION_ID_OPTIONAL = { operation_id: OPERATION_ID.optional() };
+const OPERATION_ID_OPTIONAL = {
+  operation_id: OPERATION_ID.optional().describe(
+    "Omit it; the wrapper issues a fresh one. Supply it only to retry the same earlier operation, copying the operation_id that operation's result returned.",
+  ),
+};
 const EXISTING_WORK = { work_id: z.string().min(1).max(128) };
 const REVISION_WORK = { ...EXISTING_WORK, expected_revision: WORK_REVISION };
 const BASIS_WORK = { ...EXISTING_WORK, basis_revision: WORK_REVISION };
@@ -3034,7 +3040,55 @@ export function formatInboundMessage(
     messageLine,
     "",
     `(meta: done=${done}, propose_next=${proposeNext}, conversation_id=${conversationId}, turn_number=${turnNumber})`,
+    ...workStampLines(payload, mode),
   ].join("\n");
+}
+
+const WORK_STATES: Record<WorkState, true> = {
+  nominated: true, active: true, completed: true, cancelled: true, declined: true, expired: true,
+};
+const WORK_CONTROL_OPS: Record<WorkControlOp, true> = {
+  assign: true, accept_assignment: true, decline: true, revise: true, hold: true, release: true,
+  submit: true, verdict: true, withdraw_verdict: true, accept_verdict: true, revoke_verdict: true,
+  complete: true, cancel: true, transfer: true, release_transfer: true,
+};
+const RENDERED_WORK_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+function isWorkCounter(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+/** issue #690: the server stamps the recipient's copy with `work` (and
+ *  `work_control_result` for an applied operation), but the model only sees
+ *  this rendered text. Every value is checked against a closed shape before
+ *  it is interpolated, so a malformed stamp renders nothing rather than
+ *  injecting text. A terminal render keeps the facts but drops the call to
+ *  action, which would contradict its "do not call send_to_agent" marker. */
+function workStampLines(payload: Partial<InterAgentMessagePayload>, mode: InboundReplyMode): string[] {
+  const work: unknown = payload.work;
+  if (typeof work !== "object" || work === null || Array.isArray(work)) return [];
+  const { work_id: workId, state, revision, authority_epoch: epoch } = work as Record<string, unknown>;
+  if (typeof workId !== "string" || !RENDERED_WORK_ID.test(workId)) return [];
+  if (typeof state !== "string" || !Object.hasOwn(WORK_STATES, state)) return [];
+  if (!isWorkCounter(revision) || !isWorkCounter(epoch)) return [];
+  const result: unknown = payload.work_control_result;
+  let op: string | undefined;
+  if (result !== undefined) {
+    if (typeof result !== "object" || result === null || Array.isArray(result)) return [];
+    const candidate = (result as Record<string, unknown>).op;
+    if (typeof candidate !== "string" || !Object.hasOwn(WORK_CONTROL_OPS, candidate)) return [];
+    op = candidate;
+  }
+  const lines = [
+    `(work: work_id=${workId}, state=${state}, revision=${revision}, authority_epoch=${epoch}${op === undefined ? "" : `, op=${op}`})`,
+  ];
+  if (op === "assign" && state === "nominated" && mode !== "terminal") {
+    lines.push(
+      "This message assigns that work to you. To take it, call send_to_agent with " +
+        `work_control {op: "accept_assignment", work_id: "${workId}"} (or "decline"); omit operation_id.`,
+    );
+  }
+  return lines;
 }
 
 /** Formats one or more inbound envelopes from the SAME peer into the text

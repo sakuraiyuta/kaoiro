@@ -1,7 +1,7 @@
 ---
 title: Send and wait
 status: provisional
-last_updated: 2026-10-18
+last_updated: 2026-10-27
 description: Send and wait contracts and compatibility.
 ---
 
@@ -51,6 +51,22 @@ and separators between the individual formatted messages:
 
 (meta: done=<done>, propose_next=<propose_next>, conversation_id=<conversation_id>, turn_number=<turn_number>)
 ```
+
+When the payload carries a server `work` stamp, one more line follows the meta
+line, with `op` only when `work_control_result` is present:
+
+```text
+(work: work_id=<work_id>, state=<state>, revision=<revision>, authority_epoch=<authority_epoch>, op=<op>)
+```
+
+For `op=assign` with `state=nominated`, a further line tells the assignee to
+call `send_to_agent` with `work_control {op: "accept_assignment", work_id}` (or
+`decline`) and to omit `operation_id`. A terminal (closed) render keeps the
+work line but omits that call to action. The wrapper renders a stamp only when
+`work_id` matches `[A-Za-z0-9_-]{1,128}`, `revision` and `authority_epoch` are
+non-negative safe integers, and `state` and `op` are known values; otherwise it
+renders no work line, and a message without `work` is unchanged
+([issue #690](https://github.com/sakuraiyuta/kaoiro/issues/690)).
 
 An agent replies with `send_to_agent` when it chooses to respond. Otherwise a
 normal `result` envelope is sufficient; it need not send `done`. The
