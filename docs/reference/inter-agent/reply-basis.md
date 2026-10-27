@@ -219,7 +219,7 @@ peer's state before retrying. The wrapper holds one waiter per
 conversation. Which inbound resolves it is decided by the `matchesWaiter`
 condition in `receiveInbound`
 (`wrapper/agent-common/src/inter_agent.ts`), which is the source of truth.
-A `delivery_lost` always resolves the waiter, whichever send was lost.
+A `delivery_lost` that resolves the waiter does not say which send was lost.
 Server admission allows `affected_deliveries` only on `turn_failure`, and
 the permitted `turn_failure` codes are the notice message table except
 `stale_turn` (`server/lib/kaoiro_server/inter_agent_reply_basis.ex`).
