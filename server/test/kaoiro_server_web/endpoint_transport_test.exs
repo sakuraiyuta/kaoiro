@@ -63,6 +63,23 @@ defmodule KaoiroServerWeb.EndpointTransportTest do
     end)
   end
 
+  test "accepts an absolute-form request whose authority matches the Host header", %{
+    port: port
+  } do
+    with_socket(port, fn socket ->
+      :ok = :inet.setopts(socket, packet: :http_bin)
+
+      :ok =
+        :gen_tcp.send(socket, [
+          "GET http://localhost/api/health HTTP/1.1\r\n",
+          "Host: localhost\r\n\r\n"
+        ])
+
+      assert {:ok, {:http_response, _version, 200, _reason}} =
+               :gen_tcp.recv(socket, 0, @timeout)
+    end)
+  end
+
   test "the same listener serves HTTP/1.1 health and closes h2c without sending bytes", %{
     port: port
   } do

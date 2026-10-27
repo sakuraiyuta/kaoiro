@@ -16,3 +16,8 @@ onlyBuiltDependencies:
 
 patchedDependencies:
   '@openai/codex-sdk@0.164.0': patches/@openai__codex-sdk@0.164.0.patch
+
+# @xmldom/xmldom is pinned to exactly 0.9.12 by pnpm.overrides in package.json.
+# Its only dependent is officeparser (wrapper/claude-code). Remove the override
+# once officeparser resolves @xmldom/xmldom >= 0.9.12 by itself; check with
+# `pnpm why @xmldom/xmldom`.
