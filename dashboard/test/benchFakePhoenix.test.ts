@@ -15,8 +15,10 @@ import { describe, expect, it } from "vitest";
 // Not covered: accesses on values whose type was erased (`as unknown as`,
 // `any`), dynamic member names, and the internal members protocol.ts guards
 // with `typeof` (the fake leaves those absent on purpose). It checks member
-// presence only, not signatures or runtime meaning, and it cannot see new
-// same-origin endpoints the App starts to call.
+// presence only, not signatures or runtime meaning. It cannot see new
+// same-origin endpoints the App starts to call, nor a Phoenix-typed value that
+// leaves protocol.ts through an export and is read in another file (the
+// importer check below only covers files that import phoenix themselves).
 
 const dashboard = fileURLToPath(new URL("..", import.meta.url));
 const PROTOCOL = path.join(dashboard, "src/lib/protocol.ts");

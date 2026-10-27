@@ -93,8 +93,10 @@ The harness dev server answers the session endpoints the App calls before
 it opens its socket (`vite.harness.config.ts`), and the fake transport
 must implement every `phoenix` member that `src/lib/protocol.ts` uses;
 `test/benchFakePhoenix.test.ts` fails when it does not. That check does
-not notice a new same-origin endpoint the App starts to call, so after
-changing the App's startup, smoke-run the bench once:
+not notice a new same-origin endpoint the App starts to call, nor a Phoenix
+value that leaves `protocol.ts` through an export and is read in another
+file (none does today), so after changing the App's startup, smoke-run the
+bench once:
 `node bench/runBenchApp.mjs 3 1000 5 150 none smoke`.
 
 ```bash
@@ -126,7 +128,7 @@ only wires the data the menu needs; this is the observation that it
 renders).
 
 Results are written to `bench/results/candidateA/candidateA-agents<N>-hist<N>-tick<N>-err<mode>[-<runLabel>].json`,
-plus one Playwright trace per variant. The traces stay local: they record the
+plus one Playwright trace per run. The traces stay local: they record the
 absolute path of the script that ran, so `trace-*.zip` is git-ignored and never
 committed, and `tracePath` in the result JSON is a repo-root-relative path to a
 file that may not exist in a checkout. Traces committed by earlier measurements

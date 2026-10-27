@@ -2,7 +2,6 @@ import {chromium} from '@playwright/test';
 import {createServer, build, preview} from 'vite';
 import fs from 'node:fs';
 const out='/tmp/fuji304-measure';const root=process.cwd();
-fs.copyFileSync(root+'/src/App.svelte',root+'/src/.App.before.bench.svelte');
 const prod=process.env.FUJI_PROD==='1';
 const configFile=root+'/bench/vite.harness.config.ts';
 let server,base;
@@ -51,4 +50,4 @@ try{
   const summary={...cfg,prod,localeCount:raw.localeCount,localeMs:raw.localeMs,dispatchFrame:stats(dispatchFrame),elapsed:Date.now()-start,input:stats(raw.inputs.map(x=>x.raf).filter(x=>x!==undefined)),wall:stats(wall),frames:stats(raw.frames),tickCost:stats(raw.ticks),longN:raw.long.length,longMs:raw.long.reduce((a,x)=>a+x.duration,0),dom:raw.dom,compositions:raw.compositions.length,errors,top};fs.appendFileSync(out+'/summary-v2.jsonl',JSON.stringify(summary)+'\n');console.log(JSON.stringify(summary));
   if(errors.length||raw.inputs.length<60)throw Error('Incomplete input/errors '+label);await context.close();
  }
-}finally{fs.rmSync(root+'/src/.App.before.bench.svelte',{force:true});await browser.close();await (server.close?server.close():new Promise(r=>server.httpServer.close(r)))}
+}finally{await browser.close();await (server.close?server.close():new Promise(r=>server.httpServer.close(r)))}

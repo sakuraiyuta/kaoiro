@@ -34,9 +34,11 @@ mkdir -p /tmp/fuji304-measure
 FUJI_PROD=1 FUJI_MATRIX='[{"run":10,"mode":"ascii","tick":100,"history":1000,"expand":true}]' node bench/fujiShape.mjs
 ```
 
-Run labels must be unique to retain all results. Both latency drivers copy the
-current App to the ignored `.App.before.bench.svelte` import and select `after`.
-They are not before/after comparison drivers despite that import. They build
+Run labels must be unique to retain all results. Both latency drivers select the
+`after` variant of the harness page; they are not before/after comparison
+drivers. (They used to copy the current App to an ignored
+`.App.before.bench.svelte` file only to satisfy a harness import; the harness no
+longer has a baseline variant, so that copy was removed.) They build
 unminified production JS with source maps. `fujiMeasure`'s `.log-entry` counter
 is stale and always zero; use the shape driver or fix that selector in the new
 benchmark. Their summary is dispatch-to-rAF; obtain dispatch-to-input from
