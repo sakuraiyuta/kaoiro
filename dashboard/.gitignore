@@ -3,11 +3,6 @@
 # done; never a checked-in file.
 src/lib/.AgentDetail.before.bench.svelte
 
-# issue #304 bench: runBenchApp.mjs's equivalent for the App-level harness
-# (git show <SHA>:dashboard/src/App.svelte); same generate-then-delete
-# lifecycle, never a checked-in file.
-src/.App.before.bench.svelte
-
 # issue #304 bench: Playwright traces record the absolute path of the
 # script that ran, so they stay local and are never checked in.
 bench/results/candidateA/trace-*.zip

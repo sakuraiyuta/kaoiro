@@ -9,13 +9,37 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// The real App talks to same-origin session endpoints before it opens the
+// socket (cookie login, then a ticket for the WS). The harness dev server has
+// no backend, so without these the App shows the login form and never joins
+// the fake channel. Exact method + path only; anything else falls through.
+// Bench-only: the production vite.config.ts never imports this file.
+const SESSION_ROUTES: Record<string, { method: string; body: unknown }> = {
+  "/session/new": { method: "POST", body: {} },
+  "/session/ticket": { method: "GET", body: { ticket: "bench-ticket" } },
+  "/session/auth-methods": { method: "GET", body: { token: true, oauth: [] } },
+  "/session/refresh": { method: "GET", body: {} },
+};
+
+const sessionStub = (): Plugin => ({
+  name: "bench-session-stub",
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const route = SESSION_ROUTES[(req.url ?? "").split("?")[0] ?? ""];
+      if (route === undefined || req.method !== route.method) return next();
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(route.body));
+    });
+  },
+});
+
 export default defineConfig({
   root: path.resolve(__dirname, ".."),
-  plugins: [svelte()],
+  plugins: [svelte(), sessionStub()],
   resolve: {
     alias: {
       phoenix: path.resolve(__dirname, "fakePhoenix.ts"),

@@ -81,10 +81,21 @@ statistically rigorous.
 and a fake `phoenix` transport, `fakePhoenix.ts` aliased in only by
 `vite.harness.config.ts`) instead of `AgentDetail.svelte` alone, so it can
 drive multi-agent state, live receive ticks, and the error-index scan
-(App.svelte's `errorIndex`). Compares the current worktree ("after")
-against a pinned baseline immediately before the error-index feature
-landed ("before"), materialised the same generate-then-delete way as
-`runBench.mjs` above (`src/.App.before.bench.svelte`).
+(App.svelte's `errorIndex`). Measures the current worktree (the `after`
+variant, the only one). To compare two commits, run the bench at each
+commit and compare the result JSON files; the run no longer mounts a
+pinned baseline `App.svelte` next to the current one, because that mixed a
+historical component with today's `src/lib` and broke whenever a library
+API changed. Result files committed by earlier measurements still hold
+`before`/`after` pairs.
+
+The harness dev server answers the session endpoints the App calls before
+it opens its socket (`vite.harness.config.ts`), and the fake transport
+must implement every `phoenix` member that `src/lib/protocol.ts` uses;
+`test/benchFakePhoenix.test.ts` fails when it does not. That check does
+not notice a new same-origin endpoint the App starts to call, so after
+changing the App's startup, smoke-run the bench once:
+`node bench/runBenchApp.mjs 3 1000 5 150 none smoke`.
 
 ```bash
 PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs \
@@ -121,7 +132,7 @@ committed, and `tracePath` in the result JSON is a repo-root-relative path to a
 file that may not exist in a checkout. Traces committed by earlier measurements
 were removed; if a past diagnosis needs one, extract it from the commit before
 the removal with `git show`. **The invocation exits non-zero**
-(not just an `error` field in the printed JSON) when either variant:
+(not just an `error` field in the printed JSON) when the variant:
 
 - fails to mount/measure at all (harness error),
 - the slash menu never appears,
@@ -175,6 +186,6 @@ position now exists for that window logic to anchor against. This is a
 CSS-driven rendering difference, not a product regression -- don't read
 `domNodeCount` across runs as "the same fixed DOM"; the actual row count
 also depends on receive-tick volume and how much has scrolled by the
-time it's measured. What stays meaningful is the before/after DELTA
-within a single run (candidate A's own before/after comparison), not the
-absolute count.
+time it's measured. What stays meaningful is the DELTA between the
+`before` and `after` fields of one run (the count before and after the
+typing window), not the absolute count.

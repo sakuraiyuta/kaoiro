@@ -49,6 +49,9 @@ type ServerEventCallback = (payload: unknown) => void;
 export class FakeChannel {
   #listeners = new Map<string, ServerEventCallback[]>();
   joined = false;
+  /** Read by protocol.ts (policy send path). Mirrors the Phoenix
+   *  `ChannelState` values this bench can reach. */
+  state: "closed" | "joined" = "closed";
 
   on(event: string, cb: ServerEventCallback): number {
     const list = this.#listeners.get(event) ?? [];
@@ -62,10 +65,17 @@ export class FakeChannel {
     // under measurement); no-op keeps the shape complete.
   }
 
+  // The fake never errors or closes the channel on its own, so these
+  // registrations are accepted and never fired.
+  onError(_cb: () => void): void {}
+
+  onClose(_cb: () => void): void {}
+
   join(): FakePush {
     const push = new FakePush();
     queueMicrotask(() => {
       this.joined = true;
+      this.state = "joined";
       push._resolve("ok", {});
     });
     return push;
@@ -73,7 +83,10 @@ export class FakeChannel {
 
   leave(): FakePush {
     const push = new FakePush();
-    queueMicrotask(() => push._resolve("ok", {}));
+    queueMicrotask(() => {
+      this.state = "closed";
+      push._resolve("ok", {});
+    });
     return push;
   }
 
@@ -100,6 +113,7 @@ export class Socket {
   #closeListeners: SocketCallback[] = [];
   #errorListeners: SocketCallback[] = [];
   #channels = new Map<string, FakeChannel>();
+  #connected = false;
 
   constructor(_url: string, _opts?: Record<string, unknown>) {
     // URL/opts (params, transport, heartbeatIntervalMs) are irrelevant here
@@ -128,12 +142,18 @@ export class Socket {
     // (callers register onOpen before connect() has a chance to fire it)
     // without an actual delay the bench would have to account for.
     queueMicrotask(() => {
+      this.#connected = true;
       for (const cb of this.#openListeners) cb();
     });
   }
 
+  isConnected(): boolean {
+    return this.#connected;
+  }
+
   disconnect(cb?: SocketCallback): void {
     queueMicrotask(() => {
+      this.#connected = false;
       for (const listener of this.#closeListeners) listener();
       cb?.();
     });
