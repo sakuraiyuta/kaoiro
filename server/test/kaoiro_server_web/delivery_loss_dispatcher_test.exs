@@ -4,6 +4,7 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
   import ExUnit.CaptureLog
 
   alias KaoiroServer.{AgentStates, ConversationStates, DeliveryStates, IngressOrder}
+  alias KaoiroServer.TestTimeouts
   alias KaoiroServerWeb.DeliveryLossDispatcher
 
   @supervisor KaoiroServer.Supervisor
@@ -88,7 +89,7 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
                      event: "envelope",
                      payload: %{"payload" => %{"loss_id" => _}}
                    },
-                   1_500
+                   TestTimeouts.out_of_band()
 
     refute pending?(to_id)
   end
@@ -137,7 +138,9 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
       # only come from the timer the skipped tick re-armed.
       :erlang.trace(pid, true, [:receive])
       on_exit(fn -> if Process.alive?(pid), do: :erlang.trace(pid, false, [:receive]) end)
-      assert_receive {:trace, ^pid, :receive, :flush}, 1_500
+      # The dispatcher re-arms its timer every second, so a tick is at most
+      # one period away; twice that leaves room for scheduling.
+      assert_receive {:trace, ^pid, :receive, :flush}, 2 * TestTimeouts.slow_path()
       # The tick finished before this call is served.
       :sys.get_state(pid)
       assert pending?(to_id)
@@ -146,7 +149,7 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
 
       start_store(AgentStates)
       assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
-      assert_receive {:trace, ^pid, :receive, :flush}, 1_500
+      assert_receive {:trace, ^pid, :receive, :flush}, 2 * TestTimeouts.slow_path()
       # The notice is broadcast before the loss is completed; wait for the
       # re-armed tick to finish before reading the ledger.
       :sys.get_state(pid)
@@ -219,7 +222,7 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
 
         assert_receive {:DOWN, ^ref, :process, ^pid,
                         {:timeout, {GenServer, :call, [AgentStates, {:connected?, ^to_id}, 5000]}}},
-                       1_000
+                       TestTimeouts.out_of_band()
       end)
 
       :ok = :sys.resume(AgentStates)
