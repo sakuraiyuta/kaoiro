@@ -191,6 +191,40 @@ describe("accepted-reply follow-up authorization", () => {
     discardToolResult(result);
   });
 
+  it("omits unavailable follow-up when this call's done closes the conversation", async () => {
+    const tool = makeTool();
+    const remote = inbound(2);
+    remote.payload.meta = { done: true, propose_next: "" };
+    await tool.receiveInbound(remote);
+    const result = await tool.invoke({ ...args, done: true, ...authorize(tool) }, context);
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]!.text).toContain("sent to peer");
+    noFollowup(result);
+    expect(parts(result).some(part => part.followup_authorization_unavailable === true)).toBe(false);
+    expect(handoffToolResult(result, () => {})).toBe(true);
+    expect(parts(result).some(part => part.followup_authorization_unavailable === true)).toBe(false);
+  });
+
+  it("still reports unavailable when a synthetic close lands before the ack", async () => {
+    let tool!: InterAgentTool;
+    tool = makeTool({ sendInterAgent: async () => {
+      const terminal = inbound(0);
+      terminal.agent_id = "server";
+      terminal.payload.meta = { done: true, propose_next: "" };
+      await tool.receiveInbound(terminal);
+      return accepted;
+    } });
+    const result = await tool.invoke({ ...args, ...authorize(tool) }, context);
+    expect(result.content[0]!.text).toContain("sent to peer");
+    noFollowup(result);
+    const unavailable = parts(result).filter(part => part.followup_authorization_unavailable === true);
+    expect(unavailable).toHaveLength(1);
+    expect(unavailable[0]!.followup_guidance).toBe(
+      "The previous send was accepted. No follow-up authorization is available in this result; use a newer handed-off authorization or a new confirmed input, and do not resend the accepted body.",
+    );
+  });
+
   it("needs no follow-up ticket when the accepted explicit basis equals the default", async () => {
     const tool = makeTool();
     const result = await tool.invoke({ ...args, ...authorize(tool, 1) }, context);

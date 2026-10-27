@@ -989,6 +989,7 @@ type InvokeLockOutcome =
       sent: string;
       reply: Promise<Envelope | undefined> | undefined;
       timeoutMs: number;
+      closedByThisDone: boolean;
     };
 
 /**
@@ -2342,6 +2343,7 @@ export class InterAgentTool {
         // stuck forever (which would hang every later receiveInbound()
         // call for it — review round 3 must-fix).
         let releaseDoneGate: (() => void) | null = null;
+        let closedByThisDone = false;
         if (args.done === true && !track.localDone) {
           localDoneSnapshot = {
             localDone: track.localDone,
@@ -2352,6 +2354,7 @@ export class InterAgentTool {
           if (!track.closed && track.remoteDone) {
             track.closed = true;
             track.closedAtMs = this.#nowMs();
+            closedByThisDone = true;
           }
           const gate = new Promise<void>((resolve) => {
             releaseDoneGate = resolve;
@@ -2646,6 +2649,7 @@ export class InterAgentTool {
             sent,
             reply,
             timeoutMs,
+            closedByThisDone,
           };
         } finally {
           // Final either way — accepted/unknown confirms localDone as
@@ -2672,10 +2676,10 @@ export class InterAgentTool {
       return errorResult(outcome.message);
     }
     if (outcome.kind !== "dispatched") return errorResult(outcome.message);
-    const { acceptance, protectedReply, sentTurnNumber, sent, reply, timeoutMs } = outcome;
+    const { acceptance, protectedReply, sentTurnNumber, sent, reply, timeoutMs, closedByThisDone } = outcome;
     const finish = (result: InterAgentToolResult, ordinaryInput = false): InterAgentToolResult =>
       protectedReply && acceptance.kind === "accepted" && captured && !ordinaryInput
-        ? this.#followupResult(captured, result) : result;
+        ? this.#followupResult(captured, result, closedByThisDone) : result;
 
     // ふじ 30-10 R3: a peer reply that has ALREADY landed is proof the
     // message was delivered, whatever happened to the acceptance ack. The
@@ -2780,12 +2784,15 @@ export class InterAgentTool {
     return { content: [{ type: "text", text: JSON.stringify(fields, null, 2) }] };
   }
 
-  #followupResult(attempt: ReplyAttempt, result: InterAgentToolResult): InterAgentToolResult {
+  #followupResult(attempt: ReplyAttempt, result: InterAgentToolResult, closedByThisDone: boolean): InterAgentToolResult {
     if (!this.replyBasis.needsFollowup(attempt)) return result;
     const open = () => this.#conversations.get(attempt.cid)?.closed === false;
     let ticket: ReturnType<ReplyBasis["prepareFollowup"]>;
     try { if (open()) ticket = this.replyBasis.prepareFollowup(attempt); }
     catch { /* The accepted receipt survives unavailable entropy. */ }
+    // Only this invoke's done-close omits the part. A close that arrives
+    // another way still reports that no follow-up ticket is available.
+    if (!ticket && closedByThisDone) return result;
     const unavailable = JSON.stringify({ followup_authorization_unavailable: true,
       followup_guidance: "The previous send was accepted. No follow-up authorization is available in this result; use a newer handed-off authorization or a new confirmed input, and do not resend the accepted body." });
     const part = { type: "text" as const, text: ticket ? JSON.stringify({

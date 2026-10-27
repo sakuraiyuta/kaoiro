@@ -277,6 +277,8 @@ export class ReplyBasis {
   } | undefined {
     if (this.live(origin)) return undefined;
     const active = [...this.#tickets.values()].filter(t => t.token === origin.token);
+    // Spent tickets stay until retire, and follow-ups share this map,
+    // so spending one does not free a slot of this 256-record cap.
     if (active.length >= 256) return undefined;
     const newer = () => [...this.#tickets.values()].some(t => t.token === origin.token && t.cid === cid && t.peer === peer && t.state === "unused" && t.basis > basis);
     if (renewal && newer()) return undefined;

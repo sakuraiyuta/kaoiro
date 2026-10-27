@@ -2,7 +2,7 @@
 title: Input-bound inter-agent replies
 description: Negotiated reply basis, single-use tickets, recovery handoff, and engine origin guards.
 status: provisional
-last_updated: 2026-10-18
+last_updated: 2026-10-27
 related: [messages, conversations, delivery, send-and-wait]
 ---
 
@@ -206,6 +206,28 @@ This metadata may appear in an additional JSON text content part, with
 
 > Your previous send was accepted; for a new follow-up to the same peer and conversation in this turn, copy in_reply_to and reply_ticket from this reply_authorization, and do not resend the accepted body.
 
+A waiter-delivered `delivery_lost` cannot name which send was lost, so
+"confirm the peer state before retrying" and "do not resend the accepted
+body" are one rule. `lost_notice/2` in
+`server/lib/kaoiro_server_web/delivery_loss_dispatcher.ex` puts `code`,
+`message`, `synthetic`, `kind`, `loss_id`, and `peer` on the error. The
+payload `turn_number` is 0. The loss intent keeps `seq`; the notice does
+not copy it. A synthetic notice uses code `delivery_lost` and says to
+confirm the current peer or conversation state. Any other notice uses the
+recorded reason, `delivery_lost` or `interrupted`, and says to confirm the
+peer's state before retrying. The wrapper holds one waiter per
+conversation. Only a `turn_failure` whose `affected_deliveries` names the
+awaited turn resolves that waiter by identity. Every other inbound on the
+conversation, including `delivery_lost`, resolves it, so an earlier-turn
+loss and a synthetic loss complete the same waiter as a loss of this send.
+Server admission allows `affected_deliveries` only on `turn_failure`, and
+the permitted `turn_failure` codes are the notice message table except
+`stale_turn` (`server/lib/kaoiro_server/inter_agent_reply_basis.ex`).
+`delivery_lost` is not one of them. A notice that both names this send and
+says it was not dispatched is `invalid_internal_notice` and is not
+delivered. Confirm the peer state before retrying, and do not
+unconditionally resend the body this result already records as accepted.
+
 It becomes usable only at the actual result handoff and gets the normal
 300,000 ms lifetime and single-use binding. Issuing it acknowledges no new
 peer input, credits no fold, and changes no native continuation snapshot or
@@ -219,10 +241,13 @@ notice itself never authorizes a peer reply.
 
 Newer usable authorization is preserved. Closure, retirement, forgetting,
 capacity or entropy failure cannot revive authority or hide acceptance: the
-result retains the accepted receipt and may report
-`followup_authorization_unavailable: true` with bounded `followup_guidance`.
-Optional metadata is finalized before serialization; a failed write discards
-its provisional ticket. An uncertain result handoff never resends the body.
+result retains the accepted receipt. It may report
+`followup_authorization_unavailable: true` with bounded `followup_guidance`,
+except when this call's own `done: true` is the transition that sets the
+conversation closed. A later inbound close, retirement, forgetting, capacity
+failure, or entropy failure still reports that part. Optional metadata is
+finalized before serialization; a failed write discards its provisional
+ticket. An uncertain result handoff never resends the body.
 The existing 256-record per-turn limit includes spent and follow-up tickets.
 
 ## Inline recovery and ownership
