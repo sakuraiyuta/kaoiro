@@ -2900,6 +2900,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       fake = :"token_unavailable_read_only_#{System.unique_integer([:positive])}"
       path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{fake}.dets"])
+      File.mkdir_p!(Path.dirname(path))
       File.rm(path)
       {:ok, ^fake} = :dets.open_file(fake, file: String.to_charlist(path))
       :ok = :dets.close(fake)
