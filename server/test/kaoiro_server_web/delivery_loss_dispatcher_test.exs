@@ -201,9 +201,15 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
 
       for {store, call} <- calls do
         stop_store(store)
-        assert {:noproc, {GenServer, :call, [^store, _request, 5000]}} = catch_exit(call.())
-        assert {:skipped, ^store} = DeliveryLossDispatcher.tolerate_store_restart(call)
-        start_store(store)
+
+        # Restart in `after` so a failed assertion does not leave the store
+        # down for the tests that run after this one.
+        try do
+          assert {:noproc, {GenServer, :call, [^store, _request, 5000]}} = catch_exit(call.())
+          assert {:skipped, ^store} = DeliveryLossDispatcher.tolerate_store_restart(call)
+        after
+          start_store(store)
+        end
       end
     end
 
