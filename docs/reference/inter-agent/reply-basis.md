@@ -216,10 +216,13 @@ not copy it. A synthetic notice uses code `delivery_lost` and says to
 confirm the current peer or conversation state. Any other notice uses the
 recorded reason, `delivery_lost` or `interrupted`, and says to confirm the
 peer's state before retrying. The wrapper holds one waiter per
-conversation. Only a `turn_failure` whose `affected_deliveries` names the
-awaited turn resolves that waiter by identity. Every other inbound on the
-conversation, including `delivery_lost`, resolves it, so an earlier-turn
-loss and a synthetic loss complete the same waiter as a loss of this send.
+conversation. A `turn_failure` that carries `affected_deliveries` resolves
+it only when it comes from the awaited peer and names the awaited turn with
+a positive `delivery_seq`. A `turn_failure` without `affected_deliveries`
+does not resolve it when notice attribution is negotiated. Every other
+inbound on the conversation, including `delivery_lost`, resolves it, so an
+earlier-turn loss and a synthetic loss complete the same waiter as a loss
+of this send.
 Server admission allows `affected_deliveries` only on `turn_failure`, and
 the permitted `turn_failure` codes are the notice message table except
 `stale_turn` (`server/lib/kaoiro_server/inter_agent_reply_basis.ex`).

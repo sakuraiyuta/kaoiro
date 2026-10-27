@@ -225,6 +225,17 @@ describe("accepted-reply follow-up authorization", () => {
     );
   });
 
+  it.each(["capacity", "entropy"] as const)("keeps unavailable when this call sends done but preparation fails through %s", async failure => {
+    const tool = makeTool(); const original = authorize(tool);
+    if (failure === "capacity") for (let n = 0; n < 255; n++) tool.replyBasis.prepare(context.origin, `other-${n}`, "peer", 2);
+    else vi.spyOn(tool.replyBasis, "prepareFollowup").mockImplementation(() => { throw Error("entropy unavailable"); });
+    const result = await tool.invoke({ ...args, done: true, ...original }, context);
+    expect(result.isError).toBeUndefined(); expect(result.content[0]!.text).toContain("sent to peer");
+    noFollowup(result);
+    expect(parts(result).filter(part => part.followup_authorization_unavailable === true)).toHaveLength(1);
+    handoffToolResult(result, () => {});
+  });
+
   it("needs no follow-up ticket when the accepted explicit basis equals the default", async () => {
     const tool = makeTool();
     const result = await tool.invoke({ ...args, ...authorize(tool, 1) }, context);
