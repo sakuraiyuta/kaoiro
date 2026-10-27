@@ -54,7 +54,8 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   # `@valid_kinds` union `valid_kind?/1` checks — `valid_kind?/1` alone
   # cannot distinguish a call's ORIGIN, only whether the kind string is
   # ever legal, so `wrapper_channel.ex`'s `session_lifecycle` ingress
-  # clause carries its own explicit reject for this one kind.
+  # admits only `wrapper_kind?/1` kinds and drops this one together with
+  # every `@server_kinds` member.
   @permission_kinds ~w(permission_requested permission_applied permission_failed)
   @valid_kinds MapSet.new(@wrapper_kinds ++ @server_kinds ++ @permission_kinds)
 
@@ -238,6 +239,13 @@ defmodule KaoiroServer.SessionLifecycleEvents do
     valid_kind?(kind) and valid_trigger?(kind, trigger) and valid_at?(at) and
       valid_details?(kind, details)
   end
+
+  @doc """
+  `true` when `kind` is one a wrapper may report on the `session_lifecycle`
+  wire. Every other stored kind is server-authored, and the wrapper ingress
+  drops it (`docs/reference/protocol/channels.md`).
+  """
+  def wrapper_kind?(kind), do: kind in @wrapper_kinds
 
   defp valid_details?(kind, nil) when kind not in @permission_kinds, do: true
   defp valid_details?(kind, _details) when kind not in @permission_kinds, do: false

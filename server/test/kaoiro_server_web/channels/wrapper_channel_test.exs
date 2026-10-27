@@ -4524,6 +4524,96 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert SessionLifecycleEvents.list_for_agent(agent_id) == []
     end
 
+    # Written out from docs/reference/protocol/channels.md rather than read
+    # from SessionLifecycleEvents, so a wrong production list cannot make
+    # its own test pass.
+    for kind <- ~w(disconnected reconnecting reconnected session_reset_completed) do
+      test "wrapper-produced server kind #{kind} is dropped at ingress" do
+        agent_id = "test.lifecycle-drop-" <> String.replace(unquote(kind), "_", "-")
+        socket = seed_known(agent_id)
+
+        ref =
+          push(socket, "session_lifecycle", %{
+            "kind" => unquote(kind),
+            "at" => "2026-10-27T00:00:00Z"
+          })
+
+        assert_reply ref, :ok
+
+        ref =
+          push(socket, "session_lifecycle", %{
+            "kind" => "compacting",
+            "at" => "2026-10-27T00:00:01Z"
+          })
+
+        assert_reply ref, :ok
+        assert [%{kind: "compacting"}] = SessionLifecycleEvents.list_for_agent(agent_id)
+      end
+    end
+
+    for kind <- ~w(compacting compact_boundary compact_failed resume_reserved
+                   resume_fired threshold_notice conversation_reset) do
+      test "wrapper-produced #{kind} is recorded" do
+        agent_id = "test.lifecycle-keep-" <> String.replace(unquote(kind), "_", "-")
+        socket = seed_known(agent_id)
+
+        ref =
+          push(socket, "session_lifecycle", %{
+            "kind" => unquote(kind),
+            "at" => "2026-10-27T00:00:00Z"
+          })
+
+        assert_reply ref, :ok
+
+        assert [%{kind: unquote(kind), trigger: nil}] =
+                 SessionLifecycleEvents.list_for_agent(agent_id)
+      end
+    end
+
+    test "a dropped server kind is logged with its kind and agent but not its details" do
+      agent_id = "test.lifecycle-drop-log"
+      socket = seed_known(agent_id)
+
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "session_lifecycle", %{
+              "kind" => "disconnected",
+              "at" => "2026-10-27T00:00:00Z",
+              "details" => %{"origin" => "operator", "reason" => "planted-detail-marker"}
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ ~s(wrapper-produced "disconnected" rejected)
+      assert log =~ "agent_id=#{agent_id}"
+      refute log =~ "planted-detail-marker"
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    # The per-kind clauses this replaced matched on `kind` alone, so a
+    # missing or non-string `at` was logged too; keep that.
+    test "a server kind without a string at is still logged and dropped" do
+      agent_id = "test.lifecycle-drop-no-at"
+      socket = seed_known(agent_id)
+
+      for payload <- [
+            %{"kind" => "session_reset_started"},
+            %{"kind" => "permission_requested", "at" => 42}
+          ] do
+        log =
+          capture_log(fn ->
+            ref = push(socket, "session_lifecycle", payload)
+            assert_reply ref, :ok
+          end)
+
+        assert log =~ "wrapper-produced #{inspect(payload["kind"])} rejected"
+      end
+
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
     test "planned window 中は IA を preflight bounce し pane・conversation・ledger を変更しない" do
       from_id = "test.planned-bounce-from"
       to_id = "test.planned-bounce-to"

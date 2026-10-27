@@ -1083,54 +1083,6 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
-  # ADR-0055 phase-33 Stage B: recording only, no reply payload and no
-  # peer notification (matching delivery_ack's fire-and-forget shape —
-  # the wrapper never attaches a receiver). A malformed/missing `kind` or
-  # `at` falls through to the no-op clause below rather than crashing the
-  # channel. This clause only checks the wire SHAPE (both fields present
-  # and binary) — the protocol.md value vocabulary (closed kind/trigger
-  # sets, ISO-8601 `at`) is enforced once, centrally, by
-  # `SessionLifecycleEvents.append/5` (ふじ Stage B round 1 must-fix B3).
-  #
-  # `trigger` is passed through RAW, not sanitized here (ふじ Stage B
-  # round 2 must-fix B3-残り, 2026-08-31): `Map.get/2` already collapses
-  # both "key absent" and an explicit JSON `null` to `nil`, which
-  # `append/5` already treats as valid (no trigger). A wire value of the
-  # WRONG type (e.g. a JSON number) must reach `append/5` unchanged and be
-  # rejected as a whole event there — sanitizing it to `nil` here first
-  # would store it as a legitimate-looking "no trigger" event instead of
-  # dropping it.
-  # `permission_requested` (issue #305) is server-only audit — the server
-  # "never trusts a wrapper-produced permission_requested" (protocol.md,
-  # "Permission lifecycle audit"). `SessionLifecycleEvents.valid_kind?/1`
-  # alone cannot reject it (it is a legitimate stored kind when
-  # `agents_channel.ex`'s `set_permission` handler appends it directly),
-  # so the wire-ingress boundary rejects it explicitly instead. Logged and
-  # dropped, not an error reply — a compromised/buggy wrapper gets no
-  # signal about which detail rejected it.
-  defp handle_wrapper_in("session_lifecycle", %{"kind" => "permission_requested"}, socket) do
-    Logger.warning(
-      "session_lifecycle: wrapper-produced permission_requested rejected " <>
-        "(server-only audit kind), agent_id=#{socket.assigns.agent_id}"
-    )
-
-    {:reply, :ok, socket}
-  end
-
-  # issue #677: `session_reset_started` is server-authored and, since the
-  # director path, carries attribution details the generic clause below
-  # would silently strip while still storing the kind. Reject the kind at
-  # ingress like `permission_requested` above. The other server-only kinds
-  # keep their pre-existing generic treatment (tracked separately).
-  defp handle_wrapper_in("session_lifecycle", %{"kind" => "session_reset_started"}, socket) do
-    Logger.warning(
-      "session_lifecycle: wrapper-produced session_reset_started rejected " <>
-        "(server-only audit kind), agent_id=#{socket.assigns.agent_id}"
-    )
-
-    {:reply, :ok, socket}
-  end
-
   # issue #305 S1: cross-check a wrapper-reported permission_applied/
   # failed's revision against PermissionSettings' own allocation ledger
   # BEFORE it ever enters the audit trail — the SAME "a revision the
@@ -1208,10 +1160,49 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
-  defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
-       when is_binary(kind) and is_binary(at) do
-    trigger = Map.get(payload, "trigger")
-    SessionLifecycleEvents.append(socket.assigns.agent_id, kind, trigger, at)
+  # ADR-0055 phase-33 Stage B: recording only, no reply payload and no
+  # peer notification (matching delivery_ack's fire-and-forget shape —
+  # the wrapper never attaches a receiver). A malformed/missing `kind` or
+  # `at` is a no-op rather than a channel crash. Besides the wrapper-kind
+  # check below, this clause only checks the wire SHAPE (both fields
+  # present and binary) — the protocol.md value vocabulary (closed
+  # kind/trigger sets, ISO-8601 `at`) is enforced once, centrally, by
+  # `SessionLifecycleEvents.append/5` (ふじ Stage B round 1 must-fix B3).
+  #
+  # `append/5` cannot tell a wrapper call from a server one, so a kind the
+  # wrapper may not produce (`permission_requested` and every server-merged
+  # kind) would otherwise land in the operator's timeline as if the server
+  # had recorded it. Such a kind is logged and dropped whatever its `at`,
+  # not answered with an error — a compromised/buggy wrapper gets no
+  # signal about which detail rejected it.
+  #
+  # `trigger` is passed through RAW, not sanitized here (ふじ Stage B
+  # round 2 must-fix B3-残り, 2026-08-31): `Map.get/2` already collapses
+  # both "key absent" and an explicit JSON `null` to `nil`, which
+  # `append/5` already treats as valid (no trigger). A wire value of the
+  # WRONG type (e.g. a JSON number) must reach `append/5` unchanged and be
+  # rejected as a whole event there — sanitizing it to `nil` here first
+  # would store it as a legitimate-looking "no trigger" event instead of
+  # dropping it.
+  defp handle_wrapper_in("session_lifecycle", %{"kind" => kind} = payload, socket)
+       when is_binary(kind) do
+    agent_id = socket.assigns.agent_id
+    at = Map.get(payload, "at")
+
+    cond do
+      not SessionLifecycleEvents.wrapper_kind?(kind) ->
+        Logger.warning(
+          "session_lifecycle: wrapper-produced #{inspect(kind)} rejected " <>
+            "(not a wrapper kind), agent_id=#{agent_id}"
+        )
+
+      is_binary(at) ->
+        SessionLifecycleEvents.append(agent_id, kind, Map.get(payload, "trigger"), at)
+
+      true ->
+        :ok
+    end
+
     {:reply, :ok, socket}
   end
 
