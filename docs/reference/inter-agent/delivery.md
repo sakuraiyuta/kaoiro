@@ -118,7 +118,12 @@ skip that retires the sequences last. A crash between them leaves an intent
 whose retirement never committed; the ledger deletes it on restart, and the
 retirement's next run (the wrapper's resent resync, a bind under another
 generation, or a disarm) writes it again. Notifications
-are dispatched outside the ledger process. Completion compares the intent's
+are dispatched outside the ledger process by a dispatcher that polls once a
+second. A poll that finds one of the stores it reads (the delivery ledger, agent
+states, planned disconnects, conversation states, or the ingress-order
+allocator) between a stop and its restart skips that tick and retries on the
+next one instead of terminating; any other failure still terminates the
+dispatcher, and its supervisor restarts it. Completion compares the intent's
 revision so an older dispatcher attempt cannot delete a newer loss of its
 recovery notice. A lost response or dispatcher
 restart may redeliver a notification with the same loss ID, which receivers

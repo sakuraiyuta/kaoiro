@@ -1,8 +1,26 @@
 defmodule KaoiroServerWeb.DeliveryLossDispatcher do
   @moduledoc "Delivers durable loss intents outside the delivery ledger process."
   use GenServer
-  alias KaoiroServer.{AgentStates, ConversationStates, DeliveryStates, PlannedDisconnects}
+  require Logger
+
+  alias KaoiroServer.{
+    AgentStates,
+    ConversationStates,
+    DeliveryStates,
+    IngressOrder,
+    PlannedDisconnects
+  }
+
   alias KaoiroServerWeb.SynthEnvelope
+
+  # Every registered process one tick calls, directly or through
+  # SynthEnvelope.deliver/3. A tick that lands while one of them is between
+  # a stop and its restart would exit this process with `noproc` and spend
+  # one of the root supervisor's restarts on a store that was already being
+  # restarted; such a tick is skipped and retried a second later instead.
+  # Anything else (a timeout, a name outside this list, a non-call exit, an
+  # exception) still terminates the dispatcher.
+  @stores [AgentStates, ConversationStates, DeliveryStates, IngressOrder, PlannedDisconnects]
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -15,13 +33,23 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcher do
   end
 
   @impl true
-  def handle_call(:flush, _from, state), do: {:reply, deliver_pending(), state}
+  def handle_call(:flush, _from, state),
+    do: {:reply, tolerate_store_restart(&deliver_pending/0), state}
 
   @impl true
   def handle_info(:flush, state) do
-    deliver_pending()
+    tolerate_store_restart(&deliver_pending/0)
     Process.send_after(self(), :flush, 1_000)
     {:noreply, state}
+  end
+
+  @doc false
+  def tolerate_store_restart(fun) do
+    fun.()
+  catch
+    :exit, {:noproc, {GenServer, :call, [name | _]}} when name in @stores ->
+      Logger.debug("delivery loss tick skipped: #{inspect(name)} is restarting")
+      {:skipped, name}
   end
 
   defp deliver_pending do
