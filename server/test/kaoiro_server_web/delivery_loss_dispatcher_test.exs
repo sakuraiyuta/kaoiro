@@ -3,7 +3,14 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
 
   import ExUnit.CaptureLog
 
-  alias KaoiroServer.{AgentStates, ConversationStates, DeliveryStates, IngressOrder}
+  alias KaoiroServer.{
+    AgentStates,
+    ConversationStates,
+    DeliveryStates,
+    IngressOrder,
+    PlannedDisconnects
+  }
+
   alias KaoiroServer.TestTimeouts
   alias KaoiroServerWeb.DeliveryLossDispatcher
 
@@ -81,7 +88,7 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
   defp pending?(to_id),
     do: Enum.any?(DeliveryStates.pending_losses(), &(&1.recipient == to_id))
 
-  defp assert_recovery_notice(to_id) do
+  defp assert_recovery_broadcast(to_id, budget) do
     topic = "wrapper:" <> to_id
 
     assert_receive %Phoenix.Socket.Broadcast{
@@ -89,8 +96,11 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
                      event: "envelope",
                      payload: %{"payload" => %{"loss_id" => _}}
                    },
-                   TestTimeouts.out_of_band()
+                   budget
+  end
 
+  defp assert_recovery_notice(to_id) do
+    assert_recovery_broadcast(to_id, TestTimeouts.out_of_band())
     refute pending?(to_id)
   end
 
@@ -150,10 +160,13 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
       start_store(AgentStates)
       assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
       assert_receive {:trace, ^pid, :receive, :flush}, 2 * TestTimeouts.slow_path()
-      # The notice is broadcast before the loss is completed; wait for the
-      # re-armed tick to finish before reading the ledger.
+      # A re-armed tick that ran before the re-seed delivers nothing, so sync
+      # on the broadcast rather than on a particular tick: the notice is
+      # broadcast before the loss is completed, and the barrier call is
+      # served only after that tick finished.
+      assert_recovery_broadcast(to_id, 2 * TestTimeouts.slow_path())
       :sys.get_state(pid)
-      assert_recovery_notice(to_id)
+      refute pending?(to_id)
     end
 
     test "flush skips while IngressOrder is absent and delivers once it is back" do
@@ -174,17 +187,24 @@ defmodule KaoiroServerWeb.DeliveryLossDispatcherTest do
   end
 
   describe "tolerate_store_restart/1" do
-    test "skips only a noproc call to a listed store" do
-      stop_store(AgentStates)
-      on_exit(fn -> Supervisor.restart_child(@supervisor, AgentStates) end)
+    test "skips the noproc of each listed store's real call while it is absent" do
+      # One real public call per store the tick makes, in the order the tick
+      # reaches them. Each store is stopped on its own so the skipped name is
+      # that store and nothing else is absent.
+      calls = [
+        {DeliveryStates, fn -> DeliveryStates.pending_losses() end},
+        {AgentStates, fn -> AgentStates.connected?("x") end},
+        {PlannedDisconnects, fn -> PlannedDisconnects.get("x") end},
+        {ConversationStates, fn -> ConversationStates.get("x") end},
+        {IngressOrder, fn -> IngressOrder.allocate() end}
+      ]
 
-      assert {:noproc, {GenServer, :call, [AgentStates, {:connected?, "x"}, 5000]}} =
-               catch_exit(AgentStates.connected?("x"))
-
-      assert {:skipped, AgentStates} =
-               DeliveryLossDispatcher.tolerate_store_restart(fn ->
-                 AgentStates.connected?("x")
-               end)
+      for {store, call} <- calls do
+        stop_store(store)
+        assert {:noproc, {GenServer, :call, [^store, _request, 5000]}} = catch_exit(call.())
+        assert {:skipped, ^store} = DeliveryLossDispatcher.tolerate_store_restart(call)
+        start_store(store)
+      end
     end
 
     test "propagates a noproc call to a name outside the list unchanged" do

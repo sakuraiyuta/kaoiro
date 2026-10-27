@@ -119,13 +119,14 @@ whose retirement never committed; the ledger deletes it on restart, and the
 retirement's next run (the wrapper's resent resync, a bind under another
 generation, or a disarm) writes it again. Notifications
 are dispatched outside the ledger process by a dispatcher that polls once a
-second. A poll that finds one of the stores it reads (the delivery ledger, agent
+second. A poll that finds one of the stores it calls (the delivery ledger, agent
 states, planned disconnects, conversation states, or the ingress-order
 allocator) between a stop and its restart skips that tick and retries on the
-next one instead of terminating; any other failure still terminates the
-dispatcher, and its supervisor restarts it. Completion compares the intent's
+next one instead of terminating; a store that stops while a call is in flight,
+or any other failure, still terminates the dispatcher, and its supervisor
+restarts it. Completion compares the intent's
 revision so an older dispatcher attempt cannot delete a newer loss of its
-recovery notice. A lost response or dispatcher
+recovery notice. A lost response, a skipped tick or a dispatcher
 restart may redeliver a notification with the same loss ID, which receivers
 deduplicate against the latest 10,000 distinct loss IDs in FIFO order within
 one wrapper process. Duplicate arrivals do not refresh that order. An older,
