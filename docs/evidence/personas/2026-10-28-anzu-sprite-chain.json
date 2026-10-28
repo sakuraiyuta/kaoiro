@@ -1,0 +1,53 @@
+{
+  "issue": "sakuraiyuta/kaoiro#864",
+  "date": "2026-10-28",
+  "bubble_box": [
+    712,
+    224,
+    845,
+    354
+  ],
+  "states": {
+    "idle": {
+      "raw_sha256": "1f79d5104b8f7548f4ac7cda768cc064e3070f79695ad9447b127f83e3ef647c",
+      "cut_sha256": "f862455ef3a327590a0b82bd2959916669aad97b6e0efc6345a77506bb89ee94",
+      "sprite_sha256": "32d73f39f44f2fc4b206129d79964bf00833c85b6754e20ba6145ae78ed62e13"
+    },
+    "thinking": {
+      "raw_sha256": "cdc26249671654d81bad9d562d4f5814a2d06f7d28f0ae88773890c15973fb8d",
+      "cut_sha256": "b4df816f0f4590c1c6cae651eef8b11ff4ae71f151483b882894ba02d81759f7",
+      "sprite_sha256": "0e474e625452916fb56fbde7be4c4ce833a09bfbe0144fb0419de92e1e698dfb"
+    },
+    "tool_running": {
+      "raw_sha256": "cbb09e0dad34c4d76171aad85bc281935a2f8d83b6d648762ed96031141c21df",
+      "cut_sha256": "1cbf92d0f64f9b8e78d255d9b22e98b5194b38b6c2c9050164ef8e4c8ce37b7c",
+      "sprite_sha256": "d415853c8faa5a041787a93965e5e01db79162acefbae0e7d04c666bafba9adc"
+    },
+    "waiting_input": {
+      "raw_sha256": "b7810a9e807507e3e0339b9e6b85f89c3b0d778aa21f88aaf40258979b6a3196",
+      "cut_sha256": "cafce764931ec2e1a33c74a6461b50326d99180d5c666daa5d31d275de432e8d",
+      "sprite_sha256": "b2f860f8ffd4275f871da79a23a38aa069255c87e9b70c090e9c09b6777a66a4"
+    },
+    "waiting_permission": {
+      "raw_sha256": "74c3e96c9e83ab94bfd3c8f663e56cb1a5ab48c7442af56b02314bad7e84d980",
+      "cut_sha256": "9e42933b72e1766dd0b5faa3c096847895b1119cb3ddef875980a2d22ff8c18f",
+      "sprite_sha256": "f75658d6cf049e48aeca281278a9c55d3312ebca84e7e6ff20fd1d608f1a9fef",
+      "bubble_sha256": "fb00e055dea8af00f4b3436418d4ba324290a55d2c4ac29ba85ab70184817c53"
+    },
+    "done": {
+      "raw_sha256": "0cf025b450a11c5646cd700039d5d61ab779c19a385cf2ccc785899b73ea2e1a",
+      "cut_sha256": "ba9c423b757d97a3362ab25f0313d720f189cf03090065bff5ad918c9c24f239",
+      "sprite_sha256": "be346271454b03c20894d2571a1ef8c76179198032320d1c56b8013e34f95e48"
+    },
+    "error": {
+      "raw_sha256": "5643acef3c943d377d7836eb6fe0d9524ff831936476f69cc543d56f8dbcea7e",
+      "cut_sha256": "261be57c41ad2855aa4b304152b09912d280563276249a0520b543a7b45c9315",
+      "sprite_sha256": "804d2a16882cf8a84b29b2df50ed99d73349cc185807c8b73f34f50bf107f258"
+    },
+    "fatigued": {
+      "raw_sha256": "a901648df0c5af371dc650da617af3449bba5c591b76eee9117f51e223a51149",
+      "cut_sha256": "337602c6c169b9b20d530547b5210abec2e1a9a548dead033fdd86f6c0690122",
+      "sprite_sha256": "a8350d610148933eda0555af2b69989ca3192fa53ccb70082c0d6b6426e06617"
+    }
+  }
+}
