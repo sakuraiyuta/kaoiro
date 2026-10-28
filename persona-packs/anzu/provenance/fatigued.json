@@ -1,0 +1,17 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, chibi, full body, girl, orange hair, apricot hair, short hair, two low buns, hair puffs, brown eyes, flat cap, orange cap, cabbie hat, jacket, short jacket, orange jacket, white shirt, collared shirt, brown shorts, dark brown shorts, kneehighs, white socks, brown boots, messenger bag, crossbody bag, canvas bag, beige bag, bicycle bell, standing, half-closed eyes, tired, yawning, hat slipping, drooping shoulders, looking at viewer, simple background, white background, clean lineart, flat colors, soft colors, a quick cheerful little courier girl with short apricot-orange hair in two low puffs, wearing a plain apricot-orange flat cap and a short apricot-orange jacket over a white collared shirt, dark brown shorts, white knee socks and brown boots, a plain beige canvas messenger bag across her body with a small silver bicycle bell clipped to the strap",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, emblem, patch, letter, number, writing, neon colors, fluorescent, mismatched footwear, red hair, yellow hair, blonde hair, bicycle",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 152050386799615,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": 1.0,
+  "generated_at": "2026-10-28T11:46:26+09:00",
+  "job_id": "b96086dcea464a4fb6f20a63b702b568",
+  "source_job_id": null,
+  "postprocess": "rembg birefnet-portrait -a -af 240 -ab 10 -ae 10 (rembg 2.0.85, onnxruntime 1.31.0, Pillow 12.3.0, numpy 2.4.6, pymatting 1.1.16, model birefnet-portrait.onnx sha256 1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99); scripts/persona-sprite-postprocess.py <cut> <sprite> (Pillow 10.2.0, scipy 1.11.4, numpy 1.26.4); 512x512 RGBA"
+}

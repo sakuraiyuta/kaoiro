@@ -27,7 +27,7 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert version =~ ~r/^[0-9a-f]{16}$/
 
       assert Map.keys(personas) |> Enum.sort() ==
-               ~w(ao fuji hiiro hisui kogane kohaku kuroe moegi momo shirogane)
+               ~w(anzu ao fuji hiiro hisui kogane kohaku kuroe moegi momo shirogane)
 
       assert %{"url" => "/personas/ao/idle.png?v=" <> _, "hash" => _} =
                personas["ao"]["states"]["idle"]
@@ -45,6 +45,40 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       # zip re-generation); this expectation was not updated with it and
       # has been failing on develop since.
       assert personas["kohaku"]["pack_version"] == "1.1.1"
+    end
+
+    # issue 864: anzu must deliver all eight expressions, fatigued included,
+    # through the same reader as the other packs. Both negative controls
+    # (fatigued declared but not shipped, or shipped but not declared) must
+    # fail here.
+    test "anzu は fatigued を含む 8 表現を、宣言どおりの URL と hash で届ける", %{conn: conn} do
+      %{"personas" => personas} = get(conn, "/api/personas") |> json_response(200)
+      anzu = personas["anzu"]
+
+      assert anzu["name"] == "あんず"
+      assert anzu["pack_version"] == "1.0.0"
+
+      assert Map.keys(anzu["states"]) |> Enum.sort() ==
+               Enum.sort(
+                 ~w(idle thinking tool_running waiting_input waiting_permission done error fatigued)
+               )
+
+      for {state, %{"url" => url, "hash" => hash}} <- anzu["states"] do
+        assert url =~ ~r"^/personas/anzu/#{state}\.png\?v=[0-9a-f]{12}$"
+        assert "sha256:" <> digest = hash
+
+        served = get(conn, url)
+
+        assert response(served, 200)
+
+        assert digest ==
+                 :crypto.hash(:sha256, served.resp_body) |> Base.encode16(case: :lower)
+      end
+
+      detail = get(conn, "/api/personas/anzu") |> json_response(200)
+      assert detail["name"] == "あんず"
+      assert detail["personality"] =~ "あたし"
+      assert detail["personality"] =~ "依頼主さん"
     end
   end
 

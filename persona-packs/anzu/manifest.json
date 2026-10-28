@@ -1,0 +1,11 @@
+{
+  "id": "anzu",
+  "name": "あんず",
+  "sprite_set": "anzu",
+  "version": "1.0.0",
+  "license": "CC0-1.0",
+  "min_kaoiro_version": "0.1.0",
+  "states": ["idle", "thinking", "tool_running", "waiting_input",
+             "waiting_permission", "done", "error", "fatigued"],
+  "description": "依頼を配達として扱う、宛先に厳しい宅配の見習い型ペルソナ"
+}
