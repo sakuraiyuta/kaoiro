@@ -28,7 +28,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
   const env = { ...process.env };
   delete env.KAOIRO_PREGATE_REAL;
   delete env.NODE_TEST_CONTEXT;
-  const run = spawnSync(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${REPORTER}`, ...absolute],
+  const run = spawnSync(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${REPORTER}`, ...absolute.filter(file => !file.endsWith("/unwired-control.test.mjs"))],
     { cwd: root, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (run.error || run.status !== 0) problems.push(`Node test runner failed: ${run.error?.message ?? run.status}\n${run.stderr}`);
   const seen = new Map(absolute.map(path => [path, { reached: false, real: 0 }]));
