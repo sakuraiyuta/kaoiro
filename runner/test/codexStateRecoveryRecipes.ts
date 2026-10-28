@@ -20,21 +20,24 @@ export const EXCLUDED = ["queries", "activity-count", "cut-ready", "running-help
 // Every digested root that EXCLUDED must not reach (fixture-relative).
 export const PROTECTED = ["install", "install/releases", "install/codex-state", "install/.lock.update", "install/.lock.links", "codex", "backup", "upd", ".staging.codex-", ".failed.codex-", ".restore.codex-", "config", "ordinary", "active", "mainpid", "owned-pids", "fake-cgroup", "calls"];
 
-export function digest(dir: string) {
-  const entries: string[] = [];
+// Path -> digest line, in walk order. The path is the key as the walk found it;
+// no caller recovers a path from a line.
+export function digestEntries(dir: string) {
+  const entries = new Map<string, string>();
   const walk = (rel: string) => {
     for (const name of readdirSync(join(dir, rel)).sort()) {
       const path = rel ? `${rel}/${name}` : name;
       if (EXCLUDED.includes(path)) continue;
       const st = lstatSync(join(dir, path)), mode = (st.mode & 0o7777).toString(8);
-      if (st.isSymbolicLink()) entries.push(`${path} l ${mode} ${readlinkSync(join(dir, path))}`);
-      else if (st.isDirectory()) { entries.push(`${path} d ${mode}`); walk(path); }
-      else entries.push(`${path} f ${mode} ${st.size} ${createHash("sha256").update(readFileSync(join(dir, path))).digest("hex")}`);
+      if (st.isSymbolicLink()) entries.set(path, `${path} l ${mode} ${readlinkSync(join(dir, path))}`);
+      else if (st.isDirectory()) { entries.set(path, `${path} d ${mode}`); walk(path); }
+      else entries.set(path, `${path} f ${mode} ${st.size} ${createHash("sha256").update(readFileSync(join(dir, path))).digest("hex")}`);
     }
   };
   walk("");
   return entries;
 }
+export const digest = (dir: string) => [...digestEntries(dir).values()];
 
 export type Run = { h: StateFixture; uuid: string; tx: () => any; saved: Record<string, unknown> };
 type Activity = "active" | "inactive";
@@ -326,11 +329,10 @@ export const split = (label: string): [string, string] => { const i = label.inde
 // variant's digest leaves exactly these out and nothing else.
 export const SERVICE_PATHS = ["active", "calls"];
 export class DigestMismatch extends Error { constructor(readonly paths: string[], message: string) { super(message); } }
-// Paths whose digest entries differ once `ignore` is left out of both lists.
-export function digestChanges(before: string[], after: string[], ignore: string[] = []) {
-  const keyed = (entries: string[]) => new Map(entries.map(e => [e.slice(0, e.indexOf(" ")), e] as const).filter(([path]) => !ignore.includes(path)));
-  const [x, y] = [keyed(before), keyed(after)];
-  return [...new Set([...x.keys(), ...y.keys()])].filter(path => x.get(path) !== y.get(path)).sort();
+// Paths whose digest line differs between two digests, leaving out the paths in
+// `ignore` (each compared whole, never as a prefix).
+export function digestChanges(before: Map<string, string>, after: Map<string, string>, ignore: string[] = []) {
+  return [...new Set([...before.keys(), ...after.keys()])].filter(path => !ignore.includes(path) && before.get(path) !== after.get(path)).sort();
 }
 
 // Compares one run with its declared service cell. The log after the run must
@@ -358,7 +360,7 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
   // Preparation is outside the baseline digest and the measured command.
   v?.prepare(c); extra.prepare?.(c);
   const before = c.uuid ? c.tx() : undefined, starts = h.callLog().split("start").length;
-  const outcome = decl.outcome ?? "refuse", tree = digest(h.dir);
+  const outcome = decl.outcome ?? "refuse", treeEntries = digestEntries(h.dir), tree = [...treeEntries.values()];
   const asides = (before?.asides ?? []).map((e: any) => e.aside).filter((p: string) => existsSync(p));
   // The line is rendered before the perturbation, as an operator reads it.
   const rendered = recipe.line ? undefined : lineFor(c, cmd);
@@ -414,7 +416,7 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
   }
   if (outcome === "refuse") {
     if (v?.mutating) {
-      const changed = digestChanges(tree, digest(h.dir), SERVICE_PATHS);
+      const changed = digestChanges(treeEntries, digestEntries(h.dir), SERVICE_PATHS);
       if (changed.length) throw new DigestMismatch(changed, `${out}\nzero-mutation digest differs outside the service files: ${changed.join(", ")}`);
     } else expect(digest(h.dir), out).toEqual(tree);
   }

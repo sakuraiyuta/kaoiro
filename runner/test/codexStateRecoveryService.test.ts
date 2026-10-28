@@ -1,8 +1,9 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DigestMismatch, PRECONDITIONS, SERVICE_PATHS, deactivate, digestChanges, drive, reach, serviceProblems } from "./codexStateRecoveryRecipes.js";
+import { DigestMismatch, PRECONDITIONS, SERVICE_PATHS, deactivate, digestChanges, digestEntries, drive, reach, serviceProblems } from "./codexStateRecoveryRecipes.js";
 
 // Self-tests of the service observation in drive() and of the checks on the
 // service declarations: each one must fail on its own input (issue 863).
@@ -72,17 +73,44 @@ describe("service observation: an injected fault", () => {
 });
 
 describe("service observation: the zero-mutation digest", () => {
-  const entries = (active: string, calls: string, env = "e1") => [`active f 600 6 ${active}`, `calls f 600 5 ${calls}`, `config d 700`, `config/runner.env f 600 9 ${env}`];
+  // Path -> digest line, as digestEntries returns it.
+  const rows = (active: string, calls: string, env = "e1") => new Map([["active", `active f 600 6 ${active}`], ["calls", `calls f 600 5 ${calls}`], ["config", "config d 700"], ["config/runner.env", `config/runner.env f 600 9 ${env}`]]);
   it("leaves out only the named paths", () => {
-    expect(digestChanges(entries("a", "c"), entries("b", "d"), SERVICE_PATHS)).toEqual([]);
-    expect(digestChanges(entries("a", "c"), entries("b", "d"), ["calls"])).toEqual(["active"]);
-    expect(digestChanges(entries("a", "c"), entries("b", "d"), ["active"])).toEqual(["calls"]);
-    expect(digestChanges(entries("a", "c"), entries("a", "c", "e2"), SERVICE_PATHS)).toEqual(["config/runner.env"]);
-    expect(digestChanges(entries("a", "c"), entries("a", "c"), SERVICE_PATHS)).toEqual([]);
+    expect(digestChanges(rows("a", "c"), rows("b", "d"), SERVICE_PATHS)).toEqual([]);
+    expect(digestChanges(rows("a", "c"), rows("b", "d"), ["calls"])).toEqual(["active"]);
+    expect(digestChanges(rows("a", "c"), rows("b", "d"), ["active"])).toEqual(["calls"]);
+    expect(digestChanges(rows("a", "c"), rows("a", "c", "e2"), SERVICE_PATHS)).toEqual(["config/runner.env"]);
+    expect(digestChanges(rows("a", "c"), rows("a", "c"), SERVICE_PATHS)).toEqual([]);
     expect(SERVICE_PATHS).toEqual(["active", "calls"]);
   });
   it("sees an entry that appears or disappears", () => {
-    expect(digestChanges(entries("a", "c"), entries("a", "c").slice(0, 3), SERVICE_PATHS)).toEqual(["config/runner.env"]);
+    const fewer = rows("a", "c");
+    fewer.delete("config/runner.env");
+    expect(digestChanges(rows("a", "c"), fewer, SERVICE_PATHS)).toEqual(["config/runner.env"]);
+    expect(digestChanges(fewer, rows("a", "c"), SERVICE_PATHS)).toEqual(["config/runner.env"]);
+  });
+  // A path that contains a space, or that starts with an ignored path, is its own path.
+  it("keeps paths that contain spaces or share a prefix apart, and ignores a path only as a whole", () => {
+    const keys = (names: string[], changed = "") => new Map(names.map(name => [name, `${name} f 600 1 ${name === changed ? "new" : "old"}`] as const));
+    const names = ["config/a b", "config/a c", "active b", "calls.old", "active", "calls"];
+    expect(digestChanges(keys(names), keys(names, "config/a b"), SERVICE_PATHS)).toEqual(["config/a b"]);
+    expect(digestChanges(keys(names), keys(names, "config/a c"), SERVICE_PATHS)).toEqual(["config/a c"]);
+    expect(digestChanges(keys(names), keys(names, "active b"), SERVICE_PATHS)).toEqual(["active b"]);
+    expect(digestChanges(keys(names), keys(names, "calls.old"), SERVICE_PATHS)).toEqual(["calls.old"]);
+    expect(digestChanges(keys(names), keys(names, "active"), SERVICE_PATHS)).toEqual([]);
+  });
+  it("sees a change of one of two files whose names share a prefix up to a space, through the real digest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "digest-keys-"));
+    try {
+      mkdirSync(join(dir, "config"));
+      for (const name of ["config/a b", "config/a c", "active"]) writeFileSync(join(dir, name), "1");
+      const before = digestEntries(dir);
+      writeFileSync(join(dir, "config/a b"), "2");
+      expect([...before.keys()]).toEqual(["active", "config", "config/a b", "config/a c"]);
+      expect(digestChanges(before, digestEntries(dir), SERVICE_PATHS)).toEqual(["config/a b"]);
+      writeFileSync(join(dir, "active"), "2");
+      expect(digestChanges(before, digestEntries(dir), SERVICE_PATHS)).toEqual(["config/a b"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   // The active stop of Q-bad rewrites only `active` and `calls`; a write by the
   // stop itself (the fake appends to the runner environment when asked) is
