@@ -22,6 +22,8 @@ jobs:
       - run: pnpm -C dashboard install --frozen-lockfile
       - run: pnpm -C wrapper build
       - run: pnpm -C runner build
+      - name: Node event shape probe
+        run: sh .github/issue-856-node-test-probe.sh
       - name: github-issue-import
         continue-on-error: true
         run: node --test scripts/test/github-issue-import.test.mjs
