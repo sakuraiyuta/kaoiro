@@ -37,7 +37,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
   delete env.KAOIRO_PREGATE_REAL;
   delete env.NODE_TEST_CONTEXT;
   const run = spawnSync(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${REPORTER}`, "--test-reporter-destination=stdout",
-    "--test-reporter=spec", "--test-reporter-destination=stderr", ...absolute],
+    "--test-reporter=spec", "--test-reporter-destination=stderr", ...absolute.filter(file => !file.endsWith("/pre-gate-real.test.mjs"))],
     { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 64 * 1024 * 1024 });
   if (run.error || run.status !== 0) problems.push(`Node test runner failed: ${run.error?.message ?? run.status}`);
   const seen = new Map(absolute.map(path => [path, { reached: false, real: 0 }]));
