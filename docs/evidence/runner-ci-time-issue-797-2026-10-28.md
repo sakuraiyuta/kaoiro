@@ -68,13 +68,16 @@ All of the following ran in the disposable containers; none replaces the CI run.
    and `activity-count`; 0 differences. A second set of tests pins which calls
    the front answers itself and which it hands to the script before any side
    effect.
-2. **Shadow run (not committed).** A build in which the front also ran the script
-   on every call it answered and compared the output compared 47,668 answers
-   across the Workflow, Recovery, KeepSafety, Forward, Restore and Refusals
-   suites (206 + 103 + 111 tests run; all passed) with 0 differences. The
-   Workflow file first ran as one chunk and hit the 20-minute container limit
-   (exit 124); it was rerun in two chunks. This run is of the front before the
-   byte-exactness check for `active` and `mainpid` was added; it was not repeated.
+2. **Shadow run (not committed).** A build of the final front (patched only by an
+   instrumentation that also runs the script on every call the front answers and
+   compares the output) compared 47,668 answers across the Workflow, Recovery,
+   KeepSafety, Forward, Restore, Refusals and Table suites (206 + 103 + 111 tests
+   run; all passed) with 0 differences. The Workflow file runs in two chunks
+   because one run hit the 20-minute container limit (exit 124). The same build
+   with a planted wrong `KillMode` answer reported mismatches (35 lines in the
+   KeepSafety file alone), so the comparison does fail when the front is wrong.
+   The build was made from the committed front and the instrumentation patch
+   only; the working trees were restored afterwards.
 3. **Whole runner suite.** 73 files, 1799 tests, all passed (Vitest `Duration`
    576.93 s with two workers) before the byte-exactness check; the CI run of
    the final head is recorded on the pull request.
@@ -91,17 +94,32 @@ All of the following ran in the disposable containers; none replaces the CI run.
    new file on the branch. Four (C2 `pid > 0`, C8 the `ExecStart` prefix check, N1
    the `assertReplacementDaemonsAbsent` call in `guard`, N2 the daemon-lock
    `BUSY` check) fail nothing on either side, so they are not evidence.
-6. **Negative controls.** Eleven defects put into the front (a changed `KillMode`
-   answer, no trailing-newline rule for `active`, accepting pid 0, matching
-   `*show*` by substring, no `stop`/`start` delegation, echoing the caller's
-   `HOME`, no pristine check, no stderr silence on `cmp`, always delegating,
-   and no byte-exactness check for `active` or for `mainpid`) each failed at
-   least one of the new tests; without the last two the differential test
-   reports 12 and 78 of 864 comparisons different. Without the pristine check, 5 of 30
-   Workflow tests that rewrite the fake fail (none on the unmodified branch). A
-   guard that was first written, `command -v cmp`, was not detected when
-   removed, because a failed `cmp` already hands the call over; it was removed
-   and the missing silence on stderr is what the test pins instead.
+6. **Negative controls, on the final front.** Each defect was put into the final
+   front alone and the new test file was run (5 tests):
+
+   | Defect in the front | Differential test | Pinning tests |
+   |---|---|---|
+   | wrong `KillMode` answer | fails | 2 fail |
+   | `active` with a trailing newline accepted as `active` (both the newline rule and the byte check changed) | 6 of 864 differ | 2 fail |
+   | pid 0 accepted | 78 differ | 1 fails |
+   | `show` matched as a substring | 21 differ | 1 fails |
+   | no `stop`/`start` delegation | passes (the stub shows it) | 1 fails |
+   | caller `HOME` echoed by `show-environment` | 2 differ | 1 fails |
+   | no pristine check | 4 differ | 1 fails |
+   | `cmp` without the stderr silence | passes | 1 fails |
+   | always delegating | passes | 2 fail |
+   | no byte check for `active` | 12 differ | 1 fails |
+   | no byte check for `mainpid` | 78 differ | 1 fails |
+
+   The newline defect needs both changes: the newline rule for `active` alone
+   no longer produces a wrong answer, because the byte check rejects `active\n`
+   as well. (In that run the plain `active` file is also handed to the script,
+   because the changed byte check no longer matches it; one of the two failing
+   pinning tests fails for that reason.) Without the pristine check, 5 of the 30 Workflow tests that rewrite
+   the fake fail (0 of 30 on the unmodified front). A guard that was first
+   written, `command -v cmp`, was not detected when removed, because a failed
+   `cmp` already hands the call over; it was removed and the missing silence on
+   stderr is what the test pins instead.
 
 ## Limits
 
@@ -110,5 +128,8 @@ All of the following ran in the disposable containers; none replaces the CI run.
 - The new test file takes about 80 s in a container.
 - Tests that rewrite the fake still pay the Node start on every later call,
   by design; their number was not counted.
+- The four mutants that no test kills on either side (C2, C8, N1, N2) are not
+  evidence of anything. That the 420 tests of the seven files and the new file do
+  not kill them was measured; why they live was not investigated.
 - Not shown: that no test depends on the elapsed time between fake calls, beyond
   the shadow run and the identical pass sets.
