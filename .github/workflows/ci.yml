@@ -139,8 +139,8 @@ jobs:
       - run: pnpm -C dashboard install --frozen-lockfile
       - run: pnpm -C wrapper build
       - run: pnpm -C runner build
+      - run: node --test scripts/test/check-test-isolation.test.mjs
       - run: node scripts/test-isolation/check.mjs
-      - run: node scripts/test-isolation/run-node-tests.mjs
       - run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs
 
   # Checks out on the host, then runs mix inside a pinned Elixir image.
