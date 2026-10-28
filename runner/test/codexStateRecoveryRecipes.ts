@@ -277,9 +277,14 @@ export const PRECONDITIONS: Record<string, (c: Run) => boolean> = {
   "late-populated": c => existsSync(join(c.h.dir, "late-populated")),
   "late-home": c => existsSync(join(c.h.dir, "late-env")),
   "late-link": c => existsSync(join(c.h.dir, "late-link")),
-  // The fake service runs as its owned child: the controller's start recorded
-  // the main pid and its owned-pid marker, not just the `active` file.
-  "owned-service": c => readFileSync(join(c.h.dir, "active"), "utf8") === "active" && existsSync(join(c.h.dir, "mainpid")) && readdirSync(join(c.h.dir, "owned-pids")).length > 0,
+  // The fake service runs as its owned child: the main pid its controller
+  // recorded is a live process, not just an `active` file (markers of an
+  // earlier run stay behind after a stop).
+  "owned-service": c => {
+    if (readFileSync(join(c.h.dir, "active"), "utf8") !== "active" || !existsSync(join(c.h.dir, "mainpid"))) return false;
+    const pid = JSON.parse(readFileSync(join(c.h.dir, "mainpid"), "utf8")).pid;
+    return Number.isSafeInteger(pid) && pid > 0 && existsSync(`/proc/${pid}`);
+  },
   "stage-copy-fault": c => existsSync(join(c.h.dir, "restore-copy-fault")) && c.h.current() === c.tx().replacement.from.id,
   "activity-window": c => existsSync(join(c.h.dir, "activity-fault")),
   "attest-fault": c => !readFileSync(join(c.h.root, "releases", c.h.B, "dist/cli.js"), "utf8").includes("...{}"),
