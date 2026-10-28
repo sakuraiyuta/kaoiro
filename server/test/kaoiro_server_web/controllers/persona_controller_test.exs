@@ -64,7 +64,7 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
                )
 
       for {state, %{"url" => url, "hash" => hash}} <- anzu["states"] do
-        assert url =~ ~r"^/personas/anzu/#{state}\.png\?v=[0-9a-f]{12}$"
+        assert url =~ ~r"^/personas/anzu/#{state}\.png\?v=[0-9a-f]{12}(&auth=1)?$"
         assert "sha256:" <> digest = hash
 
         served = get(conn, url)
