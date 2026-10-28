@@ -575,112 +575,113 @@ nonzero with the phase kept (or the phase in parentheses); `refuse` changes
 nothing; `noop` succeeds without changing the record.
 
 <!-- recovery-table:begin -->
-| Phase | Command | Branch | Precondition | Outcome | Class |
-|---|---|---|---|---|---|
-| `prepared` | RES | P-RES-ok | current-source | completed | — |
-| `prepared` | RES | P-RES-copy | copy-fault | settle | — |
-| `prepared` | REC | P-REC-ok | current-source | failed | — |
-| `prepared` | RST | P-RST-own | — | refuse | transaction |
-| `prepared` | RES | PS.stopped | late-populated | settle | transient |
-| `prepared` | PRN | P-PRN | — | refuse | transaction |
-| `prepared` | UPD | P-UPD | — | refuse (G2.prepare) | — |
-| `prepared` | RBK | P-RBK | — | refuse (G2.guard) | — |
-| `prepared`, `snapshot-verified` | RES | PS.snapshot-stopped | activity-window | settle | transient |
-| `prepared`, `snapshot-verified` | RES | PS.snapshot-binding | activity-window | settle | transient |
-| `prepared`, `snapshot-verified` | REC | PS.return-link | late-link | held | integrity |
-| `prepared`, `snapshot-verified` | REC | PS.return-binding | late-home | held | config |
-| `prepared`, `snapshot-verified` | REC | PS.return-activity | activity-window | held (failed) | transient |
-| `snapshot-verified` | RES | V-RES-ok | state-equal | completed | — |
-| `snapshot-verified` | RES | V-RES-stale | state-differs | settle | — |
-| `snapshot-verified` | REC | V-REC-ok | current-source | failed | — |
-| `snapshot-verified` | REC | V-REC-missing | snapshot-missing | failed | — |
-| `snapshot-verified` | RST | V-RST-own | — | refuse | transaction |
-| `snapshot-verified` | PRN | V-PRN | — | refuse | transaction |
-| `snapshot-verified` | UPD | V-UPD | — | refuse (G2.prepare) | — |
-| `snapshot-verified` | RBK | V-RBK | — | refuse (G2.guard) | — |
-| `snapshot-verified` | RES | PS.guard-nested | activity-window | settle | transient |
-| `start-intent` | RES | S-RES-source | current-source | completed | — |
-| `start-intent` | RES | S-RES-target | current-target | completed | — |
-| `start-intent` | RES | S-RES-attest | attest-fault | held | transaction |
-| `start-intent` | RES | S-RES-stale | state-differs | held | transaction |
-| `start-intent` | REC | S-REC-ok | snapshot-retained | restored | — |
-| `start-intent` | REC | S-REC-nosnap | snapshot-unretained | refuse | integrity |
-| `start-intent` | RST | S-RST-own | snapshot-retained | restored | — |
-| `start-intent` | PRN | S-PRN | — | refuse | transaction |
-| `start-intent` | UPD | S-UPD | — | refuse (G2.prepare) | — |
-| `start-intent` | RBK | S-RBK | — | refuse (G2.guard) | — |
-| `start-intent` | RES | PS.guard-nested-intent | activity-window | held | transient |
-| `start-intent` | RES | PS.after-switch | activity-window | held | transient |
-| `start-intent` | RES | PS.post-start-active | no-start | held | transient |
-| `start-intent` | RES | PS.post-start-binding | bad-live | held | config |
-| `completed`, `restored` | RES, REC | T-noop | — | noop | — |
-| `completed`, `restored` | RST | T-RST-ok | snapshot-retained | restored | — |
-| `completed`, `restored` | RST | T-RST-retired | snapshot-retired | refuse | transaction |
-| `completed`, `restored` | PRN | T-PRN | snapshot-retained | noop | — |
-| `completed`, `restored` | UPD | T-UPD | — | noop | — |
-| `completed`, `failed`, `restored` | RBK | T-RBK-ok | same-native | noop | — |
-| `completed`, `failed`, `restored` | RBK | T-RBK-native | differing-native | refuse | config |
-| `completed`, `failed`, `restored` | RBK | T-RBK-pre-n2 | pre-n2-target | refuse | config |
-| `failed` | RES | F-RES | — | noop | — |
-| `failed` | REC | F-REC-ok | current-source | failed | — |
-| `failed` | REC | F-REC-moved | current-moved | refuse | integrity |
-| `failed` | RST | F-RST | snapshot-retained | restored | — |
-| `failed` | PRN | F-PRN | snapshot-retained | failed | — |
-| `failed` | PRN | F-PRN-cleanup | cleanup-pending | failed | — |
-| `failed` | UPD | F-UPD | copy-fault | noop | — |
-| `restore-prepared` | RES | R-RES-ok | current-from | restored | — |
-| `restore-prepared` | RES | R-RES-fail | late-link | held | transaction |
-| `restore-prepared` | REC | R-REC-cancel | current-from | completed | — |
-| `restore-prepared` | REC | R-REC-moved | current-source | refuse | integrity |
-| `restore-prepared` | RST | R-RST | — | refuse | transaction |
-| `restore-prepared` | PRN | R-PRN | — | refuse | transaction |
-| `restore-prepared` | UPD | R-UPD | — | refuse (G2.prepare) | — |
-| `restore-prepared` | RBK | R-RBK | — | refuse (G2.guard) | — |
-| `restore-prepared` | RES | PS.stage | activity-window | held | transient |
-| `restore-prepared` | RES | PS.replace-stopped | activity-window | held (replace-intent) | transient |
-| `restore-prepared` | RES | PS.replace-binding | activity-window | held (replace-intent) | transient |
-| `restore-prepared` | REC | PS.cancel-activity | activity-window | held (completed) | transient |
-| `restore-prepared` | RES | PS.catch-restore | activity-window | held | transient |
-| `replace-intent` | RES, REC | Q-L1 | layout-L1 | restored | — |
-| `replace-intent` | RES, REC | Q-L2 | layout-L2 | restored | — |
-| `replace-intent` | RES, REC | Q-L3 | layout-L3 | restored | — |
-| `replace-intent` | RES, REC | Q-L4 | layout-L4 | restored | — |
-| `replace-intent` | RES, REC | Q-bad | staging-corrupt | refuse | integrity |
-| `replace-intent` | RES, REC | Q-cred | credential-both | refuse | integrity |
-| `replace-intent` | RST | Q-RST | — | refuse | transaction |
-| `replace-intent` | PRN | Q-PRN | — | refuse | transaction |
-| `replace-intent` | UPD | Q-UPD | — | refuse (G2.prepare) | — |
-| `replace-intent` | RBK | Q-RBK | — | refuse (G2.guard) | — |
+| Phase | Command | Branch | Precondition | Outcome | Service | Class |
+|---|---|---|---|---|---|---|
+| `prepared` | RES | P-RES-ok | current-source | completed | active: stop-start | — |
+| `prepared` | RES | P-RES-copy | copy-fault | settle | active: stop-start; inactive: start | — |
+| `prepared` | REC | P-REC-ok | current-source | failed | active: stop-start | — |
+| `prepared` | RST | P-RST-own | — | refuse | active: untouched | transaction |
+| `prepared` | RES | PS.stopped | late-populated | settle | active: stop-start | transient |
+| `prepared` | PRN | P-PRN | — | refuse | active: untouched | transaction |
+| `prepared` | UPD | P-UPD | — | refuse (G2.prepare) | active: untouched | — |
+| `prepared` | RBK | P-RBK | — | refuse (G2.guard) | active: untouched | — |
+| `prepared`, `snapshot-verified` | RES | PS.snapshot-stopped | activity-window | settle | active: stop-start | transient |
+| `prepared`, `snapshot-verified` | RES | PS.snapshot-binding | activity-window | settle | active: stop-start | transient |
+| `prepared`, `snapshot-verified` | REC | PS.return-link | late-link | held | active: stop | integrity |
+| `prepared`, `snapshot-verified` | REC | PS.return-binding | late-home | held | active: stop | config |
+| `prepared`, `snapshot-verified` | REC | PS.return-activity | activity-window | held (failed) | active: stop | transient |
+| `snapshot-verified` | RES | V-RES-ok | state-equal | completed | inactive: start | — |
+| `snapshot-verified` | RES | V-RES-stale | state-differs | settle | inactive: start; active: stop-start | — |
+| `snapshot-verified` | REC | V-REC-ok | current-source | failed | inactive: start | — |
+| `snapshot-verified` | REC | V-REC-missing | snapshot-missing | failed | inactive: start | — |
+| `snapshot-verified` | RST | V-RST-own | — | refuse | inactive: untouched | transaction |
+| `snapshot-verified` | PRN | V-PRN | — | refuse | inactive: untouched | transaction |
+| `snapshot-verified` | UPD | V-UPD | — | refuse (G2.prepare) | active: untouched | — |
+| `snapshot-verified` | RBK | V-RBK | — | refuse (G2.guard) | active: untouched | — |
+| `snapshot-verified` | RES | PS.guard-nested | activity-window | settle | inactive: start | transient |
+| `start-intent` | RES | S-RES-source | current-source | completed | inactive: start | — |
+| `start-intent` | RES | S-RES-target | current-target | completed | active: untouched | — |
+| `start-intent` | RES | S-RES-attest | attest-fault | held | inactive: start | transaction |
+| `start-intent` | RES | S-RES-stale | state-differs | held | inactive: untouched | transaction |
+| `start-intent` | REC | S-REC-ok | snapshot-retained | restored | inactive: start | — |
+| `start-intent` | REC | S-REC-nosnap | snapshot-unretained | refuse | inactive: untouched | integrity |
+| `start-intent` | RST | S-RST-own | snapshot-retained | restored | inactive: start | — |
+| `start-intent` | PRN | S-PRN | — | refuse | inactive: untouched | transaction |
+| `start-intent` | UPD | S-UPD | — | refuse (G2.prepare) | active: untouched | — |
+| `start-intent` | RBK | S-RBK | — | refuse (G2.guard) | active: untouched | — |
+| `start-intent` | RES | PS.guard-nested-intent | activity-window | held | inactive: untouched | transient |
+| `start-intent` | RES | PS.after-switch | activity-window | held | inactive: untouched | transient |
+| `start-intent` | RES | PS.post-start-active | no-start | held | inactive: start | transient |
+| `start-intent` | RES | PS.post-start-binding | bad-live | held | inactive: start | config |
+| `completed`, `restored` | RES, REC | T-noop | — | noop | active: untouched | — |
+| `completed`, `restored` | RST | T-RST-ok | snapshot-retained | restored | active: stop-start | — |
+| `completed`, `restored` | RST | T-RST-retired | snapshot-retired | refuse | active: untouched | transaction |
+| `completed`, `restored` | PRN | T-PRN | snapshot-retained | noop | active: untouched | — |
+| `completed`, `restored` | UPD | T-UPD | — | noop | active: stop-start | — |
+| `completed`, `failed`, `restored` | RBK | T-RBK-ok | same-native | noop | active: untouched | — |
+| `completed`, `failed`, `restored` | RBK | T-RBK-native | differing-native | refuse | active: untouched | config |
+| `completed`, `failed`, `restored` | RBK | T-RBK-pre-n2 | pre-n2-target | refuse | active: untouched | config |
+| `failed` | RES | F-RES | — | noop | active: untouched | — |
+| `failed` | REC | F-REC-ok | current-source | failed | active: stop-start | — |
+| `failed` | REC | F-REC-moved | current-moved | refuse | active: untouched | integrity |
+| `failed` | RST | F-RST | snapshot-retained | restored | active: stop-start | — |
+| `failed` | PRN | F-PRN | snapshot-retained | failed | active: untouched | — |
+| `failed` | PRN | F-PRN-cleanup | cleanup-pending | failed | active: untouched | — |
+| `failed` | UPD | F-UPD | copy-fault | noop | active: stop-start | — |
+| `restore-prepared` | RES | R-RES-ok | current-from | restored | active: stop-start | — |
+| `restore-prepared` | RES | R-RES-fail | late-link | held | active: stop | transaction |
+| `restore-prepared` | RES | R-RES-stage-copy | stage-copy-fault | held | active: stop-start; inactive: untouched | — |
+| `restore-prepared` | REC | R-REC-cancel | current-from | completed | active: untouched | — |
+| `restore-prepared` | REC | R-REC-moved | current-source | refuse | active: untouched | integrity |
+| `restore-prepared` | RST | R-RST | — | refuse | active: untouched | transaction |
+| `restore-prepared` | PRN | R-PRN | — | refuse | active: untouched | transaction |
+| `restore-prepared` | UPD | R-UPD | — | refuse (G2.prepare) | active: untouched | — |
+| `restore-prepared` | RBK | R-RBK | — | refuse (G2.guard) | active: untouched | — |
+| `restore-prepared` | RES | PS.stage | activity-window | held | active: stop-start | transient |
+| `restore-prepared` | RES | PS.replace-stopped | activity-window | held (replace-intent) | active: stop | transient |
+| `restore-prepared` | RES | PS.replace-binding | activity-window | held (replace-intent) | active: stop | transient |
+| `restore-prepared` | REC | PS.cancel-activity | activity-window | held (completed) | active: untouched | transient |
+| `restore-prepared` | RES | PS.catch-restore | activity-window | held | active: stop | transient |
+| `replace-intent` | RES, REC | Q-L1 | layout-L1 | restored | inactive: start | — |
+| `replace-intent` | RES, REC | Q-L2 | layout-L2 | restored | inactive: start | — |
+| `replace-intent` | RES, REC | Q-L3 | layout-L3 | restored | inactive: start | — |
+| `replace-intent` | RES, REC | Q-L4 | layout-L4 | restored | inactive: start | — |
+| `replace-intent` | RES, REC | Q-bad | staging-corrupt | refuse | inactive: untouched; active: stop | integrity |
+| `replace-intent` | RES, REC | Q-cred | credential-both | refuse | inactive: untouched; active: stop | integrity |
+| `replace-intent` | RST | Q-RST | — | refuse | inactive: untouched | transaction |
+| `replace-intent` | PRN | Q-PRN | — | refuse | inactive: untouched | transaction |
+| `replace-intent` | UPD | Q-UPD | — | refuse (G2.prepare) | active: untouched | — |
+| `replace-intent` | RBK | Q-RBK | — | refuse (G2.guard) | active: untouched | — |
 
-| Site | Class | Message |
-|---|---|---|
-| G1.run | transaction | "Use the recorded physical updater tool" |
-| G2.guard | transaction | "Unresolved Codex transaction requires recovery: ${}" |
-| G2.prepare | transaction | "Unresolved Codex transaction requires recovery: ${}" |
-| G2.restore | transaction | "Unresolved Codex transaction requires recovery: ${}" |
-| G2.run | transaction | "Unresolved Codex transaction requires recovery: ${}" |
-| G2.prune | transaction | "Unresolved Codex transaction requires recovery: ${}" |
-| G3.run | integrity | "Current is outside recorded operation" |
-| G3.guard | integrity | "Current is outside recorded operation" |
-| G4.run-pre | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
-| G4.guard-entry | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
-| G4.restore | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
-| G4.prepare | config | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
-| G5.began | transient | "Runner activity is transitional or unknown" |
-| G5.binding-run | transient | "Runner activity is transitional or unknown" |
-| G5.pre-stop | transient | "Runner activity is transitional or unknown" |
-| G5.target-check | transient | "Runner activity is transitional or unknown" |
-| G5.resume-stop | transient | "Runner activity is transitional or unknown" |
-| G6.helper | lock | "Lock held: ${}" |
-| G6.updater | lock | "another run holds" |
-| G6.switch-links | lock | "another run holds" |
-| G6.install-links | lock | "another run holds" |
-| G7.guard | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
-| G7.prepare | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
-| G7.restore | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
-| G7.run | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
-| G7.prune | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
-| G7.protected | cutover | "Resolve old Codex state records with the previous tool release: ${}" |
+| Site | Class | Service | Message |
+|---|---|---|---|
+| G1.run | transaction | active: untouched | "Use the recorded physical updater tool" |
+| G2.guard | transaction | active: untouched | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.prepare | transaction | active: untouched | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.restore | transaction | active: untouched | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.run | transaction | active: untouched | "Unresolved Codex transaction requires recovery: ${}" |
+| G2.prune | transaction | active: untouched | "Unresolved Codex transaction requires recovery: ${}" |
+| G3.run | integrity | active: untouched | "Current is outside recorded operation" |
+| G3.guard | integrity | active: untouched | "Current is outside recorded operation" |
+| G4.run-pre | config | active: untouched | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.guard-entry | config | active: untouched | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.restore | config | active: untouched | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G4.prepare | config | active: untouched | "Selected installed service differs from record"; "Next launch CODEX_HOME differs from requested home"; "Running CODEX_HOME differs from requested home"; "Restore home/service differs from selected record" |
+| G5.began | transient | active: untouched | "Runner activity is transitional or unknown" |
+| G5.binding-run | transient | active: untouched | "Runner activity is transitional or unknown" |
+| G5.pre-stop | transient | active: untouched | "Runner activity is transitional or unknown" |
+| G5.target-check | transient | active: untouched | "Runner activity is transitional or unknown" |
+| G5.resume-stop | transient | active: untouched | "Runner activity is transitional or unknown" |
+| G6.helper | lock | active: untouched | "Lock held: ${}" |
+| G6.updater | lock | active: untouched | "another run holds" |
+| G6.switch-links | lock | active: untouched | "another run holds" |
+| G6.install-links | lock | active: untouched | "another run holds" |
+| G7.guard | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.prepare | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.restore | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.run | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.prune | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
+| G7.protected | cutover | active: untouched | "Resolve old Codex state records with the previous tool release: ${}" |
 
 | Phase | `next` lines |
 |---|---|

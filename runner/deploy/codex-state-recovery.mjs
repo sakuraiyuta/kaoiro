@@ -129,6 +129,7 @@ export const TABLE = {
   "restore-prepared": { next: forward, branches: [
     b("R-RES-ok", ["RES"], "restored", { pre: "current-from" }),
     b("R-RES-fail", ["RES"], "held", { pre: "late-link", message: "Restore source link changed", class: "transaction" }),
+    b("R-RES-stage-copy", ["RES"], "held", { pre: "stage-copy-fault" }),
     b("R-REC-cancel", ["REC"], "completed", { pre: "current-from", pin: "cancels an admitted restore before replacement and resumes its admission release" }),
     refuse("R-REC-moved", ["REC"], "Cancellation source link changed", "integrity", { pre: "current-source", pin: "refuses changed restore current before staging and source restart" }),
     refuse("R-RST", ["RST"], M.replacing, "transaction"),
@@ -149,6 +150,39 @@ export const TABLE = {
   restored: { next: ["RST", "PRN", "RBK"], branches: terminal },
 };
 if (Object.keys(TABLE).join() !== PHASES.join()) throw new Error("Recovery table rows differ from the record phases");
+
+// The calls a run makes to the runner service's manager, in order, by branch or
+// guard site and by the service's state when the run begins. A cell is exact
+// for its displayed state and precondition only; nothing is claimed for other
+// initial states, and it is not the live service state (check that with
+// `systemctl --user is-active`). The property suites compare each cell with
+// the fake service controller's call log (docs/plans/issue-709-n3-recovery-table.md).
+export const SERVICE_OPS = { untouched: [], stop: ["stop"], start: ["start"], "stop-start": ["stop", "start"] };
+export const SERVICE_STATES = ["active", "inactive"];
+const at = (before, op, pre) => ({ before, op, ...(pre ? { pre } : {}) });
+const only = (before, op) => ({ default: at(before, op) });
+const [A0, AS, A1] = [only("active", "untouched"), only("active", "stop-start"), only("active", "stop")];
+const [I0, I1] = [only("inactive", "untouched"), only("inactive", "start")];
+const SERVICES = {
+  "P-RES-ok": AS, "P-RES-copy": { default: at("active", "stop-start"), inactive: at("inactive", "start") }, "P-REC-ok": AS, "P-RST-own": A0, "PS.stopped": AS, "P-PRN": A0,
+  "PS.snapshot-stopped": AS, "PS.snapshot-binding": AS, "PS.return-link": A1, "PS.return-binding": A1, "PS.return-activity": A1,
+  "V-RES-ok": I1, "V-RES-stale": { default: at("inactive", "start"), active: at("active", "stop-start") }, "V-REC-ok": I1, "V-REC-missing": I1, "V-RST-own": I0, "V-PRN": I0, "PS.guard-nested": I1,
+  "S-RES-source": I1, "S-RES-target": A0, "S-RES-attest": I1, "S-RES-stale": I0, "S-REC-ok": I1, "S-REC-nosnap": I0, "S-RST-own": I1, "S-PRN": I0,
+  "PS.guard-nested-intent": I0, "PS.after-switch": I0, "PS.post-start-active": I1, "PS.post-start-binding": I1,
+  "T-noop": A0, "T-RST-ok": AS, "T-RST-retired": A0, "T-PRN": A0, "T-UPD": AS, "T-RBK-ok": A0, "T-RBK-native": A0, "T-RBK-pre-n2": A0,
+  "F-RES": A0, "F-REC-ok": AS, "F-REC-moved": A0, "F-RST": AS, "F-PRN": A0, "F-PRN-cleanup": A0, "F-UPD": AS,
+  "R-RES-ok": AS, "R-RES-fail": A1, "R-RES-stage-copy": { default: at("active", "stop-start"), inactive: at("inactive", "untouched") }, "R-REC-cancel": A0, "R-REC-moved": A0, "R-RST": A0, "R-PRN": A0,
+  "PS.stage": AS, "PS.replace-stopped": A1, "PS.replace-binding": A1, "PS.cancel-activity": A0, "PS.catch-restore": A1,
+  "Q-L1": I1, "Q-L2": I1, "Q-L3": I1, "Q-L4": I1,
+  "Q-bad": { default: at("inactive", "untouched"), active: at("active", "stop") }, "Q-cred": { default: at("inactive", "untouched"), active: at("active", "stop") }, "Q-RST": I0, "Q-PRN": I0,
+  "G1.run": A0, "G2.guard": A0, "G2.prepare": A0, "G2.restore": A0, "G2.run": A0, "G2.prune": A0, "G3.run": A0, "G3.guard": A0,
+  "G4.run-pre": A0, "G4.guard-entry": A0, "G4.restore": A0, "G4.prepare": A0, "G5.began": A0, "G5.binding-run": A0, "G5.pre-stop": A0, "G5.target-check": A0, "G5.resume-stop": A0,
+  "G6.helper": A0, "G6.updater": A0, "G6.switch-links": A0, "G6.install-links": A0,
+  "G7.guard": A0, "G7.prepare": A0, "G7.restore": A0, "G7.run": A0, "G7.prune": A0, "G7.protected": A0,
+};
+const declared = [...new Set(PHASES.flatMap(p => TABLE[p].branches.filter(x => !x.guard).map(x => x.id))), ...GUARDS.map(g => g.id)];
+if (Object.keys(SERVICES).sort().join() !== declared.sort().join()) throw new Error("Service declarations differ from the declared branches and guard sites");
+for (const x of [...PHASES.flatMap(p => TABLE[p].branches), ...GUARDS]) if (!x.guard) x.service = SERVICES[x.id];
 
 // Messages raised by two or more branches or guards with different classes.
 export const SHARED_MESSAGES = {};
@@ -423,6 +457,7 @@ export const REFUSALS = {
   "Runner is not fully stopped": { files: ["codex-service.mjs"] },
   "Running CODEX_HOME differs from requested home": { files: ["codex-service.mjs"] },
   "Selected installed service differs from record": { files: ["codex-service.mjs"] },
+  "Service declarations differ from the declared branches and guard sites": { files: ["codex-state-recovery.mjs"] },
   "Snapshot UUID/home differs from record": { files: ["kaoiro-runner-codex-state.mjs"] },
   "Snapshot belongs to a different home": { files: ["codex-snapshot.mjs"] },
   "Snapshot contains excluded entries": { files: ["codex-snapshot.mjs"] },
@@ -580,15 +615,19 @@ export function render(cls, { message = "", tx, row = false, report = [], ...con
   return [...own, ...advice, ...(cls === "lock" ? report : [])];
 }
 
+// One cell per branch or guard: every declared variant, the default first.
+export const serviceCell = service => Object.values(service ?? {}).map(v => `${v.before}: ${v.op}${v.pre ? ` (${v.pre})` : ""}`).join("; ") || "?";
+
 export function runbook() {
-  const lines = ["| Phase | Command | Branch | Precondition | Outcome | Class |", "|---|---|---|---|---|---|"];
+  const lines = ["| Phase | Command | Branch | Precondition | Outcome | Service | Class |", "|---|---|---|---|---|---|---|"];
   for (const x of branches()) {
     const phases = PHASES.filter(p => TABLE[p].branches.some(y => y.id === x.id)).map(p => `\`${p}\``).join(", ");
     const outcome = x.guard ? `refuse (${x.guard})` : x.final ? `${x.outcome} (${x.final})` : x.outcome;
-    lines.push(`| ${phases} | ${x.cmds.join(", ")} | ${x.id} | ${x.pre || "—"} | ${outcome} | ${x.class || "—"} |`);
+    const service = x.guard ? GUARDS.find(g => g.id === x.guard)?.service : x.service;
+    lines.push(`| ${phases} | ${x.cmds.join(", ")} | ${x.id} | ${x.pre || "—"} | ${outcome} | ${serviceCell(service)} | ${x.class || "—"} |`);
   }
-  lines.push("", "| Site | Class | Message |", "|---|---|---|");
-  for (const g of GUARDS) lines.push(`| ${g.id} | ${g.class} | ${g.messages.map(m => `"${m.trim()}"`).join("; ")} |`);
+  lines.push("", "| Site | Class | Service | Message |", "|---|---|---|---|");
+  for (const g of GUARDS) lines.push(`| ${g.id} | ${g.class} | ${serviceCell(g.service)} | ${g.messages.map(m => `"${m.trim()}"`).join("; ")} |`);
   lines.push("", "| Phase | `next` lines |", "|---|---|");
   for (const p of PHASES) lines.push(`| \`${p}\` | ${TABLE[p].next.map(k => LABELS[k]).join(", ")} |`);
   return lines.join("\n");

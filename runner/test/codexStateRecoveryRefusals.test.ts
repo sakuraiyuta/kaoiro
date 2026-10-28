@@ -3,11 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { interruptStateWorker } from "./codexStateFixture.js";
-import { RECIPES, digest, drive, ids, reach, recovery, type Run } from "./codexStateRecoveryRecipes.js";
+import { digest, drive, ids, isFresh, reach, recovery, stateOf, type Run } from "./codexStateRecoveryRecipes.js";
 
 const executed: string[] = [];
 const groups = new Map<string, string[]>();
-for (const id of ids(3)) groups.set(RECIPES[id]!.state, [...(groups.get(RECIPES[id]!.state) ?? []), id]);
+for (const id of ids(3).filter(label => !isFresh(label))) groups.set(stateOf(id), [...(groups.get(stateOf(id)) ?? []), id]);
 
 describe.skipIf(process.platform !== "linux")("N3 recovery property: refusals and guard sites", { timeout: 90_000 }, () => {
   for (const [state, list] of groups) describe(state, () => {
@@ -15,6 +15,11 @@ describe.skipIf(process.platform !== "linux")("N3 recovery property: refusals an
     beforeAll(async () => { c = await reach(state); }, 90_000);
     afterAll(async () => { await c?.h.close(); });
     it.each(list)("refuses %s with zero mutation and its rendered hint", async id => { await drive(id, c); executed.push(id); });
+  });
+  // A variant that changes the service files runs alone, on its own fixture.
+  it.each(ids(3).filter(isFresh))("refuses %s with zero mutation outside the service files and its rendered hint", async id => {
+    const c = await reach(stateOf(id));
+    try { await drive(id, c); executed.push(id); } finally { await c.h.close(); }
   });
   it("executed exactly the declared refusals and guard sites", () => {
     expect([...executed].sort()).toEqual(ids(3).sort());

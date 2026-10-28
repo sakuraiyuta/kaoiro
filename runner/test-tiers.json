@@ -14,6 +14,7 @@
     "test/codexStateRecoveryForward.test.ts",
     "test/codexStateRecoveryRefusals.test.ts",
     "test/codexStateRecoveryRestore.test.ts",
+    "test/codexStateRecoveryService.test.ts",
     "test/codexStateWorkflow.test.ts",
     "test/codex_app_server_supervision.test.ts",
     "test/delivery-composition.test.ts",

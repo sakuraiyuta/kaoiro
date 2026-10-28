@@ -5,17 +5,18 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { scan, shellLines, type Scan } from "./codexStateRecoveryScan.js";
-import { EXCLUDED, PRECONDITIONS, PROTECTED, RECIPES } from "./codexStateRecoveryRecipes.js";
+import { EXCLUDED, PRECONDITIONS, PROTECTED, RECIPES, ids } from "./codexStateRecoveryRecipes.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const deploy = join(repo, "runner/deploy");
 const recovery: any = await import(pathToFileURL(join(deploy, "codex-state-recovery.mjs")).href);
 const SHELL = ["kaoiro-runner-update.sh", "kaoiro-runner-switch.sh", "kaoiro-runner-install.sh", "kaoiro-runner-common.sh"];
-const { ANCHORS, CAUSAL, CLASSES, COMMANDS, GUARDS, LABELS, OUTCOMES, PHASES, REFUSALS, RETHROWS, SHARED_MESSAGES, SHELL_REFUSALS, TABLE } = recovery;
+const { ANCHORS, CAUSAL, CLASSES, COMMANDS, GUARDS, LABELS, OUTCOMES, PHASES, REFUSALS, RETHROWS, SERVICE_OPS, SHARED_MESSAGES, SHELL_REFUSALS, TABLE } = recovery;
 const FIELDS = {
-  branch: ["id", "cmds", "outcome", "pre", "message", "class", "site", "pin", "final"],
+  branch: ["id", "cmds", "outcome", "pre", "message", "class", "site", "pin", "final", "service"],
   via: ["id", "cmds", "guard"],
-  guard: ["id", "messages", "class", "pin"],
+  guard: ["id", "messages", "class", "pin", "service"],
+  service: ["before", "op", "pre"],
   refusal: ["files"],
   shared: ["class", "reason"],
 };
@@ -50,12 +51,40 @@ export function schemaProblems(m: any) {
   return problems;
 }
 
-export function correspondence(m: any, recipes: Record<string, unknown>, preconditions: Record<string, unknown>) {
+// The service cells, read from the exported declarations themselves (not from
+// m.branches()) so that a modified copy of TABLE and GUARDS can be checked.
+export function serviceSchemaProblems(m: any) {
+  const problems: string[] = [];
+  const check = (id: string, service: any) => {
+    if (service === undefined) return problems.push(`${id}: no service declaration`);
+    if (!Object.hasOwn(service, "default")) problems.push(`${id}: no default service variant`);
+    for (const [name, cell] of Object.entries(service) as [string, any][]) {
+      problems.push(...unknown(cell, FIELDS.service).map(f => `${id}/${name}: unknown field ${f}`));
+      if (!Object.hasOwn(m.SERVICE_OPS, cell.op)) problems.push(`${id}/${name}: unknown operation ${cell.op}`);
+      if (!m.SERVICE_STATES.includes(cell.before)) problems.push(`${id}/${name}: unknown initial activity ${cell.before}`);
+    }
+  };
+  for (const row of Object.values(m.TABLE) as any[]) for (const x of row.branches as any[]) {
+    if (x.guard) { const guard = m.GUARDS.find((g: any) => g.id === x.guard); if (guard && guard.service === undefined) problems.push(`${x.id}: referenced guard ${x.guard} has no service declaration`); }
+    else check(x.id, x.service);
+  }
+  for (const g of m.GUARDS as any[]) check(g.id, g.service);
+  return problems;
+}
+
+export function correspondence(m: any, recipes: Record<string, any>, preconditions: Record<string, unknown>) {
   const problems: string[] = [];
   const ids = [...m.branches().filter((x: any) => !x.guard).map((x: any) => x.id), ...m.GUARDS.map((g: any) => g.id)];
   for (const id of ids) if (!Object.hasOwn(recipes, id)) problems.push(`no recipe for ${id}`);
   for (const id of Object.keys(recipes)) if (!ids.includes(id)) problems.push(`recipe for undeclared ${id}`);
-  const names = new Set(m.branches().map((x: any) => x.pre).filter(Boolean));
+  const cells = [...m.branches().filter((x: any) => !x.guard), ...m.GUARDS] as any[];
+  // A declared variant has a recipe variant and the other way round.
+  for (const x of cells) {
+    const declared = Object.keys(x.service ?? {}).filter(name => name !== "default").sort(), provided = Object.keys(recipes[x.id]?.variants ?? {}).sort();
+    for (const name of declared) if (!provided.includes(name)) problems.push(`${x.id}: declared variant ${name} has no recipe`);
+    for (const name of provided) if (!declared.includes(name)) problems.push(`${x.id}: recipe variant ${name} is undeclared`);
+  }
+  const names = new Set([...m.branches().map((x: any) => x.pre), ...cells.flatMap(x => Object.values(x.service ?? {}).map((cell: any) => cell.pre))].filter(Boolean));
   for (const name of names as Set<string>) if (!Object.hasOwn(preconditions, name)) problems.push(`no precondition ${name}`);
   for (const name of Object.keys(preconditions)) if (!names.has(name)) problems.push(`precondition ${name} is not used`);
   return problems;
@@ -100,8 +129,16 @@ describe("Codex recovery table: structure", () => {
   it("has a known schema, a branch in every cell and unique ids", () => {
     expect(schemaProblems(recovery)).toEqual([]);
   });
+  it("declares the service calls of every branch and guard site", () => {
+    expect(serviceSchemaProblems(recovery)).toEqual([]);
+    expect(Object.keys(SERVICE_OPS)).toEqual(["untouched", "stop", "start", "stop-start"]);
+  });
   it("matches the layer-2 recipes and preconditions both ways", () => {
     expect(correspondence(recovery, RECIPES, PRECONDITIONS)).toEqual([]);
+  });
+  it("lists every declared site and service variant exactly once across the three property files", () => {
+    const expected = [...recovery.branches().filter((x: any) => !x.guard), ...GUARDS].flatMap((x: any) => [x.id, ...Object.keys(x.service).filter(name => name !== "default").map(name => `${x.id}:${name}`)]);
+    expect([...ids(1), ...ids(2), ...ids(3)].sort()).toEqual(expected.sort());
   });
   it("derives one class for every cataloged message and shell line", () => {
     expect(classProblems(recovery)).toEqual([]);
@@ -202,6 +239,15 @@ describe("Codex recovery table: shell, anchors, citations, markers and runbook",
     const declared = [...GUARDS.map((g: any) => g.id), ...recovery.branches().filter((x: any) => x.site).map((x: any) => x.id)];
     expect([...new Set(marked)].sort()).toEqual([...declared].sort());
   });
+  it("renders the service cell of every branch, guard and via row", () => {
+    const rows = recovery.runbook().split("\n");
+    for (const x of recovery.branches() as any[]) {
+      const cell = recovery.serviceCell(x.guard ? GUARDS.find((g: any) => g.id === x.guard).service : x.service);
+      expect(rows.find((row: string) => row.includes(`| ${x.id} |`))!, x.id).toContain(`| ${cell} |`);
+    }
+    for (const g of GUARDS) expect(rows.find((row: string) => row.startsWith(`| ${g.id} |`))!, g.id).toContain(`| ${recovery.serviceCell(g.service)} |`);
+    expect(recovery.serviceCell(undefined)).toBe("?");
+  });
   it("keeps the generated runbook table", () => {
     const text = readFileSync(join(repo, "docs/operations/runner-update-and-rollback.md"), "utf8");
     const generated = text.split("<!-- recovery-table:begin -->")[1]?.split("<!-- recovery-table:end -->")[0]?.trim();
@@ -209,5 +255,51 @@ describe("Codex recovery table: shell, anchors, citations, markers and runbook",
   });
   it("never excludes protected state from the zero-mutation digest", () => {
     for (const path of EXCLUDED) for (const root of PROTECTED) expect(path === root || path.startsWith(root.endsWith("-") ? root : root + "/"), `${path} under ${root}`).toBe(false);
+  });
+});
+
+describe("Codex recovery table: service declaration rejection cases", () => {
+  // A copy of the declarations whose branches() follows the copy.
+  const copy = (change: (m: { TABLE: any; GUARDS: any[] }) => void) => {
+    const m = structuredClone({ TABLE: recovery.TABLE, GUARDS: recovery.GUARDS });
+    change(m);
+    const branches = () => { const done = new Set<any>(); return (recovery.PHASES as string[]).flatMap(phase => m.TABLE[phase].branches.filter((x: any) => !done.has(x.id) && done.add(x.id)).map((x: any) => ({ ...x, phase }))); };
+    return { ...recovery, TABLE: m.TABLE, GUARDS: m.GUARDS, branches };
+  };
+  // Declarations share cell objects between branches; a change must reach one branch only.
+  const branch = (m: any, id: string) => {
+    const x = (Object.values(m.TABLE) as any[]).flatMap(row => row.branches).find((y: any) => y.id === id);
+    if (x.service) x.service = structuredClone(x.service);
+    return x;
+  };
+  it("accepts the real declarations and an unchanged copy", () => {
+    expect(serviceSchemaProblems(recovery)).toEqual([]);
+    expect(serviceSchemaProblems(copy(() => {}))).toEqual([]);
+    expect(correspondence(copy(() => {}), RECIPES, PRECONDITIONS)).toEqual([]);
+  });
+  it("rejects an absent service declaration on a branch and on a guard", () => {
+    expect(serviceSchemaProblems(copy(m => { delete branch(m, "P-RES-ok").service; }))).toEqual(["P-RES-ok: no service declaration"]);
+    expect(serviceSchemaProblems(copy(m => { delete m.GUARDS.find(g => g.id === "G1.run").service; }))).toEqual(["G1.run: no service declaration"]);
+  });
+  it("rejects an unknown operation and an unknown initial activity", () => {
+    expect(serviceSchemaProblems(copy(m => { branch(m, "P-RES-ok").service.default.op = "restart"; }))).toEqual(["P-RES-ok/default: unknown operation restart"]);
+    expect(serviceSchemaProblems(copy(m => { branch(m, "P-RES-ok").service.default.before = "running"; }))).toEqual(["P-RES-ok/default: unknown initial activity running"]);
+  });
+  it("rejects an absent default and an unknown field", () => {
+    expect(serviceSchemaProblems(copy(m => { const s = branch(m, "P-RES-copy").service; s.other = s.default; delete s.default; }))).toEqual(["P-RES-copy: no default service variant"]);
+    expect(serviceSchemaProblems(copy(m => { branch(m, "P-RES-ok").service.default.extra = 1; }))).toEqual(["P-RES-ok/default: unknown field extra"]);
+  });
+  it("rejects a via row whose guard has no service declaration", () => {
+    const problems = serviceSchemaProblems(copy(m => { delete m.GUARDS.find(g => g.id === "G2.prepare").service; }));
+    expect(problems).toContain("P-UPD: referenced guard G2.prepare has no service declaration");
+    expect(problems).toContain("G2.prepare: no service declaration");
+  });
+  it("rejects a declared variant without a recipe and a recipe variant that is undeclared", () => {
+    expect(correspondence(copy(m => { branch(m, "P-RES-ok").service.inactive = { before: "inactive", op: "start" }; }), RECIPES, PRECONDITIONS)).toEqual(["P-RES-ok: declared variant inactive has no recipe"]);
+    expect(correspondence(copy(m => { delete branch(m, "P-RES-copy").service.inactive; }), RECIPES, PRECONDITIONS)).toEqual(["P-RES-copy: recipe variant inactive is undeclared"]);
+  });
+  it("rejects a variant precondition that has no check, and a check that nothing uses", () => {
+    expect(correspondence(copy(m => { branch(m, "P-RES-copy").service.inactive.pre = "no-such-check"; }), RECIPES, PRECONDITIONS)).toEqual(["no precondition no-such-check"]);
+    expect(correspondence(copy(() => {}), RECIPES, { ...PRECONDITIONS, unused: () => true })).toEqual(["precondition unused is not used"]);
   });
 });

@@ -1,11 +1,11 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
-import { RECIPES, drive, ids, reach } from "./codexStateRecoveryRecipes.js";
+import { drive, ids, reach, stateOf } from "./codexStateRecoveryRecipes.js";
 
 const executed: string[] = [];
 describe.skipIf(process.platform !== "linux")("N3 recovery property: forward phases", { timeout: 90_000 }, () => {
   it.each(ids(1))("drives %s on a freshly reached state", async id => {
-    const c = await reach(RECIPES[id]!.state);
+    const c = await reach(stateOf(id));
     try { await drive(id, c); executed.push(id); } finally { await c.h.close(); }
   });
   it("executed exactly the declared progress branches", () => {
