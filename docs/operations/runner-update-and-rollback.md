@@ -569,10 +569,20 @@ resume.
 #### Recovery table
 
 The table is generated from `runner/deploy/codex-state-recovery.mjs`
-(`node runner/deploy/codex-state-recovery.mjs --runbook`). Outcomes:
-`settle` records `failed` and starts the unchanged source; `held` exits
-nonzero with the phase kept (or the phase in parentheses); `refuse` changes
-nothing; `noop` succeeds without changing the record.
+(`node runner/deploy/codex-state-recovery.mjs --runbook`). The outcomes
+describe the selected record only: `settle` records `failed`; `held` exits
+nonzero with the phase kept (or the phase in parentheses); `refuse` preserves
+the selected record; `noop` succeeds without changing its phase (other fields
+of the record may change).
+
+The Service column states what the run does to the runner service, apart from
+the outcome: `untouched` makes no service-manager call, and `stop`, `start`
+and `stop-start` make those calls in that order. Each entry begins with the
+service's state when the run starts (`active` or `inactive`) and is exact for
+that state and the precondition in parentheses, if any; it says nothing about
+other starting states. An entry lists the calls the run made, not the state the
+service is left in. Check the live state with
+`systemctl --user is-active <service>` or `systemctl --user status <service>`.
 
 <!-- recovery-table:begin -->
 | Phase | Command | Branch | Precondition | Outcome | Service | Class |
@@ -646,8 +656,8 @@ nothing; `noop` succeeds without changing the record.
 | `replace-intent` | RES, REC | Q-L2 | layout-L2 | restored | inactive: start | — |
 | `replace-intent` | RES, REC | Q-L3 | layout-L3 | restored | inactive: start | — |
 | `replace-intent` | RES, REC | Q-L4 | layout-L4 | restored | inactive: start | — |
-| `replace-intent` | RES, REC | Q-bad | staging-corrupt | refuse | inactive: untouched; active: stop | integrity |
-| `replace-intent` | RES, REC | Q-cred | credential-both | refuse | inactive: untouched; active: stop | integrity |
+| `replace-intent` | RES, REC | Q-bad | staging-corrupt | refuse | inactive: untouched; active: stop (owned-service) | integrity |
+| `replace-intent` | RES, REC | Q-cred | credential-both | refuse | inactive: untouched; active: stop (owned-service) | integrity |
 | `replace-intent` | RST | Q-RST | — | refuse | inactive: untouched | transaction |
 | `replace-intent` | PRN | Q-PRN | — | refuse | inactive: untouched | transaction |
 | `replace-intent` | UPD | Q-UPD | — | refuse (G2.prepare) | active: untouched | — |

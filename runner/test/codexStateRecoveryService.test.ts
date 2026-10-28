@@ -1,6 +1,8 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
-import { DigestMismatch, SERVICE_PATHS, digestChanges, drive, reach, serviceProblems } from "./codexStateRecoveryRecipes.js";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { DigestMismatch, PRECONDITIONS, SERVICE_PATHS, deactivate, digestChanges, drive, reach, serviceProblems } from "./codexStateRecoveryRecipes.js";
 
 // Self-tests of the service observation in drive() and of the checks on the
 // service declarations: each one must fail on its own input (issue 863).
@@ -36,6 +38,24 @@ describe("service observation: serviceProblems", () => {
     expect(serviceProblems({ before: "inactive", op: "untouched" }, seen(["", ""], ["active", "active"]), "active")).toHaveLength(1);
     expect(serviceProblems({ before: "active", op: "restart" }, seen(["", ""], ["active", "active"]), "active")).toEqual(["unknown operation restart"]);
   });
+});
+
+describe("service observation: the active variants", () => {
+  it("run a service that exists as an owned child, not only as an `active` file", async () => {
+    const c = await reach("replace-L3");
+    try {
+      expect(PRECONDITIONS["owned-service"]!(c), "inactive service").toBe(false);
+      writeFileSync(join(c.h.dir, "active"), "active");
+      expect(PRECONDITIONS["owned-service"]!(c), "an `active` file alone").toBe(false);
+    } finally { await c.h.close(); }
+  }, 60_000);
+  it("refuse to run when the declared precondition of the variant does not hold", async () => {
+    const c = await reach("replace-L3");
+    try {
+      const failure = await drive("Q-bad:active", c, { prepare: deactivate }).then(() => undefined, (error: unknown) => error);
+      expect(String((failure as Error | undefined)?.message), "the run must fail at the service precondition").toContain("service precondition owned-service");
+    } finally { await c.h.close(); }
+  }, 60_000);
 });
 
 describe("service observation: the zero-mutation digest", () => {

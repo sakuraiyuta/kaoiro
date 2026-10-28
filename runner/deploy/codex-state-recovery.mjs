@@ -174,7 +174,7 @@ const SERVICES = {
   "R-RES-ok": AS, "R-RES-fail": A1, "R-RES-stage-copy": { default: at("active", "stop-start"), inactive: at("inactive", "untouched") }, "R-REC-cancel": A0, "R-REC-moved": A0, "R-RST": A0, "R-PRN": A0,
   "PS.stage": AS, "PS.replace-stopped": A1, "PS.replace-binding": A1, "PS.cancel-activity": A0, "PS.catch-restore": A1,
   "Q-L1": I1, "Q-L2": I1, "Q-L3": I1, "Q-L4": I1,
-  "Q-bad": { default: at("inactive", "untouched"), active: at("active", "stop") }, "Q-cred": { default: at("inactive", "untouched"), active: at("active", "stop") }, "Q-RST": I0, "Q-PRN": I0,
+  "Q-bad": { default: at("inactive", "untouched"), active: at("active", "stop", "owned-service") }, "Q-cred": { default: at("inactive", "untouched"), active: at("active", "stop", "owned-service") }, "Q-RST": I0, "Q-PRN": I0,
   "G1.run": A0, "G2.guard": A0, "G2.prepare": A0, "G2.restore": A0, "G2.run": A0, "G2.prune": A0, "G3.run": A0, "G3.guard": A0,
   "G4.run-pre": A0, "G4.guard-entry": A0, "G4.restore": A0, "G4.prepare": A0, "G5.began": A0, "G5.binding-run": A0, "G5.pre-stop": A0, "G5.target-check": A0, "G5.resume-stop": A0,
   "G6.helper": A0, "G6.updater": A0, "G6.switch-links": A0, "G6.install-links": A0,

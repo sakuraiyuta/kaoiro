@@ -74,8 +74,8 @@ const cut = (args: (h: StateFixture) => string[], fault: Record<string, unknown>
 const done = (h: StateFixture) => { ok(h.forward()); return first(h); };
 const startService = (h: StateFixture) => ok(spawnSync(h.ctl, ["--user", "start", "kogane468-test"], { env: h.env(), encoding: "utf8" }));
 const stopService = (h: StateFixture) => ok(spawnSync(h.ctl, ["--user", "stop", "kogane468-test"], { env: h.env(), encoding: "utf8" }));
-const activate = (c: Run) => startService(c.h);
-const deactivate = (c: Run) => stopService(c.h);
+export const activate = (c: Run) => startService(c.h);
+export const deactivate = (c: Run) => stopService(c.h);
 // Fails the copy of any file into a restore staging directory, once triggered.
 const restoreCopyFault = (h: StateFixture) => {
   const preload = join(h.dir, "fault-preload.mjs");
@@ -277,6 +277,9 @@ export const PRECONDITIONS: Record<string, (c: Run) => boolean> = {
   "late-populated": c => existsSync(join(c.h.dir, "late-populated")),
   "late-home": c => existsSync(join(c.h.dir, "late-env")),
   "late-link": c => existsSync(join(c.h.dir, "late-link")),
+  // The fake service runs as its owned child: the controller's start recorded
+  // the main pid and its owned-pid marker, not just the `active` file.
+  "owned-service": c => readFileSync(join(c.h.dir, "active"), "utf8") === "active" && existsSync(join(c.h.dir, "mainpid")) && readdirSync(join(c.h.dir, "owned-pids")).length > 0,
   "stage-copy-fault": c => existsSync(join(c.h.dir, "restore-copy-fault")) && c.h.current() === c.tx().replacement.from.id,
   "activity-window": c => existsSync(join(c.h.dir, "activity-fault")),
   "attest-fault": c => !readFileSync(join(c.h.root, "releases", c.h.B, "dist/cli.js"), "utf8").includes("...{}"),
