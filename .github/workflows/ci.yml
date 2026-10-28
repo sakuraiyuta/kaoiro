@@ -142,6 +142,21 @@ jobs:
       - run: node scripts/test-isolation/check.mjs
       - run: node scripts/test-isolation/run-node-tests.mjs
       - run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs
+
+  pre-gate-worker-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
       - name: Measure issue 872 guarded workers (design experiment only)
         run: |
           trap 'rm -rf -- "$RUNNER_TEMP/kogane-872-probe" "$RUNNER_TEMP/kogane-872-probe.mjs" "$RUNNER_TEMP/kogane-872-boundary-probe.mjs"' EXIT
@@ -157,8 +172,27 @@ jobs:
           source = source.replace('/w/repo', os.environ['GITHUB_WORKSPACE']).replace('/w/872-probe', os.environ['RUNNER_TEMP'] + '/kogane-872-probe')
           Path(os.environ['RUNNER_TEMP'] + '/kogane-872-boundary-probe.mjs').write_text(source)
           PY_PROBE
+          original_node="$(command -v node)"
+          original_pnpm="$(command -v pnpm)"
+          original_path="$PATH"
+          export KOGANE_PROBE_NODE="$original_node" KOGANE_PROBE_PNPM="$original_pnpm"
+          python3 - <<'PY_RUNTIME'
+          from pathlib import Path
+          import hashlib, os, shlex, shutil
+          target = Path(os.environ['RUNNER_TEMP']) / 'kogane-872-probe' / 'bin'
+          target.mkdir()
+          original = Path(os.environ['KOGANE_PROBE_NODE']).resolve()
+          shutil.copy2(original, target / 'node')
+          assert hashlib.sha256(original.read_bytes()).digest() == hashlib.sha256((target / 'node').read_bytes()).digest()
+          (target / 'pnpm').write_text('#!/bin/sh\nexec ' + shlex.quote(os.environ['KOGANE_PROBE_PNPM']) + ' "$@"\n')
+          (target / 'pnpm').chmod(0o755)
+          print('owned node SHA-256=' + hashlib.sha256((target / 'node').read_bytes()).hexdigest())
+          PY_RUNTIME
+          export PATH="$RUNNER_TEMP/kogane-872-probe/bin:$PATH"
           node "$RUNNER_TEMP/kogane-872-probe.mjs"
           node "$RUNNER_TEMP/kogane-872-boundary-probe.mjs"
+          export KOGANE_PROBE_ORIGINAL_PATH="$original_path"
+          node --input-type=module -e "$(printf %s aW1wb3J0IGFzc2VydCBmcm9tICdub2RlOmFzc2VydC9zdHJpY3QnOwppbXBvcnQge3NwYXduU3luY30gZnJvbSAnbm9kZTpjaGlsZF9wcm9jZXNzJzsKY29uc3QgZW52PXsuLi5wcm9jZXNzLmVudiwgUEFUSDpwcm9jZXNzLmVudi5LT0dBTkVfUFJPQkVfT1JJR0lOQUxfUEFUSCwgTk9ERV9PUFRJT05TOictLXJlcXVpcmU9Jytwcm9jZXNzLmVudi5SVU5ORVJfVEVNUCsnL2tvZ2FuZS04NzItcHJvYmUvdGVzdC1pc29sYXRpb24uY2pzJywgS0FPSVJPX1BSRUdBVEVfUkVBTDonMSd9Owpjb25zdCByPXNwYXduU3luYyhwcm9jZXNzLmVudi5LT0dBTkVfUFJPQkVfTk9ERSxbJy0tdGVzdCcsJy0tdGVzdC1uYW1lLXBhdHRlcm49Xk4xOicsICdzY3JpcHRzL3Rlc3QvcHJlLWdhdGUtcmVhbC50ZXN0Lm1qcyddLHtlbnYsZW5jb2Rpbmc6J3V0ZjgnfSk7CmNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHtsYWJlbDond2l0aG91dC1vd25lZC1ydW50aW1lJyxleGl0OnIuc3RhdHVzLHN0ZG91dDpyLnN0ZG91dCxzdGRlcnI6ci5zdGRlcnJ9KSk7CmFzc2VydC5lcXVhbChyLnN0YXR1cywxKTsKYXNzZXJ0Lm1hdGNoKHIuc3Rkb3V0LC9zdGFnZV9mYWlsZWQ9YnVpbGQvKTsKYXNzZXJ0Lm1hdGNoKHIuc3Rkb3V0LC9idWlsZC13cmFwcGVyIGV4aXRlZCA3OC8pOwphc3NlcnQubWF0Y2goci5zdGRvdXQsL2V4cGVjdGVkOiAnY2ktbGF5b3V0Jy8pOwphc3NlcnQubWF0Y2goci5zdGRvdXQsL2FjdHVhbDogJ2J1aWxkJy8pOwo= | base64 -d)"
 
   # Checks out on the host, then runs mix inside a pinned Elixir image.
   #
