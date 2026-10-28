@@ -52,10 +52,10 @@ The script exits 1 when any stage fails, and names the failing stage for each st
 
 ## Results
 
-Checked with the expected values above, in the disposable Python 3.12 environment, with `--rembg`:
+Checked with the expected values above, in the disposable Python 3.12 environment:
 
-- Positive run: 8 of 8 states pass. Every regenerated cut is byte-identical to the saved cut.
-- Negative controls, each in a scratch copy. Every control exits 1, and the failing stage is named:
+- Positive run, with `--rembg`: 8 of 8 states pass. Every regenerated cut is byte-identical to the saved cut.
+- Negative controls A to E, each in a scratch copy, run without `--rembg`. Every control exits 1, and the failing stage is named:
 
 | Control | Change | Stage that fails |
 |---|---|---|
@@ -65,8 +65,15 @@ Checked with the expected values above, in the disposable Python 3.12 environmen
 | D | bubble box with x0 = 760 (cuts through the bubble) | bubble hash and reproduced sprite (waiting_permission) |
 | E | raw of waiting_permission replaced by idle's raw | raw hash, positive text, bubble hash, reproduced sprite (waiting_permission) |
 
-Regenerated cut for the raw-swap case: the regenerated cut of idle's raw does not match the saved
-cut of waiting_permission (`f862455e…` against `9e42933b…`, first 16 hex characters).
+- Regeneration-only control, with `--rembg` (full record: [2026-10-28-anzu-regen-negative-control.txt](2026-10-28-anzu-regen-negative-control.txt),
+  sha256 `e15ae7d197b6a709f6313fc92ed786f91c18bd28ab5722fc8c3149f251f738c5`). The raw and job of done are
+  replaced by error's, and the earlier checks are aligned to the swapped raw, so the job, prompt, and cut
+  hashes all agree. Only `regenerated cut differs from the saved cut` fails for done (exit 1). The other seven
+  states pass.
+
+The raw-swap case for waiting_permission was also run by hand, directly with rembg rather than through the
+checker: the regenerated cut of idle's raw does not match the saved cut of waiting_permission
+(`f862455e…` against `9e42933b…`, first 16 hex characters).
 
 ## Bubble box
 
@@ -96,7 +103,9 @@ Run through the remote heavy-test runner, on the commit named in the pull reques
 
 | Run | Change | Result |
 |---|---|---|
-| clean | none | 121 of 121 pass; `mix format --check-formatted` passes |
+| clean, eb798648 | none | 121 of 121 pass; `mix format --check-formatted` passes |
+| clean, e62d3366 (anzu expectations pinned from the ZIP) | none | 121 of 121 pass; `mix format --check-formatted` passes |
+| M3 mutation, on e62d3366 | `PersonaAssets.version_param/1` returns `000000000000` for every image; the change is made in a scratch copy and restored by a shell `trap` | 119 of 121; exit 2. The new anzu test fails at its URL assertion (`v=000000000000&auth=1` against `v=32d73f39f44f`). The existing `persona_assets_test` case "url とハッシュが content-addressed 形式に従う" also fails. This is not a claim that the whole suite is green or red for other reasons |
 | (a) | `fatigued` removed from `manifest.states`, image kept in the ZIP | 14 of 15; the anzu states assertion fails (seven states, no fatigued) |
 | (b) | `sprites/fatigued.png` removed from the ZIP, still declared | 13 of 15; the pack is rejected with `sprites/fatigued.png missing`; anzu is absent |
 

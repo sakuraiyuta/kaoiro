@@ -1,0 +1,31 @@
+# M2: regeneration-only negative control for the anzu sprite chain (issue 864)
+# Recorded on 2026-10-28. Paths are replaced with placeholders; the output below is verbatim.
+
+## Input
+- materials: the operator's raw, cut, and jobs, copied to a scratch directory.
+- raw/done.png replaced by raw/error.png; jobs/done.json replaced by jobs/error.json.
+- pack provenance/done.json replaced by provenance/error.json, so the job and prompt checks pass.
+- expected JSON: states.done.raw_sha256 set to the sha256 of raw/error.png; every other value unchanged.
+  The cut hash and the sprite hash of done stay as recorded.
+- The earlier stages therefore agree with the swapped raw; only the regeneration comparison can fail.
+
+## Command
+```sh
+PATH=<rembg-env>/bin:$PATH <py312-env>/bin/python scripts/verify-persona-sprite-chain.py \
+  --materials <m2-materials> --pack <m2-pack> --expected <m2-expected.json> --rembg
+```
+
+## Output (exit code 1)
+```
+idle                 PASS sprite=32d73f39f44f2fc4
+thinking             PASS sprite=0e474e625452916f
+tool_running         PASS sprite=d415853c8faa5a04
+waiting_input        PASS sprite=b2f860f8ffd4275f
+waiting_permission   PASS sprite=f75658d6cf049e48
+done                 FAIL sprite=be346271454b03c2
+  - regenerated cut differs from the saved cut
+error                PASS sprite=804d2a16882cf8a8
+fatigued             PASS sprite=a8350d610148933e
+7/8 states pass
+exit=1
+```
