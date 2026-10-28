@@ -22,7 +22,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
   const exempt = new Set();
   for (const record of exceptions) {
     const path = record?.path;
-    if (!record || Object.keys(record).sort().join(",") !== "issue,path,reason" ||
+    if (!record ||
         typeof path !== "string" || !entries.includes(path) || exempt.has(path) ||
         !existsSync(resolve(root, path)) || !Number.isSafeInteger(record.issue) || record.issue <= 0 ||
         typeof record.reason !== "string" || !record.reason.trim() ||
