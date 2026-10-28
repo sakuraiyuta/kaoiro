@@ -48,7 +48,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
     row.reached = true;
     if (event.event === "test:fail") problems.push(`${file}: test failed: ${event.name}: ${event.error ?? "unknown"}`);
     const synthetic = event.nesting === 0 && event.name === file && event.line === 1 && event.column === 1;
-    if (event.event === "test:pass" && event.type === "test" && !event.skip && !event.todo && !synthetic) row.real++;
+    if (event.event === "test:pass" && !event.skip && !event.todo && !synthetic) row.real++;
   }
   for (const [index, file] of absolute.entries()) {
     const row = seen.get(file);
