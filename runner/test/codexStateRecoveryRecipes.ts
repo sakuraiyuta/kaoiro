@@ -351,7 +351,7 @@ export function serviceProblems(service: { before: string; op: string }, seen: {
 
 // Reaches nothing: runs one declared branch or guard on a reached state and
 // checks its outcome, hint, service calls and side effects against the declaration.
-export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) => void } = {}) {
+export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) => void; injected?: string } = {}) {
   const [id, variant] = split(label), decl = declared(id), recipe = RECIPES[id]!, h = c.h;
   const v = variant === "default" ? undefined : recipe.variants![variant]!, service = decl.service[variant], expectedAfter = v?.after ?? recipe.after;
   const cmd = recipe.cmd ?? decl.cmds?.[0];
@@ -392,7 +392,8 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
     }
     const messages: string[] = decl.messages ?? (decl.message ? [decl.message] : []);
     if (messages.length) expect(messages.some(m => recovery.keyPattern("${}" + m + "${}").test(r.stderr)), out).toBe(true);
-    if (recipe.injected) expect(r.stderr, out).toContain(recipe.injected);
+    const injected = extra.injected ?? recipe.injected;
+    if (injected) expect(r.stderr, out).toContain(injected);
     const cls = decl.class;
     if (cls && !recipe.shell) {
       const record = messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => r.stderr.includes(`requires recovery: ${x.uuid}`)) : after;

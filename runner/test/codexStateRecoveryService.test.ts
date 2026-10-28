@@ -17,25 +17,28 @@ describe("service observation: serviceProblems", () => {
   });
   it("rejects a reversed, extra, missing or incomplete suffix", () => {
     const run = (op: string, suffix: string) => serviceProblems({ before: "active", op }, seen(["x\n", `x\n${suffix}`], ["active", "active"]), "active");
-    expect(run("stop-start", "start\nstop\n")).toHaveLength(1);
-    expect(run("stop-start", "stop\nstart\nstart\n")).toHaveLength(1);
-    expect(run("stop-start", "stop\n")).toHaveLength(1);
-    expect(run("stop-start", "stop\nsta")).toHaveLength(1);
-    expect(run("untouched", "stop\n")).toHaveLength(1);
-    expect(run("stop", "")).toHaveLength(1);
-    expect(run("start", "stop\n")).toHaveLength(1);
+    const wanted = { untouched: "", stop: "stop\n", start: "start\n", "stop-start": "stop\nstart\n" } as Record<string, string>;
+    const declared = (op: string, suffix: string) => [`calls ${JSON.stringify(suffix)}, declared ${op} ${JSON.stringify(wanted[op])}`];
+    expect(run("stop-start", "start\nstop\n")).toEqual(declared("stop-start", "start\nstop\n"));
+    expect(run("stop-start", "stop\nstart\nstart\n")).toEqual(declared("stop-start", "stop\nstart\nstart\n"));
+    expect(run("stop-start", "stop\n")).toEqual(declared("stop-start", "stop\n"));
+    expect(run("stop-start", "stop\nsta")).toEqual(declared("stop-start", "stop\nsta"));
+    expect(run("untouched", "stop\n")).toEqual(declared("untouched", "stop\n"));
+    expect(run("stop", "")).toEqual(declared("stop", ""));
+    expect(run("start", "stop\n")).toEqual(declared("start", "stop\n"));
   });
   it("rejects a final activity that differs from the expectation even when the calls match", () => {
-    expect(serviceProblems({ before: "active", op: "stop-start" }, seen(["", "stop\nstart\n"], ["active", "inactive"]), "active")).toHaveLength(1);
-    expect(serviceProblems({ before: "inactive", op: "untouched" }, seen(["", ""], ["inactive", "active"]), "inactive")).toHaveLength(1);
+    expect(serviceProblems({ before: "active", op: "stop-start" }, seen(["", "stop\nstart\n"], ["active", "inactive"]), "active")).toEqual(["final activity inactive, expected active"]);
+    expect(serviceProblems({ before: "inactive", op: "untouched" }, seen(["", ""], ["inactive", "active"]), "inactive")).toEqual(["final activity active, expected inactive"]);
   });
   it("rejects a log that does not extend the log before the run, whatever its length", () => {
-    expect(serviceProblems({ before: "active", op: "stop" }, seen(["stop\nstart\n", "stop\n"], ["active", "inactive"]), "inactive")).toHaveLength(1);
-    expect(serviceProblems({ before: "active", op: "stop" }, seen(["start\n", "stop\nstop\n"], ["active", "inactive"]), "inactive")).toHaveLength(1);
-    expect(serviceProblems({ before: "active", op: "untouched" }, seen(["stop\n", ""], ["active", "active"]), "active")).toHaveLength(1);
+    const extend = ["the call log after the run does not extend the log before it"];
+    expect(serviceProblems({ before: "active", op: "stop" }, seen(["stop\nstart\n", "stop\n"], ["active", "inactive"]), "inactive")).toEqual(extend);
+    expect(serviceProblems({ before: "active", op: "stop" }, seen(["start\n", "stop\nstop\n"], ["active", "inactive"]), "inactive")).toEqual(extend);
+    expect(serviceProblems({ before: "active", op: "untouched" }, seen(["stop\n", ""], ["active", "active"]), "active")).toEqual(extend);
   });
   it("rejects a wrong initial activity and an unknown operation", () => {
-    expect(serviceProblems({ before: "inactive", op: "untouched" }, seen(["", ""], ["active", "active"]), "active")).toHaveLength(1);
+    expect(serviceProblems({ before: "inactive", op: "untouched" }, seen(["", ""], ["active", "active"]), "active")).toEqual(["initial activity active, declared inactive"]);
     expect(serviceProblems({ before: "active", op: "restart" }, seen(["", ""], ["active", "active"]), "active")).toEqual(["unknown operation restart"]);
   });
 });
@@ -54,6 +57,16 @@ describe("service observation: the active variants", () => {
     try {
       const failure = await drive("Q-bad:active", c, { prepare: deactivate }).then(() => undefined, (error: unknown) => error);
       expect(String((failure as Error | undefined)?.message), "the run must fail at the service precondition").toContain("service precondition owned-service");
+    } finally { await c.h.close(); }
+  }, 60_000);
+});
+
+describe("service observation: an injected fault", () => {
+  it("is the failure that the run reports, not just any failure with the same service calls", async () => {
+    const c = await reach("restore-prepared");
+    try {
+      const failure = await drive("R-RES-stage-copy", c, { injected: "text that no refusal prints" }).then(() => undefined, (error: unknown) => error);
+      expect(String((failure as Error | undefined)?.message), "the run must fail at the injected-text assertion").toContain("text that no refusal prints");
     } finally { await c.h.close(); }
   }, 60_000);
 });
