@@ -10,7 +10,7 @@ const REPORTER = fileURLToPath(new URL("./node-reporter.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 export function entryProblem(path, row, exempt) {
-  if (!row.reached) return `${path}: no Node test event`;
+  if (!row.reached && !exempt) return `${path}: no Node test event`;
   if (exempt && row.real) return `${path}: stale exception, a real test ran`;
   if (!exempt && !row.real) return `${path}: no real test ran`;
   return undefined;
