@@ -107,3 +107,18 @@ test("runner forwards failure diagnostics and stack on stderr", () => fixture({ 
   assert.match(result.stderr, /diagnostic-canary/);
   assert.match(result.stderr, /at TestContext/);
 }));
+
+for (const input of [undefined, "0"]) {
+  test(`the runner activates the real gate when its input is ${input}`, () => fixture({ "opt-in.test.mjs":
+    testFile('test("activated", { skip: process.env.KAOIRO_PREGATE_REAL !== "1" }, () => {});') }, (root, entries) => {
+    const before = process.env.KAOIRO_PREGATE_REAL;
+    try {
+      if (input === undefined) delete process.env.KAOIRO_PREGATE_REAL;
+      else process.env.KAOIRO_PREGATE_REAL = input;
+      assert.deepEqual(runNodeEntries(root, entries, []), []);
+    } finally {
+      if (before === undefined) delete process.env.KAOIRO_PREGATE_REAL;
+      else process.env.KAOIRO_PREGATE_REAL = before;
+    }
+  }));
+}

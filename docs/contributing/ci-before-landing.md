@@ -2,7 +2,7 @@
 title: CI before landing on develop
 description: Run and record CI on the exact candidate before a director lands it on develop.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-10-28
 ---
 
 # CI before landing on develop
@@ -57,6 +57,14 @@ deployment behavior.
 ## Reviewer evidence
 
 The `test-isolation` job runs the canonical Node entries serially and checks the explicit exceptions in `scripts/test-isolation/node-ci-exceptions.mjs`. Reviewers verify that each exception issue remains open and relevant; CI cannot verify tracker state.
+
+The real pre-gate entry has no exception and must run six cases. Its shared
+runtime copies Node because a symlink resolves outside the owned bin, and its
+single-signal teardown removes the owned clones and gate scratch (see
+[fixture lifecycle](pre-gate.md#real-suite-fixture-lifecycle)). For changes to
+this integration, verify activation/obsolete-exception negative controls and
+time the complete `test-isolation` job twice; record both runs and the maximum
+against the 15-minute budget, with `PNPM_MAX_WORKERS` unset.
 
 The implementation reviewer records this evidence for the reviewed candidate:
 

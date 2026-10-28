@@ -505,10 +505,18 @@ function installNetwork() {
 }
 
 function installWorker() {
-  // A worker loads its own builtins, so the patched child_process and net
-  // would not apply inside it.
-  workerThreads.Worker = function Worker() {
-    refuse("ERR_TEST_ISOLATION", "test refused worker_threads: isolation cannot reach a worker");
+  const OriginalWorker = workerThreads.Worker;
+  workerThreads.Worker = class Worker extends OriginalWorker {
+    constructor(filename, options = {}) {
+      if (options.env !== undefined || options.execArgv !== undefined) {
+        refuse("ERR_TEST_ISOLATION", "test refused worker environment or startup argument override");
+      }
+      const inherited = [...process.execArgv];
+      if (inherited[0] === "--require" && inherited[1] === __filename) inherited.splice(0, 2);
+      // A worker has its own builtins. Install the boundary before its entry,
+      // even when the parent imported the guard without a startup preload.
+      super(filename, { ...options, env: boundaryEnvironment(), execArgv: ["--require", __filename, ...inherited] });
+    }
   };
 }
 

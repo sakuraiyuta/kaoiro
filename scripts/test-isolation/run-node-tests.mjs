@@ -34,7 +34,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
   if (problems.length) return problems;
   const absolute = entries.map(path => resolve(root, path));
   const env = { ...process.env };
-  delete env.KAOIRO_PREGATE_REAL;
+  env.KAOIRO_PREGATE_REAL = "1";
   delete env.NODE_TEST_CONTEXT;
   const run = spawnSync(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${REPORTER}`, "--test-reporter-destination=stdout",
     "--test-reporter=spec", "--test-reporter-destination=stderr", ...absolute],

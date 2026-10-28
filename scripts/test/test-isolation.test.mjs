@@ -343,10 +343,19 @@ test("NODE_OPTIONS alone carries the guard to every Node launch form", async () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("worker_threads are refused because the guard cannot reach them", async () => {
-  const { Worker } = await import("node:worker_threads");
-  assert.throws(() => new Worker("0", { eval: true }), { code: "ERR_TEST_ISOLATION" });
-});
+for (const mode of ["R1a", "R1b", "R2a", "R2b", "inherited", "cjs", "esm", "permit"]) {
+  test(`worker boundary: ${mode}`, () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-worker-"));
+    const probe = fileURLToPath(new URL("./fixtures/isolation-worker-probe.cjs", import.meta.url));
+    try {
+      // env removes the spawn boundary's preload too: the root must install
+      // isolation by ordinary require, not accidentally inherit a preload.
+      const result = spawnSync("env", ["-u", "NODE_OPTIONS", "-u", "KAOIRO_TEST_ISOLATION_CHILD",
+        process.execPath, probe, mode, root], { encoding: "utf8", timeout: 15000 });
+      assert.equal(result.status, 0, result.stderr);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
 
 test("children keep explicit fixture tokens and owned pointers across generations", () => {
   const root = mkdtempSync(join(tmpdir(), "kaoiro577-lineage-"));

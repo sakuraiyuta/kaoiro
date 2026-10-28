@@ -2,7 +2,7 @@
 title: Pre-gate — a fast environment check before a full suite
 description: What scripts/pre-gate checks (pinned toolchain, offline frozen install, clean builds, a CI-like pnpm layout), how to run a suite through it, and how to read the run record.
 status: accepted
-last_updated: 2026-10-19
+last_updated: 2026-10-28
 related: [runner-development]
 ---
 
@@ -89,4 +89,27 @@ code is never changed by recording.
   checks in turn and requires the matching scenario to go red.
 - `KAOIRO_PREGATE_REAL=1 node --test scripts/test/pre-gate-real.test.mjs`
   commits a defect into a scratch clone of the real repository and runs that
-  clone's gate on the new SHA. Under the isolation guard it currently fails because pnpm workers are refused; see [issue #872](https://github.com/sakuraiyuta/kaoiro/issues/872).
+  clone's gate on the new SHA. The canonical `test-isolation` CI runner enables all six cases under the isolation guard. Direct developer invocation remains opt-in.
+
+## Real-suite fixture lifecycle
+
+All six cases use the same owned runtime: a byte-identical copy of the current
+Node executable and a launcher forwarding to the real pinned pnpm. Node must be
+copied: `process.execPath` resolves a symlink back to the original directory,
+so the fixed child PATH would miss the owned bin. P reaches the suite with this
+runtime; N1 drops PATH passthrough and must reach `ci-layout/marker_missing`
+after successful builds. The fixture does not fabricate install/build results.
+
+The test owns a base clone, mutation clones and gate TMPDIR beneath one temporary
+root, including Git worktree metadata. It asynchronously spawns each gate in
+its own process group. Normal teardown and a single SIGINT/SIGTERM stop any
+active owned gate group, await its close, then remove the root. Signals target
+only the group captured from a successful spawn; no host process discovery is
+used. Signal acceptance observes the real N1 CI-build and checks paths/processes
+from an external probe after cancellation, including cancellation of `node --test`.
+
+A second same-kind signal during cleanup, uncatchable termination or machine
+loss can interrupt cleanup; the enclosing disposable test slot or CI temporary
+root owner must recover it. Those cases are not covered by the single-signal
+claim. `PNPM_MAX_WORKERS` is not set by this fixture; acceptance uses the normal
+package-manager worker selection.
