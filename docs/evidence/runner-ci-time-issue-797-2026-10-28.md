@@ -33,7 +33,9 @@ change is `runner/test/codexStateSystemctlFront.sh`, written by
 | `codexStateRecoveryRefusals.test.ts` | 47 | 124.6 s | 38.4 s |
 | `codexStateFixtureSystemctl.test.ts` (new) | 5 | | 71.5 s |
 
-Test counts of the six existing files are unchanged. Vitest 2.1.9 starts
+Test counts of the existing files are unchanged (the table lists the six that
+carry most of the time; `codexStateRecoveryTable.test.ts`, 28 tests, is the
+seventh consumer of the fixture). Vitest 2.1.9 starts
 `max(CPUs - 1, 1)` workers, so the 4-vCPU runner uses three: 3296.92 s of test
 time over three workers is about 1100 s, which is why splitting files could not
 have been enough and the work itself had to shrink.
@@ -60,35 +62,42 @@ All of the following ran in the disposable containers; none replaces the CI run.
 
 1. **Differential test (committed).** The front and the script answer the argv
    recorded from a real forward and restore, and the forms the front's
-   specification decides, in 14 states: 48 argument lists, 672 comparisons of
-   exit status, stdout, first stderr line, `queries` and `activity-count`; 0
-   differences. A second set of tests pins which calls the front answers itself
-   and which it hands to the script before any side effect.
+   specification decides, in 18 states (among them an `active` or `mainpid`
+   file holding a NUL byte, which POSIX `read` drops silently): 48 argument
+   lists, 864 comparisons of exit status, stdout, first stderr line, `queries`
+   and `activity-count`; 0 differences. A second set of tests pins which calls
+   the front answers itself and which it hands to the script before any side
+   effect.
 2. **Shadow run (not committed).** A build in which the front also ran the script
    on every call it answered and compared the output compared 47,668 answers
    across the Workflow, Recovery, KeepSafety, Forward, Restore and Refusals
    suites (206 + 103 + 111 tests run; all passed) with 0 differences. The
    Workflow file first ran as one chunk and hit the 20-minute container limit
-   (exit 124); it was rerun in two chunks.
+   (exit 124); it was rerun in two chunks. This run is of the front before the
+   byte-exactness check for `active` and `mainpid` was added; it was not repeated.
 3. **Whole runner suite.** 73 files, 1799 tests, all passed (Vitest `Duration`
-   576.93 s with two workers); the CI run above agrees.
-4. **Product mutants.** Ten one-line changes to `runner/deploy` were run on the
-   branch. Six (C1, C3, C4, C5, C6, C7: the `ActiveState`, `MainPID`,
-   `ControlGroup`, `Transient` and `RootImage` checks) were killed; four (C2 `pid > 0`,
-   C8 the `ExecStart` prefix check, N1 the `assertReplacementDaemonsAbsent` call in
-   `guard`, N2 the daemon-lock `BUSY` check) were not killed on the branch (nor by the develop runs of the five files named
-   below), so they are not evidence. For KeepSafety, Forward, Refusals, Restore and the
-   recovery table (146 tests) all ten mutants and the unmutated tree were run on
-   develop and on the branch: the failing tests and the first line of every
-   failure message are identical. For the three mutants that fail Workflow tests
-   (C3, C4, C5) the whole Workflow file was also run on develop: identical. The
-   Recovery file was not run against mutants on develop, and the Workflow file
-   was not run on develop for the other seven mutants.
-5. **Negative controls.** Nine defects put into the front (a changed `KillMode`
+   576.93 s with two workers) before the byte-exactness check; the CI run of
+   the final head is recorded on the pull request.
+4. **Same tests, same results.** The JSON reporter output of the seven consumer
+   files (420 tests) on develop and on the final branch has the same test names
+   and the same status for every test (all passed), compared as sets.
+5. **Product mutants.** Ten one-line changes to `runner/deploy` were run on
+   develop and on the final branch against all seven files (420 tests each;
+   the Workflow file in two chunks on develop). For every one of them, and for
+   the unmutated tree, the set of failing tests and the first line of every
+   failure message are identical on both sides. Six mutants (C1, C3, C4, C5, C6,
+   C7: the `ActiveState`, `MainPID`, `ControlGroup`, `Transient` and `RootImage`
+   checks) fail 10, 1, 10, 6, 5 and 5 tests; C6 and C7 also fail one test of the
+   new file on the branch. Four (C2 `pid > 0`, C8 the `ExecStart` prefix check, N1
+   the `assertReplacementDaemonsAbsent` call in `guard`, N2 the daemon-lock
+   `BUSY` check) fail nothing on either side, so they are not evidence.
+6. **Negative controls.** Eleven defects put into the front (a changed `KillMode`
    answer, no trailing-newline rule for `active`, accepting pid 0, matching
    `*show*` by substring, no `stop`/`start` delegation, echoing the caller's
-   `HOME`, no pristine check, no stderr silence on `cmp`, always delegating) each
-   failed at least one of the new tests. Without the pristine check, 5 of 30
+   `HOME`, no pristine check, no stderr silence on `cmp`, always delegating,
+   and no byte-exactness check for `active` or for `mainpid`) each failed at
+   least one of the new tests; without the last two the differential test
+   reports 12 and 78 of 864 comparisons different. Without the pristine check, 5 of 30
    Workflow tests that rewrite the fake fail (none on the unmodified branch). A
    guard that was first written, `command -v cmp`, was not detected when
    removed, because a failed `cmp` already hands the call over; it was removed
@@ -98,7 +107,7 @@ All of the following ran in the disposable containers; none replaces the CI run.
 
 - The CI figure is one run of the draft PR. The acceptance in the issue also
   needs the first two develop CI runs after landing.
-- The new test takes about 70 s in CI.
+- The new test file takes about 80 s in a container.
 - Tests that rewrite the fake still pay the Node start on every later call,
   by design; their number was not counted.
 - Not shown: that no test depends on the elapsed time between fake calls, beyond
