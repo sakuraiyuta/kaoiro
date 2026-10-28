@@ -523,7 +523,7 @@ describe.skipIf(process.platform !== "linux")("managed child environments", { ti
     expect(new Set(nested.map(c=>c.argv.find((a: string)=>["guard","promote"].includes(a))))).toEqual(new Set(["guard","promote"]));
     for (const child of nested) {
       closed(child);
-      expect(child.env).toMatchObject({ KAOIRO_SYSTEMCTL:h.ctl, KAOIRO_NODE:base.KAOIRO_NODE, XDG_RUNTIME_DIR:runtime, DBUS_SESSION_BUS_ADDRESS:env.DBUS_SESSION_BUS_ADDRESS });
+      expect(child.env).toMatchObject({ KAOIRO_SYSTEMCTL:h.systemctl, KAOIRO_NODE:base.KAOIRO_NODE, XDG_RUNTIME_DIR:runtime, DBUS_SESSION_BUS_ADDRESS:env.DBUS_SESSION_BUS_ADDRESS });
       for (const key of ["CODEX_HOME","KAOIRO_RUNNER_DIR","KAOIRO_RUNNER_ENV","XDG_CONFIG_HOME"]) expect(child.env[key],key).toBeUndefined();
     }
     const attested=lines("attest-env.jsonl");

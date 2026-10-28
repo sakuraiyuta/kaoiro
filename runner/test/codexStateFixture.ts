@@ -10,6 +10,17 @@ import { cgroupFixture } from "./codexCgroupFixture.js";
 import { makeReleaseTarball, revisionOf, runScript, writeReleaseTree } from "./releaseFixture.js";
 import { publishPidMarker, signalPidIfStartMatches } from "./pid_marker.js";
 const wrapperCorePidHelper = fileURLToPath(new URL("../../wrapper/core/dist/pid.js", import.meta.url));
+const frontTemplate = readFileSync(fileURLToPath(new URL("./codexStateSystemctlFront.sh", import.meta.url)), "utf8");
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+export function systemctlFrontScript(paths: { dir: string; impl: string; shim: string; conf: string; ordinary: string }) {
+  return frontTemplate.replace("@DIR@", () => shellQuote(paths.dir)).replace("@IMPL@", () => shellQuote(paths.impl)).replace("@SHIM@", () => shellQuote(paths.shim))
+    .replace("@CONF@", () => shellQuote(paths.conf)).replace("@ORDINARY@", () => shellQuote(paths.ordinary));
+}
+export const RECORD_VARIABLE = "KAOIRO_FIXTURE_SYSTEMCTL_RECORD";
+function withoutRecording(source: NodeJS.ProcessEnv) {
+  const { [RECORD_VARIABLE]: _recording, ...rest } = source;
+  return rest;
+}
 export async function createStateFixture(options: { liveDefault?: boolean; liveHomeMissing?: boolean; liveDifferent?: boolean; toolId?: string } = {}) {
   let dir: string, root: string, home: string, ordinary: string, conf: string, calls: string, ctl: string, child: ChildProcess, archive: string, nodeOptions: string;
   const A = revisionOf("state-workflow-a"), B = revisionOf("state-workflow-b");
@@ -91,6 +102,10 @@ else if (args.includes('show')) {
  console.log(values[prop || 'ExecStart'] || '');
 }
 `, { mode: 0o755 });
+  // Answers the read-only queries without starting Node; see codexStateFixtureSystemctl.test.ts.
+  const systemctl = join(dir, "systemctl-front.sh");
+  writeFileSync(join(dir, "systemctl.pristine"), readFileSync(ctl));
+  writeFileSync(systemctl, systemctlFrontScript({ dir, impl: ctl, shim: root + "/current/deploy/kaoiro-runner-launch.sh", conf, ordinary }), { mode: 0o755 });
   const faultPreload = join(dir, "fault-preload.mjs");
   writeFileSync(faultPreload, `
 import fs from 'node:fs';
@@ -149,14 +164,15 @@ exec ${quote(process.execPath)} ${quote("--import=" + preload)} ${quote("--impor
 `, { mode: 0o755 });
   const workers: ChildProcess[] = [], workerCloses: Promise<void>[] = [];
   let workerOutput = "", workerStdout = "", closed = false;
-  const env = () => ({ ...process.env, HOME: ordinary, CODEX_HOME: home, KAOIRO_NODE: nodeWrapper, KAOIRO_RUNNER_DIR: conf, KAOIRO_RUNNER_ENV: join(conf,"runner.env"), KAOIRO_RUNNER_CONFIG: join(conf,"runner.config.json"), KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_SYSTEMCTL: ctl, NODE_OPTIONS: nodeOptions });
+  // The recording variable reaches only the runs that set it themselves.
+  const env = () => ({ ...withoutRecording(process.env), HOME: ordinary, CODEX_HOME: home, KAOIRO_NODE: nodeWrapper, KAOIRO_RUNNER_DIR: conf, KAOIRO_RUNNER_ENV: join(conf,"runner.env"), KAOIRO_RUNNER_CONFIG: join(conf,"runner.config.json"), KAOIRO_RUNNER_SERVER_URL: "", KAOIRO_SYSTEMCTL: systemctl, NODE_OPTIONS: nodeOptions });
   const helper = join(root, "releases", tool, "deploy/kaoiro-runner-codex-state.mjs");
   const updater = join(root, "releases", tool, "deploy/kaoiro-runner-update.sh");
   // Strict artifact derivation needs the flags supplied by the shipped launcher.
   const state = (...args: string[]) => spawnSync("/bin/sh", ["-c", 'deploy_dir=$1; shift; . "$deploy_dir/kaoiro-runner-common.sh"; kaoiro_codex_state "$@"', "fixture-state", join(root,"releases",tool,"deploy"), ...args], { env: env(), encoding: "utf8" });
   const recordFiles = () => readdirSync(join(root, "codex-state/v2/records")).filter(n => n.endsWith(".json"));
   const records = () => recordFiles().map(f => JSON.parse(readFileSync(join(root, "codex-state/v2/records", f), "utf8")));
-  return { dir, root, home, ordinary, conf, calls, ctl, A, B, helper, updater, env,
+  return { dir, root, home, ordinary, conf, calls, ctl, systemctl, A, B, helper, updater, env,
     state, records, tarball: () => archive, workerOutput: () => workerOutput, workerStdout: () => workerStdout,
     spawnHelper: (args: string[]) => { const worker=spawn(process.execPath,["--experimental-vm-modules","--disable-warning=ExperimentalWarning",helper,...args],{env:env(),stdio:"ignore"});workers.push(worker);workerCloses.push(new Promise<void>(resolve=>worker.once("close",()=>resolve())));return worker; },
     spawnWorker: (args: string[]) => { const worker=spawn(updater,args,{env:env(),stdio:["ignore","pipe","pipe"]});worker.stdout?.on("data",data=>{workerStdout+=String(data);});worker.stderr?.on("data",data=>{workerOutput+=String(data);});workers.push(worker);workerCloses.push(new Promise<void>(resolve=>worker.once("close",()=>resolve())));return worker; },
