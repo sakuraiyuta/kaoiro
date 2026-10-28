@@ -77,6 +77,10 @@ describe.skipIf(process.platform !== "linux")("fixture systemctl front: equals t
         { name: "active with a newline", set: () => writeFileSync(path("active"), "active\n") },
         { name: "empty active", set: () => writeFileSync(path("active"), "") },
         { name: "pid 0", set: () => writeFileSync(path("mainpid"), '{"pid":0,"start":"1"}') },
+        { name: "active with a trailing NUL", set: () => writeFileSync(path("active"), "active\0") },
+        { name: "active with a NUL inside", set: () => writeFileSync(path("active"), "act\0ive") },
+        { name: "mainpid with a NUL after the pid", set: () => writeFileSync(path("mainpid"), '{"pid":42\0,"start":"1"}') },
+        { name: "mainpid with a trailing NUL", set: () => writeFileSync(path("mainpid"), `${original.mainpid}\0`) },
         { name: "pid with a leading zero", set: () => writeFileSync(path("mainpid"), '{"pid":05,"start":"1"}') },
         { name: "mainpid with spaces", set: () => writeFileSync(path("mainpid"), '{ "pid": 5, "start": "1" }') },
         { name: "pid over 15 digits", set: () => writeFileSync(path("mainpid"), '{"pid":1234567890123456,"start":"1"}') },
@@ -86,7 +90,7 @@ describe.skipIf(process.platform !== "linux")("fixture systemctl front: equals t
         { name: "rewritten script", set: () => writeFileSync(h.ctl, original.ctl.replace("MainPID:active?String(ownerPid):'0'", "MainPID:'4242'")) },
         { name: "caller environment differs", set: () => {}, env: { HOME: "/nonexistent-caller-home", KAOIRO_RUNNER_DIR: "/nonexistent-caller-runner-dir" } },
       ];
-      expect(states.length).toBe(14);
+      expect(states.length).toBe(18);
       const run = (bin: string, argv: string[], env: Record<string, string | undefined>, repeat: number) => {
         for (const name of ["queries", "activity-count"]) rmSync(path(name), { force: true });
         const outcomes = [];
@@ -195,6 +199,10 @@ describe.skipIf(process.platform !== "linux")("fixture systemctl front: fast pat
         { name: "show with a newline", argv: ["--user", "show\n", "--property=KillMode"] },
         { name: "a longer word", argv: ["--user", "showx", "--property=KillMode"] },
         { name: "an active file with a newline", argv: show("MainPID"), set: () => writeFileSync(join(s.dir, "active"), "active\n") },
+        { name: "an active file with a trailing NUL", argv: show("MainPID"), set: () => writeFileSync(join(s.dir, "active"), "active\0") },
+        { name: "an active file with a NUL inside", argv: show("ActiveState"), set: () => writeFileSync(join(s.dir, "active"), "act\0ive") },
+        { name: "a mainpid file with a NUL after the pid", argv: show("MainPID"), set: () => writeFileSync(join(s.dir, "mainpid"), '{"pid":42\0,"start":"1"}') },
+        { name: "a mainpid file with a trailing NUL", argv: show("MainPID"), set: () => writeFileSync(join(s.dir, "mainpid"), `${MAINPID}\0`) },
         { name: "a missing active file", argv: show("MainPID"), set: () => rmSync(join(s.dir, "active")) },
         { name: "a missing mainpid file", argv: show("MainPID"), set: () => rmSync(join(s.dir, "mainpid")) },
         { name: "pid 0", argv: show("MainPID"), set: () => writeFileSync(join(s.dir, "mainpid"), '{"pid":0,"start":"1"}') },

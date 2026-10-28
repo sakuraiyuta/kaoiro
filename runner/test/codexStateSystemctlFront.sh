@@ -47,12 +47,17 @@ cmp -s "$impl" "$d/systemctl.pristine" 2> /dev/null || slow "$@"
 
 # active is compared as a whole string by the Node script. A zero status from
 # read means a newline was present, so the content is not exactly "active".
+# read also drops NUL bytes silently, so a value that passes the checks below
+# must still be the file's exact bytes (cmp), or Node answers.
 [ -f "$d/mainpid" ] || slow "$@"
 [ -f "$d/active" ] || slow "$@"
 m=
 if IFS= read -r m < "$d/mainpid"; then slow "$@"; fi
 act=
 if IFS= read -r act < "$d/active"; then slow "$@"; fi
+if [ "$act" = active ]; then
+  printf '%s' "$act" | cmp -s - "$d/active" 2> /dev/null || slow "$@"
+fi
 p=${m#'{"pid":'}
 p=${p%%,*}
 s=${m#*',"start":"'}
@@ -61,6 +66,7 @@ case $p in '' | *[!0-9]* | 0*) slow "$@" ;; esac
 case $s in '' | *[!0-9]*) slow "$@" ;; esac
 [ "${#p}" -le 15 ] || slow "$@"
 [ "$m" = '{"pid":'"$p"',"start":"'"$s"'"}' ] || slow "$@"
+printf '%s' "$m" | cmp -s - "$d/mainpid" 2> /dev/null || slow "$@"
 
 if [ $want_env = 1 ]; then
   [ ! -e "$d/manager-extra" ] || slow "$@"
