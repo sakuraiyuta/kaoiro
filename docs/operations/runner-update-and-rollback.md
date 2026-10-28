@@ -570,9 +570,21 @@ resume.
 
 The table is generated from `runner/deploy/codex-state-recovery.mjs`
 (`node runner/deploy/codex-state-recovery.mjs --runbook`). Outcomes:
-`settle` records `failed` and starts the unchanged source; `held` exits
-nonzero with the phase kept (or the phase in parentheses); `refuse` changes
-nothing; `noop` succeeds without changing the record.
+`settle` records `failed` and starts the unchanged source (running the source
+release); `held` exits nonzero with the phase kept (or the phase in
+parentheses); `refuse` changes nothing (service untouched); `noop`
+succeeds without changing the record (service untouched).
+
+Service state after an outcome ending in `held`:
+
+- A forward refusal before `replace-intent` (in `prepared` or
+  `snapshot-verified`) restarts the unchanged source release (restart
+  attempted, may be refused).
+- A restore-staging refusal (in `restore-prepared`) restarts the source release
+  only if the runner was active when the run began (restart attempted, may be
+  refused).
+- A refusal at or after `replace-intent` (or in `start-intent`) leaves the
+  runner stopped until the operator recovers the transaction.
 
 <!-- recovery-table:begin -->
 | Phase | Command | Branch | Precondition | Outcome | Class |
