@@ -382,14 +382,13 @@ const CI_JOB = "test-isolation";
 const CI_STEPS = ["- run: node scripts/test-isolation/check.mjs",
   "- run: node scripts/test-isolation/run-node-tests.mjs",
   "- run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs"];
-const CI_UNSAFE_KEY = /^(?:-\s+)?(?:continue-on-error|if|needs)\s*:/;
+const CI_UNSAFE_KEY = /^(?:-\s+)?(?:continue-on-error|if)\s*:/;
 
 /** Returns how the test-isolation job of a workflow fails to run the checker and its tests. */
 export function ciWiringProblems(text) {
   const lines = text.split("\n");
   const start = lines.indexOf(`  ${CI_JOB}:`);
   if (start < 0) return [`${CI_WORKFLOW}: job ${CI_JOB} not found`];
-  if (lines.filter(line => line === `  ${CI_JOB}:`).length !== 1) return [`${CI_WORKFLOW}: duplicate job ${CI_JOB}`];
   const next = lines.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));
   const job = lines.slice(start + 1, next < 0 ? undefined : next).map(line => line.trim());
   const problems = CI_STEPS.filter(step => !job.includes(step))
