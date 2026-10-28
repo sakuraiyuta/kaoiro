@@ -569,22 +569,38 @@ resume.
 #### Recovery table
 
 The table is generated from `runner/deploy/codex-state-recovery.mjs`
-(`node runner/deploy/codex-state-recovery.mjs --runbook`). Outcomes:
-`settle` records `failed` and starts the unchanged source (running the source
-release); `held` exits nonzero with the phase kept (or the phase in
-parentheses); `refuse` changes nothing (service untouched); `noop`
-succeeds without changing the record (service untouched).
+(`node runner/deploy/codex-state-recovery.mjs --runbook`). The outcome
+guarantees only the state of the transaction record, not the live runner
+service: `settle` records `failed` and attempts to start the unchanged source;
+`held` exits nonzero with the phase kept (or the phase in parentheses);
+`refuse` rejects the command without modifying the record; `noop` succeeds
+without modifying the record (though commands like `UPD` may still run
+independent operations).
 
-Service state after an outcome ending in `held`:
+Automatic restart attempts and service state:
 
 - A forward refusal before `replace-intent` (in `prepared` or
-  `snapshot-verified`) restarts the unchanged source release (restart
-  attempted, may be refused).
-- A restore-staging refusal (in `restore-prepared`) restarts the source release
-  only if the runner was active when the run began (restart attempted, may be
-  refused).
-- A refusal at or after `replace-intent` (or in `start-intent`) leaves the
-  runner stopped until the operator recovers the transaction.
+  `snapshot-verified`): once changes begin, an automatic restart of the
+  unchanged source release is attempted (restart attempted, may be refused).
+- A restore-staging refusal (in `restore-prepared` before replacement):
+  restart of the source release is attempted only if the runner was active
+  when the run began (restart attempted, may be refused).
+- A cancellation of `restore-prepared` (`recover`): records the prior phase
+  and attempts to restart the source release; a failure during startup or
+  post-start validation (`PS.cancel-activity`) leaves the record
+  `held (completed)` without an automatic rollback.
+- Failures during or after service startup (in `start-intent`, such as
+  `S-RES-attest` or `PS.post-start-binding`): the runner service was started
+  and no automatic stop is performed on failure, so the service may remain
+  active while the record is `held`.
+- Refusals at or after `replace-intent`: the runner was stopped before
+  replacement and no automatic restart is attempted in catch.
+
+Because outcomes describe the transaction record rather than the live
+process, neither `held` nor `refuse` guarantees that the service is running or
+stopped. After an unexpected refusal or held outcome, operators should check
+the actual service state directly (for example, with
+`systemctl --user is-active <service>` or `systemctl --user status <service>`).
 
 <!-- recovery-table:begin -->
 | Phase | Command | Branch | Precondition | Outcome | Class |
