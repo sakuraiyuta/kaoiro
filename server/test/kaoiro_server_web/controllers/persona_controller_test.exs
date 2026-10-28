@@ -47,36 +47,57 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
       assert personas["kohaku"]["pack_version"] == "1.1.1"
     end
 
-    # issue 864: anzu must deliver all eight expressions, fatigued included,
-    # through the same reader as the other packs. Both negative controls
-    # (fatigued declared but not shipped, or shipped but not declared) must
-    # fail here.
-    test "anzu は fatigued を含む 8 表現を、宣言どおりの URL と hash で届ける", %{conn: conn} do
+    # issue 864: anzu must deliver all eight expressions, fatigued included.
+    # Every expected value is computed from the bundled ZIP itself: each
+    # sprite's sha256, the URL version (its first 12 hex digits), the manifest
+    # description, and the first line of the composed prompt. Both negative
+    # controls (fatigued declared but not shipped, or shipped but not
+    # declared) must fail here.
+    test "anzu は fatigued を含む 8 表現を、ZIP の値どおりの URL と hash で届ける", %{conn: conn} do
+      zip = Path.join(:code.priv_dir(:kaoiro_server), "persona-packs/anzu-1.0.0.zip")
+      {:ok, entries} = :zip.unzip(String.to_charlist(zip), [:memory])
+      files = Map.new(entries, fn {name, bin} -> {List.to_string(name), bin} end)
+      manifest = Jason.decode!(Map.fetch!(files, "manifest.json"))
+
       %{"personas" => personas} = get(conn, "/api/personas") |> json_response(200)
       anzu = personas["anzu"]
 
       assert anzu["name"] == "あんず"
       assert anzu["pack_version"] == "1.0.0"
+      assert manifest["version"] == "1.0.0"
+      assert anzu["description"] == manifest["description"]
+      assert anzu["description"] == "依頼を配達として扱う、宛先に厳しい宅配の見習い型ペルソナ"
 
-      assert Map.keys(anzu["states"]) |> Enum.sort() ==
-               Enum.sort(
-                 ~w(idle thinking tool_running waiting_input waiting_permission done error fatigued)
-               )
+      states = ~w(idle thinking tool_running waiting_input waiting_permission done error fatigued)
+      assert Map.keys(anzu["states"]) |> Enum.sort() == Enum.sort(states)
 
-      for {state, %{"url" => url, "hash" => hash}} <- anzu["states"] do
-        assert url =~ ~r"^/personas/anzu/#{state}\.png\?v=[0-9a-f]{12}(&auth=1)?$"
-        assert "sha256:" <> digest = hash
+      for state <- states do
+        bin = Map.fetch!(files, "sprites/#{state}.png")
+        digest = :crypto.hash(:sha256, bin) |> Base.encode16(case: :lower)
+        version = String.slice(digest, 0, 12)
+        info = anzu["states"][state]
 
-        served = get(conn, url)
+        assert info["hash"] == "sha256:" <> digest
+
+        assert info["url"] in [
+                 "/personas/anzu/#{state}.png?v=#{version}",
+                 "/personas/anzu/#{state}.png?v=#{version}&auth=1"
+               ]
+
+        served = get(conn, info["url"])
 
         assert response(served, 200)
-
-        assert digest ==
-                 :crypto.hash(:sha256, served.resp_body) |> Base.encode16(case: :lower)
+        assert served.resp_body == bin
       end
+
+      [first_line | _] =
+        KaoiroServer.PersonaAssets.prompt("anzu") |> String.split("\n", parts: 2)
+
+      assert first_line == "あなたは kaoiro のペルソナ「あんず」(persona.id = `anzu`) として応答する。"
 
       detail = get(conn, "/api/personas/anzu") |> json_response(200)
       assert detail["name"] == "あんず"
+      assert detail["description"] == manifest["description"]
       assert detail["personality"] =~ "あたし"
       assert detail["personality"] =~ "依頼主さん"
     end
