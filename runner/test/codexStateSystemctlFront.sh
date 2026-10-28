@@ -43,8 +43,7 @@ done
 [ $want_env = 1 ] || [ $want_show = 1 ] || slow "$@"
 
 # A rewritten fake (tests inject faults by editing it) is served by Node.
-command -v cmp > /dev/null 2>&1 || slow "$@"
-cmp -s "$impl" "$d/systemctl.pristine" || slow "$@"
+cmp -s "$impl" "$d/systemctl.pristine" 2> /dev/null || slow "$@"
 
 # active is compared as a whole string by the Node script. A zero status from
 # read means a newline was present, so the content is not exactly "active".

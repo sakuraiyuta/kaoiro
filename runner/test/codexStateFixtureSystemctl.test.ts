@@ -164,7 +164,7 @@ describe.skipIf(process.platform !== "linux")("fixture systemctl front: fast pat
     try {
       for (const property of PRODUCT_PROPERTIES) {
         const result = s.call(show(property));
-        expect(result, property).toMatchObject({ status: 0, stdout: `${answers[property]}\n`, queries: `${property}\n` });
+        expect(result, property).toMatchObject({ status: 0, stdout: `${answers[property]}\n`, stderr: "", queries: `${property}\n` });
       }
       expect(s.call(["--user", "show", "-p", "KillMode", "--value", SERVICE])).toMatchObject({ stdout: `${answers.ExecStart}\n`, queries: "ExecStart\n" });
       expect(s.call(["--user", "show", "--property=", "--value", SERVICE])).toMatchObject({ stdout: `${answers.ExecStart}\n`, queries: "ExecStart\n" });
@@ -213,7 +213,7 @@ describe.skipIf(process.platform !== "linux")("fixture systemctl front: fast pat
         writeFileSync(s.stub, readFileSync(join(s.dir, "systemctl.pristine")));
         set?.();
         const result = s.call(argv, env);
-        expect(result, name).toMatchObject({ status: 0, stdout: delegated(argv), queries: null });
+        expect(result, name).toMatchObject({ status: 0, stdout: delegated(argv), stderr: "", queries: null });
       }
       // The activity-fault window leaves other properties on the fast path.
       writeFileSync(join(s.dir, "activity-fault"), "{}");
