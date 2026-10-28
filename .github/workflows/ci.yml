@@ -395,3 +395,48 @@ jobs:
             }
             console.log("persistence-path manifest OK (" + entries.length + " stores)");
           '
+
+  pre-gate-acceptance-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - name: Measure positive and negative integration controls
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {spawnSync} from 'node:child_process';
+          import {readFileSync,writeFileSync,mkdtempSync,rmSync,readdirSync} from 'node:fs';
+          import {join} from 'node:path';
+          import {tmpdir} from 'node:os';
+          import {pathToFileURL} from 'node:url';
+          const root=process.cwd(),tmp=mkdtempSync(join(tmpdir(),'kaoiro872-controls-'));
+          const env={...process.env,TMPDIR:tmp};delete env.NODE_TEST_CONTEXT;delete env.KAOIRO_PREGATE_REAL;delete env.PNPM_MAX_WORKERS;
+          const entry='scripts/test/pre-gate-real.test.mjs';
+          const runner='scripts/test-isolation/run-node-tests.mjs',exceptions='scripts/test-isolation/node-ci-exceptions.mjs';
+          const invoke=`import {runNodeEntries} from ${JSON.stringify(pathToFileURL(join(root,runner)).href)};const problems=runNodeEntries(${JSON.stringify(root)},[${JSON.stringify(entry)}]);for(const p of problems)console.error(p);process.exitCode=problems.length?1:0;`;
+          function run(label,args,status,pattern,extra={}){
+           const r=spawnSync(process.execPath,args,{env:{...env,...extra},encoding:'utf8',maxBuffer:64*1024*1024});
+           console.log(JSON.stringify({label,status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+           assert.equal(r.status,status);assert.match(r.stdout+r.stderr,pattern);assert.deepEqual(readdirSync(tmp),[]);
+          }
+          function changed(file,transform,action){const before=readFileSync(file,'utf8');try{const after=transform(before);assert.notEqual(after,before);writeFileSync(file,after);action();}finally{writeFileSync(file,before);}}
+          try{
+           run('canonical-positive',['--input-type=module','-e',invoke],0,/pre-gate-real\.test\.mjs: 6 real test\(s\)/);
+           changed(runner,s=>s.replace('env.KAOIRO_PREGATE_REAL = "1";','delete env.KAOIRO_PREGATE_REAL;'),()=>run('activation-cut',['--input-type=module','-e',invoke],1,/pre-gate-real\.test\.mjs: no real test ran/));
+           changed(exceptions,()=>`export const NODE_CI_EXCEPTIONS = [{path:${JSON.stringify(entry)},issue:872,reason:"obsolete controlled exception"}];\n`,()=>run('obsolete-exception',['--input-type=module','-e',invoke],1,/pre-gate-real\.test\.mjs: stale exception, a real test ran/));
+           changed(entry,s=>s.replace('const nodeBinary = join(bin, "node");','const nodeBinary = process.execPath;').replace('PATH: `${bin}:${process.env.PATH}`','PATH: process.env.PATH').replace('    copyFileSync(process.execPath, nodeBinary);\n',''),()=>{
+            run('without-owned-runtime',['--test','--test-name-pattern=^N1:',entry],1,/stage_failed=build.*build-wrapper exited 78/,{KAOIRO_PREGATE_REAL:'1'});
+           });
+           changed('.github/workflows/ci.yml',s=>s.replace('      - run: node scripts/test-isolation/run-node-tests.mjs\n',''),()=>run('wiring-cut',['--test','--test-name-pattern=^the real workflow runs','scripts/test/check-test-isolation.test.mjs'],1,/missing the step/));
+          }finally{rmSync(tmp,{recursive:true,force:true});}
+          NODE
