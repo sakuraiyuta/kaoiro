@@ -1,5 +1,8 @@
-# Restore the speech bubble that birefnet-portrait drops (anzu waiting_permission, 2026-10-28, hisui).
-# usage: python3 compose_bubble.py <raw.png> <cut.png> <out.png> x0 y0 x1 y1
+# Restore the speech bubble that birefnet-portrait drops (anzu waiting_permission, issue 864).
+# Pinned: Python 3.12, Pillow 10.2.0, numpy 1.26.4, scipy 1.11.4. scipy is used only by this
+# script and persona-sprite-postprocess.py, not as a product dependency. Install in a disposable
+# venv, as in docs/evidence/personas/2026-10-28-anzu-sprite-chain.md (Versions section).
+# usage: python3 scripts/persona-sprite-compose-bubble.py <raw.png> <cut.png> <out.png> x0 y0 x1 y1
 # Inside the box, pixels that differ from the white background are the bubble's ink;
 # the region they enclose is filled. Alpha 255 on the filled region, ink coverage on a 2 px rim.
 import sys

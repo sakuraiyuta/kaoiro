@@ -1,5 +1,9 @@
-# Exact postprocess used for anzu sprites (2026-10-28, hisui).
-# usage: python3 postprocess.py <cut.png> <out.png>
+# Postprocess for anzu sprites (issue 864): rembg cut -> 512x512 RGBA sprite.
+# Pinned: Python 3.12, Pillow 10.2.0, numpy 1.26.4, scipy 1.11.4. scipy is used only
+# by this script and persona-sprite-compose-bubble.py, not as a product dependency.
+# Install in a disposable venv, as in docs/evidence/personas/2026-10-28-anzu-sprite-chain.md
+# (Versions section).
+# usage: python3 scripts/persona-sprite-postprocess.py <cut.png> <out.png>
 # cut.png = output of: rembg i -m birefnet-portrait -a -af 240 -ab 10 -ae 10 raw.png cut.png
 import sys
 import numpy as np
