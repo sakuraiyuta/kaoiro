@@ -1,5 +1,5 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -488,6 +488,9 @@ describe("resident ACP host", () => {
   ])("waits for the broker and reports rejection ($scene)", async ({
     scene, beforeWaitTexts, toolNames,
   }) => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-grok-broker-"));
+    scratch.push(dir);
+    const readyFile = join(dir, "ready");
     let host!: GrokHost;
     const envelopes: Envelope[] = [];
     const broker = new PermissionBroker({
@@ -496,6 +499,7 @@ describe("resident ACP host", () => {
       onPendingChange: (pending) => host.setPendingPermission(pending),
     });
     const startedHost = await started({
+      env: { ...process.env, KAOIRO_TEST_GROK_BROKER_READY_FILE: readyFile },
       send: (e) => envelopes.push(e),
       decidePermission: (...args) => broker.decide(...args),
     });
@@ -506,6 +510,8 @@ describe("resident ACP host", () => {
     void turn.catch(() => {});
     await vi.waitFor(() => expect(host.state).toBe("waiting_permission"));
     const request = envelopes.find((e) => e.type === "permission_request")!;
+    // Elapsed time after the ACP request does not acknowledge the broker wait.
+    writeFileSync(readyFile, "ready");
     await vi.waitFor(() => expect(received.mock.calls.some(([notification]) =>
       notification.update.sessionUpdate === "agent_message_chunk" &&
       notification.update.content.type === "text" &&

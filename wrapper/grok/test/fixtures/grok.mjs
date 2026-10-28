@@ -541,14 +541,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
               },
             }) + "\n",
           );
-          setTimeout(
-            () =>
-              update({
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: "BROKER_WAIT_PROGRESS" },
-              }),
-            25,
-          );
+          const readyFile = process.env.KAOIRO_TEST_GROK_BROKER_READY_FILE;
+          if (readyFile) {
+            const ready = setInterval(() => {
+              if (!existsSync(readyFile)) return;
+              clearInterval(ready);
+              textChunk("BROKER_WAIT_PROGRESS");
+            }, 5);
+          } else {
+            setTimeout(
+              () =>
+                update({
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "BROKER_WAIT_PROGRESS" },
+                }),
+              25,
+            );
+          }
           break;
         }
         if (text === "permission-no-tool-call") {
@@ -576,14 +585,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
               },
             }) + "\n",
           );
-          setTimeout(
-            () =>
-              update({
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: "BROKER_WAIT_PROGRESS" },
-              }),
-            25,
-          );
+          const readyFile = process.env.KAOIRO_TEST_GROK_BROKER_READY_FILE;
+          if (readyFile) {
+            const ready = setInterval(() => {
+              if (!existsSync(readyFile)) return;
+              clearInterval(ready);
+              textChunk("BROKER_WAIT_PROGRESS");
+            }, 5);
+          } else {
+            setTimeout(
+              () =>
+                update({
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "BROKER_WAIT_PROGRESS" },
+                }),
+              25,
+            );
+          }
           break;
         }
         if (text === "pending-only") {
