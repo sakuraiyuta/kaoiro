@@ -1,3 +1,4 @@
+import "./isolation.setup";
 import { describe, expect, it } from "vitest";
 import { sortAgents } from "../src/lib/gridSort";
 import type { Envelope } from "../src/lib/protocol";
