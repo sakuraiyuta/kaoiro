@@ -2438,6 +2438,9 @@ export async function fetchPersonaPackDetail(
 export interface AuthMethods {
   token: boolean;
   oauth: string[];
+  /** Whether this server offers device approval (issue 801). Absent on a
+   *  server that predates it. */
+  device?: boolean;
 }
 
 /**
@@ -2458,7 +2461,9 @@ export async function fetchAuthMethods(
       body === null ||
       typeof (body as AuthMethods).token !== "boolean" ||
       !Array.isArray((body as AuthMethods).oauth) ||
-      !(body as AuthMethods).oauth.every((p) => typeof p === "string")
+      !(body as AuthMethods).oauth.every((p) => typeof p === "string") ||
+      ((body as AuthMethods).device !== undefined &&
+        typeof (body as AuthMethods).device !== "boolean")
     ) {
       return null;
     }
