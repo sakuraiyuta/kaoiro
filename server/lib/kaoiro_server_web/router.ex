@@ -23,6 +23,12 @@ defmodule KaoiroServerWeb.Router do
     plug KaoiroServerWeb.RequireOperatorPlug
   end
 
+  # Responses carrying device codes, tokens or tickets are not stored
+  # (issue 801, RFC 6749 §5.1).
+  pipeline :device_api do
+    plug KaoiroServerWeb.DeviceAuthHeaders
+  end
+
   pipeline :authenticated do
     plug :fetch_session
     plug KaoiroServerWeb.RequireAuthenticatedPlug
@@ -63,10 +69,32 @@ defmodule KaoiroServerWeb.Router do
 
     get "/", KaoiroServerWeb.RootRedirect, []
     post "/session/new", KaoiroServerWeb.SessionController, :create
-    get "/session/ticket", KaoiroServerWeb.SessionController, :ticket
-    get "/session/refresh", KaoiroServerWeb.SessionController, :refresh
     get "/session/auth-methods", KaoiroServerWeb.SessionController, :auth_methods
     delete "/session", KaoiroServerWeb.SessionController, :delete
+  end
+
+  # The ticket and refresh endpoints also take a device access token
+  # (issue 801), and every response here carries a credential.
+  scope "/session", KaoiroServerWeb do
+    pipe_through [:browser, :device_api]
+
+    get "/ticket", SessionController, :ticket
+    get "/refresh", SessionController, :refresh
+
+    # The approval API for the device authorization grant (issue 801).
+    post "/device/lookup", DeviceApprovalController, :lookup
+    post "/device/decision", DeviceApprovalController, :decision
+  end
+
+  # The device authorization grant's native endpoints and verification
+  # URI (issue 801, RFC 8628). No session: the native endpoints neither
+  # read nor write the cookie.
+  scope "/", KaoiroServerWeb do
+    pipe_through :device_api
+
+    post "/oauth/device", OAuthDeviceController, :device
+    post "/oauth/token", OAuthDeviceController, :token
+    get "/device", DeviceApprovalController, :entry
   end
 
   # OAuth login (ADR-0042). Both legs ride the session cookie: the

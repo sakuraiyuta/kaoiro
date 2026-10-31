@@ -220,8 +220,14 @@ defmodule KaoiroServerWeb.SessionController do
   # actually serve (ADR-0042). `token` is false when :client_tokens holds
   # no usable entry (the fail-closed state of issue #28), `oauth` lists
   # only providers whose credentials are complete.
+  # `device` says whether the device authorization grant (issue 801) can
+  # be served to this request (KaoiroServerWeb.DeviceAvailability).
   def auth_methods(conn, _params) do
-    json(conn, %{token: Auth.token_auth_enabled?(), oauth: OAuth.enabled_providers()})
+    json(conn, %{
+      token: Auth.token_auth_enabled?(),
+      oauth: OAuth.enabled_providers(),
+      device: KaoiroServerWeb.DeviceAvailability.check(conn) == :ok
+    })
   end
 
   # Takes the cookie credential SessionCredential re-validated and returns
