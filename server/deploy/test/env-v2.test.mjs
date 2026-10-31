@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { isValidEnvConsistencyV2, parsePersistenceManifest } from "../kaoiro-deploy-env-v2.mjs";
+import { isValidEnvConsistency } from "../kaoiro-deploy-manifest.mjs";
 
 const digest = s => createHash("sha256").update(s).digest("hex");
 const raw = JSON.stringify([{store:"users",env:"USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
@@ -26,4 +27,11 @@ test("v2 new-store evidence does not fabricate an old path", () => {
 test("manifest rejects duplicate keys and duplicate store identities", () => {
   assert.throws(() => parsePersistenceManifest('[{"store":"a","store":"b","env":"A","default_file":"x","default_path":"/x"}]'));
   const one = JSON.parse(raw)[0]; assert.throws(() => parsePersistenceManifest(JSON.stringify([one, {...one,env:"OTHER"}])));
+});
+
+test("shared reader keeps legacy records and rejects partial v2 as legacy", () => {
+  assert.equal(isValidEnvConsistency({skipped:true, reason:"legacy"}), true);
+  assert.equal(isValidEnvConsistency({skipped:false, entries:{}}), true);
+  assert.equal(isValidEnvConsistency(record()), true);
+  assert.equal(isValidEnvConsistency({guard_schema:2, skipped:true, reason:"legacy"}), false);
 });
