@@ -60,7 +60,6 @@
   }
 
   async function decide(info: DeviceLookup, decision: DeviceDecision): Promise<void> {
-    if (busy) return;
     busy = true;
     const result = await decideDeviceCode(info.userCode, decision);
     busy = false;
