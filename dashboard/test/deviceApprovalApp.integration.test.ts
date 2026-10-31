@@ -332,6 +332,16 @@ describe("closing", () => {
     expect(stored()).toBeNull();
   });
 
+  it("after closing, a later logout shows no device line on the login card", async () => {
+    await start("/index.html?device=1");
+    await vi.waitFor(() => expect(codeInput()).not.toBeNull());
+    dialog()!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+    document.querySelector<HTMLButtonElement>("button.logout")!.click();
+    await vi.waitFor(() => expect(document.querySelector(".login-card")).not.toBeNull());
+    expect(document.querySelector("[data-device-login]")).toBeNull();
+  });
+
   it("an empty or blank code cannot be submitted", async () => {
     await start("/index.html?device=1");
     await vi.waitFor(() => expect(codeInput()).not.toBeNull());
