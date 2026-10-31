@@ -947,14 +947,15 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
       const fromEnv = Object.hasOwn(containerEnv, old.env);
       const effective = fromEnv ? containerEnv[old.env] : old.default_path;
       if (effective !== destination) {
-        fail(`${target.env}: the existing store ${target.store} uses ${JSON.stringify(effective)}, not ${JSON.stringify(destination)}; this CLI has no forward migration path for an existing store outside the state volume. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b)`);
+        const flagHint = accepted.has(target.env) ? " this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)." : "";
+        fail(`${target.env}: the existing store ${target.store} uses ${JSON.stringify(effective)}, not ${JSON.stringify(destination)}; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).${flagHint}`);
       }
       entries[target.env] = {kind: "existing", store_id: target.store, target_env: target.env,
         target_path: destination, old_env: old.env, old_effective_path: effective,
         old_path_source: fromEnv ? "env" : "old_manifest", volume_name: volume.name};
       continue;
     }
-    if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container at ${JSON.stringify(containerEnv[target.env])}; cannot accept it as a new store`);
+    if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container at ${JSON.stringify(containerEnv[target.env])}; cannot accept it as a new store. this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)`);
     if (contract !== "exhaustive_stable_v1") fail(`${target.env}: old image cannot establish an exhaustive stable store contract; use the non-destructive rollback`);
     if (!accepted.has(target.env)) {
       missingAcceptances.push(`${target.env}: independently verify that no earlier data needs migration. If it is a genuinely new store, resume with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${targetRevision} --accept-new-store ${target.env}`);
@@ -2259,7 +2260,7 @@ export function runUpdate(flags, config) {
           fail("old container or image changed during persistence manifest query");
         }
         if (oldPersistencePaths.skipped) {
-          fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; roll back this transaction before retrying`);
+          fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; the target image's default may differ from the old container's actual path. A missing file at the target default does not prove that this store never existed. Do not use --accept-new-store for an existing or uncertain store; roll back this transaction before retrying`);
         }
         envConsistency = checkEnvConsistency(
           persistencePaths.paths, persistencePaths.raw, oldPersistencePaths.paths, oldPersistencePaths.raw,

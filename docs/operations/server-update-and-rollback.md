@@ -103,7 +103,8 @@ runner preparation.
   only when the old image advertises the supported exhaustive and stable store
   contract. The operator must independently establish that no earlier data
   needs migration; the CLI cannot prove the absence of historical data. See
-  4.3 (2) and the 4.3 (5-b) paragraph that begins "For a genuinely new store".
+  4.3 (2) and the 4.3 (5-b) paragraph that begins
+  "For a genuinely new store".
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
   persisted, so in-progress exchanges are lost.
@@ -505,18 +506,18 @@ a separately designed migration is required.
 
 For a genuinely new store, establish independently that no earlier version
 held data before considering `--accept-new-store`. If the old image cannot
-report its manifest, the CLI checks the target default, which may differ from
-the old image's actual path. The operator must also establish the old image's
-actual path and verify that no file exists there; if that cannot be established,
-do not use the flag. A missing file at the target default alone does not prove
+report its manifest, the CLI refuses before probing; use the non-destructive
+rollback. The target default may differ from an earlier image's actual path.
+The operator must also establish the old image's actual path and investigate
+whether any earlier version used the store; if that cannot be established, do
+not use the flag. A missing file at the target default alone does not prove
 that the store never existed. If the old manifest answers but omits the store,
 it still cannot prove an earlier version did not use it. If a probe is
 `undetermined`, investigate its reason; it does not authorize an empty store.
 
 **Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
 reference-only** — the target compose's own `environment:` entry is what
-actually gates the container, and `.env`'s own line (recorded as `declared`
-by the #220 check above) is never compared. Do not treat it as a step to keep
+actually gates the container, and `.env`'s own line is never compared by the persistence-path check. Do not treat it as a step to keep
 in sync by hand: `.env.example` and `mix kaoiro.env` both emit this line
 commented out by design, so a later wizard re-run silently drops a
 manually-uncommented one — an operator relying on `.env` to remember this

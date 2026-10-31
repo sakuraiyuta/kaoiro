@@ -2207,6 +2207,8 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   }
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro-dets\/users.dets/);
+  assert.ok(caught.message.includes("Copying cannot unblock this transaction or a new update."));
+  assert.ok(caught.message.includes("Do not use --accept-new-store for an existing or uncertain store."));
   assert.match(caught.message, /\/var\/lib\/kaoiro\/users.dets/);
   assert.match(caught.message, /non-destructive rollback/);
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
@@ -2362,6 +2364,7 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
   }
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro_users.dets/);
+  assert.ok(caught.message.includes("Copying cannot unblock this transaction or a new update."));
   assert.match(caught.message, /non-destructive rollback/);
 });
 
@@ -2630,6 +2633,8 @@ test("runUpdate refuses an unflagged store when the old image cannot answer the 
       runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("old image persistence manifest unavailable"));
+  assert.ok(caught.message.includes("the target image's default may differ from the old container's actual path"));
+  assert.ok(caught.message.includes("A missing file at the target default does not prove that this store never existed."));
   assert.doesNotMatch(caught.message, /update --transaction [^\n]*--accept-new-store/);
   assert.equal(calls.some(isStatProbe), false);
   assertNoDestructiveCalls(calls);
