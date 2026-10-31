@@ -317,10 +317,20 @@ jobs:
   # builds.
   server-image:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Fetch image probe history
+        run: |
+          git fetch --no-tags --depth=1 origin c8f75a35be90f683983db9857d32fc9276bd0f53 7e2447f2ea14ebd8d08d478bd060e66b12dfdffc
       - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
+      - name: Temporary issue 920 image measurement
+        env:
+          PROBE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/issue-920-image-probe/probe.mjs .
       # issue #322 M5 follow-up (must-1): the deploy CLI decides module
       # PRESENCE from this beam-file glob BEFORE ever calling eval — pins
       # the glob this image's own release layout actually has it at,
