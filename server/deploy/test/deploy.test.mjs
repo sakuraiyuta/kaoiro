@@ -1866,19 +1866,17 @@ test("runUpdate does not borrow a colliding transaction's recovery hint", () => 
 // reason: eval boots the full release and fails on missing env vars
 // BEFORE the module lookup, for every real invocation, so its own exit
 // code could never distinguish "absent" from "OOM/daemon failure").
-test("runUpdate records env_consistency as skipped when the target image's beam probe reports the module absent", () => {
-  const result = withScenario("running-clean-stop", () =>
+test("runUpdate refuses before stop when target manifest is unavailable", () => {
+  const calls = withCallLog("running-clean-stop", () =>
     withEnvConsistencyFixture({ beamAbsent: "1" }, () =>
-      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      assert.throws(
+        () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        /target image persistence manifest unavailable/,
+      ),
     ),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.skipped, true);
-  // issue #322 M5 follow-up (must-1): reason now states the OBSERVATION
-  // (beam not found at this glob, in this image), not an inferred cause.
-  assert.ok(manifest.env_consistency.reason.includes("PersistencePaths beam not found"));
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
 
 test("runUpdate throws (never skips) when eval fails on an image the beam probe reports has the module", () => {
