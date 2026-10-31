@@ -1008,6 +1008,9 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
   const volume = resolveNamedVolumeFromCompose(bin, serverDir, composeArgs);
   if (!volume.ok) fail(`state volume unavailable: ${volume.reason}; use the non-destructive rollback`);
   const oldByStore = new Map(oldPaths.map(p => [p.store, p]));
+  if (paths.some(p => oldByStore.has(p.store) && !Object.hasOwn(containerEnv, oldByStore.get(p.store).env))) {
+    process.stderr.write("Old default paths depend on startup environment. Confirm TMPDIR, TEMP, and TMP matched the container configuration at startup and were not changed by the running process; otherwise use the non-destructive rollback. See docs/operations/server-update-and-rollback.md 4.3 (5-b).\n");
+  }
   const targetOnly = paths.some(p => !oldByStore.has(p.store));
   const contract = targetOnly ? queryPersistenceContract(bin, oldImageId) : null;
   const entries = {};
@@ -1745,8 +1748,17 @@ export const UNRESUMABLE_PHASES = reachablePhases(PHASE.STOPPING, TRANSITIONS);
 // next commands rendered from kaoiro-deploy-recovery.mjs, re-read from the
 // journal on disk so the hint names the phase that was actually persisted.
 
+const LEGACY_GUARD_WARNING = "Legacy transaction: its environment observation was not verified by the new persistence guards.";
+
+function legacyGuardWarning(journal) {
+  if (![PHASE.ENV_CONSISTENCY_CHECKED, PHASE.MAINTENANCE_GATE_PASSED].includes(journal.phase)) return null;
+  const observation = journal.history.find(entry => entry.phase === PHASE.ENV_CONSISTENCY_CHECKED)?.observation;
+  return observation && observation.guard_schema !== 2 ? LEGACY_GUARD_WARNING : null;
+}
+
 function recoveryText(transactionId, journal) {
-  return formatRecovery(renderRecovery(transactionId, journal));
+  const lines = [legacyGuardWarning(journal), formatRecovery(renderRecovery(transactionId, journal))];
+  return lines.filter(Boolean).join("\n");
 }
 
 function appendRecoveryHint(err, dir, transactionId) {
@@ -2102,6 +2114,8 @@ export function runUpdate(flags, config) {
         );
       }
       ({ id: transactionId, dir, journal } = unfinished);
+      const legacyWarning = legacyGuardWarning(journal);
+      if (legacyWarning) process.stderr.write(`${legacyWarning}\n`);
       hintDir = dir;
       // issue #695: eligibility comes from the recovery table, before any
       // write or Docker call. A commit-half phase used to pass this point
@@ -3388,6 +3402,7 @@ export function runStatus(flags, config) {
               id: unfinished.id,
               phase: unfinished.journal.phase,
               envConsistency: unfinishedEnvConsistency,
+              legacyGuardWarning: legacyGuardWarning(unfinished.journal),
               recovery: renderRecovery(unfinished.id, unfinished.journal),
             },
     doneTransactions: listDoneTransactionSummaries(backupRoot),
