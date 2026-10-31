@@ -37,7 +37,6 @@
     onStop,
     onRestore,
     onDelete,
-    onOpenPersonaDetail,
     statusLine = { kind: "none" },
     onOpenStatusLineHistory,
   }: {
@@ -85,11 +84,6 @@
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
-    /** Opens the persona pack detail modal (issue #232) for this agent's
-     *  persona when supplied and a persona id resolved; otherwise the
-     *  image's click falls back to onSelect (handlePersonaOpenClick below),
-     *  same as clicking the rest of the card. */
-    onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
     /** What the card says about the agent's self-written status line (issue
      *  482). `none` draws no row; `unset` says so; `set` shows the head the
      *  server cut, as plain text. */
@@ -99,49 +93,15 @@
     onOpenStatusLineHistory?: ((agentId: string) => void) | undefined;
   } = $props();
 
-  // issue #232 MF-2 round-2 must-fix (MF-R2-1): the expand origin must be
-  // the CARD's centre regardless of which button the click landed on —
-  // `.open` no longer covers the whole card (the image sits outside it in
-  // `.card-media`), so `event.currentTarget`'s own rect would give a
-  // smaller/offset box depending on which sibling fired the click.
-  // `cardEl` (the <article> itself) is the one stable reference both
-  // `selectFrom` call sites below share.
+  // The face and `.open` are sibling buttons, so the expand origin is read
+  // from the <article> itself: either button's own rect would be smaller
+  // or offset from the tile's centre.
   let cardEl: HTMLElement | undefined = $state();
 
   // Hand the detail the tile's viewport centre so it grows from this tile.
   function selectFrom(event: MouseEvent): void {
     const rect = (cardEl ?? (event.currentTarget as HTMLElement)).getBoundingClientRect();
     onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-  }
-
-  // issue #232 MF-2 (ふじ round-1 must-fix): the persona image's click
-  // opens the persona pack detail modal, as a SIBLING <button> to `.open`
-  // rather than nested inside it or reached by dispatching on click
-  // coordinates from `.open`'s own handler (the earlier pointer-only
-  // design — a keyboard user tabbing into `.open` and pressing
-  // Enter/Space had no way to land on the persona action; ふじ measured
-  // onSelect fired, onOpenPersonaDetail never did). `.card-media` (below)
-  // is the new position:relative wrapper carrying `.lamp`/`.error-icon`/
-  // etc.'s absolute positioning, unchanged in effect from when `.open`
-  // carried it.
-  const personaId = $derived(envelope.persona?.id);
-
-  // issue #232 MF-2 round-2 must-fix (MF-R2-1, ふじ probe): making
-  // `.persona-open` `disabled` whenever there is no persona action (no
-  // onOpenPersonaDetail — e.g. a viewer session, App.svelte's isOperator
-  // gate — or no resolved persona id) made the image's click a dead end.
-  // Before the sibling split, that same click fell through to
-  // `selectFrom` (the whole card was one `.open` button). Route it back
-  // there instead of disabling the click affordance outright —
-  // `directoryOnly` is the one condition that must still suppress it
-  // (an offline tile has no detail view to open at all, persona or
-  // otherwise).
-  function handlePersonaOpenClick(event: MouseEvent): void {
-    if (personaId && onOpenPersonaDetail) {
-      onOpenPersonaDetail(personaId);
-      return;
-    }
-    selectFrom(event);
   }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
@@ -572,20 +532,16 @@
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
     <div class="sprite-slot">
-      <!-- issue #232 MF-2: own <button>, sibling to `.open` below — a
-           keyboard user can now Tab to this action directly instead of
-           it being unreachable except by mouse. disabled only when there
-           is no detail view to open at all (directoryOnly); no persona id
-           or no handler falls back to selectFrom (handlePersonaOpenClick
-           above) rather than disabling the click. -->
+      <!-- Same action as `.open`, so it is kept out of the Tab order to
+           avoid a duplicate stop. Persona detail opens from AgentDetail's
+           portrait instead (2026-10-05 operator decision). -->
       <button
         type="button"
-        class="persona-open"
-        onclick={directoryOnly ? undefined : handlePersonaOpenClick}
+        class="face-open"
+        tabindex="-1"
+        onclick={directoryOnly ? undefined : selectFrom}
         disabled={directoryOnly}
-        aria-label={personaId && onOpenPersonaDetail
-          ? `${name} のペルソナ詳細を表示`
-          : `${name} の詳細を開く`}
+        aria-label={`${name} の詳細を開く`}
       >
         {#key display.shown}
           <PersonaFace
@@ -679,7 +635,7 @@
     {/if}
   </button>
   {#if statusLine.kind !== "none"}
-    <!-- A sibling of .open and .persona-open, not nested in .open: a button
+    <!-- A sibling of .open and .face-open, not nested in .open: a button
          may not contain another interactive element, and opening the change
          log must not also open the detail view. -->
     <button
@@ -838,12 +794,9 @@
     margin-bottom: 1rem;
   }
 
-  /* issue #232 MF-2: the click target for the persona detail modal, a
-     plain reset so it does not visibly alter `.sprite-slot`'s existing
-     size/position — sized entirely by its PersonaFace child, same as
-     when the image sat unwrapped. Mirrors AgentDetail's
-     `.portrait-open`. */
-  .persona-open {
+  /* Plain reset so the face's button wrapper does not alter
+     `.sprite-slot`'s size/position — sized entirely by PersonaFace. */
+  .face-open {
     display: block;
     margin: 0;
     padding: 0;
@@ -853,7 +806,7 @@
     cursor: pointer;
   }
 
-  .persona-open:disabled {
+  .face-open:disabled {
     cursor: default;
   }
 
