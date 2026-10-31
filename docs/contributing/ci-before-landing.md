@@ -64,7 +64,7 @@ single-signal teardown removes the owned clones and gate scratch (see
 [fixture lifecycle](pre-gate.md#real-suite-fixture-lifecycle)). For changes to
 this integration, verify activation/obsolete-exception negative controls and
 time the complete `test-isolation` job twice; record both runs and the maximum
-against the 15-minute budget (observed range 319 to 503 seconds across runs), with `PNPM_MAX_WORKERS` unset.
+against the 15-minute budget (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924), with `PNPM_MAX_WORKERS` unset.
 
 The implementation reviewer records this evidence for the reviewed candidate:
 
