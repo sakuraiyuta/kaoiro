@@ -2780,7 +2780,8 @@ test("a refused admission leaves a resumable transaction, and the flagged resume
   assert.ok(resumed.calls.includes(WORK_STORE_PROBE_CALL));
   assert.equal(readdirSyncNonHidden(backupRoot).length, 1);
   const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "new_store");
+  assert.equal(entry.destination_probe_result, "absent");
   assert.equal(entry.operator_accepted_new_store, true);
 });
 
@@ -2815,9 +2816,8 @@ test("the deploy CLI process refuses two unflagged new stores, then resumes the 
   const refused = runCli([]);
   assert.equal(refused.caught, undefined);
   assert.equal(refused.result.status, 1, "a refused admission exits non-zero");
-  assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: compose declares"));
-  assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
-  assert.ok(refused.result.stderr.includes("Copying cannot unblock this transaction or a new update."));
+  assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: independently verify"));
+  assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: independently verify"));
   assert.ok(refused.result.stderr.includes("note: update: If an existing-store path mismatch caused the refusal"));
   assert.equal(refused.calls.filter(isComposeBuild).length, 1);
   assert.equal(refused.calls.some(isStatProbe), false);
@@ -2841,10 +2841,11 @@ test("the deploy CLI process refuses two unflagged new stores, then resumes the 
   assert.equal(report.phase, "done");
   assert.equal(report.transactionId, transactionId);
   assert.deepEqual(resumed.calls.filter(isComposeBuild), [], "the prepared image is reused, not rebuilt");
-  assert.equal(resumed.calls.filter(isStatProbe).length, 2, "each flagged store is measured once");
+  assert.equal(resumed.calls.filter(isStatProbe).length, 4, "both locations are measured for each flagged store");
   const entries = readManifest(dir).env_consistency.entries;
   for (const envName of ["KAOIRO_WORK_STORE_PATH", "KAOIRO_SECOND_STORE_PATH"]) {
-    assert.equal(entries[envName].match, true, envName);
+    assert.equal(entries[envName].kind, "new_store", envName);
+    assert.equal(entries[envName].destination_probe_result, "absent", envName);
     assert.equal(entries[envName].operator_accepted_new_store, true, envName);
   }
   assert.equal(readdirSyncNonHidden(backupRoot).length, 1);
