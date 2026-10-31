@@ -102,7 +102,7 @@ These are the CI job's steps. The checker prints each problem on stderr and one 
 
 The Node runner uses the canonical entries, runs them serially from the repository root and requires each file to report a real, non-skipped, non-todo test. It sets `KAOIRO_PREGATE_REAL=1` in the child environment, even when the caller omits it or sets `0` and does not add or change `NODE_OPTIONS`. Exceptions are exact entries with an issue and reason in `scripts/test-isolation/node-ci-exceptions.mjs`; their failures and missing events still fail the job, and a real test makes an exception stale. CI checks the issue number's shape, not whether it is open or relevant; reviewers must check that. There are currently no exceptions. The real pre-gate entry must report all six cases as real passing tests; retaining its obsolete exception fails with `stale exception`, and losing activation fails with `no real test ran`.
 
-The job timeout is 15 minutes (observed range 319 to 503 seconds across runs). Time the complete integrated job twice on a candidate that changes this workload, and assess headroom from the maximum duration. Do not set `PNPM_MAX_WORKERS` for acceptance to carry over a disposable probe's resource cap.
+The job timeout is 15 minutes (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924). Time the complete integrated job twice on a candidate that changes this workload, and assess headroom from the maximum duration. Do not set `PNPM_MAX_WORKERS` for acceptance to carry over a disposable probe's resource cap.
 
 The workflow tests pin the CI commands exactly, including the complete four-file node:test list. Update them together with ciWiringProblems in the checker.
 
