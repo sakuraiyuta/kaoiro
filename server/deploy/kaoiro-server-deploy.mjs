@@ -40,7 +40,7 @@ import { entryActs, formatRecovery, OPERATION, recoveryFacts, renderRecovery, se
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
-import { queryManifestRaw, queryPersistenceContract } from "./kaoiro-deploy-image-query.mjs";
+import { IMAGE_QUERY_TIMEOUT_MS, queryManifestRaw, queryPersistenceContract } from "./kaoiro-deploy-image-query.mjs";
 import { isWithinStateVolume, parsePersistenceManifest } from "./kaoiro-deploy-env-v2.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
@@ -667,21 +667,6 @@ function restartCount(bin, container) {
 // BUILD_PREPARED), not before — this is the earliest point its own
 // `eval` interface can be queried at all.
 
-/** The canonical list, landed by #310:
- *  `KaoiroServer.PersistencePaths.manifest/0` returns one map per store
- *  carrying exactly the keys `:store`/`:env`/`:default_file`/
- *  `:default_path` (クロエ round 5 review A-MF-2 added the last one — the
- *  ABSOLUTE path `runtime.exs`'s own fallback resolves to when `:env` is
- *  unset, as opposed to `:default_file`'s bare filename). Named here as
- *  the single fixed expression this file's own eval call uses (director
- *  ruling 2026-09-06, A-1); CI's `server-image` job runs this same
- *  expression against the image it just built, with no env, and rejects
- *  anything that is not a JSON array of exactly those four keys. An image
- *  built before #310 landed (or an old image a rollback targets) simply
- *  lacks the module; that is queryPersistencePaths' own "skipped"
- *  outcome, not a defect in this string. */
-const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
-
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // クロエ #310 round 1 S-1: the contract says EXACTLY these keys
@@ -773,7 +758,7 @@ function imageHasPersistencePathsModule(bin, imageId) {
       imageId,
       "-c",
       `ls ${PERSISTENCE_PATHS_BEAM_GLOB} >/dev/null 2>&1 && echo present || echo absent`,
-    ]);
+    ], { timeout: IMAGE_QUERY_TIMEOUT_MS });
   } catch (err) {
     fail(
       `could not probe image ${imageId} for the persistence-paths module (image start or docker daemon failure): ${err.message}`,
@@ -784,35 +769,8 @@ function imageHasPersistencePathsModule(bin, imageId) {
   fail(`persistence-paths module probe for image ${imageId} printed an unexpected shape: ${JSON.stringify(raw)}`);
 }
 
-/** Queries `imageId`'s own canonical persistence-path list: `docker run
- *  --rm --entrypoint /app/bin/kaoiro_server <imageId> eval
- *  '<PERSISTENCE_PATHS_EVAL_EXPR>'`, addressed by Id (never a tag, which
- *  can move — director ruling 2026-09-06, A-1) so this always queries
- *  the EXACT image about to run. No env vars are passed; the list this
- *  queries is static, not env-dependent.
- *
- *  issue #322 M5: module presence is decided FIRST, and separately, by
- *  imageHasPersistencePathsModule above — not by this eval call's own
- *  exit code (see that function's doc comment for why treating every
- *  eval failure as "absent" was fail-open). Absent: `{skipped: true,
- *  reason}`, never throws — the caller proceeds without this check
- *  rather than blocking on a capability this image was never going to
- *  have. Present: the eval process itself exiting non-zero always
- *  throws DeployError — that is always "something actively wrong",
- *  regardless of which image.
- *
- *  issue #322 M5 follow-up (should-2, クロエ review): a SHAPE violation
- *  (exiting 0 but printing something other than the expected array of
- *  4-key entries) is different: `throwOnShapeViolation` (default true)
- *  governs whether it throws too, or degrades to the same
- *  skipped+reason shape the absent case uses. The TARGET image keeps
- *  the default — this transaction's own build MUST behave correctly,
- *  since its manifest decides which env vars are even checked. A
- *  caller querying an OLD image passes `false`: a shape violation there
- *  means that image "could not answer" the OPTIONAL default_path
- *  preference checkEnvConsistency asks it for — a fact about that
- *  image's own history, not a defect in the transaction being run —
- *  so it should not abort an otherwise-clean update. */
+// A missing or malformed old manifest is distinguished from an eval failure;
+// both are rejected by the update gate before the stop window.
 function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true, env = null } = {}) {
   if (!imageHasPersistencePathsModule(bin, imageId)) {
     // issue #322 M5 follow-up (クロエ round M5 review must-1): states
