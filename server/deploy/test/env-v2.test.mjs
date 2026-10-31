@@ -12,6 +12,8 @@ const record = () => ({guard_schema:2,old_image_id:`sha256:${"a".repeat(64)}`,ta
 test("v2 binds every target store to an inside matching path", () => {
   const r = record(); assert.equal(isValidEnvConsistencyV2(r), true);
   delete r.entries.USERS; assert.equal(isValidEnvConsistencyV2(r), false);
+  const extra = record(); extra.entries.EXTRA = {...extra.entries.USERS, target_env:"EXTRA"};
+  assert.equal(isValidEnvConsistencyV2(extra), false);
   const changed = record(); changed.entries.USERS.old_effective_path = "/var/lib/kaoiro/else.dets"; assert.equal(isValidEnvConsistencyV2(changed), false);
   const outside = record(); outside.entries.USERS.target_path = outside.entries.USERS.old_effective_path = "/var/lib/kaoiro-else/x"; assert.equal(isValidEnvConsistencyV2(outside), false);
   const hash = record(); hash.target_manifest_sha256 = "0".repeat(64); assert.equal(isValidEnvConsistencyV2(hash), false);
