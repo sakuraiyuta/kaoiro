@@ -11,7 +11,8 @@ defmodule KaoiroServer.StoreSingletonGuardTest do
     "ConversationStates" => KaoiroServer.ConversationStates,
     "AgentActivity" => KaoiroServer.AgentActivity,
     "DeliveryStates" => KaoiroServer.DeliveryStates,
-    "SessionLifecycleEvents" => KaoiroServer.SessionLifecycleEvents
+    "SessionLifecycleEvents" => KaoiroServer.SessionLifecycleEvents,
+    "DeviceAuth" => KaoiroServer.DeviceAuth
   }
 
   # Pure functions whose arity matches a store function that takes a server.

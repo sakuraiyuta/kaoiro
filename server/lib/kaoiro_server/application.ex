@@ -185,6 +185,9 @@ defmodule KaoiroServer.Application do
       # asset cache, so a missing event source must not silently stop
       # enforcing revocation.
       KaoiroServer.OAuthAllowlistWatcher,
+      # Pending device authorizations (issue 801). In-memory only and
+      # started bare, without the clock / node_list test seams.
+      KaoiroServer.DeviceAuth,
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint,
       KaoiroServerWeb.DeliveryLossDispatcher

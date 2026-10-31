@@ -25,7 +25,8 @@ defmodule KaoiroServer.TestStores do
   @memory_stores [
     KaoiroServer.ConversationStates,
     KaoiroServer.AgentActivity,
-    KaoiroServer.WrapperBuildInfos
+    KaoiroServer.WrapperBuildInfos,
+    KaoiroServer.DeviceAuth
   ]
 
   @dets_singletons [
