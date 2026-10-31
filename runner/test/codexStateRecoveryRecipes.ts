@@ -17,6 +17,9 @@ const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-loc
 // the fixture directory, including the fake service state and its call log,
 // is part of the zero-mutation digest.
 export const EXCLUDED = ["queries", "activity-count", "cut-ready", "running-helper", "removal-observations", "child-env.jsonl", "start-record-phases", "start-phases"];
+// Temporary names a marker writer leaves behind when it is killed before it
+// renames the file into place.
+export const EXCLUDED_TEMPORARY_PREFIXES = ["cut-ready.tmp-", "running-helper.tmp-"];
 // Every digested root that EXCLUDED must not reach (fixture-relative).
 export const PROTECTED = ["install", "install/releases", "install/codex-state", "install/.lock.update", "install/.lock.links", "codex", "backup", "upd", ".staging.codex-", ".failed.codex-", ".restore.codex-", "config", "ordinary", "active", "mainpid", "owned-pids", "fake-cgroup", "calls"];
 
@@ -27,7 +30,7 @@ export function digestEntries(dir: string) {
   const walk = (rel: string) => {
     for (const name of readdirSync(join(dir, rel)).sort()) {
       const path = rel ? `${rel}/${name}` : name;
-      if (EXCLUDED.includes(path)) continue;
+      if (EXCLUDED.includes(path) || EXCLUDED_TEMPORARY_PREFIXES.some(prefix => path.startsWith(prefix))) continue;
       const st = lstatSync(join(dir, path)), mode = (st.mode & 0o7777).toString(8);
       if (st.isSymbolicLink()) entries.set(path, `${path} l ${mode} ${readlinkSync(join(dir, path))}`);
       else if (st.isDirectory()) { entries.set(path, `${path} d ${mode}`); walk(path); }
