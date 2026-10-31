@@ -17,7 +17,7 @@ if not plain_http? do
   # Note `:force_ssl` is required to be set at compile-time.
   config :kaoiro_server, KaoiroServerWeb.Endpoint,
     force_ssl: [
-      rewrite_on: [:x_forwarded_proto],
+      rewrite_on: [],
       exclude: [
         # paths: ["/health"],
         hosts: ["localhost", "127.0.0.1"]
