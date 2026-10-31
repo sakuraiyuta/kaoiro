@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { AppServerContextMeter } from "./app_server_context.js";
 // CodexHost owns one selected backend for a wrapper lifetime. App-server is
 // persistent; explicit exec uses one SDK process per turn. Both share the

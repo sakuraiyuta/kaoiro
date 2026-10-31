@@ -304,3 +304,43 @@ test("default local observe and remove-pin use real evidence and config bytes", 
   assert.equal(JSON.parse(output.stdout.text).maintenance_evidence_sha256, hash(await readFile(evidencePath)));
   assert.equal(cursorCalls, 1);
 });
+
+for (const [name, change] of Object.entries({
+  "missing roster target": f => { f.state.h.rows.shift(); },
+  "non-Codex target": f => { f.state.h.rows[0].engine = "grok"; },
+  "wrong applied backend": f => { f.state.r.appliedBackend = f.state.s.applied_backend = "app-server"; f.state.r.configuredBackend = "app-server"; },
+  "stopping sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), stopping: true }); },
+  "restarting sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), restarting: true }); },
+  "resetting sibling": f => { f.state.s.children.push({ ...child(host + ".sibling"), reset_pending: true }); },
+  "pending sibling spawn": f => { f.state.s.pending_spawns.push(host + ".sibling"); },
+  "pending sibling switch": f => { f.state.s.pending_switches.push(host + ".sibling"); },
+})) test("restore admission rejects " + name + " before credentials", async () => {
+  const f = fixture(); f.state.h.rows.push({ ...row(host + ".sibling"), connected: true, pointer: "non_nil" });
+  change(f); const e = await accept(f, "restore-fresh");
+  for (const entry of e.agents) entry.current_backend = entry.classification === "codex" ? f.state.r.appliedBackend : "not-applicable";
+  f.state.evidence = JSON.stringify(e); const output = io();
+  assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.match(output.stderr.text, /target-not-fresh|restore-backend-mismatch|supervisor-work-pending/);
+  assert.equal(f.calls.open, 0); assert.equal(f.calls.restore, 0);
+});
+
+for (const [name, change] of Object.entries({
+  "owner": f => { f.state.s.owner = "#PID<1.2.9>"; },
+  "sibling pointer": f => { f.state.h.rows[1].pointer = "nil"; },
+  "new sibling child": f => { f.state.s.children.push(child(host + ".new")); },
+  "missing target pointer": f => { f.state.h.rows[0].pointer = "missing"; },
+  "restarting target": f => { f.state.s.children[0].restarting = true; },
+})) test("restore completion rejects changed " + name + " without a second restore", async () => {
+  const f = fixture(); await accept(f, "restore-fresh");
+  f.state.hook = (key, n) => { if (key === "host" && n === 5) change(f); };
+  const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.match(output.stderr.text, /observation-changed|observation-invalid|supervisor-work-pending/);
+  assert.equal(f.calls.restore, 1); assert.equal(f.calls.close, 1); assert.equal(f.calls.write, 0);
+});
+
+for (const key of ["host", "runner", "supervisor", "evidence", "cursor"]) test("unavailable " + key + " stops before mutation", async () => {
+  const f = fixture(); await accept(f); f.state.hook = called => { if (called === key) throw new Error("private fixture detail"); };
+  const output = io(); assert.equal(await main(args("remove-pin"), f.adapters, output), 1);
+  assert.match(output.stderr.text, /before-write/); assert.doesNotMatch(output.stderr.text, /private fixture detail/);
+  assert.equal(f.calls.write, 0); assert.equal(f.calls.open, 0);
+});

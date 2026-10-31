@@ -1,7 +1,7 @@
 ---
 title: "Codex backends and ownership"
 status: implemented
-last_updated: 2026-10-03
+last_updated: 2026-10-31
 ---
 
 # Codex backends and ownership
@@ -26,7 +26,7 @@ overlapping operations. Another turn is allowed after the terminal notification,
 including when an earlier consumer still has buffered events to read.
 
 `AppServerHostRuntime` is an internal execution owner above `AppServerSession`;
-`CodexHostOptions.backend = "app-server"` selects it explicitly. The CLI alone
+omitted `CodexHostOptions.backend` or explicit `"app-server"` selects it. The CLI alone
 translates the validated startup config into that option; constructing a Host
 directly does not read config or environment hints.
 It creates one session, opens or resumes once, and rejects overlapping calls.
@@ -40,7 +40,7 @@ path creates a replacement child or falls back to exec.
 
 `runCodexCli({ backend: "app-server" })` is an internal composition seam. The
 ordinary entrypoint calls `runCodexCli()` with no arguments and selects from
-`config.codex_backend ?? "exec"`. Only internal tests may override this with the
+`config.codex_backend ?? DEFAULT_CODEX_BACKEND` (`"app-server"`). Only internal tests may override this with the
 dependency object; environment and flags cannot select a backend.
 The optional watchdog clock supplies only time and timer operations. Settings,
 interrupt, fail-stop and lifecycle callbacks are the production implementation.
