@@ -67,6 +67,7 @@ it("relays the runner-local backend at bootstrap/reload and preserves running wr
     children[0]!.exit();expect(configs[2]?.codex_backend).toBe("exec");
     file("app-server");reload();await runtime!.waitForReloads();
     children[1]!.exit();expect(configs[3]?.codex_backend).toBe("app-server");
+    diagnostic.mockClear();
     file();reload();await runtime!.waitForReloads();
     callbacks.onSpawn?.(spawn("c"));expect(configs[4]?.codex_backend).toBe("app-server");
     expect(observe()).toMatchObject({ applied_backend: "app-server" });
