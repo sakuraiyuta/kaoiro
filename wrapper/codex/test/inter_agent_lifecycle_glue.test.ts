@@ -541,7 +541,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
@@ -562,7 +562,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnStart: ({ turnToken }) => harness.onTurnStart(turnToken),
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
@@ -583,7 +583,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
@@ -613,7 +613,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
@@ -638,7 +638,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
@@ -671,7 +671,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
     const host = new CodexHost(config, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
     });
     harness.bindHost(host);
@@ -722,7 +722,7 @@ describe("issue #221 段階3: 同一peer busy-trigger coalescing (codex glue)", 
       const host = new CodexHost(config, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.conversationIds, info.error),
       });
       harness.bindHost(host);

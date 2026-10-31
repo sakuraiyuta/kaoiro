@@ -188,6 +188,8 @@ export interface WrapperBuildIdentity {
  *  not the config file. */
 export type Persona = WirePersona;
 
+export const DEFAULT_CODEX_BACKEND = "app-server" as const;
+
 /** Wrapper init config. agent_id is a stable id, constant across restarts.
  *  server_url points the wrapper at the kaoiro server's wrapper socket
  *  (ws:// or wss://) and is required — the wrapper cannot open its SDK
@@ -295,7 +297,7 @@ export interface WrapperConfig {
    *  value, so the runner option outranks any user-global Codex config: true
    *  force-enables, false disables (ADR-0038 F2). */
   codex_internal_subagents?: boolean;
-  /** Runner-local launch selection. Omitted = exec; never sourced from spawn. */
+  /** Runner-local launch selection. Omitted = app-server; never sourced from spawn. */
   codex_backend?: "exec" | "app-server";
   /** Runner-owned private home for Codex agent tool shells. Never a server setting. */
   codex_tool_home?: string;
