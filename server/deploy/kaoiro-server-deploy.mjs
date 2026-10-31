@@ -979,6 +979,7 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
   const targetOnly = paths.some(p => !oldByStore.has(p.store));
   const contract = targetOnly ? queryPersistenceContract(bin, oldImageId) : null;
   const entries = {};
+  const missingAcceptances = [];
   for (const target of paths) {
     const destination = composeEnv[target.env];
     if (!isWithinStateVolume(destination)) {
@@ -998,7 +999,10 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
     }
     if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container at ${JSON.stringify(containerEnv[target.env])}; cannot accept it as a new store`);
     if (contract !== "exhaustive_stable_v1") fail(`${target.env}: old image cannot establish an exhaustive stable store contract; use the non-destructive rollback`);
-    if (!accepted.has(target.env)) fail(`${target.env}: independently verify that no earlier data needs migration. If it is a genuinely new store, resume with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${targetRevision} --accept-new-store ${target.env}`);
+    if (!accepted.has(target.env)) {
+      missingAcceptances.push(`${target.env}: independently verify that no earlier data needs migration. If it is a genuinely new store, resume with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${targetRevision} --accept-new-store ${target.env}`);
+      continue;
+    }
     const candidate = target.default_path;
     if (!isAbsolute(candidate) || resolve(candidate) !== candidate) fail(`${target.env}: invalid target default path`);
     const probe = probeContainerPath(bin, container, candidate);
@@ -1021,6 +1025,7 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
       target_probe_path: candidate, probe_result: "absent", destination_probe_result: "absent",
       operator_accepted_new_store: true, volume_name: volume.name};
   }
+  if (missingAcceptances.length > 0) fail(missingAcceptances.join("; "));
   return {guard_schema: 2, old_image_id: oldImageId, target_image_id: targetImageId,
     path_policy: "textual_state_volume_v1", target_manifest_raw: targetRaw,
     target_manifest_sha256: createHash("sha256").update(targetRaw, "utf8").digest("hex"), entries};
