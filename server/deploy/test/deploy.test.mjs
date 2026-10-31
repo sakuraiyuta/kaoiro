@@ -6874,14 +6874,14 @@ test("new-store guard checks the old default and volume destination separately",
   const targetDefault = "/tmp/kaoiro-dets/users.dets";
   const destination = "/var/lib/kaoiro/users.dets";
   for (const presentPath of [targetDefault, destination]) {
-    let checked = false;
+    let caught;
     const calls = withCallLog("running-clean-stop", () =>
       withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", presentPath}, () => {
-        assert.throws(() => runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()), /cannot verify the target default path|destination .*present/);
-        checked = true;
+        try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+        catch (error) { caught = error; }
       }),
     );
-    assert.equal(checked, true, presentPath);
+    assert.match(caught?.message ?? "no error", /cannot verify the target default path|destination .*present/, presentPath);
     assert.doesNotMatch(calls, /compose stop|compose up|archive/);
   }
   const result = withScenario("running-clean-stop", () =>
