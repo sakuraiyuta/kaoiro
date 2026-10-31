@@ -2123,7 +2123,7 @@ export function runUpdate(flags, config) {
       if (!entryActs(selectEntry(journal.phase, "update", recoveryFacts(journal)))) {
         fail(`transaction ${transactionId} cannot be resumed by update (phase: ${journal.phase})`);
       }
-      writeJournal(dir, journal, validateJournalAgainstStateMachine);
+      validateJournalAgainstStateMachine(journal);
       const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
       oldImageId = oldEntry.observation.old_image_id;
       oldSha = oldEntry.observation.old_sha;
