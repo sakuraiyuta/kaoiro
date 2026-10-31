@@ -59,7 +59,7 @@ try {
   await writeFile(join(root, 'observer.mjs'), `import fs from 'node:fs';import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';import {createHash} from 'node:crypto';
 const log=x=>fs.appendFileSync(process.env.KOGANE_OBSERVATION_LOG,JSON.stringify(x)+'\\n');
 log({kind:'node',pid:process.pid,ppid:process.ppid,entry:process.argv[1]});
-const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(this,arguments);if(ex.endsWith('/codex'))log({kind:'native',pid:p.pid,sha:createHash('sha256').update(fs.readFileSync(ex)).digest('hex')});p.once('exit',(code,signal)=>log({kind:'exit',pid:p.pid,code,signal}));return p;};syncBuiltinESMExports();\n`);
+const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(this,arguments);if(ex.endsWith('/codex'))log({kind:'native',pid:p.pid,exec_turn:args.includes('exec'),sha:createHash('sha256').update(fs.readFileSync(ex)).digest('hex')});p.once('exit',(code,signal)=>log({kind:'exit',pid:p.pid,code,signal}));return p;};syncBuiltinESMExports();\n`);
   provider = createServer(async (req, res) => {
     let raw = ''; for await (const part of req) raw += part;
     const payload = JSON.parse(raw), n = ++providerRequests, id = 'observation-' + n;
@@ -254,6 +254,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
   for (const child of [...children].reverse()) await stopOwned(child);
   if (provider) { provider.closeAllConnections(); await new Promise(r => provider.close(r)); }
   report.processes = await records();
+  report.native_turns = report.processes.filter(x => x.kind === "native" && x.exec_turn).length;
   report.all_observed_processes_gone = report.processes.filter(x => x.kind === 'node' || x.kind === 'native').every(x => !existsSync('/proc/' + x.pid));
   await rm(root, { recursive: true, force: true });
   report.scratch_removed = !existsSync(root);
