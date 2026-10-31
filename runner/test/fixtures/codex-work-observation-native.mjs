@@ -164,12 +164,15 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
         assert.equal(await rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), true);
         assert.ok(existsSync('/proc/' + wrapper.pid));
         const prior = server, oldVmPid = await rpc('System.pid()');
-        // Hold only our runner so VM-ready cannot race ahead of the missing-registration check.
-        pausedRunner = runner;
-        assert.equal(runner.kill('SIGSTOP'), true);
+        const shutdownLogStart = recordedLogs.get(runner).length;
         const restartVm = async () => {
           await exec(release, ['stop'], { env, timeout: 30_000 });
           await waitFor(() => prior.exitCode !== null || prior.signalCode !== null, 'release VM exit');
+          // Pausing before close handling changes Phoenix's reconnect behavior.
+          await waitFor(() => recordedLogs.get(runner).slice(shutdownLogStart).some(x => x.text.includes('runner: socket closed')),
+            'runner observed old VM socket close');
+          pausedRunner = runner;
+          assert.equal(runner.kill('SIGSTOP'), true);
           server = start(release, ['start']);
           await waitFor(async () => { try { return await rpc('true'); } catch { return false; } }, 'new VM ready');
         };
