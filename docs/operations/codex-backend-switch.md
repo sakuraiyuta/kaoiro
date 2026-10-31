@@ -18,7 +18,7 @@ coverage and remaining limits are recorded in the
 Use the preparation command introduced for [issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564),
 `scripts/codex-backend-compatibility.mjs`, before deploying a later
 default-changing release to an affected host whose `codex.backend` is omitted.
-Its only supported phase is `prepare`:
+Run `prepare` on the preparation release before installing the default-changing release:
 
 ```sh
 node scripts/codex-backend-compatibility.mjs \
@@ -116,9 +116,9 @@ local user unit's MainPID, InvocationID, unchanged configuration and startup
 revision, applied backend, channel owner, and runner instance. It requires
 both server and runner support. Old runners time out after five seconds;
 unavailable, malformed, oversized, busy, or ambiguous responses are refused.
-The existing `prepare` phase does not use this reader. The omitted backend
-still selects `exec`; remove-pin and fresh-restore gating belong to the
-subsequent default-change unit ([issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564)).
+The existing `prepare` phase does not use this reader. The `observe`,
+`remove-pin`, `pin-exec-fresh`, and `restore-fresh` phases use it with the
+server host projection and local runner/configuration observations.
 
 For `ambiguous_runner`, identify and resolve duplicate connections using the
 existing runner-service procedure before observing again. A join that cannot
@@ -148,31 +148,122 @@ Observation covers the current server's joined channels only,
 not offline runners or runners connected to another server. Use one
 maintenance owner; a read does not lock out later lifecycle changes.
 
-## Codex backend selection and rollback
+## Fresh backend migration
 
-Use a runner release containing ADR-0058 Stage 1. In `runner.config.json`, merge
-`"backend": "app-server"` into the existing `codex` object without deleting its
-auth or model settings. The default is `"exec"`. This selects all subsequent
-Codex wrapper lifetimes on that runner, not one dashboard agent. Running
-wrappers keep their backend. No environment variable, backend flag or dashboard
-control overrides it. Check the wrapper's `codex: backend=...` startup diagnostic.
+Use one maintenance owner and exclude concurrent operator lifecycle actions.
+Observations do not form a distributed lock: peer input can race with a reset
+or arrive after the last observation. Before changing backend, every Codex
+agent on the host must be disconnected, have a persisted **nil** pointer
+(not a missing row), and have no pending reset/transition or Supervisor work.
+Keep non-Codex agents in the roster; their existing connections are allowed.
+Resolve unknown engine/current routing from actual records. Never infer a
+session's origin from its UUID, an omitted backend, or missing snapshot data.
 
-To roll back to exec while preserving a session (exercised in production on
-the 0.156.1 pin, in both directions, on 2026-09-30; see issue #452):
+For each Codex sibling, obtain the operator's acceptance of context loss,
+use the existing reset/new control, wait for completion and join, then stop.
+Peer input after reset can create a new pointer. Repeat at most three cycles;
+if the host still cannot reach the boundary, stop for operator review. A reset
+failure may restore the previous ID: do not interpret failure as a nil pointer
+or silently discard that session. The CLI does not perform resets or stops.
 
-1. Record the Codex session ID, host and working directory. Stop the target agent
-   through the existing operator stop action and wait for it to exit. Do not
-   merely drop its socket or race the Supervisor's automatic restart.
-2. Set `codex.backend` to `"exec"`. Wait for the runner diagnostic
-   `runner: codex backend=exec for subsequent wrappers`. The earlier
-   `config reload` line alone is insufficient; a skipped/failed reload must be
-   corrected before proceeding. Other future Codex launches also use exec.
-3. Use the existing session selection/restore flow to resume that recorded ID
-   on the same host and cwd, with the same Codex session store. Do not select
-   a fresh session/reset. The runner enforces its existing session existence
-   check and exclusive resume lock.
-4. Confirm `codex: backend=exec`, the resumed session ID and the next successful
-   result. An ambiguous or failed turn is not automatically resubmitted.
+Use the same confirmed host, runner SHA, compose file, runner config and user
+unit arguments as `prepare`. Immediately before **each** operation, the director
+or assigned agent may run the read-only phase with already authorized adapters:
+
+```sh
+node scripts/codex-backend-compatibility.mjs \
+  --phase observe --phase-target remove-pin \
+  --host <host-id> --runner-sha <full-sha> \
+  --compose-file <compose-file> --runner-config <runner-config> \
+  --runner-unit <user-unit>
+```
+
+For `restore-fresh`, add `--agent <agent-id> --backend <exec|app-server>`.
+`observe` does not write config, collect an acknowledgement cursor, read an
+operator credential, or open an operator socket. Its JSON contains the actual
+configured/applied backend, receipt, and `maintenance_template`. It succeeds
+when observation succeeds, even if the host is not ready to mutate.
+
+Save only the template as a private JSON file. Keep both the template and the
+completed record outside repositories, public issues and kaoiro shared folders;
+use an owned temporary directory or an operator-private location. Do not post
+its output into those destinations. The creator deletes it after use.
+The template includes runner/config identity, owner, instance and the complete
+host roster, with `maintenance_owner_accepted:false`, unknown current routing,
+and empty evidence references. It cannot authorize a write as emitted.
+
+The director/agent prepares classifications, current routing and evidence
+references from actual launch records. Each row has `id`, `classification`
+(`codex` or `not-codex`), `current_backend`, and nonempty `evidence_refs`.
+A non-Codex row uses `not-applicable`; a Codex row uses its known backend or
+`none` only when disconnected/nil/work-free. References are pointers to
+operator-reviewed facts, not machine-verifiable proof. The **operator** checks
+the complete record and exclusion of concurrent actions, sets
+`maintenance_owner_accepted:true`, and runs the operation from their own console.
+Agents do not accept or execute writes on the operator's behalf.
+If owner, instance, config or roster changes, regenerate the record and repeat
+the operator check. Never carry an earlier acceptance forward automatically.
+
+| Phase | Additional arguments | Required boundary and result |
+|---|---|---|
+| `remove-pin` | `--maintenance-evidence <private-file>` | Explicit exec configured and applied, plus the whole-host fresh boundary. Remove only the backend key; wait for omitted app-server to be applied. Explicit app-server and already omitted configurations are refused. |
+| `pin-exec-fresh` | `--maintenance-evidence <private-file>` | Same whole-host fresh boundary. Select explicit exec. Already explicit exec still needs current observations and freshness; it is not a bypass. |
+| `restore-fresh` | `--maintenance-evidence <private-file> --agent <id> --backend <exec|app-server> --operator-config <private-file>` | Target disconnected/nil/work-free, no pending lifecycle work, and all known Codex routing on the same selected backend. A connected same-backend sibling with a non-nil pointer is allowed. Send normal restore once and observe target connection plus its normal Supervisor child. |
+
+The operator runs restore from their own console too. Agents, including the
+director, never create, read or receive the operator token file. It contains
+`{"server_url":"wss://<server>/client/websocket","token":"<operator-token>"}`,
+lives outside the repo and shared folders, and must be a regular non-symlink
+file owned by the executing effective UID with mode **0600**. The CLI checks
+before reading and checks the opened descriptor again. The operator confirms
+placement; file mode alone does not prove that placement. Other phases reject
+`--operator-config` before reading it. Custom adapters do not waive these
+operational rules. No credential is accepted in URL userinfo or query strings.
+
+Normal restore sends no resume ID, cwd, engine override or snapshot. The
+server's nil-pointer path retains `apply_resume_snapshot:true`. A reply is only
+acceptance; successful CLI output additionally requires a fresh observation
+of the target connection, no pending operation, and a normal Supervisor child.
+It sends no model input. New native identity is checked by the migration's
+native acceptance procedure, not inferred from reply correlation.
+
+Every mutation rechecks H/R -> Supervisor -> H/R and compares a second bundle
+immediately before the action. Successful JSON includes
+`maintenance_evidence_sha256`, the hash of the exact accepted input bytes.
+Keep the result with the private record until the operation is resolved.
+
+| Failure stage | Required next action |
+|---|---|
+| `before-write` | No write/restore occurred. Resolve the reason, observe again, and create a new accepted record. |
+| `write-outcome-unknown` | Inspect actual config and applied state; even a failed directory fsync may follow a successful rename. Do not restore wrappers yet. |
+| `after-write` | Keep the actual config, resolve acknowledgement/observation failure, and confirm a reload receipt newer than the write. No automatic pin restoration. If remove-pin already left omission, do not rerun remove-pin or write exec just to retry. Only after confirming omitted app-server, create a new record for restore. |
+| `restore-outcome-unknown` | Do not resend. Inspect current membership, pending work and connections. Use existing controls to resolve the state; retry only once the target is again disconnected/nil/work-free with a new record. |
+
+A signal or forced exit is an unknown outcome too. If A restores successfully
+and B fails, keep the backend and reobserve the whole host before retrying B.
+Switching back to exec requires the fresh boundary for A and every sibling.
+Registry replacement uses the VM recovery procedure above; application-only
+restart or VM readiness without runner registration is not recovery.
+
+## Backend selection and code rollback
+
+The runner-local backend selects all subsequent Codex wrapper lifetimes on
+that runner, not one dashboard agent. Existing wrappers keep their backend.
+There is no environment flag or dashboard per-agent override. Confirm
+`codex: backend=...` and the runner's applied-selection diagnostic.
+
+Backend fallback and code rollback are different operations. The supported
+backend fallback is `pin-exec-fresh` followed by fresh exec restores; it does
+not resume app-server IDs on exec. Before a same-native **code** rollback,
+stop all Codex siblings, preserve explicit app-server selection and verify its
+application, then activate the known older code with the same native hash.
+Restore one app-server ID, check its continuation/history, then restore siblings.
+If the runner cannot start, validate the selected backend with the offline
+loader before activating the old code. An old omitted-exec code target without
+explicit app-server preparation is not a valid rollback target. Native-hash or
+state changes require the existing state-aware rollback procedure instead.
+Historical cross-backend observations remain evidence only and do not authorize
+that procedure on the current native pin.
 
 This changes backend selection, not the installed release. App-server startup
 failure remains an operator-visible error and closes admission; there is no
