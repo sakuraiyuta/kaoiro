@@ -959,11 +959,16 @@ function containerEffectiveEnv(bin, container) {
   } catch (err) {
     fail(`could not parse '{{json .Config.Env}}' for ${container}: ${err.message}`);
   }
+  if (!Array.isArray(parsed) || !parsed.every(line => typeof line === "string")) {
+    fail(`invalid Config.Env for ${container}`);
+  }
   const env = {};
   for (const line of parsed) {
     const idx = line.indexOf("=");
     if (idx === -1) continue;
-    env[line.slice(0, idx)] = line.slice(idx + 1);
+    const name = line.slice(0, idx);
+    if (Object.hasOwn(env, name)) fail(`duplicate container environment variable ${name}`);
+    env[name] = line.slice(idx + 1);
   }
   return env;
 }
@@ -2376,7 +2381,13 @@ export function runUpdate(flags, config) {
           // violation in the old image's own manifest is the same kind
           // of "could not answer" — never this transaction's own defect
           // to abort over.
-          const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false });
+          const oldContainerEnv = containerEffectiveEnv(bin, oldContainerId);
+          const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false, env: oldContainerEnv });
+          if (dockerInspect(bin, container, "{{.Id}}") !== oldContainerId ||
+              dockerInspect(bin, oldContainerId, "{{.Image}}") !== oldImageId ||
+              dockerInspect(bin, oldContainerId, "{{.State.Status}}") !== "running") {
+            fail("old container or image changed during persistence manifest query");
+          }
           if (oldPersistencePaths.skipped) {
             fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; roll back this transaction before retrying`);
           }
@@ -2385,7 +2396,7 @@ export function runUpdate(flags, config) {
             persistencePaths.paths,
             join(serverDir, ".env"),
             composeDeclaredEnv(bin, serverDir, boundComposeArgs(targetPlan, serverDir, dir)),
-            containerEffectiveEnv(bin, container),
+            oldContainerEnv,
             oldPathsByEnv,
             { bin, container, serverDir, composeArgs: boundComposeArgs(targetPlan, serverDir, dir), acceptNewStores: flags.acceptNewStores },
           );
