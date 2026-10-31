@@ -6975,6 +6975,10 @@ test("previous CLI revision is declared only in its shared file", () => {
   const revisionText = readFileSync(join(repository, fixture), "utf8");
   assert.match(revisionText, /^[a-f0-9]{40}\n?$/);
   const revision = revisionText.trim();
+  const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const archives = source.split("\n").filter(line => /^\s*const archive = execFileSync\("git"/.test(line));
+  assert.equal(archives.length, 1);
+  assert.match(archives[0], /"archive", revisionText\.trim\(\),/);
   const result = spawnSync("git", ["-C", repository, "grep", "-I", "-l", "-z", "-F", revision, "--", ".", ":(exclude)scripts/issue-920-image-probe/**"], {encoding:"utf8"});
   assert.equal(result.status, 0, result.stderr);
   const paths = result.stdout.split("\0").filter(Boolean);
