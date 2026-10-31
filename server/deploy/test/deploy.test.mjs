@@ -6990,3 +6990,50 @@ test("previous CLI handles a pending v2 journal conservatively across four entry
     assert.deepEqual(readdirSyncNonHidden(backupRoot), [id]);
   }
 });
+
+function withTimedOutImageEval(predicate, fn) {
+  const original = childProcess.execFileSync;
+  let timeout;
+  childProcess.execFileSync = (file, args, options) => {
+    if (file === bin && predicate(args)) {
+      timeout = options.timeout;
+      const error = new Error("image query timed out");
+      error.code = "ETIMEDOUT";
+      throw error;
+    }
+    return original(file, args, options);
+  };
+  syncBuiltinESMExports();
+  try { return {result:fn(), timeout: () => timeout}; }
+  finally { childProcess.execFileSync = original; syncBuiltinESMExports(); }
+}
+
+for (const which of ["target", "old"]) {
+  test(`manifest ${which} image timeout refuses at BUILD_PREPARED and restores latest`, () => {
+    const predicate = args => args.some(a => a.includes("PersistencePaths.manifest()")) &&
+      (args.includes(OLD_IMAGE_ID) === (which === "old"));
+    const timed = withTimedOutImageEval(predicate, () => attemptUpdate("running-clean-stop", () =>
+      withEnvConsistencyFixture({}, () => runUpdate({repo:workDir, target:headSha, maintenanceApproved:true}, configWithCleanStopMeasured()))));
+    assert.equal(timed.timeout(), 30_000);
+    assert.match(timed.result.caught?.message ?? "no error", /image query timed out/);
+    assertNoDestructiveCalls(timed.result.calls);
+    assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+    const backup = join(root, "kaoiro-deploy");
+    const [id] = readdirSyncNonHidden(backup);
+    assert.equal(readJournal(join(backup, id)).phase, PHASE.BUILD_PREPARED);
+    assert.match(timed.result.caught.message, /rollback/);
+  });
+}
+
+test("contract timeout means no usable marker before the stop", () => {
+  const timed = withTimedOutImageEval(args => args.some(a => a.includes("PersistencePaths.contract()")), () =>
+    attemptUpdate("running-clean-stop", () => withNewWorkStore({}, () =>
+      runUpdate(workStoreFlags({maintenanceApproved:true}), configWithCleanStopMeasured()))));
+  assert.equal(timed.timeout(), 30_000);
+  assert.match(timed.result.caught?.message ?? "no error", /cannot establish an exhaustive stable store contract/);
+  assertNoDestructiveCalls(timed.result.calls);
+  assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+  const backup = join(root, "kaoiro-deploy");
+  const [id] = readdirSyncNonHidden(backup);
+  assert.equal(readJournal(join(backup, id)).phase, PHASE.BUILD_PREPARED);
+});
