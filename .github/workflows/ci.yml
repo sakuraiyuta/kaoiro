@@ -317,7 +317,9 @@ jobs:
   # builds.
   server-image:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Raised from 5 for the G56 boot-and-probe step below (issue 801); set
+    # it from the first run's measured build + boot + probe time.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
@@ -395,3 +397,131 @@ jobs:
             }
             console.log("persistence-path manifest OK (" + entries.length + " stores)");
           '
+      # G56 (issue 801, device authorization grant): boot the image built
+      # above with production settings and probe its entry over loopback
+      # http, as the TLS-terminating proxy would reach it. Claim cells are
+      # asserted; every other header and body is an observation written to
+      # the job summary and never fails the job. Device and user codes are
+      # redacted before anything is printed. All values are throwaway.
+      - name: device authorization entry probe (G56)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/g56"
+          mkdir -p "$out"
+          secret=$(openssl rand -hex 64)
+          common=(
+            -e SECRET_KEY_BASE="$secret" -e PHX_HOST=kaoiro.example
+            -e KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID=ci
+            -e KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=ci
+            -e KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example
+          )
+          docker run -d --name kaoiro-g56 -p 127.0.0.1:4000:4000 "${common[@]}" kaoiro-server:ci
+          # (e): every name an implementation could plausibly read the
+          # insecure-transport exception from. None may take effect.
+          docker run -d --name kaoiro-g56-env -p 127.0.0.1:4001:4000 "${common[@]}" \
+            -e KAOIRO_DEVICE_AUTH_ALLOW_INSECURE_TRANSPORT=true \
+            -e DEVICE_AUTH_ALLOW_INSECURE_TRANSPORT=true \
+            -e KAOIRO_ALLOW_INSECURE_TRANSPORT=true \
+            -e KAOIRO_DEVICE_AUTH_INSECURE=true \
+            kaoiro-server:ci
+
+          wait_ready() {
+            local port=$1 started=$SECONDS
+            # No Host header: curl's 127.0.0.1 is an excluded host, so the
+            # health check is not redirected.
+            until [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/health")" = 200 ]; do
+              if (( SECONDS - started > 60 )); then
+                echo "port $port did not answer /api/health with 200 within 60 s" >&2
+                docker logs kaoiro-g56 >&2 || true
+                docker logs kaoiro-g56-env >&2 || true
+                exit 1
+              fi
+              sleep 1
+            done
+            echo "port $port ready after $(( SECONDS - started )) s"
+          }
+          wait_ready 4000
+          wait_ready 4001
+
+          form=(-H 'content-type: application/x-www-form-urlencoded' --data-binary 'client_id=x')
+          json=(-H 'content-type: application/json' --data-binary '{')
+          https=(-H 'x-forwarded-proto: https')
+          # probe ROW PORT CURL_ARGS... -> $out/ROW.{status,headers,body}
+          probe() {
+            local row=$1 port=$2
+            shift 2
+            curl -sS -o "$out/$row.body" -D "$out/$row.headers" -w '%{http_code}' \
+              "$@" "http://127.0.0.1:$port${path}" > "$out/$row.status"
+          }
+          path=/oauth/device
+          probe a 4000 -H 'host: kaoiro.example' "${https[@]}" "${form[@]}"
+          probe b 4000 -H 'host: kaoiro.example' "${form[@]}"
+          probe c 4000 -H 'host: localhost' "${https[@]}" "${form[@]}"
+          probe d 4000 -H 'host: localhost' "${form[@]}"
+          probe e 4001 -H 'host: localhost' "${form[@]}"
+          probe f 4000 -H 'host: kaoiro.example' "${https[@]}" "${json[@]}"
+          path=/session/new
+          probe g 4000 -H 'host: kaoiro.example' "${https[@]}" "${json[@]}"
+          path=/session/auth-methods
+          probe h_on 4000 -H 'host: kaoiro.example' "${https[@]}"
+          probe h_off 4000 -H 'host: kaoiro.example'
+
+          status() { cat "$out/$1.status"; }
+          has_header() { grep -qiE "^$2" "$out/$1.headers"; }
+          check_a() {
+            [ "$(status a)" = 200 ] &&
+              has_header a 'strict-transport-security: max-age=31536000' &&
+              jq -e 'has("device_code")' "$out/a.body" > /dev/null
+          }
+          check_b() { [ "$(status b)" = 307 ] && has_header b 'location: https://kaoiro\.example/'; }
+          check_c() { [ "$(status c)" = 200 ] && ! has_header c 'strict-transport-security:'; }
+          check_d() { [ "$(status d)" = 503 ]; }
+          check_e() { [ "$(status e)" = 503 ]; }
+          check_f() { [ "$(status f)" = 415 ]; }
+          check_g() { [ "$(status g)" = 400 ]; }
+          check_h_on() {
+            [ "$(status h_on)" = 200 ] && jq -e '.device == true' "$out/h_on.body" > /dev/null
+          }
+          check_h_off() { [ "$(status h_off)" = 301 ] && has_header h_off 'location: https://kaoiro\.example/'; }
+          failures=()
+          claim() { if ! "check_$1"; then failures+=("($1) expected $2"); fi; }
+          claim a "200 + HSTS + device_code in the body"
+          claim b "307 + Location on kaoiro.example"
+          claim c "200 without HSTS"
+          claim d "503"
+          claim e "503 with the exception-like env"
+          claim f "415"
+          claim g "400 (status only)"
+          claim h_on "200 + device: true"
+          claim h_off "301 + Location on kaoiro.example"
+
+          # Observations: every status, header and body, codes redacted.
+          redact='if type == "object" then with_entries(if (.key | IN("device_code", "user_code", "verification_uri_complete")) then .value = "<redacted>" else . end) else . end'
+          {
+            echo "## G56 device authorization entry probe"
+            for row in a b c d e f g h_on h_off; do
+              echo "### ($row) status $(status "$row")"
+              echo '```'
+              tr -d '\r' < "$out/$row.headers"
+              if [ ! -s "$out/$row.body" ]; then
+                echo "(empty body)"
+              elif jq -c "$redact" "$out/$row.body" 2> /dev/null; then
+                :
+              else
+                echo "(non-JSON body, $(wc -c < "$out/$row.body") bytes)"
+              fi
+              echo '```'
+            done
+            if [ "${#failures[@]}" -gt 0 ]; then
+              echo "### Claim cells that failed"
+              printf -- '- %s\n' "${failures[@]}"
+            else
+              echo "### All claim cells held"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          [ "${#failures[@]}" -eq 0 ]
+      - name: remove the G56 containers
+        if: always()
+        run: docker rm -f kaoiro-g56 kaoiro-g56-env || true
