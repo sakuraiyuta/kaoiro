@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import {
   captureDeliveryEnvironment, DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS,
   deliveryPersonaList, resolveDelivery, RETIRED_CODEX_OPERATOR_STEER_ENV,

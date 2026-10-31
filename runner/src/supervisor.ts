@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 // Process supervisor (ADR-0023, phases 4-4b/4-5). Owns the host's wrapper child
 // processes: spawns a wrapper per `spawn`, restarts a crashed one (isolated
 // from siblings), stops/restarts on operator command, enumerates resume
