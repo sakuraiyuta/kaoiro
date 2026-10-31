@@ -6925,7 +6925,7 @@ test("stable store ID refuses a changed old path even with a new-store flag", ()
   const oldEvalOutput = JSON.stringify([{store:"users",env:"OLD_USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
   let caught;
   const calls = withCallLog("running-clean-stop", () =>
-    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/tmp/users.dets"]'}, () => {
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/tmp/users.dets"]', contract:"1", volumePresent:"1", probeExit:"1"}, () => {
       try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
       catch (error) { caught = error; }
     }),

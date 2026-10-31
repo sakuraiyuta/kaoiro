@@ -934,8 +934,7 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
   if (paths.some(p => oldByStore.has(p.store) && !Object.hasOwn(containerEnv, oldByStore.get(p.store).env))) {
     process.stderr.write("Old default paths depend on startup environment. Confirm TMPDIR, TEMP, and TMP matched the container configuration at startup and were not changed by the running process; otherwise use the non-destructive rollback. See docs/operations/server-update-and-rollback.md 4.3 (5-b).\n");
   }
-  const targetOnly = paths.some(p => !oldByStore.has(p.store));
-  const contract = targetOnly ? queryPersistenceContract(bin, oldImageId) : null;
+  const contract = queryPersistenceContract(bin, oldImageId);
   const entries = {};
   const missingAcceptances = [];
   for (const target of paths) {
