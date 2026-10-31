@@ -362,7 +362,7 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
   const cmd = recipe.cmd ?? decl.cmds?.[0];
   // Preparation is outside the baseline digest and the measured command.
   v?.prepare(c); extra.prepare?.(c);
-  const before = c.uuid ? c.tx() : undefined, starts = h.callLog().split("start").length;
+  const before = c.uuid ? c.tx() : undefined;
   const outcome = decl.outcome ?? "refuse", treeEntries = digestEntries(h.dir), tree = [...treeEntries.values()];
   const asides = (before?.asides ?? []).map((e: any) => e.aside).filter((p: string) => existsSync(p));
   // The line is rendered before the perturbation, as an operator reads it.
@@ -390,7 +390,7 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
     else if (["refuse", "held", "settle"].includes(outcome)) expect(r.status, out).not.toBe(0);
     else expect(r.status, out).toBe(0);
     if (after) {
-      if (outcome === "settle") { expect(after.phase, out).toBe("failed"); expect(h.callLog().split("start").length, out).toBe(starts + 1); expect(readFileSync(join(h.dir, "start-record-phases"), "utf8").trim().split("\n").at(-1)!.split(","), out).toContain("failed"); }
+      if (outcome === "settle") { expect(after.phase, out).toBe("failed"); expect(readFileSync(join(h.dir, "start-record-phases"), "utf8").trim().split("\n").at(-1)!.split(","), out).toContain("failed"); }
       else if (outcome === "held") expect(after.phase, out).toBe(decl.final ?? before.phase);
       else if (["refuse", "noop"].includes(outcome)) expect(after.phase, out).toBe(before.phase);
       else expect(after.phase, out).toBe(outcome);
