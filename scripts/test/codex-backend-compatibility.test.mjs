@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { main } from "../codex-backend-compatibility.mjs";
+import { main, observeSupervisor } from "../codex-backend-compatibility.mjs";
 
 const HOST = "legacy-host";
 const RUNNER_SHA = "475e0d5d01d173b46be3bbb7b28564ccf8743abd";
@@ -1162,4 +1162,62 @@ test("the default local adapter keeps unavailable observations and failed acknow
     assert.equal(boundary.calls.systemctl, 6);
     assert.equal(boundary.calls.acknowledgement, 0);
   });
+});
+
+test("Supervisor reader binds two fresh RPC replies to the unchanged local unit", async (t) => {
+  const files = localFiles(t);
+  const args = { host: HOST, runner_config: files.configPath, runner_unit: "test.service", compose_file: "test-compose.yml" };
+  const value = { version: "0", schema: 1, host: HOST, pid: 4242, build_revision: RUNNER_SHA,
+    instance_id: "11111111-1111-4111-8111-111111111111", owner: "#PID<0.1.0>",
+    request_id: "a".repeat(32), applied_backend: "exec", children: [], pending_spawns: [], pending_switches: [] };
+  for (const scenario of ["ok", "pid", "zero-pid", "unit-pid", "missing-pid", "owner", "invalid-owner", "instance", "invalid-instance", "revision", "backend", "version", "schema", "host", "request", "flags", "malformed-element", "duplicate", "registry", "timeout", "old-server", "config", "invocation"]) {
+    const boundary = localCommandBoundary({ configPath: files.configPath });
+    let queries = 0;
+    let pidReads = 0;
+    const commands = (command, argv) => {
+      if (command === "systemctl" && argv.includes("MainPID")) {
+        pidReads += 1;
+        if (scenario === "missing-pid") return "0\n";
+        return scenario === "unit-pid" && pidReads > 1 ? "4243\n" : "4242\n";
+      }
+      if (command === "systemctl" && scenario === "invocation" && queries === 2) return "f".repeat(32);
+      if (command === "docker") {
+        queries += 1;
+        assert.match(argv.at(-1), /CodexBackendCompatibility\.observe_runner\("legacy-host"\)/);
+        if (scenario === "old-server") throw new Error("undefined RPC");
+        if (scenario === "registry") return JSON.stringify({ error: "runner_registry_changed" });
+        if (scenario === "timeout") return JSON.stringify({ error: "runner_observation_timeout" });
+        const result = { ...value };
+        if (scenario === "pid") result.pid = 4243;
+        if (scenario === "zero-pid") result.pid = 0;
+        if (scenario === "invalid-owner") result.owner = "";
+        if (scenario === "invalid-instance") result.instance_id = "";
+        if (scenario === "version") result.version = "1";
+        if (scenario === "schema") result.schema = 2;
+        if (scenario === "host") result.host = "another";
+        if (scenario === "request") result.request_id = "";
+        if (scenario === "flags") result.children = [{ agent_id: AGENT_ID, stopping: "false", restarting: false, reset_pending: false }];
+        if (scenario === "owner" && queries === 2) result.owner = "#PID<0.2.0>";
+        if (scenario === "instance" && queries === 2) result.instance_id = "22222222-2222-4222-8222-222222222222";
+        if (scenario === "revision") result.build_revision = "b".repeat(40);
+        if (scenario === "backend") result.applied_backend = "app-server";
+        if (scenario === "malformed-element") result.pending_spawns = ["other.a"];
+        if (scenario === "duplicate") result.pending_switches = [AGENT_ID, AGENT_ID];
+        if (scenario === "config" && queries === 2) writeFileSync(files.configPath, `{"host_id":"${HOST}","extra":1}`);
+        return JSON.stringify(result);
+      }
+      return boundary.runCommand(command, argv);
+    };
+    if (scenario === "ok") {
+      const result = await observeSupervisor(args, commands);
+      assert.equal(result.pid, 4242);
+      assert.equal(result.invocationId, INVOCATION_ID);
+      assert.equal(queries, 2);
+    } else {
+      await assert.rejects(observeSupervisor(args, commands), scenario === "registry" ? /runner-registry-changed/ : undefined, scenario);
+      if (scenario === "missing-pid") assert.equal(queries, 0);
+      if (scenario === "zero-pid") assert.equal(queries, 1);
+    }
+    writeFileSync(files.configPath, files.configBytes);
+  }
 });

@@ -57,6 +57,7 @@ class FakeRunnerLink {
   sendSessions(): void {}
   sendResetResult(): void {}
   sendStopAgent(): void {}
+  sendCodexWorkObserved() {}
   sendCatalogResult(): void {}
   updateRegister(register: RunnerRegister): void {
     this.updatedRegisters.push(register);

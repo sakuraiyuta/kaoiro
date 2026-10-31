@@ -6,6 +6,7 @@
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
+  CodexWorkSnapshot,
   EngineKind,
   EngineModelInfo,
   ModelSource,
@@ -94,6 +95,7 @@ type MaybePromise<T> = T | Promise<T>;
 /** An async existence check in flight. `token` tells a late continuation it
  *  was superseded; `abort` stops the probe it started (issue #644). */
 interface PendingCheck {
+  engine: EngineKind;
   token: symbol;
   abort: AbortController;
 }
@@ -739,6 +741,23 @@ export class Supervisor {
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
 
+  observeCodexWork(): CodexWorkSnapshot | null {
+    const known = (engine: EngineKind) => ["claude-code", "codex", "antigravity", "grok"].includes(engine);
+    const children = [...this.#children];
+    const spawns = [...this.#pendingSpawns];
+    const switches = [...this.#pendingSwitches];
+    if (children.some(([, entry]) => !known(entry.parsed.engine))
+      || [...spawns, ...switches].some(([, entry]) => !known(entry.engine))) return null;
+    return {
+      applied_backend: this.#codexBackend ?? "exec",
+      children: children.filter(([, entry]) => entry.parsed.engine === "codex").map(([agent_id, entry]) => ({
+        agent_id, stopping: entry.stopping, restarting: entry.restarting, reset_pending: entry.pendingReset !== undefined,
+      })),
+      pending_spawns: spawns.filter(([, entry]) => entry.engine === "codex").map(([id]) => id),
+      pending_switches: switches.filter(([, entry]) => entry.engine === "codex").map(([id]) => id),
+    };
+  }
+
   /** Hot-swap runtime config on a config-file reload. Full replacement per
    *  field — the caller provides the current value for every field, so the
    *  supervisor never carries stale values from a prior config revision.
@@ -830,7 +849,7 @@ export class Supervisor {
       return;
     }
 
-    const pending: PendingCheck = { token: Symbol(agentId), abort };
+    const pending: PendingCheck = { token: Symbol(agentId), abort, engine: parsed.engine };
     this.#pendingSpawns.set(agentId, pending);
     void exists
       .then((found) => {
@@ -943,7 +962,7 @@ export class Supervisor {
       return;
     }
 
-    const pending: PendingCheck = { token: Symbol(agentId), abort };
+    const pending: PendingCheck = { token: Symbol(agentId), abort, engine: entry.parsed.engine };
     this.#pendingSwitches.set(agentId, pending);
     void exists
       .then((found) => {

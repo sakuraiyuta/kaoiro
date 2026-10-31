@@ -405,6 +405,55 @@ async function parseOriginFile(file) {
   }
 }
 
+export async function observeSupervisor(args, runCommand = run) {
+  if (!HOST_ID.test(args.host ?? "") || args.host.length > 256) stop("invalid-arguments");
+  const readPid = () => {
+    const value = runCommand("systemctl", ["--user", "show", "-p", "MainPID", "--value", args.runner_unit]).trim();
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) stop("supervisor-identity-mismatch");
+    return Number(value);
+  };
+  const query = () => {
+    const command = [
+      `case KaoiroServer.CodexBackendCompatibility.observe_runner(${JSON.stringify(args.host)}) do`,
+      "  {:ok, projection} -> IO.puts(Jason.encode!(projection))",
+      '  {:error, reason} -> IO.puts(Jason.encode!(%{error: to_string(reason)}))',
+      "end",
+    ].join("\n");
+    const value = parseJsonOutput(runCommand("docker", [
+      "compose", "-f", resolve(args.compose_file), "exec", "-T", "kaoiro",
+      "/app/bin/kaoiro_server", "rpc", command,
+    ]));
+    if (value?.error === "runner_registry_changed") stop("runner-registry-changed");
+    if (!isRecord(value) || value.version !== "0" || value.schema !== 1 || value.host !== args.host
+      || !FULL_SHA.test(value.build_revision ?? "") || !Number.isSafeInteger(value.pid) || value.pid < 1
+      || typeof value.instance_id !== "string" || !/^[0-9a-f-]{36}$/.test(value.instance_id)
+      || typeof value.owner !== "string" || !/^#PID<[0-9.]+>$/.test(value.owner)
+      || typeof value.request_id !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(value.request_id)
+      || !BACKENDS.has(value.applied_backend) || !Array.isArray(value.children)
+      || !value.children.every((row) => isRecord(row) && [row.stopping, row.restarting, row.reset_pending].every((v) => typeof v === "boolean"))) {
+      stop("supervisor-observation-unavailable");
+    }
+    for (const ids of [value.children.map((row) => row.agent_id), value.pending_spawns, value.pending_switches]) {
+      if (!Array.isArray(ids) || new Set(ids).size !== ids.length
+        || ids.some((id) => typeof id !== "string" || id.length > 256 || !HOST_ID.test(id) || hostFromAgentId(id) !== args.host)) {
+        stop("supervisor-observation-unavailable");
+      }
+    }
+    return value;
+  };
+  const before = await readLocalRunner(args, runCommand);
+  const pid = readPid();
+  const first = query();
+  const last = query();
+  const after = await readLocalRunner(args, runCommand);
+  if (pid !== readPid() || first.pid !== pid || last.pid !== pid
+    || ["owner", "instance_id", "build_revision", "applied_backend"].some((key) => first[key] !== last[key])
+    || ["configHash", "configMtimeMs", "runnerSha", "invocationId", "configuredBackend", "appliedBackend"].some((key) => before[key] !== after[key])
+    || first.build_revision !== before.runnerSha || first.applied_backend !== before.appliedBackend
+    || (before.configuredBackend !== "omitted" && first.applied_backend !== before.configuredBackend)) stop("supervisor-identity-mismatch");
+  return { ...last, invocationId: before.invocationId, configHash: before.configHash, configMtimeMs: before.configMtimeMs };
+}
+
 function localAdapters(args, runCommand = run) {
   return {
     async observeHost(host) {
@@ -415,6 +464,7 @@ function localAdapters(args, runCommand = run) {
       return parseJsonOutput(output);
     },
     observeRunner: (runnerArgs) => readLocalRunner(runnerArgs, runCommand),
+    observeSupervisor: () => observeSupervisor(args, runCommand),
     readOriginEvidence: async (file) => parseOriginFile(file),
     async captureAckCursor() {
       const output = runCommand("journalctl", ["--user", "--no-pager", "--lines=0", "--show-cursor"]);

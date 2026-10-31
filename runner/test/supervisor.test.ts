@@ -39,6 +39,92 @@ const spawnMsg = {
 
 const allowlist = ["/home/user/git/kaoiro"];
 
+describe("Supervisor Codex work observation", () => {
+  const message = { ...spawnMsg, engine: "codex" };
+  it("reports Codex entries through stopping and exit, while excluding other engines", () => {
+    const h = harness({ codexHomeProblem: () => null });
+    expect(h.sup.observeCodexWork()).toEqual({ applied_backend: "exec", children: [], pending_spawns: [], pending_switches: [] });
+    h.sup.handleSpawn({ ...spawnMsg, agent_id: "lab-pc-1.other" });
+    expect(h.sup.observeCodexWork()?.children).toEqual([]);
+    h.sup.handleSpawn(message);
+    expect(h.sup.observeCodexWork()?.children).toEqual([{ agent_id: message.agent_id, stopping: false, restarting: false, reset_pending: false }]);
+    h.sup.handleStop({ agent_id: message.agent_id });
+    expect(h.sup.observeCodexWork()?.children).toEqual([{ agent_id: message.agent_id, stopping: true, restarting: false, reset_pending: false }]);
+    h.children[1]!.exit();
+    expect(h.sup.observeCodexWork()?.children).toEqual([]);
+    h.sup.stopAll();
+  });
+
+  it("observes pending spawn and switch from their actual asynchronous existence checks", async () => {
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise, codexHomeProblem: () => null });
+    h.sup.handleSpawn({ ...message, resume_session_id: "resume" });
+    expect(h.sup.observeCodexWork()?.pending_spawns).toEqual([message.agent_id]);
+    expect(h.sup.observeCodexWork()?.children).toEqual([]);
+    check.resolve(true);
+    await check.promise;
+    expect(h.sup.observeCodexWork()?.pending_spawns).toEqual([]);
+    expect(h.sup.observeCodexWork()?.children.map((row) => row.agent_id)).toEqual([message.agent_id]);
+    h.sup.handleSwitchSession({ agent_id: message.agent_id, resume_session_id: "next" });
+    expect(h.sup.observeCodexWork()?.pending_switches).toEqual([message.agent_id]);
+    await Promise.resolve();
+    expect(h.sup.observeCodexWork()?.pending_switches).toEqual([]);
+    expect(h.sup.observeCodexWork()?.children[0]?.restarting).toBe(true);
+    h.sup.stopAll();
+  });
+
+  it("retains reset intent across both termination deadlines", () => {
+    vi.useFakeTimers();
+    const h = harness({ codexHomeProblem: () => null });
+    try {
+      h.sup.handleSpawn(message);
+      h.sup.handleResetSession({ agent_id: message.agent_id, request_id: "reset-observation", mode: "new" });
+      expect(h.sup.observeCodexWork()?.children[0]?.reset_pending).toBe(true);
+      vi.advanceTimersByTime(5_000);
+      expect(h.sup.observeCodexWork()?.children.map((row) => row.agent_id)).toEqual([message.agent_id]);
+      vi.advanceTimersByTime(5_000);
+      expect(h.sup.observeCodexWork()?.children.map((row) => row.agent_id)).toEqual([message.agent_id]);
+      h.sup.handleStop({ agent_id: message.agent_id });
+      h.children[0]!.exit();
+      vi.advanceTimersByTime(10_001);
+      expect(h.sup.observeCodexWork()?.children).toEqual([]);
+      expect(h.children).toHaveLength(1);
+    } finally {
+      h.sup.stopAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an unknown engine in any internal work collection", async () => {
+    const originalSet = Map.prototype.set;
+    const captured: Array<Record<string, unknown>> = [];
+    const set = vi.spyOn(Map.prototype, "set").mockImplementation(function (this: Map<unknown, unknown>, key, value) {
+      if (key === message.agent_id && value && typeof value === "object" && ("parsed" in value || "abort" in value)) captured.push(value);
+      return originalSet.call(this, key, value);
+    });
+    const check = deferred<boolean>();
+    const h = harness({ exists: check.promise, codexHomeProblem: () => null });
+    try {
+      h.sup.handleSpawn({ ...message, resume_session_id: "resume" });
+      const pending = captured.at(-1)!;
+      pending.engine = undefined;
+      expect(h.sup.observeCodexWork()).toBeNull();
+      pending.engine = "codex";
+      check.resolve(true); await check.promise;
+      const parsed = captured.at(-1)!.parsed as Record<string, unknown>;
+      parsed.engine = "future-engine";
+      expect(h.sup.observeCodexWork()).toBeNull();
+      parsed.engine = "codex";
+      h.sup.handleSwitchSession({ agent_id: message.agent_id, resume_session_id: "next" });
+      const switching = captured.at(-1)!;
+      switching.engine = undefined;
+      expect(h.sup.observeCodexWork()).toBeNull();
+      switching.engine = "codex";
+      await Promise.resolve();
+    } finally { set.mockRestore(); h.sup.stopAll(); }
+  });
+});
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;

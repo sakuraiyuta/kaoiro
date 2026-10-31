@@ -2,7 +2,7 @@
 title: Runner control and launch
 description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-10-10
+last_updated: 2026-10-31
 related: [protocol, architecture]
 ---
 
@@ -31,6 +31,43 @@ use the existing **Channels event** mechanism; no envelope `type` is added.
 | runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, ceiling_conflict?, to_session_id?: string \| null }`. Outcome of a `reset_session`; `ok: true` means the fresh spawn succeeded and the server keeps the reset pending until the fresh wrapper joins, `ok: false` carries a closed-vocabulary `reason`. The server rejects a structurally malformed result instead of forwarding it. Field meaning: the `session_reset_result` row in [Channels](channels.md#directional-message-types-v0-settled). |
 | server → runner | `refresh_engine_catalog` | `{ engine, request_id, force? }`. **Operator-only** request to re-probe the LaunchDialog engine catalog ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md) Option E). It is keyed by `(host, engine)`, not agent; `force` bypasses TTL. Only Claude currently probes live; Codex advertises statically ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1). |
 | runner → server | `catalog_result` | `{ host_id, engine, request_id, ok, reason?, models_count? }`. Completion report for `refresh_engine_catalog`, forwarded to operators. Failure reasons are `auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; `models_count` is only a toast signal and the catalog arrives in the runner's normal `hosts` broadcast ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md)). |
+
+### Read-only Codex Supervisor observation
+
+The release RPC `CodexBackendCompatibility.observe_runner/1` alone initiates
+`observe_codex_work`; it is not exposed through the lobby or agent MCP.
+Requests contain `{version: "0", schema: 1, request_id}`. The request ID is
+32 URL-safe base64 characters. The current channel owner receives a direct
+push, never a topic broadcast. There is one outstanding request per channel;
+a second caller receives `runner_observation_busy`. Timeout is five seconds;
+disconnect and caller death release the pending request.
+
+`codex_work_observed` echoes version, schema and request ID, and adds `host`,
+`build_revision` (40 lowercase hex characters), positive Node `pid`,
+process-lifetime `instance_id`, `applied_backend` (`exec` or `app-server`),
+`children: [{agent_id, stopping, restarting, reset_pending}]`,
+`pending_spawns: [agent_id]`, and `pending_switches: [agent_id]`.
+Unknown work engines replace the backend and three lists with
+`unavailable: true`; the server refuses that response. No session IDs, cwd,
+prompts, or credentials are included. Observation requests and responses
+require version `"0"` and schema `1`; they do not use best-effort version acceptance.
+
+The server rejects the whole response on a malformed element, duplicate ID
+within a list, foreign-host ID, wrong request/owner, or payload whose
+`:erlang.external_size` exceeds 65,536 bytes. This is not a JSON byte limit.
+An agent may appear in both children and pending switches. Entries are not
+dropped to fit the limit. The RPC returns only allowlisted fields and stamps
+the server channel `owner` identity; responses are never broadcast to clients.
+
+Every authenticated successful runner join registers its channel process in
+a duplicate-key Registry, including old runners and pre-register channels.
+Observation requires exactly one joined channel matching HostRegistry's
+owner before request, before push, on response and before RPC return.
+Registry/partition identity is frozen before Endpoint starts; replacement
+refuses observation until the whole application restarts. An abnormal
+partition exit terminates all runner channels, which reconnect; wrapper
+channels and agents are unaffected. See the
+[manual recovery procedure](../../operations/codex-backend-switch.md#read-only-supervisor-observation).
 
 **Authentication**: The runner connects with per-host tokens (a server-configured
 `host_id:token` list, extending ADR-0011's per-entity token principle). host_id is fixed in

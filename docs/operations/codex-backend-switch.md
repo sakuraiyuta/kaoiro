@@ -1,7 +1,7 @@
 ---
 title: "Codex backend switching and rollback"
 status: implemented
-last_updated: 2026-10-27
+last_updated: 2026-10-31
 ---
 
 # Codex backend switching and rollback
@@ -100,6 +100,43 @@ operator review. For separate server and runner hosts, use only an already
 authorized adapter module; this command does not infer remote access or add an
 SSH route. The preparation is not a distributed lock, so one maintenance owner
 must exclude concurrent operator lifecycle actions while it runs.
+
+## Read-only Supervisor observation
+
+`KaoiroServer.CodexBackendCompatibility.observe_runner(host_id)` is a release
+RPC that reads the connected runner's Codex Supervisor entries and pending
+spawn/switch intents. Stopping, restarting, and resetting entries remain
+visible until removed. An empty result is not a process-tree census or proof
+of wrapper disconnection; server connection and session-pointer checks remain
+separate requirements.
+
+The `observeSupervisor` reader exported by
+`scripts/codex-backend-compatibility.mjs` binds two fresh RPC responses to the
+local user unit's MainPID, InvocationID, unchanged configuration and startup
+revision, applied backend, channel owner, and runner instance. It requires
+both server and runner support. Old runners time out after five seconds;
+unavailable, malformed, oversized, busy, or ambiguous responses are refused.
+The existing `prepare` phase does not use this reader. The omitted backend
+still selects `exec`; remove-pin and fresh-restore gating belong to the
+subsequent default-change unit ([issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564)).
+
+For `ambiguous_runner`, identify and resolve duplicate connections using the
+existing runner-service procedure before observing again. A join that cannot
+register in the server's connection Registry fails. If the Registry or its
+partition is replaced, RPC returns `runner_registry_changed` (the local
+reader reports `runner-registry-changed`). Recovery is manual: schedule a
+whole server application restart under the
+[server update procedure](server-update-and-rollback.md), then obtain new observations.
+Reconnecting a runner alone does not clear this refusal. A channel-only
+rejoin also does not resend host registration; the required whole application
+restart reopens transports so runners register again.
+
+An abnormal Registry partition exit terminates all runner channels, which
+reconnect; wrapper channels and agents are not registered there and remain
+unaffected. Lifecycle broadcasts during the runner reconnection gap may not
+be delivered. Observation covers the current server's joined channels only,
+not offline runners or runners connected to another server. Use one
+maintenance owner; a read does not lock out later lifecycle changes.
 
 ## Codex backend selection and rollback
 
