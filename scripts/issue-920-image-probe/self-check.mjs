@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { archiveCopy, compareManifest, verifyCopy, writeOldTest, writeVolumeTest, transformOldTest, ARGV_RECORDER } from './copy-check.mjs';
+const repo = resolve(process.argv[2]);
+const old = '7e2447f2ea14ebd8d08d478bd060e66b12dfdffc';
+const root = mkdtempSync(join(tmpdir(), 'momo-920-probe-self-'));
+try {
+  const recorder=join(root,'argv-recorder.cjs'), arglog=join(root,'argv.jsonl');
+  writeFileSync(recorder,ARGV_RECORDER);
+  for (const first of ['inspect','--inspect','-e','--']) {
+    const args=[first,'value'];
+    const result=spawnSync(process.execPath,[recorder,...args],{encoding:'utf8',timeout:5000,env:{...process.env,KAOIRO_PROBE_ARGV_LOG:arglog}});
+    assert.equal(result.status,0, `argv test failed or timed out for ${first}: ${result.error || result.stderr}`);
+    assert.deepEqual(JSON.parse(readFileSync(arglog,'utf8').trim().split('\n').at(-1)),args);
+    console.log('ARGV_LITERAL_PASS '+JSON.stringify(args));
+  }
+  const dir = join(root, 'old');
+  archiveCopy(repo, old, dir);
+  const file = join(dir, 'server/deploy/kaoiro-server-deploy.mjs');
+  const saved = readFileSync(file);
+  writeFileSync(file, Buffer.concat([saved, Buffer.from('x')]));
+  assert.throws(() => verifyCopy(repo, old, dir), /copy mismatch/);
+  writeFileSync(file, saved);
+  verifyCopy(repo, old, dir);
+  const other=join(dir,'.gitignore'); const otherSaved=readFileSync(other);
+  writeFileSync(other,Buffer.concat([otherSaved,Buffer.from('x')]));
+  assert.throws(()=>verifyCopy(repo,old,dir),/copy mismatch/);
+  writeFileSync(other,otherSaved); verifyCopy(repo,old,dir);
+  const expected = JSON.parse(readFileSync(new URL('./c8-expected-tuples.json', import.meta.url), 'utf8'));
+  const entries = expected.map(([store, env, default_file, default_path]) => ({store, env, default_file, default_path}));
+  compareManifest(entries, expected);
+  assert.throws(() => compareManifest(entries.slice(1), expected), /differs/);
+  const raw = join(root, 'manifest.json');
+  const originalTest=readFileSync(join(dir,'server/deploy/test/deploy.test.mjs'));
+  assert.throws(()=>transformOldTest(Buffer.from(originalTest.toString('utf8').replace('assert.ok(caught.message.includes(\"/tmp/old-work.dets\"));','missing assertion'))),/replacement must match once/);
+  const test = writeOldTest(repo, old, dir);
+  const invoke = () => spawnSync(process.execPath, ['--test', '--test-name-pattern=runUpdate refuses the flag for a store the old image already lists, without probing', test], { encoding: 'utf8', env: {...process.env, KAOIRO_PROBE_MANIFEST: raw}, maxBuffer: 10 * 1024 * 1024, timeout:120000 });
+  writeFileSync(raw, JSON.stringify(entries));
+  const good = invoke();
+  if (good.status !== 0) throw new Error(`old test baseline failed: ${good.status}\n${good.stdout}\n${good.stderr}`);
+  writeFileSync(raw, JSON.stringify(entries.filter(e => e.env !== 'KAOIRO_WORK_STORE_PATH')));
+  const bad = invoke();
+  assert.equal(bad.status, 1, `missing store did not fail: ${bad.status}\n${bad.stdout}\n${bad.stderr}`);
+  assert.match(bad.stdout, /not ok .*runUpdate refuses the flag/);
+  const pdir = join(root, 'product');
+  archiveCopy(repo, 'd2333a24690d9a00d171a0631fcc856b8acf0e23', pdir);
+  const volumeTest = writeVolumeTest(repo, 'd2333a24690d9a00d171a0631fcc856b8acf0e23', pdir);
+  const volume = spawnSync(process.execPath, ['--test', '--test-name-pattern=new-store guard never creates a missing target volume', volumeTest], {encoding:'utf8', maxBuffer:10 * 1024 * 1024, timeout:120000});
+  if (volume.status !== 0) throw new Error(`volume test failed: ${volume.status}\n${volume.stdout}\n${volume.stderr}`);
+  console.log('SELF_CHECK: copy mismatch rejected; manifest mismatch rejected; old test baseline passed and missing work store failed; volume argv test passed');
+} finally { rmSync(root, {recursive:true,force:true}); }
