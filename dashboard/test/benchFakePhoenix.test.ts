@@ -13,13 +13,12 @@ import { describe, expect, it } from "vitest";
 // requires the fake to implement each one.
 //
 // A Phoenix type mixed with another type, or with a second Phoenix type, is
-// reported instead of being treated as a member requirement. Object patterns
-// and assignment targets are judged by the type of the value being
-// destructured, at any nesting depth. Assignment targets follow static
-// property names and array elements. A nested target under a non-static
-// computed name is an unsupported computed assignment target. An
-// assertion from a Phoenix type to a different type is counted, and is
-// not a member requirement.
+// reported instead of being treated as a member requirement. Binding
+// patterns in declarations keep the type of the value being destructured.
+// Any destructuring assignment is rejected without reading that type,
+// including one nested in a value or wrapped in parentheses, and one used
+// as a for-of or for-in head. An assertion from a Phoenix type to a
+// different type is counted, and is not a member requirement.
 //
 // Not covered: a Phoenix value read outside protocol.ts, and erasure that is
 // not an assertion (a structural variable or parameter). Member presence
@@ -173,80 +172,18 @@ function surface(overrides: Record<string, string> = {}): Surface {
     }
   };
 
-  const propertyType = (
-    source: ts.Type,
-    name: string,
-    atNode: ts.Node,
-  ): ts.Type | undefined => {
-    const symbol = checker.getPropertyOfType(source, name);
-    if (!symbol) return undefined;
-    return checker.getTypeOfSymbolAtLocation(symbol, atNode);
+  const unwrapParens = (node: ts.Node): ts.Node => {
+    let current = node;
+    while (ts.isParenthesizedExpression(current)) {
+      current = current.expression;
+    }
+    return current;
   };
 
-  const staticName = (name: ts.PropertyName): string | undefined => {
-    if (
-      ts.isIdentifier(name) ||
-      ts.isStringLiteral(name) ||
-      ts.isNumericLiteral(name)
-    ) {
-      return name.text;
-    }
-    if (
-      ts.isComputedPropertyName(name) &&
-      ts.isStringLiteralLike(name.expression)
-    ) {
-      return name.expression.text;
-    }
-    return undefined;
-  };
-
-  const nestedTarget = (node: ts.Node): boolean =>
-    ts.isObjectLiteralExpression(node) ||
-    ts.isArrayLiteralExpression(node) ||
-    ts.isParenthesizedExpression(node);
-
-  const visitAssignTarget = (target: ts.Node, source: ts.Type): void => {
-    if (ts.isParenthesizedExpression(target)) {
-      visitAssignTarget(target.expression, source);
-      return;
-    }
-    if (ts.isObjectLiteralExpression(target)) {
-      const cls = classify(source);
-      if (cls.kind === "one" || cls.kind === "mixed") {
-        unsupported.push(
-          `destructuring of a Phoenix value at ${at(target)}`,
-        );
-        return;
-      }
-      for (const prop of target.properties) {
-        if (!ts.isPropertyAssignment(prop)) continue;
-        if (!nestedTarget(prop.initializer)) continue;
-        const name = staticName(prop.name);
-        if (name === undefined) {
-          if (ts.isComputedPropertyName(prop.name)) {
-            unsupported.push(
-              `unsupported computed assignment target at ${at(prop)}`,
-            );
-          }
-          continue;
-        }
-        const inner = propertyType(source, name, prop.name);
-        if (inner) visitAssignTarget(prop.initializer, inner);
-      }
-      return;
-    }
-    if (!ts.isArrayLiteralExpression(target)) return;
-    target.elements.forEach((element, index) => {
-      if (!element || ts.isOmittedExpression(element)) return;
-      const innerNode = ts.isSpreadElement(element)
-        ? element.expression
-        : element;
-      if (!nestedTarget(innerNode)) return;
-      const named = propertyType(source, String(index), element);
-      const inner = named ??
-        checker.getIndexTypeOfType(source, ts.IndexKind.Number);
-      if (inner) visitAssignTarget(innerNode, inner);
-    });
+  const noteAssign = (node: ts.Node): void => {
+    unsupported.push(
+      `unsupported destructuring assignment at ${at(node)}`,
+    );
   };
 
   const assertionPlace = (node: ts.Node): string => {
@@ -295,19 +232,31 @@ function surface(overrides: Record<string, string> = {}): Surface {
     } else if (ts.isObjectBindingPattern(node)) {
       noteDestructure(checker.getTypeAtLocation(node), node);
     } else if (
-      ts.isObjectLiteralExpression(node) ||
-      ts.isArrayLiteralExpression(node)
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
     ) {
-      const parent = node.parent;
-      if (
-        ts.isBinaryExpression(parent) &&
-        parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        parent.left === node
-      ) {
-        visitAssignTarget(
-          node,
-          checker.getTypeAtLocation(parent.right),
-        );
+      const left = unwrapParens(node.left);
+      if (ts.isObjectLiteralExpression(left)) {
+        noteAssign(node);
+      }
+      if (ts.isArrayLiteralExpression(left)) {
+        noteAssign(node);
+      }
+    } else if (ts.isForOfStatement(node)) {
+      const ofHead = unwrapParens(node.initializer);
+      if (ts.isObjectLiteralExpression(ofHead)) {
+        noteAssign(node);
+      }
+      if (ts.isArrayLiteralExpression(ofHead)) {
+        noteAssign(node);
+      }
+    } else if (ts.isForInStatement(node)) {
+      const inHead = unwrapParens(node.initializer);
+      if (ts.isObjectLiteralExpression(inHead)) {
+        noteAssign(node);
+      }
+      if (ts.isArrayLiteralExpression(inHead)) {
+        noteAssign(node);
       }
     } else if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
       const op = classify(checker.getTypeAtLocation(node.expression));
@@ -500,11 +449,6 @@ describe("bench fake phoenix transport", () => {
       "  for (const k in c) key = k;",
       "  return key;",
       "}",
-      "export function benchIdentAssignArray(channels: Channel[]) {",
-      "  let first: Channel;",
-      "  ([first] = channels);",
-      "  return first.join();",
-      "}",
     ].join("\n");
     const out = probed(protocolSource, extra);
     expect(problems(out)).toEqual([]);
@@ -534,6 +478,30 @@ describe("bench fake phoenix transport", () => {
       "export function benchParam({ topic }: Channel): string {",
       "  return topic;",
       "}",
+      "export function benchDynamic(c: Channel, name: \"topic\"): string {",
+      "  return c[name];",
+      "}",
+    ].join("\n");
+    const out = problems(probed(protocolSource, extra));
+    for (const name of [
+      "benchPlain",
+      "benchNestedArray",
+      "benchNestedObject",
+      "benchForOfPattern",
+      "benchParam",
+    ]) {
+      expect(out).toContain(`destructuring of a Phoenix value at ${name}`);
+    }
+    expect(
+      out.some((item) =>
+        item.startsWith("unsupported destructuring assignment at "),
+      ),
+    ).toBe(false);
+    expect(out).toContain("dynamic member access on Channel at benchDynamic");
+  }, 120_000);
+
+  it("fails closed on a destructuring assignment", () => {
+    const extra = [
       "export function benchAssign(c: Channel): string {",
       "  let topic = \"\";",
       "  ({ topic } = c);",
@@ -558,29 +526,11 @@ describe("bench fake phoenix transport", () => {
       "  ({ \"inner\": { topic } } = holder);",
       "  return topic;",
       "}",
-      "export function benchDynamic(c: Channel, name: \"topic\"): string {",
-      "  return c[name];",
+      "export function benchIdentAssignArray(channels: Channel[]): string {",
+      "  let first: Channel;",
+      "  ([first] = channels);",
+      "  return first.join();",
       "}",
-    ].join("\n");
-    const out = problems(probed(protocolSource, extra));
-    for (const name of [
-      "benchPlain",
-      "benchNestedArray",
-      "benchNestedObject",
-      "benchForOfPattern",
-      "benchParam",
-      "benchAssign",
-      "benchAssignNested",
-      "benchAssignArray",
-      "benchAssignQuoted",
-    ]) {
-      expect(out).toContain(`destructuring of a Phoenix value at ${name}`);
-    }
-    expect(out).toContain("dynamic member access on Channel at benchDynamic");
-  }, 120_000);
-
-  it("fails closed on a computed assignment target", () => {
-    const extra = [
       "export function benchComputedAssign(",
       "  holder: { inner: { topic: string } },",
       "  key: string,",
@@ -589,11 +539,146 @@ describe("bench fake phoenix transport", () => {
       "  ({ [key]: { topic } } = holder);",
       "  return topic;",
       "}",
+      "export function benchComputedIdent(",
+      "  holder: { inner: Channel },",
+      "  key: string,",
+      "): string {",
+      "  let topic: Channel;",
+      "  ({ [key]: topic } = holder);",
+      "  return topic.join();",
+      "}",
+      "export function benchDefaultObject(",
+      "  holder: { inner?: { topic: string } },",
+      "): string {",
+      "  let topic = \"\";",
+      "  ({ inner: { topic } = { topic: \"fallback\" } } = holder);",
+      "  return topic;",
+      "}",
+      "export function benchDefaultArray(",
+      "  channels: { topic: string }[],",
+      "): string {",
+      "  let topic = \"\";",
+      "  ([{ topic } = { topic: \"fallback\" }] = channels);",
+      "  return topic;",
+      "}",
+      "export function benchValueObject(channel: Channel): string {",
+      "  let topic = \"\";",
+      "  const box = { value: ({ topic } = channel) };",
+      "  return box.value + topic;",
+      "}",
+      "export function benchValueArray(channel: Channel): string {",
+      "  let topic = \"\";",
+      "  const box = [({ topic } = channel)];",
+      "  return String(box.length) + topic;",
+      "}",
+      "export function benchWrappedFallback(",
+      "  holder: { outer: { inner: { topic: string } } },",
+      "  fallback: { inner: Channel },",
+      "): string {",
+      "  let topic = \"\";",
+      "  ({ outer: { inner: { topic } } = fallback } = holder);",
+      "  return topic;",
+      "}",
+      "export function benchForOfObject(channels: Channel[]): string {",
+      "  let topic = \"\";",
+      "  for ({ topic } of channels) return topic;",
+      "  return topic;",
+      "}",
+      "export function benchForOfArray(channels: Channel[][]): string {",
+      "  let topic = \"\";",
+      "  for ([{ topic }] of channels) return topic;",
+      "  return topic;",
+      "}",
+      "export function benchForInObject(",
+      "  holder: Record<string, Channel>,",
+      "): string {",
+      "  let topic = \"\";",
+      "  for ({ topic } in holder) return topic;",
+      "  return topic;",
+      "}",
+      "export function benchForInArray(",
+      "  holder: Record<string, Channel>,",
+      "): string {",
+      "  let topic = \"\";",
+      "  for ([{ topic }] in holder) return topic;",
+      "  return topic;",
+      "}",
+      "export function benchParen(channel: Channel): string {",
+      "  let topic = \"\";",
+      "  (({ topic }) = channel);",
+      "  return topic;",
+      "}",
+      "export function benchParenDeep(channel: Channel): string {",
+      "  let topic = \"\";",
+      "  ((({ topic }) = channel));",
+      "  return topic;",
+      "}",
+      "export function benchForOfParen(channels: Channel[]): string {",
+      "  let topic = \"\";",
+      "  for (({ topic }) of channels) return topic;",
+      "  return topic;",
+      "}",
     ].join("\n");
-    const computedOut = problems(probed(protocolSource, extra));
-    expect(computedOut).toEqual([
-      "unsupported computed assignment target at benchComputedAssign",
-    ]);
+    const out = problems(probed(protocolSource, extra));
+    const assign = (name: string): number =>
+      out.filter(
+        (item) => item === `unsupported destructuring assignment at ${name}`,
+      ).length;
+    const legacy = out.filter((item) =>
+      item.startsWith("destructuring of a Phoenix value at "),
+    );
+    const computed = out.filter((item) =>
+      item.startsWith("unsupported computed assignment target at "),
+    );
+    expect({
+      counts: {
+        benchAssign: assign("benchAssign"),
+        benchAssignNested: assign("benchAssignNested"),
+        benchAssignArray: assign("benchAssignArray"),
+        benchAssignQuoted: assign("benchAssignQuoted"),
+        benchIdentAssignArray: assign("benchIdentAssignArray"),
+        benchComputedAssign: assign("benchComputedAssign"),
+        benchComputedIdent: assign("benchComputedIdent"),
+        benchDefaultObject: assign("benchDefaultObject"),
+        benchDefaultArray: assign("benchDefaultArray"),
+        benchValueObject: assign("benchValueObject"),
+        benchValueArray: assign("benchValueArray"),
+        benchWrappedFallback: assign("benchWrappedFallback"),
+        benchForOfObject: assign("benchForOfObject"),
+        benchForOfArray: assign("benchForOfArray"),
+        benchForInObject: assign("benchForInObject"),
+        benchForInArray: assign("benchForInArray"),
+        benchParen: assign("benchParen"),
+        benchParenDeep: assign("benchParenDeep"),
+        benchForOfParen: assign("benchForOfParen"),
+      },
+      legacy,
+      computed,
+    }).toEqual({
+      counts: {
+        benchAssign: 1,
+        benchAssignNested: 1,
+        benchAssignArray: 1,
+        benchAssignQuoted: 1,
+        benchIdentAssignArray: 1,
+        benchComputedAssign: 1,
+        benchComputedIdent: 1,
+        benchDefaultObject: 2,
+        benchDefaultArray: 2,
+        benchValueObject: 1,
+        benchValueArray: 1,
+        benchWrappedFallback: 2,
+        benchForOfObject: 1,
+        benchForOfArray: 1,
+        benchForInObject: 1,
+        benchForInArray: 1,
+        benchParen: 1,
+        benchParenDeep: 1,
+        benchForOfParen: 1,
+      },
+      legacy: [],
+      computed: [],
+    });
   }, 120_000);
 
   it("fails closed on mixed Phoenix unions and intersections", () => {
