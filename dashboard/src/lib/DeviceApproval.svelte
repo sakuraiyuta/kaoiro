@@ -3,7 +3,7 @@
   // §4.3): entry -> confirm -> done, with error in between. `needs_login` is
   // not here: before login there is no dashboard, so App.svelte shows it as a
   // line on the login card.
-  import { onMount, untrack } from "svelte";
+  import { untrack } from "svelte";
   import Modal from "./Modal.svelte";
   import {
     decideDeviceCode,
@@ -43,12 +43,6 @@
   let code = $state(untrack(() => initialCode ?? ""));
   let busy = $state(false);
 
-  // A reply that arrives after the dialog is gone belongs to nobody.
-  let alive = true;
-  onMount(() => () => {
-    alive = false;
-  });
-
   function close(): void {
     // A decision in flight cannot be taken back, so the dialog stays until its
     // answer is shown.
@@ -61,7 +55,6 @@
     if (typed === "" || busy) return;
     busy = true;
     const result = await lookupDeviceCode(typed);
-    if (!alive) return;
     busy = false;
     view = result.ok ? { kind: "confirm", info: result.value } : { kind: "error", error: result.error };
   }
@@ -70,7 +63,6 @@
     if (busy) return;
     busy = true;
     const result = await decideDeviceCode(info.userCode, decision);
-    if (!alive) return;
     busy = false;
     view = result.ok ? { kind: "done", decision } : { kind: "error", error: result.error };
   }
