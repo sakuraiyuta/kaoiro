@@ -192,6 +192,7 @@ test("restore transport failure is uncertain and never retried", async () => {
 });
 
 for (const [name, change] of Object.entries({
+  "wrong schema": e => { e.schema = 0; },
   "unknown field": e => { e.extra = true; },
   "wrong phase": e => { e.phase = "pin-exec-fresh"; },
   "wrong host": e => { e.host = "different"; },
