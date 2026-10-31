@@ -2896,18 +2896,22 @@ test("resuming an already-checked transaction carries a new acknowledged observa
   assert.deepEqual(recordedEnvObservation(dir), recorded);
 });
 
-test("resuming an already-checked transaction carries a historical observation into the manifest without adding an acknowledgement", () => {
+test("resuming a legacy observation warns and preserves it without inventing acknowledgement", () => {
   const { transactionId, dir } = prepareThroughEnvConsistency();
   const journal = readJournal(dir);
-  const historical = journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
-  delete historical.entries.KAOIRO_WORK_STORE_PATH.operator_accepted_new_store;
-  assert.equal(historical.entries.KAOIRO_WORK_STORE_PATH.first_application, "never_existed");
+  const oldEntry = journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED);
+  oldEntry.observation = {skipped:false, entries:{KAOIRO_WORK_STORE_PATH:{
+    declared:null, compose:WORK_STORE_VOLUME, container_effective:WORK_STORE_DEFAULT,
+    container_source:"default", assumed_default_source:"target_image", match:true,
+    file_probe_path:WORK_STORE_DEFAULT, file_probe_result:"absent", first_application:"never_existed",
+  }}};
+  const historical = oldEntry.observation;
   writeFileSync(join(dir, "journal.json"), `${JSON.stringify(journal, null, 2)}\n`);
+  const status = withScenario("running", () => runStatus({repo:workDir}, configWithOverride()));
+  assert.match(status.unfinishedTransaction.legacyGuardWarning, /not verified by the new persistence guards/);
   resumeAlreadyChecked(transactionId);
-  const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
   assert.deepEqual(readManifest(dir).env_consistency, historical);
-  assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(Object.hasOwn(historical.entries.KAOIRO_WORK_STORE_PATH, "operator_accepted_new_store"), false);
 });
 
 test("runUpdate refuses when compose does not declare a persistence-path var the image requires at all", () => {
@@ -2926,11 +2930,7 @@ test("runUpdate refuses when compose does not declare a persistence-path var the
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(
-    caught.message.includes(
-      "KAOIRO_USERS_PATH: not a normalized path below the state volume at all (the #217 class",
-    ),
-  );
+  assert.match(caught.message, /KAOIRO_USERS_PATH: destination undefined is not a normalized path below the state volume/);
 });
 
 // クロエ round 5 review SF-7: composeDeclaredEnv's own shape guard — the
