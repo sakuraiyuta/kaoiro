@@ -308,6 +308,7 @@ JS
   volume)
     case "$2" in
       inspect)
+        if [ "$KAOIRO_TEST_VOLUME_PRESENT" = 1 ]; then exit 0; fi
         case "$FAKE_DOCKER_SCENARIO" in
           volume-exists-no-container) exit 0 ;;
           *) exit 1 ;;
@@ -343,6 +344,7 @@ JS
       exit 0
     fi
     if [ "$3" != env ] || [ "$4" != LC_ALL=C ] || [ "$5" != stat ] || [ "$6" != --printf=present ] || [ "$7" != -- ]; then exit 125; fi
+    if [ -n "$KAOIRO_TEST_PRESENT_PATH" ] && [ "$8" = "$KAOIRO_TEST_PRESENT_PATH" ]; then printf 'present'; exit 0; fi
     if [ "$KAOIRO_TEST_FILE_PROBE_REAL" = 1 ]; then
       env LC_ALL=C stat --printf=present -- "$8"
       exit $?
@@ -439,7 +441,7 @@ JS
             esac
             ;;
           '{{json .Mounts}}')
-            printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state"}]\\n'
+            printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state","Destination":"/var/lib/kaoiro"}]\\n'
             ;;
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
@@ -717,6 +719,10 @@ JS
       # the same default) when unset, so every EXISTING test — none of
       # which distinguish old from target — keeps its current behavior
       # unchanged.
+      *"PersistencePaths.contract()"*)
+        if [ "$KAOIRO_TEST_CONTRACT" = 1 ]; then printf '"exhaustive_stable_v1"\\n'; exit 0; fi
+        exit 1
+        ;;
       *"/app/bin/kaoiro_server"*)
         if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
           exit 1
@@ -1209,6 +1215,9 @@ function withEnvConsistencyFixture(
     probeStdout,
     probeStderr,
     probeReal,
+    contract,
+    volumePresent,
+    presentPath,
   } = {},
   fn,
 ) {
@@ -1235,6 +1244,9 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_FILE_PROBE_STDOUT: probeStdout,
     KAOIRO_TEST_FILE_PROBE_STDERR: probeStderr,
     KAOIRO_TEST_FILE_PROBE_REAL: probeReal,
+    KAOIRO_TEST_CONTRACT: contract,
+    KAOIRO_TEST_VOLUME_PRESENT: volumePresent,
+    KAOIRO_TEST_PRESENT_PATH: presentPath,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -6855,4 +6867,31 @@ test("Compose inputs: use-time legacy validation precedes any rendering", () => 
     withScenario("running-clean-stop", () => checkForwardCompose(bin, join(workDir, "server"), root, legacy))),
     /lacks a usable project identity or hashes/);
   assert.equal(calls.length, 0);
+});
+
+test("new-store guard checks the old default and volume destination separately", () => {
+  const oldEvalOutput = JSON.stringify([{store:"other",env:"KAOIRO_OTHER_PATH",default_file:"other.dets",default_path:"/tmp/other.dets"}]);
+  const targetDefault = "/tmp/kaoiro-dets/users.dets";
+  const destination = "/var/lib/kaoiro/users.dets";
+  for (const presentPath of [targetDefault, destination]) {
+    let checked = false;
+    const calls = withCallLog("running-clean-stop", () =>
+      withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", presentPath}, () => {
+        assert.throws(() => runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()), /cannot verify the target default path|destination .*present/);
+        checked = true;
+      }),
+    );
+    assert.equal(checked, true, presentPath);
+    assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  }
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1"}, () =>
+      runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()),
+    ),
+  );
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.target_probe_path, targetDefault);
+  assert.equal(entry.target_path, destination);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
 });

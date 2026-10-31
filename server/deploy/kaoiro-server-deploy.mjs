@@ -40,8 +40,8 @@ import { entryActs, formatRecovery, OPERATION, recoveryFacts, renderRecovery, se
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
-import { queryManifestRaw } from "./kaoiro-deploy-image-query.mjs";
-import { parsePersistenceManifest } from "./kaoiro-deploy-env-v2.mjs";
+import { queryManifestRaw, queryPersistenceContract } from "./kaoiro-deploy-image-query.mjs";
+import { isWithinStateVolume, parsePersistenceManifest } from "./kaoiro-deploy-env-v2.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -998,130 +998,64 @@ function isUnderStateVolume(path) {
   return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
-/** Consistency for exactly the env var names `paths` names (director
- *  ruling 2026-09-06, A-MF-1, correcting the original 3-way design;
- *  クロエ round 5 review A-MF-2, correcting A-MF-1 in turn): compose's
- *  resolved declaration vs. the CURRENTLY RUNNING (old) container's
- *  EFFECTIVE path for that store — the container's own env value if set,
- *  else the image's `default_path` for it (what the app itself falls
- *  back to). `match` is `compose === container_effective`, except for a
- *  store the operator named with `--accept-new-store` (issue #339) that is
- *  measured to be a first application: the old image's manifest, when it
- *  can answer, does not list it; the old container has the variable unset;
- *  the old container has no file at the effective path; and the compose
- *  path is under the named state volume. Every one of those must hold for
- *  that store, and a flag naming one store never admits another. The
- *  exception is reached ONLY from a mismatch: a store whose compose path
- *  and effective path already agree passes as before, with no flag and no
- *  probe, and a flag naming such a store is not consulted.
- *
- *  WHY EFFECTIVE, NOT THE RAW ENV (A-MF-1's own bug): on the first
- *  application that adds a NEW persistence-path var to compose, the OLD
- *  container was never recreated with it, so its raw env can NEVER equal
- *  compose's new value — comparing raw env would fail-close EVERY
- *  legitimate first application, forever, since the raw env cannot change
- *  before the container the check reads FROM is itself recreated by the
- *  very deploy the check is gating. Comparing against the image's OWN
- *  documented fallback instead asks the right question: "is the store
- *  already effectively where compose is about to declare it" — true when
- *  compose merely started EXPLICITLY declaring what was already the
- *  default (no migration needed), false when compose names a genuinely
- *  DIFFERENT location (a real 5-b migration is needed, and the failure
- *  message below says so).
- *
- *  `compose === null` (compose does not declare this var AT ALL, for a
- *  store the image DOES require) is its own failure mode — the exact
- *  #217 class (a required persistence var silently missing from compose
- *  escapes backup). No separate `compose !== null` guard is needed to
- *  fail it: `container_effective` is never null (`default_path` is a
- *  required, non-empty field — isValidPersistencePathEntry), so `null`
- *  can never equal it and `match` already reads false on its own
- *  (measured: adding the guard back and then removing it again left
- *  every test in this file's own suite green either way).
- *
- *  `.env`'s own line is recorded as `declared` but NEVER folded into
- *  `match`: the bundled docker-compose.yaml sets every canonical
- *  persistence-path var as a LITERAL `environment:` entry (not `${VAR}`
- *  interpolation), while `.env.example`/`mix kaoiro.env` emit the same
- *  vars as commented-out hints. `declared` stays in the record purely
- *  for an operator's own reference — a value never compared, never gates
- *  the outcome.
- *
- *  issue #322 M5 (must-fix): `default_path` here is a FALLBACK for
- *  "what the container would be reading if it never had this var set" —
- *  but `paths` is the TARGET image's own manifest, so substituting
- *  `default_path` FROM IT is only an observation of the OLD container's
- *  actual effective path if the OLD and NEW images are known to compile
- *  the SAME default for this store (not guaranteed — #310's manifest
- *  could change a default between versions). `oldPathsByEnv` (from a
- *  SEPARATE queryPersistencePaths call against the OLD image, when it
- *  can answer at all) is preferred; `assumed_default_source` records
- *  which one actually supplied the value used, so the observation never
- *  silently passes off an assumption as a measurement. */
-function checkEnvConsistency(
-  paths,
-  envPath,
-  composeEnv,
-  containerEnv,
-  oldPathsByEnv,
-  { bin, container, serverDir, acceptNewStores, composeArgs = [] },
-) {
+function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, containerEnv,
+  { bin, container, oldImageId, targetImageId, serverDir, acceptNewStores, composeArgs = [] }) {
   const accepted = new Set(acceptNewStores ?? []);
-  const known = new Set(paths.map((p) => p.env));
+  const known = new Set(paths.map(p => p.env));
   for (const name of accepted) {
-    if (!known.has(name)) {
-      fail(
-        `--accept-new-store ${JSON.stringify(name)} does not name a persistence-path var of the target image (${[...known].join(", ")}) — check the spelling`,
-      );
-    }
+    if (!known.has(name)) fail(`--accept-new-store ${JSON.stringify(name)} does not name a target persistence path`);
   }
+  const volume = resolveNamedVolumeFromCompose(bin, serverDir, composeArgs);
+  if (!volume.ok) fail(`state volume unavailable: ${volume.reason}; use the non-destructive rollback`);
+  const oldByStore = new Map(oldPaths.map(p => [p.store, p]));
+  const targetOnly = paths.some(p => !oldByStore.has(p.store));
+  const contract = targetOnly ? queryPersistenceContract(bin, oldImageId) : null;
   const entries = {};
-  for (const { env: envName, default_path: targetDefaultPath } of paths) {
-    const declared = readEnvFileValue(envPath, envName);
-    const compose = Object.hasOwn(composeEnv, envName) ? composeEnv[envName] : null;
-    const containerRaw = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
-    const oldDefaultPath = oldPathsByEnv?.get(envName);
-    const defaultPath = oldDefaultPath ?? targetDefaultPath;
-    const assumedDefaultSource = oldDefaultPath !== undefined ? "old_image" : "target_image";
-    const containerEffective = containerRaw !== null ? containerRaw : defaultPath;
-    const containerSource = containerRaw !== null ? "env" : "default";
-    let match = compose === containerEffective;
-    let fileProbe;
-    if (!match && compose !== null && accepted.has(envName)) {
-      if (oldPathsByEnv?.has(envName)) {
-        fail(
-          `${envName}: --accept-new-store refused because the old image's own manifest already lists this store (default ${JSON.stringify(oldPathsByEnv.get(envName))}), so it is not new in the target image — this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)`,
-        );
-      }
-      if (containerRaw !== null) {
-        fail(
-          `${envName}: --accept-new-store refused because the running container already has this variable set to ${JSON.stringify(containerRaw)}, so the store was configured before this update — this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)`,
-        );
-      }
-      const stateVolume = resolveNamedVolumeFromCompose(bin, serverDir, composeArgs);
-      if (!stateVolume.ok || !isUnderStateVolume(compose)) {
-        fail(`${envName}: cannot accept first application because compose does not place ${JSON.stringify(compose)} under the /var/lib/kaoiro named volume${stateVolume.ok ? "" : ` (${stateVolume.reason})`}`);
-      }
-      fileProbe = {
-        file_probe_path: containerEffective,
-        ...probeContainerPath(bin, container, containerEffective),
-      };
-      if (fileProbe.file_probe_result === "absent") match = true;
+  for (const target of paths) {
+    const destination = composeEnv[target.env];
+    if (!isWithinStateVolume(destination)) {
+      fail(`${target.env}: destination ${JSON.stringify(destination)} is not a normalized path below the state volume; use the non-destructive rollback`);
     }
-    entries[envName] = {
-      declared,
-      compose,
-      container_effective: containerEffective,
-      container_source: containerSource,
-      assumed_default_source: assumedDefaultSource,
-      ...fileProbe,
-      ...(fileProbe?.file_probe_result === "absent"
-        ? { first_application: "never_existed", operator_accepted_new_store: true }
-        : {}),
-      match,
-    };
+    const old = oldByStore.get(target.store);
+    if (old) {
+      const fromEnv = Object.hasOwn(containerEnv, old.env);
+      const effective = fromEnv ? containerEnv[old.env] : old.default_path;
+      if (effective !== destination) {
+        fail(`${target.env}: the existing store ${target.store} uses ${JSON.stringify(effective)}, not ${JSON.stringify(destination)}; this CLI has no forward migration path for an existing store outside the state volume. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b)`);
+      }
+      entries[target.env] = {kind: "existing", store_id: target.store, target_env: target.env,
+        target_path: destination, old_env: old.env, old_effective_path: effective,
+        old_path_source: fromEnv ? "env" : "old_manifest", volume_name: volume.name};
+      continue;
+    }
+    if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container; cannot accept it as a new store`);
+    if (contract !== "exhaustive_stable_v1") fail(`${target.env}: old image cannot establish an exhaustive stable store contract; use the non-destructive rollback`);
+    if (!accepted.has(target.env)) fail(`${target.env}: a newly introduced store requires --accept-new-store ${target.env}; independently verify that no earlier data needs migration`);
+    const candidate = target.default_path;
+    if (!isAbsolute(candidate) || resolve(candidate) !== candidate) fail(`${target.env}: invalid target default path`);
+    const probe = probeContainerPath(bin, container, candidate);
+    if (probe.file_probe_result !== "absent") fail(`${target.env}: cannot verify the target default path ${JSON.stringify(candidate)} is absent in the old container; inspect it and use the non-destructive rollback`);
+    if (!namedVolumeExists(bin, volume.name)) fail(`${target.env}: target state volume is missing or unavailable; no volume was created`);
+    let mounts;
+    try { mounts = JSON.parse(dockerInspect(bin, container, "{{json .Mounts}}")); }
+    catch { fail(`${target.env}: cannot inspect the running container's mounts`); }
+    const matching = Array.isArray(mounts) ? mounts.filter(m => m?.Destination === "/var/lib/kaoiro") : [];
+    if (matching.length !== 1 || matching[0].Type !== "volume" || matching[0].Name !== volume.name) {
+      fail(`${target.env}: cannot bind the existing state volume to the running container; use the non-destructive rollback`);
+    }
+    const destinationProbe = probeContainerPath(bin, container, destination);
+    if (destinationProbe.file_probe_result !== "absent") {
+      fail(`${target.env}: destination ${JSON.stringify(destination)} is present or cannot be checked. Identify the entry and decide whether to preserve or move it before retrying; use the non-destructive rollback`);
+    }
+    entries[target.env] = {kind: "new_store", store_id: target.store, target_env: target.env,
+      target_path: destination, old_effective_path: null, old_manifest_contract: contract,
+      old_manifest_raw: oldRaw, old_manifest_sha256: createHash("sha256").update(oldRaw, "utf8").digest("hex"),
+      target_probe_path: candidate, probe_result: "absent", destination_probe_result: "absent",
+      operator_accepted_new_store: true, volume_name: volume.name};
   }
-  return entries;
+  return {guard_schema: 2, old_image_id: oldImageId, target_image_id: targetImageId,
+    path_policy: "textual_state_volume_v1", target_manifest_raw: targetRaw,
+    target_manifest_sha256: createHash("sha256").update(targetRaw, "utf8").digest("hex"), entries};
 }
 
 // newTransactionId()'s own format: YYYYMMDDTHHMMSSZ (its ISO timestamp
@@ -2371,76 +2305,29 @@ export function runUpdate(flags, config) {
         writeJournal(dir, journal, validateJournalAgainstStateMachine);
         if (persistencePaths.skipped) {
           fail(`target image persistence manifest unavailable: ${persistencePaths.reason}; roll back this transaction before retrying`);
-        } else {
-          // issue #322 M5: ask the OLD (currently running) image for its
-          // OWN default_path per store, when it can answer at all — the
-          // measured fallback checkEnvConsistency prefers over the
-          // target's own manifest. A pre-#310 old image (the common case
-          // for the FIRST #310 upgrade) simply cannot answer; that skip is
-          // expected here too, not itself an error. should-2: a SHAPE
-          // violation in the old image's own manifest is the same kind
-          // of "could not answer" — never this transaction's own defect
-          // to abort over.
-          const oldContainerEnv = containerEffectiveEnv(bin, oldContainerId);
-          const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false, env: oldContainerEnv });
-          if (dockerInspect(bin, container, "{{.Id}}") !== oldContainerId ||
-              dockerInspect(bin, oldContainerId, "{{.Image}}") !== oldImageId ||
-              dockerInspect(bin, oldContainerId, "{{.State.Status}}") !== "running") {
-            fail("old container or image changed during persistence manifest query");
-          }
-          if (oldPersistencePaths.skipped) {
-            fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; roll back this transaction before retrying`);
-          }
-          const oldPathsByEnv = new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
-          const entries = checkEnvConsistency(
-            persistencePaths.paths,
-            join(serverDir, ".env"),
-            composeDeclaredEnv(bin, serverDir, boundComposeArgs(targetPlan, serverDir, dir)),
-            oldContainerEnv,
-            oldPathsByEnv,
-            { bin, container, serverDir, composeArgs: boundComposeArgs(targetPlan, serverDir, dir), acceptNewStores: flags.acceptNewStores },
-          );
-          envConsistency = { skipped: false, entries };
-          if (!Object.values(entries).every((e) => e.match)) {
-            // director ruling 2026-09-06: abort cleanup before the stop
-            // window — `compose build` (inside runBuild, above) already
-            // repointed `latest` at the new image; leaving it there would
-            // let the next `compose up` (an operator retry, or another
-            // tool) switch an unreviewed deployment into production.
-            // Restored to the SAME image the already-verified rollback
-            // tag names, verified again here by read-back.
-            runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
-            const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
-            if (revertedId !== oldImageId) {
-              fail(
-                `env_consistency check failed AND could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
-                1,
-                { retagHandled: true },
-              );
-            }
-            const flagged = new Set(flags.acceptNewStores ?? []);
-            const newStoreHint = (envName, e) =>
-              e.container_source === "default" && e.assumed_default_source === "target_image" && !flagged.has(envName)
-                ? oldPathsByEnv === null
-                  ? " The old image cannot report its persistence manifest; the target image's default may differ from the old container's actual path. A missing file at the target default does not prove that this store never existed. Use the printed non-destructive rollback and investigate; do not use --accept-new-store for an existing or uncertain store."
-                  : ` If you independently establish that ${envName} never existed in any earlier version, resume this transaction with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${target} --accept-new-store ${envName} (add --maintenance-approved once the window is approved). The CLI checks that the old manifest omits the store, the old container has the variable unset, and no file exists at the target default path; the current manifest cannot prove earlier history.`
-                : "";
-            const problems = Object.entries(entries)
-              .filter(([, e]) => !e.match)
-              .map(([envName, e]) =>
-                e.compose === null
-                  ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
-                  : e.file_probe_result === "undetermined"
-                    ? `${envName}: could not probe the running container's path ${JSON.stringify(e.file_probe_path)} (${e.file_probe_reason}); absence is unverified`
-                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.${newStoreHint(envName, e)}`,
-              );
-            fail(
-              `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
-              1,
-              { retagHandled: true },
-            );
-          }
         }
+        const oldContainerEnv = containerEffectiveEnv(bin, oldContainerId);
+        const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false, env: oldContainerEnv });
+        if (dockerInspect(bin, container, "{{.Id}}") !== oldContainerId ||
+            dockerInspect(bin, oldContainerId, "{{.Image}}") !== oldImageId ||
+            dockerInspect(bin, oldContainerId, "{{.State.Status}}") !== "running") {
+          fail("old container or image changed during persistence manifest query");
+        }
+        if (oldPersistencePaths.skipped) {
+          fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; roll back this transaction before retrying`);
+        }
+        envConsistency = checkEnvConsistency(
+          persistencePaths.paths, persistencePaths.raw, oldPersistencePaths.paths, oldPersistencePaths.raw,
+          composeDeclaredEnv(bin, serverDir, boundComposeArgs(targetPlan, serverDir, dir)), oldContainerEnv,
+          { bin, container: oldContainerId, oldImageId, targetImageId: buildResult.imageId,
+            serverDir, composeArgs: boundComposeArgs(targetPlan, serverDir, dir), acceptNewStores: flags.acceptNewStores },
+        );
+        if (dockerInspect(bin, container, "{{.Id}}") !== oldContainerId ||
+            dockerInspect(bin, oldContainerId, "{{.Image}}") !== oldImageId ||
+            dockerInspect(bin, oldContainerId, "{{.State.Status}}") !== "running") {
+          fail("old container or image changed during persistence checks");
+        }
+
       } catch (err) {
         // issue #322 M5 follow-up (should-1, クロエ review): ANY OTHER
         // exception in this block (a shape violation, an eval failure on
