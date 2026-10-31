@@ -81,7 +81,13 @@ defmodule KaoiroServerWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
-  plug Plug.Parsers,
+  # The stock `plug Plug.Parsers` line, wrapped: the native device
+  # authorization endpoints (POST /oauth/device, /oauth/token) read their
+  # own form input so a malformed body becomes their RFC-shaped error
+  # rather than a ParseError, and every other request is delegated to
+  # Plug.Parsers with these options (issue 801,
+  # docs/adr/0070-device-authorization-grant.md).
+  plug KaoiroServerWeb.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
