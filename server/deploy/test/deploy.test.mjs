@@ -6898,3 +6898,28 @@ test("new-store guard checks both locations absent", () => {
   assert.equal(entry.probe_result, "absent");
   assert.equal(entry.destination_probe_result, "absent");
 });
+
+test("new-store guard refuses an old image without a contract marker", () => {
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /cannot establish an exhaustive stable store contract/);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+});
+
+test("new-store guard never creates a missing target volume", () => {
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /target state volume is missing or unavailable/);
+  assert.match(calls, /volume inspect kaoiro_kaoiro-state/);
+  assert.doesNotMatch(calls, /volume create|--mount| -v |compose stop|compose up|archive/);
+});
