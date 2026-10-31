@@ -184,6 +184,8 @@ describe("App.svelte work admission settings", () => {
     await openSettings();
     expect(workSection()).not.toBeNull();
     const save = () => Array.from(workSection()!.querySelectorAll("button")).find(button => button.textContent === "保存")!;
+    const input = workSection()!.querySelector<HTMLInputElement>("input")!;
+    input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true })); await tick();
     expect(save().disabled).toBe(false);
     h.onWorkSettings?.({ version: "0", state: "unavailable", reason: "work_settings_corrupt", message: "Offline one-key repair is required." });
     await tick();
@@ -223,7 +225,7 @@ describe("App.svelte work admission settings", () => {
     captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 44 });
     Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!.click();
     await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(43, {
-      work_nominated_per_principal: 0, work_active_per_assignee: 16,
+      work_nominated_per_principal: 0,
     }));
   });
   it("rereads conflict/unknown outcomes without replay; reset removes only the selected override", async () => {
@@ -231,6 +233,8 @@ describe("App.svelte work admission settings", () => {
     h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
     await tick(); await openSettings();
     const save = () => Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!;
+    const input = workSection()!.querySelector<HTMLInputElement>("input")!;
+    input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true })); await tick();
     captured.setWorkSettings.mockRejectedValueOnce(new Error("revision_conflict"));
     captured.getWorkSettings.mockResolvedValueOnce({ ...ready, revision: 43 });
     save().click();
@@ -254,6 +258,8 @@ describe("App.svelte work admission settings", () => {
     const h = await mountApp();
     h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
     await tick(); await openSettings();
+    const input = workSection()!.querySelector<HTMLInputElement>("input")!;
+    input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true })); await tick();
     let complete!: (value: typeof ready) => void;
     captured.setWorkSettings.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
     Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!.click();
@@ -262,6 +268,99 @@ describe("App.svelte work admission settings", () => {
     complete({ ...ready, revision: 43 }); await tick(); await tick();
     expect(workSection()!.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
     expect(workSection()!.textContent).not.toContain("適用値:");
+  });
+
+  const editKey = async (index: number, text: string) => {
+    const input = workSection()!.querySelectorAll<HTMLInputElement>("input")[index]!;
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+  };
+  const saveButton = () => Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent === "保存")!;
+  const openWorkSettings = async () => {
+    const h = await mountApp();
+    h.onHosts?.([], false); h.onStatus("connected"); h.onWorkSettings?.(ready);
+    await tick(); await openSettings();
+  };
+  const reload = async () => {
+    captured.getWorkSettings.mockResolvedValueOnce({ ...ready });
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent?.startsWith("設定・変更履歴"))!.click();
+    await vi.waitFor(() => expect(workSection()!.textContent).toContain("入力は保持しています"));
+  };
+  it("sends only the edited key in one patch", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 43 });
+    saveButton().click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(42, { work_nominated_per_principal: 0 }));
+    expect(captured.setWorkSettings).toHaveBeenCalledTimes(1);
+  });
+  it("sends a key edited and then restored to its effective value", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    await editKey(0, "16");
+    captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 43 });
+    saveButton().click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(42, { work_nominated_per_principal: 16 }));
+  });
+  it("keeps the edit mark across a reread so the patch matches the kept draft", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    await reload();
+    expect(workSection()!.querySelectorAll<HTMLInputElement>("input")[0]!.value).toBe("0");
+    await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
+    captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 43 });
+    saveButton().click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(42, { work_nominated_per_principal: 0 }));
+  });
+  it("keeps an earlier edit when another key is edited after a reread", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    await reload();
+    await editKey(1, "1");
+    captured.setWorkSettings.mockResolvedValue({ ...ready, revision: 43 });
+    saveButton().click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(42, { work_nominated_per_principal: 0, work_active_per_assignee: 1 }));
+  });
+  it("disables save with no edited key and never sends an empty patch", async () => {
+    await openWorkSettings();
+    expect(saveButton().disabled).toBe(true);
+    saveButton().click();
+    await tick();
+    expect(captured.setWorkSettings).not.toHaveBeenCalled();
+  });
+  it("clears the edit marks when the snapshot becomes unavailable", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    const h = captured.handlers!;
+    h.onWorkSettings?.({ version: "0", state: "unavailable", reason: "work_settings_corrupt", message: "Offline one-key repair is required." });
+    await tick();
+    h.onWorkSettings?.({ ...ready, revision: 43 });
+    await vi.waitFor(() => expect(workSection()!.querySelectorAll<HTMLInputElement>("input")[0]!.value).toBe("16"));
+    expect(saveButton().disabled).toBe(true);
+  });
+  it("clears the edit marks when the connection is replaced", async () => {
+    await openWorkSettings();
+    await editKey(0, "0");
+    const h = captured.handlers!;
+    h.onStatus("disconnected");
+    await tick();
+    h.onStatus("connected");
+    h.onWorkSettings?.({ ...ready, revision: 43 });
+    await vi.waitFor(() => expect(workSection()!.querySelectorAll<HTMLInputElement>("input")[0]!.value).toBe("16"));
+    expect(saveButton().disabled).toBe(true);
+  });
+  it("clears every edit mark after a reset succeeds", async () => {
+    await openWorkSettings();
+    await editKey(1, "1");
+    captured.setWorkSettings.mockResolvedValueOnce({ ...ready, revision: 43 });
+    Array.from(workSection()!.querySelectorAll("button")).find(b => b.textContent?.startsWith("サーバー設定に戻す"))!.click();
+    await vi.waitFor(() => expect(captured.setWorkSettings).toHaveBeenCalledWith(42, { work_nominated_per_principal: null }));
+    await vi.waitFor(() => expect(workSection()!.querySelectorAll<HTMLInputElement>("input")[1]!.value).toBe("16"));
+    expect(saveButton().disabled).toBe(true);
+    saveButton().click();
+    await tick();
+    expect(captured.setWorkSettings).toHaveBeenCalledTimes(1);
   });
 
 });
