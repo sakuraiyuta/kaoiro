@@ -349,6 +349,13 @@ JS
     fi
     if [ "$3" != env ] || [ "$4" != LC_ALL=C ] || [ "$5" != stat ] || [ "$6" != --printf=present ] || [ "$7" != -- ]; then exit 125; fi
     if [ -n "$KAOIRO_TEST_PRESENT_PATH" ] && [ "$8" = "$KAOIRO_TEST_PRESENT_PATH" ]; then printf 'present'; exit 0; fi
+    if [ -n "$KAOIRO_TEST_PROBE_FAIL_PATH" ] && [ "$8" = "$KAOIRO_TEST_PROBE_FAIL_PATH" ]; then
+      case "$KAOIRO_TEST_PROBE_FAIL_MODE" in
+        denied) printf "stat: cannot statx '%s': Permission denied\\n" "$8" >&2; exit 1 ;;
+        error) exit 125 ;;
+        unexpected) printf 'unexpected'; exit 0 ;;
+      esac
+    fi
     if [ "$KAOIRO_TEST_FILE_PROBE_REAL" = 1 ]; then
       env LC_ALL=C stat --printf=present -- "$8"
       exit $?
@@ -1222,6 +1229,8 @@ function withEnvConsistencyFixture(
     contract,
     volumePresent,
     presentPath,
+    probeFailPath,
+    probeFailMode,
   } = {},
   fn,
 ) {
@@ -1251,6 +1260,8 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_CONTRACT: contract,
     KAOIRO_TEST_VOLUME_PRESENT: volumePresent,
     KAOIRO_TEST_PRESENT_PATH: presentPath,
+    KAOIRO_TEST_PROBE_FAIL_PATH: probeFailPath,
+    KAOIRO_TEST_PROBE_FAIL_MODE: probeFailMode,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -6928,3 +6939,19 @@ test("stable store ID follows the old environment name when its path matches", (
   assert.equal(entry.old_env, "OLD_USERS");
   assert.equal(entry.old_effective_path, "/var/lib/kaoiro/users.dets");
 });
+
+for (const probeFailPath of [newStoreDefault, newStoreDestination]) {
+  for (const probeFailMode of ["denied", "error", "unexpected"]) {
+    test(`new-store guard refuses ${probeFailMode} at ${probeFailPath}`, () => {
+      let caught;
+      const calls = withCallLog("running-clean-stop", () =>
+        withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", probeFailPath, probeFailMode}, () => {
+          try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+          catch (error) { caught = error; }
+        }),
+      );
+      assert.match(caught?.message ?? "no error", /cannot verify the target default path|destination .*cannot be checked/);
+      assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+    });
+  }
+}
