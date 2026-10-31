@@ -6969,11 +6969,35 @@ for (const probeFailPath of [newStoreDefault, newStoreDestination]) {
   }
 }
 
+test("previous CLI revision is declared only in its shared file", () => {
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const fixture = "server/deploy/test-support/previous-cli-revision.txt";
+  const revisionText = readFileSync(join(repository, fixture), "utf8");
+  assert.match(revisionText, /^[a-f0-9]{40}\n?$/);
+  const revision = revisionText.trim();
+  const result = spawnSync("git", ["-C", repository, "grep", "-I", "-l", "-z", "-F", revision, "--", ".", ":(exclude)scripts/issue-920-image-probe/**"], {encoding:"utf8"});
+  assert.equal(result.status, 0, result.stderr);
+  const paths = result.stdout.split("\0").filter(Boolean);
+  assert.ok(paths.includes(fixture));
+  for (const path of paths.filter(path => path !== fixture)) {
+    assert.equal(path, ".github/workflows/ci.yml", `unexpected revision literal in ${path}`);
+    const lines = readFileSync(join(repository, path), "utf8").split("\n");
+    const start = lines.indexOf("  server-image:");
+    const end = lines.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));
+    const matches = lines.map((line, index) => ({line, index})).filter(({line}) => line.includes(revision));
+    assert.equal(matches.length, 1);
+    assert.ok(start >= 0 && matches[0].index > start && (end < 0 || matches[0].index < end));
+    assert.equal(matches[0].line.trim(), `git fetch --no-tags --depth=1 origin c8f75a35be90f683983db9857d32fc9276bd0f53 ${revision}`);
+  }
+});
+
 test("previous CLI handles a pending v2 journal conservatively across four entry points", () => {
   const previous = join(root, "previous-cli");
   mkdirSync(previous);
   const repository = fileURLToPath(new URL("../../../", import.meta.url));
-  const archive = execFileSync("git", ["-C", repository, "archive", "7e2447f2ea14ebd8d08d478bd060e66b12dfdffc", "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"], {maxBuffer:32 * 1024 * 1024});
+  const revisionText = readFileSync(join(repository, "server/deploy/test-support/previous-cli-revision.txt"), "utf8");
+  assert.match(revisionText, /^[a-f0-9]{40}\n?$/);
+  const archive = execFileSync("git", ["-C", repository, "archive", revisionText.trim(), "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"], {maxBuffer:32 * 1024 * 1024});
   execFileSync("tar", ["-x", "-C", previous], {input:archive});
   const cli = join(previous, "server/deploy/kaoiro-server-deploy.mjs");
   const configPath = join(root, "old-cli-config.json");

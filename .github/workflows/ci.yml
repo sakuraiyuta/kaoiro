@@ -111,6 +111,13 @@ jobs:
         working-directory: server/deploy
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch previous deploy CLI revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(cat "$GITHUB_WORKSPACE/server/deploy/test-support/previous-cli-revision.txt")"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$revision"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -129,6 +136,13 @@ jobs:
         with:
           persist-credentials: false
       # v4
+      - name: Fetch previous deploy CLI revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(cat "$GITHUB_WORKSPACE/server/deploy/test-support/previous-cli-revision.txt")"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$revision"
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 10.20.0
