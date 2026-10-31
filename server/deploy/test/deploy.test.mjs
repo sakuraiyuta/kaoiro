@@ -2972,7 +2972,8 @@ test("runUpdate parses compose's environment when it is the array (\"KEY=VALUE\"
   assert.equal(result.phase, "done");
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.match, true);
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.old_effective_path, "/var/lib/kaoiro/users.dets");
 });
 
 test("runUpdate throws (not a silent {}) when compose config has no service by the expected name", () => {
