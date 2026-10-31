@@ -202,7 +202,7 @@ for (const [name, change] of Object.entries({
   "missing non-Codex id": e => { e.agents.pop(); },
   "extra id": e => { e.agents.push({ ...e.agents[0], id: host + ".unknown" }); },
   "unknown classification": e => { e.agents[0].classification = "unknown"; },
-  "contradicting engine": e => { e.agents[0].classification = "not-codex"; },
+  "contradicting engine": e => { e.agents[0].classification = "not-codex"; e.agents[0].current_backend = "not-applicable"; },
   "unknown routing": e => { e.agents[0].current_backend = "unknown"; },
   "mixed routing": e => { e.agents[0].current_backend = "app-server"; },
   "non-Codex routing": e => { e.agents[1].current_backend = "exec"; },
