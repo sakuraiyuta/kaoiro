@@ -1,6 +1,6 @@
 {
   "typescript": "5.9.3",
-  "raw": 492,
+  "raw": 493,
   "problems": [],
   "rows": [
     {
@@ -1045,6 +1045,14 @@
     },
     {
       "path": "runner/test/codexStateFixture.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateFixtureMarkers.test.ts",
       "imports": [
         "vitest"
       ],

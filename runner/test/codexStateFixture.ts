@@ -112,6 +112,13 @@ import fs from 'node:fs';
 import {syncBuiltinESMExports} from 'node:module';
 const dir=${JSON.stringify(dir)}, root=${JSON.stringify(root)}, home=${JSON.stringify(home)};
 const rename=fs.renameSync, read=fs.readFileSync, remove=fs.rmSync;
+const slowWrite=(path,text)=>{
+ const delay=fs.existsSync(dir+'/slow-marker-write')?Number(read(dir+'/slow-marker-write','utf8')):0;
+ if(delay>0){ fs.writeFileSync(path,''); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,delay); }
+ fs.writeFileSync(path,text);
+};
+const publishPidMarker=${publishPidMarker.toString()};
+const publish=(name,text)=>publishPidMarker(dir+'/'+name,process.pid,{writeFileSync:slowWrite,renameSync:rename},text);
 fs.rmSync=(path,...args)=>{
  if(String(path).includes('/.staging.codex-') || String(path)===dir+'/backup') {
   const names=fs.existsSync(root+'/codex-state/v2/records')?fs.readdirSync(root+'/codex-state/v2/records').filter(n=>n.endsWith('.json')):[];
@@ -120,11 +127,11 @@ fs.rmSync=(path,...args)=>{
  }
  return remove(path,...args);
 };
-if(process.argv[2]==='run') fs.writeFileSync(dir+'/running-helper',JSON.stringify({pid:process.pid,start:read('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19]}));
+if(process.argv[2]==='run') publish('running-helper',JSON.stringify({pid:process.pid,start:read('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19]}));
 fs.readFileSync=(path,...args)=>{
  const value=read(path,...args), faultPath=dir+'/fault.json';
  if(process.argv[2]==='promote' && String(path).startsWith(root+'/codex-state/v2/records/') && fs.existsSync(faultPath) && JSON.parse(read(faultPath,'utf8')).promote) {
-  fs.writeFileSync(dir+'/cut-ready',JSON.stringify({pid:process.pid,start:read('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19]}));
+  publish('cut-ready',JSON.stringify({pid:process.pid,start:read('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19]}));
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
  }
  return value;
@@ -140,7 +147,7 @@ fs.renameSync=(from,to)=>{
  if(fault?.credential) matches=String(from).includes('/.failed.codex-') && String(from).endsWith('/'+fault.credential);
  const fire=()=>{
   if(fault.once) fs.unlinkSync(faultPath);
-  fs.writeFileSync(dir+'/cut-ready',JSON.stringify({pid:process.pid,start:fs.readFileSync('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19],from,to}));
+  publish('cut-ready',JSON.stringify({pid:process.pid,start:fs.readFileSync('/proc/'+process.pid+'/stat','utf8').split(') ')[1].split(' ')[19],from,to}));
   if(fault.error) throw new Error('injected checkpoint failure');
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);
  };
