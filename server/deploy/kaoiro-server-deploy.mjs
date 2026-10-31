@@ -19,7 +19,7 @@ import {
   rmSync,
   statfsSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { artifactBuildIdentity, assertSourceIdentity, computeBuildIdentity, requireTaggedIdentity } from "../../scripts/build-identity.mjs";
 import { fsyncExistingPath, writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
@@ -682,15 +682,6 @@ function restartCount(bin, container) {
  *  outcome, not a defect in this string. */
 const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
 
-// クロエ round 4 review A-SF-1: `entry.env` is about to be embedded into
-// a RegExp (readEnvFileValue) to search `.env`'s own text — an
-// unconstrained string lets a malformed (or malicious) eval response
-// turn that into an arbitrary pattern (`.*` would match ANY line,
-// leaking an unrelated secret line from `.env` into the recorded
-// entry; `(` alone is an invalid RegExp and throws SyntaxError). Real
-// env var names are POSIX-shell identifiers; restricting to that shape
-// closes the class rather than escaping the string and hoping every
-// future caller remembers to.
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // クロエ #310 round 1 S-1: the contract says EXACTLY these keys
@@ -868,26 +859,6 @@ function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true, env
   return { skipped: false, paths: parsed, raw };
 }
 
-/** Reads `.env`'s explicit value for exactly `envName` — never the rest
- *  of the file, which may hold secrets (SECRET_KEY_BASE,
- *  KAOIRO_CLIENT_TOKENS, ...) this check has no business reading or
- *  recording (director ruling 2026-09-06, A-2). `null` when the key is
- *  absent — a legitimate "not set" observation, not a read failure.
- *  Safe to embed `envName` in a RegExp unescaped: every caller filters
- *  through `isValidPersistencePathEntry`'s ENV_VAR_NAME_RE first (クロエ
- *  round 4 review A-SF-1) — this function does not re-validate, so it
- *  must never be called on an unvalidated name. */
-function readEnvFileValue(envPath, envName) {
-  let raw;
-  try {
-    raw = readFileSync(envPath, "utf8");
-  } catch {
-    return null;
-  }
-  const match = new RegExp(`^${envName}=(.*)$`, "m").exec(raw);
-  return match === null ? null : match[1];
-}
-
 /** The compose project's own RESOLVED declaration for `SERVICE` (`.env`
  *  interpolation already applied — the same fact `docker compose up`
  *  itself would use), keyed by env var name. `docker compose config
@@ -990,12 +961,6 @@ function probeContainerPath(bin, container, path) {
       file_probe_reason: stderr === statError("Permission denied") ? "permission_denied" : "probe_command_failed",
     };
   }
-}
-
-function isUnderStateVolume(path) {
-  if (!isAbsolute(path)) return false;
-  const child = relative("/var/lib/kaoiro", path);
-  return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
 function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, containerEnv,
