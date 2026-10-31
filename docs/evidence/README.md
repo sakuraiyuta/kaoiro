@@ -42,6 +42,7 @@ Codex app-server transport migration (ADR-0058) — historical excerpts, one fil
 - [settings-and-permission.md](codex-app-server/settings-and-permission.md) — Settings/permission increments
 - [stage1-compatibility.md](codex-app-server/stage1-compatibility.md) — Stage 1 compatibility gate, 2026-09-18
 - [transport-spikes-2026-09-14.md](codex-app-server/transport-spikes-2026-09-14.md) — Transport spikes, 2026-09-14
+- [daemon-home-2026-10-28.md](codex-app-server/daemon-home-2026-10-28.md) — daemon home: preserve admitted state and reject runtime authority before copying
 
 ## deployment/
 

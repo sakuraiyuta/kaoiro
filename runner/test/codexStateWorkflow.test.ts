@@ -377,6 +377,34 @@ describe.skipIf(process.platform !== "linux")("per-entry unfinished exclusion", 
   });
 });
 
+describe.skipIf(process.platform !== "linux")("restore admission runtime marker", { timeout: 30_000 }, () => {
+  // Red if admitRestore drops assertNoExternalDaemon or calls it after
+  // publish. Other marker kinds stay in codexHomeClassification.test.ts.
+  const admit = () => {
+    mkdirSync(join(h.root, ".lock.update"), { mode: 0o700 });
+    const record = tx();
+    return h.state("prepare-restore", h.root, record.snapshot.path, h.home, "kogane468-test", h.B);
+  };
+  it("admits prepare-restore without a runtime marker", () => {
+    ok(h.forward());
+    const result = admit();
+    expect(result.status, result.stderr).toBe(0);
+    expect(tx().phase).toBe("restore-prepared");
+    expect(tx().replacement.priorPhase).toBe("completed");
+  });
+  it("refuses a runtime marker at prepare-restore and keeps the record bytes", () => {
+    ok(h.forward());
+    const bytes = readFileSync(h.recordPath(tx().uuid));
+    mkdirSync(join(h.home, "app-server-daemon"), { mode: 0o700 });
+    writeFileSync(join(h.home, "app-server-daemon", "daemon.pid"), "", { mode: 0o600 });
+    const result = admit();
+    expect(readFileSync(h.recordPath(tx().uuid))).toEqual(bytes);
+    expect(tx().phase).toBe("completed");
+    expect(tx()).not.toHaveProperty("replacement");
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("CODEX_EXTERNAL_DAEMON_ENTRY: app-server-daemon/daemon.pid");
+  });
+});
 
 describe.skipIf(process.platform !== "linux")("development activation option", { timeout: 35_000 }, () => {
   it.each(["forward","resume"])("preserves explicit allow-dirty through a state-aware %s",async mode=>{
