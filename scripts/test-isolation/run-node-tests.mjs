@@ -16,7 +16,7 @@ export function entryProblem(path, row, exempt) {
   return undefined;
 }
 
-export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
+export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS, { stderr = "inherit" } = {}) {
   root = realpathSync(root);
   const problems = [];
   const exempt = new Set();
@@ -38,7 +38,7 @@ export function runNodeEntries(root, entries, exceptions = NODE_CI_EXCEPTIONS) {
   delete env.NODE_TEST_CONTEXT;
   const run = spawnSync(process.execPath, ["--test", "--test-concurrency=1", `--test-reporter=${REPORTER}`, "--test-reporter-destination=stdout",
     "--test-reporter=spec", "--test-reporter-destination=stderr", ...absolute],
-    { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 64 * 1024 * 1024 });
+    { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", stderr], maxBuffer: 64 * 1024 * 1024 });
   if (run.error || run.status !== 0) problems.push(`Node test runner failed: ${run.error?.message ?? run.status}`);
   const seen = new Map(absolute.map(path => [path, { reached: false, real: 0 }]));
   for (const line of run.stdout.trim().split("\n").filter(Boolean)) {
