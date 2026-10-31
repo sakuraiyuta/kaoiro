@@ -307,6 +307,10 @@ JS
   # container disappeared) opts in explicitly.
   volume)
     case "$2" in
+      ls)
+        if [ "$KAOIRO_TEST_VOLUME_PRESENT" = 1 ]; then printf 'kaoiro_kaoiro-state\\n'; fi
+        exit 0
+        ;;
       inspect)
         if [ "$KAOIRO_TEST_VOLUME_PRESENT" = 1 ]; then exit 0; fi
         case "$FAKE_DOCKER_SCENARIO" in
@@ -6883,13 +6887,16 @@ test("new-store guard refuses an old image without a contract marker", () => {
 });
 
 test("new-store guard never creates a missing target volume", () => {
-  let caught;
+  let caught, volumesBefore, volumesAfter;
   const calls = withCallLog("running-clean-stop", () =>
     withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", probeExit:"1"}, () => {
+      volumesBefore = execFileSync(bin, ["volume", "ls", "-q"], {encoding:"utf8"});
       try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
       catch (error) { caught = error; }
+      volumesAfter = execFileSync(bin, ["volume", "ls", "-q"], {encoding:"utf8"});
     }),
   );
+  assert.equal(volumesBefore, volumesAfter);
   assert.match(caught?.message ?? "no error", /target state volume is missing or unavailable/);
   assert.match(calls, /volume inspect kaoiro_kaoiro-state/);
   assert.doesNotMatch(calls, /^volume create|^run .*?(?:--mount| -v )|^compose stop|^compose up|archive/m);
