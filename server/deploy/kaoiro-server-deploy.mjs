@@ -40,6 +40,8 @@ import { entryActs, formatRecovery, OPERATION, recoveryFacts, renderRecovery, se
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 import { requireFleetCompatibility } from "./kaoiro-build-compatibility.mjs";
 import { preparePolicyPlacement } from "./kaoiro-delivery-policy-placement.mjs";
+import { queryManifestRaw } from "./kaoiro-deploy-image-query.mjs";
+import { parsePersistenceManifest } from "./kaoiro-deploy-env-v2.mjs";
 
 // The pre-existing four fsyncExistingPath checkpoints have no isolated
 // integration fault path: tar verification and findUnfinishedTransaction read
@@ -820,7 +822,7 @@ function imageHasPersistencePathsModule(bin, imageId) {
  *  preference checkEnvConsistency asks it for — a fact about that
  *  image's own history, not a defect in the transaction being run —
  *  so it should not abort an otherwise-clean update. */
-function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true } = {}) {
+function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true, env = null } = {}) {
   if (!imageHasPersistencePathsModule(bin, imageId)) {
     // issue #322 M5 follow-up (クロエ round M5 review must-1): states
     // what was OBSERVED (the beam file is absent at this glob, in this
@@ -834,22 +836,15 @@ function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true } = 
   }
   let raw;
   try {
-    raw = runDocker(bin, [
-      "run",
-      "--rm",
-      "--entrypoint",
-      "/app/bin/kaoiro_server",
-      imageId,
-      "eval",
-      PERSISTENCE_PATHS_EVAL_EXPR,
-    ]);
+    raw = queryManifestRaw(bin, imageId, { env });
   } catch (err) {
     fail(`image ${imageId} has the persistence-paths module but its eval call failed: ${err.message}`);
   }
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parsePersistenceManifest(raw);
   } catch (err) {
+    if (!throwOnShapeViolation) return { skipped: true, reason: `invalid manifest from ${imageId}: ${err.message}` };
     fail(
       `persistence-path eval for image ${imageId} exited 0 but did not print a JSON array (${err.message}): ${raw}`,
     );
@@ -870,7 +865,7 @@ function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true } = 
     if (!throwOnShapeViolation) return { skipped: true, reason: emptyMessage };
     fail(emptyMessage);
   }
-  return { skipped: false, paths: parsed };
+  return { skipped: false, paths: parsed, raw };
 }
 
 /** Reads `.env`'s explicit value for exactly `envName` — never the rest
@@ -2370,7 +2365,7 @@ export function runUpdate(flags, config) {
           registered: !persistencePaths.skipped && persistencePaths.paths.some(p => p.store === "delivery_policies" || p.env === "KAOIRO_DELIVERY_POLICIES_PATH") } };
         writeJournal(dir, journal, validateJournalAgainstStateMachine);
         if (persistencePaths.skipped) {
-          envConsistency = { skipped: true, reason: persistencePaths.reason };
+          fail(`target image persistence manifest unavailable: ${persistencePaths.reason}; roll back this transaction before retrying`);
         } else {
           // issue #322 M5: ask the OLD (currently running) image for its
           // OWN default_path per store, when it can answer at all — the
