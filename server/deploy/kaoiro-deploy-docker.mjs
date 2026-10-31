@@ -53,8 +53,12 @@ export function resolveDockerBin(config, env = process.env) {
  *  what a given failure means (branch classification, abort, ...); this
  *  only runs the process. */
 export function runDocker(bin, args, opts = {}) {
-  const output = execFileSync(bin, args, { encoding: "utf8", ...opts });
+  const output = runDockerRaw(bin, args, { encoding: "utf8", ...opts });
   return output === null ? "" : output.trim();
+}
+
+export function runDockerRaw(bin, args, opts = {}) {
+  return execFileSync(bin, args, opts);
 }
 
 /** `docker inspect <target> --format <format>` — one target, one format
