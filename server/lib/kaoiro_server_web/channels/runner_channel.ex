@@ -110,6 +110,8 @@ defmodule KaoiroServerWeb.RunnerChannel do
     end
   end
 
+  def handle_info(_message, socket), do: {:noreply, socket}
+
   @impl true
   def handle_in("codex_work_observed", payload, socket) do
     case socket.assigns[:codex_observation] do

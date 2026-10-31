@@ -143,7 +143,8 @@ An abnormal Registry partition exit terminates runner channels. The partition
 failure itself does not terminate wrapper channels or agents, which are not
 registered there. The subsequent VM restart disconnects their server
 transports; confirm wrapper reconnection as part of recovery. Lifecycle
-broadcasts during the runner reconnection gap may not be delivered. Observation covers the current server's joined channels only,
+broadcasts during the runner reconnection gap may not be delivered.
+Observation covers the current server's joined channels only,
 not offline runners or runners connected to another server. Use one
 maintenance owner; a read does not lock out later lifecycle changes.
 

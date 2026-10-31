@@ -20,19 +20,50 @@ function run(name, script, expectedError) {
     assert.equal(result.status, 1);
     assert.equal(report.result, 'fail');
     assert.ok(report.error.includes(expectedError), report.error);
+    const recovery = report.controls.filter(row => row.partition_exit);
+    const last = recovery.at(-1);
+    if (name === 'vm-restart-omitted') {
+      assert.equal(last.old_vm_pid, last.new_vm_pid);
+      assert.deepEqual(last.recovered, { error: 'runner_registry_changed' });
+    } else if (name === 'application-only') {
+      assert.equal(recovery[0].partition_exit, 'normal');
+      assert.equal(recovery[0].recovered.error, undefined);
+      assert.equal(recovery[0].old_vm_pid, recovery[0].new_vm_pid);
+      assert.equal(last.partition_exit, 'kill');
+      assert.equal(last.old_vm_pid, last.new_vm_pid);
+      assert.ok(last.registrations.length > 1);
+      assert.ok(last.registrations.every(value => value === false));
+      assert.deepEqual(last.observed_after_timeout, { error: 'ambiguous_runner' });
+    } else {
+      assert.equal(name, 'registration-wait-omitted');
+      assert.deepEqual(last.registrations, []);
+      assert.deepEqual(last.recovered, { error: 'ambiguous_runner' });
+    }
   } else {
     assert.equal(result.status, 0);
     assert.equal(report.result, 'pass');
+    const recovery = report.controls.filter(row => row.partition_exit);
+    assert.deepEqual(recovery.map(row => row.partition_exit), ['normal', 'kill']);
+    for (const row of recovery) {
+      assert.equal(row.old_vm_exited, true);
+      assert.equal(row.old_vm_absent, true);
+      assert.notEqual(row.old_vm_pid, row.new_vm_pid);
+      assert.deepEqual(row.immediate, { error: 'ambiguous_runner' });
+      assert.equal(row.registrations[0], false);
+      assert.equal(row.registrations.at(-1), true);
+      assert.equal(row.recovered.error, undefined);
+      assert.equal(row.wrapper_unaffected_by_partition, true);
+    }
   }
 }
 
 const mutations = [
-  ['vm-restart-omitted', 'await restartVm();', 'void restartVm;', 'recovery requires the old VM to exit'],
+  ['vm-restart-omitted', 'await restartVm();', 'void restartVm;', 'recovery observation must succeed'],
   ['application-only', 'await restartVm();',
     "await rpc('(fn -> :ok = Application.stop(:kaoiro_server); {:ok, _} = Application.ensure_all_started(:kaoiro_server); true end).()');",
-    'recovery requires the old VM to exit'],
-  ['registration-wait-omitted', "await waitFor(registrationReady, 'runner registration after VM restart');",
-    'await registrationReady();', 'recovery must wait for runner registration'],
+    'timeout: runner registration after recovery'],
+  ['registration-wait-omitted', 'await waitForRegistration();',
+    'void waitForRegistration;', 'recovery observation must succeed'],
 ];
 
 run('baseline', fixture);
