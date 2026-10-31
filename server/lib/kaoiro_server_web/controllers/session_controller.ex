@@ -33,6 +33,7 @@ defmodule KaoiroServerWeb.SessionController do
   require Logger
 
   alias KaoiroServer.Auth
+  alias KaoiroServer.DeviceAccessToken
   alias KaoiroServer.OAuth
   alias KaoiroServerWeb.SessionCredential
 
@@ -48,16 +49,29 @@ defmodule KaoiroServerWeb.SessionController do
   # sign-only storage). The token itself never reaches JS. An OAuth
   # session carries its identity instead, which is not a secret but rides
   # the same encrypted envelope so ClientSocket has one thing to decrypt.
+  #
+  # A device access token (issue 801) gets the same ticket for its
+  # identity. Its failure leaves the session alone: the cookie riding
+  # along belongs to whoever else uses this browser, not to the bearer.
   def ticket(conn, _params) do
-    case credential(conn) do
-      {:ok, payload} ->
-        json(conn, %{ticket: Phoenix.Token.encrypt(conn, @ws_ticket_salt, payload)})
+    case SessionCredential.resolve_request(conn) do
+      {:bearer, {:ok, %{identity: identity}}} ->
+        json(conn, %{ticket: Phoenix.Token.encrypt(conn, @ws_ticket_salt, identity)})
 
-      :error ->
-        conn
-        |> clear_session()
-        |> put_status(:unauthorized)
-        |> json(%{error: "unauthorized"})
+      {:bearer, {:error, reason}} ->
+        SessionCredential.reject_bearer(conn, reason, %{error: "unauthorized"})
+
+      {:cookie, credential} ->
+        case credential(credential) do
+          {:ok, payload} ->
+            json(conn, %{ticket: Phoenix.Token.encrypt(conn, @ws_ticket_salt, payload)})
+
+          :error ->
+            conn
+            |> clear_session()
+            |> put_status(:unauthorized)
+            |> json(%{error: "unauthorized"})
+        end
     end
   end
 
@@ -132,8 +146,42 @@ defmodule KaoiroServerWeb.SessionController do
     end
   end
 
+  # A device access token (issue 801) is refreshed in the body instead:
+  # no cookie is written, `iat` carries over so the absolute lifetime
+  # still counts from the first issue, and a failure touches neither the
+  # session nor any socket (an expired token is not a revocation; the
+  # allow-list watcher already drops revoked identities).
   def refresh(conn, _params) do
-    case credential(conn) do
+    case SessionCredential.resolve_request(conn) do
+      {:bearer, {:ok, %{identity: identity, issued_at: issued_at}}} ->
+        refresh_bearer(conn, identity, issued_at)
+
+      {:bearer, {:error, reason}} ->
+        SessionCredential.reject_bearer(conn, reason, "")
+
+      {:cookie, credential} ->
+        refresh_cookie(conn, credential)
+    end
+  end
+
+  defp refresh_bearer(conn, identity, issued_at) do
+    now = System.system_time(:second)
+
+    case DeviceAccessToken.expires_in(issued_at, now) do
+      left when left > 0 ->
+        json(conn, %{
+          access_token: DeviceAccessToken.encrypt(identity, issued_at, now),
+          token_type: "Bearer",
+          expires_in: left
+        })
+
+      _none_left ->
+        SessionCredential.reject_bearer(conn, :too_old, "")
+    end
+  end
+
+  defp refresh_cookie(conn, credential) do
+    case credential(credential) do
       {:ok, payload} ->
         # Re-put the same credential to mark the session written, so
         # Plug.Session re-emits the cookie with a fresh max_age (slides
@@ -176,14 +224,14 @@ defmodule KaoiroServerWeb.SessionController do
     json(conn, %{token: Auth.token_auth_enabled?(), oauth: OAuth.enabled_providers()})
   end
 
-  # Re-validates whatever the session holds and returns the value that
-  # should ride the WS ticket / be re-written to the cookie. Delegates the
-  # actual "is this still valid" check to SessionCredential (issue #232)
-  # so RequireOperatorPlug's HTTP operator gate cannot drift from this
-  # definition; unwraps its tagged-tuple shape back to this controller's
-  # existing bare token / identity-map return.
-  defp credential(conn) do
-    case SessionCredential.resolve(conn) do
+  # Takes the cookie credential SessionCredential re-validated and returns
+  # the value that should ride the WS ticket / be re-written to the
+  # cookie. The "is this still valid" check stays in SessionCredential
+  # (issue #232) so RequireOperatorPlug's HTTP operator gate cannot drift
+  # from this definition; this only unwraps its tagged-tuple shape back to
+  # this controller's existing bare token / identity-map return.
+  defp credential(resolved) do
+    case resolved do
       {:oauth, identity} -> {:ok, identity}
       {:token, token} -> {:ok, token}
       nil -> :error

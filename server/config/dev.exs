@@ -42,6 +42,12 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :kaoiro_server, dev_routes: true
 
+# The device authorization grant and device access tokens are refused
+# over plain http (issue 801). Development and tests run without TLS, so
+# they take this exception. It is set here and in test.exs only;
+# runtime.exs never reads it, so a release cannot enable it.
+config :kaoiro_server, :device_auth_allow_insecure_transport, true
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

@@ -4,8 +4,9 @@ defmodule KaoiroServerWeb.RequireOperatorPlug do
   mirroring `AgentsChannel`'s `@operator_capable_roles` gate for the HTTP
   surface — the same two roles admitted for WS operator actions.
 
-  Re-resolves the role from the session cookie's credential on EVERY
-  request via `SessionCredential.resolve/1` + `ClientSocket.role_for/1` —
+  Re-resolves the role from the request's credential (the session cookie,
+  or a device access token in `Authorization: Bearer`, issue 801) on EVERY
+  request via `SessionCredential.resolve_request/1` + `ClientSocket.role_for/1` —
   never a role cached at login — so a revoked token or an allow-list
   demotion takes effect at the very next request instead of waiting for
   cookie expiry (same live-revalidate contract `AgentsChannel.require_operator/1`
@@ -14,8 +15,10 @@ defmodule KaoiroServerWeb.RequireOperatorPlug do
 
   Fail-closed on every non-operator outcome: no credential at all (never
   logged in, or one that no longer validates) -> 401; a credential that
-  resolves to `:viewer` -> 403. Must run AFTER `:fetch_session` in the
-  pipeline.
+  resolves to `:viewer` -> 403. A bearer failure is answered with its
+  RFC 6750 challenge instead (`SessionCredential.reject_bearer/3`), and a
+  bearer viewer's 403 carries `error="insufficient_scope"`. Must run AFTER
+  `:fetch_session` in the pipeline.
   """
 
   import Plug.Conn
@@ -28,16 +31,41 @@ defmodule KaoiroServerWeb.RequireOperatorPlug do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    case role(conn) do
-      nil -> deny(conn, :unauthorized, "unauthorized")
-      role when role in @operator_capable_roles -> conn
-      _viewer -> deny(conn, :forbidden, "forbidden")
+    case SessionCredential.resolve_request(conn) do
+      {:cookie, credential} ->
+        case ClientSocket.role_for(credential) do
+          nil -> deny(conn, :unauthorized, "unauthorized")
+          role when role in @operator_capable_roles -> conn
+          _viewer -> deny(conn, :forbidden, "forbidden")
+        end
+
+      {:bearer, {:ok, %{identity: identity}}} ->
+        case ClientSocket.role_for({:oauth, identity}) do
+          nil ->
+            reject_bearer(conn, :not_allowed)
+
+          role when role in @operator_capable_roles ->
+            conn
+
+          _viewer ->
+            conn
+            |> put_resp_header(
+              "www-authenticate",
+              SessionCredential.www_authenticate(:insufficient_scope)
+            )
+            |> deny(:forbidden, "forbidden")
+        end
+
+      {:bearer, {:error, reason}} ->
+        reject_bearer(conn, reason)
     end
   end
 
-  @doc "Live-resolves the requester's role from the session cookie, or nil."
-  @spec role(Plug.Conn.t()) :: :viewer | :operator | :admin | nil
-  def role(conn), do: conn |> SessionCredential.resolve() |> ClientSocket.role_for()
+  defp reject_bearer(conn, reason) do
+    conn
+    |> SessionCredential.reject_bearer(reason, %{"error" => "unauthorized"})
+    |> halt()
+  end
 
   defp deny(conn, status, error) do
     conn

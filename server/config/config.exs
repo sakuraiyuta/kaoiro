@@ -134,7 +134,11 @@ config :phoenix, :filter_parameters, [
   "cookie",
   "apikey",
   "api_key",
-  "credential"
+  "credential",
+  # The device authorization grant's codes (issue 801). Its access_token
+  # is already covered by "token".
+  "device_code",
+  "user_code"
 ]
 
 # Import environment specific config. This must remain at the bottom
