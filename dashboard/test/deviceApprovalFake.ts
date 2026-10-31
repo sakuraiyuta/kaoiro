@@ -2,6 +2,7 @@
 // Every body here is written from the design's browser API table (§4.2 / §4.8)
 // alone, not copied from the server's implementation or its tests; the two are
 // compared when the server lands (decision D9).
+import "./isolation.setup";
 import { vi } from "vitest";
 
 export interface FakeCall {
