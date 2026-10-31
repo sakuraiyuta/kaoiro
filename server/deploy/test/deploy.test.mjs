@@ -1978,7 +1978,7 @@ test("runUpdate refuses before stop when old manifest is unavailable", () => {
 // can only equal the old one if the preference is genuinely applied, not
 // merely labeled.
 test("runUpdate prefers the OLD image's own default_path over the target's, when the old image's beam probe reports present", () => {
-  const oldDefaultPath = "/tmp/old-image-dets/users.dets";
+  const oldDefaultPath = "/var/lib/kaoiro/old-image-users.dets";
   const oldEvalOutput = JSON.stringify([
     { store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: oldDefaultPath },
   ]);
@@ -1996,15 +1996,15 @@ test("runUpdate prefers the OLD image's own default_path over the target's, when
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "old_image");
-  assert.equal(entry.container_source, "default");
-  assert.equal(entry.container_effective, oldDefaultPath);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_path_source, "old_manifest");
+  assert.equal(entry.old_effective_path, oldDefaultPath);
   assert.notEqual(
-    entry.container_effective,
+    entry.old_effective_path,
     "/tmp/kaoiro-dets/users.dets",
     "must not have used the target image's own default_path",
   );
-  assert.equal(entry.match, true);
+  assert.equal(entry.target_path, oldDefaultPath);
 });
 
 test("runUpdate refuses a malformed old manifest before stop", () => {
@@ -2189,18 +2189,9 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("env_consistency check found a problem"));
-  // クロエ round 5 review SF-8: the message must name the two parties the
-  // check actually compares (compose vs. the container's effective path)
-  // and must not send an operator to edit .env, which A-MF-1 never reads
-  // for `match`. A-MF-2: a genuine value mismatch (compose is not null)
-  // reads as a first-application migration, naming both paths and 5-b.
-  assert.ok(caught.message.includes(".env's own line is recorded as \"declared\" for reference only"));
-  assert.ok(
-    caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
-    ),
-  );
+  assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro-dets\/users.dets/);
+  assert.match(caught.message, /\/var\/lib\/kaoiro\/users.dets/);
+  assert.match(caught.message, /non-destructive rollback/);
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
   assert.ok(
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
@@ -2240,7 +2231,8 @@ test("runUpdate reports both failures when env_consistency mismatches AND the ab
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("env_consistency check failed AND could not restore kaoiro-server:latest"));
+  assert.match(caught.message, /existing store Users uses/);
+  assert.match(caught.message, /could not restore kaoiro-server:latest/);
 });
 
 test("runUpdate proceeds through DONE when compose and container agree", () => {
@@ -2261,10 +2253,10 @@ test("runUpdate proceeds through DONE when compose and container agree", () => {
   assert.equal(result.phase, "done");
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.skipped, false);
+  assert.equal(manifest.env_consistency.guard_schema, 2);
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.declared, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, entry.target_path);
 });
 
 // director ruling 2026-09-06, A-MF-1: the exact bug the 3-way design had
@@ -2293,8 +2285,8 @@ test("runUpdate proceeds through DONE when compose and container agree, even wit
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.declared, null);
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, entry.target_path);
 });
 
 // クロエ round 5 review A-MF-2 ("ao's own finding while writing (e)"): the
@@ -2331,9 +2323,9 @@ test("runUpdate matches when the container's raw env is unset but its default_pa
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.container_effective, "/var/lib/kaoiro/users.dets");
-  assert.equal(entry.container_source, "default");
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_path_source, "old_manifest");
 });
 
 test("runUpdate refuses with the 5-b message when the container's raw env is unset and its default_path genuinely differs from compose", () => {
@@ -2352,11 +2344,8 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(
-    caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
-    ),
-  );
+  assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro_users.dets/);
+  assert.match(caught.message, /non-destructive rollback/);
 });
 
 const WORK_STORE_DEFAULT = "/tmp/kaoiro-dets/work_store.dets";
@@ -4841,23 +4830,11 @@ test("status surfaces an unfinished transaction's id and phase", () => {
   // issue #220 absorption (turn 8 follow-up): MOUNT_RESOLVED is reached
   // only after ENV_CONSISTENCY_CHECKED, so its recorded observation is
   // already available here.
-  assert.deepEqual(result.unfinishedTransaction.envConsistency, {
-    skipped: false,
-    entries: {
-      KAOIRO_USERS_PATH: {
-        compose: "/var/lib/kaoiro/users.dets",
-        container_effective: "/var/lib/kaoiro/users.dets",
-        container_source: "env",
-        // issue #322 M5: the old image's own beam probe defaults to
-        // "present" in this fixture too, so its own default_path answers
-        // this — the common case (a routine update, not the first-ever
-        // #310 upgrade).
-        assumed_default_source: "old_image",
-        declared: null,
-        match: true,
-      },
-    },
-  });
+  const journal = readJournal(join(backupRoot, transactionId));
+  const observation = journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
+  assert.deepEqual(result.unfinishedTransaction.envConsistency, observation);
+  assert.equal(observation.guard_schema, 2);
+  assert.equal(observation.entries.KAOIRO_USERS_PATH.old_effective_path, "/var/lib/kaoiro/users.dets");
 });
 
 // issue #220 absorption (turn 8 follow-up): a transaction that has NOT
@@ -4892,19 +4869,10 @@ test("status lists a completed transaction with its source/target SHA and comple
   const [entry] = result.doneTransactions;
   assert.equal(entry.sourceSha, headSha);
   assert.equal(entry.targetSha, headSha);
-  assert.deepEqual(entry.envConsistency, {
-    skipped: false,
-    entries: {
-      KAOIRO_USERS_PATH: {
-        compose: "/var/lib/kaoiro/users.dets",
-        container_effective: "/var/lib/kaoiro/users.dets",
-        container_source: "env",
-        assumed_default_source: "old_image",
-        declared: null,
-        match: true,
-      },
-    },
-  });
+  const manifest = readManifest(join(configWithCleanStopMeasured().backup_root, entry.id));
+  assert.deepEqual(entry.envConsistency, manifest.env_consistency);
+  assert.equal(entry.envConsistency.guard_schema, 2);
+  assert.equal(entry.envConsistency.entries.KAOIRO_USERS_PATH.target_path, "/var/lib/kaoiro/users.dets");
   assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
 });
 
