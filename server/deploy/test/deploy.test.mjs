@@ -1920,6 +1920,12 @@ test("runUpdate restores kaoiro-server:latest to the old image when an eval fail
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
     "expected kaoiro-server:latest to be retagged back to the old image on failure",
   );
+  const status = withScenario("running", () => runStatus({ repo: workDir }, configWithCleanStopMeasured()));
+  assert.equal(status.unfinishedTransaction.phase, PHASE.BUILD_PREPARED);
+  assert.equal(status.unfinishedTransaction.envConsistency, null);
+  const update = status.unfinishedTransaction.recovery.find((entry) => entry.command === "update");
+  assert.ok(update.note.startsWith("If an existing-store path mismatch caused the refusal"));
+  assert.ok(update.argv.includes("--target"));
 });
 
 test("runUpdate throws when the module-presence probe itself fails (image start or daemon failure)", () => {
