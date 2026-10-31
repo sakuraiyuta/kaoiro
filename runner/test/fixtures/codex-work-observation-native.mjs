@@ -39,7 +39,11 @@ async function rpc(expression) {
 }
 const json = value => `Jason.decode!(${JSON.stringify(JSON.stringify(value))})`;
 const observe = host => rpc(`case KaoiroServer.CodexBackendCompatibility.observe_runner(${JSON.stringify(host)}) do {:ok, p} -> p; {:error, e} -> %{error: to_string(e)} end`);
-const broadcast = (topic, event, payload) => rpc(`KaoiroServerWeb.Endpoint.broadcast(${JSON.stringify(topic)}, ${JSON.stringify(event)}, ${json(payload)})`);
+const broadcast = (topic, event, payload) => rpc(`(fn ->
+  payload = ${json(payload)}
+  payload = if ${JSON.stringify(event)} == "spawn", do: Map.put(payload, "token", KaoiroServer.Auth.mint_wrapper_token(payload["agent_id"])), else: payload
+  KaoiroServerWeb.Endpoint.broadcast(${JSON.stringify(topic)}, ${JSON.stringify(event)}, payload)
+end).()`);
 async function records() {
   const path = join(root, 'processes.jsonl');
   return existsSync(path) ? (await readFile(path, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse) : [];

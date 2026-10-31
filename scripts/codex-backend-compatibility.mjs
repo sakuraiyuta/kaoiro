@@ -291,7 +291,7 @@ const supervisorState = s => ({ ...s, request_id: undefined,
   children: [...s.children].sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
   pending_spawns: [...s.pending_spawns].sort(), pending_switches: [...s.pending_switches].sort() });
 
-async function maintenanceBundle(args, adapters) {
+async function maintenanceBundle(args, adapters, progress) {
   const read = async () => {
     const h = validateObservation(await observeHost(adapters, args.host, "server-observation-unavailable"), args.host);
     const r = await observeRunner(adapters, args, "runner-observation-unavailable");
@@ -299,20 +299,23 @@ async function maintenanceBundle(args, adapters) {
     for (const row of h.rows) {
       if (!exactKeys(row, ["id", "directory", "live", "connected", "reset_pending", "transition_pending", "pointer", "engine"])) stop("observation-invalid");
     }
-    return { h: { ...h, rows: sortedRows(h.rows) }, r };
+    const sample = { h: { ...h, rows: sortedRows(h.rows) }, r };
+    if (progress) progress.read(sample);
+    return sample;
   };
   const first = await read();
   let s;
   try { s = await adapters.observeSupervisor(args); }
   catch (error) { if (error instanceof Stop) throw error; stop("supervisor-observation-unavailable"); }
   validateSupervisor(s, args.host);
+  if (progress) progress.supervisor(supervisorState(s));
   const last = await read();
-  if (!isStable(first.h, last.h) || !isStable(runnerState(first.r), runnerState(last.r))) stop("observation-changed");
+  if ((!progress && !isStable(first.h, last.h)) || !isStable(runnerState(first.r), runnerState(last.r))) stop("observation-changed");
   const r = last.r;
   if (s.build_revision !== r.runnerSha || s.invocationId !== r.invocationId || s.configHash !== r.configHash
     || s.configMtimeMs !== r.configMtimeMs || s.applied_backend !== r.appliedBackend
     || (r.configuredBackend !== "omitted" && r.configuredBackend !== r.appliedBackend)) stop("supervisor-identity-mismatch");
-  return { ...last, s: supervisorState(s) };
+  return { ...last, s: supervisorState(s), stable: isStable(first.h, last.h) };
 }
 
 function maintenanceBinding({ h, r, s }) {
@@ -402,6 +405,39 @@ function stableBundle(before, after) {
   return isStable(before.h, after.h) && isStable(runnerState(before.r), runnerState(after.r)) && isStable(before.s, after.s);
 }
 
+function restoreProgress(current, agent) {
+  const baseline = new Map(current.h.rows.map(row => [row.id, row]));
+  let previous = baseline.get(agent);
+  return {
+    read({ h, r }) {
+      for (const key of RUNNER_FIELDS) if (r[key] !== current.r[key]) stop("observation-changed");
+      const target = h.rows.find(row => row.id === agent);
+      if (!target) stop("observation-changed");
+      for (const key of ["engine", "directory"]) if (target[key] !== baseline.get(agent)[key]) stop("observation-changed");
+      if (target.reset_pending) stop("pending-lifecycle");
+      if (target.pointer === "missing") stop("observation-invalid");
+      if (previous.connected && !target.connected) stop("observation-changed");
+      if (previous.pointer === "non_nil" && target.pointer === "nil") stop("observation-changed");
+      // live denotes an AgentStates row, not a socket; its baseline may already be true.
+      if (previous.live && !target.live) stop("observation-changed");
+      if (h.rows.some(row => row.id !== agent && !baseline.has(row.id))) stop("observation-changed");
+      if (current.h.rows.some(row => row.id !== agent && !h.rows.some(item => item.id === row.id))) stop("observation-changed");
+      for (const row of h.rows) {
+        if (row.id !== agent && baseline.has(row.id) && !isStable(row, baseline.get(row.id))) stop("observation-changed");
+      }
+      previous = target;
+    },
+    supervisor(s) {
+      for (const key of ["owner", "instance_id", "pid", "build_revision"]) if (s[key] !== current.s[key]) stop("observation-changed");
+      const siblings = value => value.children.filter(item => item.agent_id !== agent);
+      if (!isStable(siblings(current.s), siblings(s))) stop("observation-changed");
+      if (s.pending_spawns.some(id => id !== agent)) stop("observation-changed");
+      if (s.pending_switches.some(id => id !== agent)) stop("observation-changed");
+      for (const flag of ["stopping", "restarting", "reset_pending"]) if (s.children.some(item => item[flag])) stop("supervisor-work-pending");
+    },
+  };
+}
+
 export async function runMaintenance(args, adapters) {
   let stage = "before-write", operator;
   try {
@@ -436,20 +472,12 @@ export async function runMaintenance(args, adapters) {
       if (args.phase === "restore-fresh") {
         stage = "restore-outcome-unknown";
         try { await operator.restore(args.agent); } catch { stop("restore-unconfirmed"); }
-        const until = Date.now() + 30_000;
+        const until = Date.now() + 30_000, progress = restoreProgress(current, args.agent);
         do {
-          const after = await maintenanceBundle(args, adapters);
-          if (!isStable(runnerState(current.r), runnerState(after.r))
-            || ["owner", "instance_id", "pid", "build_revision"].some(key => current.s[key] !== after.s[key])) stop("observation-changed");
-          const comparable = h => h.rows.map(row => row.id === args.agent ? pick(row, ["id", "engine", "directory"]) : row);
-          if (!isStable(comparable(current.h), comparable(after.h))) stop("observation-changed");
-          const siblings = s => s.children.filter(item => item.agent_id !== args.agent);
-          if (!isStable(siblings(current.s), siblings(after.s))
-            || after.s.pending_spawns.some(id => id !== args.agent) || after.s.pending_switches.some(id => id !== args.agent)) stop("observation-changed");
+          const after = await maintenanceBundle(args, adapters, progress);
+          if (Date.now() >= until) stop("restore-unconfirmed");
           const row = after.h.rows.find(item => item.id === args.agent), child = after.s.children.find(item => item.agent_id === args.agent);
-          if (row?.pointer === "missing") stop("observation-invalid");
-          if (after.s.children.some(item => item.stopping || item.restarting || item.reset_pending)) stop("supervisor-work-pending");
-          if (row?.connected && !row.reset_pending && !row.transition_pending && child
+          if (after.stable && row?.connected && !row.reset_pending && !row.transition_pending && child
             && !after.s.pending_spawns.length && !after.s.pending_switches.length) return { ...result, status: "restored" };
           await new Promise(resolveDelay => setTimeout(resolveDelay, 100));
         } while (Date.now() < until);

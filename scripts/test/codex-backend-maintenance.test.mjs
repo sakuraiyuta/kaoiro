@@ -345,3 +345,101 @@ for (const key of ["host", "runner", "supervisor", "evidence", "cursor"]) test("
   assert.match(output.stderr.text, /before-write/); assert.doesNotMatch(output.stderr.text, /private fixture detail/);
   assert.equal(f.calls.write, 0); assert.equal(f.calls.open, 0);
 });
+
+const progressFaults = {
+  "target-id": f => { f.state.h.rows[0].id = host + ".replacement"; },
+  "target-engine": f => { f.state.h.rows[0].engine = "grok"; },
+  "target-directory": f => { f.state.h.rows[0].directory = false; },
+  "target-reset": f => { f.state.h.rows[0].reset_pending = true; },
+  "target-missing": f => { f.state.h.rows[0].pointer = "missing"; },
+  "sibling-added": f => { f.state.h.rows.push(row(host + ".z-new")); },
+  "sibling-removed": f => { f.state.h.rows.pop(); },
+  "sibling-child": f => { f.state.s.children.push(child(other)); },
+  "foreign-spawn": f => { f.state.s.pending_spawns.push(other); },
+  "foreign-switch": f => { f.state.s.pending_switches.push(other); },
+};
+for (const flag of ["stopping", "restarting", "reset_pending"]) progressFaults["target-" + flag.replace("_", "-")] = f => { f.state.s.children[0][flag] = true; };
+for (const [key, value] of Object.entries({ owner: "#PID<1.2.9>", instance_id: "87654321-1234-1234-1234-123456789abc", pid: 101, build_revision: "e".repeat(40) })) {
+  progressFaults["supervisor-" + key] = f => { f.state.s[key] = value; };
+}
+for (const [key, value] of Object.entries({ invocationId: "e".repeat(32), configHash: "e".repeat(64), configMtimeMs: 1001, configuredBackend: "app-server", appliedBackend: "app-server" })) {
+  progressFaults["runner-" + key] = f => { f.state.r[key] = value; };
+}
+for (const [name, change] of Object.entries(progressFaults)) test("restore guard " + name, async () => {
+  const supervisor = name.startsWith("supervisor-") || ["sibling-child", "foreign-spawn", "foreign-switch", "target-stopping", "target-restarting", "target-reset-pending"].includes(name);
+  for (const half of supervisor ? [5] : [5, 6]) {
+    const f = fixture(); await accept(f, "restore-fresh");
+    f.state.hook = (key, n) => {
+      if (key === (supervisor ? "supervisor" : "host") && n === (supervisor ? 3 : half)) change(f);
+      if (key === "supervisor" && n === 4) { f.state.s.pending_spawns = []; f.state.s.pending_switches = []; }
+    };
+    const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+    const reason = name === "target-reset" ? "pending-lifecycle" : name === "target-missing" ? "observation-invalid"
+      : ["target-stopping", "target-restarting", "target-reset-pending"].includes(name) ? "supervisor-work-pending" : "observation-changed";
+    assert.equal(JSON.parse(output.stderr.text).reason, reason);
+    assert.equal(f.calls.host, half); assert.equal(f.calls.restore, 1); assert.equal(f.calls.write, 0); assert.equal(f.calls.close, 1);
+  }
+});
+
+for (const [name, key, high, low] of [["connected", "connected", true, false], ["pointer", "pointer", "non_nil", "nil"], ["live", "live", true, false]]) {
+  test("restore guard " + name + "-regression", async () => {
+    for (const dropAt of [6, 7]) {
+      const f = fixture(); await accept(f, "restore-fresh");
+      f.state.hook = (kind, n) => {
+        if (kind !== "host" || n < 5) return;
+        f.state.h.rows[0][key] = n === dropAt ? low : high;
+        f.state.h.rows[0].transition_pending = n < dropAt;
+      };
+      const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+      assert.equal(JSON.parse(output.stderr.text).reason, "observation-changed"); assert.equal(f.calls.host, dropAt);
+      assert.equal(f.calls.restore, 1); assert.equal(f.calls.write, 0);
+    }
+  });
+}
+for (const position of ["first", "last", "both"]) test("restore guard sibling-" + position, async () => {
+  const f = fixture(); await accept(f, "restore-fresh");
+  f.state.hook = (key, n) => { if (key === "host" && n >= 5) f.state.h.rows[1].pointer =
+    (position !== "last" && n === 5) || (position !== "first" && n === 6) ? "nil" : "non_nil"; };
+  const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.equal(JSON.parse(output.stderr.text).reason, "observation-changed");
+  assert.equal(f.calls.host, position === "last" ? 6 : 5); assert.equal(f.calls.restore, 1);
+});
+
+const admissionFaults = {
+  "runner-host": [f => { f.state.r.host = "different"; }, "runner-observation-invalid"],
+  "runner-runnerSha": [f => { f.state.r.runnerSha = "e".repeat(40); }, "runner-identity-mismatch"],
+  "cross-revision": [f => { f.state.s.build_revision = "e".repeat(40); }, "supervisor-identity-mismatch"],
+  "cross-invocation": [f => { f.state.s.invocationId = "e".repeat(32); }, "supervisor-identity-mismatch"],
+  "cross-hash": [f => { f.state.s.configHash = "e".repeat(64); }, "supervisor-identity-mismatch"],
+  "cross-mtime": [f => { f.state.s.configMtimeMs = 1001; }, "supervisor-identity-mismatch"],
+  "cross-backend": [f => { f.state.s.applied_backend = "app-server"; }, "supervisor-identity-mismatch"],
+  "configured-consistency": [f => { f.state.r.configuredBackend = "app-server"; }, "supervisor-identity-mismatch"],
+};
+for (const [name, [change, reason]] of Object.entries(admissionFaults)) test("restore guard " + name, async () => {
+  const f = fixture(); await accept(f, "restore-fresh"); change(f);
+  const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.equal(JSON.parse(output.stderr.text).reason, reason); assert.equal(f.calls.restore, 0); assert.equal(f.calls.open, 0);
+});
+for (const [name, first, last] of [["strict-initial", 1, 2], ["strict-before-restore", 3, 4]]) test("restore guard " + name, async () => {
+  const f = fixture(); await accept(f, "restore-fresh");
+  f.state.hook = (key, n) => { if (key === "host") f.state.h.rows[0].transition_pending = n === (first === 1 ? last : first); };
+  const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.equal(JSON.parse(output.stderr.text).reason, "observation-changed"); assert.equal(f.calls.restore, 0);
+});
+test("restore guard stable-result", async () => {
+  for (const liveBefore of [false, true]) {
+    const f = fixture(); f.state.h.rows[0].live = liveBefore; await accept(f, "restore-fresh");
+    f.state.hook = (key, n) => { if (key === "host" && n >= 5) Object.assign(f.state.h.rows[0],
+      { connected: n > 5, transition_pending: n === 5, live: n > 5 ? true : liveBefore, pointer: n > 5 ? "non_nil" : "nil" }); };
+    const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 0, output.stderr.text);
+    assert.equal(f.calls.host, 8); assert.equal(f.calls.restore, 1); assert.equal(f.calls.close, 1); assert.equal(f.calls.write, 0);
+  }
+});
+test("restore guard deadline", async t => {
+  const f = fixture(); await accept(f, "restore-fresh"); let now = 0;
+  t.mock.method(Date, "now", () => now);
+  f.state.hook = (key, n) => { if (key === "host" && n === 6) now = 30_001; };
+  const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
+  assert.equal(JSON.parse(output.stderr.text).reason, "restore-unconfirmed"); assert.match(output.stderr.text, /restore-outcome-unknown/);
+  assert.equal(f.calls.host, 6); assert.equal(f.calls.restore, 1); assert.equal(f.calls.close, 1);
+});
