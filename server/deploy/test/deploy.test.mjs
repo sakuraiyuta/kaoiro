@@ -307,7 +307,12 @@ JS
   # container disappeared) opts in explicitly.
   volume)
     case "$2" in
+      ls)
+        if [ "$KAOIRO_TEST_VOLUME_PRESENT" = 1 ]; then printf 'kaoiro_kaoiro-state\\n'; fi
+        exit 0
+        ;;
       inspect)
+        if [ "$KAOIRO_TEST_VOLUME_PRESENT" = 1 ]; then exit 0; fi
         case "$FAKE_DOCKER_SCENARIO" in
           volume-exists-no-container) exit 0 ;;
           *) exit 1 ;;
@@ -343,6 +348,14 @@ JS
       exit 0
     fi
     if [ "$3" != env ] || [ "$4" != LC_ALL=C ] || [ "$5" != stat ] || [ "$6" != --printf=present ] || [ "$7" != -- ]; then exit 125; fi
+    if [ -n "$KAOIRO_TEST_PRESENT_PATH" ] && [ "$8" = "$KAOIRO_TEST_PRESENT_PATH" ]; then printf 'present'; exit 0; fi
+    if [ -n "$KAOIRO_TEST_PROBE_FAIL_PATH" ] && [ "$8" = "$KAOIRO_TEST_PROBE_FAIL_PATH" ]; then
+      case "$KAOIRO_TEST_PROBE_FAIL_MODE" in
+        denied) printf "stat: cannot statx '%s': Permission denied\\n" "$8" >&2; exit 1 ;;
+        error) exit 125 ;;
+        unexpected) printf 'unexpected'; exit 0 ;;
+      esac
+    fi
     if [ "$KAOIRO_TEST_FILE_PROBE_REAL" = 1 ]; then
       env LC_ALL=C stat --printf=present -- "$8"
       exit $?
@@ -439,7 +452,7 @@ JS
             esac
             ;;
           '{{json .Mounts}}')
-            printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state"}]\\n'
+            if [ -n "$KAOIRO_TEST_MOUNTS_JSON" ]; then printf '%s\\n' "$KAOIRO_TEST_MOUNTS_JSON"; else printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state","Destination":"/var/lib/kaoiro"}]\\n'; fi
             ;;
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
@@ -717,6 +730,10 @@ JS
       # the same default) when unset, so every EXISTING test — none of
       # which distinguish old from target — keeps its current behavior
       # unchanged.
+      *"PersistencePaths.contract()"*)
+        if [ "$KAOIRO_TEST_CONTRACT" = 1 ]; then printf '"exhaustive_stable_v1"\\n'; exit 0; fi
+        exit 1
+        ;;
       *"/app/bin/kaoiro_server"*)
         if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
           exit 1
@@ -1209,6 +1226,12 @@ function withEnvConsistencyFixture(
     probeStdout,
     probeStderr,
     probeReal,
+    contract,
+    volumePresent,
+    presentPath,
+    probeFailPath,
+    probeFailMode,
+    mountsJson,
   } = {},
   fn,
 ) {
@@ -1235,6 +1258,12 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_FILE_PROBE_STDOUT: probeStdout,
     KAOIRO_TEST_FILE_PROBE_STDERR: probeStderr,
     KAOIRO_TEST_FILE_PROBE_REAL: probeReal,
+    KAOIRO_TEST_CONTRACT: contract,
+    KAOIRO_TEST_VOLUME_PRESENT: volumePresent,
+    KAOIRO_TEST_PRESENT_PATH: presentPath,
+    KAOIRO_TEST_PROBE_FAIL_PATH: probeFailPath,
+    KAOIRO_TEST_PROBE_FAIL_MODE: probeFailMode,
+    KAOIRO_TEST_MOUNTS_JSON: mountsJson,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -1866,19 +1895,20 @@ test("runUpdate does not borrow a colliding transaction's recovery hint", () => 
 // reason: eval boots the full release and fails on missing env vars
 // BEFORE the module lookup, for every real invocation, so its own exit
 // code could never distinguish "absent" from "OOM/daemon failure").
-test("runUpdate records env_consistency as skipped when the target image's beam probe reports the module absent", () => {
-  const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture({ beamAbsent: "1" }, () =>
-      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
-    ),
+test("runUpdate refuses before stop when target manifest is unavailable", () => {
+  let checked = false;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({ beamAbsent: "1" }, () => {
+      assert.throws(
+        () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        /target image persistence manifest unavailable/,
+      );
+      checked = true;
+    }),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.skipped, true);
-  // issue #322 M5 follow-up (must-1): reason now states the OBSERVATION
-  // (beam not found at this glob, in this image), not an inferred cause.
-  assert.ok(manifest.env_consistency.reason.includes("PersistencePaths beam not found"));
+  assert.equal(checked, true);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
 
 test("runUpdate throws (never skips) when eval fails on an image the beam probe reports has the module", () => {
@@ -1940,39 +1970,20 @@ test("runUpdate throws when the module-presence probe itself fails (image start 
   );
 });
 
-// issue #322 M5 (must-fix, second half): default_path came from the
-// TARGET image's own manifest even for the OLD (currently running)
-// container's fallback — an assumption, not a measurement, unless old
-// and new happen to compile the same default. When the old image CAN
-// answer (its own beam probe reports present), checkEnvConsistency now
-// prefers ITS default_path and records assumed_default_source:
-// "old_image" (pinned above, in the status tests). This test covers the
-// other branch: the old image cannot answer (a pre-#310 old image is
-// the common real case), so the fallback to the target's own
-// default_path is used, and the observation says so explicitly.
-test("runUpdate falls back to the target image's own default_path, and records the assumption, when the old image's beam probe reports absent", () => {
-  const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture(
-      {
-        // Declare the same path FAKE_DOCKER's default eval output gives
-        // as the target image's own default_path, so falling back to it
-        // (this test's whole point) is a match, not a genuine migration
-        // — that failure mode already has its own dedicated tests.
-        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
-        containerEnvJson: "[]",
-        oldBeamAbsent: "1",
-      },
-      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
-    ),
+test("runUpdate refuses before stop when old manifest is unavailable", () => {
+  let checked = false;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({ oldBeamAbsent: "1", containerEnvJson: "[]" }, () => {
+      assert.throws(
+        () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        /old image persistence manifest unavailable/,
+      );
+      checked = true;
+    }),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.container_source, "default");
-  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
-  assert.equal(entry.match, true);
+  assert.equal(checked, true);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
 
 // issue #322 M5 follow-up (must-2, クロエ review): the earlier "falls
@@ -1984,7 +1995,7 @@ test("runUpdate falls back to the target image's own default_path, and records t
 // can only equal the old one if the preference is genuinely applied, not
 // merely labeled.
 test("runUpdate prefers the OLD image's own default_path over the target's, when the old image's beam probe reports present", () => {
-  const oldDefaultPath = "/tmp/old-image-dets/users.dets";
+  const oldDefaultPath = "/var/lib/kaoiro/old-image-users.dets";
   const oldEvalOutput = JSON.stringify([
     { store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: oldDefaultPath },
   ]);
@@ -2002,43 +2013,31 @@ test("runUpdate prefers the OLD image's own default_path over the target's, when
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "old_image");
-  assert.equal(entry.container_source, "default");
-  assert.equal(entry.container_effective, oldDefaultPath);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_path_source, "old_manifest");
+  assert.equal(entry.old_effective_path, oldDefaultPath);
   assert.notEqual(
-    entry.container_effective,
+    entry.old_effective_path,
     "/tmp/kaoiro-dets/users.dets",
     "must not have used the target image's own default_path",
   );
-  assert.equal(entry.match, true);
+  assert.equal(entry.target_path, oldDefaultPath);
 });
 
-// issue #322 M5 follow-up (should-2, クロエ review): the OLD image's own
-// manifest is an OPTIONAL enhancement (a fact about that image's history,
-// not this transaction's own defect) — a shape violation there must fall
-// back to the target's own default_path, the same as the old image being
-// unable to answer at all (beam absent), not abort an otherwise-clean
-// update. oldEvalOutput reports only 3 of the 4 required keys (missing
-// default_path) — a genuine shape violation per isValidPersistencePathEntry.
-test("runUpdate falls back to the target image's own default_path, and does not abort, when the old image's manifest has a shape violation", () => {
-  const oldEvalOutput = JSON.stringify([{ store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
-  const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture(
-      {
-        oldEvalOutput,
-        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
-        containerEnvJson: "[]",
-      },
-      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
-    ),
+test("runUpdate refuses a malformed old manifest before stop", () => {
+  const oldEvalOutput = JSON.stringify([{store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets"}]);
+  let checked = false;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson: "[]"}, () => {
+      assert.throws(
+        () => runUpdate({repo: workDir, target: headSha, maintenanceApproved: true}, configWithCleanStopMeasured()),
+        /old image persistence manifest unavailable/,
+      );
+      checked = true;
+    }),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
-  assert.equal(entry.match, true);
+  assert.equal(checked, true);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
 });
 
 test("runUpdate throws when the target image's eval exits 0 but does not print valid JSON", () => {
@@ -2207,18 +2206,11 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("env_consistency check found a problem"));
-  // クロエ round 5 review SF-8: the message must name the two parties the
-  // check actually compares (compose vs. the container's effective path)
-  // and must not send an operator to edit .env, which A-MF-1 never reads
-  // for `match`. A-MF-2: a genuine value mismatch (compose is not null)
-  // reads as a first-application migration, naming both paths and 5-b.
-  assert.ok(caught.message.includes(".env's own line is recorded as \"declared\" for reference only"));
-  assert.ok(
-    caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
-    ),
-  );
+  assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro-dets\/users.dets/);
+  assert.ok(caught.message.includes("this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store."));
+  assert.ok(caught.message.includes("Do not use --accept-new-store for an existing or uncertain store."));
+  assert.match(caught.message, /\/var\/lib\/kaoiro\/users.dets/);
+  assert.match(caught.message, /non-destructive rollback/);
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
   assert.ok(
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
@@ -2258,7 +2250,8 @@ test("runUpdate reports both failures when env_consistency mismatches AND the ab
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("env_consistency check failed AND could not restore kaoiro-server:latest"));
+  assert.match(caught.message, /existing store Users uses/);
+  assert.match(caught.message, /could not restore kaoiro-server:latest/);
 });
 
 test("runUpdate proceeds through DONE when compose and container agree", () => {
@@ -2279,10 +2272,10 @@ test("runUpdate proceeds through DONE when compose and container agree", () => {
   assert.equal(result.phase, "done");
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.skipped, false);
+  assert.equal(manifest.env_consistency.guard_schema, 2);
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.declared, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, entry.target_path);
 });
 
 // director ruling 2026-09-06, A-MF-1: the exact bug the 3-way design had
@@ -2311,8 +2304,8 @@ test("runUpdate proceeds through DONE when compose and container agree, even wit
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.declared, null);
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, entry.target_path);
 });
 
 // クロエ round 5 review A-MF-2 ("ao's own finding while writing (e)"): the
@@ -2349,9 +2342,9 @@ test("runUpdate matches when the container's raw env is unset but its default_pa
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.container_effective, "/var/lib/kaoiro/users.dets");
-  assert.equal(entry.container_source, "default");
+  assert.equal(entry.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_effective_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.old_path_source, "old_manifest");
 });
 
 test("runUpdate refuses with the 5-b message when the container's raw env is unset and its default_path genuinely differs from compose", () => {
@@ -2370,11 +2363,9 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(
-    caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
-    ),
-  );
+  assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro_users.dets/);
+  assert.ok(caught.message.includes("this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store."));
+  assert.match(caught.message, /non-destructive rollback/);
 });
 
 const WORK_STORE_DEFAULT = "/tmp/kaoiro-dets/work_store.dets";
@@ -2393,6 +2384,8 @@ function withNewWorkStore(overrides, fn) {
     composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
     containerEnvJson: "[]",
     probeExit: "1",
+    contract: "1",
+    volumePresent: "1",
     ...overrides,
   }, fn);
 }
@@ -2401,7 +2394,7 @@ function withNewWorkStore(overrides, fn) {
 // operator's explicit per-store flag, so every test that must reach the
 // probe (or the mount-safety refusal behind it) names the store here.
 const ACCEPT_WORK_STORE = new Set(["KAOIRO_WORK_STORE_PATH"]);
-const WORK_STORE_PROBE_CALL = `exec kaoiro-c1 env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`;
+const WORK_STORE_PROBE_CALL = `exec sha256:${"f".repeat(64)} env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`;
 
 function workStoreFlags(extra = {}) {
   return { repo: workDir, target: headSha, acceptNewStores: ACCEPT_WORK_STORE, ...extra };
@@ -2444,29 +2437,24 @@ test("runUpdate admits a flagged store absent from the old manifest and containe
   assert.ok(calls.includes(WORK_STORE_PROBE_CALL));
   const dir = join(root, "kaoiro-deploy", result.transactionId);
   const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(entry.kind, "new_store");
+  assert.equal(entry.old_effective_path, null);
   assert.equal(entry.operator_accepted_new_store, true);
-  assert.equal(entry.file_probe_path, WORK_STORE_DEFAULT);
-  assert.equal(entry.file_probe_result, "absent");
-  assert.equal(entry.assumed_default_source, "target_image");
+  assert.equal(entry.target_probe_path, WORK_STORE_DEFAULT);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
+  assert.equal(entry.target_path, WORK_STORE_VOLUME);
   const observed = readJournal(dir).history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
   assert.equal(observed.entries.KAOIRO_WORK_STORE_PATH.operator_accepted_new_store, true);
 });
 
-test("runUpdate admits a flagged store when the old image cannot answer its manifest query", () => {
-  const { result, caught, calls } = attemptUpdate("running-clean-stop", () =>
+test("runUpdate refuses a flagged store when the old manifest is unavailable", () => {
+  const { caught, calls } = attemptUpdate("running-clean-stop", () =>
     withNewWorkStore({ oldBeamAbsent: "1" }, () =>
       runUpdate(workStoreFlags({ maintenanceApproved: true }), configWithCleanStopMeasured())));
-  assert.equal(caught, undefined);
-  assert.equal(result.phase, "done");
-  assert.ok(calls.includes(WORK_STORE_PROBE_CALL));
-  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
-    .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.first_application, "never_existed");
-  assert.equal(entry.operator_accepted_new_store, true);
+  assert.match(caught?.message ?? "no error", /old image persistence manifest unavailable/);
+  assert.ok(!calls.includes(WORK_STORE_PROBE_CALL));
+  assertNoDestructiveCalls(calls);
 });
 
 test("runUpdate admits a missing path observed by the real stat probe", () => {
@@ -2483,9 +2471,9 @@ test("runUpdate admits a missing path observed by the real stat probe", () => {
   assert.equal(result.phase, "done");
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.file_probe_path, missingPath);
-  assert.equal(entry.file_probe_result, "absent");
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(entry.target_probe_path, missingPath);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
   assert.equal(entry.operator_accepted_new_store, true);
 });
 
@@ -2508,9 +2496,7 @@ test("runUpdate refuses an existing store behind an inaccessible parent", (t) =>
         evalOutput,
         probeReal: "1",
       }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-      (err) => err instanceof DeployError && err.message.includes("could not probe") &&
-        err.message.includes('"file_probe_result":"undetermined"') &&
-        err.message.includes('"file_probe_reason":"permission_denied"') &&
+      (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
         !err.message.includes('"first_application":"never_existed"'),
     );
   } finally {
@@ -2524,7 +2510,7 @@ test("runUpdate keeps the 5-b failure when the old container has the flagged sto
     () => withScenario("running", () => withNewWorkStore({ probeExit: "0" }, () =>
       runUpdate(workStoreFlags(), configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_result":"present"'),
   );
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
@@ -2539,7 +2525,7 @@ test("runUpdate keeps the 5-b failure when the old image knows the store", () =>
     () => withScenario("running", () => withNewWorkStore({ oldEvalOutput: OLD_WORK_STORE_MANIFEST }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+    (err) => err instanceof DeployError && err.message.includes("existing store Work uses") &&
       err.message.includes("/tmp/old-work.dets"),
   );
 });
@@ -2549,7 +2535,7 @@ test("runUpdate refuses the flag for a store the old image already lists, withou
     withNewWorkStore({ oldEvalOutput: OLD_WORK_STORE_MANIFEST }, () =>
       runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("--accept-new-store refused because the old image's own manifest already lists"));
+  assert.ok(caught.message.includes("existing store Work uses"));
   assert.ok(caught.message.includes("/tmp/old-work.dets"));
   assert.ok(caught.message.includes("this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)"));
   assert.equal(calls.some(isStatProbe), false);
@@ -2562,7 +2548,7 @@ test("runUpdate rejects a never-existed store omitted from compose", () => {
     () => withScenario("running", () => withNewWorkStore({ composeEnvJson: "{}" }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("compose does not declare this persistence-path var"),
+    (err) => err instanceof DeployError && err.message.includes("not a normalized path below the state volume"),
   );
 });
 
@@ -2571,8 +2557,7 @@ test("runUpdate rejects a never-existed store declared outside the state volume"
     () => withScenario("running", () => withNewWorkStore({
       composeEnvJson: '{"KAOIRO_WORK_STORE_PATH":"/tmp/outside/work_store.dets"}',
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
-      err.message.includes("/var/lib/kaoiro named volume"),
+    (err) => err instanceof DeployError && err.message.includes("not a normalized path below the state volume"),
   );
 });
 
@@ -2588,7 +2573,7 @@ test("runUpdate rejects a never-existed store without a named state volume mount
   assert.throws(
     () => withScenario("running", () => withComposePlans(bindPlan, bindPlan, () =>
       withNewWorkStore({}, () => runUpdate(workStoreFlags(), configWithOverride())))),
-    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
+    (err) => err instanceof DeployError && err.message.includes("state volume unavailable") &&
       err.message.includes("no named-volume mount"),
   );
 });
@@ -2598,7 +2583,7 @@ test("runUpdate refuses to infer absence when the container path probe fails", (
     () => withScenario("running", () => withNewWorkStore({ probeExit: "125" }, () =>
       runUpdate(workStoreFlags(), configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path"),
   );
 });
 
@@ -2607,7 +2592,7 @@ test("runUpdate refuses to infer absence from a diagnostic exit 1", () => {
     () => withScenario("running", () => withNewWorkStore({
       probeExit: "1", probeStderr: "container is not running",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path"),
   );
 });
 
@@ -2617,7 +2602,7 @@ test("runUpdate refuses an absent answer for a different path", () => {
       probeExit: "1",
       probeStderr: "stat: cannot statx '/tmp/other-store.dets': No such file or directory",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_reason":"probe_command_failed"'),
   );
 });
@@ -2627,7 +2612,7 @@ test("runUpdate refuses unexpected output from the container path probe", () => 
     () => withScenario("running", () => withNewWorkStore({
       probeExit: "0", probeStdout: "unexpected",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_reason":"unexpected_output"'),
   );
 });
@@ -2636,7 +2621,7 @@ test("runUpdate refuses an unflagged store the old manifest omits, without probi
   const { caught, calls } = attemptUpdate("running", () =>
     withNewWorkStore({}, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("first-application migration"));
+  assert.ok(caught.message.includes("independently verify that no earlier data needs migration"));
   assert.equal(calls.some(isStatProbe), false);
   assertNoDestructiveCalls(calls);
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
@@ -2647,7 +2632,9 @@ test("runUpdate refuses an unflagged store when the old image cannot answer the 
     withNewWorkStore({ oldBeamAbsent: "1" }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("The old image cannot report its persistence manifest; the target image's default may differ from the old container's actual path. A missing file at the target default does not prove that this store never existed."));
+  assert.ok(caught.message.includes("old image persistence manifest unavailable"));
+  assert.ok(caught.message.includes("the target image's default may differ from the old container's actual path"));
+  assert.ok(caught.message.includes("A missing file at the target default does not prove that this store never existed."));
   assert.doesNotMatch(caught.message, /update --transaction [^\n]*--accept-new-store/);
   assert.equal(calls.some(isStatProbe), false);
   assertNoDestructiveCalls(calls);
@@ -2659,7 +2646,7 @@ test("runUpdate refuses the flag when the old container already has the variable
       containerEnvJson: JSON.stringify(["KAOIRO_WORK_STORE_PATH=/tmp/previously-configured.dets"]),
     }, () => runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("--accept-new-store refused because the running container already has this variable set"));
+  assert.ok(caught.message.includes("configured in the old container at"));
   assert.ok(caught.message.includes("/tmp/previously-configured.dets"));
   assert.ok(caught.message.includes("this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)"));
   assert.equal(calls.some(isStatProbe), false);
@@ -2679,9 +2666,10 @@ test("runUpdate refuses a flag naming a var the target image does not list, and 
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
 });
 
-test("runUpdate leaves an already matching new store outside the first-application probe", () => {
+test("runUpdate leaves a matching existing store outside the first-application probe", () => {
   const { result, caught, calls } = attemptUpdate("running-clean-stop", () => withNewWorkStore({
-    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_DEFAULT }),
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
+    oldEvalOutput: JSON.stringify([{store:"Work",env:"KAOIRO_WORK_STORE_PATH",default_file:"work_store.dets",default_path:WORK_STORE_VOLUME}]),
     probeExit: "125",
   }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())));
   assert.equal(caught, undefined);
@@ -2689,7 +2677,8 @@ test("runUpdate leaves an already matching new store outside the first-applicati
   assert.equal(calls.some(isStatProbe), false, "a store whose paths already match needs no probe");
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_effective_path, WORK_STORE_VOLUME);
   assert.equal(Object.hasOwn(entry, "first_application"), false);
   assert.equal(Object.hasOwn(entry, "file_probe_path"), false);
   assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
@@ -2697,7 +2686,8 @@ test("runUpdate leaves an already matching new store outside the first-applicati
 
 test("runUpdate does not consult a flag for a store whose paths already match", () => {
   const { result, caught, calls } = attemptUpdate("running-clean-stop", () => withNewWorkStore({
-    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_DEFAULT }),
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
+    oldEvalOutput: JSON.stringify([{store:"Work",env:"KAOIRO_WORK_STORE_PATH",default_file:"work_store.dets",default_path:WORK_STORE_VOLUME}]),
     probeExit: "125",
   }, () => runUpdate(workStoreFlags({ maintenanceApproved: true }), configWithCleanStopMeasured())));
   assert.equal(caught, undefined);
@@ -2705,7 +2695,8 @@ test("runUpdate does not consult a flag for a store whose paths already match", 
   assert.equal(calls.some(isStatProbe), false);
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_effective_path, WORK_STORE_VOLUME);
   assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
 });
 
@@ -2735,7 +2726,9 @@ test("runUpdate admits several new stores, each named by its own flag", () => {
   assert.equal(result.phase, "done");
   const entries = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries;
   for (const envName of acceptNewStores) {
-    assert.equal(entries[envName].match, true);
+    assert.equal(entries[envName].kind, "new_store");
+    assert.equal(entries[envName].probe_result, "absent");
+    assert.equal(entries[envName].destination_probe_result, "absent");
     assert.equal(entries[envName].operator_accepted_new_store, true);
   }
 });
@@ -2744,8 +2737,8 @@ test("runUpdate does not let one store's flag admit another new store", () => {
   const { caught, calls } = attemptUpdate("running", () => withTwoNewStores({}, () =>
     runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
-  assert.equal(caught.message.includes("KAOIRO_WORK_STORE_PATH: compose declares"), false);
+  assert.ok(caught.message.includes("KAOIRO_SECOND_STORE_PATH: independently verify"));
+  assert.equal(caught.message.includes("KAOIRO_WORK_STORE_PATH: independently verify"), false);
   assert.ok(calls.includes(WORK_STORE_PROBE_CALL), "the flagged store is measured");
   assert.equal(
     calls.some((line) => isStatProbe(line) && line.endsWith(SECOND_STORE_DEFAULT)),
@@ -2760,8 +2753,8 @@ test("an env_consistency refusal names the exact resume command, which a fresh u
   const first = attemptUpdate("running", () =>
     withNewWorkStore({}, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(first.caught instanceof DeployError);
-  assert.ok(first.caught.message.includes("If you independently establish that KAOIRO_WORK_STORE_PATH never existed in any earlier version"));
-  assert.ok(first.caught.message.includes("the current manifest cannot prove earlier history"));
+  assert.ok(first.caught.message.includes("KAOIRO_WORK_STORE_PATH: independently verify that no earlier data needs migration"));
+  assert.ok(first.caught.message.includes("If it is a genuinely new store, resume with:"));
   const backupRoot = join(root, "kaoiro-deploy");
   const [transactionId] = readdirSyncNonHidden(backupRoot);
   assert.ok(
@@ -2809,7 +2802,8 @@ test("a refused admission leaves a resumable transaction, and the flagged resume
   assert.ok(resumed.calls.includes(WORK_STORE_PROBE_CALL));
   assert.equal(readdirSyncNonHidden(backupRoot).length, 1);
   const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "new_store");
+  assert.equal(entry.destination_probe_result, "absent");
   assert.equal(entry.operator_accepted_new_store, true);
 });
 
@@ -2844,9 +2838,8 @@ test("the deploy CLI process refuses two unflagged new stores, then resumes the 
   const refused = runCli([]);
   assert.equal(refused.caught, undefined);
   assert.equal(refused.result.status, 1, "a refused admission exits non-zero");
-  assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: compose declares"));
-  assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
-  assert.ok(refused.result.stderr.includes("Copying cannot unblock this transaction or a new update."));
+  assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: independently verify"));
+  assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: independently verify"));
   assert.ok(refused.result.stderr.includes("note: update: If an existing-store path mismatch caused the refusal"));
   assert.equal(refused.calls.filter(isComposeBuild).length, 1);
   assert.equal(refused.calls.some(isStatProbe), false);
@@ -2870,10 +2863,11 @@ test("the deploy CLI process refuses two unflagged new stores, then resumes the 
   assert.equal(report.phase, "done");
   assert.equal(report.transactionId, transactionId);
   assert.deepEqual(resumed.calls.filter(isComposeBuild), [], "the prepared image is reused, not rebuilt");
-  assert.equal(resumed.calls.filter(isStatProbe).length, 2, "each flagged store is measured once");
+  assert.equal(resumed.calls.filter(isStatProbe).length, 4, "both locations are measured for each flagged store");
   const entries = readManifest(dir).env_consistency.entries;
   for (const envName of ["KAOIRO_WORK_STORE_PATH", "KAOIRO_SECOND_STORE_PATH"]) {
-    assert.equal(entries[envName].match, true, envName);
+    assert.equal(entries[envName].kind, "new_store", envName);
+    assert.equal(entries[envName].destination_probe_result, "absent", envName);
     assert.equal(entries[envName].operator_accepted_new_store, true, envName);
   }
   assert.equal(readdirSyncNonHidden(backupRoot).length, 1);
@@ -2925,18 +2919,27 @@ test("resuming an already-checked transaction carries a new acknowledged observa
   assert.deepEqual(recordedEnvObservation(dir), recorded);
 });
 
-test("resuming an already-checked transaction carries a historical observation into the manifest without adding an acknowledgement", () => {
+test("resuming a legacy observation warns and preserves it without inventing acknowledgement", () => {
   const { transactionId, dir } = prepareThroughEnvConsistency();
   const journal = readJournal(dir);
-  const historical = journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
-  delete historical.entries.KAOIRO_WORK_STORE_PATH.operator_accepted_new_store;
-  assert.equal(historical.entries.KAOIRO_WORK_STORE_PATH.first_application, "never_existed");
+  const oldEntry = journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED);
+  oldEntry.observation = {skipped:false, entries:{KAOIRO_WORK_STORE_PATH:{
+    declared:null, compose:WORK_STORE_VOLUME, container_effective:WORK_STORE_DEFAULT,
+    container_source:"default", assumed_default_source:"target_image", match:true,
+    file_probe_path:WORK_STORE_DEFAULT, file_probe_result:"absent", first_application:"never_existed",
+  }}};
+  const historical = oldEntry.observation;
   writeFileSync(join(dir, "journal.json"), `${JSON.stringify(journal, null, 2)}\n`);
-  resumeAlreadyChecked(transactionId);
-  const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
+  const status = withScenario("running", () => runStatus({repo:workDir}, configWithOverride()));
+  assert.match(status.unfinishedTransaction.legacyGuardWarning, /not verified by the new persistence guards/);
+  let warning = "";
+  const originalWrite = process.stderr.write;
+  process.stderr.write = function(chunk, ...args) { warning += String(chunk); return true; };
+  try { resumeAlreadyChecked(transactionId); }
+  finally { process.stderr.write = originalWrite; }
+  assert.match(warning, /not verified by the new persistence guards/);
   assert.deepEqual(readManifest(dir).env_consistency, historical);
-  assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(Object.hasOwn(historical.entries.KAOIRO_WORK_STORE_PATH, "operator_accepted_new_store"), false);
 });
 
 test("runUpdate refuses when compose does not declare a persistence-path var the image requires at all", () => {
@@ -2955,11 +2958,7 @@ test("runUpdate refuses when compose does not declare a persistence-path var the
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(
-    caught.message.includes(
-      "KAOIRO_USERS_PATH: compose does not declare this persistence-path var at all (the #217 class",
-    ),
-  );
+  assert.match(caught.message, /KAOIRO_USERS_PATH: destination undefined is not a normalized path below the state volume/);
 });
 
 // クロエ round 5 review SF-7: composeDeclaredEnv's own shape guard — the
@@ -2985,7 +2984,8 @@ test("runUpdate parses compose's environment when it is the array (\"KEY=VALUE\"
   assert.equal(result.phase, "done");
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
-  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.match, true);
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.target_path, "/var/lib/kaoiro/users.dets");
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.old_effective_path, "/var/lib/kaoiro/users.dets");
 });
 
 test("runUpdate throws (not a silent {}) when compose config has no service by the expected name", () => {
@@ -4859,23 +4859,11 @@ test("status surfaces an unfinished transaction's id and phase", () => {
   // issue #220 absorption (turn 8 follow-up): MOUNT_RESOLVED is reached
   // only after ENV_CONSISTENCY_CHECKED, so its recorded observation is
   // already available here.
-  assert.deepEqual(result.unfinishedTransaction.envConsistency, {
-    skipped: false,
-    entries: {
-      KAOIRO_USERS_PATH: {
-        compose: "/var/lib/kaoiro/users.dets",
-        container_effective: "/var/lib/kaoiro/users.dets",
-        container_source: "env",
-        // issue #322 M5: the old image's own beam probe defaults to
-        // "present" in this fixture too, so its own default_path answers
-        // this — the common case (a routine update, not the first-ever
-        // #310 upgrade).
-        assumed_default_source: "old_image",
-        declared: null,
-        match: true,
-      },
-    },
-  });
+  const journal = readJournal(join(backupRoot, transactionId));
+  const observation = journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
+  assert.deepEqual(result.unfinishedTransaction.envConsistency, observation);
+  assert.equal(observation.guard_schema, 2);
+  assert.equal(observation.entries.KAOIRO_USERS_PATH.old_effective_path, "/var/lib/kaoiro/users.dets");
 });
 
 // issue #220 absorption (turn 8 follow-up): a transaction that has NOT
@@ -4910,19 +4898,10 @@ test("status lists a completed transaction with its source/target SHA and comple
   const [entry] = result.doneTransactions;
   assert.equal(entry.sourceSha, headSha);
   assert.equal(entry.targetSha, headSha);
-  assert.deepEqual(entry.envConsistency, {
-    skipped: false,
-    entries: {
-      KAOIRO_USERS_PATH: {
-        compose: "/var/lib/kaoiro/users.dets",
-        container_effective: "/var/lib/kaoiro/users.dets",
-        container_source: "env",
-        assumed_default_source: "old_image",
-        declared: null,
-        match: true,
-      },
-    },
-  });
+  const manifest = readManifest(join(configWithCleanStopMeasured().backup_root, entry.id));
+  assert.deepEqual(entry.envConsistency, manifest.env_consistency);
+  assert.equal(entry.envConsistency.guard_schema, 2);
+  assert.equal(entry.envConsistency.entries.KAOIRO_USERS_PATH.target_path, "/var/lib/kaoiro/users.dets");
   assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
 });
 
@@ -6086,7 +6065,8 @@ function withPolicyPlacement(options, fn) {
   try {
     return withComposePlans(JSON.stringify(compose), JSON.stringify(compose), () =>
       withEnvConsistencyFixture({ evalOutput: JSON.stringify(options.missingRegistration ? [users] : [users, store]),
-        oldEvalOutput: JSON.stringify(options.newStore ? [users] : [users, store]), containerEnvJson: JSON.stringify(oldEnv) }, () =>
+        oldEvalOutput: JSON.stringify(options.newStore ? [users] : [users, store]), containerEnvJson: JSON.stringify(oldEnv),
+        contract: options.newStore ? "1" : undefined }, () =>
         withScenario("running-clean-stop", () => fn(() => existsSync(calls) ? readFileSync(calls, "utf8") : ""))));
   } finally {
     writeFileSync(bin, FAKE_DOCKER);
@@ -6139,10 +6119,10 @@ test("policy placement: a legacy pre-gate resume must observe the store before m
 
 test("policy placement: matching tmp fallback refuses before the maintenance flag and stop", () => {
   withPolicyPlacement({ policyPath: "/tmp/kaoiro-dets/delivery_policies.dets", fallbackMatch: true }, calls => {
-    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), /policy path is outside/);
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), /not a normalized path below the state volume/);
     const journal = readJournal(policyTransactionDir());
-    assert.equal(journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV].match, true);
-    assert.equal(journal.phase, PHASE.ENV_CONSISTENCY_CHECKED);
+    assert.equal(journal.phase, PHASE.BUILD_PREPARED);
+    assert.ok(!journal.history.some(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED));
     assert.ok(!calls().includes("compose stop"));
     assert.ok(calls().includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
   });
@@ -6153,7 +6133,8 @@ test("policy placement: explicitly accepted new-store mismatch also passes the p
     assert.throws(() => runUpdate({ repo: workDir, target: headSha, acceptNewStores: new Set([POLICY_ENV]) }, configWithCleanStopMeasured()), err => err.exitCode === 64);
     const journal = readJournal(policyTransactionDir());
     const observed = journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV];
-    assert.equal(observed.first_application, "never_existed");
+    assert.equal(observed.kind, "new_store");
+    assert.equal(observed.destination_probe_result, "absent");
     assert.equal(observed.operator_accepted_new_store, true);
     assert.ok(journal.policy_store_placement);
     assert.ok(calls().includes("create --name kaoiro-policy-"));
@@ -6426,9 +6407,9 @@ test("Compose inputs: fresh forward binds policy and accepted new-store reads to
       return output;
     }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true,
       acceptNewStores: new Set([POLICY_ENV]) }, { ...configWithCleanStopMeasured(), health_url: null }), args => {
-      if (args[0] === "exec" && args.includes("stat")) { probes.push(args[1]); assert.equal(args[1], "kaoiro-c1"); }
+      if (args[0] === "exec" && args.includes("stat")) { probes.push(args[1]); assert.equal(args[1], `sha256:${"f".repeat(64)}`); }
     });
-    assert.deepEqual(probes, ["kaoiro-c1"]);
+    assert.deepEqual(probes, [`sha256:${"f".repeat(64)}`, `sha256:${"f".repeat(64)}`]);
     assert.equal(result.phase, "done");
     assertForwardComposeArgs(calls, join(root, "kaoiro-deploy", result.transactionId), "yaml", 5, 2);
   });
@@ -6886,3 +6867,248 @@ test("Compose inputs: use-time legacy validation precedes any rendering", () => 
     /lacks a usable project identity or hashes/);
   assert.equal(calls.length, 0);
 });
+
+const newStoreOldManifest = JSON.stringify([{store:"other",env:"KAOIRO_OTHER_PATH",default_file:"other.dets",default_path:"/tmp/other.dets"}]);
+const newStoreDefault = "/tmp/kaoiro-dets/users.dets";
+const newStoreDestination = "/var/lib/kaoiro/users.dets";
+for (const presentPath of [newStoreDefault, newStoreDestination]) {
+  test(`new-store guard checks presence at ${presentPath}`, () => {
+    let caught;
+    const calls = withCallLog("running-clean-stop", () =>
+      withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", presentPath}, () => {
+        try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+        catch (error) { caught = error; }
+      }),
+    );
+    assert.match(caught?.message ?? "no error", /cannot verify the target default path|destination .*present/, presentPath);
+    assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  });
+}
+
+test("new-store guard checks both locations absent", () => {
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1"}, () =>
+      runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()),
+    ),
+  );
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.target_probe_path, newStoreDefault);
+  assert.equal(entry.target_path, newStoreDestination);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
+});
+
+test("new-store guard refuses an old image without a contract marker", () => {
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /cannot establish an exhaustive stable store contract/);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+});
+
+test("new-store guard never creates a missing target volume", () => {
+  let caught, volumesBefore, volumesAfter;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", probeExit:"1"}, () => {
+      volumesBefore = execFileSync(bin, ["volume", "ls", "-q"], {encoding:"utf8"});
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+      volumesAfter = execFileSync(bin, ["volume", "ls", "-q"], {encoding:"utf8"});
+    }),
+  );
+  assert.equal(volumesBefore, volumesAfter);
+  assert.match(caught?.message ?? "no error", /target state volume is missing or unavailable/);
+  assert.match(calls, /volume inspect kaoiro_kaoiro-state/);
+  assert.doesNotMatch(calls, /^volume create|^run .*?(?:--mount| -v )|^compose stop|^compose up|archive/m);
+});
+
+test("stable store ID refuses a changed old path even with a new-store flag", () => {
+  const oldEvalOutput = JSON.stringify([{store:"users",env:"OLD_USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/tmp/users.dets"]', contract:"1", volumePresent:"1", probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /existing store users uses .*\/tmp\/users.dets/);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.doesNotMatch(calls, /^exec .* stat /m);
+});
+
+test("stable store ID follows the old environment name when its path matches", () => {
+  const oldEvalOutput = JSON.stringify([{store:"users",env:"OLD_USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/var/lib/kaoiro/users.dets"]'}, () =>
+      runUpdate({repo:workDir, target:headSha, maintenanceApproved:true}, configWithCleanStopMeasured()),
+    ),
+  );
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_env, "OLD_USERS");
+  assert.equal(entry.old_effective_path, "/var/lib/kaoiro/users.dets");
+});
+
+for (const probeFailPath of [newStoreDefault, newStoreDestination]) {
+  for (const probeFailMode of ["denied", "error", "unexpected"]) {
+    test(`new-store guard refuses ${probeFailMode} at ${probeFailPath}`, () => {
+      let caught;
+      const calls = withCallLog("running-clean-stop", () =>
+        withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", probeFailPath, probeFailMode}, () => {
+          try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+          catch (error) { caught = error; }
+        }),
+      );
+      assert.match(caught?.message ?? "no error", /cannot verify the target default path|destination .*cannot be checked/);
+      assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+    });
+  }
+}
+
+test("previous CLI handles a pending v2 journal conservatively across four entry points", () => {
+  const previous = join(root, "previous-cli");
+  mkdirSync(previous);
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const archive = execFileSync("git", ["-C", repository, "archive", "7e2447f2ea14ebd8d08d478bd060e66b12dfdffc", "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"], {maxBuffer:32 * 1024 * 1024});
+  execFileSync("tar", ["-x", "-C", previous], {input:archive});
+  const cli = join(previous, "server/deploy/kaoiro-server-deploy.mjs");
+  const configPath = join(root, "old-cli-config.json");
+  writeFileSync(configPath, JSON.stringify(configWithCleanStopMeasured()), {mode:0o600});
+  assert.throws(() => withScenario("running", () => runUpdate({repo:workDir, target:headSha}, configWithCleanStopMeasured())), error => error.exitCode === 64);
+  const backupRoot = configWithCleanStopMeasured().backup_root;
+  const [id] = readdirSyncNonHidden(backupRoot);
+  const journalPath = join(backupRoot, id, "journal.json");
+  const before = readFileSync(journalPath);
+  const journal = readJournal(join(backupRoot, id));
+  assert.equal(journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.guard_schema, 2);
+  const invoke = args => withScenario("running", () => spawnSync(process.execPath, [cli, ...args, "--repo", workDir, "--config", configPath], {encoding:"utf8"}));
+  const status = invoke(["status"]);
+  assert.equal(status.status, 0, status.stderr);
+  const summary = JSON.parse(status.stdout);
+  assert.ok(summary.unfinishedTransaction.error, status.stdout);
+  for (const args of [
+    ["update", "--transaction", id, "--target", headSha, "--maintenance-approved"],
+    ["rollback", "--transaction", id, "--confirm-restore"],
+    ["update", "--target", headSha, "--maintenance-approved"],
+  ]) {
+    const result = invoke(args);
+    assert.notEqual(result.status, 0, `${args.join(" ")} unexpectedly succeeded`);
+    assert.match(result.stderr, /invalid|observation|state.machine/i);
+    assert.deepEqual(readFileSync(journalPath), before);
+    assert.deepEqual(readdirSyncNonHidden(backupRoot), [id]);
+  }
+});
+
+function withTimedOutImageEval(predicate, fn) {
+  const original = childProcess.execFileSync;
+  let timeout;
+  childProcess.execFileSync = (file, args, options) => {
+    if (file === bin && predicate(args)) {
+      timeout = options.timeout;
+      const error = new Error("image query timed out");
+      error.code = "ETIMEDOUT";
+      throw error;
+    }
+    return original(file, args, options);
+  };
+  syncBuiltinESMExports();
+  try { return {result:fn(), timeout: () => timeout}; }
+  finally { childProcess.execFileSync = original; syncBuiltinESMExports(); }
+}
+
+for (const which of ["target", "old"]) {
+  test(`manifest ${which} image timeout refuses at BUILD_PREPARED and restores latest`, () => {
+    const predicate = args => args.some(a => a.includes("PersistencePaths.manifest()")) &&
+      (args.includes(OLD_IMAGE_ID) === (which === "old"));
+    const timed = withTimedOutImageEval(predicate, () => attemptUpdate("running-clean-stop", () =>
+      withEnvConsistencyFixture({}, () => runUpdate({repo:workDir, target:headSha, maintenanceApproved:true}, configWithCleanStopMeasured()))));
+    assert.equal(timed.timeout(), 30_000);
+    assert.match(timed.result.caught?.message ?? "no error", /image query timed out/);
+    assertNoDestructiveCalls(timed.result.calls);
+    assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+    const backup = join(root, "kaoiro-deploy");
+    const [id] = readdirSyncNonHidden(backup);
+    assert.equal(readJournal(join(backup, id)).phase, PHASE.BUILD_PREPARED);
+    assert.match(timed.result.caught.message, /rollback/);
+  });
+}
+
+test("contract timeout means no usable marker before the stop", () => {
+  const timed = withTimedOutImageEval(args => args.some(a => a.includes("PersistencePaths.contract()")), () =>
+    attemptUpdate("running-clean-stop", () => withNewWorkStore({}, () =>
+      runUpdate(workStoreFlags({maintenanceApproved:true}), configWithCleanStopMeasured()))));
+  assert.equal(timed.timeout(), 30_000);
+  assert.match(timed.result.caught?.message ?? "no error", /cannot establish an exhaustive stable store contract/);
+  assertNoDestructiveCalls(timed.result.calls);
+  assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
+  const backup = join(root, "kaoiro-deploy");
+  const [id] = readdirSyncNonHidden(backup);
+  assert.equal(readJournal(join(backup, id)).phase, PHASE.BUILD_PREPARED);
+});
+
+test("new-store guard refuses a relative target default before probing", () => {
+  const evalOutput = JSON.stringify([{store:"users",env:"KAOIRO_USERS_PATH",default_file:"users.dets",default_path:"relative/users.dets"}]);
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({evalOutput,oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
+      catch(error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /invalid target default path/);
+  assert.doesNotMatch(calls, /^exec .* stat /m);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+});
+
+for (const [label, mounts] of [
+  ["missing", []],
+  ["bind", [{Type:"bind",Name:"kaoiro_kaoiro-state",Destination:"/var/lib/kaoiro"}]],
+  ["different", [{Type:"volume",Name:"other-volume",Destination:"/var/lib/kaoiro"}]],
+  ["shadowed", [{Type:"volume",Name:"kaoiro_kaoiro-state",Destination:"/var/lib/kaoiro"}, {Type:"bind",Destination:"/var/lib/kaoiro/users.dets"}]],
+]) {
+  test(`new-store guard refuses a ${label} destination volume mount`, () => {
+    let caught;
+    const calls = withCallLog("running-clean-stop", () =>
+      withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1",mountsJson:JSON.stringify(mounts)}, () => {
+        try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
+        catch(error) { caught = error; }
+      }),
+    );
+    assert.match(caught?.message ?? "no error", /cannot bind the existing state volume|another mount shadows the destination/);
+    assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  });
+}
+
+for (const stage of ["after-manifest", "after-contract"]) {
+  for (const [label, format, value] of [
+    ["container", "{{.Id}}", `sha256:${"e".repeat(64)}`],
+    ["image", "{{.Image}}", `sha256:${"e".repeat(64)}`],
+    ["status", "{{.State.Status}}", "exited"],
+  ]) {
+    test(`persistence guard refuses ${label} change ${stage}`, () => {
+      let currentStage = "before", injected = false, caught;
+      const calls = withCallLog("running-clean-stop", () =>
+        withEnvConsistencyFixture({contract:"1"}, () => {
+          try {
+            observeDockerCalls((args, output) => {
+              if (args.some(arg => arg.includes("PersistencePaths.manifest()")) && args.includes(OLD_IMAGE_ID)) currentStage = "after-manifest";
+              if (args.some(arg => arg.includes("PersistencePaths.contract()")) && args.includes(OLD_IMAGE_ID)) currentStage = "after-contract";
+              if (!injected && currentStage === stage && args[0] === "inspect" && args[3] === format) {
+                injected = true;
+                return `${value}\n`;
+              }
+              return output;
+            }, () => runUpdate({repo:workDir,target:headSha,maintenanceApproved:true},configWithCleanStopMeasured()));
+          } catch(error) { caught = error; }
+        }),
+      );
+      assert.equal(injected, true);
+      assert.match(caught?.message ?? "no error", /old container or image changed/);
+      assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+    });
+  }
+}

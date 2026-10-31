@@ -184,6 +184,15 @@ defmodule KaoiroServer.PersistencePaths do
   end
 
   @doc """
+  The manifest lists restart-surviving DETS stores with stable identities.
+
+  A store identity must not be reused or changed when its environment name
+  or path changes. A release that cannot preserve this promise must not
+  advertise this contract.
+  """
+  def contract, do: "exhaustive_stable_v1"
+
+  @doc """
   Where the bundled `docker-compose.yaml` places a store: under the
   `kaoiro-state` named volume.
   """

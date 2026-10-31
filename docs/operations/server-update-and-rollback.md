@@ -98,18 +98,13 @@ runner preparation.
   truth is the persistence set in 1.2. An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
-- **Know which persistence stores are new in the target image.** A new store
-  whose compose path differs from the old container's effective path (the usual
-  case: the old default lies outside the named volume) is admitted only when you
-  name it with `--accept-new-store <ENV_NAME>` (4.3 (2)); a new store whose
-  compose path already equals that effective path passes without the flag. When
-  the old image's manifest is unavailable, that the store never existed before
-  is your assertion: `update` measures only that the old container has the
-  variable unset and no file at the target image's default path, which may
-  differ from the old container's actual path. Before considering the flag,
-  perform the additional checks in the 4.3 (5-b) paragraph that begins
-  "For a genuinely new store". A store that existed before is never new:
-  do not name it (4.3 (5-b)).
+- **Know which persistence stores are new in the target image.** A store
+  absent from the old manifest is eligible for `--accept-new-store <ENV_NAME>`
+  only when the old image advertises the supported exhaustive and stable store
+  contract. The operator must independently establish that no earlier data
+  needs migration; the CLI cannot prove the absence of historical data. See
+  4.3 (2) and the 4.3 (5-b) paragraph that begins
+  "For a genuinely new store".
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
   persisted, so in-progress exchanges are lost.
@@ -396,111 +391,53 @@ STDOUT ahead of the JSON, which this section treats as actively wrong rather
 than absent, so every update would fail. Both apply to any custom image
 built from this Dockerfile.
 
-`update` then, for every reported persistence-path env var, compares
-**compose's resolved
-declaration** against **the currently-running (old) container's EFFECTIVE
-path for that store** — the container's own env value if it is set, else a
-`default_path` for it (what the app itself falls back to) — not the literal
-`.env` file, recorded separately as `declared` for reference only (the
-bundled `docker-compose.yaml` sets every canonical persistence-path var as a
-literal `environment:` entry, so `.env`'s own line legitimately differs on
-every correctly-configured host; folding it into the comparison would
-fail-close every update).
+`update` compares stores by their stable IDs in the target and old manifests.
+Both manifests must be available and valid; a missing, malformed or timed-out
+manifest refuses the update before the stop. A target default is never used as
+the old container's effective path. For an existing store, the old container's
+configured path, or that store's old-image default when unset, must equal the
+compose destination. The destination must be a normalized absolute child of
+`/var/lib/kaoiro` on the named state volume. The check is textual: it does not
+verify symlinks, nested mounts, or the physical backing of an already-open file.
 
-**Which image's `default_path` (issue #322 M5).** Substituting the TARGET
-image's own manifest value for the OLD container's fallback is only a
-measurement if the old and new images compile the SAME default for that
-store — not guaranteed across a #310 manifest change. `update` runs the same
-beam-presence-then-manifest probe above against the OLD image too, and
-prefers ITS `default_path` when it can answer at all; only when the old
-image cannot answer (no beam file — the common case on the very first #310
-upgrade) does it fall back to the target's own value. Each entry records
-`assumed_default_source` (`"old_image"` when measured this way, or
-`"target_image"` when it fell back), so the observation never silently
-passes an assumption off as a measurement.
+When the old path variable is unset, the CLI queries the old image with its
+inspected `TMPDIR`, `TEMP`, and `TMP` values. Before continuing, the operator
+must establish that the running process started with the inspected environment
+and did not later change those values. Docker inspect cannot establish this; if
+it cannot be established, use the non-destructive rollback.
 
-**Effective, not raw env, on purpose.** On the first application that adds a
-NEW persistence-path var to compose, the old container was never recreated
-with it, so its raw env can never equal compose's new value — comparing raw
-env would fail-close every legitimate first application forever, since the
-raw env cannot change before the very deploy the check is gating recreates
-the container. Comparing against the effective path instead asks the right
-question: compose merely starting to declare EXPLICITLY what was already the
-default needs no migration (match); compose naming a genuinely different
-location normally means a real first-application migration is needed (5-b,
-below) — `update` aborts with a message naming the store and both paths. Compose not
-declaring a required store AT ALL is its own, always-failing case (the #217
-class: a required persistence var missing from compose can silently escape
-backup).
+A new store absent from the old image's manifest requires the old image's
+`contract/0` to report `exhaustive_stable_v1` and an explicit
+`--accept-new-store <ENV_NAME>`. Older images with no such contract cannot
+admit an omitted store. The flag records acceptance only: the operator must
+independently establish that no data in any earlier version needs migration.
+The CLI checks both the target manifest's default path in the old container
+and the compose destination in the resolved existing state volume. Both must
+be absent; the CLI does not create a missing volume for the check. Absence at
+those locations does not prove historical data never existed. If the destination
+contains an entry, identify it and decide whether to preserve or move it before
+retrying; use the non-destructive rollback while investigating.
 
-**A new store whose compose path differs from the old container's effective
-path is admitted only by the operator's explicit, per-store flag** (issue #339).
-A new store usually differs: compose places it under the named volume, while
-the old container's default lies outside it, so the check reads it as a
-mismatch and `update` never waves that mismatch through on its own. (A new store
-whose default path already equals the compose path is not a mismatch and needs
-no flag.) Name the store with `--accept-new-store <ENV_NAME>` (repeatable, one
-occurrence per store; a flag admits exactly the store it names):
-
-```sh
-node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
-  --accept-new-store KAOIRO_WORK_STORE_PATH
-```
-
-The flag is consulted only for a mismatch. A store whose compose path and
-effective path already agree passes with no flag and no probe, and a flag
-naming such a store changes nothing. With the flag, `update` checks the
-conditions below; the operator must independently establish the store
-never existed in any earlier version:
-
-- the target image's manifest lists `<ENV_NAME>` (a name it does not list is
-  refused as a likely misspelling);
-- if the OLD image can answer its manifest probe, it does not list the store.
-  If it cannot answer, the CLI substitutes the target image's default path;
-  this is an assumption and does not establish the old container's actual path;
-- the OLD container has the variable unset;
-- `docker exec` runs the container's Debian `stat` with `LC_ALL=C` and reports
-  `No such file or directory` at the path it selected. If the old manifest is
-  unavailable, this is the target default, not necessarily the old actual path;
-- the resolved compose declaration puts the new path under the
-  `/var/lib/kaoiro` named volume, and compose resolves that mount to a named
-  volume.
-
-Only then does `update` accept the mismatch and record
-`first_application: "never_existed"`, `operator_accepted_new_store: true`,
-`file_probe_path`, and `file_probe_result: "absent"` in that store's
-`env_consistency` entry. A present file still requires 5-b. Permission denied,
-command failure, or an unrecognized probe answer records
-`file_probe_result: "undetermined"` with `file_probe_reason` in the error
-detail and aborts before the stop window; it never proves absence. Without the
-flag the same store aborts with the 5-b message.
-
-Records written before this flag existed (an entry with
-`first_application: "never_existed"` and no `operator_accepted_new_store`) stay
-valid: journals and manifests that carry one still resume and roll back, and a
-transaction that already reached `env_consistency_checked` keeps its recorded
-observation (a resume does not re-measure it, and `--accept-new-store` is
-ignored for it). Only entries written by the current CLI carry the
-acknowledgement.
-
-Any `env_consistency` failure aborts before the stop window: `latest` is
-retagged back to the old image and the retag verified by read-back
-automatically, and no container is stopped, archived, or restarted. The
-transaction stays at `build_prepared` (a fresh `update` is refused while it is
-unfinished). When the refusal is for a store that is new in the target image,
-resume that transaction with the flag; the prepared image is reused, nothing is
-rebuilt, and the check runs again:
+A failure leaves the transaction at `build_prepared`, restores the old image
+tag, and offers the non-destructive rollback without stopping the container.
+For an existing or uncertain store, do not use the flag; copying a file to the
+volume cannot unblock this or a new update. If a genuinely new store is
+eligible and all checks and the operator's independent investigation succeed,
+resume the prepared transaction with its per-store flag:
 
 ```sh
 node server/deploy/kaoiro-server-deploy.mjs update --transaction <transaction-id> \
   --target <target-sha> --accept-new-store <ENV_NAME> [--maintenance-approved]
 ```
 
-For an existing or uncertain store, do not use the flag. Follow the refusal
-and rollback guidance in 5-b below; copying a file to the volume does not
-unblock this or a new update. **Until #310 lands, the target image lacks this module and the check
-reports `{skipped: true, reason: ...}`**; it neither blocks nor verifies
-anything today, and `--accept-new-store` has nothing to act on.
+For an existing or uncertain store, follow the refusal and rollback guidance
+in 5-b below. Copying a file to the volume cannot unblock this or a new update.
+
+Finish or roll back an older in-progress update before updating the deploy
+tool. An older `env_consistency_checked` or `maintenance_gate_passed` journal
+has not passed the new guards even if it can be resumed; status and resume warn
+about it. Do not downgrade the deploy tool while a v2 transaction is pending;
+complete or recover it with a v2-aware tool.
 
 `update` then exits non-zero, naming the transaction and requiring
 `--maintenance-approved`:
@@ -569,18 +506,18 @@ a separately designed migration is required.
 
 For a genuinely new store, establish independently that no earlier version
 held data before considering `--accept-new-store`. If the old image cannot
-report its manifest, the CLI checks the target default, which may differ from
-the old image's actual path. The operator must also establish the old image's
-actual path and verify that no file exists there; if that cannot be established,
-do not use the flag. A missing file at the target default alone does not prove
+report its manifest, the CLI refuses before probing; use the non-destructive
+rollback. The target default may differ from an earlier image's actual path.
+The operator must also establish the old image's actual path and investigate
+whether any earlier version used the store; if that cannot be established, do
+not use the flag. A missing file at the target default alone does not prove
 that the store never existed. If the old manifest answers but omits the store,
 it still cannot prove an earlier version did not use it. If a probe is
 `undetermined`, investigate its reason; it does not authorize an empty store.
 
 **Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
 reference-only** — the target compose's own `environment:` entry is what
-actually gates the container, and `.env`'s own line (recorded as `declared`
-by the #220 check above) is never compared. Do not treat it as a step to keep
+actually gates the container, and `.env`'s own line is never compared by the persistence-path check. Do not treat it as a step to keep
 in sync by hand: `.env.example` and `mix kaoiro.env` both emit this line
 commented out by design, so a later wizard re-run silently drops a
 manually-uncommented one — an operator relying on `.env` to remember this

@@ -146,15 +146,15 @@ test("build-prepared guidance is conditional and preserves legacy rollback rende
 
 test("5-b runbook does not prescribe live copy or an outside-volume match", () => {
   const runbook = readFileSync(join(here, "../../../docs/operations/server-update-and-rollback.md"), "utf8");
-  assert.ok(runbook.includes("variable unset and no file at the target image's default path, which may\n  differ from the old container's actual path."));
-  assert.ok(runbook.includes('perform the additional checks in the 4.3 (5-b) paragraph that begins\n  "For a genuinely new store".'));
+  assert.ok(runbook.includes("report its manifest, the CLI refuses before probing; use the non-destructive\nrollback."));
+  assert.ok(runbook.includes('4.3 (2) and the 4.3 (5-b) paragraph that begins\n  "For a genuinely new store".'));
   const section = runbook.split("**(5-b) Existing or uncertain persistence store: refusal and recovery**")[1]?.split("**(5-c)")[0];
   assert.ok(section);
   assert.ok(!section.includes("docker cp <container>:/tmp/kaoiro_users.dets"));
   assert.ok(section.includes("Copying a live DETS file to the target volume does not unblock either"));
   assert.ok(section.includes("Do not point compose or an override outside"));
   assert.ok(section.includes("The operator must also establish the old image's"));
-  assert.ok(section.includes("if that cannot be established,"));
+  assert.ok(section.includes("if that cannot be established, do"));
 });
 
 test("refusals and deferred rows render a note and no command", () => {
