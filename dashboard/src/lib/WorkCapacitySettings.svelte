@@ -13,6 +13,7 @@
   let drafts = $state<Record<WorkCapacityKey, string>>({ work_nominated_per_principal: "", work_active_per_assignee: "" });
   let pending = $state(false);
   let dirty = $state(false);
+  let touched = $state<Record<WorkCapacityKey, boolean>>({ work_nominated_per_principal: false, work_active_per_assignee: false });
   let newerSettings = $state(false);
   let uncertain = $state(false);
   let error = $state<string | null>(null);
@@ -27,7 +28,7 @@
       else drafts = { work_nominated_per_principal: String(snapshot.effective.work_nominated_per_principal), work_active_per_assignee: String(snapshot.effective.work_active_per_assignee) };
       uncertain = false;
     } else {
-      dirty = false;
+      clearEdits();
       newerSettings = false;
       drafts = { work_nominated_per_principal: "", work_active_per_assignee: "" };
     }
@@ -35,13 +36,18 @@
   $effect(() => {
     void generation;
     void connection;
-    dirty = false;
+    clearEdits();
     newerSettings = false;
     pending = false;
     uncertain = false;
     error = null;
   });
   const enabled = $derived(!!connection && snapshot?.state === "ready" && !pending && !uncertain);
+  const anyTouched = $derived(WORK_CAPACITY_KEYS.some(key => touched[key]));
+  function clearEdits(): void {
+    dirty = false;
+    touched = { work_nominated_per_principal: false, work_active_per_assignee: false };
+  }
   function parse(raw: string): number | null {
     if (!/^[0-9]+$/.test(raw)) return null;
     const value = Number(raw);
@@ -65,6 +71,7 @@
     if (!enabled || !connection || snapshot?.state !== "ready") return;
     const changes: WorkCapacityPatch = reset ? { [reset]: null } : {};
     if (!reset) for (const key of WORK_CAPACITY_KEYS) {
+      if (!touched[key]) continue;
       const value = parse(drafts[key]);
       if (value === null) return;
       changes[key] = value;
@@ -79,7 +86,7 @@
     try {
       const value = await requestConnection.setWorkSettings(revision, changes);
       if (current() && !(latestSnapshot()?.state === "unavailable" && value.state === "ready")) {
-        dirty = false;
+        clearEdits();
         newerSettings = false;
         onSnapshot(value);
       }
@@ -110,13 +117,13 @@
     <p>設定未取得、未接続、またはサーバーがこの設定に対応していません。</p>
   {/if}
   {#each WORK_CAPACITY_KEYS as key}
-    <label>{labels[key]}<input aria-label={labels[key]} inputmode="numeric" type="text" bind:value={drafts[key]} oninput={() => { dirty = true; }} disabled={!enabled} /></label>
+    <label>{labels[key]}<input aria-label={labels[key]} inputmode="numeric" type="text" bind:value={drafts[key]} oninput={() => { dirty = true; touched[key] = true; }} disabled={!enabled} /></label>
     {#if snapshot?.state === "ready"}
       <p>適用値: {snapshot.effective[key] === 0 ? "無制限 (0)" : snapshot.effective[key]} / 設定元: {sourceLabels[snapshot.sources[key]]} / サーバー設定: {snapshot.fallbacks[key]}</p>
     {/if}
     <button onclick={() => save(key)} disabled={!enabled}>サーバー設定に戻す: {labels[key]}</button>
   {/each}
-  <button onclick={() => save()} disabled={!enabled || !valid}>保存</button>
+  <button onclick={() => save()} disabled={!enabled || !valid || !anyTouched}>保存</button>
   <button onclick={refresh} disabled={!connection || pending}>設定・変更履歴を読み直す</button>
   {#if newerSettings}<p role="status">サーバーの設定が更新されました。入力は保持しています。適用値を確認してから保存してください。</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
