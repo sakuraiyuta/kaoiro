@@ -1,5 +1,6 @@
 import "./fixtures/test-isolation.mjs";
 import assert from "node:assert/strict";
+import { renameSync } from "node:fs";
 import { createRequire } from "node:module";
 import { mkdtemp, writeFile, chmod, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,3 +101,27 @@ test("operator adapter does not reconnect or resend after connection loss", asyn
   finally { connection.close(); }
   assert.equal(f.frames.length, 2);
 });
+
+test("operator adapter rejects replacement between pathname check and open", async t => {
+  const f = await fixture(t), replacement = join(f.root, "replacement");
+  await writeFile(replacement, "not json", { mode: 0o600 });
+  const uid = process.geteuid(); let calls = 0;
+  t.mock.method(process, "geteuid", () => { if (++calls === 1) renameSync(replacement, f.file); return uid; });
+  await assert.rejects(openOperator(f.file), /operator-config-invalid/);
+  assert.equal(f.frames.length, 0);
+});
+
+for (const [field, value] of [[0, "different-join"], [2, "different:topic"], [3, "different_event"]]) {
+  test("operator reply correlation rejects mismatched frame field " + field, async t => {
+    const f = await fixture(t, (response, frame, socket) => {
+      if (frame[3] === "restore") {
+        const wrong = structuredClone(response); wrong[field] = value; socket.send(JSON.stringify(wrong));
+        response[4].status = "error";
+      }
+      return response;
+    });
+    const connection = await openOperator(f.file);
+    try { await assert.rejects(connection.restore("maintenance.codex"), /operator-rejected/); }
+    finally { connection.close(); }
+  });
+}

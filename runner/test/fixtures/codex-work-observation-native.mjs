@@ -80,7 +80,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
     for (const directory of ['home', 'config', 'codex', 'work', 'tmp']) await mkdir(join(state, directory), { recursive: true });
     await writeFile(join(state, 'codex/config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local"\n[model_providers.local]\nname = "Isolated observation"\nbase_url = "http://127.0.0.1:${provider.address().port}/v1"\nwire_api = "responses"\n[features]\nshell_snapshot = false\nplugins = false\n[analytics]\nenabled = false\n`);
     await writeFile(join(state, 'config/runner.config.json'), JSON.stringify({ host_id: host, server_url: 'ws://127.0.0.1:44019/runner',
-      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { auth_mode: 'apikey', internal_subagents: false } }));
+      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { backend: "exec", auth_mode: 'apikey', internal_subagents: false } }));
     const runnerEnv = { KAOIRO_RUNNER_TOKEN: 'isolated-' + label, HOME: join(state, 'home'), TMPDIR: join(state, 'tmp'),
       KAOIRO_NODE: process.execPath, KAOIRO_RUNNER_DIR: join(state, 'config'), CODEX_HOME: join(state, 'codex'),
       NODE_OPTIONS: '--import=' + join(root, 'observer.mjs'), KOGANE_OBSERVATION_LOG: join(root, 'processes.jsonl') };

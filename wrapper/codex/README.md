@@ -1,6 +1,6 @@
 # Codex wrapper internals
 
-The public Codex engine defaults to `codex exec`. Select the backend through
+The public Codex engine defaults to `app-server`; exec remains an explicit selection. Select the backend through
 `runner.config.json` → `codex.backend`; see the [configuration contract](../../docs/reference/configuration/runner.md#codex-backend)
 and [switching and rollback runbook](../../docs/operations/codex-backend-switch.md).
 
@@ -32,5 +32,6 @@ stream-reader patch; Node 24 splits literal U+2028/U+2029 with the upstream
 readline reader. Native checks use isolated homes and a loopback provider,
 including `runCodexCli` with its production factories on both backends.
 See [the 0.164.0 evidence](../../docs/evidence/codex-app-server/pin-0.164.0-adoption-gates-2026-10-27.md)
-for fixture provenance, negative controls and remaining limits. Signed-in
-server default-model/default-effort behavior remains unverified.
+for fixture provenance, negative controls and remaining limits. The
+[U2 acceptance limits](../../docs/operations/codex-backend-switch.md#accepted-measurement-limits)
+separate controlled native checks from authenticated behavior and API-key defaults.

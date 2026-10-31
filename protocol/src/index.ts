@@ -188,8 +188,6 @@ export interface WrapperBuildIdentity {
  *  not the config file. */
 export type Persona = WirePersona;
 
-export const DEFAULT_CODEX_BACKEND = "app-server" as const;
-
 /** Wrapper init config. agent_id is a stable id, constant across restarts.
  *  server_url points the wrapper at the kaoiro server's wrapper socket
  *  (ws:// or wss://) and is required — the wrapper cannot open its SDK

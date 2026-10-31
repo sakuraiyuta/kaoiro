@@ -16,7 +16,7 @@ coverage and remaining limits are recorded in the
 ## Preparation before a default change
 
 Use the preparation command introduced for [issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564),
-`scripts/codex-backend-compatibility.mjs`, before deploying a later
+`scripts/codex-backend-compatibility.mjs`, before deploying the
 default-changing release to an affected host whose `codex.backend` is omitted.
 Run `prepare` on the preparation release before installing the default-changing release:
 
@@ -285,3 +285,31 @@ Production therefore uses a dedicated `CODEX_HOME` that only the pinned binary
 touches (operator decision, [issue #454](https://github.com/sakuraiyuta/kaoiro/issues/454));
 the procedure is in [Codex home for production](codex-home.md). Rolling back
 the backend (above) keeps whichever home is configured.
+
+## Accepted measurement limits
+
+The omitted backend selects app-server. The [U2 acceptance decision](https://github.com/sakuraiyuta/kaoiro/issues/564#issuecomment-6435984343)
+accepts the following limits; they are not claims of full backend parity:
+
+- N11: configuration capture was measured for `developer_instructions` only.
+- N12: authenticated default-model/effort coverage is ChatGPT login only. The
+  actual HTTPS reasoning-effort value was not observed.
+- N13: pin 0.164.0 fired a vetted, native-UI-trusted `SessionStart` hook on start
+  and resume on both backends, with additional context reaching the local
+  provider. Permanent tests cover callbacks and environment markers; the
+  separate local probe supplies additional-context evidence. Managed settings,
+  other hook events and plugin hooks remain unmeasured. Equality of that CI
+  binary to the probe's hash is inferred from the npm pin, not attested there.
+- N14: supported forced refresh and continuation were measured with ChatGPT
+  login; natural expiry and multiple long-lived processes sharing auth were not.
+- N15: explicit and automatic compaction used controlled, lowered thresholds;
+  the default automatic threshold was not measured.
+
+The app-server default was not measured with API-key authentication
+(model/effort defaults and credential lifecycle). If you use API-key auth and
+need the previous backend behavior, set `codex.backend` to `exec` explicitly.
+If the host already has app-server sessions, first follow the guarded
+fresh-backend transition; selecting exec does not authorize resuming existing
+app-server IDs through exec. API-key mode remains supported as a configuration
+option; local-provider tests with an explicit model do not establish its
+account-default behavior.
