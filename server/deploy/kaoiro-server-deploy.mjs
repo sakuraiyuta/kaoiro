@@ -961,7 +961,7 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
       continue;
     }
     const candidate = target.default_path;
-    if (!isAbsolute(candidate) || resolve(candidate) !== candidate) fail(`${target.env}: invalid target default path`);
+    if (resolve(candidate) !== candidate) fail(`${target.env}: invalid target default path`);
     const probe = probeContainerPath(bin, container, candidate);
     if (probe.file_probe_result !== "absent") fail(`${target.env}: cannot verify the target default path ${JSON.stringify(candidate)} is absent in the old container (${JSON.stringify(probe)}); inspect it and use the non-destructive rollback`);
     if (!namedVolumeExists(bin, volume.name)) fail(`${target.env}: target state volume is missing or unavailable; no volume was created`);
