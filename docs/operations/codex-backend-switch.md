@@ -227,6 +227,18 @@ of the target connection, no pending operation, and a normal Supervisor child.
 It sends no model input. New native identity is checked by the migration's
 native acceptance procedure, not inferred from reply correlation.
 
+After restore acknowledgement, only the target's forward progress may defer a
+result: `connected` false to true, `pointer` nil to non-nil, and `live` false to
+true. `live` means an AgentStates row exists, not that its socket is connected;
+its pre-restore value may already be true. Reversing any of those transitions
+stops with an unknown outcome. `transition_pending` may move either way. The
+CLI waits for a stable bundle and the completion conditions above; it still
+rejects observed sibling, membership, runner/config or owner changes immediately.
+It never resends restore. The polling deadline is 30 seconds, with an in-flight
+bundle bounded by its adapters' read timeouts in addition to that deadline.
+A bundle finishing after the deadline returns an unknown outcome, even if it
+shows a connected target. Custom adapters must provide bounded reads.
+
 Every mutation rechecks H/R -> Supervisor -> H/R and compares a second bundle
 immediately before the action. Successful JSON includes
 `maintenance_evidence_sha256`, the hash of the exact accepted input bytes.
