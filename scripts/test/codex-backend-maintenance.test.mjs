@@ -258,7 +258,8 @@ for (const [name, change] of Object.entries({
 test("restore reply alone is insufficient without the observed connection", async t => {
   const f = fixture(); await accept(f, "restore-fresh");
   f.adapters.openOperator = async () => ({ restore() { f.calls.restore++; f.state.s.children.push(child(agent)); }, close() {} });
-  let now = 0; t.mock.method(Date, "now", () => now += 31_000);
+  let now = 0; t.mock.method(Date, "now", () => now);
+  f.state.hook = (key, n) => { if (key === "host" && n === 7) now = 31_000; };
   const output = io(); assert.equal(await main(args("restore-fresh"), f.adapters, output), 1);
   assert.match(output.stderr.text, /restore-unconfirmed/); assert.equal(f.calls.restore, 1);
 });
