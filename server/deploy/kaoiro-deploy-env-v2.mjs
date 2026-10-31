@@ -75,9 +75,10 @@ export function isValidEnvConsistencyV2(value) {
         if (!keys(e, ["kind", "store_id", "target_env", "target_path", "old_env", "old_effective_path", "old_path_source", "volume_name"]) ||
           !nonempty(e.old_env) || e.old_effective_path !== e.target_path || !["env", "old_manifest"].includes(e.old_path_source)) return false;
       } else if (e.kind === "new_store") {
-        if (!keys(e, ["kind", "store_id", "target_env", "target_path", "old_effective_path", "old_manifest_contract", "old_manifest_raw", "old_manifest_sha256", "target_probe_path", "probe_result", "operator_accepted_new_store", "volume_name"]) ||
+        if (!keys(e, ["kind", "store_id", "target_env", "target_path", "old_effective_path", "old_manifest_contract", "old_manifest_raw", "old_manifest_sha256", "target_probe_path", "probe_result", "destination_probe_result", "operator_accepted_new_store", "volume_name"]) ||
           e.old_effective_path !== null || e.old_manifest_contract !== CONTRACT || !nonempty(e.old_manifest_raw) || !DIGEST.test(e.old_manifest_sha256) ||
-          sha256(e.old_manifest_raw) !== e.old_manifest_sha256 || e.target_probe_path !== e.target_path || e.probe_result !== "absent" || e.operator_accepted_new_store !== true ||
+          sha256(e.old_manifest_raw) !== e.old_manifest_sha256 || e.target_probe_path !== t.default_path || !posix.isAbsolute(e.target_probe_path) || posix.normalize(e.target_probe_path) !== e.target_probe_path ||
+          e.probe_result !== "absent" || e.destination_probe_result !== "absent" || e.operator_accepted_new_store !== true ||
           parsePersistenceManifest(e.old_manifest_raw).some(old => old.store === e.store_id)) return false;
       } else return false;
     }

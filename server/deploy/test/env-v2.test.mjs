@@ -18,8 +18,14 @@ test("v2 binds every target store to an inside matching path", () => {
 });
 
 test("v2 new-store evidence does not fabricate an old path", () => {
-  const r = record(); r.entries.USERS = {kind:"new_store",store_id:"users",target_env:"USERS",target_path:"/var/lib/kaoiro/users.dets",old_effective_path:null,old_manifest_contract:"exhaustive_stable_v1",old_manifest_raw:old,old_manifest_sha256:digest(old),target_probe_path:"/var/lib/kaoiro/users.dets",probe_result:"absent",operator_accepted_new_store:true,volume_name:"state"};
+  const r = record(); r.entries.USERS = {kind:"new_store",store_id:"users",target_env:"USERS",target_path:"/var/lib/kaoiro/users.dets",old_effective_path:null,old_manifest_contract:"exhaustive_stable_v1",old_manifest_raw:old,old_manifest_sha256:digest(old),target_probe_path:"/tmp/users.dets",probe_result:"absent",destination_probe_result:"absent",operator_accepted_new_store:true,volume_name:"state"};
   assert.equal(isValidEnvConsistencyV2(r), true);
+  const probePresent = structuredClone(r); probePresent.entries.USERS.probe_result = "present";
+  assert.equal(isValidEnvConsistencyV2(probePresent), false);
+  const destinationPresent = structuredClone(r); destinationPresent.entries.USERS.destination_probe_result = "present";
+  assert.equal(isValidEnvConsistencyV2(destinationPresent), false);
+  const wrongProbe = structuredClone(r); wrongProbe.entries.USERS.target_probe_path = "/tmp/other.dets";
+  assert.equal(isValidEnvConsistencyV2(wrongProbe), false);
   r.entries.USERS.old_manifest_raw = raw; r.entries.USERS.old_manifest_sha256 = digest(raw);
   assert.equal(isValidEnvConsistencyV2(r), false);
 });
