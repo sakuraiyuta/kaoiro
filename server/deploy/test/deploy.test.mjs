@@ -452,7 +452,7 @@ JS
             esac
             ;;
           '{{json .Mounts}}')
-            printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state","Destination":"/var/lib/kaoiro"}]\\n'
+            if [ -n "$KAOIRO_TEST_MOUNTS_JSON" ]; then printf '%s\\n' "$KAOIRO_TEST_MOUNTS_JSON"; else printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state","Destination":"/var/lib/kaoiro"}]\\n'; fi
             ;;
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
@@ -1231,6 +1231,7 @@ function withEnvConsistencyFixture(
     presentPath,
     probeFailPath,
     probeFailMode,
+    mountsJson,
   } = {},
   fn,
 ) {
@@ -1262,6 +1263,7 @@ function withEnvConsistencyFixture(
     KAOIRO_TEST_PRESENT_PATH: presentPath,
     KAOIRO_TEST_PROBE_FAIL_PATH: probeFailPath,
     KAOIRO_TEST_PROBE_FAIL_MODE: probeFailMode,
+    KAOIRO_TEST_MOUNTS_JSON: mountsJson,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -7041,4 +7043,31 @@ test("contract timeout means no usable marker before the stop", () => {
   const backup = join(root, "kaoiro-deploy");
   const [id] = readdirSyncNonHidden(backup);
   assert.equal(readJournal(join(backup, id)).phase, PHASE.BUILD_PREPARED);
+});
+
+test("new-store guard refuses a relative target default before probing", () => {
+  const evalOutput = JSON.stringify([{store:"users",env:"KAOIRO_USERS_PATH",default_file:"users.dets",default_path:"relative/users.dets"}]);
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({evalOutput,oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1"}, () => {
+      try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
+      catch(error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /invalid target default path/);
+  assert.doesNotMatch(calls, /^exec .* stat /m);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+});
+
+test("new-store guard refuses a destination mounted from another volume", () => {
+  let caught;
+  const mountsJson = JSON.stringify([{Type:"volume",Name:"other-volume",Destination:"/var/lib/kaoiro"}]);
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1",mountsJson}, () => {
+      try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
+      catch(error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /cannot bind the existing state volume/);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
 });
