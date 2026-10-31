@@ -2207,7 +2207,7 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   }
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro-dets\/users.dets/);
-  assert.ok(caught.message.includes("Copying cannot unblock this transaction or a new update."));
+  assert.ok(caught.message.includes("this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store."));
   assert.ok(caught.message.includes("Do not use --accept-new-store for an existing or uncertain store."));
   assert.match(caught.message, /\/var\/lib\/kaoiro\/users.dets/);
   assert.match(caught.message, /non-destructive rollback/);
@@ -2364,7 +2364,7 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
   }
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /existing store Users uses .*\/tmp\/kaoiro_users.dets/);
-  assert.ok(caught.message.includes("Copying cannot unblock this transaction or a new update."));
+  assert.ok(caught.message.includes("this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store."));
   assert.match(caught.message, /non-destructive rollback/);
 });
 
@@ -2753,8 +2753,8 @@ test("an env_consistency refusal names the exact resume command, which a fresh u
   const first = attemptUpdate("running", () =>
     withNewWorkStore({}, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(first.caught instanceof DeployError);
-  assert.ok(first.caught.message.includes("If you independently establish that KAOIRO_WORK_STORE_PATH never existed in any earlier version"));
-  assert.ok(first.caught.message.includes("the current manifest cannot prove earlier history"));
+  assert.ok(first.caught.message.includes("KAOIRO_WORK_STORE_PATH: independently verify that no earlier data needs migration"));
+  assert.ok(first.caught.message.includes("If it is a genuinely new store, resume with:"));
   const backupRoot = join(root, "kaoiro-deploy");
   const [transactionId] = readdirSyncNonHidden(backupRoot);
   assert.ok(
