@@ -214,7 +214,7 @@ async function makeRig(
           turnEnds.push(info);
           options.onTurnEnd?.(info);
         },
-        codexFactory: (codexOptions) => {
+        backend: "exec", codexFactory: (codexOptions) => {
           captured = codexOptions;
           return client;
         },

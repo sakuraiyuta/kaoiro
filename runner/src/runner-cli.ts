@@ -1,3 +1,4 @@
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
 import { randomUUID } from "node:crypto";
 import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
 import { createDeliverySnapshot, deliveryBehaviourRelay, deliveryEnvironment, retiredDeliveryWarnings } from "./delivery-settings.js";
@@ -559,7 +560,7 @@ export async function runRunnerCli(
         `runner: behaviour settings for subsequent wrappers: ${describeBehaviourRelay(nextBehaviourRelay)}\n`,
       );
     }
-    process.stderr.write(`runner: codex backend=${config.codex?.backend ?? "exec"} for subsequent wrappers\n`);
+    process.stderr.write(`runner: codex backend=${config.codex?.backend ?? DEFAULT_CODEX_BACKEND} for subsequent wrappers\n`);
     refreshGrokCatalog();
   };
   const watcher = watchConfig(

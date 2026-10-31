@@ -119,7 +119,7 @@ await import(pathToFileURL(process.argv[1]).href);
       host = new CodexHost(config, {
         appendSystemPrompt: "Call probe", onState: e => states.push(e), onLog: e => states.push(e), onTurnEnd: () => { ended += 1; },
         toolDescriptors: [tool], turnTraceDir: join(home, "traces"),
-        codexFactory: options => {
+        backend: "exec", codexFactory: options => {
           delayBridge(options.config);
           const sdk = new Codex(options);
           return {

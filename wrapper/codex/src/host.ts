@@ -1,13 +1,8 @@
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
 import { AppServerContextMeter } from "./app_server_context.js";
-// CodexHost — owns the real Codex SDK session for one agent: spawns one
-// `codex exec` per turn via @openai/codex-sdk (resume for turns 2+), derives
-// kaoiro states from the ThreadEvent stream (adapter.ts + the shared state
-// machine), and serves the common tools through the MCP bridge
-// (docs/reference/engines/codex-exec-events.md, ADR-0032). The Claude twin is
-// @kaoiro/claude-code's AgentHost; both implement EngineAdapter.
-//
-// Approval is pinned to "never" (ADR-0033); waiting_permission represents
-// the dispatch gate, not an SDK approval callback.
+// CodexHost owns one selected backend for a wrapper lifetime. App-server is
+// persistent; explicit exec uses one SDK process per turn. Both share the
+// state machine, tool bridge, lifecycle controls and delivery accounting.
 
 import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
@@ -295,7 +290,7 @@ function initialStatusExtFromCatalog(
   model: string | null,
   permissionSyncSupported = false,
   approvalAxis = false,
-  backend: "exec" | "app-server" = "exec",
+  backend: "exec" | "app-server" = DEFAULT_CODEX_BACKEND,
 ): Record<string, unknown> {
   return {
     engine: "codex",
@@ -337,7 +332,7 @@ export function initialStatusExt(
     config.codex_chatgpt_plan,
     config.codex_extra_models,
   );
-  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false, config.codex_backend ?? "exec");
+  return initialStatusExtFromCatalog(catalog, config.model ?? null, false, false, config.codex_backend ?? DEFAULT_CODEX_BACKEND);
 }
 
 /** Who produced a `send()`; only operator input may be steered. */
@@ -1513,7 +1508,7 @@ export class CodexHost implements EngineAdapter {
     });
   }
 
-  get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? "exec"; }
+  get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? DEFAULT_CODEX_BACKEND; }
 
   /** Whether this host was built with the operator-steer mechanism. */
   get operatorSteerEnabled(): boolean { return this.#options.operatorSteer !== undefined; }
@@ -1529,7 +1524,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   get #approvalAxis(): boolean {
-    return this.#options.backend === "app-server" && this.#options.appServerApprovals !== undefined;
+    return this.historyBackend === "app-server" && this.#options.appServerApprovals !== undefined;
   }
 
   scheduleHistoryReplay(job: AppServerHistoryJob): void {
@@ -1556,7 +1551,7 @@ export class CodexHost implements EngineAdapter {
       // prevent a real SDK turn or a default Codex factory from starting.
       writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
-    const appServer = this.#options.backend === "app-server";
+    const appServer = this.historyBackend === "app-server";
     const descriptors = this.#options.toolDescriptors ?? [];
     let toolHost: ToolHost | null = null;
     const factory =

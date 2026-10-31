@@ -294,14 +294,14 @@ it("does not pin display-only default model and effort hints", async () => {
   expect(f.turns()[0]?.params).not.toHaveProperty("model");expect(f.turns()[0]?.params).not.toHaveProperty("effort");f.terminal();
 });
 
-it("keeps the default exec factory, arguments and callbacks despite unrelated config and environment hints", async () => {
+it("keeps the explicit exec factory, arguments and callbacks despite unrelated config and environment hints", async () => {
   const prior = process.env.KAOIRO_CODEX_BACKEND;process.env.KAOIRO_CODEX_BACKEND = "app-server";
   const appFactory = vi.fn(), starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), logs: Envelope[] = [];
   const threadOptions: unknown[] = [], options: unknown[] = [];
   const launch = { ...config, backend: "app-server", codex_backend: "app-server" as const };
   const host = new CodexHost(launch, { appServerSessionFactory: appFactory, appendSystemPrompt: "PERSONA",
     onState: () => {}, onLog: e => logs.push(e), onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals,
-    codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {
+    backend: "exec", codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {
       runStreamed: async () => ({ events: (async function* () { yield { type: "turn.completed" as const, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 } }; })() }),
     }; }, resumeThread: () => { throw new Error("unexpected resume"); } }; },
   });
