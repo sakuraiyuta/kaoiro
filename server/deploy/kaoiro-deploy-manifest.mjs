@@ -12,6 +12,7 @@
 // means a phase transition never has to rewrite (and re-validate) the
 // artifact facts that did not change.
 import { readFileSync } from "node:fs";
+import { isValidEnvConsistencyV2 } from "./kaoiro-deploy-env-v2.mjs";
 import { isPlacementReference, readPlacementReference } from "./kaoiro-delivery-policy-placement.mjs";
 import { join } from "node:path";
 
@@ -160,6 +161,7 @@ export function isValidEnvConsistency(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
+  if (Object.hasOwn(value, "guard_schema")) return isValidEnvConsistencyV2(value);
   if (value.skipped === true) {
     return typeof value.reason === "string" && value.reason !== "";
   }

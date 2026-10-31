@@ -53,7 +53,7 @@ export function parsePersistenceManifest(raw) {
   if (!Array.isArray(value) || value.length === 0) throw new Error("invalid persistence manifest");
   const stores = new Set(), envs = new Set();
   for (const entry of value) {
-    if (!object(entry) || ![entry.store, entry.env, entry.default_file, entry.default_path].every(nonempty) || stores.has(entry.store) || envs.has(entry.env)) {
+    if (!keys(entry, ["store", "env", "default_file", "default_path"]) || ![entry.store, entry.env, entry.default_file, entry.default_path].every(nonempty) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.env) || stores.has(entry.store) || envs.has(entry.env)) {
       throw new Error("invalid or duplicate persistence entry");
     }
     stores.add(entry.store); envs.add(entry.env);
