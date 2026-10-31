@@ -1,3 +1,4 @@
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
 import { resolveDelivery, retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage } from "@kaoiro/agent-common";
 // Codex wrapper CLI — the composition root of the codex engine: loads the
 // config, connects the ServerLink, waits fail-closed for the server-pushed
@@ -184,7 +185,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
-  const backend = dependencies.backend ?? config.codex_backend ?? "exec";
+  const backend = dependencies.backend ?? config.codex_backend ?? DEFAULT_CODEX_BACKEND;
   writeRedactedStderr(`codex: backend=${backend}\n`);
   writeRedactedStderr(`codex: home=${codexHome()}\n`);
   const resolvedDelivery = resolveDelivery({
@@ -676,7 +677,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // Constructed before the link: the join reply can arrive before `host`
   // exists, so the verdict has to be held until markReady() (ADR-0051 D2).
   const replayer = new CodexHistoryReplay({
-    backend: () => host?.historyBackend ?? "exec",
+    backend: () => host?.historyBackend ?? DEFAULT_CODEX_BACKEND,
     schedule: job => host.scheduleHistoryReplay(job),
     captureFence: () => link?.captureHistoryReplayFence?.() ?? (() => false),
     seedState: () =>

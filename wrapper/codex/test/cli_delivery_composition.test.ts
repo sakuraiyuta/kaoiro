@@ -6,6 +6,7 @@ import { runCodexCli } from "../src/cli.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const config: WrapperConfig = {
+  codex_backend: "exec",
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P",

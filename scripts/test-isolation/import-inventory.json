@@ -1,6 +1,6 @@
 {
   "typescript": "5.9.3",
-  "raw": 494,
+  "raw": 495,
   "problems": [],
   "rows": [
     {
@@ -2901,6 +2901,14 @@
     },
     {
       "path": "wrapper/codex/test/approval_config.integration.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "wrapper/codex/test/backend_default.test.ts",
       "imports": [
         "vitest"
       ],
