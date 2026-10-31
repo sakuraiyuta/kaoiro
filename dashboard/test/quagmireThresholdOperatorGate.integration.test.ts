@@ -339,7 +339,7 @@ describe("App.svelte work admission settings", () => {
     await vi.waitFor(() => expect(workSection()!.querySelectorAll<HTMLInputElement>("input")[0]!.value).toBe("16"));
     expect(saveButton().disabled).toBe(true);
   });
-  it("clears the edit marks when the connection is replaced", async () => {
+  it("clears the edit marks when the connection drops and comes back", async () => {
     await openWorkSettings();
     await editKey(0, "0");
     const h = captured.handlers!;
