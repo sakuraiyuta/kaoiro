@@ -95,8 +95,8 @@ must implement every `phoenix` member that `src/lib/protocol.ts` uses;
 `test/benchFakePhoenix.test.ts` fails when it does not. That check does
 not notice a new same-origin endpoint the App starts to call, nor a Phoenix
 value that leaves `protocol.ts` through an export and is read in another
-file (none does today), so after changing the App's startup, smoke-run the
-bench once:
+file (none does today), so after changing the App's startup or an export
+from `protocol.ts`, smoke-run the bench once:
 `node bench/runBenchApp.mjs 3 1000 5 150 none smoke`.
 
 ```bash

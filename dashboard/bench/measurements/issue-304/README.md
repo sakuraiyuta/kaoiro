@@ -34,9 +34,9 @@ mkdir -p /tmp/fuji304-measure
 FUJI_PROD=1 FUJI_MATRIX='[{"run":10,"mode":"ascii","tick":100,"history":1000,"expand":true}]' node bench/fujiShape.mjs
 ```
 
-Run labels must be unique to retain all results. Both latency drivers select the
-`after` variant of the harness page; they are not before/after comparison
-drivers. (They used to copy the current App to an ignored
+Run labels must be unique to retain all results. Both latency drivers request
+`?variant=after`, but the harness page does not read `variant`; they are not
+before/after comparison drivers. (They used to copy the current App to an ignored
 `.App.before.bench.svelte` file only to satisfy a harness import; the harness no
 longer has a baseline variant, so that copy was removed.) They build
 unminified production JS with source maps. `fujiMeasure`'s `.log-entry` counter
