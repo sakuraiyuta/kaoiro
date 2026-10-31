@@ -6923,3 +6923,30 @@ test("new-store guard never creates a missing target volume", () => {
   assert.match(calls, /volume inspect kaoiro_kaoiro-state/);
   assert.doesNotMatch(calls, /^volume create|^run .*?(?:--mount| -v )|^compose stop|^compose up|archive/m);
 });
+
+test("stable store ID refuses a changed old path even with a new-store flag", () => {
+  const oldEvalOutput = JSON.stringify([{store:"users",env:"OLD_USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
+  let caught;
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/tmp/users.dets"]'}, () => {
+      try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
+      catch (error) { caught = error; }
+    }),
+  );
+  assert.match(caught?.message ?? "no error", /existing store users uses .*\/tmp\/users.dets/);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.doesNotMatch(calls, /^exec .* stat /m);
+});
+
+test("stable store ID follows the old environment name when its path matches", () => {
+  const oldEvalOutput = JSON.stringify([{store:"users",env:"OLD_USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:'["OLD_USERS=/var/lib/kaoiro/users.dets"]'}, () =>
+      runUpdate({repo:workDir, target:headSha, maintenanceApproved:true}, configWithCleanStopMeasured()),
+    ),
+  );
+  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_env, "OLD_USERS");
+  assert.equal(entry.old_effective_path, "/var/lib/kaoiro/users.dets");
+});
