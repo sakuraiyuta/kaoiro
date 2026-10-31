@@ -1867,14 +1867,17 @@ test("runUpdate does not borrow a colliding transaction's recovery hint", () => 
 // BEFORE the module lookup, for every real invocation, so its own exit
 // code could never distinguish "absent" from "OOM/daemon failure").
 test("runUpdate refuses before stop when target manifest is unavailable", () => {
+  let checked = false;
   const calls = withCallLog("running-clean-stop", () =>
-    withEnvConsistencyFixture({ beamAbsent: "1" }, () =>
+    withEnvConsistencyFixture({ beamAbsent: "1" }, () => {
       assert.throws(
         () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
         /target image persistence manifest unavailable/,
-      ),
-    ),
+      );
+      checked = true;
+    }),
   );
+  assert.equal(checked, true);
   assert.doesNotMatch(calls, /compose stop|compose up|archive/);
   assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
@@ -1939,14 +1942,17 @@ test("runUpdate throws when the module-presence probe itself fails (image start 
 });
 
 test("runUpdate refuses before stop when old manifest is unavailable", () => {
+  let checked = false;
   const calls = withCallLog("running-clean-stop", () =>
-    withEnvConsistencyFixture({ oldBeamAbsent: "1", containerEnvJson: "[]" }, () =>
+    withEnvConsistencyFixture({ oldBeamAbsent: "1", containerEnvJson: "[]" }, () => {
       assert.throws(
         () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
         /old image persistence manifest unavailable/,
-      ),
-    ),
+      );
+      checked = true;
+    }),
   );
+  assert.equal(checked, true);
   assert.doesNotMatch(calls, /compose stop|compose up|archive/);
   assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
@@ -1991,14 +1997,17 @@ test("runUpdate prefers the OLD image's own default_path over the target's, when
 
 test("runUpdate refuses a malformed old manifest before stop", () => {
   const oldEvalOutput = JSON.stringify([{store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets"}]);
+  let checked = false;
   const calls = withCallLog("running-clean-stop", () =>
-    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson: "[]"}, () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson: "[]"}, () => {
       assert.throws(
         () => runUpdate({repo: workDir, target: headSha, maintenanceApproved: true}, configWithCleanStopMeasured()),
         /old image persistence manifest unavailable/,
-      ),
-    ),
+      );
+      checked = true;
+    }),
   );
+  assert.equal(checked, true);
   assert.doesNotMatch(calls, /compose stop|compose up|archive/);
 });
 
