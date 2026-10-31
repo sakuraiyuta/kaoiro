@@ -267,6 +267,18 @@ describe("confirm", () => {
     expect(dialogText()).toContain("数秒で接続する");
   });
 
+  it("a code typed loosely is looked up as typed, and the decision uses the server's normalized form", async () => {
+    fake.lookup = () => lookupOk({ user_code: CODE });
+    await start("/index.html?device=1");
+    await vi.waitFor(() => expect(codeInput()).not.toBeNull());
+    await submitCode("  bcd fgh jkl ");
+    await vi.waitFor(() => expect(dialogText()).toContain("承認する identity"));
+    expect(calls("/session/device/lookup")[0]!.body).toEqual({ user_code: "bcd fgh jkl" });
+    button("承認").click();
+    await vi.waitFor(() => expect(dialogText()).toContain("承認した"));
+    expect(calls("/session/device/decision")[0]!.body).toEqual({ user_code: CODE, decision: "approve" });
+  });
+
   it("deny sends deny", async () => {
     await toConfirm();
     fake.decision = () => decisionOk("denied");
