@@ -6955,3 +6955,37 @@ for (const probeFailPath of [newStoreDefault, newStoreDestination]) {
     });
   }
 }
+
+test("previous CLI handles a pending v2 journal conservatively across four entry points", () => {
+  const previous = join(root, "previous-cli");
+  mkdirSync(previous);
+  const repository = fileURLToPath(new URL("../../../", import.meta.url));
+  const archive = execFileSync("git", ["-C", repository, "archive", "7e2447f2ea14ebd8d08d478bd060e66b12dfdffc", "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"]);
+  execFileSync("tar", ["-x", "-C", previous], {input:archive});
+  const cli = join(previous, "server/deploy/kaoiro-server-deploy.mjs");
+  const configPath = join(root, "old-cli-config.json");
+  writeFileSync(configPath, JSON.stringify(configWithCleanStopMeasured()), {mode:0o600});
+  assert.throws(() => withScenario("running", () => runUpdate({repo:workDir, target:headSha}, configWithCleanStopMeasured())), error => error.exitCode === 64);
+  const backupRoot = configWithCleanStopMeasured().backup_root;
+  const [id] = readdirSyncNonHidden(backupRoot);
+  const journalPath = join(backupRoot, id, "journal.json");
+  const before = readFileSync(journalPath);
+  const journal = readJournal(join(backupRoot, id));
+  assert.equal(journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.guard_schema, 2);
+  const invoke = args => withScenario("running", () => spawnSync(process.execPath, [cli, ...args, "--repo", workDir, "--config", configPath], {encoding:"utf8"}));
+  const status = invoke(["status"]);
+  assert.equal(status.status, 0, status.stderr);
+  const summary = JSON.parse(status.stdout);
+  assert.ok(summary.unfinishedTransaction.error, status.stdout);
+  for (const args of [
+    ["update", "--transaction", id, "--target", headSha, "--maintenance-approved"],
+    ["rollback", "--transaction", id, "--confirm-restore"],
+    ["update", "--target", headSha, "--maintenance-approved"],
+  ]) {
+    const result = invoke(args);
+    assert.notEqual(result.status, 0, `${args.join(" ")} unexpectedly succeeded`);
+    assert.match(result.stderr, /invalid|observation|state.machine/i);
+    assert.deepEqual(readFileSync(journalPath), before);
+    assert.deepEqual(readdirSyncNonHidden(backupRoot), [id]);
+  }
+});
