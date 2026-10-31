@@ -6869,29 +6869,32 @@ test("Compose inputs: use-time legacy validation precedes any rendering", () => 
   assert.equal(calls.length, 0);
 });
 
-test("new-store guard checks the old default and volume destination separately", () => {
-  const oldEvalOutput = JSON.stringify([{store:"other",env:"KAOIRO_OTHER_PATH",default_file:"other.dets",default_path:"/tmp/other.dets"}]);
-  const targetDefault = "/tmp/kaoiro-dets/users.dets";
-  const destination = "/var/lib/kaoiro/users.dets";
-  for (const presentPath of [targetDefault, destination]) {
+const newStoreOldManifest = JSON.stringify([{store:"other",env:"KAOIRO_OTHER_PATH",default_file:"other.dets",default_path:"/tmp/other.dets"}]);
+const newStoreDefault = "/tmp/kaoiro-dets/users.dets";
+const newStoreDestination = "/var/lib/kaoiro/users.dets";
+for (const presentPath of [newStoreDefault, newStoreDestination]) {
+  test(`new-store guard checks presence at ${presentPath}`, () => {
     let caught;
     const calls = withCallLog("running-clean-stop", () =>
-      withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", presentPath}, () => {
+      withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1", presentPath}, () => {
         try { runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()); }
         catch (error) { caught = error; }
       }),
     );
     assert.match(caught?.message ?? "no error", /cannot verify the target default path|destination .*present/, presentPath);
     assert.doesNotMatch(calls, /compose stop|compose up|archive/);
-  }
+  });
+}
+
+test("new-store guard checks both locations absent", () => {
   const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1"}, () =>
+    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest, containerEnvJson:"[]", contract:"1", volumePresent:"1", probeExit:"1"}, () =>
       runUpdate({repo:workDir, target:headSha, maintenanceApproved:true, acceptNewStores:["KAOIRO_USERS_PATH"]}, configWithCleanStopMeasured()),
     ),
   );
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.target_probe_path, targetDefault);
-  assert.equal(entry.target_path, destination);
+  assert.equal(entry.target_probe_path, newStoreDefault);
+  assert.equal(entry.target_path, newStoreDestination);
   assert.equal(entry.probe_result, "absent");
   assert.equal(entry.destination_probe_result, "absent");
 });
