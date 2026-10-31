@@ -964,11 +964,11 @@ function probeContainerPath(bin, container, path) {
 }
 
 function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, containerEnv,
-  { bin, container, oldImageId, targetImageId, serverDir, acceptNewStores, composeArgs = [] }) {
+  { bin, container, oldImageId, targetImageId, serverDir, acceptNewStores, transactionId, targetRevision, composeArgs = [] }) {
   const accepted = new Set(acceptNewStores ?? []);
   const known = new Set(paths.map(p => p.env));
   for (const name of accepted) {
-    if (!known.has(name)) fail(`--accept-new-store ${JSON.stringify(name)} does not name a target persistence path`);
+    if (!known.has(name)) fail(`--accept-new-store ${JSON.stringify(name)} does not name a persistence-path var of the target image (${[...known].join(", ")})`);
   }
   const volume = resolveNamedVolumeFromCompose(bin, serverDir, composeArgs);
   if (!volume.ok) fail(`state volume unavailable: ${volume.reason}; use the non-destructive rollback`);
@@ -996,13 +996,13 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
         old_path_source: fromEnv ? "env" : "old_manifest", volume_name: volume.name};
       continue;
     }
-    if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container; cannot accept it as a new store`);
+    if (Object.hasOwn(containerEnv, target.env)) fail(`${target.env}: configured in the old container at ${JSON.stringify(containerEnv[target.env])}; cannot accept it as a new store`);
     if (contract !== "exhaustive_stable_v1") fail(`${target.env}: old image cannot establish an exhaustive stable store contract; use the non-destructive rollback`);
-    if (!accepted.has(target.env)) fail(`${target.env}: a newly introduced store requires --accept-new-store ${target.env}; independently verify that no earlier data needs migration`);
+    if (!accepted.has(target.env)) fail(`${target.env}: independently verify that no earlier data needs migration. If it is a genuinely new store, resume with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${targetRevision} --accept-new-store ${target.env}`);
     const candidate = target.default_path;
     if (!isAbsolute(candidate) || resolve(candidate) !== candidate) fail(`${target.env}: invalid target default path`);
     const probe = probeContainerPath(bin, container, candidate);
-    if (probe.file_probe_result !== "absent") fail(`${target.env}: cannot verify the target default path ${JSON.stringify(candidate)} is absent in the old container; inspect it and use the non-destructive rollback`);
+    if (probe.file_probe_result !== "absent") fail(`${target.env}: cannot verify the target default path ${JSON.stringify(candidate)} is absent in the old container (${JSON.stringify(probe)}); inspect it and use the non-destructive rollback`);
     if (!namedVolumeExists(bin, volume.name)) fail(`${target.env}: target state volume is missing or unavailable; no volume was created`);
     let mounts;
     try { mounts = JSON.parse(dockerInspect(bin, container, "{{json .Mounts}}")); }
@@ -2299,7 +2299,7 @@ export function runUpdate(flags, config) {
           persistencePaths.paths, persistencePaths.raw, oldPersistencePaths.paths, oldPersistencePaths.raw,
           composeDeclaredEnv(bin, serverDir, boundComposeArgs(targetPlan, serverDir, dir)), oldContainerEnv,
           { bin, container: oldContainerId, oldImageId, targetImageId: buildResult.imageId,
-            serverDir, composeArgs: boundComposeArgs(targetPlan, serverDir, dir), acceptNewStores: flags.acceptNewStores },
+            serverDir, transactionId, targetRevision: target, composeArgs: boundComposeArgs(targetPlan, serverDir, dir), acceptNewStores: flags.acceptNewStores },
         );
         if (dockerInspect(bin, container, "{{.Id}}") !== oldContainerId ||
             dockerInspect(bin, oldContainerId, "{{.Image}}") !== oldImageId ||

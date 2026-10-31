@@ -2417,29 +2417,24 @@ test("runUpdate admits a flagged store absent from the old manifest and containe
   assert.ok(calls.includes(WORK_STORE_PROBE_CALL));
   const dir = join(root, "kaoiro-deploy", result.transactionId);
   const entry = readManifest(dir).env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(entry.kind, "new_store");
+  assert.equal(entry.old_effective_path, null);
   assert.equal(entry.operator_accepted_new_store, true);
-  assert.equal(entry.file_probe_path, WORK_STORE_DEFAULT);
-  assert.equal(entry.file_probe_result, "absent");
-  assert.equal(entry.assumed_default_source, "target_image");
+  assert.equal(entry.target_probe_path, WORK_STORE_DEFAULT);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
+  assert.equal(entry.target_path, WORK_STORE_VOLUME);
   const observed = readJournal(dir).history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation;
   assert.equal(observed.entries.KAOIRO_WORK_STORE_PATH.operator_accepted_new_store, true);
 });
 
-test("runUpdate admits a flagged store when the old image cannot answer its manifest query", () => {
-  const { result, caught, calls } = attemptUpdate("running-clean-stop", () =>
+test("runUpdate refuses a flagged store when the old manifest is unavailable", () => {
+  const { caught, calls } = attemptUpdate("running-clean-stop", () =>
     withNewWorkStore({ oldBeamAbsent: "1" }, () =>
       runUpdate(workStoreFlags({ maintenanceApproved: true }), configWithCleanStopMeasured())));
-  assert.equal(caught, undefined);
-  assert.equal(result.phase, "done");
-  assert.ok(calls.includes(WORK_STORE_PROBE_CALL));
-  const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
-    .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.first_application, "never_existed");
-  assert.equal(entry.operator_accepted_new_store, true);
+  assert.match(caught?.message ?? "no error", /old image persistence manifest unavailable/);
+  assert.ok(!calls.includes(WORK_STORE_PROBE_CALL));
+  assertNoDestructiveCalls(calls);
 });
 
 test("runUpdate admits a missing path observed by the real stat probe", () => {
@@ -2456,9 +2451,9 @@ test("runUpdate admits a missing path observed by the real stat probe", () => {
   assert.equal(result.phase, "done");
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.file_probe_path, missingPath);
-  assert.equal(entry.file_probe_result, "absent");
-  assert.equal(entry.first_application, "never_existed");
+  assert.equal(entry.target_probe_path, missingPath);
+  assert.equal(entry.probe_result, "absent");
+  assert.equal(entry.destination_probe_result, "absent");
   assert.equal(entry.operator_accepted_new_store, true);
 });
 
@@ -2481,9 +2476,7 @@ test("runUpdate refuses an existing store behind an inaccessible parent", (t) =>
         evalOutput,
         probeReal: "1",
       }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-      (err) => err instanceof DeployError && err.message.includes("could not probe") &&
-        err.message.includes('"file_probe_result":"undetermined"') &&
-        err.message.includes('"file_probe_reason":"permission_denied"') &&
+      (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
         !err.message.includes('"first_application":"never_existed"'),
     );
   } finally {
