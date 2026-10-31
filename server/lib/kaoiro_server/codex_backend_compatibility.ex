@@ -47,6 +47,7 @@ defmodule KaoiroServer.CodexBackendCompatibility do
            "pending_spawns" => spawns,
            "pending_switches" => switches
          } <- payload,
+         false <- Map.has_key?(payload, "unavailable"),
          true <- is_binary(revision) and Regex.match?(~r/^[0-9a-f]{40}$/, revision),
          true <- is_integer(pid) and pid > 0,
          true <- is_binary(instance) and Regex.match?(~r/^[0-9a-f-]{36}$/, instance),

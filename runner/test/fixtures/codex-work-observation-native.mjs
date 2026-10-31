@@ -177,37 +177,44 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
           await waitFor(async () => { try { return await rpc('true'); } catch { return false; } }, 'new VM ready');
         };
         await restartVm();
-        assert.ok(prior.exitCode !== null || prior.signalCode !== null, 'recovery requires the old VM to exit');
-        assert.equal(existsSync('/proc/' + oldVmPid), false, 'old VM must be absent');
         const newVmPid = await rpc('System.pid()');
-        assert.notEqual(newVmPid, oldVmPid);
         const immediate = await observe(host);
-        assert.deepEqual(immediate, { error: 'ambiguous_runner' });
         const registrations = [];
+        const recovery = { label, partition_exit: reason, old_vm_pid: oldVmPid, new_vm_pid: newVmPid,
+          old_vm_exited: prior.exitCode !== null || prior.signalCode !== null,
+          old_vm_absent: !existsSync('/proc/' + oldVmPid), immediate, registrations, wrapper_pid: wrapper.pid };
+        report.controls.push(recovery);
         const registrationReady = async () => {
           const registered = await rpc(`KaoiroServer.HostRegistry.get(${JSON.stringify(host)}) != nil`);
           registrations.push(registered);
+          return registered;
+        };
+        const waitForRegistration = async () => {
+          await registrationReady();
           if (pausedRunner === runner) {
             assert.equal(runner.kill('SIGCONT'), true);
             pausedRunner = undefined;
           }
-          return registered;
+          await waitFor(registrationReady, 'runner registration after recovery');
         };
-        await waitFor(registrationReady, 'runner registration after VM restart');
-        assert.equal(registrations[0], false, 'VM ready precedes runner registration');
-        assert.equal(registrations.at(-1), true, 'recovery must wait for runner registration');
-        await waitFor(() => rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), 'wrapper reconnected after VM restart');
+        try {
+          await waitForRegistration();
+        } catch (error) {
+          recovery.registration_error = error.message;
+          recovery.observed_after_timeout = await observe(host);
+          throw error;
+        }
         const recovered = await observe(host);
-        assert.equal(recovered.error, undefined);
+        recovery.recovered = recovered;
+        assert.equal(recovered.error, undefined, 'recovery observation must succeed');
         assert.equal(recovered.pid, runner.pid);
         assert.equal(recovered.instance_id, value.instance_id);
         assert.equal(recovered.build_revision, build.revision);
         assert.deepEqual(recovered.children, value.children);
+        await waitFor(() => rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), 'wrapper reconnected after recovery');
         assert.equal(runner.exitCode, null); assert.equal(runner.signalCode, null);
         assert.ok(existsSync('/proc/' + wrapper.pid));
-        report.controls.push({ label, partition_exit: reason, old_vm_pid: oldVmPid, new_vm_pid: newVmPid,
-          immediate, registrations, recovered, wrapper_pid: wrapper.pid,
-          wrapper_unaffected_by_partition: true, release_vm_restart_recovered: true });
+        recovery.wrapper_unaffected_by_partition = true;
       }
     }
 

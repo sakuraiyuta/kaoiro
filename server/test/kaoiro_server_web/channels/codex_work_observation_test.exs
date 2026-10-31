@@ -65,6 +65,8 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
     assert [{owner, nil}] = Registry.lookup(@registry, host)
     assert owner == socket.channel_pid
     assert {:error, :runner_owner_changed} = RunnerConnections.check_owner(host, self())
+    send(owner, :unrelated_info)
+    _ = :sys.get_state(owner)
     {task, request} = query(host)
     value = payload(host, request) |> Map.put("secret", "must-not-project")
     assert_reply(push(socket, "codex_work_observed", value), :ok)
@@ -233,6 +235,9 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
 
     for {key, invalid} <-
           [
+            {"unavailable", true},
+            {"unavailable", false},
+            {"unavailable", nil},
             {"host", "other"},
             {"schema", 2},
             {"version", "1"},
@@ -307,6 +312,94 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
       if size == 65_536,
         do: assert({:ok, _} = result),
         else: assert(result == {:error, :payload_too_large})
+    end
+  end
+
+  for reason <- [:normal, :kill] do
+    @tag :registry_rejoin
+    @tag partition_exit: reason
+    test "a new singleton after #{reason} partition replacement cannot hide the old population",
+         %{
+           partition_exit: reason
+         } do
+      Process.flag(:trap_exit, true)
+      host = "observation-rejoin"
+      old = join_runner(host)
+      old_down = Process.monitor(old.channel_pid)
+      [{_, partition, :worker, [Registry.Partition]}] = Supervisor.which_children(@registry)
+      partition_down = Process.monitor(partition)
+
+      try do
+        if reason == :normal,
+          do: GenServer.stop(partition, :normal),
+          else: Process.exit(partition, :kill)
+
+        assert_receive {:DOWN, ^partition_down, :process, ^partition, _}
+
+        replacement =
+          Enum.find_value(1..100, fn _ ->
+            case Supervisor.which_children(@registry) do
+              [{_, pid, :worker, [Registry.Partition]}] when is_pid(pid) and pid != partition ->
+                pid
+
+              _ ->
+                receive do
+                after
+                  10 -> nil
+                end
+            end
+          end)
+
+        assert is_pid(replacement)
+        assert Registry.lookup(@registry, host) == []
+
+        if reason == :normal do
+          assert %{topic: "runner:" <> ^host} = :sys.get_state(old.channel_pid)
+          refute_receive {:DOWN, ^old_down, :process, _, _}
+        else
+          assert_receive {:DOWN, ^old_down, :process, _, _}
+        end
+
+        new = join_runner(host)
+        assert Registry.lookup(@registry, host) == [{new.channel_pid, nil}]
+        assert %{runner_pid: owner} = HostRegistry.get(host)
+        assert owner == new.channel_pid
+        caller = self()
+
+        task =
+          Task.async(fn ->
+            result = CodexBackendCompatibility.observe_runner(host)
+            send(caller, {:rejoin_observed, result})
+            result
+          end)
+
+        # A faulty epoch reset must reach the false empty success, not just time out.
+        pushed =
+          receive do
+            %Phoenix.Socket.Message{event: "observe_codex_work", payload: %{request_id: request}} ->
+              empty =
+                Map.merge(payload(host, request), %{
+                  "children" => [],
+                  "pending_spawns" => [],
+                  "pending_switches" => []
+                })
+
+              assert_reply(push(new, "codex_work_observed", empty), :ok)
+              true
+
+            {:rejoin_observed, _} ->
+              false
+          after
+            7_000 -> flunk("observation neither refused nor pushed")
+          end
+
+        assert Task.await(task) == {:error, :runner_registry_changed}
+        refute pushed
+        refute_push("observe_codex_work", _)
+      after
+        :ok = Application.stop(:kaoiro_server)
+        {:ok, _} = Application.ensure_all_started(:kaoiro_server)
+      end
     end
   end
 

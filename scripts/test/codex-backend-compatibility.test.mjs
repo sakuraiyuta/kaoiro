@@ -1170,7 +1170,18 @@ test("Supervisor reader binds two fresh RPC replies to the unchanged local unit"
   const value = { version: "0", schema: 1, host: HOST, pid: 4242, build_revision: RUNNER_SHA,
     instance_id: "11111111-1111-4111-8111-111111111111", owner: "#PID<0.1.0>",
     request_id: "a".repeat(32), applied_backend: "exec", children: [], pending_spawns: [], pending_switches: [] };
-  for (const scenario of ["ok", "pid", "zero-pid", "unit-pid", "missing-pid", "owner", "invalid-owner", "instance", "invalid-instance", "revision", "backend", "version", "schema", "host", "request", "flags", "malformed-element", "duplicate", "registry", "timeout", "old-server", "config", "invocation"]) {
+  const identityMismatch = "supervisor-identity-mismatch";
+  const unavailable = "supervisor-observation-unavailable";
+  const cases = {
+    ok: null, pid: identityMismatch, "zero-pid": unavailable, "unit-pid": identityMismatch,
+    "missing-pid": identityMismatch, owner: identityMismatch, "invalid-owner": unavailable,
+    instance: identityMismatch, "invalid-instance": unavailable, revision: identityMismatch,
+    backend: identityMismatch, version: unavailable, schema: unavailable, host: unavailable,
+    request: unavailable, flags: unavailable, "malformed-element": unavailable, duplicate: unavailable,
+    registry: "runner-registry-changed", timeout: unavailable, "old-server": "undefined RPC",
+    config: identityMismatch, invocation: identityMismatch,
+  };
+  for (const [scenario, expectedError] of Object.entries(cases)) {
     const boundary = localCommandBoundary({ configPath: files.configPath });
     let queries = 0;
     let pidReads = 0;
@@ -1214,7 +1225,7 @@ test("Supervisor reader binds two fresh RPC replies to the unchanged local unit"
       assert.equal(result.invocationId, INVOCATION_ID);
       assert.equal(queries, 2);
     } else {
-      await assert.rejects(observeSupervisor(args, commands), scenario === "registry" ? /runner-registry-changed/ : undefined, scenario);
+      await assert.rejects(observeSupervisor(args, commands), { message: expectedError }, scenario);
       if (scenario === "missing-pid") assert.equal(queries, 0);
       if (scenario === "zero-pid") assert.equal(queries, 1);
     }
