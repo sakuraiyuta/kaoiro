@@ -5,6 +5,23 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { queryManifestRaw, queryPersistenceContract } from "../kaoiro-deploy-image-query.mjs";
+import { runDocker } from "../kaoiro-deploy-docker.mjs";
+
+test("image queries use the same Docker context as other Docker operations", () => {
+  const dir = mkdtempSync(join(tmpdir(), "momo920-context-"));
+  const previous = process.env.DOCKER_CONTEXT;
+  try {
+    const bin = join(dir, "docker");
+    writeFileSync(bin, '#!/bin/sh\nprintf "%s\\n" "$DOCKER_CONTEXT"\n', {mode:0o700});
+    process.env.DOCKER_CONTEXT = "test-context";
+    assert.equal(runDocker(bin, []), "test-context");
+    assert.equal(queryManifestRaw(bin, "sha256:x"), "test-context\n");
+  } finally {
+    if (previous === undefined) delete process.env.DOCKER_CONTEXT;
+    else process.env.DOCKER_CONTEXT = previous;
+    rmSync(dir, {recursive:true,force:true});
+  }
+});
 
 test("raw query keeps bytes and rejects invalid UTF-8", () => {
   const dir = mkdtempSync(join(tmpdir(), "momo920-query-"));

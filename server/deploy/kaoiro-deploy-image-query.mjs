@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { TextDecoder } from "node:util";
+import { runDockerRaw } from "./kaoiro-deploy-docker.mjs";
 
 export const IMAGE_QUERY_TIMEOUT_MS = 30_000;
 export const PERSISTENCE_CONTRACT = "exhaustive_stable_v1";
@@ -20,7 +20,7 @@ export function queryImageRaw(bin, imageId, expression, { env = null, timeout = 
   } else {
     args.push("--entrypoint", "/app/bin/kaoiro_server", imageId, "eval", expression);
   }
-  const raw = execFileSync(bin, args, { timeout, maxBuffer: 2 * 1024 * 1024 });
+  const raw = runDockerRaw(bin, args, { timeout, maxBuffer: 2 * 1024 * 1024 });
   return new TextDecoder("utf-8", { fatal: true }).decode(raw);
 }
 
