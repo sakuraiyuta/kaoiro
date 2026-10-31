@@ -9,14 +9,50 @@ const original = readFileSync(fixture, 'utf8');
 const args = process.argv.slice(2);
 assert.equal(args.length, 3, 'release executable, current tree, old tree required');
 
+function requireVmRecovery(report) {
+  const recovery = report.controls.filter(row => row.partition_exit);
+  assert.deepEqual(recovery.map(row => row.partition_exit), ['normal', 'kill']);
+  for (const row of recovery) {
+    assert.equal(row.old_vm_exited, true, 'recovery requires the old VM to exit');
+    assert.equal(row.old_vm_absent, true);
+    assert.notEqual(row.old_vm_pid, row.new_vm_pid);
+    assert.deepEqual(row.immediate, { error: 'ambiguous_runner' });
+    assert.equal(row.registrations[0], false);
+    assert.equal(row.registrations.at(-1), true);
+    assert.equal(row.recovered.error, undefined);
+    assert.equal(row.wrapper_unaffected_by_partition, true);
+  }
+}
+
 function run(name, script, expectedError) {
   const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 300_000 });
   const report = JSON.parse(result.stdout.trim().split('\n').at(-1));
-  console.log(JSON.stringify({ name, exit: result.status, report, stderr: result.stderr }));
+  console.log(JSON.stringify({ name, comparison_only: name === 'application-only',
+    exit: result.status, report, stderr: result.stderr }));
   assert.equal(result.error, undefined);
   assert.equal(report.all_observed_processes_gone, true, 'previous case must release its processes');
   assert.equal(report.scratch_removed, true, 'previous case must release its scratch');
-  if (expectedError) {
+  if (name === 'application-only') {
+    const recovery = report.controls.filter(row => row.partition_exit);
+    assert.deepEqual(recovery.map(row => row.partition_exit), ['normal', 'kill']);
+    for (const row of recovery) assert.equal(row.old_vm_pid, row.new_vm_pid);
+    assert.equal(recovery[0].recovered.error, undefined);
+    const last = recovery.at(-1);
+    // Application-only has both succeeded and failed in native runs; it is not VM recovery.
+    if (result.status === 0) {
+      assert.equal(report.result, 'pass');
+      assert.equal(last.recovered.error, undefined);
+      assert.equal(last.wrapper_unaffected_by_partition, true);
+    } else {
+      assert.equal(result.status, 1);
+      assert.equal(report.result, 'fail');
+      assert.ok(report.error.includes(expectedError), report.error);
+      assert.ok(last.registrations.length > 1);
+      assert.ok(last.registrations.every(value => value === false));
+      assert.deepEqual(last.observed_after_timeout, { error: 'ambiguous_runner' });
+    }
+    assert.throws(() => requireVmRecovery(report), /recovery requires the old VM to exit/);
+  } else if (expectedError) {
     assert.equal(result.status, 1);
     assert.equal(report.result, 'fail');
     assert.ok(report.error.includes(expectedError), report.error);
@@ -25,15 +61,6 @@ function run(name, script, expectedError) {
     if (name === 'vm-restart-omitted') {
       assert.equal(last.old_vm_pid, last.new_vm_pid);
       assert.deepEqual(last.recovered, { error: 'runner_registry_changed' });
-    } else if (name === 'application-only') {
-      assert.equal(recovery[0].partition_exit, 'normal');
-      assert.equal(recovery[0].recovered.error, undefined);
-      assert.equal(recovery[0].old_vm_pid, recovery[0].new_vm_pid);
-      assert.equal(last.partition_exit, 'kill');
-      assert.equal(last.old_vm_pid, last.new_vm_pid);
-      assert.ok(last.registrations.length > 1);
-      assert.ok(last.registrations.every(value => value === false));
-      assert.deepEqual(last.observed_after_timeout, { error: 'ambiguous_runner' });
     } else {
       assert.equal(name, 'registration-wait-omitted');
       assert.deepEqual(last.registrations, []);
@@ -42,18 +69,7 @@ function run(name, script, expectedError) {
   } else {
     assert.equal(result.status, 0);
     assert.equal(report.result, 'pass');
-    const recovery = report.controls.filter(row => row.partition_exit);
-    assert.deepEqual(recovery.map(row => row.partition_exit), ['normal', 'kill']);
-    for (const row of recovery) {
-      assert.equal(row.old_vm_exited, true);
-      assert.equal(row.old_vm_absent, true);
-      assert.notEqual(row.old_vm_pid, row.new_vm_pid);
-      assert.deepEqual(row.immediate, { error: 'ambiguous_runner' });
-      assert.equal(row.registrations[0], false);
-      assert.equal(row.registrations.at(-1), true);
-      assert.equal(row.recovered.error, undefined);
-      assert.equal(row.wrapper_unaffected_by_partition, true);
-    }
+    requireVmRecovery(report);
   }
 }
 
