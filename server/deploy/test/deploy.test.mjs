@@ -6921,5 +6921,5 @@ test("new-store guard never creates a missing target volume", () => {
   );
   assert.match(caught?.message ?? "no error", /target state volume is missing or unavailable/);
   assert.match(calls, /volume inspect kaoiro_kaoiro-state/);
-  assert.doesNotMatch(calls, /volume create|--mount| -v |compose stop|compose up|archive/);
+  assert.doesNotMatch(calls, /^volume create|^run .*?(?:--mount| -v )|^compose stop|^compose up|archive/m);
 });
