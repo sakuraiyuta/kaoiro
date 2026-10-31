@@ -64,9 +64,13 @@ a duplicate-key Registry, including old runners and pre-register channels.
 Observation requires exactly one joined channel matching HostRegistry's
 owner before request, before push, on response and before RPC return.
 Registry/partition identity is frozen before Endpoint starts; replacement
-refuses observation until the whole application restarts. An abnormal
-partition exit terminates all runner channels, which reconnect; wrapper
-channels and agents are unaffected. See the
+latches refusal for the current application generation. Supported manual
+recovery stops and starts the entire server release/BEAM VM, then requires
+runner registration and a fresh successful observation. An in-VM application
+restart can reset the baseline without restoring runner registration and is
+not sufficient recovery. An abnormal partition exit terminates runner
+channels; channel rejoin alone does not resend host registration. The
+partition failure itself does not terminate wrapper channels or agents. See the
 [manual recovery procedure](../../operations/codex-backend-switch.md#read-only-supervisor-observation).
 
 **Authentication**: The runner connects with per-host tokens (a server-configured
