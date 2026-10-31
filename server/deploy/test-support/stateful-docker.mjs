@@ -79,7 +79,7 @@ function compose(rest) {
       const override = JSON.parse(readFileSync(file, "utf8"));
       volumes.push(...(override.services.kaoiro.volumes ?? []));
     }
-    out({ name: "kaoiro", services: { kaoiro: { environment: {}, volumes } }, volumes: { "kaoiro-state": { name: state.volume.name } } });
+    out({ name: "kaoiro", services: { kaoiro: { environment: { KAOIRO_USERS_PATH: "/var/lib/kaoiro/users.dets" }, volumes } }, volumes: { "kaoiro-state": { name: state.volume.name } } });
     return finish();
   }
   if (sub === "build") {
@@ -130,8 +130,8 @@ function inspect(target, format) {
       "{{.State.OOMKilled}}": "false",
       "{{.State.StartedAt}}": container.startedAt ?? "2026-10-20T00:00:00Z",
       "{{json .Config.Labels}}": JSON.stringify({ "com.docker.compose.project": "kaoiro", "com.docker.compose.service": "kaoiro" }),
-      "{{json .Mounts}}": JSON.stringify([{ Type: "volume", Name: state.volume.name }]),
-      "{{json .Config.Env}}": "[]",
+      "{{json .Mounts}}": JSON.stringify([{ Type: "volume", Name: state.volume.name, Destination: "/var/lib/kaoiro" }]),
+      "{{json .Config.Env}}": JSON.stringify(["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]),
       '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}': state.volume.name,
     }[format];
     if (format === "{{.RestartCount}}") {
@@ -165,7 +165,12 @@ function run(rest) {
     out({ revision: info.revision, build_identity_formats: info.formats });
     return finish();
   }
+  if (tail[0] === "-c" && /PersistencePaths\.beam/.test(tail[1])) { out("present"); return finish(); }
   if (tail[0] === "-c" && /\.beam/.test(tail[1])) { out("absent"); return finish(); }
+  if (tail.some(arg => arg.includes("PersistencePaths.manifest()"))) {
+    out([{ store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro-dets/users.dets" }]);
+    return finish();
+  }
   if (tail[0] === "sh" && tail[1] === "-c" && tail[2].startsWith("find /data -mindepth 1 -maxdepth 1 -exec stat")) {
     out(volumeDigestLines(state.volume.dir).join("\n"));
     return finish();
