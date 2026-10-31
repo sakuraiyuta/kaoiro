@@ -155,7 +155,7 @@ describe("permission rejoin during startup diagnostics", () => {
       createHost: (hostConfig, options) => {
         host = new CodexHost(hostConfig, {
           ...options,
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           permissionRolloutRoot: root,
           turnTraceDir: join(root, "traces"),
         });

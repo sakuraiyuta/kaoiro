@@ -219,7 +219,7 @@ it.each([undefined, "exec", "app-server"] as const)("selects only the published 
       createHost: (_config, options) => { selected = options.backend;return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never; },
       prepareStartup: async () => {},
     });
-    expect(selected).toBe(backend ?? "exec");
+    expect(selected).toBe(backend ?? "app-server");
   } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
     process.argv = argv;vi.unstubAllEnvs();

@@ -1,3 +1,4 @@
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
 // Process supervisor (ADR-0023, phases 4-4b/4-5). Owns the host's wrapper child
 // processes: spawns a wrapper per `spawn`, restarts a crashed one (isolated
 // from siblings), stops/restarts on operator command, enumerates resume
@@ -507,7 +508,7 @@ export function resolveWrapperConfig(
     // authoritative over user-global Codex config, so relay a concrete
     // boolean for every codex spawn (default true when unset).
     config.codex_internal_subagents = codexInternalSubagents ?? true;
-    config.codex_backend = codexBackend ?? "exec";
+    config.codex_backend = codexBackend ?? DEFAULT_CODEX_BACKEND;
     // issue #292: relay codex.extra_models verbatim (empty/absent both fall
     // through) so the wrapper applies the same merge to its own catalog
     // resolution the runner already applied to the register's.
@@ -749,7 +750,7 @@ export class Supervisor {
     if (children.some(([, entry]) => !known(entry.parsed.engine))
       || [...spawns, ...switches].some(([, entry]) => !known(entry.engine))) return null;
     return {
-      applied_backend: this.#codexBackend ?? "exec",
+      applied_backend: this.#codexBackend ?? DEFAULT_CODEX_BACKEND,
       children: children.filter(([, entry]) => entry.parsed.engine === "codex").map(([agent_id, entry]) => ({
         agent_id, stopping: entry.stopping, restarting: entry.restarting, reset_pending: entry.pendingReset !== undefined,
       })),

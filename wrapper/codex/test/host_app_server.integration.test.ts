@@ -75,7 +75,7 @@ enabled = false
     expect(await link.waitForPermissionSyncNegotiation()).toBe(true);
     const config: WrapperConfig = { agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url,
       model: "gpt-5.6-sol", effort: "high", sandbox: "workspace-write", network_access: false, codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
-    host = new CodexHost(config, { backend: "app-server", appendSystemPrompt: "HOST_PERSONA", permissionSyncSupported: true,
+    host = new CodexHost(config, { ...(initialOverride === null ? {} : { backend: "app-server" as const }), appendSystemPrompt: "HOST_PERSONA", permissionSyncSupported: true,
       waitForPermissionSync: () => {
         const wait = { ready: false };permissionWaits.push(wait);
         return link!.waitForPermissionSync().then(() => { wait.ready = true; });

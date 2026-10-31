@@ -64,7 +64,7 @@ describe("CodexHost — abandonment after the terminal was observed", () => {
           permissionSyncSupported: true,
           turnTraceDir: join(root, "traces"),
           rateLimitResolver: async () => new Map(),
-          codexFactory: () => {
+          backend: "exec", codexFactory: () => {
             const thread = {
               async runStreamed() {
                 return {
