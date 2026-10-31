@@ -7076,3 +7076,33 @@ for (const [label, mounts] of [
     assert.doesNotMatch(calls, /compose stop|compose up|archive/);
   });
 }
+
+for (const stage of ["after-manifest", "after-contract"]) {
+  for (const [label, format, value] of [
+    ["container", "{{.Id}}", `sha256:${"e".repeat(64)}`],
+    ["image", "{{.Image}}", `sha256:${"e".repeat(64)}`],
+    ["status", "{{.State.Status}}", "exited"],
+  ]) {
+    test(`persistence guard refuses ${label} change ${stage}`, () => {
+      let currentStage = "before", injected = false, caught;
+      const calls = withCallLog("running-clean-stop", () =>
+        withEnvConsistencyFixture({contract:"1"}, () => {
+          try {
+            observeDockerCalls((args, output) => {
+              if (args.some(arg => arg.includes("PersistencePaths.manifest()")) && args.includes(OLD_IMAGE_ID)) currentStage = "after-manifest";
+              if (args.some(arg => arg.includes("PersistencePaths.contract()")) && args.includes(OLD_IMAGE_ID)) currentStage = "after-contract";
+              if (!injected && currentStage === stage && args[0] === "inspect" && args[3] === format) {
+                injected = true;
+                return `${value}\n`;
+              }
+              return output;
+            }, () => runUpdate({repo:workDir,target:headSha,maintenanceApproved:true},configWithCleanStopMeasured()));
+          } catch(error) { caught = error; }
+        }),
+      );
+      assert.equal(injected, true);
+      assert.match(caught?.message ?? "no error", /old container or image changed/);
+      assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+    });
+  }
+}
