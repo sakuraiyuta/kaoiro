@@ -2925,7 +2925,12 @@ test("resuming a legacy observation warns and preserves it without inventing ack
   writeFileSync(join(dir, "journal.json"), `${JSON.stringify(journal, null, 2)}\n`);
   const status = withScenario("running", () => runStatus({repo:workDir}, configWithOverride()));
   assert.match(status.unfinishedTransaction.legacyGuardWarning, /not verified by the new persistence guards/);
-  resumeAlreadyChecked(transactionId);
+  let warning = "";
+  const originalWrite = process.stderr.write;
+  process.stderr.write = function(chunk, ...args) { warning += String(chunk); return true; };
+  try { resumeAlreadyChecked(transactionId); }
+  finally { process.stderr.write = originalWrite; }
+  assert.match(warning, /not verified by the new persistence guards/);
   assert.deepEqual(readManifest(dir).env_consistency, historical);
   assert.equal(Object.hasOwn(historical.entries.KAOIRO_WORK_STORE_PATH, "operator_accepted_new_store"), false);
 });
