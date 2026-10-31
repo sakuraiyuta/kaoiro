@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { randomUUID } from "node:crypto";
 import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
 import { createDeliverySnapshot, deliveryBehaviourRelay, deliveryEnvironment, retiredDeliveryWarnings } from "./delivery-settings.js";

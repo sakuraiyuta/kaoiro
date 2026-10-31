@@ -84,7 +84,14 @@ host before deploying that runner release. The observation helper is read-only
 and adds no DETS schema or rollback state; use the [Codex backend preparation
 runbook](codex-backend-switch.md#preparation-before-a-default-change) for the
 applied-selection and origin checks. A server update alone does not complete
-runner preparation.
+runner preparation. Hosts retaining an observed, applied explicit backend do
+not need omitted-setting preparation; keep that setting during deployment.
+Backend changes require the [guarded fresh boundary](codex-backend-switch.md#fresh-backend-migration).
+For code rollback preserving app-server, verify explicit app-server before
+activating old code, with the same native hash and compatible state. Unknown
+creation origin alone does not prevent that same-backend rollback; unknown or
+mixed current routing does. A failed reset can attempt the previous ID: stop
+and retain the established backend until the failure is resolved.
 
 - **Pin the target to a full 40-character SHA.** Do not depend on `git pull`; record
   the SHA in the change log.
