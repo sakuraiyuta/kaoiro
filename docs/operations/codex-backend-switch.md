@@ -276,6 +276,8 @@ explicit app-server preparation is not a valid rollback target. Native-hash or
 state changes require the existing state-aware rollback procedure instead.
 Historical cross-backend observations remain evidence only and do not authorize
 that procedure on the current native pin.
+See the [U2 native migration evidence](../evidence/codex-app-server/u2-fresh-migration-0.164.0-2026-10-31.md)
+for the measured fresh migration and same-native code rollback.
 
 This changes backend selection, not the installed release. App-server startup
 failure remains an operator-visible error and closes admission; there is no
