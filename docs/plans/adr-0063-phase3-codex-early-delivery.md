@@ -2,10 +2,15 @@
 title: ADR-0063 phase 3 — Codex inter-agent early delivery
 description: Design for attaching independently leased inter-agent input to a running Codex app-server turn through turn/steer.
 status: proposed
-last_updated: 2026-10-09
+last_updated: 2026-10-31
 ---
 
 # ADR-0063 phase 3 — Codex inter-agent early delivery
+
+The current omitted backend is app-server; explicit exec remains queued. The
+[default-on plan](issue-463-default-inflight-delivery.md#c4b-implementation-boundary)
+and [fresh migration runbook](../operations/codex-backend-switch.md#fresh-backend-migration)
+define the U2/C4C adjacent-landing and existing-session safeguards.
 
 ## Decision and scope
 

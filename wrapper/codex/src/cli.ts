@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/protocol";
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { resolveDelivery, retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage } from "@kaoiro/agent-common";
 // Codex wrapper CLI — the composition root of the codex engine: loads the
 // config, connects the ServerLink, waits fail-closed for the server-pushed

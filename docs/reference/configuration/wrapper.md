@@ -74,7 +74,7 @@ Codex process keeps its separate `CODEX_HOME` for auth, sessions and resume.
   lifetimes; the live per-agent policy remains a separate gate.
 
 - `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
-  resolved to `"exec"` when omitted and relayed only for Codex launches. The
+  resolved to `"app-server"` when omitted and relayed only for Codex launches. The
   wrapper validates the closed enum. It is not accepted from `spawn` or a
   resume snapshot and is not a wire capability. Reload affects subsequent
   wrapper lifetimes, including resumes; existing wrappers retain their backend.

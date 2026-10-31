@@ -209,3 +209,5 @@ export {
 export type { DeliveryEnvironment, DeliveryInputs, RetiredCodexOperatorSteerInput } from "./delivery_modes.js";
 export { deliveryPersonaList } from "./persona_opt_in.js";
 export type { WorkToolHandlers } from "./work_tools.js";
+
+export const DEFAULT_CODEX_BACKEND = "app-server" as const;

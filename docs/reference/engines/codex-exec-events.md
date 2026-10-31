@@ -10,13 +10,13 @@ related: [protocol, plugin-model, system-overview, claude-events]
 
 ## Backend scope
 
-Codex defaults to the exec SDK path documented below. Runner-local
-`codex.backend = "app-server"` explicitly selects the app-server adapter for
+This page documents the explicit exec SDK backend. Runner-local
+`codex.backend = "exec"` selects it; omission selects app-server for
 subsequent wrapper launches/resumes; its pinned notification mappings and
 acceptance evidence are in [ADR-0058 Appendix C](../../evidence/codex-app-server/stage1-compatibility.md#appendix-c--stage-1-compatibility-gate-2026-09-18-jst)
-and the [wrapper README](../../../wrapper/codex/README.md). Both paths preserve
-queued IA, fixed `approval=never`, permission observation, and the existing
-log/result/lifecycle wire. App-server does not silently fall back to exec.
+and the [wrapper README](../../../wrapper/codex/README.md). Exec retains queued input and fixed `approval=never`; app-server capabilities
+are described in the [transport reference](codex-app-server.md). Both retain
+the existing log/result/lifecycle wire. App-server does not silently fall back to exec.
 
 ## Purpose
 
