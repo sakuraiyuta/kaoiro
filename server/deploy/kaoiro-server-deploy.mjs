@@ -972,6 +972,10 @@ function checkEnvConsistency(paths, targetRaw, oldPaths, oldRaw, composeEnv, con
     if (matching.length !== 1 || matching[0].Type !== "volume" || matching[0].Name !== volume.name) {
       fail(`${target.env}: cannot bind the existing state volume to the running container; use the non-destructive rollback`);
     }
+    const shadowed = mounts.some(m => typeof m?.Destination === "string" &&
+      m.Destination.startsWith("/var/lib/kaoiro/") &&
+      (destination === m.Destination || destination.startsWith(`${m.Destination}/`)));
+    if (shadowed) fail(`${target.env}: another mount shadows the destination in the running container; use the non-destructive rollback`);
     const destinationProbe = probeContainerPath(bin, container, destination);
     if (destinationProbe.file_probe_result !== "absent") {
       fail(`${target.env}: destination ${JSON.stringify(destination)} is present or cannot be checked. Identify the entry and decide whether to preserve or move it before retrying; use the non-destructive rollback`);
