@@ -17,7 +17,7 @@ const root = await mkdtemp(join(tmpdir(), 'kogane910-native-'));
 const exec = promisify(execFile), delay = ms => new Promise(r => setTimeout(r, ms));
 const report = { builds: {}, observations: [], turns: [], controls: [], processes: [] };
 const children = [], launched = [], logs = new Map(), recordedLogs = new Map();
-let provider, server, providerRequests = 0, toolResults = 0;
+let provider, server, pausedRunner, providerRequests = 0, toolResults = 0;
 const env = { PATH: dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', HOME: root, TMPDIR: root,
   ERL_FLAGS: '+S 3:3', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', RELEASE_NODE: 'kogane910@127.0.0.1', RELEASE_DISTRIBUTION: 'name',
   RELEASE_COOKIE: 'isolated-observation-test', PHX_SERVER: 'true', PORT: '44019', KAOIRO_RUNNER_TOKENS: 'observation-current:isolated-current,observation-old:isolated-old' };
@@ -163,12 +163,48 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
         assert.deepEqual(await observe(host), { error: 'runner_registry_changed' });
         assert.equal(await rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), true);
         assert.ok(existsSync('/proc/' + wrapper.pid));
-        await rpc('(fn -> :ok = Application.stop(:kaoiro_server); {:ok, _} = Application.ensure_all_started(:kaoiro_server); true end).()');
-        await waitFor(async () => await rpc(`KaoiroServer.HostRegistry.get(${JSON.stringify(host)}) != nil`), 'registration after whole application restart');
-        await waitFor(() => rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), 'wrapper reconnected after application restart');
-        assert.equal((await observe(host)).children[0].agent_id, agent);
+        const prior = server, oldVmPid = await rpc('System.pid()');
+        // Hold only our runner so VM-ready cannot race ahead of the missing-registration check.
+        pausedRunner = runner;
+        assert.equal(runner.kill('SIGSTOP'), true);
+        const restartVm = async () => {
+          await exec(release, ['stop'], { env, timeout: 30_000 });
+          await waitFor(() => prior.exitCode !== null || prior.signalCode !== null, 'release VM exit');
+          server = start(release, ['start']);
+          await waitFor(async () => { try { return await rpc('true'); } catch { return false; } }, 'new VM ready');
+        };
+        await restartVm();
+        assert.ok(prior.exitCode !== null || prior.signalCode !== null, 'recovery requires the old VM to exit');
+        assert.equal(existsSync('/proc/' + oldVmPid), false, 'old VM must be absent');
+        const newVmPid = await rpc('System.pid()');
+        assert.notEqual(newVmPid, oldVmPid);
+        const immediate = await observe(host);
+        assert.deepEqual(immediate, { error: 'ambiguous_runner' });
+        const registrations = [];
+        const registrationReady = async () => {
+          const registered = await rpc(`KaoiroServer.HostRegistry.get(${JSON.stringify(host)}) != nil`);
+          registrations.push(registered);
+          if (pausedRunner === runner) {
+            assert.equal(runner.kill('SIGCONT'), true);
+            pausedRunner = undefined;
+          }
+          return registered;
+        };
+        await waitFor(registrationReady, 'runner registration after VM restart');
+        assert.equal(registrations[0], false, 'VM ready precedes runner registration');
+        assert.equal(registrations.at(-1), true, 'recovery must wait for runner registration');
+        await waitFor(() => rpc(`MapSet.member?(KaoiroServer.AgentStates.connected_ids(), ${JSON.stringify(agent)})`), 'wrapper reconnected after VM restart');
+        const recovered = await observe(host);
+        assert.equal(recovered.error, undefined);
+        assert.equal(recovered.pid, runner.pid);
+        assert.equal(recovered.instance_id, value.instance_id);
+        assert.equal(recovered.build_revision, build.revision);
+        assert.deepEqual(recovered.children, value.children);
+        assert.equal(runner.exitCode, null); assert.equal(runner.signalCode, null);
         assert.ok(existsSync('/proc/' + wrapper.pid));
-        report.controls.push({ label, partition_exit: reason, wrapper_unaffected_by_partition: true, whole_application_restart_recovered: true });
+        report.controls.push({ label, partition_exit: reason, old_vm_pid: oldVmPid, new_vm_pid: newVmPid,
+          immediate, registrations, recovered, wrapper_pid: wrapper.pid,
+          wrapper_unaffected_by_partition: true, release_vm_restart_recovered: true });
       }
     }
 
@@ -192,11 +228,14 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
   report.result = 'fail'; report.error = error.stack;
   report.logs = children.map(child => ({ pid: child.pid, exit: child.exitCode, tail: logs.get(child) }));
 } finally {
-  for (const { host, agent } of launched) {
-    try { await broadcast('runner:' + host, 'stop', { version: '0', agent_id: agent }); }
-    catch (error) { report.cleanup_error = error.message; }
-  }
-  try { await waitFor(async () => (await records()).filter(x => x.kind === 'node' && x.entry.endsWith('/wrapper/codex/dist/cli.js')).every(x => !existsSync('/proc/' + x.pid)), 'owned wrappers stopped', 15_000); }
+  if (pausedRunner) pausedRunner.kill('SIGCONT');
+  try { await waitFor(async () => {
+    // A failed recovery assertion can leave registration pending; stop after it reconnects too.
+    for (const { host, agent } of launched) {
+      await broadcast('runner:' + host, 'stop', { version: '0', agent_id: agent });
+    }
+    return (await records()).filter(x => x.kind === 'node' && x.entry.endsWith('/wrapper/codex/dist/cli.js')).every(x => !existsSync('/proc/' + x.pid));
+  }, 'owned wrappers stopped', 15_000); }
   catch (error) { report.cleanup_error = error.message; }
   for (const child of [...children].reverse()) await stopOwned(child);
   if (provider) { provider.closeAllConnections(); await new Promise(r => provider.close(r)); }

@@ -124,17 +124,26 @@ For `ambiguous_runner`, identify and resolve duplicate connections using the
 existing runner-service procedure before observing again. A join that cannot
 register in the server's connection Registry fails. If the Registry or its
 partition is replaced, RPC returns `runner_registry_changed` (the local
-reader reports `runner-registry-changed`). Recovery is manual: schedule a
-whole server application restart under the
-[server update procedure](server-update-and-rollback.md), then obtain new observations.
-Reconnecting a runner alone does not clear this refusal. A channel-only
-rejoin also does not resend host registration; the required whole application
-restart reopens transports so runners register again.
+reader reports `runner-registry-changed`). The refusal is latched for the
+current server application generation. Recovery is manual: schedule a full
+server release/BEAM VM stop and start under the
+[server update procedure](server-update-and-rollback.md). Confirm that the old
+VM has exited and the new VM has started, then require runner registration
+and a fresh successful Supervisor observation before proceeding. A healthy
+server alone does not establish recovery. If either check fails, stop and
+investigate; do not treat an unavailable observation as an empty result.
 
-An abnormal Registry partition exit terminates all runner channels, which
-reconnect; wrapper channels and agents are not registered there and remain
-unaffected. Lifecycle broadcasts during the runner reconnection gap may not
-be delivered. Observation covers the current server's joined channels only,
+Stopping and starting only `:kaoiro_server` inside the same VM is not a
+supported recovery procedure: it can reset the Registry baseline without
+restoring runner registration after an abnormal partition exit. Reconnecting
+a runner alone does not clear the existing application generation's refusal.
+A channel-only rejoin also does not resend host registration.
+
+An abnormal Registry partition exit terminates runner channels. The partition
+failure itself does not terminate wrapper channels or agents, which are not
+registered there. The subsequent VM restart disconnects their server
+transports; confirm wrapper reconnection as part of recovery. Lifecycle
+broadcasts during the runner reconnection gap may not be delivered. Observation covers the current server's joined channels only,
 not offline runners or runners connected to another server. Use one
 maintenance owner; a read does not lock out later lifecycle changes.
 
