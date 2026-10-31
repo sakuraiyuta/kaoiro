@@ -63,8 +63,9 @@ it.each([undefined, "exec", "app-server"] as const)("runs the %s production fact
     await vi.waitFor(() => expect(results()).toHaveLength(1), { timeout: 45_000 });
     expect(results()[0]!.payload).toMatchObject({ state: "done", payload: { text: expect.stringContaining(nonce) } });
     expect((results()[0]!.payload.payload as Record<string, unknown>).is_error).not.toBe(true);
-    expect(hosts.mock.contexts.at(-1)?.historyBackend).toBe(backend ?? "app-server");
-    expect(hosts.mock.contexts.at(-1)?.statusExtSnapshot()?.session_capabilities).toMatchObject({ supports_context_usage: backend !== "exec" });
+    const observedHost = hosts.mock.contexts.at(-1) as CodexHost | undefined;
+    expect(observedHost?.historyBackend).toBe(backend ?? "app-server");
+    expect(observedHost?.statusExtSnapshot()?.session_capabilities).toMatchObject({ supports_context_usage: backend !== "exec" });
     expect(requests).toHaveLength(2);
     expect(requests[0]!.model).toBe("gpt-6-luna");
     expect(JSON.stringify(requests[1]!.input)).toContain(unicode);
