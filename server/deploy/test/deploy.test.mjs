@@ -6979,6 +6979,17 @@ test("previous CLI revision is declared only in its shared file", () => {
   assert.equal(result.status, 0, result.stderr);
   const paths = result.stdout.split("\0").filter(Boolean);
   assert.ok(paths.includes(fixture));
+  const workflow = readFileSync(join(repository, ".github/workflows/ci.yml"), "utf8").split("\n");
+  for (const job of ["server-deploy", "test-isolation"]) {
+    const start = workflow.indexOf(`  ${job}:`);
+    assert.notEqual(start, -1, `missing ${job} job`);
+    const end = workflow.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));
+    const lines = workflow.slice(start + 1, end < 0 ? undefined : end).map(line => line.trim());
+    assert.equal(lines.filter(line => line === 'revision="$(cat "$GITHUB_WORKSPACE/server/deploy/test-support/previous-cli-revision.txt")"').length, 1);
+    assert.equal(lines.filter(line => line === '[[ "$revision" =~ ^[0-9a-f]{40}$ ]]').length, 1);
+    const fetches = lines.filter(line => /\bgit\b.*\bfetch\b/.test(line));
+    assert.deepEqual(fetches, ['git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$revision"']);
+  }
   for (const path of paths.filter(path => path !== fixture)) {
     assert.equal(path, ".github/workflows/ci.yml", `unexpected revision literal in ${path}`);
     const lines = readFileSync(join(repository, path), "utf8").split("\n");
