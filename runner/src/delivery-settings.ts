@@ -1,3 +1,4 @@
+import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import {
   captureDeliveryEnvironment, DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS,
   deliveryPersonaList, resolveDelivery, RETIRED_CODEX_OPERATOR_STEER_ENV,
@@ -19,7 +20,7 @@ export function createDeliverySnapshot(config: RunnerConfig, env: Readonly<Recor
     engine: row.engine,
     ceiling: config.in_flight_delivery?.[row.engine]?.enabled ?? row.enabled,
     default: config.in_flight_delivery?.[row.engine]?.default ?? row.default,
-    codexBackend: config.codex?.backend ?? "exec",
+    codexBackend: config.codex?.backend ?? DEFAULT_CODEX_BACKEND,
     phase2Delivery: config.claude_code?.phase2_delivery,
     env: captured,
   })])) as Record<EngineKind, DeliveryInputs & { ceiling: boolean; default: boolean }>;

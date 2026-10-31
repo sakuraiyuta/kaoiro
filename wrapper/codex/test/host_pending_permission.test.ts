@@ -108,7 +108,7 @@ async function inTurn(): Promise<{
       started = true;
     },
     appendSystemPrompt: "p",
-    codexFactory: () => parkedClient(gate.promise),
+    backend: "exec", codexFactory: () => parkedClient(gate.promise),
     now: () => "T",
   });
   const done = host.run("hi");

@@ -23,15 +23,16 @@ SDK itself was rejected (ADR-0023 D3, ADR-0057: no second language). Accepting
 this ADR authorizes Stage 1 only. Steering (Stage 2) and approvals (Stage 3)
 remain separate decisions, and no current permission or inter-agent delivery
 contract changes until they are accepted. The operator approved publication of
-an explicit optional Stage 1 backend selector on 2026-09-18; exec remains the
-default and rollback target. Stage 1 is implemented with this opt-in surface;
-this is not approval to replace the default.
+an explicit optional Stage 1 backend selector on 2026-09-18; that stage kept exec
+as the default and did not authorize replacing it.
 
 **Default backend (2026-10-01, operator decision).** The default Codex
 backend changes from exec to app-server just before the default-on
 in-flight delivery work
 ([issue #463](https://github.com/sakuraiyuta/kaoiro/issues/463)) merges into
-`develop`. An opt-out keeps exec selectable as the rollback target. The
+`develop`. An explicit setting keeps exec selectable. Existing hosts require
+the [fresh-session transition](../operations/codex-backend-switch.md#fresh-backend-migration);
+a backend setting does not authorize cross-backend resume. The
 measurements this ADR requires before a default-adapter switch still apply
 to that change.
 

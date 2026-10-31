@@ -39,7 +39,11 @@ async function rpc(expression) {
 }
 const json = value => `Jason.decode!(${JSON.stringify(JSON.stringify(value))})`;
 const observe = host => rpc(`case KaoiroServer.CodexBackendCompatibility.observe_runner(${JSON.stringify(host)}) do {:ok, p} -> p; {:error, e} -> %{error: to_string(e)} end`);
-const broadcast = (topic, event, payload) => rpc(`KaoiroServerWeb.Endpoint.broadcast(${JSON.stringify(topic)}, ${JSON.stringify(event)}, ${json(payload)})`);
+const broadcast = (topic, event, payload) => rpc(`(fn ->
+  payload = ${json(payload)}
+  payload = if ${JSON.stringify(event)} == "spawn", do: Map.put(payload, "token", KaoiroServer.Auth.mint_wrapper_token(payload["agent_id"])), else: payload
+  KaoiroServerWeb.Endpoint.broadcast(${JSON.stringify(topic)}, ${JSON.stringify(event)}, payload)
+end).()`);
 async function records() {
   const path = join(root, 'processes.jsonl');
   return existsSync(path) ? (await readFile(path, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse) : [];
@@ -55,7 +59,7 @@ try {
   await writeFile(join(root, 'observer.mjs'), `import fs from 'node:fs';import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';import {createHash} from 'node:crypto';
 const log=x=>fs.appendFileSync(process.env.KOGANE_OBSERVATION_LOG,JSON.stringify(x)+'\\n');
 log({kind:'node',pid:process.pid,ppid:process.ppid,entry:process.argv[1]});
-const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(this,arguments);if(ex.endsWith('/codex'))log({kind:'native',pid:p.pid,sha:createHash('sha256').update(fs.readFileSync(ex)).digest('hex')});p.once('exit',(code,signal)=>log({kind:'exit',pid:p.pid,code,signal}));return p;};syncBuiltinESMExports();\n`);
+const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(this,arguments);if(ex.endsWith('/codex'))log({kind:'native',pid:p.pid,exec_turn:args.includes('exec'),sha:createHash('sha256').update(fs.readFileSync(ex)).digest('hex')});p.once('exit',(code,signal)=>log({kind:'exit',pid:p.pid,code,signal}));return p;};syncBuiltinESMExports();\n`);
   provider = createServer(async (req, res) => {
     let raw = ''; for await (const part of req) raw += part;
     const payload = JSON.parse(raw), n = ++providerRequests, id = 'observation-' + n;
@@ -80,7 +84,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
     for (const directory of ['home', 'config', 'codex', 'work', 'tmp']) await mkdir(join(state, directory), { recursive: true });
     await writeFile(join(state, 'codex/config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local"\n[model_providers.local]\nname = "Isolated observation"\nbase_url = "http://127.0.0.1:${provider.address().port}/v1"\nwire_api = "responses"\n[features]\nshell_snapshot = false\nplugins = false\n[analytics]\nenabled = false\n`);
     await writeFile(join(state, 'config/runner.config.json'), JSON.stringify({ host_id: host, server_url: 'ws://127.0.0.1:44019/runner',
-      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { auth_mode: 'apikey', internal_subagents: false } }));
+      cwd_allowlist: [join(state, 'work')], capabilities: ['codex'], codex: { backend: "exec", auth_mode: 'apikey', internal_subagents: false } }));
     const runnerEnv = { KAOIRO_RUNNER_TOKEN: 'isolated-' + label, HOME: join(state, 'home'), TMPDIR: join(state, 'tmp'),
       KAOIRO_NODE: process.execPath, KAOIRO_RUNNER_DIR: join(state, 'config'), CODEX_HOME: join(state, 'codex'),
       NODE_OPTIONS: '--import=' + join(root, 'observer.mjs'), KOGANE_OBSERVATION_LOG: join(root, 'processes.jsonl') };
@@ -250,6 +254,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,opts){const p=original.apply(t
   for (const child of [...children].reverse()) await stopOwned(child);
   if (provider) { provider.closeAllConnections(); await new Promise(r => provider.close(r)); }
   report.processes = await records();
+  report.native_turns = report.processes.filter(x => x.kind === "native" && x.exec_turn).length;
   report.all_observed_processes_gone = report.processes.filter(x => x.kind === 'node' || x.kind === 'native').every(x => !existsSync('/proc/' + x.pid));
   await rm(root, { recursive: true, force: true });
   report.scratch_removed = !existsSync(root);

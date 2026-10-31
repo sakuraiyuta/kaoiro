@@ -100,6 +100,9 @@ Moved to [Runner install and distribution](../docs/operations/runner-install.md#
 
 ## Codex backend selection
 
+Omitting `codex.backend` selects app-server; explicit `exec` remains available.
+Before changing an existing host, follow the [fresh migration procedure](../docs/operations/codex-backend-switch.md#fresh-backend-migration).
+
 Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-backend-selection).
 
 ## Codex configuration

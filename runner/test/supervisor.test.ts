@@ -43,7 +43,7 @@ describe("Supervisor Codex work observation", () => {
   const message = { ...spawnMsg, engine: "codex" };
   it("reports Codex entries through stopping and exit, while excluding other engines", () => {
     const h = harness({ codexHomeProblem: () => null });
-    expect(h.sup.observeCodexWork()).toEqual({ applied_backend: "exec", children: [], pending_spawns: [], pending_switches: [] });
+    expect(h.sup.observeCodexWork()).toEqual({ applied_backend: "app-server", children: [], pending_spawns: [], pending_switches: [] });
     h.sup.handleSpawn({ ...spawnMsg, agent_id: "lab-pc-1.other" });
     expect(h.sup.observeCodexWork()?.children).toEqual([]);
     h.sup.handleSpawn(message);

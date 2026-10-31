@@ -6,13 +6,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
+import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 import { resolveAppServerBinary } from "../src/app_server_rpc.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 // Only the external peers are scripted. No CLI construction seam is injected;
 // the exec case also measures the SDK reader on actual native command output.
-it.each(["exec", "app-server"] as const)("runs the %s production factories against a local provider", async backend => {
+it.each([undefined, "exec", "app-server"] as const)("runs the %s production factories against a local provider", async backend => {
+  const hosts = vi.spyOn(CodexHost.prototype, "run");
   const home = await mkdtemp(join(homedir(), "niko-539-cli-native-"));
   const nonce = `native-${randomUUID()}`;
   const unicode = `before${String.fromCodePoint(0x2028)}middle${String.fromCodePoint(0x2029)}after`;
@@ -48,7 +50,7 @@ it.each(["exec", "app-server"] as const)("runs the %s production factories again
     const configPath = join(home, "kaoiro.json");
     await writeFile(configPath, JSON.stringify({ agent_id: "native-fixture", persona: { id: "native-fixture", name: "Native", sprite_set: "native-fixture" },
       display_name: "Native", server_url: wire.url, model: "gpt-6-luna", sandbox: "read-only", network_access: false,
-      ...(backend === "app-server" ? { codex_backend: backend } : {}) }));
+      ...(backend === undefined ? {} : { codex_backend: backend }) }));
     vi.stubEnv("HOME", home); vi.stubEnv("CODEX_HOME", home);
     for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "CODEX_MODEL_DEFAULT",
       "KAOIRO_CODEX_APPROVAL_AXIS", "KAOIRO_CODEX_OPERATOR_STEER"]) vi.stubEnv(name, undefined);
@@ -61,21 +63,25 @@ it.each(["exec", "app-server"] as const)("runs the %s production factories again
     await vi.waitFor(() => expect(results()).toHaveLength(1), { timeout: 45_000 });
     expect(results()[0]!.payload).toMatchObject({ state: "done", payload: { text: expect.stringContaining(nonce) } });
     expect((results()[0]!.payload.payload as Record<string, unknown>).is_error).not.toBe(true);
+    const observedHost = hosts.mock.contexts.at(-1) as CodexHost | undefined;
+    expect(observedHost?.historyBackend).toBe(backend ?? "app-server");
+    expect(observedHost?.statusExtSnapshot()?.session_capabilities).toMatchObject({ supports_context_usage: backend !== "exec" });
     expect(requests).toHaveLength(2);
     expect(requests[0]!.model).toBe("gpt-6-luna");
     expect(JSON.stringify(requests[1]!.input)).toContain(unicode);
     const native = resolveAppServerBinary();
     const version = execFileSync(native, ["--version"], { encoding: "utf8" }).trim();
     expect(version).toBe("codex-cli 0.164.0");
-    const record = { backend, node: process.version, native_version: version,
+    const record = { backend: backend ?? "omitted", selected_backend: backend ?? "app-server", node: process.version, native_version: version,
       native_sha256: createHash("sha256").update(await readFile(native)).digest("hex"),
       requests: requests.map(r => ({ model: r.model, reasoning: r.reasoning })), unicode_observed: true,
       result: results()[0]!.payload, factory_injections: [] };
     const outputDir = process.env.KAOIRO_CODEX_0164_EVIDENCE_DIR;
-    if (outputDir) await writeFile(join(outputDir, `cli-native-${backend}.json`), JSON.stringify(record, null, 2) + "\n");
+    if (outputDir) await writeFile(join(outputDir, `cli-native-${backend ?? "omitted"}.json`), JSON.stringify(record, null, 2) + "\n");
   } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) listener("SIGINT");
     await running;
+    hosts.mockRestore();
     process.argv = argv; vi.unstubAllEnvs();
     await wire.close(); provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));

@@ -33,7 +33,7 @@ a turn, and EOF without a terminal throws. Result text uses the last
 answer exists. Text and error details use the existing shared bounds;
 Host relay goes through `makeResult`.
 
-The internal Host backend consumes this projection; normal launch defaults to exec.
+The internal Host backend consumes this projection; normal launch defaults to app-server.
 
 Turn projection retains native `last` and `total` token counts plus the nullable
 model context window. Usage notifications yield detached snapshots, and the
