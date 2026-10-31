@@ -8,7 +8,7 @@ const nonempty = v => typeof v === "string" && v.length > 0;
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const keys = (v, expected) => object(v) && Object.keys(v).length === expected.length && expected.every(k => Object.hasOwn(v, k));
 const sha256 = s => createHash("sha256").update(s, "utf8").digest("hex");
-export const isWithinStateVolume = p => nonempty(p) && posix.isAbsolute(p) && posix.normalize(p) === p && p.startsWith("/var/lib/kaoiro/");
+export const isWithinStateVolume = p => nonempty(p) && posix.isAbsolute(p) && posix.normalize(p) === p && p.startsWith("/var/lib/kaoiro/") && !p.endsWith("/");
 
 // JSON.parse otherwise accepts duplicated object keys with last-wins semantics.
 export function parseUniqueJson(raw) {

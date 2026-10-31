@@ -9,6 +9,59 @@ const digest = s => createHash("sha256").update(s).digest("hex");
 const raw = JSON.stringify([{store:"users",env:"USERS",default_file:"users.dets",default_path:"/tmp/users.dets"}]);
 const old = JSON.stringify([{store:"other",env:"OTHER",default_file:"other.dets",default_path:"/tmp/other.dets"}]);
 const record = () => ({guard_schema:2,old_image_id:`sha256:${"a".repeat(64)}`,target_image_id:`sha256:${"b".repeat(64)}`,path_policy:"textual_state_volume_v1",target_manifest_raw:raw,target_manifest_sha256:digest(raw),entries:{USERS:{kind:"existing",store_id:"users",target_env:"USERS",target_path:"/var/lib/kaoiro/users.dets",old_env:"USERS",old_effective_path:"/var/lib/kaoiro/users.dets",old_path_source:"env",volume_name:"state"}}});
+const newRecord = () => {
+  const r = record();
+  r.entries.USERS = {kind:"new_store",store_id:"users",target_env:"USERS",target_path:"/var/lib/kaoiro/users.dets",old_effective_path:null,old_manifest_contract:"exhaustive_stable_v1",old_manifest_raw:old,old_manifest_sha256:digest(old),target_probe_path:"/tmp/users.dets",probe_result:"absent",destination_probe_result:"absent",operator_accepted_new_store:true,volume_name:"state"};
+  return r;
+};
+
+const setDefaultPath = (r, path) => {
+  const entries = JSON.parse(r.target_manifest_raw);
+  entries[0].default_path = path;
+  r.target_manifest_raw = JSON.stringify(entries);
+  r.target_manifest_sha256 = digest(r.target_manifest_raw);
+  r.entries.USERS.target_probe_path = path;
+};
+
+const readerCases = [
+  ["top-level keys", record, r => { r.extra = true; }],
+  ["schema", record, r => { r.guard_schema = 3; }],
+  ["old image", record, r => { r.old_image_id = "bad"; }],
+  ["target image", record, r => { r.target_image_id = "bad"; }],
+  ["path policy", record, r => { r.path_policy = "bad"; }],
+  ["target manifest hash", record, r => { r.target_manifest_sha256 = "0".repeat(64); }],
+  ["target manifest parsing", record, r => { const a = JSON.parse(raw); delete a[0].default_file; r.target_manifest_raw = JSON.stringify(a); r.target_manifest_sha256 = digest(r.target_manifest_raw); }],
+  ["entry count", record, r => { r.entries.EXTRA = {...r.entries.USERS}; }],
+  ["store id", record, r => { r.entries.USERS.store_id = "other"; }],
+  ["target env", record, r => { r.entries.USERS.target_env = "OTHER"; }],
+  ["target path", record, r => { r.entries.USERS.target_path = r.entries.USERS.old_effective_path = "/outside"; }],
+  ["volume name", record, r => { r.entries.USERS.volume_name = ""; }],
+  ["existing keys", record, r => { r.entries.USERS.extra = true; }],
+  ["existing old env", record, r => { r.entries.USERS.old_env = ""; }],
+  ["existing old path", record, r => { r.entries.USERS.old_effective_path = "/var/lib/kaoiro/other"; }],
+  ["existing source", record, r => { r.entries.USERS.old_path_source = "other"; }],
+  ["new store keys", newRecord, r => { r.entries.USERS.extra = true; }],
+  ["new store old path", newRecord, r => { r.entries.USERS.old_effective_path = "/var/lib/kaoiro/old"; }],
+  ["new store contract", newRecord, r => { r.entries.USERS.old_manifest_contract = "other"; }],
+  ["old manifest hash", newRecord, r => { r.entries.USERS.old_manifest_sha256 = "0".repeat(64); }],
+  ["probe matches default", newRecord, r => { r.entries.USERS.target_probe_path = "/tmp/other"; }],
+  ["probe absolute", newRecord, r => { setDefaultPath(r, "relative"); }],
+  ["probe normalized", newRecord, r => { setDefaultPath(r, "/tmp/../relative"); }],
+  ["probe absent", newRecord, r => { r.entries.USERS.probe_result = "present"; }],
+  ["destination absent", newRecord, r => { r.entries.USERS.destination_probe_result = "present"; }],
+  ["operator accepted", newRecord, r => { r.entries.USERS.operator_accepted_new_store = false; }],
+  ["old manifest excludes store", newRecord, r => { r.entries.USERS.old_manifest_raw = raw; r.entries.USERS.old_manifest_sha256 = digest(raw); }],
+  ["old manifest parsing", newRecord, r => { const a = JSON.parse(old); delete a[0].default_file; r.entries.USERS.old_manifest_raw = JSON.stringify(a); r.entries.USERS.old_manifest_sha256 = digest(r.entries.USERS.old_manifest_raw); }],
+  ["unknown kind", record, r => { r.entries.USERS.kind = "other"; }],
+];
+for (const [name, make, change] of readerCases) {
+  test(`v2 reader rejects ${name}`, () => {
+    const r = make();
+    assert.equal(isValidEnvConsistencyV2(r), true);
+    change(r);
+    assert.equal(isValidEnvConsistencyV2(r), false);
+  });
+}
 
 test("v2 binds every target store to an inside matching path", () => {
   const r = record(); assert.equal(isValidEnvConsistencyV2(r), true);
@@ -73,7 +126,7 @@ test("manifest validates environment identifiers and shape", () => {
 
 test("state volume path containment is normalized and boundary aware", () => {
   assert.equal(isWithinStateVolume("/var/lib/kaoiro/a.dets"), true);
-  for (const path of ["relative", "/var/lib/kaoiro", "/var/lib/kaoiro-other/a", "/var/lib/kaoiro/../outside", "/var/lib/kaoiro//a"]) {
+  for (const path of ["relative", "/var/lib/kaoiro", "/var/lib/kaoiro/", "/var/lib/kaoiro-other/a", "/var/lib/kaoiro/../outside", "/var/lib/kaoiro//a"]) {
     assert.equal(isWithinStateVolume(path), false, path);
   }
 });
