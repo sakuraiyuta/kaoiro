@@ -284,14 +284,18 @@ defmodule KaoiroServerWeb.SessionCredentialBearerTest do
 
   # G43
   describe "allow-list and role" do
+    # Ticket and refresh check no role, so the resolver's allow-list check
+    # is what stops them.
     test "an identity dropped from the allow-list is 401 invalid_token", %{conn: conn} do
       token = token_for(@ao)
       put_allowlist("nextcloud:mio:viewer\n")
 
-      resp = conn |> bearer(token) |> get("/api/personas")
+      for path <- ["/api/personas", "/session/ticket", "/session/refresh"] do
+        resp = conn |> bearer(token) |> get(path)
 
-      assert resp.status == 401
-      assert challenge(resp) == [~s(Bearer realm="kaoiro", error="invalid_token")]
+        assert resp.status == 401, path
+        assert challenge(resp) == [~s(Bearer realm="kaoiro", error="invalid_token")], path
+      end
     end
 
     test "a viewer is 403 insufficient_scope on an operator endpoint", %{conn: conn} do
