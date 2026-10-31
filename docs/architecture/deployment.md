@@ -2,7 +2,7 @@
 title: Multi-host deployment architecture
 description: Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts.
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-10-31
 related: [deployment]
 ---
 
@@ -35,6 +35,11 @@ flowchart LR
 Use one server and any number of runners per host ID. TLS terminates at nginx;
 the server remains plain HTTP (decision 2026-06-11, see `docker-compose.yaml`).
 Only deployments restricted to a VPN may use the direct, nginx-free option (1.5).
+
+The device authorization grant for native clients needs this single server:
+its pending codes live in the server's memory, so it is disabled when
+`DNS_CLUSTER_QUERY` is set (see
+[server configuration](../reference/configuration/server.md#device-authorization-grant)).
 
 ### Build and restart boundaries
 

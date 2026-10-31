@@ -2,7 +2,7 @@
 title: Server configuration
 description: The server's .env variables, DETS persistence paths, and persona/footer mount points.
 status: accepted
-last_updated: 2026-10-09
+last_updated: 2026-10-31
 related: [deployment]
 ---
 
@@ -94,6 +94,30 @@ tooling should treat the file as an optional leftover, not a required object.
 `KAOIRO_PLAIN_HTTP` and `KAOIRO_PUBLISH_IP` (direct-VPN deployment only) are
 covered in the [Network and login runbook](../../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26),
 not repeated here.
+
+## Device authorization grant
+
+The device authorization grant ([ADR-0070](../../adr/0070-device-authorization-grant.md),
+contract in [device authorization grant](../protocol/device-authorization.md))
+has no env of its own. `GET /session/auth-methods` reports `device: true`, and
+`POST /oauth/device` / `POST /oauth/token` answer, only when all of these hold:
+
+| condition | when it fails |
+|---|---|
+| The request reached the server over https: a TLS-terminating proxy that **overwrites** `x-forwarded-proto` (the same assumption `force_ssl` and the cookie's Secure flag already make), with the normal build | A `KAOIRO_PLAIN_HTTP=true` build, and plain http straight to an excluded host (`localhost`, `127.0.0.1`), are refused with 503 |
+| A single backend: one server process holds the pending codes in memory | A non-empty `DNS_CLUSTER_QUERY` disables the flow at boot (warning in the log); a node connected later makes it unavailable. Two backends that do not know of each other behind one proxy cannot be detected: do not deploy that way |
+| At least one OAuth provider is configured | Without one there is nobody to approve |
+| The dashboard is served (`:serve_dashboard`, ADR-0007) | Approval happens in the dashboard |
+
+Pending codes are not persisted; a restart drops them and the devices start
+over. Issued device access tokens survive a restart, since they are encrypted
+with `SECRET_KEY_BASE`; rotating it invalidates them together with every
+session cookie. Serving the flow from several backends would need a shared
+store for pending codes and is not supported.
+
+The dev and test configs set `:device_auth_allow_insecure_transport` so the
+flow works over plain http locally; `runtime.exs` never reads it, so a release
+cannot enable it.
 
 ## See Also
 

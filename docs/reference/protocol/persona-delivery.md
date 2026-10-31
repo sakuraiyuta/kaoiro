@@ -2,18 +2,18 @@
 title: Persona delivery
 description: The persona asset HTTP API and the WS-handshake personality-prompt push, including the wire's reject/fail-closed guarantees.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-31
 related: [protocol, personas]
 ---
 
 # Persona delivery
 
-### Persona asset distribution
+## Persona asset distribution
 
 HTTP API resolving `persona.sprite_set` to images. [ADR-0008](../../adr/0008-persona-asset-distribution.md)
 initially covered sprites only; [ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md)
 expanded it on 2026-07-05 to persona-pack zip distribution, a server aggregate SoT, and
-auto-watch. It is independent of Channels and not gated by `:serve_dashboard`; the HTTP API requires a live session cookie.
+auto-watch. It is independent of Channels and not gated by `:serve_dashboard`; the HTTP API requires a live session cookie or a device access token in `Authorization: Bearer` ([device authorization grant](device-authorization.md)).
 Asset layout and format are defined by [personas](../../specs/personas.md); the pack schema is
 [persona-pack-format](../personas/pack-format.md).
 
@@ -45,8 +45,9 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
   it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
 - Manifest and image responses, including errors and HEAD, use
   `Cache-Control: private, no-store`. Both bare and versioned image requests
-  revalidate the cookie and role before any asset lookup. Anonymous, invalid,
-  and revoked sessions receive 401, even for nonexistent packs.
+  revalidate the credential (cookie or bearer) and role before any asset
+  lookup. Anonymous, invalid, and revoked credentials receive 401, even for
+  nonexistent packs.
 - Operator/admin receive all packs. Viewers receive only packs used by the
   logical running-agent list: one `AgentStates` snapshot, projected through the
   same viewer envelope allowlist as the channel, excluding `disconnected`.
@@ -91,7 +92,7 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
 - **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
   additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md) F6); no manual restart is needed.
 
-### Personality prompt delivery (ADR-0029)
+## Personality prompt delivery (ADR-0029)
 
 Under [ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md), the personality
 prompt is pushed from the server aggregate SoT (`personality.md` in the persona pack) to the
@@ -113,7 +114,7 @@ wrapper during the WS handshake.
   [ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md)
   F10).
 
-### Prompt delivery (WS handshake)
+## Prompt delivery (WS handshake)
 
 In the **handshake message** immediately after the wrapper connects to the
 server, the server pushes to the wrapper a prompt string combining “personality
@@ -126,7 +127,7 @@ detailed message format.
 - If the server is unreachable, the wrapper spawn itself fails (fail closed).
   There is no local fallback.
 
-### Data model
+## Data model
 
 Wrapper configuration has no personality-related field. Only `persona.id` /
 `persona.name` / `persona.sprite_set` (canonical values from the pack,

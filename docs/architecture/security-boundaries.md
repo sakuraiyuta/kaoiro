@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-31
 ---
 
 # Security boundaries
@@ -28,11 +28,25 @@ flowchart LR
   W["N wrappers"] -->|ws| WS["/wrapper<br/>KAOIRO_WRAPPER_TOKENS<br/>or signed (ADR-0024)"]
   R["N runners"] -->|ws| RS["/runner<br/>KAOIRO_RUNNER_TOKENS"]
   C[Client dashboard] -->|ws| CS["/client<br/>cookie + ticket (ADR-0013)<br/>token or OAuth identity (ADR-0042)"]
+  NC[Native client] -->|"https: device grant,<br/>bearer for HTTP + ticket"| CS
   WS --> SRV[Phoenix Server]
   RS --> SRV
   CS --> SRV
   SRV -->|"envelope (admin/operator/viewer)"| CS
 ```
+
+### HTTP entry for the device authorization grant
+
+The endpoint's `plug Plug.Parsers` line is replaced by
+`KaoiroServerWeb.Parsers` (`server/lib/kaoiro_server_web/endpoint.ex`): a POST
+to `/oauth/device` or `/oauth/token` is read by `NativeOAuthInput`, which
+checks transport, content type, query string, size, encoding and duplicate
+keys in that order and leaves its verdict in `conn.private` instead of
+raising; every other request goes to `Plug.Parsers.call/2` with the same
+options. A parser exception before the router is rendered with the connection
+from before `Plug.SSL`, without the controller's headers, which is why the two
+native endpoints do not use it
+([ADR-0070](../adr/0070-device-authorization-grant.md) decision 7).
 
 ## Permission control (two-axis model)
 
@@ -60,6 +74,8 @@ allow rules.
 | **Audit logging** | No durable record of who sent what to which agent and when | None | Future (when SQLite is introduced) |
 | **Tool-input masking** | Command lines / paths are shown raw in the operator dialog | Operator-only delivery + 16KB truncation | Future |
 | **Runner-less wrapper auth** | Localhost direct connection only; a token is unavailable without going through spawn | Runner required | [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) |
+| **Device access token revocation** | A device access token cannot be revoked on its own; it is valid until its three-day sliding or thirty-day absolute lifetime ends ([ADR-0070](../adr/0070-device-authorization-grant.md)) | Removing the identity from the OAuth allowlist refuses its next request, and the allowlist watcher disconnects its sockets. Already connected WebSockets are not ended by the thirty days | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |
+| **Device code availability** | Unauthenticated `POST /oauth/device` requests can hold all 20 pending codes (10 per minute), refusing legitimate devices for ten minutes | Codes expire in ten minutes; a restart clears them. Wrong user-code guesses are capped per identity and in total, which bounds a guess to about 2^-30 per code | [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801) |
 | **conversation_id confidentiality** | Observable by every dashboard operator | `participants_mismatch` guard rejects third-party reuse | [#17](https://github.com/sakuraiyuta/kaoiro/issues/17), intentional Phase 1 choice |
 
 ## See Also

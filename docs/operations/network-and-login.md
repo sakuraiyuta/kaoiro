@@ -2,7 +2,7 @@
 title: Network and login runbook
 description: nginx reverse proxy, the direct-VPN deployment alternative, and configuring OAuth login.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-10-31
 related: [deployment]
 ---
 
@@ -184,7 +184,7 @@ edit is needed, only creating the plain file at that path.
 
 ```sh
 curl http://<PHX_HOST>:<PORT>/session/auth-methods
-# → {"token":true|false,"oauth":["github","nextcloud",...]}
+# → {"token":true|false,"oauth":["github","nextcloud",...],"device":true|false}
 ```
 
 The login screen lists buttons for enabled providers; accounts outside the
@@ -196,13 +196,39 @@ re-resolving the role from the credential on every HTTP request
 time. Rejection WARN logs include `provider:uid`, so the identifier to copy
 into the allowlist can be read from the log.
 
+### Logging in a native client (device authorization grant)
+
+A native client such as kaoiro-client.nvim logs in through the browser
+([ADR-0070](../adr/0070-device-authorization-grant.md), contract in
+[device authorization grant](../reference/protocol/device-authorization.md)).
+`device` in the verify output above is `true` when the server can serve it;
+the conditions are in
+[server configuration](../reference/configuration/server.md#device-authorization-grant).
+The proxy's `proxy_set_header X-Forwarded-Proto $scheme;` above is required:
+the server accepts the flow only for requests the proxy marks as https.
+
+1. Start the login in the client. It shows a code such as `BCD-FGH-JKL` and a
+   URL ending in `/device` (or opens one that carries the code).
+2. Open the URL in a browser and log in with OAuth if asked. A shared-token
+   session cannot approve; log in with OAuth instead.
+3. Enter the code if it is not filled in, and check the confirmation: the code
+   must match the one the client shows, and the identity and role shown are
+   the ones the client will connect as. **Deny a login you did not start**
+   yourself. The client name shown is self-declared and proves nothing.
+4. Approve. Within a few seconds the client connects and shows
+   `provider:uid`; check that it is you.
+
+A code lives ten minutes. A token lasts three days after it was issued or
+last refreshed (the client refreshes it on its own) and must be approved again
+in the browser at least every thirty days. Removing the identity from the allowlist stops its client at the next
+request; there is no way to revoke one client's token alone.
+
 ## See Also
 
 - [Multi-host deployment architecture](../architecture/deployment.md).
 - [Server install runbook](server-install.md).
 - [Server configuration](../reference/configuration/server.md).
 - [Production deployment manual](production.md).
-
 
 ## Persona HTTP authentication and cache migration
 

@@ -2,7 +2,7 @@
 title: CI before landing on develop
 description: Run and record CI on the exact candidate before a director lands it on develop.
 status: accepted
-last_updated: 2026-10-28
+last_updated: 2026-10-31
 ---
 
 # CI before landing on develop
@@ -130,7 +130,11 @@ evidence.
 ## Native checks outside CI
 
 All jobs in `ci.yml` run on `ubuntu-latest`. The `server-image` job builds and
-probes the image, but CI does not validate behavior that depends on a live host
+probes the image, including booting it and probing the device authorization
+entry over loopback with and without `x-forwarded-proto: https` (G56,
+[issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801)); its claim
+cells fail the job and the rest is written to the job summary as observations.
+CI does not validate behavior that depends on a live host
 service manager, host kernel, installed native CLI, or deployment daemon.
 
 The reviewer also runs and records the relevant native check when a change

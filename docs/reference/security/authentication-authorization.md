@@ -1,7 +1,7 @@
 ---
 title: Authentication and authorization
 status: accepted
-last_updated: 2026-10-03
+last_updated: 2026-10-31
 ---
 
 # Authentication and authorization
@@ -10,7 +10,7 @@ Related security topics: [Security boundaries](../../architecture/security-bound
 
 The structural type for roles is `UserRole` in [@kaoiro/protocol](../../../protocol/src/index.ts); this page defines the authorization semantics.
 
-### Socket authentication (`server/lib/kaoiro_server/auth.ex`)
+## Socket authentication (`server/lib/kaoiro_server/auth.ex`)
 
 | Socket | Topic convention | Authentication | env | When unset |
 |---|---|---|---|---|
@@ -28,7 +28,8 @@ The two client paths coexist independently. If `KAOIRO_CLIENT_TOKENS` is unset
 and OAuth is enabled, only OAuth is available; the reverse enables only tokens;
 with both unset no one can enter. The dashboard selects its login screen using
 the unauthenticated `GET /session/auth-methods`
-(`{"token": bool, "oauth": [provider, ...]}`).
+(`{"token": bool, "oauth": [provider, ...], "device": bool}`; `device` is
+the [device authorization grant](#device-authorization-grant)'s availability).
 
 The wrapper/runner dev fallback does not operate in `:prod` (the runtime reads
 `env: config_env()` from `config.exs` via `Application.get_env(:kaoiro_server, :env)`).
@@ -37,7 +38,7 @@ rejected, while a valid server-minted signed wrapper token is still accepted
 unless its agent has been revoked. Other wrapper connections are rejected. This
 does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 
-### Topic authorization (channel `join/3`)
+## Topic authorization (channel `join/3`)
 
 - Wrapper: `WrapperChannel.join/3` (`wrapper_channel.ex:117-127`) validates the agent ID
   charset (`validate_agent_id/1`) and duplicate connections (`reject_if_connected/1`,
@@ -48,7 +49,7 @@ does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 - The charset is `[A-Za-z0-9._-]` ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61)),
   structurally preventing topic-string injection.
 
-### Three roles ([ADR-0050](../../adr/0050-principal-model-and-graded-access-control.md) D2)
+## Three roles ([ADR-0050](../../adr/0050-principal-model-and-graded-access-control.md) D2)
 
 `admin` > `operator` > `viewer`, introduced in issue #188.
 
@@ -69,7 +70,7 @@ does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 - The exception is `guard_against_reset_pending/2`. It is a restriction rather
   than a privilege, so admin is included in the guard as well.
 
-### Role-based output gate ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md))
+## Role-based output gate ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md))
 
 `AgentsChannel.handle_out` uses an **allow-list**. Viewers receive:
 
@@ -85,7 +86,7 @@ removed for viewers (fail-closed). A new envelope type is not delivered unless
 explicitly declared (`sanitize_envelope_for(:viewer, _) -> :drop`). See the
 MUST items in [threat-model](enforcement-boundaries.md#constraints) for threat-based rationale.
 
-#### Agent status lines (issue 482)
+### Agent status lines (issue 482)
 
 A viewer sees an agent's status line only for an agent in its own role-filtered
 snapshot. `status_line_snapshot`, `status_line` and `status_line_history` all go
@@ -95,7 +96,7 @@ viewer, and a hidden id and a nonexistent id answer the history request alike
 (`unknown_agent`). `status_line_settings` and `set_status_line_retention` are
 operator-capable only. See [status line](../inter-agent/status-line.md).
 
-### Operator-only inbound (`handle_in`)
+## Operator-only inbound (`handle_in`)
 
 Call `require_operator(socket)` first, both directly and inside
 `relay_to_wrapper_guarded/3` / `relay_to_runner_guarded/3`:
@@ -115,14 +116,15 @@ The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a
 snapshot (OAuth section, #148, below).
 
-### Authenticated persona HTTP delivery
+## Authenticated persona HTTP delivery
 
 `GET /api/personas` and `GET /personas/:sprite_set/:file` use
 `RequireAuthenticatedPlug` after session decoding and before content negotiation.
-It live-resolves the cookie credential and accepts viewer/operator/admin only.
-Anonymous, invalid and revoked credentials receive 401 before lookup; no token
-in a URL or WS ticket substitutes for the HTTP cookie. Responses use
-`Cache-Control: private, no-store`.
+It live-resolves the request's credential, the cookie or a device access token
+in `Authorization: Bearer` ([below](#device-authorization-grant)), and accepts
+viewer/operator/admin only. Anonymous, invalid and revoked credentials receive
+401 before lookup; no token in a URL, a form body or a WS ticket substitutes for
+them. Responses use `Cache-Control: private, no-store`.
 
 Operator/admin receive all packs. Viewer access uses the shared channel viewer
 projection over non-disconnected `AgentStates` entries, canonical persona
@@ -134,20 +136,22 @@ conditional requests. Filtered versions exclude hidden content. Details and
 request-snapshot race semantics are in [persona delivery](../protocol/persona-delivery.md).
 The detail endpoint below remains operator/admin-only.
 
-### Operator-only HTTP endpoint (issue #232)
+## Operator-only HTTP endpoint (issue #232)
 
 Separate from the WS `handle_in` gate, an operator/admin-only HTTP endpoint
 exists. `KaoiroServerWeb.RequireOperatorPlug` gates after `:fetch_session`: it
-extracts the session-cookie credential with
-`KaoiroServerWeb.SessionCredential.resolve/1` and live-resolves the role on
-every request with `ClientSocket.role_for/1` (the same function as WS). Missing
-or revoked credentials return 401; viewers return 403.
+extracts the request's credential (cookie or device access token) with
+`KaoiroServerWeb.SessionCredential.resolve_request/1` and live-resolves the role
+on every request with `ClientSocket.role_for/1` (the same function as WS).
+Missing or revoked credentials return 401; viewers return 403, with
+`WWW-Authenticate: Bearer realm="kaoiro", error="insufficient_scope"` when the
+credential is a bearer.
 
 | endpoint | Reason |
 |---|---|
 | `GET /api/personas/:id` | Returns all manifest.json metadata and the full personality.md. A custom pack's personality.md is a system prompt and may contain proprietary operating instructions, so ADR-0021 F7's fail-closed default applies (new output surfaces are operator-only; viewer disclosure requires an explicit decision). |
 
-### Cookie / ticket sessions ([ADR-0013](../../adr/0013-user-token-cookie-persistence.md))
+## Cookie / ticket sessions ([ADR-0013](../../adr/0013-user-token-cookie-persistence.md))
 
 - Initial authentication exchanges `?token=...` in a **POST body** (avoiding URL
   log leakage) for an httpOnly, encrypted session cookie (three-day sliding).
@@ -166,8 +170,14 @@ or revoked credentials return 401; viewers return 403.
   forms cannot send JSON content-type and cross-origin `fetch` stops at preflight.
   `GET /?token=` is a plain navigation that sends cookies, so it instead checks
   the session and ignores the token when `oauth_identity` is present.
+- `GET /session/ticket` and `GET /session/refresh` also accept a device access
+  token. A request with an `Authorization` header is judged on it alone and
+  **never falls back to the cookie**; a bearer failure leaves the session and
+  the sockets alone (it neither clears the cookie nor disconnects).
+  `SessionCredential.resolve/1` stays cookie-only; `resolve_request/1` adds the
+  header and reports which source answered.
 
-### OAuth login ([ADR-0042](../../adr/0042-oauth-allowlist-login.md))
+## OAuth login ([ADR-0042](../../adr/0042-oauth-allowlist-login.md))
 
 - Providers are Google / GitHub / Nextcloud. Use `assent` + `Req`; only
   Nextcloud uses a custom `Assent.Strategy.OAuth2.Base` strategy
@@ -220,7 +230,65 @@ or revoked credentials return 401; viewers return 403.
   unavailable when deployed with `KAOIRO_PLAIN_HTTP=true` (GitHub / Nextcloud
   permit HTTP).
 
-### Two wrapper token paths
+## Device authorization grant
+
+[ADR-0070](../../adr/0070-device-authorization-grant.md),
+[issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801). The wire
+contract is [device authorization grant](../protocol/device-authorization.md).
+
+- **Credential.** The device access token is `Phoenix.Token.encrypt` of
+  `%{provider, uid, iat}` with the salt `device_access` and the endpoint's
+  `secret_key_base`: the session cookie's identity plus the first issue time.
+  The server keeps no token. `KaoiroServer.DeviceAccessToken` checks the
+  payload shape (exactly those three keys, non-empty binaries, integer `iat`
+  no more than 60 seconds ahead), a sliding three-day lifetime from the
+  token's signing time and an absolute thirty-day lifetime from `iat`. A
+  refresh keeps `iat`, so refreshing cannot extend a stolen token past thirty
+  days. The thirty days do not end an already connected WebSocket.
+- **Where it is accepted.** Persona HTTP, `GET /session/ticket` and
+  `GET /session/refresh`, in the `Authorization` header only (RFC 6750 §2.1).
+  `DELETE /session` and the approval API never read it; the approval API
+  refuses it with `cookie_session_required`.
+- **Failures.** Malformed or plain-http requests are 400 `invalid_request`,
+  another scheme is 401 without an error attribute, and a token that fails
+  decryption, shape or lifetime checks, or whose identity left the allow-list,
+  is 401 `invalid_token`, each with its `WWW-Authenticate` challenge. A
+  failure returns no part of the payload to the caller, so no disconnect
+  target or new token is derived from unverified input. A bearer failure
+  never clears a session or disconnects a socket.
+- **Transport.** The flow and the bearer are served only when
+  `conn.scheme` is `:https` after `Plug.SSL` applies `x-forwarded-proto`
+  (`SessionCredential.secure_transport?/1`). The
+  `:device_auth_allow_insecure_transport` exception is set only in `dev.exs`
+  and `test.exs`, and `runtime.exs` never reads it.
+- **Approval.** Only an OAuth session cookie whose identity is on the
+  allow-list may look up and approve a code, with a JSON body. Approving binds
+  that identity (not a role) to the code; the token endpoint re-checks the
+  allow-list when the code is collected and answers `access_denied` if the
+  identity has left it. The device then acts with the identity's current role.
+- **Limits.** User codes are nine letters from a 20-letter alphabet
+  (2^38.9). Failed lookups and decisions are capped at 5 per identity and 20 in
+  total in any 900-second window, and at most 20 codes are pending, so a
+  single code (alive 600 seconds) faces at most 20 wrong guesses: about
+  2^-30.0. Issuing is capped at 10 per 60 seconds and 64 held entries.
+- **Harm of a wrong match.** Guessing someone's code makes their device log in
+  as the guesser (they see the guesser's role and act as the guesser), not
+  the reverse. The token response and the client show the connected
+  identity, and the approval screen names the identity being bound. In
+  remote phishing (RFC 8628 §5.4) someone who is not on the allow-list starts
+  a flow and gets an allowed person to approve it; the rate limits do not
+  help there. The approval screen asks the person to check that the code
+  matches the device in front of them and to deny a login they did not start,
+  codes live 600 seconds, and the self-declared `client_id` is shown as such.
+- **Revocation.** There is no per-token revocation, as with a copied cookie.
+  Removing the identity from the allow-list refuses its next request, and the
+  allow-list watcher disconnects its sockets.
+- **Logging.** Issue, approval, denial, grant and rate limiting are logged
+  with the identity and the self-declared `client_id`; device codes, user codes
+  and access tokens are not logged, and `device_code` / `user_code` are in the
+  parameter filter.
+
+## Two wrapper token paths
 
 1. **Pre-registered**: `agent_id:token` pairs in `KAOIRO_WRAPPER_TOKENS`
 2. **Server-minted signed token**: The spawn path (ADR-0024) issues one through
