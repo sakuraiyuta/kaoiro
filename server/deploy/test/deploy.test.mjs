@@ -2364,6 +2364,8 @@ function withNewWorkStore(overrides, fn) {
     composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
     containerEnvJson: "[]",
     probeExit: "1",
+    contract: "1",
+    volumePresent: "1",
     ...overrides,
   }, fn);
 }
@@ -2372,7 +2374,7 @@ function withNewWorkStore(overrides, fn) {
 // operator's explicit per-store flag, so every test that must reach the
 // probe (or the mount-safety refusal behind it) names the store here.
 const ACCEPT_WORK_STORE = new Set(["KAOIRO_WORK_STORE_PATH"]);
-const WORK_STORE_PROBE_CALL = `exec kaoiro-c1 env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`;
+const WORK_STORE_PROBE_CALL = `exec sha256:${"f".repeat(64)} env LC_ALL=C stat --printf=present -- ${WORK_STORE_DEFAULT}`;
 
 function workStoreFlags(extra = {}) {
   return { repo: workDir, target: headSha, acceptNewStores: ACCEPT_WORK_STORE, ...extra };
