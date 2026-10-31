@@ -6961,7 +6961,7 @@ test("previous CLI handles a pending v2 journal conservatively across four entry
   const previous = join(root, "previous-cli");
   mkdirSync(previous);
   const repository = fileURLToPath(new URL("../../../", import.meta.url));
-  const archive = execFileSync("git", ["-C", repository, "archive", "7e2447f2ea14ebd8d08d478bd060e66b12dfdffc", "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"]);
+  const archive = execFileSync("git", ["-C", repository, "archive", "7e2447f2ea14ebd8d08d478bd060e66b12dfdffc", "server/deploy", "runner/deploy", "scripts/build-identity.mjs", "scripts/child-process-environment.mjs"], {maxBuffer:32 * 1024 * 1024});
   execFileSync("tar", ["-x", "-C", previous], {input:archive});
   const cli = join(previous, "server/deploy/kaoiro-server-deploy.mjs");
   const configPath = join(root, "old-cli-config.json");
