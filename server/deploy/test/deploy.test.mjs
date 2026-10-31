@@ -6037,7 +6037,8 @@ function withPolicyPlacement(options, fn) {
   try {
     return withComposePlans(JSON.stringify(compose), JSON.stringify(compose), () =>
       withEnvConsistencyFixture({ evalOutput: JSON.stringify(options.missingRegistration ? [users] : [users, store]),
-        oldEvalOutput: JSON.stringify(options.newStore ? [users] : [users, store]), containerEnvJson: JSON.stringify(oldEnv) }, () =>
+        oldEvalOutput: JSON.stringify(options.newStore ? [users] : [users, store]), containerEnvJson: JSON.stringify(oldEnv),
+        contract: options.newStore ? "1" : undefined }, () =>
         withScenario("running-clean-stop", () => fn(() => existsSync(calls) ? readFileSync(calls, "utf8") : ""))));
   } finally {
     writeFileSync(bin, FAKE_DOCKER);
@@ -6090,10 +6091,10 @@ test("policy placement: a legacy pre-gate resume must observe the store before m
 
 test("policy placement: matching tmp fallback refuses before the maintenance flag and stop", () => {
   withPolicyPlacement({ policyPath: "/tmp/kaoiro-dets/delivery_policies.dets", fallbackMatch: true }, calls => {
-    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), /policy path is outside/);
+    assert.throws(() => runUpdate({ repo: workDir, target: headSha }, configWithCleanStopMeasured()), /not a normalized path below the state volume/);
     const journal = readJournal(policyTransactionDir());
-    assert.equal(journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV].match, true);
-    assert.equal(journal.phase, PHASE.ENV_CONSISTENCY_CHECKED);
+    assert.equal(journal.phase, PHASE.BUILD_PREPARED);
+    assert.ok(!journal.history.some(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED));
     assert.ok(!calls().includes("compose stop"));
     assert.ok(calls().includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
   });
@@ -6104,7 +6105,8 @@ test("policy placement: explicitly accepted new-store mismatch also passes the p
     assert.throws(() => runUpdate({ repo: workDir, target: headSha, acceptNewStores: new Set([POLICY_ENV]) }, configWithCleanStopMeasured()), err => err.exitCode === 64);
     const journal = readJournal(policyTransactionDir());
     const observed = journal.history.find(e => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation.entries[POLICY_ENV];
-    assert.equal(observed.first_application, "never_existed");
+    assert.equal(observed.kind, "new_store");
+    assert.equal(observed.destination_probe_result, "absent");
     assert.equal(observed.operator_accepted_new_store, true);
     assert.ok(journal.policy_store_placement);
     assert.ok(calls().includes("create --name kaoiro-policy-"));
@@ -6377,9 +6379,9 @@ test("Compose inputs: fresh forward binds policy and accepted new-store reads to
       return output;
     }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true,
       acceptNewStores: new Set([POLICY_ENV]) }, { ...configWithCleanStopMeasured(), health_url: null }), args => {
-      if (args[0] === "exec" && args.includes("stat")) { probes.push(args[1]); assert.equal(args[1], "kaoiro-c1"); }
+      if (args[0] === "exec" && args.includes("stat")) { probes.push(args[1]); assert.equal(args[1], `sha256:${"f".repeat(64)}`); }
     });
-    assert.deepEqual(probes, ["kaoiro-c1"]);
+    assert.deepEqual(probes, [`sha256:${"f".repeat(64)}`, `sha256:${"f".repeat(64)}`]);
     assert.equal(result.phase, "done");
     assertForwardComposeArgs(calls, join(root, "kaoiro-deploy", result.transactionId), "yaml", 5, 2);
   });
