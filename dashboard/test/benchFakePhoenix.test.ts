@@ -16,8 +16,10 @@ import { describe, expect, it } from "vitest";
 // reported instead of being treated as a member requirement. Object patterns
 // and assignment targets are judged by the type of the value being
 // destructured, at any nesting depth. Assignment targets follow static
-// property names and array elements. An assertion from a Phoenix type to a
-// different type is counted, and is not a member requirement.
+// property names and array elements. A nested target under a non-static
+// computed name is an unsupported computed assignment target. An
+// assertion from a Phoenix type to a different type is counted, and is
+// not a member requirement.
 //
 // Not covered: a Phoenix value read outside protocol.ts, and erasure that is
 // not an assertion (a structural variable or parameter). Member presence
@@ -220,9 +222,14 @@ function surface(overrides: Record<string, string> = {}): Surface {
         if (!ts.isPropertyAssignment(prop)) continue;
         if (!nestedTarget(prop.initializer)) continue;
         const name = staticName(prop.name);
-        // A non-static name has no property to follow. The inner literal's
-        // own type is not the source property type.
-        if (name === undefined) continue;
+        if (name === undefined) {
+          if (ts.isComputedPropertyName(prop.name)) {
+            unsupported.push(
+              `unsupported computed assignment target at ${at(prop)}`,
+            );
+          }
+          continue;
+        }
         const inner = propertyType(source, name, prop.name);
         if (inner) visitAssignTarget(prop.initializer, inner);
       }
@@ -570,6 +577,23 @@ describe("bench fake phoenix transport", () => {
       expect(out).toContain(`destructuring of a Phoenix value at ${name}`);
     }
     expect(out).toContain("dynamic member access on Channel at benchDynamic");
+  }, 120_000);
+
+  it("fails closed on a computed assignment target", () => {
+    const extra = [
+      "export function benchComputedAssign(",
+      "  holder: { inner: { topic: string } },",
+      "  key: string,",
+      "): string {",
+      "  let topic = \"\";",
+      "  ({ [key]: { topic } } = holder);",
+      "  return topic;",
+      "}",
+    ].join("\n");
+    const computedOut = problems(probed(protocolSource, extra));
+    expect(computedOut).toEqual([
+      "unsupported computed assignment target at benchComputedAssign",
+    ]);
   }, 120_000);
 
   it("fails closed on mixed Phoenix unions and intersections", () => {
