@@ -14,7 +14,7 @@ const SECRET = "abcdef123456";
 const MASKED = "api_key=********3456";
 
 describe("CodexHost stderr — production default", () => {
-  it("masks a real SDK config failure on the child process stderr and wire", async () => {
+  it("masks a real explicit-exec SDK config failure on the child process stderr and wire", async () => {
     const codexHome = await mkdtemp(join(tmpdir(), "kaoiro-codex-home-"));
     await writeFile(join(codexHome, "config.toml"), `api_key=${SECRET}\n`);
     const childSource = `
@@ -31,6 +31,7 @@ describe("CodexHost stderr — production default", () => {
         sandbox: "read-only",
         network_access: false,
       }, {
+        backend: "exec",
         onState: () => {},
         onLog: (envelope) => logs.push(envelope),
         onTurnEnd: () => { ended = true; },
