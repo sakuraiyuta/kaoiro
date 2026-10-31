@@ -1938,39 +1938,17 @@ test("runUpdate throws when the module-presence probe itself fails (image start 
   );
 });
 
-// issue #322 M5 (must-fix, second half): default_path came from the
-// TARGET image's own manifest even for the OLD (currently running)
-// container's fallback — an assumption, not a measurement, unless old
-// and new happen to compile the same default. When the old image CAN
-// answer (its own beam probe reports present), checkEnvConsistency now
-// prefers ITS default_path and records assumed_default_source:
-// "old_image" (pinned above, in the status tests). This test covers the
-// other branch: the old image cannot answer (a pre-#310 old image is
-// the common real case), so the fallback to the target's own
-// default_path is used, and the observation says so explicitly.
-test("runUpdate falls back to the target image's own default_path, and records the assumption, when the old image's beam probe reports absent", () => {
-  const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture(
-      {
-        // Declare the same path FAKE_DOCKER's default eval output gives
-        // as the target image's own default_path, so falling back to it
-        // (this test's whole point) is a match, not a genuine migration
-        // — that failure mode already has its own dedicated tests.
-        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
-        containerEnvJson: "[]",
-        oldBeamAbsent: "1",
-      },
-      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+test("runUpdate refuses before stop when old manifest is unavailable", () => {
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({ oldBeamAbsent: "1", containerEnvJson: "[]" }, () =>
+      assert.throws(
+        () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        /old image persistence manifest unavailable/,
+      ),
     ),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.container_source, "default");
-  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
-  assert.equal(entry.match, true);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  assert.match(calls, new RegExp(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
 });
 
 // issue #322 M5 follow-up (must-2, クロエ review): the earlier "falls
@@ -2011,32 +1989,17 @@ test("runUpdate prefers the OLD image's own default_path over the target's, when
   assert.equal(entry.match, true);
 });
 
-// issue #322 M5 follow-up (should-2, クロエ review): the OLD image's own
-// manifest is an OPTIONAL enhancement (a fact about that image's history,
-// not this transaction's own defect) — a shape violation there must fall
-// back to the target's own default_path, the same as the old image being
-// unable to answer at all (beam absent), not abort an otherwise-clean
-// update. oldEvalOutput reports only 3 of the 4 required keys (missing
-// default_path) — a genuine shape violation per isValidPersistencePathEntry.
-test("runUpdate falls back to the target image's own default_path, and does not abort, when the old image's manifest has a shape violation", () => {
-  const oldEvalOutput = JSON.stringify([{ store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
-  const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture(
-      {
-        oldEvalOutput,
-        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
-        containerEnvJson: "[]",
-      },
-      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+test("runUpdate refuses a malformed old manifest before stop", () => {
+  const oldEvalOutput = JSON.stringify([{store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets"}]);
+  const calls = withCallLog("running-clean-stop", () =>
+    withEnvConsistencyFixture({oldEvalOutput, containerEnvJson: "[]"}, () =>
+      assert.throws(
+        () => runUpdate({repo: workDir, target: headSha, maintenanceApproved: true}, configWithCleanStopMeasured()),
+        /old image persistence manifest unavailable/,
+      ),
     ),
   );
-  assert.equal(result.phase, "done");
-  const backupRoot = join(root, "kaoiro-deploy");
-  const manifest = readManifest(join(backupRoot, result.transactionId));
-  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
-  assert.equal(entry.assumed_default_source, "target_image");
-  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
-  assert.equal(entry.match, true);
+  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
 });
 
 test("runUpdate throws when the target image's eval exits 0 but does not print valid JSON", () => {
