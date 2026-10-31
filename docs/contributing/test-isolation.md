@@ -98,6 +98,13 @@ node scripts/test-isolation/run-node-tests.mjs
 node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs
 ~~~
 
+In a shallow checkout, fetch the previous deploy CLI revision before running
+the Node test entries:
+
+~~~sh
+git fetch --no-tags --depth=1 origin "$(cat server/deploy/test-support/previous-cli-revision.txt)"
+~~~
+
 These are the CI job's steps. The checker prints each problem on stderr and one JSON line, {"entries":N,"problems":N}, on stdout; it exits 0 only with no problems. The test-isolation job runs the checker once against the real repository. Its self-tests cover content selection, first-import enforcement, unsupported acquisition, canary and helper contracts, setupOrder, the checker CLI failure path, and CI wiring. The separate isolation and child-process-environment suites continue to cover runtime refusals, network rules, permits, and child environment handling.
 
 The Node runner uses the canonical entries, runs them serially from the repository root and requires each file to report a real, non-skipped, non-todo test. It sets `KAOIRO_PREGATE_REAL=1` in the child environment, even when the caller omits it or sets `0` and does not add or change `NODE_OPTIONS`. Exceptions are exact entries with an issue and reason in `scripts/test-isolation/node-ci-exceptions.mjs`; their failures and missing events still fail the job, and a real test makes an exception stale. CI checks the issue number's shape, not whether it is open or relevant; reviewers must check that. There are currently no exceptions. The real pre-gate entry must report all six cases as real passing tests; retaining its obsolete exception fails with `stale exception`, and losing activation fails with `no real test ran`.
