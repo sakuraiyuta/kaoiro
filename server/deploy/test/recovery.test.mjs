@@ -147,7 +147,7 @@ test("build-prepared guidance is conditional and preserves legacy rollback rende
 test("5-b runbook does not prescribe live copy or an outside-volume match", () => {
   const runbook = readFileSync(join(here, "../../../docs/operations/server-update-and-rollback.md"), "utf8");
   assert.ok(runbook.includes("variable unset and no file at the target image's default path, which may\n  differ from the old container's actual path."));
-  assert.ok(runbook.includes("perform the additional checks in the final paragraph of 4.3 (5-b)."));
+  assert.ok(runbook.includes('perform the additional checks in the 4.3 (5-b) paragraph that begins\n  "For a genuinely new store".'));
   const section = runbook.split("**(5-b) Existing or uncertain persistence store: refusal and recovery**")[1]?.split("**(5-c)")[0];
   assert.ok(section);
   assert.ok(!section.includes("docker cp <container>:/tmp/kaoiro_users.dets"));
