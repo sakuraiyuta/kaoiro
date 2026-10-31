@@ -1,7 +1,7 @@
 ---
 title: Transaction state table for server deploy and runner update
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-10-31
 ---
 
 # Transaction state table for server deploy and runner update
@@ -770,7 +770,7 @@ Each unit gets its own issue when it starts; L1 first.
 | L1b | destructive rollback steps and resume (5.3), live fleet admission on resume, audit-only fleet record | L1 | no server row deferred | — |
 | L2 | superseded by [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709) N2 and N3 ([N3 plan](issue-709-n3-recovery-table.md)) | — | — | — |
 | L3 | superseded by issue #709 N2 (restore phases) and N3 | — | — | — |
-| L4 | verified 5-b acknowledgement | L1 (table, rendering, harness) | `build_prepared` 5-b case progresses | 553 |
+| L4 | correct 5-b refusal guidance | L1 (table, rendering, harness) | existing-store mismatch remains refused; guidance directs non-destructive rollback | 553 not planned after L4 lands |
 | L5 | compose file set with override hashes | L1 (harness; the 681 recipe flips from "recoverable" to "admitted") | 681 recipe completes forward | 681 root |
 
 ## 9. Verification plan (summary)

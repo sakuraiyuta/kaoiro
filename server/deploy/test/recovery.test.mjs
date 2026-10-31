@@ -128,6 +128,33 @@ test("a journal without invocation renders named placeholders, never a guess", (
   assert.deepEqual(rollback.placeholders.map((p) => p.name), ["<repo>", "--config <path>"]);
 });
 
+test("build-prepared guidance is conditional and preserves legacy rollback rendering", () => {
+  const lines = renderRecovery(TX, journalAt(PHASE.BUILD_PREPARED, { invocation: null, containerId: null, target: null }));
+  const update = lines.find((line) => line.command === "update");
+  const rollback = lines.find((line) => line.command === "rollback");
+  assert.equal(update.note, "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying alone cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).");
+  assert.ok(update.argv.includes("<target>"));
+  assert.ok(rollback.argv.includes("<repo>"));
+  assert.equal(rollback.operation, "non-destructive");
+  const text = formatRecovery(lines);
+  assert.ok(text.includes(`note: update: ${update.note}`));
+  assert.ok(!text.includes("legacy journal:"));
+  for (const phase of [PHASE.OLD_IMAGE_SAVED, PHASE.ENV_CONSISTENCY_CHECKED, PHASE.MAINTENANCE_GATE_PASSED, PHASE.STOPPED]) {
+    assert.ok(!formatRecovery(renderRecovery(TX, journalAt(phase, { containerId: null }))).includes("legacy journal:"));
+  }
+});
+
+test("5-b runbook does not prescribe live copy or an outside-volume match", () => {
+  const runbook = readFileSync(join(here, "../../../docs/operations/server-update-and-rollback.md"), "utf8");
+  const section = runbook.split("**(5-b) Existing or uncertain persistence store: refusal and recovery**")[1]?.split("**(5-c)")[0];
+  assert.ok(section);
+  assert.ok(!section.includes("docker cp <container>:/tmp/kaoiro_users.dets"));
+  assert.ok(section.includes("Copying a live DETS file to the target volume does not unblock either"));
+  assert.ok(section.includes("Do not point compose or an override outside"));
+  assert.ok(section.includes("The operator must also establish the old image's"));
+  assert.ok(section.includes("if that cannot be established,"));
+});
+
 test("refusals and deferred rows render a note and no command", () => {
   const lines = renderRecovery(TX, journalAt(PHASE.ROLLBACK_RESTORING));
   assert.deepEqual(lines.map((l) => [l.command, l.argv]), [["update", null], ["rollback", null]]);

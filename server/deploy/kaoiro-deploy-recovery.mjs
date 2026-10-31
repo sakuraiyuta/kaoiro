@@ -29,6 +29,7 @@ export const CONDITION = Object.freeze({
 
 const CLOSED = "closed";
 const DEFERRED_L1B = "deferred(L1b)";
+const BUILD_PREPARED_GUIDANCE = "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying alone cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).";
 
 const entry = (command, operation, { condition = null, closure = CLOSED, note = null } = {}) =>
   Object.freeze({ command, operation, condition, closure, note });
@@ -62,7 +63,11 @@ const ROWS = [
     }),
     ...nonDestructiveRollback,
   ]],
-  ...[PHASE.BUILD_PREPARED, PHASE.ENV_CONSISTENCY_CHECKED, PHASE.MAINTENANCE_GATE_PASSED].map((phase) => [phase, [
+  [PHASE.BUILD_PREPARED, [
+    entry("update", OPERATION.RESUME, { note: BUILD_PREPARED_GUIDANCE }),
+    ...nonDestructiveRollback,
+  ]],
+  ...[PHASE.ENV_CONSISTENCY_CHECKED, PHASE.MAINTENANCE_GATE_PASSED].map((phase) => [phase, [
     entry("update", OPERATION.RESUME),
     ...nonDestructiveRollback,
   ]]),
@@ -211,6 +216,7 @@ export function formatRecovery(lines) {
       line += ` (replace ${l.placeholders.map((p) => `${p.name} with ${p.meaning}`).join("; ")})`;
     }
     text.push(line);
+    if (l.note === BUILD_PREPARED_GUIDANCE) text.push(`note: ${l.command}: ${l.note}`);
   }
   return text.join("\n");
 }

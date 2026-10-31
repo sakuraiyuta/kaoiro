@@ -155,9 +155,8 @@ command per step, backed by a transaction manifest + journal under
 `backup_root` (default `~/kaoiro-deploy/`). Run it as a normal user directly on
 the server host, inside its checked-out repo — it runs every `git`/`docker`
 call itself. Unlike the old manual runbook, **none of the commands below are
-wrapped in `ssh '...'`**: log into the server host once for the CLI calls and
-5-b's manual steps (all of them operate on the server's own containers/
-volumes), and separately into the relevant runner host for (3)/(4)/(7)
+wrapped in `ssh '...'`**: log into the server host once for the CLI calls,
+and separately into the relevant runner host for (3)/(4)/(7)
 (section 2 covers multi-host runner deployment; a single-host lab setup may
 have both be the same machine).
 
@@ -447,21 +446,19 @@ node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
 
 The flag is consulted only for a mismatch. A store whose compose path and
 effective path already agree passes with no flag and no probe, and a flag
-naming such a store changes nothing. With the flag, `update` still measures
-every condition itself and admits the store only if all of them hold:
+naming such a store changes nothing. With the flag, `update` checks the
+conditions below; the operator must independently establish the store
+never existed in any earlier version:
 
 - the target image's manifest lists `<ENV_NAME>` (a name it does not list is
   refused as a likely misspelling);
-- the OLD image, when it can answer its manifest probe, does not list the
-  store; an old image that cannot answer (a pre-#310 image, the case behind
-  the 2026-09-07 update) is allowed here, and the entry records
-  `assumed_default_source: "target_image"`. That is an operator-approved
-  uncertainty, not proof that the old image never had the store; the stat
-  probe below is what stands in for it;
-- the OLD container has the variable unset (a variable that was set means the
-  store was configured before this update);
+- if the OLD image can answer its manifest probe, it does not list the store.
+  If it cannot answer, the CLI substitutes the target image's default path;
+  this is an assumption and does not establish the old container's actual path;
+- the OLD container has the variable unset;
 - `docker exec` runs the container's Debian `stat` with `LC_ALL=C` and reports
-  `No such file or directory` for that exact old effective path;
+  `No such file or directory` at the path it selected. If the old manifest is
+  unavailable, this is the target default, not necessarily the old actual path;
 - the resolved compose declaration puts the new path under the
   `/var/lib/kaoiro` named volume, and compose resolves that mount to a named
   volume.
@@ -496,12 +493,9 @@ node server/deploy/kaoiro-server-deploy.mjs update --transaction <transaction-id
   --target <target-sha> --accept-new-store <ENV_NAME> [--maintenance-approved]
 ```
 
-For any other refusal, follow 5-b below; the flag does not apply. Copying a
-store into the volume (5-b) does not by itself make a refused `build_prepared`
-transaction pass on resume: the check compares the compose path with the running
-container's effective path, which the copy does not change, so it refuses again
-([issue #553](https://github.com/sakuraiyuta/kaoiro/issues/553)). Do not use
-`--accept-new-store` to get past it. **Until #310 lands, the target image lacks this module and the check
+For an existing or uncertain store, do not use the flag. Follow the refusal
+and rollback guidance in 5-b below; copying a file to the volume does not
+unblock this or a new update. **Until #310 lands, the target image lacks this module and the check
 reports `{skipped: true, reason: ...}`**; it neither blocks nor verifies
 anything today, and `--accept-new-store` has nothing to act on.
 
@@ -537,9 +531,8 @@ there is no automatic retry loop. Recovery is manual (4.4 (1)): `docker start
 past this point**; once the stop failure is understood, a fresh `update`
 starts a new transaction.
 
-**Do this step's migration (5-b) BEFORE running the command above**, while the
-old container is still running — this call stops it and immediately archives,
-with no pause in between.
+**If the persistence-path check refuses an existing or uncertain store, stop**
+and follow (5-b); do not proceed to the stop command above.
 
 **(5-a) Resolve the volume (automatic)**
 
@@ -547,86 +540,39 @@ Re-resolved from the just-stopped container's own mount (never hard-coded),
 recorded in `journal.json`'s `mount_resolved` phase. An empty result aborts
 the run rather than archiving nothing.
 
-**(5-b) Migrate the user ledger (first application only, manual)**
+**(5-b) Existing or uncertain persistence store: refusal and recovery**
 
-Outside `update`'s own scope (its `status` output says so explicitly: "does
-not perform the first-application user-ledger migration judgment"). On the
-**first application** that adds `KAOIRO_USERS_PATH` to compose, the **current
-ledger is not in the volume** — the old container started without this env and
-used the fallback under `System.tmp_dir!()` (`kaoiro_users.dets`) from
-`KaoiroServer.Users.default_path/0`. **Recreating it as-is would make the
-deployment that fixes compose discard the current ledger.** Do this once,
-before step (5)'s commit call, while the old container is still running:
+The CLI has no forward migration path for an existing store outside the state
+volume. Copying a live DETS file to the target volume does not unblock either
+the refused transaction or a new update and can lose writes. Preserve the old
+container and its data: do not recreate or remove it with `docker compose up`,
+`down`, or `rm` to force progress. Do not use `--accept-new-store` for an
+existing or uncertain store.
 
-```sh
-# 1. Check running container's effective path (empty means unset = fallback in use)
-docker inspect <container> \
-  --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "KAOIRO_USERS_PATH"}}{{.}}{{end}}{{end}}'
-```
+Use the non-destructive rollback command printed below the refusal, also shown
+by `status`. Add `--dry-run` to preview the operation; the preview is a snapshot
+and can become stale. Rollback still checks the recorded container identity and
+fleet conditions; if those checks fail, stop and investigate. Inspect the actual
+old store path and named-volume mount without assuming the target default.
 
-Empty output means unset and the fallback path is in use. **If already
-configured, skip this step** (and all later deployments do the same).
+Only when the old container already reads the same store from the verified
+`/var/lib/kaoiro` named-volume mount may you correct a mistaken compose or
+override declaration to that already-used path. After rollback and verification,
+start a new update. Do not point compose or an override outside
+`/var/lib/kaoiro` merely to pass the comparison: recreating a container can
+lose a store in its writable layer. If the old store is outside the volume or
+its actual source or mount is uncertain, preserve the old container and stop;
+a separately designed migration is required.
 
-```sh
-# 2. Evacuate ledger from running container and record checksum and numeric owner
-#    (docker cp works on a running container, so run before stopping)
-docker cp <container>:/tmp/kaoiro_users.dets <backup-dir>/users-migrate-<timestamp>.dets
-sha256sum <backup-dir>/users-migrate-<timestamp>.dets
-
-# Deterministically retrieve numeric owner from known existing DETS
-docker run --rm -v <volume>:/data:ro alpine stat -c "%u:%g" /data/agent_directory.dets
-
-# 3. Confirm users.dets does not already exist on volume side
-docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1
-
-# 4. Place into volume. Owner must be specified numerically
-#    Alpine nogroup is GID 65533 but runtime DETS has different GID;
-#    named specification (nobody:nogroup) results in group mismatch
-docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
-  alpine sh -c "cp /backup/users-migrate-<timestamp>.dets /data/users.dets \
-    && chown <uid>:<gid> /data/users.dets && chmod 600 /data/users.dets"
-
-# 5. After placement, confirm bit-identity with evacuated source
-docker run --rm -v <volume>:/data:ro alpine sha256sum /data/users.dets
-# -> Must match SHA-256 recorded in step 2
-docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets
-# -> Owner / group / mode must match existing DETS
-```
-
-**A successful copy alone does not guarantee bit identity with the authority.**
-Always compare SHA-256. **If this existing user ledger's source file is
-absent, the ledger is already lost.** Record this and let the operator decide;
-**do not silently create an empty ledger**.
-
-Decide which case a refused store is in before choosing a remedy:
-
-- **New in the target image, no historical data.** Neither the old image nor
-  an earlier version ever had this store, the old container has the variable
-  unset, and the default file is absent. There is no old data to evacuate:
-  resume with `--accept-new-store <ENV_NAME>` (step (2)). The CLI measures the
-  unset variable and the absent file at the exact default path, and, when the old
-  image's manifest is available, that the old image does not list the store. It
-  cannot see an earlier version's history, so that the store never existed is
-  your assertion, most of all when the old manifest is unavailable. It records
-  `never_existed` with your acknowledgement.
-- **Existed before, but its file is missing.** An earlier version had the
-  store (the old image lists it, or you know the ledger existed) and the file
-  is gone. The ledger is lost or the path is wrong; **do not use
-  `--accept-new-store`**, which would record an empty store as new. Investigate
-  as in the paragraph above.
-- **File present, or the variable already set.** This is the real migration
-  this section describes. The flag is refused for it. The copy above preserves
-  the ledger but does not unblock a refused `build_prepared` transaction: the
-  next check still compares the compose path with the running container's
-  unchanged effective path and refuses with the same migration message, with
-  `latest` restored and nothing stopped or archived. The CLI has no resume path
-  for this case yet
-  ([issue #553](https://github.com/sakuraiyuta/kaoiro/issues/553)); do not
-  record the store as new to get past it.
-
-If the probe says `undetermined`, inspect the recorded reason and restore path
-visibility or the probe command before retrying; it does not authorize an
-empty store or a 5-b copy.
+For a genuinely new store, establish independently that no earlier version
+held data before considering `--accept-new-store`. If the old image cannot
+report its manifest, the CLI checks the target default, which may differ from
+the old image's actual path. The operator must also establish the old image's
+actual path and verify that no file exists there; if that cannot be established,
+do not use the flag. A missing file at the target default alone does not prove
+that the store never existed. If the old manifest answers but omits the store,
+it still cannot prove an earlier version did not use it. If a probe is
+`undetermined`, investigate its reason; it does not authorize an empty store.
 
 **Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
 reference-only** — the target compose's own `environment:` entry is what
@@ -635,9 +581,7 @@ by the #220 check above) is never compared. Do not treat it as a step to keep
 in sync by hand: `.env.example` and `mix kaoiro.env` both emit this line
 commented out by design, so a later wizard re-run silently drops a
 manually-uncommented one — an operator relying on `.env` to remember this
-setting would find it quietly gone. This step's DETS placement is included
-in the pre-deploy archive step (5) takes right after; later deployments never
-need this step again.
+setting would find it quietly gone.
 
 **(5-c) Archive and verify DETS (automatic)**
 

@@ -1090,12 +1090,12 @@ function checkEnvConsistency(
     if (!match && compose !== null && accepted.has(envName)) {
       if (oldPathsByEnv?.has(envName)) {
         fail(
-          `${envName}: --accept-new-store refused because the old image's own manifest already lists this store (default ${JSON.stringify(oldPathsByEnv.get(envName))}), so it is not new in the target image — follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
+          `${envName}: --accept-new-store refused because the old image's own manifest already lists this store (default ${JSON.stringify(oldPathsByEnv.get(envName))}), so it is not new in the target image — this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)`,
         );
       }
       if (containerRaw !== null) {
         fail(
-          `${envName}: --accept-new-store refused because the running container already has this variable set to ${JSON.stringify(containerRaw)}, so the store was configured before this update — follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
+          `${envName}: --accept-new-store refused because the running container already has this variable set to ${JSON.stringify(containerRaw)}, so the store was configured before this update — this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)`,
         );
       }
       const stateVolume = resolveNamedVolumeFromCompose(bin, serverDir, composeArgs);
@@ -2411,19 +2411,12 @@ export function runUpdate(flags, config) {
                 { retagHandled: true },
               );
             }
-            // クロエ round 5 review A-MF-2: distinguishes the two DIFFERENT
-            // remediations a mismatching entry can need — an operator
-            // reading either sentence knows what to actually go do,
-            // instead of a single generic "mismatch" naming three fields.
-            // issue #339: a mismatch whose old side could be a store that
-            // never existed (variable unset, no old manifest entry) can be
-            // admitted by the operator, so name the exact resume command;
-            // the refusal left this transaction at BUILD_PREPARED, which a
-            // fresh `update` would refuse to start over.
             const flagged = new Set(flags.acceptNewStores ?? []);
             const newStoreHint = (envName, e) =>
               e.container_source === "default" && e.assumed_default_source === "target_image" && !flagged.has(envName)
-                ? `. If ${envName} is new in the target image and never had data, resume this transaction with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${target} --accept-new-store ${envName} (add --maintenance-approved once the window is approved); the CLI then verifies the old container has the variable unset and no file at the default path`
+                ? oldPathsByEnv === null
+                  ? " The old image cannot report its persistence manifest; the target image's default may differ from the old container's actual path. A missing file at the target default does not prove that this store never existed. Use the printed non-destructive rollback and investigate; do not use --accept-new-store for an existing or uncertain store."
+                  : ` If you independently establish that ${envName} never existed in any earlier version, resume this transaction with: node server/deploy/kaoiro-server-deploy.mjs update --transaction ${transactionId} --target ${target} --accept-new-store ${envName} (add --maintenance-approved once the window is approved). The CLI checks that the old manifest omits the store, the old container has the variable unset, and no file exists at the target default path; the current manifest cannot prove earlier history.`
                 : "";
             const problems = Object.entries(entries)
               .filter(([, e]) => !e.match)
@@ -2432,7 +2425,7 @@ export function runUpdate(flags, config) {
                   ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
                   : e.file_probe_result === "undetermined"
                     ? `${envName}: could not probe the running container's path ${JSON.stringify(e.file_probe_path)} (${e.file_probe_reason}); absence is unverified`
-                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying${newStoreHint(envName, e)}`,
+                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying alone cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.${newStoreHint(envName, e)}`,
               );
             fail(
               `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
