@@ -398,8 +398,8 @@ describe.skipIf(process.platform !== "linux")("restore admission runtime marker"
     mkdirSync(join(h.home, "app-server-daemon"), { mode: 0o700 });
     writeFileSync(join(h.home, "app-server-daemon", "daemon.pid"), "", { mode: 0o600 });
     const result = admit();
-    expect(readFileSync(h.recordPath(tx().uuid))).toEqual(bytes);
     expect(tx().phase).toBe("completed");
+    expect(readFileSync(h.recordPath(tx().uuid))).toEqual(bytes);
     expect(tx()).not.toHaveProperty("replacement");
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("CODEX_EXTERNAL_DAEMON_ENTRY: app-server-daemon/daemon.pid");
