@@ -87,7 +87,7 @@ describe("Codex watchdog host boundary", () => {
       onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
       onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
 
@@ -157,7 +157,7 @@ describe("Codex watchdog host boundary", () => {
       onLifecycle: (event) => lifecycle.push(event as Record<string, unknown>),
       onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
 
@@ -190,7 +190,7 @@ describe("Codex watchdog host boundary", () => {
       onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
       onTurnEnd: (info) => turnEnds.push(info as Record<string, unknown>),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
 
@@ -222,7 +222,7 @@ describe("Codex watchdog host boundary", () => {
       onTurnEnd: () => {},
       onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       materializeImages: async (_agentId, _uploads, lifecycle) => {
         const dir = materialization++ === 0 ? activeDir : queuedDir;
         lifecycle.onDirectoryCreated(dir);

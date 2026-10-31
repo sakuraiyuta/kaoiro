@@ -43,6 +43,7 @@ import {
 } from "../src/rollout.js";
 
 const CONFIG: WrapperConfig = {
+  codex_backend: "exec",
   agent_id: "host-1.codex-a",
   persona: { id: "kuroe", name: "クロエ", sprite_set: "kuroe" },
   display_name: "クロエ",
@@ -233,7 +234,7 @@ describe("CodexHost — own tasklist envelopes (issue #188)", () => {
       onState: () => {},
       onTask: (envelope) => tasks.push(envelope),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
 
@@ -387,7 +388,7 @@ describe("exec input handoff evidence", () => {
     };
     const client: CodexClientLike = { startThread: () => thread, resumeThread: () => thread };
     const host = new CodexHost(CONFIG, {
-      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onState: () => {}, appendSystemPrompt: "p", backend: "exec", codexFactory: () => client,
       onTurnStart: () => order.push("turn-start"),
       onInputHandedOff: info => { order.push("input-handed-off");handoffs.push(info.handoff); },
       onTurnEnd: () => ended.resolve(),
@@ -416,7 +417,7 @@ describe("exec input handoff evidence", () => {
     };
     const client: CodexClientLike = { startThread: () => thread, resumeThread: () => thread };
     const host = new CodexHost(CONFIG, {
-      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onState: () => {}, appendSystemPrompt: "p", backend: "exec", codexFactory: () => client,
       onInputHandedOff: () => { handoffs += 1; },
       onTurnEnd: () => ended.resolve(),
     });
@@ -436,7 +437,7 @@ describe("host-queued inter-agent input preparation (SDK backend)", () => {
     host = new CodexHost(CONFIG, {
       onState: (envelope) => states.push(envelope.state),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       prepareInput: () => { host.close(); return null; },
     });
     await host.send("obsolete", undefined, ["cid"], "skip-token");
@@ -452,7 +453,7 @@ describe("host-queued inter-agent input preparation (SDK backend)", () => {
     const host = new CodexHost(CONFIG, {
       onState: (envelope) => states.push(envelope.state),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       prepareInput: () => null,
       onTurnStart: ({ turnToken }) => starts.push(turnToken),
     });
@@ -473,7 +474,7 @@ describe("host-queued inter-agent input preparation (SDK backend)", () => {
     const host = new CodexHost(CONFIG, {
       onState: (envelope) => states.push(envelope.state),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       prepareInput: (token) => token === "stale-token"
         ? null : { text: "prepared", conversationIds: ["survivor"] },
       onTurnStart: ({ turnToken, conversationIds }) => {
@@ -525,7 +526,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: (options) => {
+      backend: "exec", codexFactory: (options) => {
         captured = options;
         return client;
       },
@@ -579,7 +580,7 @@ describe("CodexHost", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         codexClientVersion: "0.144.1",
       },
     );
@@ -664,7 +665,7 @@ describe("CodexHost", () => {
       onLog: (envelope) => logs.push(envelope),
       onTurnEnd: () => ended.resolve(),
       appendSystemPrompt: "p",
-      codexFactory: () =>
+      backend: "exec", codexFactory: () =>
         new Codex({ codexPathOverride: executable }) as CodexClientLike,
       now: () => "T",
     });
@@ -701,7 +702,7 @@ describe("CodexHost", () => {
         appendSystemPrompt: "p",
         modelSource: "config",
         effortSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
       },
     );
 
@@ -734,7 +735,7 @@ describe("CodexHost", () => {
         {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: (options) => {
+          backend: "exec", codexFactory: (options) => {
             captured = options;
             return client;
           },
@@ -758,7 +759,7 @@ describe("CodexHost", () => {
       {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: (options) => {
+        backend: "exec", codexFactory: (options) => {
           captured = options;
           return client;
         },
@@ -871,7 +872,7 @@ describe("CodexHost", () => {
         {
           onState: (event) => states.push(event),
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -919,7 +920,7 @@ describe("CodexHost", () => {
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "persona",
         onSessionId: (id) => sessionIds.push(id),
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -977,7 +978,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     const done = host.run("first");
@@ -1045,7 +1046,7 @@ describe("CodexHost", () => {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
         modelSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1085,7 +1086,7 @@ describe("CodexHost", () => {
           sandbox: "workspace-write",
           network_access: false,
         },
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1126,7 +1127,7 @@ describe("CodexHost", () => {
           onState: (event) => states.push(event),
           appendSystemPrompt: "p",
           modelSource: "config",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1176,7 +1177,7 @@ describe("CodexHost", () => {
         appendSystemPrompt: "p",
         modelSource: "config",
         effortSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1206,7 +1207,7 @@ describe("CodexHost", () => {
         appendSystemPrompt: "p",
         modelSource: "config",
         effortSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1256,7 +1257,7 @@ describe("CodexHost", () => {
         appendSystemPrompt: "p",
         modelSource: "config",
         effortSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1290,7 +1291,7 @@ describe("CodexHost", () => {
         if (e.ext.model === "gpt-5.6-sol") modelStamped.resolve();
       },
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       modelResolver: async (id) => (id === "uuid-model" ? "gpt-5.6-sol" : null),
       now: () => "T",
     });
@@ -1326,7 +1327,7 @@ describe("CodexHost", () => {
         if (e.ext.model === "gpt-delayed") modelStamped.resolve();
       },
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       modelResolver: resolver,
       now: () => "T",
     });
@@ -1369,7 +1370,7 @@ describe("CodexHost", () => {
         if (e.ext.model === "gpt-first") firstModelStamped.resolve();
       },
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       modelResolver: async () => resolved.shift() ?? null,
       now: () => "T",
     });
@@ -1411,7 +1412,7 @@ describe("CodexHost", () => {
         if (e.ext.model === "gpt-new-turn") newModelStamped.resolve();
       },
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       modelResolver: () => {
         calls += 1;
         if (calls === 1) return Promise.resolve(null);
@@ -1462,7 +1463,7 @@ describe("CodexHost", () => {
         if (e.ext.model === "gpt-second") secondModelStamped.resolve();
       },
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       modelResolver: async () => models.shift() ?? null,
       now: () => "T",
     });
@@ -1489,7 +1490,7 @@ describe("CodexHost", () => {
       onState: () => {},
       appendSystemPrompt: "p",
       resumeSessionId: "uuid-resume",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     await runOneTurn(host, "again", client);
@@ -1505,7 +1506,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: () => turnEnded.resolve(),
       now: () => "T",
     });
@@ -1523,7 +1524,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     host.attachOpen({ upload_id: "up-1", filename: "screen.png", mime: "image/png", size: 3, chunks: 1 });
@@ -1553,7 +1554,7 @@ describe("CodexHost", () => {
     const rejected: Envelope[] = [];
     const { client } = makeClient([]);
     const host = new CodexHost(CONFIG, {
-      onState: () => {}, appendSystemPrompt: "p", codexFactory: () => client,
+      onState: () => {}, appendSystemPrompt: "p", backend: "exec", codexFactory: () => client,
       onAttachRejected: (e) => rejected.push(e), now: () => "T",
     });
     host.attachOpen({ upload_id: "not-image", filename: "note.txt", mime: "text/plain", size: 1, chunks: 1 });
@@ -1566,7 +1567,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     host.setPendingQuestion({
@@ -1588,7 +1589,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     await expect(host.setPermissionMode("default")).rejects.toThrow(
@@ -1609,7 +1610,7 @@ describe("CodexHost", () => {
       onState: () => {},
       appendSystemPrompt: "persona",
       toolDescriptors: [descriptor],
-      codexFactory: (options) => {
+      backend: "exec", codexFactory: (options) => {
         captured = options;
         return client;
       },
@@ -1635,7 +1636,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       materializeImages: async (_agentId, _uploads, lifecycle) => {
         lifecycle.onDirectoryCreated("/tmp/kaoiro-test-race");
         entered();
@@ -1681,7 +1682,7 @@ describe("CodexHost", () => {
         appendSystemPrompt: "persona",
         modelSource: "config",
         effortSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1703,7 +1704,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
       appendSystemPrompt: "persona",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     await runOneTurn(host, "hi", client);
@@ -1720,7 +1721,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: (e) => states.push(e),
       appendSystemPrompt: "persona",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     await runOneTurn(host, "hi", client);
@@ -1783,7 +1784,7 @@ describe("CodexHost", () => {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
         modelSource: "config",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       },
     );
@@ -1807,7 +1808,7 @@ describe("CodexHost", () => {
     const host = new CodexHost(CONFIG, {
       onState: (event) => states.push(event),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       now: () => "T",
     });
     await runOneTurn(host, "hi", client);
@@ -1834,7 +1835,7 @@ describe("CodexHost", () => {
           onState: (event) => states.push(event),
           appendSystemPrompt: "p",
           modelSource: "config",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1868,7 +1869,7 @@ describe("CodexHost", () => {
         {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1899,7 +1900,7 @@ describe("CodexHost", () => {
         {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1924,7 +1925,7 @@ describe("CodexHost", () => {
         {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1949,7 +1950,7 @@ describe("CodexHost", () => {
         {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -1978,7 +1979,7 @@ describe("CodexHost", () => {
             sandbox: "danger-full-access",
             network_access: false,
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2012,7 +2013,7 @@ describe("CodexHost", () => {
             sandbox: "danger-full-access",
             network_access: true,
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2053,7 +2054,7 @@ describe("CodexHost", () => {
           appendSystemPrompt: "p",
           modelSource: "launch",
           effortSource: "config",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2091,7 +2092,7 @@ describe("CodexHost", () => {
             effort: "ultra",
             effort_source: "launch",
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2127,7 +2128,7 @@ describe("CodexHost", () => {
           modelSource: "launch",
           effortSource: "launch",
           // resumeSnapshot 未設定: fresh spawn。
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2158,7 +2159,7 @@ describe("CodexHost", () => {
           appendSystemPrompt: "p",
           modelSource: "launch",
           effortSource: "config",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2193,7 +2194,7 @@ describe("CodexHost", () => {
           modelSource: snapshot.model_source,
           effortSource: snapshot.effort_source,
           resumeSnapshot: snapshot,
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2233,7 +2234,7 @@ describe("CodexHost", () => {
           modelSource: snapshot.model_source,
           effortSource: snapshot.effort_source,
           resumeSnapshot: snapshot,
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2278,7 +2279,7 @@ describe("CodexHost", () => {
             effort: "high",
             effort_source: "default",
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2340,7 +2341,7 @@ describe("CodexHost", () => {
             effort: "high",
             effort_source: "default",
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2382,7 +2383,7 @@ describe("CodexHost", () => {
             effort: "ultra",
             effort_source: "default",
           },
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         },
       );
@@ -2430,7 +2431,7 @@ describe("CodexHost", () => {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
         resumeSessionId: "uuid-resume-host-run",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
@@ -2495,7 +2496,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
@@ -2542,7 +2543,7 @@ describe("CodexHost", () => {
           if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
         },
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: async () => snapshot,
         now: () => "T",
       });
@@ -2595,7 +2596,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: (event) => states.push(event),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         // Keep the filesystem source deterministic, but call the production
         // parser rather than hand-writing an empty Map in this fixture.
         rateLimitResolver: async (id) => codexRateLimitsFromRolloutIn(root, id),
@@ -2630,7 +2631,7 @@ describe("CodexHost", () => {
           if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
         },
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: async () => snapshot,
         now: () => "T",
       });
@@ -2698,7 +2699,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: (e) => states.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
@@ -2738,7 +2739,7 @@ describe("CodexHost", () => {
           if (e.ext.rate_limits !== undefined) rateLimitsStamped.resolve();
         },
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: resolver,
         now: () => "T",
       });
@@ -2785,7 +2786,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: (e) => states.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rateLimitResolver: () => {
           resolverCalls += 1;
           if (resolverCalls === 1) {
@@ -2834,7 +2835,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -2855,7 +2856,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -2885,7 +2886,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         now: () => "T",
       });
@@ -2935,7 +2936,7 @@ describe("CodexHost", () => {
           onState: () => {},
           onLog: (envelope) => logs.push(envelope),
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           onTurnEnd: (info) => turnEnds.push(info),
           now: () => "T",
         });
@@ -2991,7 +2992,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnStart: ({ turnToken }) => {
           starts.push(turnToken);
           if (turnToken === "turn-2") {
@@ -3084,7 +3085,7 @@ describe("CodexHost", () => {
         const host = new CodexHost(CONFIG, {
           onState: () => {},
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           terminalDrainGraceMs: 20,
           onTurnStart: ({ turnToken }) => {
             starts.push(turnToken);
@@ -3201,7 +3202,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         terminalDrainGraceMs: 20,
         onTurnStart: ({ turnToken }) => {
           if (turnToken === "turn-2") {
@@ -3244,7 +3245,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
@@ -3271,7 +3272,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -3295,7 +3296,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -3319,7 +3320,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -3349,7 +3350,7 @@ describe("CodexHost", () => {
         onState: () => {},
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       });
 
@@ -3376,7 +3377,7 @@ describe("CodexHost", () => {
         onState: () => {},
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       });
 
@@ -3420,7 +3421,7 @@ describe("CodexHost", () => {
         onState: () => {},
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       });
 
@@ -3455,7 +3456,7 @@ describe("CodexHost", () => {
           onLog: (e) => logs.push(e),
           onTurnEnd: () => turnEnded.resolve(),
           appendSystemPrompt: "p",
-          codexFactory: () => client,
+          backend: "exec", codexFactory: () => client,
           now: () => "T",
         });
         await runOneTurn(host, "inbound", client, turnEnded.promise);
@@ -3480,7 +3481,7 @@ describe("CodexHost", () => {
         onState: () => {},
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       });
 
@@ -3509,7 +3510,7 @@ describe("CodexHost", () => {
         onState: () => {},
         onLog: (e) => logs.push(e),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         now: () => "T",
       });
 
@@ -3543,7 +3544,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         turnTraceDir: traceDir,
       });
 
@@ -3560,7 +3561,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         turnTraceDir: "/dev/null/kaoiro-trace",
       });
 
@@ -3592,7 +3593,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         turnTraceDir: traceDir,
         now: () => "T",
       });
@@ -3646,7 +3647,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
@@ -3680,7 +3681,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -3713,7 +3714,7 @@ describe("CodexHost", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         onTurnEnd: (info) => turnEnds.push(info),
         now: () => "T",
       });
@@ -3797,7 +3798,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       // 本物の verifyRolloutCorruption を fixture root へ向けるだけ — 検証
       // ロジック自体はモックしない (MF-2 の貫通要件)。
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
@@ -3849,7 +3850,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       rolloutCorruptionRepairer: (id) => repairRolloutCorruption(id, root),
       onTurnEnd: (info) => {
@@ -3910,7 +3911,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       rolloutCorruptionRepairer: (id) => repairRolloutCorruption(id, root),
       onTurnEnd: (info) => {
@@ -3966,7 +3967,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rolloutCorruptionVerifier: () => "corrupted",
         rolloutCorruptionRepairer: () => ({
           repaired: true,
@@ -4029,7 +4030,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
           if (entry.type === "result") resultCount += 1;
         },
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         rolloutCorruptionVerifier: () => "corrupted",
         rolloutCorruptionRepairer: () => ({
           repaired: true,
@@ -4071,7 +4072,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (entry) => logs.push(entry),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: () => "corrupted",
       rolloutCorruptionRepairer: () => ({
         repaired: true,
@@ -4116,7 +4117,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (entry) => logs.push(entry),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: () => {
         throw new Error("rollout inspection unavailable");
       },
@@ -4170,7 +4171,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       onTurnEnd: (info) => {
         turnEnds.push(info);
@@ -4219,7 +4220,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       onTurnEnd: (info) => {
         turnEnds.push(info);
@@ -4280,7 +4281,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => freshMidStreamClient,
+      backend: "exec", codexFactory: () => freshMidStreamClient,
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
       onTurnEnd: (info) => {
         turnEnds.push(info);
@@ -4348,7 +4349,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         resumeSessionId: sessionId,
         permissionSyncSupported: true,
         permissionRolloutRoot: root,
@@ -4448,7 +4449,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: (state) => states.push(state),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       resumeSessionId: sessionId,
       permissionSyncSupported: true,
       permissionRolloutRoot: root,
@@ -4510,7 +4511,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: (state) => states.push(state),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       resumeSessionId: sessionId,
       permissionSyncSupported: true,
       permissionRolloutRoot: root,
@@ -4569,7 +4570,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       permissionSyncSupported: true,
       permissionSyncWarningMs: 1,
       waitForPermissionSync: () => sync.promise,
@@ -4628,7 +4629,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         resumeSessionId: sessionId,
         resumeSnapshot: { sandbox: "read-only", network_access: false },
         permissionSyncSupported: true,
@@ -4710,7 +4711,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => client,
+        backend: "exec", codexFactory: () => client,
         resumeSessionId: sessionId,
         permissionSyncSupported: true,
         permissionRolloutRoot: root,
@@ -4784,7 +4785,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => ({
+        backend: "exec", codexFactory: () => ({
           startThread: (threadOptions) => {
             if (threadOptions !== undefined) options.push(threadOptions);
             return thread;
@@ -4831,7 +4832,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => ({
+        backend: "exec", codexFactory: () => ({
           startThread: () => {
             throw new Error("expected resumed session");
           },
@@ -4896,7 +4897,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       {
         onState: (state) => states.push(state),
         appendSystemPrompt: "p",
-        codexFactory: () => ({
+        backend: "exec", codexFactory: () => ({
           startThread: () => {
             throw new Error("expected resumed session");
           },
@@ -4961,7 +4962,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: (state) => states.push(state),
       appendSystemPrompt: "p",
-      codexFactory: () => ({
+      backend: "exec", codexFactory: () => ({
         startThread: () => {
           throw new Error("expected resumed session");
         },
@@ -5024,7 +5025,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: (state) => states.push(state),
       appendSystemPrompt: "p",
-      codexFactory: () => ({
+      backend: "exec", codexFactory: () => ({
         startThread: () => {
           throw new Error("expected resumed session");
         },
@@ -5077,7 +5078,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
+      backend: "exec", codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
       permissionSyncSupported: true,
       waitForPermissionSync: () => sync.promise,
     });
@@ -5125,7 +5126,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     const host = new CodexHost(CONFIG, {
       onState: () => {},
       appendSystemPrompt: "p",
-      codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
+      backend: "exec", codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
       permissionSyncSupported: true,
       waitForPermissionSync: () => {
         waits += 1;
@@ -5165,7 +5166,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       onState: () => {},
       onLog: (e) => logs.push(e),
       appendSystemPrompt: "p",
-      codexFactory: () => client,
+      backend: "exec", codexFactory: () => client,
       onTurnEnd: (info) => {
         turnEnds.push(info);
         turnSettled[turnEnds.length - 1]?.resolve();

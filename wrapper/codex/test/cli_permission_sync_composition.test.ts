@@ -70,6 +70,7 @@ class TestSocket {
 vi.stubGlobal("WebSocket", class {});
 
 const config: WrapperConfig = {
+  codex_backend: "exec",
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P",

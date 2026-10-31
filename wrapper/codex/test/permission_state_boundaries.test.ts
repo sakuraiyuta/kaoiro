@@ -147,7 +147,7 @@ async function createHarness(options: {
   }, {
     onState: () => {},
     appendSystemPrompt: "p",
-    codexFactory: () => client,
+    backend: "exec", codexFactory: () => client,
     resumeSessionId: SESSION_ID,
     permissionRolloutRoot: root,
     permissionSyncSupported: true,
