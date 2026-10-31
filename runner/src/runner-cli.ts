@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { captureDeliveryEnvironment } from "@kaoiro/agent-common";
 import { createDeliverySnapshot, deliveryBehaviourRelay, deliveryEnvironment, retiredDeliveryWarnings } from "./delivery-settings.js";
 // Runner CLI runtime — loads the runner config, connects to the kaoiro server
@@ -120,7 +121,7 @@ function antigravityMaxFrom(
 
 type RunnerLinkLike = Pick<
   RunnerLink,
-  "sendSpawnResult" | "sendSessions" | "sendResetResult" | "sendStopAgent" | "sendCatalogResult" | "updateRegister" | "reconnect" | "close"
+  "sendCodexWorkObserved" | "sendSpawnResult" | "sendSessions" | "sendResetResult" | "sendStopAgent" | "sendCatalogResult" | "updateRegister" | "reconnect" | "close"
 >;
 
 export interface RunnerCliDependencies {
@@ -266,6 +267,7 @@ export async function runRunnerCli(
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
   let link: RunnerLinkLike;
+  const observationInstance = randomUUID();
   const initialRuntime = {
     cwdAllowlist: config.cwd_allowlist,
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
@@ -350,6 +352,18 @@ export async function runRunnerCli(
     register: appliedRegister,
     heartbeatMs: HEARTBEAT_MS,
     logHeartbeats: () => heartbeatLogging,
+    onObserveCodexWork: (payload) => {
+      if (payload === null || typeof payload !== "object") return;
+      const request = payload as Record<string, unknown>;
+      if (request.version !== "0" || request.schema !== 1
+        || typeof request.request_id !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(request.request_id)) return;
+      const work = supervisor.observeCodexWork();
+      link.sendCodexWorkObserved({
+        version: "0", schema: 1, request_id: request.request_id, host: config.host_id,
+        build_revision: buildInfo.revision, pid: process.pid, instance_id: observationInstance,
+        ...(work ?? { unavailable: true as const }),
+      });
+    },
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),
     onRestart: (payload) => supervisor.handleRestart(payload),

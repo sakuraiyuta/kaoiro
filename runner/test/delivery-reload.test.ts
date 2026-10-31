@@ -38,7 +38,7 @@ async function harness(extra: Record<string, unknown> = {}, dependencyOverrides:
     resolveAntigravityCatalog: async () => [], resolveAgyVersion: async () => null,
     createRunnerLink: (_url, _host, options) => {
       callbacks = options; registers.push(options.register);
-      return { sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {}, sendCatalogResult() {},
+      return { sendSpawnResult() {}, sendSessions() {}, sendResetResult() {}, sendStopAgent() {}, sendCodexWorkObserved() {}, sendCatalogResult() {},
         updateRegister: updates, reconnect: (_url, _host, register) => updates(register), close() {} };
     },
     watchRunnerConfig: (path, onReload, onError) => watchRunnerConfig(path,

@@ -55,6 +55,8 @@ defmodule KaoiroServer.Application do
       KaoiroServer.TaskStates,
       # Live host set + spawnable personas per host (ADR-0023, issue #67).
       KaoiroServer.HostRegistry,
+      {Registry, keys: :duplicate, partitions: 1, name: KaoiroServer.RunnerConnections.Registry},
+      KaoiroServer.RunnerConnections,
       # Restart-surviving session_id pointers (ADR-0014 F1, issue #49).
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).

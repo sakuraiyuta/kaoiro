@@ -39,6 +39,7 @@ function harness(root: string, configPath: string) {
         sendSessions() {},
         sendResetResult() {},
         sendStopAgent() {},
+        sendCodexWorkObserved() {},
         sendCatalogResult() {},
         updateRegister() {},
         reconnect() {},

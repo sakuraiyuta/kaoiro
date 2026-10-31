@@ -32,7 +32,7 @@ async function bootRunner() {
     createRunnerLink: (_url, _id, options) => {
       callbacks = options;
       return { sendSpawnResult: (result: SpawnResult) => { results.push(result); }, sendSessions() {}, sendResetResult() {},
-        sendStopAgent() {}, sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {} };
+        sendStopAgent() {}, sendCodexWorkObserved() {}, sendCatalogResult() {}, updateRegister() {}, reconnect() {}, close() {} };
     },
     watchRunnerConfig: (path) => { void loadRunnerConfig(path); return { close() {} }; },
     installSignalHandlers: false,

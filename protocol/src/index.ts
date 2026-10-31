@@ -1626,6 +1626,30 @@ export interface RunnerRegister {
   antigravity_cli_version?: string;
 }
 
+/** Read-only Supervisor entries, not an OS process-tree inventory. */
+export interface ObserveCodexWork {
+  version: "0";
+  schema: 1;
+  request_id: string;
+}
+
+export interface CodexWorkSnapshot {
+  applied_backend: "exec" | "app-server";
+  children: Array<{ agent_id: string; stopping: boolean; restarting: boolean; reset_pending: boolean }>;
+  pending_spawns: string[];
+  pending_switches: string[];
+}
+
+export type CodexWorkObserved = {
+  version: "0";
+  schema: 1;
+  request_id: string;
+  host: string;
+  build_revision: string;
+  pid: number;
+  instance_id: string;
+} & (CodexWorkSnapshot | { unavailable: true });
+
 /** runner -> server liveness ping; the topic carries the host_id, but it is
  *  sent in the payload too per the protocol.md schema. */
 export interface RunnerHeartbeat {

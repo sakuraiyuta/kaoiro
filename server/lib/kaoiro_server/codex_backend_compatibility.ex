@@ -1,8 +1,9 @@
 defmodule KaoiroServer.CodexBackendCompatibility do
   @moduledoc """
   Read-only, host-scoped observations for the Codex backend preparation
-  workflow. The projection deliberately excludes session IDs, cwd, snapshots,
-  envelope contents, process owners, and lifecycle transaction metadata.
+  workflow. Projections exclude session IDs, cwd, snapshots, envelope contents,
+  and lifecycle transaction metadata. Runner observations include the channel
+  owner and Node identity needed to bind them to the local service.
   """
 
   alias KaoiroServer.AgentActivity
@@ -10,9 +11,73 @@ defmodule KaoiroServer.CodexBackendCompatibility do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
+  alias KaoiroServer.RunnerConnections
   alias KaoiroServerWeb.AgentId
 
   @host_id_pattern ~r/^[A-Za-z0-9._-]+$/
+
+  @doc "Reads the current owner's Supervisor entries; never a process-tree census."
+  def observe_runner(host_id) do
+    with true <- is_binary(host_id) and AgentId.valid?(host_id),
+         {:ok, owner} <- RunnerConnections.owner(host_id),
+         request_id = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false),
+         {:ok, projection} <- GenServer.call(owner, {:observe_codex_work, request_id}, 6_000),
+         :ok <- RunnerConnections.check_owner(host_id, owner) do
+      {:ok, Map.put(projection, "owner", inspect(owner))}
+    else
+      false -> {:error, :invalid_host_id}
+      error -> error
+    end
+  catch
+    :exit, _ -> {:error, :runner_observation_unavailable}
+  end
+
+  @doc false
+  def validate_runner(payload, host, request_id) do
+    with %{
+           "version" => "0",
+           "schema" => 1,
+           "host" => ^host,
+           "request_id" => ^request_id,
+           "build_revision" => revision,
+           "pid" => pid,
+           "instance_id" => instance,
+           "applied_backend" => backend,
+           "children" => children,
+           "pending_spawns" => spawns,
+           "pending_switches" => switches
+         } <- payload,
+         true <- is_binary(revision) and Regex.match?(~r/^[0-9a-f]{40}$/, revision),
+         true <- is_integer(pid) and pid > 0,
+         true <- is_binary(instance) and Regex.match?(~r/^[0-9a-f-]{36}$/, instance),
+         true <- backend in ["exec", "app-server"],
+         true <- is_list(children) and Enum.all?(children, &valid_child?/1),
+         true <- valid_work_ids?(Enum.map(children, & &1["agent_id"]), host),
+         true <- valid_work_ids?(spawns, host) and valid_work_ids?(switches, host) do
+      {:ok,
+       Map.take(
+         payload,
+         ~w(version schema host request_id build_revision pid instance_id applied_backend children pending_spawns pending_switches)
+       )
+       |> Map.update!("children", fn rows ->
+         Enum.map(rows, &Map.take(&1, ~w(agent_id stopping restarting reset_pending)))
+       end)}
+    else
+      _ -> {:error, :invalid_runner_observation}
+    end
+  end
+
+  defp valid_child?(%{"agent_id" => _, "stopping" => s, "restarting" => r, "reset_pending" => p}),
+    do: is_boolean(s) and is_boolean(r) and is_boolean(p)
+
+  defp valid_child?(_), do: false
+
+  defp valid_work_ids?(ids, host) when is_list(ids) do
+    Enum.all?(ids, &(is_binary(&1) and AgentId.valid?(&1) and AgentId.host_id_from(&1) == host)) and
+      length(Enum.uniq(ids)) == length(ids)
+  end
+
+  defp valid_work_ids?(_, _), do: false
 
   @doc "Returns the complete allowlisted host projection or an unavailable error."
   def observe_host(host_id, opts \\ [])
