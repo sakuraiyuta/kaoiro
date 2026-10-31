@@ -14,8 +14,9 @@ import { describe, expect, it } from "vitest";
 //
 // A Phoenix type mixed with another type, or with a second Phoenix type, is
 // reported instead of being treated as a member requirement. Object patterns
-// and assignment object literals are judged by the type of the value being
-// destructured, at any nesting depth. An assertion from a Phoenix type to a
+// and assignment targets are judged by the type of the value being
+// destructured, at any nesting depth. Assignment targets follow static
+// property names and array elements. An assertion from a Phoenix type to a
 // different type is counted, and is not a member requirement.
 //
 // Not covered: a Phoenix value read outside protocol.ts, and erasure that is
@@ -170,30 +171,83 @@ function surface(overrides: Record<string, string> = {}): Surface {
     }
   };
 
-  const visitAssignment = (
-    literal: ts.ObjectLiteralExpression,
+  const propertyType = (
     source: ts.Type,
-  ): void => {
-    const cls = classify(source);
-    if (cls.kind === "one" || cls.kind === "mixed") {
-      unsupported.push(`destructuring of a Phoenix value at ${at(literal)}`);
+    name: string,
+    atNode: ts.Node,
+  ): ts.Type | undefined => {
+    const symbol = checker.getPropertyOfType(source, name);
+    if (!symbol) return undefined;
+    return checker.getTypeOfSymbolAtLocation(symbol, atNode);
+  };
+
+  const staticName = (name: ts.PropertyName): string | undefined => {
+    if (
+      ts.isIdentifier(name) ||
+      ts.isStringLiteral(name) ||
+      ts.isNumericLiteral(name)
+    ) {
+      return name.text;
+    }
+    if (
+      ts.isComputedPropertyName(name) &&
+      ts.isStringLiteralLike(name.expression)
+    ) {
+      return name.expression.text;
+    }
+    return undefined;
+  };
+
+  const nestedTarget = (node: ts.Node): boolean =>
+    ts.isObjectLiteralExpression(node) ||
+    ts.isArrayLiteralExpression(node) ||
+    ts.isParenthesizedExpression(node);
+
+  const visitAssignTarget = (target: ts.Node, source: ts.Type): void => {
+    if (ts.isParenthesizedExpression(target)) {
+      visitAssignTarget(target.expression, source);
       return;
     }
-    for (const prop of literal.properties) {
-      if (!ts.isPropertyAssignment(prop)) continue;
-      if (!ts.isIdentifier(prop.name)) continue;
-      if (!ts.isObjectLiteralExpression(prop.initializer)) continue;
-      const inner = checker.getTypeOfPropertyOfType(source, prop.name.text);
-      if (inner) visitAssignment(prop.initializer, inner);
+    if (ts.isObjectLiteralExpression(target)) {
+      const cls = classify(source);
+      if (cls.kind === "one" || cls.kind === "mixed") {
+        unsupported.push(
+          `destructuring of a Phoenix value at ${at(target)}`,
+        );
+        return;
+      }
+      for (const prop of target.properties) {
+        if (!ts.isPropertyAssignment(prop)) continue;
+        if (!nestedTarget(prop.initializer)) continue;
+        const name = staticName(prop.name);
+        // A non-static name has no property to follow. The inner literal's
+        // own type is not the source property type.
+        if (name === undefined) continue;
+        const inner = propertyType(source, name, prop.name);
+        if (inner) visitAssignTarget(prop.initializer, inner);
+      }
+      return;
     }
+    if (!ts.isArrayLiteralExpression(target)) return;
+    target.elements.forEach((element, index) => {
+      if (!element || ts.isOmittedExpression(element)) return;
+      const innerNode = ts.isSpreadElement(element)
+        ? element.expression
+        : element;
+      if (!nestedTarget(innerNode)) return;
+      const named = propertyType(source, String(index), element);
+      const inner = named ??
+        checker.getIndexTypeOfType(source, ts.IndexKind.Number);
+      if (inner) visitAssignTarget(innerNode, inner);
+    });
   };
 
   const assertionPlace = (node: ts.Node): string => {
     let binding = "";
     const fn = at(node);
-    let cur: ts.Node | undefined = node;
-    while (cur.parent) {
-      const parent = cur.parent;
+    let cur: ts.Node = node;
+    while (cur.kind !== ts.SyntaxKind.SourceFile) {
+      const parent: ts.Node = cur.parent;
       if (
         !binding &&
         ts.isVariableDeclaration(parent) &&
@@ -234,12 +288,20 @@ function surface(overrides: Record<string, string> = {}): Surface {
     } else if (ts.isObjectBindingPattern(node)) {
       noteDestructure(checker.getTypeAtLocation(node), node);
     } else if (
-      ts.isObjectLiteralExpression(node) &&
-      ts.isBinaryExpression(node.parent) &&
-      node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      node.parent.left === node
+      ts.isObjectLiteralExpression(node) ||
+      ts.isArrayLiteralExpression(node)
     ) {
-      visitAssignment(node, checker.getTypeAtLocation(node.parent.right));
+      const parent = node.parent;
+      if (
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        parent.left === node
+      ) {
+        visitAssignTarget(
+          node,
+          checker.getTypeAtLocation(parent.right),
+        );
+      }
     } else if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
       const op = classify(checker.getTypeAtLocation(node.expression));
       const target = checker.getTypeFromTypeNode(node.type);
@@ -431,6 +493,11 @@ describe("bench fake phoenix transport", () => {
       "  for (const k in c) key = k;",
       "  return key;",
       "}",
+      "export function benchIdentAssignArray(channels: Channel[]) {",
+      "  let first: Channel;",
+      "  ([first] = channels);",
+      "  return first.join();",
+      "}",
     ].join("\n");
     const out = probed(protocolSource, extra);
     expect(problems(out)).toEqual([]);
@@ -472,6 +539,18 @@ describe("bench fake phoenix transport", () => {
       "  ({ inner: { topic } } = holder);",
       "  return topic;",
       "}",
+      "export function benchAssignArray(channels: Channel[]): string {",
+      "  let topic = \"\";",
+      "  ([{ topic }] = channels);",
+      "  return topic;",
+      "}",
+      "export function benchAssignQuoted(",
+      "  holder: { inner: Channel },",
+      "): string {",
+      "  let topic = \"\";",
+      "  ({ \"inner\": { topic } } = holder);",
+      "  return topic;",
+      "}",
       "export function benchDynamic(c: Channel, name: \"topic\"): string {",
       "  return c[name];",
       "}",
@@ -485,6 +564,8 @@ describe("bench fake phoenix transport", () => {
       "benchParam",
       "benchAssign",
       "benchAssignNested",
+      "benchAssignArray",
+      "benchAssignQuoted",
     ]) {
       expect(out).toContain(`destructuring of a Phoenix value at ${name}`);
     }
