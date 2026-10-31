@@ -29,7 +29,7 @@ export const CONDITION = Object.freeze({
 
 const CLOSED = "closed";
 const DEFERRED_L1B = "deferred(L1b)";
-const BUILD_PREPARED_GUIDANCE = "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying alone cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).";
+const BUILD_PREPARED_GUIDANCE = "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).";
 
 const entry = (command, operation, { condition = null, closure = CLOSED, note = null } = {}) =>
   Object.freeze({ command, operation, condition, closure, note });

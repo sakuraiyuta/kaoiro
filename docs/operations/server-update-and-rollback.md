@@ -105,8 +105,10 @@ runner preparation.
   compose path already equals that effective path passes without the flag. When
   the old image's manifest is unavailable, that the store never existed before
   is your assertion: `update` measures only that the old container has the
-  variable unset and no file at the default path. A store that existed before is
-  never new: do not name it (4.3 (5-b)).
+  variable unset and no file at the target image's default path, which may
+  differ from the old container's actual path. Before considering the flag,
+  perform the additional checks in the final paragraph of 4.3 (5-b). A store
+  that existed before is never new: do not name it (4.3 (5-b)).
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
   persisted, so in-progress exchanges are lost.

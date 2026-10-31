@@ -2216,7 +2216,7 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   assert.ok(caught.message.includes(".env's own line is recorded as \"declared\" for reference only"));
   assert.ok(
     caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying alone cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
     ),
   );
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
@@ -2372,7 +2372,7 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
   assert.ok(caught instanceof DeployError);
   assert.ok(
     caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying alone cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration or a changed path; this CLI has no forward migration path for an existing store outside the state volume. Copying cannot unblock this transaction or a new update. Do not use --accept-new-store for an existing or uncertain store. The non-destructive rollback command is printed below and is also available from status; add --dry-run to preview it. See docs/operations/server-update-and-rollback.md 4.3 (5-b) before choosing a recovery.',
     ),
   );
 });
@@ -2791,7 +2791,7 @@ test("a refused admission leaves a resumable transaction, and the flagged resume
   assert.equal(status.unfinishedTransaction.envConsistency, null);
   const update = status.unfinishedTransaction.recovery.find((entry) => entry.command === "update");
   const rollback = status.unfinishedTransaction.recovery.find((entry) => entry.command === "rollback");
-  assert.equal(update.note, "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying alone cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).");
+  assert.equal(update.note, "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).");
   assert.ok(update.argv.includes("--target"));
   assert.equal(rollback.operation, "non-destructive");
   assert.ok(rollback.argv.includes("--confirm-restore"));
@@ -2846,7 +2846,7 @@ test("the deploy CLI process refuses two unflagged new stores, then resumes the 
   assert.equal(refused.result.status, 1, "a refused admission exits non-zero");
   assert.ok(refused.result.stderr.includes("KAOIRO_WORK_STORE_PATH: compose declares"));
   assert.ok(refused.result.stderr.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
-  assert.ok(refused.result.stderr.includes("Copying alone cannot unblock this transaction or a new update."));
+  assert.ok(refused.result.stderr.includes("Copying cannot unblock this transaction or a new update."));
   assert.ok(refused.result.stderr.includes("note: update: If an existing-store path mismatch caused the refusal"));
   assert.equal(refused.calls.filter(isComposeBuild).length, 1);
   assert.equal(refused.calls.some(isStatProbe), false);

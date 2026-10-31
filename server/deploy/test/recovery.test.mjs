@@ -132,7 +132,7 @@ test("build-prepared guidance is conditional and preserves legacy rollback rende
   const lines = renderRecovery(TX, journalAt(PHASE.BUILD_PREPARED, { invocation: null, containerId: null, target: null }));
   const update = lines.find((line) => line.command === "update");
   const rollback = lines.find((line) => line.command === "rollback");
-  assert.equal(update.note, "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying alone cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).");
+  assert.equal(update.note, "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).");
   assert.ok(update.argv.includes("<target>"));
   assert.ok(rollback.argv.includes("<repo>"));
   assert.equal(rollback.operation, "non-destructive");
@@ -146,6 +146,8 @@ test("build-prepared guidance is conditional and preserves legacy rollback rende
 
 test("5-b runbook does not prescribe live copy or an outside-volume match", () => {
   const runbook = readFileSync(join(here, "../../../docs/operations/server-update-and-rollback.md"), "utf8");
+  assert.ok(runbook.includes("variable unset and no file at the target image's default path, which may\n  differ from the old container's actual path."));
+  assert.ok(runbook.includes("perform the additional checks in the final paragraph of 4.3 (5-b)."));
   const section = runbook.split("**(5-b) Existing or uncertain persistence store: refusal and recovery**")[1]?.split("**(5-c)")[0];
   assert.ok(section);
   assert.ok(!section.includes("docker cp <container>:/tmp/kaoiro_users.dets"));
