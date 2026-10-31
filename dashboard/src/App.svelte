@@ -5,6 +5,12 @@
   import { DeliveryPolicyStore } from "./lib/deliveryPolicyStore.svelte";
   import AgentDetail from "./lib/AgentDetail.svelte";
   import AgentGridShell from "./lib/AgentGridShell.svelte";
+  import DeviceApproval from "./lib/DeviceApproval.svelte";
+  import {
+    captureDeviceEntry,
+    clearDeviceEntry,
+    type DeviceEntry,
+  } from "./lib/deviceApproval";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
   import PersonaDetailDialog from "./lib/PersonaDetailDialog.svelte";
   import PersonaFace from "./lib/PersonaFace.svelte";
@@ -562,6 +568,25 @@
   // neutral loading state instead of flashing the dashboard before we know
   // whether a session exists.
   let authChecked = $state(false);
+
+  // Device authorization approval (issue 801, design §4.3). `deviceStart` is
+  // the tab's "started" state from the URL or from before an OAuth round trip;
+  // `deviceOpen` is set once login is confirmed and the approval view shows.
+  let deviceStart = $state<DeviceEntry | null>(null);
+  let deviceOpen = $state(false);
+
+  // Called wherever a login is confirmed. The stored state is dropped only
+  // here, never before the page leaves for OAuth.
+  function openDeviceApprovalIfStarted(): void {
+    if (deviceStart === null || needLogin) return;
+    clearDeviceEntry(sessionStorage);
+    deviceOpen = true;
+  }
+
+  function closeDeviceApproval(): void {
+    deviceOpen = false;
+    deviceStart = null;
+  }
 
   // Connection lifecycle refs shared by mount / login / logout. The join
   // epoch is reactive so child controls can invalidate work on same-object
@@ -1692,6 +1717,7 @@
     // token, so the shared secret never rides the WS upgrade URL / access
     // logs — same as the reload path (ADR-0013).
     await connectFromCookie();
+    if (!destroyed) openDeviceApprovalIfStarted();
   }
 
   // Logout (#47): drop the server session + cookie, force-close the socket,
@@ -1784,6 +1810,15 @@
         history.replaceState(null, "", scrubbed);
       }
 
+      // A device approval start (`?device=1#code=...`, or the state kept across
+      // OAuth): read, persist and scrub before anything awaits, so the page
+      // can leave for OAuth at any later moment with the state saved.
+      const device = captureDeviceEntry(location, sessionStorage);
+      deviceStart = device.entry;
+      if (device.scrubbedHref !== null) {
+        history.replaceState(null, "", device.scrubbedHref);
+      }
+
       // Fetched in parallel with the token/cookie flow below so authMethods
       // is already settled by the time authChecked reveals the login form
       // (no flash of the wrong form).
@@ -1824,7 +1859,10 @@
       await authMethodsPromise;
       // The auth check is done; reveal the form or dashboard instead of the
       // neutral loading state.
-      if (!destroyed) authChecked = true;
+      if (!destroyed) {
+        openDeviceApprovalIfStarted();
+        authChecked = true;
+      }
     })();
 
     // #25: refresh the timeline clock on a fixed cadence. Kept short
@@ -1860,6 +1898,11 @@
       {/if}
       {#if loginError}
         <p class="login-error" role="alert">{loginError}</p>
+      {/if}
+      {#if deviceStart !== null}
+        <p class="login-note" data-device-login>
+          device の login を承認するには、先に login してください。
+        </p>
       {/if}
       {#if authMethods.token}
         <input
@@ -2106,6 +2149,15 @@
   <PersonaDetailDialog
     personaId={personaDetailId}
     onClose={() => (personaDetailId = null)}
+  />
+{/if}
+
+{#if deviceOpen && deviceStart !== null}
+  <DeviceApproval
+    initialCode={deviceStart.code}
+    available={authMethods.device !== false}
+    providers={authMethods.oauth.map((id) => ({ id, label: oauthProviderLabel(id) }))}
+    onClose={closeDeviceApproval}
   />
 {/if}
 
