@@ -7059,15 +7059,20 @@ test("new-store guard refuses a relative target default before probing", () => {
   assert.doesNotMatch(calls, /compose stop|compose up|archive/);
 });
 
-test("new-store guard refuses a destination mounted from another volume", () => {
-  let caught;
-  const mountsJson = JSON.stringify([{Type:"volume",Name:"other-volume",Destination:"/var/lib/kaoiro"}]);
-  const calls = withCallLog("running-clean-stop", () =>
-    withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1",mountsJson}, () => {
-      try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
-      catch(error) { caught = error; }
-    }),
-  );
-  assert.match(caught?.message ?? "no error", /cannot bind the existing state volume/);
-  assert.doesNotMatch(calls, /compose stop|compose up|archive/);
-});
+for (const [label, mounts] of [
+  ["missing", []],
+  ["bind", [{Type:"bind",Name:"kaoiro_kaoiro-state",Destination:"/var/lib/kaoiro"}]],
+  ["different", [{Type:"volume",Name:"other-volume",Destination:"/var/lib/kaoiro"}]],
+]) {
+  test(`new-store guard refuses a ${label} destination volume mount`, () => {
+    let caught;
+    const calls = withCallLog("running-clean-stop", () =>
+      withEnvConsistencyFixture({oldEvalOutput:newStoreOldManifest,containerEnvJson:"[]",contract:"1",volumePresent:"1",probeExit:"1",mountsJson:JSON.stringify(mounts)}, () => {
+        try { runUpdate({repo:workDir,target:headSha,maintenanceApproved:true,acceptNewStores:["KAOIRO_USERS_PATH"]},configWithCleanStopMeasured()); }
+        catch(error) { caught = error; }
+      }),
+    );
+    assert.match(caught?.message ?? "no error", /cannot bind the existing state volume/);
+    assert.doesNotMatch(calls, /compose stop|compose up|archive/);
+  });
+}
