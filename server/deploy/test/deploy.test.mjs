@@ -7063,6 +7063,7 @@ for (const [label, mounts] of [
   ["missing", []],
   ["bind", [{Type:"bind",Name:"kaoiro_kaoiro-state",Destination:"/var/lib/kaoiro"}]],
   ["different", [{Type:"volume",Name:"other-volume",Destination:"/var/lib/kaoiro"}]],
+  ["shadowed", [{Type:"volume",Name:"kaoiro_kaoiro-state",Destination:"/var/lib/kaoiro"}, {Type:"bind",Destination:"/var/lib/kaoiro/users.dets"}]],
 ]) {
   test(`new-store guard refuses a ${label} destination volume mount`, () => {
     let caught;
@@ -7072,7 +7073,7 @@ for (const [label, mounts] of [
         catch(error) { caught = error; }
       }),
     );
-    assert.match(caught?.message ?? "no error", /cannot bind the existing state volume/);
+    assert.match(caught?.message ?? "no error", /cannot bind the existing state volume|another mount shadows the destination/);
     assert.doesNotMatch(calls, /compose stop|compose up|archive/);
   });
 }
