@@ -2644,9 +2644,10 @@ test("runUpdate refuses a flag naming a var the target image does not list, and 
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
 });
 
-test("runUpdate leaves an already matching new store outside the first-application probe", () => {
+test("runUpdate leaves a matching existing store outside the first-application probe", () => {
   const { result, caught, calls } = attemptUpdate("running-clean-stop", () => withNewWorkStore({
-    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_DEFAULT }),
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
+    oldEvalOutput: JSON.stringify([{store:"Work",env:"KAOIRO_WORK_STORE_PATH",default_file:"work_store.dets",default_path:WORK_STORE_VOLUME}]),
     probeExit: "125",
   }, () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured())));
   assert.equal(caught, undefined);
@@ -2654,7 +2655,8 @@ test("runUpdate leaves an already matching new store outside the first-applicati
   assert.equal(calls.some(isStatProbe), false, "a store whose paths already match needs no probe");
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_effective_path, WORK_STORE_VOLUME);
   assert.equal(Object.hasOwn(entry, "first_application"), false);
   assert.equal(Object.hasOwn(entry, "file_probe_path"), false);
   assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
@@ -2662,7 +2664,8 @@ test("runUpdate leaves an already matching new store outside the first-applicati
 
 test("runUpdate does not consult a flag for a store whose paths already match", () => {
   const { result, caught, calls } = attemptUpdate("running-clean-stop", () => withNewWorkStore({
-    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_DEFAULT }),
+    composeEnvJson: JSON.stringify({ KAOIRO_WORK_STORE_PATH: WORK_STORE_VOLUME }),
+    oldEvalOutput: JSON.stringify([{store:"Work",env:"KAOIRO_WORK_STORE_PATH",default_file:"work_store.dets",default_path:WORK_STORE_VOLUME}]),
     probeExit: "125",
   }, () => runUpdate(workStoreFlags({ maintenanceApproved: true }), configWithCleanStopMeasured())));
   assert.equal(caught, undefined);
@@ -2670,7 +2673,8 @@ test("runUpdate does not consult a flag for a store whose paths already match", 
   assert.equal(calls.some(isStatProbe), false);
   const entry = readManifest(join(root, "kaoiro-deploy", result.transactionId))
     .env_consistency.entries.KAOIRO_WORK_STORE_PATH;
-  assert.equal(entry.match, true);
+  assert.equal(entry.kind, "existing");
+  assert.equal(entry.old_effective_path, WORK_STORE_VOLUME);
   assert.equal(Object.hasOwn(entry, "operator_accepted_new_store"), false);
 });
 
