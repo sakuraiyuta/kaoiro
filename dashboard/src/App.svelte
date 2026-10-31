@@ -92,6 +92,8 @@
     requestNotificationPermission,
   } from "./lib/notify";
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
+  import { sortAgents } from "./lib/gridSort";
+  import { settings } from "./lib/settings.svelte";
   import {
     clientBuildIdentity,
     formatBuildIdentity,
@@ -583,9 +585,12 @@
   // consistent whether the server restarted (directory-only) or only the
   // wrapper died (live disconnected — hot reload / crash / network hiccup).
   const sorted = $derived(
-    Object.values(agents)
-      .filter((envelope) => envelope.state !== "disconnected")
-      .sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
+    sortAgents(
+      Object.values(agents).filter(
+        (envelope) => envelope.state !== "disconnected",
+      ),
+      settings.gridSort,
+    ),
   );
   // Active-task tally per parent agent_id (ADR-0019 F4 concurrency:
   // +1 on started, -1 on completed — `tasks`'s nested shape (M1 fix-
