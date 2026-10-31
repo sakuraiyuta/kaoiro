@@ -2377,9 +2377,10 @@ export function runUpdate(flags, config) {
           // of "could not answer" — never this transaction's own defect
           // to abort over.
           const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false });
-          const oldPathsByEnv = oldPersistencePaths.skipped
-            ? null
-            : new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
+          if (oldPersistencePaths.skipped) {
+            fail(`old image persistence manifest unavailable: ${oldPersistencePaths.reason}; roll back this transaction before retrying`);
+          }
+          const oldPathsByEnv = new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
           const entries = checkEnvConsistency(
             persistencePaths.paths,
             join(serverDir, ".env"),
