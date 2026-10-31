@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { isValidEnvConsistencyV2, parsePersistenceManifest } from "../kaoiro-deploy-env-v2.mjs";
+import { isValidEnvConsistencyV2, isWithinStateVolume, parsePersistenceManifest } from "../kaoiro-deploy-env-v2.mjs";
 import { isValidEnvConsistency } from "../kaoiro-deploy-manifest.mjs";
 
 const digest = s => createHash("sha256").update(s).digest("hex");
@@ -60,4 +60,11 @@ test("manifest validates environment identifiers and shape", () => {
   assert.throws(() => parsePersistenceManifest(JSON.stringify([{...entry, env:".*"}])));
   assert.throws(() => parsePersistenceManifest(JSON.stringify([{...entry, extra:true}])));
   assert.throws(() => parsePersistenceManifest(JSON.stringify([entry, {...entry, store:"other"}])));
+});
+
+test("state volume path containment is normalized and boundary aware", () => {
+  assert.equal(isWithinStateVolume("/var/lib/kaoiro/a.dets"), true);
+  for (const path of ["relative", "/var/lib/kaoiro", "/var/lib/kaoiro-other/a", "/var/lib/kaoiro/../outside", "/var/lib/kaoiro//a"]) {
+    assert.equal(isWithinStateVolume(path), false, path);
+  }
 });

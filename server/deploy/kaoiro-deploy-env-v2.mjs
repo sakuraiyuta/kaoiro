@@ -8,7 +8,7 @@ const nonempty = v => typeof v === "string" && v.length > 0;
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const keys = (v, expected) => object(v) && Object.keys(v).length === expected.length && expected.every(k => Object.hasOwn(v, k));
 const sha256 = s => createHash("sha256").update(s, "utf8").digest("hex");
-const inside = p => nonempty(p) && posix.isAbsolute(p) && posix.normalize(p) === p && p.startsWith("/var/lib/kaoiro/");
+export const isWithinStateVolume = p => nonempty(p) && posix.isAbsolute(p) && posix.normalize(p) === p && p.startsWith("/var/lib/kaoiro/");
 
 // JSON.parse otherwise accepts duplicated object keys with last-wins semantics.
 export function parseUniqueJson(raw) {
@@ -70,7 +70,7 @@ export function isValidEnvConsistencyV2(value) {
     if (Object.keys(value.entries).length !== target.length) return false;
     for (const t of target) {
       const e = value.entries[t.env];
-      if (!object(e) || e.store_id !== t.store || e.target_env !== t.env || !inside(e.target_path) || !nonempty(e.volume_name)) return false;
+      if (!object(e) || e.store_id !== t.store || e.target_env !== t.env || !isWithinStateVolume(e.target_path) || !nonempty(e.volume_name)) return false;
       if (e.kind === "existing") {
         if (!keys(e, ["kind", "store_id", "target_env", "target_path", "old_env", "old_effective_path", "old_path_source", "volume_name"]) ||
           !nonempty(e.old_env) || e.old_effective_path !== e.target_path || !["env", "old_manifest"].includes(e.old_path_source)) return false;
