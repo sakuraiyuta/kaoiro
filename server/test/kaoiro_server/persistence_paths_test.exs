@@ -36,6 +36,11 @@ defmodule KaoiroServer.PersistencePathsTest do
     assert Enum.uniq(stores) == stores
   end
 
+  test "capability marker leaves the manifest as an array" do
+    assert PersistencePaths.contract() == "exhaustive_stable_v1"
+    assert is_list(PersistencePaths.manifest())
+  end
+
   test "manifest round-trips through JSON (the shape the CLI parses)" do
     decoded = PersistencePaths.manifest() |> Jason.encode!() |> Jason.decode!()
 
