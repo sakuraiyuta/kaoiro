@@ -35,3 +35,29 @@ test("shared reader keeps legacy records and rejects partial v2 as legacy", () =
   assert.equal(isValidEnvConsistency(record()), true);
   assert.equal(isValidEnvConsistency({guard_schema:2, skipped:true, reason:"legacy"}), false);
 });
+
+test("v2 fails closed on malformed identity, manifest, and evidence", () => {
+  const scenarios = [
+    r => { r.old_image_id = "sha256:short"; },
+    r => { r.target_image_id = "sha256:short"; },
+    r => { r.path_policy = "other"; },
+    r => { r.target_manifest_raw = "[]"; r.target_manifest_sha256 = digest("[]"); },
+    r => { r.entries.USERS.target_env = "OTHER"; },
+    r => { r.entries.USERS.store_id = "other"; },
+    r => { r.entries.USERS.target_path = r.entries.USERS.old_effective_path = "/var/lib/kaoiro/../escape"; },
+    r => { r.entries.USERS.old_path_source = "target"; },
+    r => { r.entries.USERS.volume_name = ""; },
+    r => { r.entries.USERS.unexpected = true; },
+    r => { r.unexpected = true; },
+  ];
+  for (const change of scenarios) {
+    const r = record(); change(r); assert.equal(isValidEnvConsistencyV2(r), false, change.toString());
+  }
+});
+
+test("manifest validates environment identifiers and shape", () => {
+  const entry = JSON.parse(raw)[0];
+  assert.throws(() => parsePersistenceManifest(JSON.stringify([{...entry, env:".*"}])));
+  assert.throws(() => parsePersistenceManifest(JSON.stringify([{...entry, extra:true}])));
+  assert.throws(() => parsePersistenceManifest(JSON.stringify([entry, {...entry, store:"other"}])));
+});
