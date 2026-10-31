@@ -1,6 +1,6 @@
 import "../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DigestMismatch, PRECONDITIONS, SERVICE_PATHS, deactivate, digestChanges, digestEntries, drive, reach, serviceProblems } from "./codexStateRecoveryRecipes.js";
@@ -110,6 +110,23 @@ describe("service observation: the zero-mutation digest", () => {
       expect(digestChanges(before, digestEntries(dir), SERVICE_PATHS)).toEqual(["config/a b"]);
       writeFileSync(join(dir, "active"), "2");
       expect(digestChanges(before, digestEntries(dir), SERVICE_PATHS)).toEqual(["config/a b"]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("sees changes to directories and symlinks whose names share a prefix through a space", () => {
+    const dir = mkdtempSync(join(tmpdir(), "digest-entry-keys-"));
+    const dA = "config/d a", dB = "config/d b", lA = "config/l a", lB = "config/l b";
+    try {
+      mkdirSync(join(dir, "config"));
+      mkdirSync(join(dir, dA)); mkdirSync(join(dir, dB));
+      chmodSync(join(dir, dA), 0o755); chmodSync(join(dir, dB), 0o755);
+      symlinkSync("target a", join(dir, lA)); symlinkSync("target b", join(dir, lB));
+      const before = digestEntries(dir);
+      expect([...before.keys()]).toEqual(["config", dA, dB, lA, lB]);
+      chmodSync(join(dir, dA), 0o700);
+      expect(digestChanges(before, digestEntries(dir), SERVICE_PATHS)).toEqual([dA]);
+      const beforeLink = digestEntries(dir);
+      unlinkSync(join(dir, lA)); symlinkSync("target changed", join(dir, lA));
+      expect(digestChanges(beforeLink, digestEntries(dir), SERVICE_PATHS)).toEqual([lA]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   // The active stop of Q-bad rewrites only `active` and `calls`; a write by the
