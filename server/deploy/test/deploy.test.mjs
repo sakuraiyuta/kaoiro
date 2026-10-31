@@ -2490,7 +2490,7 @@ test("runUpdate keeps the 5-b failure when the old container has the flagged sto
     () => withScenario("running", () => withNewWorkStore({ probeExit: "0" }, () =>
       runUpdate(workStoreFlags(), configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_result":"present"'),
   );
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
@@ -2505,7 +2505,7 @@ test("runUpdate keeps the 5-b failure when the old image knows the store", () =>
     () => withScenario("running", () => withNewWorkStore({ oldEvalOutput: OLD_WORK_STORE_MANIFEST }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("first-application migration") &&
+    (err) => err instanceof DeployError && err.message.includes("existing store Work uses") &&
       err.message.includes("/tmp/old-work.dets"),
   );
 });
@@ -2515,7 +2515,7 @@ test("runUpdate refuses the flag for a store the old image already lists, withou
     withNewWorkStore({ oldEvalOutput: OLD_WORK_STORE_MANIFEST }, () =>
       runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("--accept-new-store refused because the old image's own manifest already lists"));
+  assert.ok(caught.message.includes("existing store Work uses"));
   assert.ok(caught.message.includes("/tmp/old-work.dets"));
   assert.ok(caught.message.includes("this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)"));
   assert.equal(calls.some(isStatProbe), false);
@@ -2528,7 +2528,7 @@ test("runUpdate rejects a never-existed store omitted from compose", () => {
     () => withScenario("running", () => withNewWorkStore({ composeEnvJson: "{}" }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("compose does not declare this persistence-path var"),
+    (err) => err instanceof DeployError && err.message.includes("not a normalized path below the state volume"),
   );
 });
 
@@ -2537,8 +2537,7 @@ test("runUpdate rejects a never-existed store declared outside the state volume"
     () => withScenario("running", () => withNewWorkStore({
       composeEnvJson: '{"KAOIRO_WORK_STORE_PATH":"/tmp/outside/work_store.dets"}',
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
-      err.message.includes("/var/lib/kaoiro named volume"),
+    (err) => err instanceof DeployError && err.message.includes("not a normalized path below the state volume"),
   );
 });
 
@@ -2554,7 +2553,7 @@ test("runUpdate rejects a never-existed store without a named state volume mount
   assert.throws(
     () => withScenario("running", () => withComposePlans(bindPlan, bindPlan, () =>
       withNewWorkStore({}, () => runUpdate(workStoreFlags(), configWithOverride())))),
-    (err) => err instanceof DeployError && err.message.includes("cannot accept first application") &&
+    (err) => err instanceof DeployError && err.message.includes("state volume unavailable") &&
       err.message.includes("no named-volume mount"),
   );
 });
@@ -2564,7 +2563,7 @@ test("runUpdate refuses to infer absence when the container path probe fails", (
     () => withScenario("running", () => withNewWorkStore({ probeExit: "125" }, () =>
       runUpdate(workStoreFlags(), configWithOverride()),
     )),
-    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path"),
   );
 });
 
@@ -2573,7 +2572,7 @@ test("runUpdate refuses to infer absence from a diagnostic exit 1", () => {
     () => withScenario("running", () => withNewWorkStore({
       probeExit: "1", probeStderr: "container is not running",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe"),
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path"),
   );
 });
 
@@ -2583,7 +2582,7 @@ test("runUpdate refuses an absent answer for a different path", () => {
       probeExit: "1",
       probeStderr: "stat: cannot statx '/tmp/other-store.dets': No such file or directory",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_reason":"probe_command_failed"'),
   );
 });
@@ -2593,7 +2592,7 @@ test("runUpdate refuses unexpected output from the container path probe", () => 
     () => withScenario("running", () => withNewWorkStore({
       probeExit: "0", probeStdout: "unexpected",
     }, () => runUpdate(workStoreFlags(), configWithOverride()))),
-    (err) => err instanceof DeployError && err.message.includes("could not probe") &&
+    (err) => err instanceof DeployError && err.message.includes("cannot verify the target default path") &&
       err.message.includes('"file_probe_reason":"unexpected_output"'),
   );
 });
@@ -2602,7 +2601,7 @@ test("runUpdate refuses an unflagged store the old manifest omits, without probi
   const { caught, calls } = attemptUpdate("running", () =>
     withNewWorkStore({}, () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("first-application migration"));
+  assert.ok(caught.message.includes("independently verify that no earlier data needs migration"));
   assert.equal(calls.some(isStatProbe), false);
   assertNoDestructiveCalls(calls);
   assert.equal(readFileSync(join(root, "latest-tag-id"), "utf8"), OLD_IMAGE_ID);
@@ -2613,7 +2612,7 @@ test("runUpdate refuses an unflagged store when the old image cannot answer the 
     withNewWorkStore({ oldBeamAbsent: "1" }, () =>
       runUpdate({ repo: workDir, target: headSha }, configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("The old image cannot report its persistence manifest; the target image's default may differ from the old container's actual path. A missing file at the target default does not prove that this store never existed."));
+  assert.ok(caught.message.includes("old image persistence manifest unavailable"));
   assert.doesNotMatch(caught.message, /update --transaction [^\n]*--accept-new-store/);
   assert.equal(calls.some(isStatProbe), false);
   assertNoDestructiveCalls(calls);
@@ -2625,7 +2624,7 @@ test("runUpdate refuses the flag when the old container already has the variable
       containerEnvJson: JSON.stringify(["KAOIRO_WORK_STORE_PATH=/tmp/previously-configured.dets"]),
     }, () => runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("--accept-new-store refused because the running container already has this variable set"));
+  assert.ok(caught.message.includes("configured in the old container at"));
   assert.ok(caught.message.includes("/tmp/previously-configured.dets"));
   assert.ok(caught.message.includes("this store is not eligible for --accept-new-store; use the non-destructive rollback command printed below (also in status), optionally adding --dry-run to preview; see docs/operations/server-update-and-rollback.md 4.3 (5-b)"));
   assert.equal(calls.some(isStatProbe), false);
@@ -2701,7 +2700,9 @@ test("runUpdate admits several new stores, each named by its own flag", () => {
   assert.equal(result.phase, "done");
   const entries = readManifest(join(root, "kaoiro-deploy", result.transactionId)).env_consistency.entries;
   for (const envName of acceptNewStores) {
-    assert.equal(entries[envName].match, true);
+    assert.equal(entries[envName].kind, "new_store");
+    assert.equal(entries[envName].probe_result, "absent");
+    assert.equal(entries[envName].destination_probe_result, "absent");
     assert.equal(entries[envName].operator_accepted_new_store, true);
   }
 });
@@ -2710,8 +2711,8 @@ test("runUpdate does not let one store's flag admit another new store", () => {
   const { caught, calls } = attemptUpdate("running", () => withTwoNewStores({}, () =>
     runUpdate(workStoreFlags(), configWithOverride())));
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("KAOIRO_SECOND_STORE_PATH: compose declares"));
-  assert.equal(caught.message.includes("KAOIRO_WORK_STORE_PATH: compose declares"), false);
+  assert.ok(caught.message.includes("KAOIRO_SECOND_STORE_PATH: independently verify"));
+  assert.equal(caught.message.includes("KAOIRO_WORK_STORE_PATH: independently verify"), false);
   assert.ok(calls.includes(WORK_STORE_PROBE_CALL), "the flagged store is measured");
   assert.equal(
     calls.some((line) => isStatProbe(line) && line.endsWith(SECOND_STORE_DEFAULT)),
@@ -2923,7 +2924,7 @@ test("runUpdate refuses when compose does not declare a persistence-path var the
   assert.ok(caught instanceof DeployError);
   assert.ok(
     caught.message.includes(
-      "KAOIRO_USERS_PATH: compose does not declare this persistence-path var at all (the #217 class",
+      "KAOIRO_USERS_PATH: not a normalized path below the state volume at all (the #217 class",
     ),
   );
 });
