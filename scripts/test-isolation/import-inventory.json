@@ -1,6 +1,6 @@
 {
   "typescript": "5.9.3",
-  "raw": 493,
+  "raw": 513,
   "problems": [],
   "rows": [
     {
@@ -205,6 +205,14 @@
     },
     {
       "path": "dashboard/test/appUnackedErrorAck.integration.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/benchFakePhoenix.test.ts",
       "imports": [
         "vitest"
       ],
@@ -836,6 +844,14 @@
       "firstImport": "./isolation.setup"
     },
     {
+      "path": "dashboard/test/untrustedMarkdownStyle.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
       "path": "dashboard/test/userListWireRoundTrip.integration.test.ts",
       "imports": [
         "vitest"
@@ -853,6 +869,22 @@
     },
     {
       "path": "dashboard/test/viteBuildIdentity.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/workCapacitySettingsLifecycle.integration.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/workSettings.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1028,6 +1060,14 @@
       "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "runner/test/codexDaemonIdentity.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "runner/test/codexHomeClassification.test.ts",
       "imports": [
         "vitest"
@@ -1077,6 +1117,54 @@
     },
     {
       "path": "runner/test/codexStateRecovery.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryForward.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryRecipes.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryRefusals.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryRestore.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryService.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "runner/test/codexStateRecoveryTable.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1452,6 +1540,30 @@
       "firstImport": "./fixtures/test-isolation.mjs"
     },
     {
+      "path": "scripts/test/codex-backend-compatibility.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "./fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "scripts/test/codex-backend-maintenance.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "./fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "scripts/test/codex-backend-operator.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "./fixtures/test-isolation.mjs"
+    },
+    {
       "path": "scripts/test/extract-peer-session-reset-reply-vocabulary.test.mjs",
       "imports": [
         "node:test"
@@ -1469,6 +1581,14 @@
     },
     {
       "path": "scripts/test/github-issue-import.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "./fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "scripts/test/node-ci-coverage.test.mjs",
       "imports": [
         "node:test"
       ],
@@ -1701,6 +1821,14 @@
     },
     {
       "path": "wrapper/agent-common/test/ia_sidecar.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "wrapper/agent-common/test/inbound_work_stamp.test.ts",
       "imports": [
         "vitest"
       ],
@@ -2076,6 +2204,14 @@
       "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "wrapper/antigravity/test/inbound_work_stamp_composition.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "wrapper/antigravity/test/index.test.ts",
       "imports": [
         "vitest"
@@ -2397,6 +2533,14 @@
     },
     {
       "path": "wrapper/claude-code/test/host.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "wrapper/claude-code/test/inbound_work_stamp_composition.test.ts",
       "imports": [
         "vitest"
       ],
@@ -3228,6 +3372,14 @@
       "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "wrapper/codex/test/inbound_work_stamp_composition.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "wrapper/codex/test/inter_agent_lifecycle_glue.test.ts",
       "imports": [
         "vitest"
@@ -3740,6 +3892,14 @@
       "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "wrapper/grok/test/inbound_work_stamp_composition.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "wrapper/grok/test/live-permission.test.ts",
       "imports": [
         "vitest"
@@ -3949,3 +4109,4 @@
     }
   ]
 }
+
