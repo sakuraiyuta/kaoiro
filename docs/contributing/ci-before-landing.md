@@ -2,7 +2,7 @@
 title: CI before landing on develop
 description: Run and record CI on the exact candidate before a director lands it on develop.
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-01
 ---
 
 # CI before landing on develop
@@ -129,10 +129,14 @@ evidence.
 
 ## Native checks outside CI
 
-All jobs in `ci.yml` are pinned to the `ubuntu-24.04` runner label. The label
-pins the OS release, while the image version and kernel continue to change;
-the image will eventually be retired. Moving the label is a deliberate change
-tied to [issue #949](https://github.com/sakuraiyuta/kaoiro/issues/949).
+All jobs in `ci.yml` run on the `ubuntu-26.04` runner label. The label pins
+the OS release, while the image version and kernel continue to change; moving
+the label is a deliberate change with its own CI run. The `wrapper` job unloads
+the image's two bwrap AppArmor profiles before the tests, because the confined
+system `bwrap` of that image orphans the codex sandbox after SIGTERM
+([issue #949](https://github.com/sakuraiyuta/kaoiro/issues/949)); the stock
+environment with the profiles loaded is covered by
+[issue #957](https://github.com/sakuraiyuta/kaoiro/issues/957).
 The `server-image` job builds and
 probes the image, including booting it and probing the device authorization
 entry over loopback with and without `x-forwarded-proto: https` (G56,

@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   wrapper:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     defaults:
       run:
@@ -59,6 +59,26 @@ jobs:
             echo "::error::Codex sandbox requires a usable unprivileged user namespace; M1/M2 were not run."
             exit 1
           fi
+
+          # issue 949: the ubuntu-26.04 image confines its system bwrap with
+          # AppArmor profiles under which the pid-1 child of the codex sandbox
+          # outlives bwrap, so the codex SIGTERM tests see orphaned processes.
+          # Unload the measured set; the stock environment is issue 957.
+          for profile in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/glycin.bwrap; do
+            if [ -f "$profile" ]; then
+              sudo apparmor_parser -R "$profile"
+              echo "unloaded AppArmor profile file $profile"
+            fi
+          done
+          if ! aa_status="$(sudo aa-status 2>&1)"; then
+            echo "::error::aa-status failed: $aa_status"
+            exit 1
+          fi
+          if grep -w bwrap <<<"$aa_status"; then
+            echo "::error::an AppArmor profile matching bwrap is still loaded; the codex SIGTERM tests would see orphaned sandboxes."
+            exit 1
+          fi
+          echo "aa-status: no profile matching bwrap"
       - uses: pnpm/action-setup@v4
         with:
           version: 10.20.0
@@ -73,7 +93,7 @@ jobs:
       # spawned as real processes), and that build needs the sibling
       # workspace packages' dist, so build the whole wrapper first.
       - run: pnpm build
-      - run: uname -r
+      - run: uname -r && head -2 /etc/os-release && (bwrap --version || true)
       - run: pnpm test
 
   # No `working-directory` default here: the install has to happen at the
@@ -81,7 +101,7 @@ jobs:
   # .d.ts files (they are workspace deps, so an unbuilt wrapper fails with
   # TS2307).
   runner:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +125,7 @@ jobs:
   # until this job existed (クロエ-sub finding, #306 round 3: every prior
   # green `node --test` count was a LOCAL claim only).
   server-deploy:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 8
     defaults:
       run:
@@ -130,7 +150,7 @@ jobs:
   # package's own Vitest, so it needs the dependencies and what the accepted
   # test scripts build first (wrapper, including antigravity and grok, and runner).
   test-isolation:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -177,7 +197,7 @@ jobs:
   # release pin (OTP 26) could not compile this suite's Japanese test names at
   # all ("argument 1: not an iolist term"), which is what surfaced the drift.
   server:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -306,7 +326,7 @@ jobs:
             '
 
   dashboard:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 6
     defaults:
       run:
@@ -331,7 +351,7 @@ jobs:
   # registry decision (issue #140), so this only proves the image still
   # builds.
   server-image:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Raised from 5 for the G56 boot-and-probe step below (issue 801); set
     # it from the first run's measured build + boot + probe time.
     timeout-minutes: 10
