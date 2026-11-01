@@ -114,30 +114,54 @@ jobs:
               sudo aa-status 2>/dev/null | grep -i bwrap || echo "no bwrap profile loaded now" ;;
             baseline) echo "baseline" ;;
           esac
-      - name: pnpm test with a bwrap process sampler (issue 949 experiment P2)
+      - name: bwrap die-with-parent probe without codex (issue 949 experiment P2b)
         run: |
-          (
-            while true; do
-              for p in /proc/[0-9]*; do
-                pid=${p#/proc/}
-                comm=$(cat "$p/comm" 2>/dev/null) || continue
-                cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-100)
-                case "$comm $cmd" in
-                  *bwrap*|codex-linux*|*codex-linux-sandbox*)
-                    echo "pid=$pid ppid=$(awk '{print $4}' "$p/stat" 2>/dev/null) comm=$comm exe=$(readlink "$p/exe" 2>/dev/null || echo '?') cmd=$cmd" ;;
-                esac
-              done
-              sleep 0.2
-            done
-          ) > "$RUNNER_TEMP/bwrap-samples.log" 2>/dev/null &
+          if ! command -v bwrap >/dev/null; then echo "no system bwrap in PATH; probe skipped"; exit 0; fi
+          echo "bwrap: $(command -v bwrap) label=$(cat /proc/self/attr/apparmor/current)"
+          setsid bash -c 'bwrap --unshare-pid --as-pid-1 --new-session --die-with-parent --ro-bind / / --proc /proc --dev /dev -- sleep 300 & sleep 1; echo "launcher exits (pid $$)"'
+          sleep 1
+          echo "after the launcher exited:"
+          ps -eo pid,ppid,pgid,sid,label,args | grep -E "bwrap|sleep 300" | grep -v grep || echo "no bwrap / sleep 300 survivors"
+          pkill -f "sleep 300" && echo "(killed the survivor; disposable VM)" || true
+      - name: pnpm test with a bwrap process sampler (issue 949 experiment P2b)
+        run: |
+          cat > "$RUNNER_TEMP/sampler.py" <<'PY'
+          import os, sys, time
+          out = open(sys.argv[1], "a"); seen = set()
+          while True:
+              for d in os.listdir("/proc"):
+                  if not d.isdigit():
+                      continue
+                  try:
+                      comm = open(f"/proc/{d}/comm").read().strip()
+                      if "bwrap" not in comm and not comm.startswith("codex-linux") and comm != "sleep":
+                          continue
+                      cmd = open(f"/proc/{d}/cmdline", "rb").read().replace(b"\0", b" ")[:120].decode("latin1")
+                      if comm == "sleep" and "sleep 77" not in cmd:
+                          continue
+                      st = open(f"/proc/{d}/stat").read(); f = st[st.rindex(")") + 2:].split()
+                      try: exe = os.readlink(f"/proc/{d}/exe")
+                      except OSError as e: exe = f"unreadable({e.errno})"
+                      try: label = open(f"/proc/{d}/attr/apparmor/current").read().strip()
+                      except OSError as e: label = f"unreadable({e.errno})"
+                      key = (d, comm, exe, label, f[1], f[2], f[3])
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      out.write(f"pid={d} ppid={f[1]} pgid={f[2]} sid={f[3]} comm={comm} label={label} exe={exe} cmd={cmd}\n"); out.flush()
+                  except OSError:
+                      pass
+              time.sleep(0.02)
+          PY
+          python3 "$RUNNER_TEMP/sampler.py" "$RUNNER_TEMP/bwrap-samples.log" &
           echo $! > "$RUNNER_TEMP/sampler.pid"
           pnpm test
-      - name: bwrap process samples (issue 949 experiment P2)
+      - name: bwrap process samples (issue 949 experiment P2b)
         if: always()
         run: |
           kill "$(cat "$RUNNER_TEMP/sampler.pid")" 2>/dev/null || true
-          echo "distinct samples: $(sort -u "$RUNNER_TEMP/bwrap-samples.log" | wc -l)"
-          sort -u "$RUNNER_TEMP/bwrap-samples.log" | cut -c1-300 | head -80
+          echo "distinct samples: $(wc -l < "$RUNNER_TEMP/bwrap-samples.log")"
+          cut -c1-330 "$RUNNER_TEMP/bwrap-samples.log" | head -120
       - name: kernel audit log after the tests (issue 949 experiment P2)
         if: always()
         run: |
