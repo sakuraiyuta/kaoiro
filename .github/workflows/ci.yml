@@ -70,7 +70,7 @@ jobs:
               echo "unloaded AppArmor profile file $profile"
             fi
           done
-          if ! aa_status="$(sudo /usr/sbin/aa-status-nc3-does-not-exist 2>&1)"; then
+          if ! aa_status="$(sudo aa-status 2>&1)"; then
             echo "::error::aa-status failed: $aa_status"
             exit 1
           fi
