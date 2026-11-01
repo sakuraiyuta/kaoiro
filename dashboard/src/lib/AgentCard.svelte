@@ -533,12 +533,17 @@
     {/if}
     <div class="sprite-slot">
       <!-- Same action as `.open`, so it is kept out of the Tab order to
-           avoid a duplicate stop. Persona detail opens from AgentDetail's
-           portrait instead (2026-10-05 operator decision). -->
+           avoid a duplicate stop, and out of the accessibility tree
+           (`aria-hidden`; `tabindex=-1` keeps it from being a hidden tab
+           stop) so a screen reader does not list the same button twice.
+           Persona detail opens from AgentDetail's portrait instead (PR #908,
+           operator accepted 2026-11-01, supersedes the grid-face part of
+           issue #232). -->
       <button
         type="button"
         class="face-open"
         tabindex="-1"
+        aria-hidden="true"
         onclick={directoryOnly ? undefined : selectFrom}
         disabled={directoryOnly}
         aria-label={`${name} の詳細を開く`}

@@ -801,7 +801,7 @@
         })}
     >
       <option value="name">名前順</option>
-      <option value="recent">最近動いた順</option>
+      <option value="recent">最近動いた順 (状態が変わると並びが動く)</option>
     </select>
   </label>
 

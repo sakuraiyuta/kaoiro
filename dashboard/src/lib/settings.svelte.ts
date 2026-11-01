@@ -17,7 +17,8 @@ export interface Settings {
    *  では gate しない。既定 off (導入前の表示を変えない)。 */
   hideNonMessageLogEntries: boolean;
   /** Order of the live agent grid. "name" is the original agent_id order;
-   *  "recent" puts the agent whose state changed most recently first. */
+   *  "recent" puts the agent with the newest grid envelope first (mostly a
+   *  state change; see gridSort.ts), so the cards move as states change. */
   gridSort: GridSort;
 }
 
