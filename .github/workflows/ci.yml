@@ -60,25 +60,7 @@ jobs:
             exit 1
           fi
 
-          # issue 949: the ubuntu-26.04 image confines its system bwrap with
-          # AppArmor profiles under which the pid-1 child of the codex sandbox
-          # outlives bwrap, so the codex SIGTERM tests see orphaned processes.
-          # Unload the measured set; the stock environment is issue 957.
-          for profile in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/glycin.bwrap; do
-            if [ -f "$profile" ]; then
-              sudo apparmor_parser -R "$profile"
-              echo "unloaded AppArmor profile file $profile"
-            fi
-          done
-          if ! aa_status="$(sudo aa-status 2>&1)"; then
-            echo "::error::aa-status failed: $aa_status"
-            exit 1
-          fi
-          if grep -w bwrap <<<"$aa_status"; then
-            echo "::error::an AppArmor profile matching bwrap is still loaded; the codex SIGTERM tests would see orphaned sandboxes."
-            exit 1
-          fi
-          echo "aa-status: no profile matching bwrap"
+          echo "NC2: no unload, no assertion"
       - uses: pnpm/action-setup@v4
         with:
           version: 10.20.0
