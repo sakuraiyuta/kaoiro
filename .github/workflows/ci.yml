@@ -11,7 +11,13 @@ permissions:
 
 jobs:
   wrapper:
-    runs-on: ubuntu-24.04
+    # issue 949 experiment P (temporary, not for landing): run the wrapper
+    # job on both runner releases to capture the 26.04 failure signature.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
       run:
@@ -73,7 +79,21 @@ jobs:
       # spawned as real processes), and that build needs the sibling
       # workspace packages' dist, so build the whole wrapper first.
       - run: pnpm build
-      - run: uname -r
+      - name: runner environment (issue 949 experiment P)
+        run: |
+          uname -r
+          cat /etc/os-release
+          ps --version
+          ldd --version | head -1
+          systemctl --version | head -1
+          cat /proc/1/comm
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
+          cat /proc/sys/user/max_user_namespaces || true
+          cat /proc/sys/kernel/yama/ptrace_scope || true
+          cat /sys/fs/cgroup/cgroup.controllers || true
+          cat /proc/self/cgroup
+          ps -o pid,ppid,pgid,sid,comm -p $$ -p $PPID
+          bwrap --version || true
       - run: pnpm test
 
   # No `working-directory` default here: the install has to happen at the
