@@ -389,10 +389,10 @@
   // is open, or null. issue #232 MF-1 (director decision): the server
   // endpoint (GET /api/personas/:id) is operator/admin only — a custom
   // pack's personality.md is a system prompt that may carry proprietary
-  // operating instructions. The `onOpenPersonaDetail` wiring site (AgentDetail
-  // only; grid cards open the detail instead) gates on `isOperator` so a
-  // viewer session never even shows the
-  // click affordance; viewer disclosure is a separate future decision
+  // operating instructions. The `onOpenPersonaDetail` wiring site below
+  // (AgentDetail only; grid cards open the agent detail instead) gates on
+  // `isOperator` so a viewer session never even shows the click
+  // affordance; viewer disclosure is a separate future decision
   // (ADR-0021 F7).
   let personaDetailId = $state<string | null>(null);
 

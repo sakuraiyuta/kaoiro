@@ -1,8 +1,9 @@
 import "./isolation.setup";
 // @vitest-environment jsdom
-// AgentCard の顔画像クリック: グリッドでは顔もカードの他の部分と同じく
-// エージェント詳細 (タイムライン) を開く (2026-10-05 オペレータ決定)。
-// ペルソナ詳細は AgentDetail の portrait から開く (別テスト)。
+// AgentCard face click: in the grid the face opens the agent detail
+// (timeline) like the rest of the card (PR #908, operator accepted
+// 2026-11-01, supersedes the grid-face part of issue #232). Persona detail
+// opens from AgentDetail's portrait (a separate test).
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";
@@ -60,6 +61,18 @@ describe("AgentCard 顔クリック", () => {
 
     expect(target.querySelector(".face-open")!.getAttribute("tabindex")).toBe("-1");
     expect(target.querySelector(".open")!.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("`.face-open` is hidden from the accessibility tree, `.open` is not (one \"open detail\" button for a screen reader)", async () => {
+    const target = await render({ onSelect: vi.fn() });
+
+    // aria-hidden on a focusable element is only safe when it cannot be
+    // reached by Tab; tabindex=-1 (previous test) is what allows it
+    expect(target.querySelector(".face-open")!.getAttribute("aria-hidden")).toBe("true");
+    expect(target.querySelector(".open")!.hasAttribute("aria-hidden")).toBe(false);
+    expect(
+      target.querySelectorAll('button[aria-label$="の詳細を開く"]:not([aria-hidden="true"])'),
+    ).toHaveLength(1);
   });
 
   it("directoryOnly なら `.face-open` は disabled", async () => {
