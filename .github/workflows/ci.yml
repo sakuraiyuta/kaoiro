@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   wrapper:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -73,6 +73,7 @@ jobs:
       # spawned as real processes), and that build needs the sibling
       # workspace packages' dist, so build the whole wrapper first.
       - run: pnpm build
+      - run: uname -r
       - run: pnpm test
 
   # No `working-directory` default here: the install has to happen at the
@@ -80,7 +81,7 @@ jobs:
   # .d.ts files (they are workspace deps, so an unbuilt wrapper fails with
   # TS2307).
   runner:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +105,7 @@ jobs:
   # until this job existed (クロエ-sub finding, #306 round 3: every prior
   # green `node --test` count was a LOCAL claim only).
   server-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     defaults:
       run:
@@ -129,7 +130,7 @@ jobs:
   # package's own Vitest, so it needs the dependencies and what the accepted
   # test scripts build first (wrapper, including antigravity and grok, and runner).
   test-isolation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -176,7 +177,7 @@ jobs:
   # release pin (OTP 26) could not compile this suite's Japanese test names at
   # all ("argument 1: not an iolist term"), which is what surfaced the drift.
   server:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -305,7 +306,7 @@ jobs:
             '
 
   dashboard:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 6
     defaults:
       run:
@@ -330,7 +331,7 @@ jobs:
   # registry decision (issue #140), so this only proves the image still
   # builds.
   server-image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Raised from 5 for the G56 boot-and-probe step below (issue 801); set
     # it from the first run's measured build + boot + probe time.
     timeout-minutes: 10

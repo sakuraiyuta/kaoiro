@@ -129,7 +129,11 @@ evidence.
 
 ## Native checks outside CI
 
-All jobs in `ci.yml` run on `ubuntu-latest`. The `server-image` job builds and
+All jobs in `ci.yml` are pinned to the `ubuntu-24.04` runner label. The label
+pins the OS release, while the image version and kernel continue to change;
+the image will eventually be retired. Moving the label is a deliberate change
+tied to [issue #949](https://github.com/sakuraiyuta/kaoiro/issues/949).
+The `server-image` job builds and
 probes the image, including booting it and probing the device authorization
 entry over loopback with and without `x-forwarded-proto: https` (G56,
 [issue #801](https://github.com/sakuraiyuta/kaoiro/issues/801)); its claim
