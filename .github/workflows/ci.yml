@@ -16,7 +16,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-26.04]
+        include:
+          - { os: ubuntu-24.04, variant: baseline }
+          - { os: ubuntu-26.04, variant: baseline }
+          - { os: ubuntu-26.04, variant: no-system-bwrap }
+          - { os: ubuntu-26.04, variant: bwrap-apparmor-unloaded }
+    name: wrapper (${{ matrix.os }}, ${{ matrix.variant }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
@@ -94,7 +99,50 @@ jobs:
           cat /proc/self/cgroup
           ps -o pid,ppid,pgid,sid,comm -p $$ -p $PPID
           bwrap --version || true
-      - run: pnpm test
+          command -v bwrap || true
+          ls -la /etc/apparmor.d/ | grep -i bwrap || echo "no bwrap profile file"
+          for f in /etc/apparmor.d/*bwrap*; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done || true
+          sudo aa-status 2>/dev/null | grep -i -E "bwrap|profiles are|processes are" || true
+      - name: variant setup (issue 949 experiment P2)
+        run: |
+          case "${{ matrix.variant }}" in
+            no-system-bwrap)
+              sudo mv /usr/bin/bwrap /usr/bin/bwrap.moved-for-issue-949
+              command -v bwrap && exit 1 || echo "system bwrap removed from PATH" ;;
+            bwrap-apparmor-unloaded)
+              for f in /etc/apparmor.d/*bwrap*; do [ -f "$f" ] && sudo apparmor_parser -R "$f" && echo "unloaded $f"; done
+              sudo aa-status 2>/dev/null | grep -i bwrap || echo "no bwrap profile loaded now" ;;
+            baseline) echo "baseline" ;;
+          esac
+      - name: pnpm test with a bwrap process sampler (issue 949 experiment P2)
+        run: |
+          (
+            while true; do
+              for p in /proc/[0-9]*; do
+                pid=${p#/proc/}
+                comm=$(cat "$p/comm" 2>/dev/null) || continue
+                cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-100)
+                case "$comm $cmd" in
+                  *bwrap*|codex-linux*|*codex-linux-sandbox*)
+                    echo "pid=$pid ppid=$(awk '{print $4}' "$p/stat" 2>/dev/null) comm=$comm exe=$(readlink "$p/exe" 2>/dev/null || echo '?') cmd=$cmd" ;;
+                esac
+              done
+              sleep 0.2
+            done
+          ) > "$RUNNER_TEMP/bwrap-samples.log" 2>/dev/null &
+          echo $! > "$RUNNER_TEMP/sampler.pid"
+          pnpm test
+      - name: bwrap process samples (issue 949 experiment P2)
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/sampler.pid")" 2>/dev/null || true
+          echo "distinct samples: $(sort -u "$RUNNER_TEMP/bwrap-samples.log" | wc -l)"
+          sort -u "$RUNNER_TEMP/bwrap-samples.log" | cut -c1-300 | head -80
+      - name: kernel audit log after the tests (issue 949 experiment P2)
+        if: always()
+        run: |
+          sudo dmesg 2>/dev/null | grep -i -E "apparmor|audit" | tail -60 || true
+          sudo journalctl -k --no-pager 2>/dev/null | grep -i apparmor | tail -30 || true
 
   # No `working-directory` default here: the install has to happen at the
   # workspace root, and runner's typecheck needs the wrapper packages' emitted
