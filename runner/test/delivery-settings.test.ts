@@ -163,3 +163,9 @@ describe("retired Codex operator-steer inputs in the runner", () => {
     expect(base[flag]).toBe("1");
   });
 });
+
+it("resolves omitted Codex selection before publishing delivery metadata", () => {
+  const snapshot = createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: {} }), {});
+  expect(snapshot.engines.codex.codexBackend).toBe("app-server");
+  expect(buildLaunchDeliveryMetadata(snapshot, "codex").mechanisms).toMatchObject({ operator_early: "steer", inter_agent_early: "steer" });
+});

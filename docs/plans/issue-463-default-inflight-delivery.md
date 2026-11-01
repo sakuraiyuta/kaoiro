@@ -59,6 +59,18 @@ does not relay the key. The readers are removed by C5 after one released version
 with these warnings. The omitted-setting Codex backend stays with C4B, and the
 Claude opt-ins with C4C.
 
+## C4B implementation boundary
+
+[Issue #564](https://github.com/sakuraiyuta/kaoiro/issues/564) resolves omitted
+backend settings to app-server in runner relay, CLI, Host, history, status and
+Supervisor observation. Explicit exec remains available. The maintenance CLI
+uses read-only observations and operator-accepted per-operation records for
+whole-host fresh transitions and individual fresh restores. See the
+[runbook](../operations/codex-backend-switch.md#fresh-backend-migration) for
+U1 preparation, unknown origins, reset failures and same-native code rollback.
+The U2 candidate and C4C must both be reviewed and checked before their adjacent
+landings, with no unrelated landing or standalone release between them.
+
 ## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 
 Source defaults and configured production behavior are separate:

@@ -1,0 +1,146 @@
+{
+  "date": "2026-10-31",
+  "product_commit": "af4a41545a2df0d4e9d8a951b7cf7cf840d8c5a7",
+  "native_sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306",
+  "native_turns": {
+    "migration": 13,
+    "live_sibling": 2,
+    "observation": 4,
+    "total": 19
+  },
+  "migration": [
+    {
+      "row": "A/B/C/D/E",
+      "status": "pass",
+      "legacy_id_retained": true,
+      "peer_and_sibling_refusal": true
+    },
+    {
+      "row": "G",
+      "status": "pass",
+      "no_resume": true,
+      "new_native_id": true,
+      "retained_policy_snapshot": true
+    },
+    {
+      "row": "K",
+      "status": "pass",
+      "same_backend_sibling_restore": true
+    },
+    {
+      "row": "J",
+      "status": "pass",
+      "same_native_same_ids": true,
+      "omission_refusal": "procedural offline loader check, no product gate"
+    },
+    {
+      "row": "M",
+      "status": "pass",
+      "reset_rollback_and_peer_refused": true
+    },
+    {
+      "row": "L",
+      "status": "pass",
+      "fresh_exec_distinct": true
+    },
+    {
+      "row": "N",
+      "status": "pass",
+      "archived_pointer_proposal": "isolated state fault only",
+      "ordinary_api_not_guarded": true
+    }
+  ],
+  "live_sibling": [
+    {
+      "row": "live-sibling-same-backend",
+      "status": "pass",
+      "sibling_unchanged": true,
+      "new_target_native_id": true,
+      "no_resume": true,
+      "backend_change_refused": true
+    }
+  ],
+  "registry_error_reaches_workflow": true,
+  "observation": {
+    "builds": {
+      "current": {
+        "revision": "af4a41545a2df0d4e9d8a951b7cf7cf840d8c5a7",
+        "dirty": false
+      },
+      "old": {
+        "revision": "c8f75a35be90f683983db9857d32fc9276bd0f53",
+        "dirty": false
+      }
+    },
+    "tool_turns": [
+      {
+        "label": "current",
+        "same_session": true,
+        "tool_turns": 2
+      },
+      {
+        "label": "old",
+        "same_session": true,
+        "tool_turns": 2
+      }
+    ],
+    "vm_recoveries": [
+      {
+        "partition_exit": "normal",
+        "old_vm_exited": true,
+        "old_vm_absent": true,
+        "pid_changed": true,
+        "immediate_error": "ambiguous_runner",
+        "registrations": [
+          false,
+          true
+        ],
+        "recovered": true,
+        "wrapper_survived": true
+      },
+      {
+        "partition_exit": "kill",
+        "old_vm_exited": true,
+        "old_vm_absent": true,
+        "pid_changed": true,
+        "immediate_error": "ambiguous_runner",
+        "registrations": [
+          false,
+          true
+        ],
+        "recovered": true,
+        "wrapper_survived": true
+      }
+    ],
+    "token_omission_negative": {
+      "result": "expected-failure",
+      "native_turns": 0,
+      "unauthorized": true,
+      "all_observed_processes_gone": true,
+      "scratch_removed": true
+    },
+    "old_reader": "runner_observation_timeout",
+    "all_observed_processes_gone": true
+  },
+  "network_audit": {
+    "migration_inet_lines": 49,
+    "sibling_inet_lines": 8,
+    "all_loopback": true,
+    "scope": "traced runner and native descendants; U2a has no connect trace"
+  },
+  "scratch_removed": true,
+  "script_tests": {
+    "commit": "b46a77d05f3bab0c2b9e41b56390897164bf1a83",
+    "before": 195,
+    "after": 195,
+    "independent_mutants_red": 87,
+    "restore_units": 40
+  },
+  "source_sha256": {
+    "scripts/codex-backend-compatibility.mjs": "1cde82e8af492dca02c8bdce18b60d376a04d9376015f2d49cf52668dea36c76",
+    "scripts/codex-backend-operator.mjs": "13e7b705bb6e1a9546523a48cf471d47ceecafcb106fadc0effc3531a5ce7c35",
+    "scripts/test/codex-backend-maintenance.test.mjs": "b4276ac9542dfd7df4ae487ee0f76a233e1cc61a01fb4ec75ec910541a28eb06",
+    "scripts/test/codex-backend-operator.test.mjs": "603f88ed8d6e8e73c85263c04fbf9c7de304dd7a3554163f056c444eca91fc5b",
+    "runner/test/fixtures/codex-work-observation-native.mjs": "2f4699aad6a08a061576537e1a14db9d01cd7df8f976188f3932c55696aa1236"
+  }
+}

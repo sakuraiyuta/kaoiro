@@ -42,7 +42,7 @@ async function harness(extra: Partial<CodexHostOptions> & { repeats?: number } =
     resumeSessionId: "gate-session", permissionRolloutRoot: root,
     permissionSyncSupported: true, permissionGateTimeoutMs: 150,
     turnTraceDir: join(root, "traces"), rateLimitResolver: async () => new Map(),
-    codexFactory: () => {
+    backend: "exec", codexFactory: () => {
       const thread = { async runStreamed() {
         calls++;
         await appendFile(path, (JSON.stringify({ type: "turn_context", payload: {
@@ -157,7 +157,7 @@ describe("permission gate lifetime boundaries", () => {
       sandbox: "read-only", network_access: false,
     }, { onState: () => {}, appendSystemPrompt: "test", permissionSyncSupported: true,
       permissionGateTimeoutMs: 40, turnTraceDir: root, onTurnFinalized: finalized,
-      codexFactory: () => ({ startThread: () => { throw new Error("must stay blocked"); },
+      backend: "exec", codexFactory: () => ({ startThread: () => { throw new Error("must stay blocked"); },
         resumeThread: () => { throw new Error("must stay blocked"); } }),
     });
     host.applyPermissionSync({ version: "0", next: baseline, control: unknown(baseline) });

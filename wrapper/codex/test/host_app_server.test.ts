@@ -23,7 +23,7 @@ function holdStartup() {
   cleanup.push(async () => release.resolve());
   return { entered: entered.promise, release: release.resolve };
 }
-function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
+function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config, omitBackend = false) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
   let number = 0, active = 0, maxActive = 0;
@@ -68,7 +68,7 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   const states: Envelope[] = [], logs: Envelope[] = [], tasks: Envelope[] = [];
   const starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), boundaries = vi.fn();
   const createSession = vi.fn(options => AppServerSession.create({ ...options, transport: { spawnChild: () => child, shutdownTimeoutMs: 100 } }));
-  const host = new CodexHost(launch, { backend: "app-server", appServerSessionFactory: createSession,
+  const host = new CodexHost(launch, { ...(omitBackend ? {} : { backend: "app-server" as const }), appServerSessionFactory: createSession,
     appendSystemPrompt: "PERSONA", onState: e => states.push(e), onLog: e => logs.push(e), onTask: e => tasks.push(e),
     onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals, onTurnBoundary: boundaries, ...overrides });
   const running = host.run();cleanup.push(async () => { host.close();await running; });
@@ -294,14 +294,14 @@ it("does not pin display-only default model and effort hints", async () => {
   expect(f.turns()[0]?.params).not.toHaveProperty("model");expect(f.turns()[0]?.params).not.toHaveProperty("effort");f.terminal();
 });
 
-it("keeps the default exec factory, arguments and callbacks despite unrelated config and environment hints", async () => {
+it("keeps the explicit exec factory, arguments and callbacks despite unrelated config and environment hints", async () => {
   const prior = process.env.KAOIRO_CODEX_BACKEND;process.env.KAOIRO_CODEX_BACKEND = "app-server";
   const appFactory = vi.fn(), starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), logs: Envelope[] = [];
   const threadOptions: unknown[] = [], options: unknown[] = [];
   const launch = { ...config, backend: "app-server", codex_backend: "app-server" as const };
   const host = new CodexHost(launch, { appServerSessionFactory: appFactory, appendSystemPrompt: "PERSONA",
     onState: () => {}, onLog: e => logs.push(e), onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals,
-    codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {
+    backend: "exec", codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {
       runStreamed: async () => ({ events: (async function* () { yield { type: "turn.completed" as const, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, reasoning_output_tokens: 0 } }; })() }),
     }; }, resumeThread: () => { throw new Error("unexpected resume"); } }; },
   });
@@ -622,4 +622,12 @@ it("preserves the context when compatibility rejects a model request before acce
   const launch = { ...config };delete launch.model;
   const f = fixture({ codexClientVersion: "0.144.1" }, launch);await f.host.send("known");await f.until(1);contextResponse(f);f.terminal();await vi.waitFor(() => expect(contextOf(f)).toBeDefined());
   await f.host.setModel("gpt-6-astra");expect(contextOf(f)).toBeDefined();expect(f.states.at(-1)?.ext?.switch_error).toMatchObject({ reason: "client_version_too_old" });
+});
+
+it("runs the app-server runtime when raw Host backend is omitted", async () => {
+  const f = fixture({ codexFactory: () => { throw new Error("unexpected exec runtime"); } }, config, true);
+  await f.host.send("omitted runtime", undefined, [], "default-turn");
+  await f.until(1);
+  expect(f.createSession).toHaveBeenCalledTimes(1);
+  f.terminal(); await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
 });

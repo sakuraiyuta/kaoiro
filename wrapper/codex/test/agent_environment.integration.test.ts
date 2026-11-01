@@ -7,13 +7,14 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
 import { AppServerRpc, resolveAppServerBinary } from "../src/app_server_rpc.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const execFileAsync = promisify(execFile);
 
-it.each(["exec", "app-server"] as const)("marks native %s shells with inherit-none across cold resumes", async backend => {
+it.each([undefined, "exec", "app-server"] as const)("marks native %s shells with inherit-none across cold resumes", async backend => {
   const root = await mkdtemp(join(homedir(), ".fuji659-codex-"));
   const requests: Array<Record<string, unknown>> = [];
   const wire = await phoenixLoopback();
@@ -46,6 +47,8 @@ it.each(["exec", "app-server"] as const)("marks native %s shells with inherit-no
   if (!address || typeof address === "string") throw new Error("No provider port");
   const argv = process.argv;
   const originalSignals = process.listeners("SIGINT");
+  const hosts = vi.spyOn(CodexHost.prototype, "run");
+  let childOutput = "";
   let running: Promise<void> | undefined;
   let nativeChild: ChildProcess | undefined;
   try {
@@ -113,12 +116,12 @@ enabled = false
       if (stage === "cold-resume-managed") {
         nativeChild = spawn(process.execPath, [fileURLToPath(new URL("../dist/cli.js", import.meta.url)),
           configPath, "Read the marker", "--resume", resumed!], { stdio: ["ignore", "pipe", "pipe"] });
-        let output = "";
-        nativeChild.stdout!.on("data", chunk => { output += chunk; });
-        nativeChild.stderr!.on("data", chunk => { output += chunk; });
+        childOutput = "";
+        nativeChild.stdout!.on("data", chunk => { childOutput += chunk; });
+        nativeChild.stderr!.on("data", chunk => { childOutput += chunk; });
         running = new Promise<void>((resolve, reject) => {
           nativeChild!.once("error", reject);
-          nativeChild!.once("close", code => code === 0 ? resolve() : reject(new Error(`Wrapper child exited ${code}: ${output}`)));
+          nativeChild!.once("close", code => code === 0 ? resolve() : reject(new Error(`Wrapper child exited ${code}: ${childOutput}`)));
         });
       } else running = runCodexCli();
       void running.catch(() => {});
@@ -130,6 +133,8 @@ enabled = false
       expect((result()!.payload.payload as Record<string, unknown>).is_error).not.toBe(true);
       expect(JSON.stringify(requests.at(-1)?.input)).toContain("FUJI_MARKER=1");
       expect(process.env.KAOIRO_AGENT).toBeUndefined();
+      if (nativeChild) expect(childOutput).toContain(`codex: backend=${backend ?? "app-server"}`);
+      else expect((hosts.mock.contexts.at(-1) as CodexHost).historyBackend).toBe(backend ?? "app-server");
       const currentHooks = (await hooks()).slice(hooksBefore);
       expect(currentHooks.length).toBeGreaterThan(0);
       expect(currentHooks.every(entry => entry.marker === "1")).toBe(true);
@@ -152,6 +157,7 @@ enabled = false
       listener("SIGINT"); process.off("SIGINT", listener);
     }
     await running;
+    hosts.mockRestore();
     process.argv = argv;
     vi.unstubAllEnvs();
     await wire.close(); provider.closeAllConnections();
