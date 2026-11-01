@@ -66,8 +66,7 @@ jobs:
           # Unload the measured set; the stock environment is issue 957.
           for profile in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/glycin.bwrap; do
             if [ -f "$profile" ]; then
-              sudo apparmor_parser -R "$profile"
-              echo "unloaded AppArmor profile file $profile"
+              echo "NC1: not unloading AppArmor profile file $profile"
             fi
           done
           if ! aa_status="$(sudo aa-status 2>&1)"; then
