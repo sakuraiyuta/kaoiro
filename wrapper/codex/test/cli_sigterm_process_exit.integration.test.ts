@@ -23,18 +23,19 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { release, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { execFileSync, execSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   OWNER_TAG_ENV,
   newOwnerTag,
   processHasTag,
+  taggedProcesses,
   waitForNoTagged,
 } from "./fixtures/owner_tag.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
@@ -110,6 +111,72 @@ function findDescendantByExactArgs(rootPid: number, command: string): number | n
 function findCodexExecPidOnce(parentPid: number): number | null {
   const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes("codex exec"));
   return direct[0]?.pid ?? null;
+}
+
+/**
+ * Survivor report for the final wait: what the two tracked PIDs look like
+ * when they outlive the SIGTERM. Kernel state / parent / pid namespace from
+ * /proc/<pid>/status, process group and session from /proc/<pid>/stat, the
+ * ps row, every process still carrying the owner tag (a survivor reparented
+ * away from the test tree is visible only there), and the kernel release.
+ * Each read tolerates the process vanishing in between: this text only
+ * decorates a timeout that already happened.
+ */
+function survivorDiagnostics(
+  tracked: readonly { label: string; pid: number | null }[],
+  ownerTag: string,
+): string {
+  const lines = [`\nsurvivors after the final wait (kernel ${release()}):`];
+  for (const { label, pid } of tracked) {
+    if (pid === null) {
+      lines.push(`${label}: pid never found`);
+      continue;
+    }
+    lines.push(`${label} pid=${pid} alive=${isAlive(pid)}`);
+    lines.push(`  status: ${procStatusSummary(pid)}`);
+    lines.push(`  stat: ${procStatSummary(pid)}`);
+    lines.push(`  ps: ${psRow(pid)}`);
+  }
+  const tagged = taggedProcesses(ownerTag);
+  lines.push(`processes still tagged: ${tagged.length}`);
+  for (const p of tagged) lines.push(`  pid=${p.pid} ppid=${p.ppid} args=${p.args}`);
+  return lines.join("\n");
+}
+
+function procStatusSummary(pid: number): string {
+  const wanted = new Set(["Name", "State", "PPid", "NSpid", "Uid"]);
+  try {
+    return readFileSync(`/proc/${pid}/status`, "latin1")
+      .split("\n")
+      .filter((line) => wanted.has(line.split(":")[0] ?? ""))
+      .map((line) => line.replace(/\s+/g, " "))
+      .join(" ") || "<empty>";
+  } catch (error) {
+    return `unreadable: ${String(error)}`;
+  }
+}
+
+// "pid (comm) state ppid pgrp session ..." -- comm may itself contain ")".
+function procStatSummary(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "latin1");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return `state=${fields[0]} ppid=${fields[1]} pgid=${fields[2]} sid=${fields[3]}`;
+  } catch (error) {
+    return `unreadable: ${String(error)}`;
+  }
+}
+
+function psRow(pid: number): string {
+  try {
+    const rows = execFileSync("ps", ["-o", "pid,ppid,pgid,sid,stat,args", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim().split("\n");
+    return rows.length > 1 ? rows.slice(1).join(" | ").trim() : "<no row>";
+  } catch (error) {
+    return `unavailable: ${String(error)}`;
+  }
 }
 
 // issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
@@ -263,7 +330,15 @@ enabled=false
       expect(outcome.signal, `stderr: ${stderr}`).toBeNull();
       expect(outcome.code, `stderr: ${stderr}`).toBe(0);
       expect(outcome.elapsedMs).toBeLessThan(5_000);
-      await waitFor(() => !isAlive(execChildPid!) && !isAlive(sleepPid!), 2_000);
+      await waitFor(
+        () => !isAlive(execChildPid!) && !isAlive(sleepPid!),
+        2_000,
+        () =>
+          survivorDiagnostics(
+            [{ label: "codex exec child", pid: execChildPid }, { label: "sleep 77", pid: sleepPid }],
+            ownerTag,
+          ) + timeoutDiagnostics(stderr, home),
+      );
       await waitForNoTagged(ownerTag);
     } finally {
       forceKillIfTagged(execChildPid ?? undefined, ownerTag);
