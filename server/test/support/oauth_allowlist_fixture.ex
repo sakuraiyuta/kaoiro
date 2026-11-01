@@ -10,8 +10,15 @@ defmodule KaoiroServer.OAuthAllowlistFixture do
   uses an OS-pid + crypto run nonce. Two runs sharing a path here would
   have one overwrite or delete the other's allow-list mid-assertion —
   and the allow-list is fail-closed, so the victim run sees a spurious
-  `nil` role. Callers still have to clear `:oauth_allowlist_path`
-  themselves, which the OAuth suites already do in their own setup.
+  `nil` role.
+
+  `on_exit` also puts `:oauth_allowlist_path` back to the value it had
+  before the call (unset stays unset). A key left pointing at the removed
+  file outlived its test and, once another test restarted the application,
+  started a module-named `OAuthAllowlistWatcher` under the application
+  supervisor (issue 923). `on_exit` callbacks run last-registered-first, so
+  a `delete_env` a caller registers after this call runs before the
+  restore; both end unset when the key was unset before.
   """
 
   @doc "Writes `contents` and configures it as the allow-list. Returns the path."
@@ -25,12 +32,24 @@ defmodule KaoiroServer.OAuthAllowlistFixture do
         "kaoiro_test_allowlist_#{System.pid()}_#{nonce}"
       )
 
+    previous = Application.fetch_env(:kaoiro_server, :oauth_allowlist_path)
     File.write!(path, contents)
-    ExUnit.Callbacks.on_exit(fn -> File.rm(path) end)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      File.rm(path)
+      restore_allowlist_path(previous)
+    end)
+
     Application.put_env(:kaoiro_server, :oauth_allowlist_path, path)
 
     path
   end
+
+  defp restore_allowlist_path(:error),
+    do: Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
+
+  defp restore_allowlist_path({:ok, value}),
+    do: Application.put_env(:kaoiro_server, :oauth_allowlist_path, value)
 
   @doc """
   Replaces the allow-list at `path` with `contents` while the watcher may be

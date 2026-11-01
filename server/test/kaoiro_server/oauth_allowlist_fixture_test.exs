@@ -34,6 +34,35 @@ defmodule KaoiroServer.OAuthAllowlistFixtureTest do
     assert Path.wildcard(target <> ".tmp-*") == []
   end
 
+  # Both checks run from an on_exit registered BEFORE put_allowlist, so they
+  # run after the fixture's own restore (on_exit is last-registered-first).
+  # Read in the test body the key legitimately holds the temp path.
+  describe "put_allowlist/1 restores :oauth_allowlist_path (issue 923)" do
+    test "a value set before the call is back after the test, not the temp path" do
+      sentinel = "sentinel-before-put_allowlist"
+      Application.put_env(:kaoiro_server, :oauth_allowlist_path, sentinel)
+
+      on_exit(fn ->
+        assert Application.get_env(:kaoiro_server, :oauth_allowlist_path) == sentinel
+        Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
+      end)
+
+      path = put_allowlist(@full)
+      assert Application.get_env(:kaoiro_server, :oauth_allowlist_path) == path
+    end
+
+    test "an unset key is unset again after the test" do
+      Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
+
+      on_exit(fn ->
+        assert Application.fetch_env(:kaoiro_server, :oauth_allowlist_path) == :error
+      end)
+
+      path = put_allowlist(@full)
+      assert Application.get_env(:kaoiro_server, :oauth_allowlist_path) == path
+    end
+  end
+
   defp read_until_done(path, flag, {reads, bad}) do
     if :atomics.get(flag, 1) == 1 do
       {reads, bad}

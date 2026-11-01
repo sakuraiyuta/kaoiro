@@ -11,13 +11,26 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
   @checkpoint_key {OAuthAllowlistWatcher, :checkpoint}
 
+  # A watcher already registered under the module name (one the application
+  # restarted into while :oauth_allowlist_path was left in the env, issue
+  # 923) would fail every start_watcher/1 below with :already_started.
+  # Fail here with the cause instead, and confirm on exit that this test did
+  # not leave one behind either.
+  @watcher_message "a module-named OAuthAllowlistWatcher is running before " <>
+                     "this test; an application restart picked up a leaked " <>
+                     ":oauth_allowlist_path, or an earlier test left its watcher alive"
+
   setup do
+    assert Process.whereis(OAuthAllowlistWatcher) == nil, @watcher_message
     Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
     :persistent_term.erase(@checkpoint_key)
 
     on_exit(fn ->
       Application.delete_env(:kaoiro_server, :oauth_allowlist_path)
       :persistent_term.erase(@checkpoint_key)
+
+      assert Process.whereis(OAuthAllowlistWatcher) == nil,
+             "this test left a module-named OAuthAllowlistWatcher registered"
     end)
 
     :ok

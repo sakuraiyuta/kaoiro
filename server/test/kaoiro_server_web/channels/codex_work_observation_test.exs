@@ -3,6 +3,34 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
   alias KaoiroServer.{CodexBackendCompatibility, HostRegistry, RunnerConnections}
   @registry RunnerConnections.Registry
 
+  # Every application restart in this module goes through these. A restart
+  # re-evaluates the child list, and the OAuth allow-list watcher starts for
+  # real -- module-named, under the application supervisor, for the rest of
+  # the suite -- whenever an earlier test left :oauth_allowlist_path in the
+  # env (issue 923). Checking right after the start fails the test that
+  # restarted instead of a later module.
+  @watcher_message "a module-named OAuthAllowlistWatcher is running after " <>
+                     "the application (re)start; the test node must boot it as :ignore"
+
+  defp stop_application! do
+    case Application.stop(:kaoiro_server) do
+      :ok -> :ok
+      # on_exit recovery after a test died between stop and start.
+      {:error, {:not_started, :kaoiro_server}} -> :ok
+    end
+  end
+
+  defp start_application! do
+    {:ok, _} = Application.ensure_all_started(:kaoiro_server)
+    assert Process.whereis(KaoiroServer.OAuthAllowlistWatcher) == nil, @watcher_message
+    :ok
+  end
+
+  defp restart_application! do
+    stop_application!()
+    start_application!()
+  end
+
   defp join_runner(host, register? \\ true) do
     {:ok, _, socket} =
       KaoiroServerWeb.RunnerSocket
@@ -160,8 +188,7 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
     after
       {:ok, _} = Supervisor.restart_child(KaoiroServer.Supervisor, @registry)
       # Only the application restart may establish the new baseline.
-      :ok = Application.stop(:kaoiro_server)
-      {:ok, _} = Application.ensure_all_started(:kaoiro_server)
+      restart_application!()
     end
   end
 
@@ -397,15 +424,14 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
         refute pushed
         refute_push("observe_codex_work", _)
       after
-        :ok = Application.stop(:kaoiro_server)
-        {:ok, _} = Application.ensure_all_started(:kaoiro_server)
+        restart_application!()
       end
     end
   end
 
   test "partition replacement refuses until the entire application restarts" do
     Process.flag(:trap_exit, true)
-    on_exit(fn -> Application.ensure_all_started(:kaoiro_server) end)
+    on_exit(fn -> restart_application!() end)
 
     # This is a tripwire for Registry's partition layout and link semantics across Elixir upgrades.
     for reason <- [:normal, :kill] do
@@ -431,10 +457,10 @@ defmodule KaoiroServerWeb.CodexWorkObservationTest do
       if reason == :kill, do: assert_receive({:DOWN, ^channel_down, :process, _, _})
       if reason == :kill, do: assert_receive({:DOWN, ^other_down, :process, _, _})
       assert {:error, :runner_registry_changed} = CodexBackendCompatibility.observe_runner(host)
-      :ok = Application.stop(:kaoiro_server)
+      stop_application!()
       if reason == :normal, do: assert_receive({:DOWN, ^channel_down, :process, _, _})
       if reason == :normal, do: assert_receive({:DOWN, ^other_down, :process, _, _})
-      {:ok, _} = Application.ensure_all_started(:kaoiro_server)
+      start_application!()
       socket = join_runner(host)
       {task, request} = query(host)
       assert_reply(push(socket, "codex_work_observed", payload(host, request)), :ok)
