@@ -6984,7 +6984,7 @@ test("previous CLI revision is declared only in its shared file", () => {
   const paths = result.stdout.split("\0").filter(Boolean);
   assert.ok(paths.includes(fixture));
   const workflow = readFileSync(join(repository, ".github/workflows/ci.yml"), "utf8").split("\n");
-  for (const job of ["server-deploy", "test-isolation"]) {
+  for (const job of ["test-isolation"]) {
     const start = workflow.indexOf(`  ${job}:`);
     assert.notEqual(start, -1, `missing ${job} job`);
     const end = workflow.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));

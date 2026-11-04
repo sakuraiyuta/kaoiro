@@ -64,7 +64,7 @@ single-signal teardown removes the owned clones and gate scratch (see
 [fixture lifecycle](pre-gate.md#real-suite-fixture-lifecycle)). For changes to
 this integration, verify activation/obsolete-exception negative controls and
 time the complete `test-isolation` job twice; record both runs and the maximum
-against the 15-minute budget (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924), with `PNPM_MAX_WORKERS` unset.
+against the 15-minute budget (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924; the 2026-11-01 baseline run 41290855615 took 688 seconds from its first step to its last), with `PNPM_MAX_WORKERS` unset.
 
 The implementation reviewer records this evidence for the reviewed candidate:
 
@@ -74,7 +74,7 @@ The implementation reviewer records this evidence for the reviewed candidate:
 - Workflow event and overall conclusion.
 - Every job in `ci.yml` at that SHA and its conclusion. The current workflow
   declares `wrapper`,
-  `runner`, `server-deploy`, `test-isolation`, `server`, `dashboard`, and
+  `runner`, `test-isolation`, `server`, `dashboard`, and
   `server-image`; the workflow file at the candidate SHA is authoritative if
   that list changes.
 - Any native check required by the change, with its target SHA and result.
@@ -100,7 +100,6 @@ Record the results in the review note or PR discussion, for example:
 | --- | --- |
 | `wrapper` | `success` |
 | `runner` | `success` |
-| `server-deploy` | `success` |
 | `test-isolation` | `success` |
 | `server` | `success` |
 | `dashboard` | `success` |

@@ -95,7 +95,6 @@ pnpm -C wrapper build
 pnpm -C runner build
 node scripts/test-isolation/check.mjs
 node scripts/test-isolation/run-node-tests.mjs
-node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs
 ~~~
 
 In a shallow checkout, fetch the previous deploy CLI revision before running
@@ -105,13 +104,13 @@ the Node test entries:
 git fetch --no-tags --depth=1 origin "$(cat server/deploy/test-support/previous-cli-revision.txt)"
 ~~~
 
-These are the CI job's steps. The checker prints each problem on stderr and one JSON line, {"entries":N,"problems":N}, on stdout; it exits 0 only with no problems. The test-isolation job runs the checker once against the real repository. Its self-tests cover content selection, first-import enforcement, unsupported acquisition, canary and helper contracts, setupOrder, the checker CLI failure path, and CI wiring. The separate isolation and child-process-environment suites continue to cover runtime refusals, network rules, permits, and child environment handling.
+These are the CI job's steps. The checker prints each problem on stderr and one JSON line, {"entries":N,"problems":N}, on stdout; it exits 0 only with no problems. The test-isolation job runs the checker once against the real repository. Its self-tests cover content selection, first-import enforcement, unsupported acquisition, canary and helper contracts, setupOrder, the checker CLI failure path, and CI wiring. The isolation and child-process-environment suites cover runtime refusals, network rules, permits, and child environment handling through the canonical Node runner. That runner also executes the deploy tests; there is no separate `server-deploy` job. If installation, builds or the checker fail first, deploy results are unavailable and the job fails.
 
 The Node runner uses the canonical entries, runs them serially from the repository root and requires each file to report a real, non-skipped, non-todo test. It sets `KAOIRO_PREGATE_REAL=1` in the child environment, even when the caller omits it or sets `0` and does not add or change `NODE_OPTIONS`. Exceptions are exact entries with an issue and reason in `scripts/test-isolation/node-ci-exceptions.mjs`; their failures and missing events still fail the job, and a real test makes an exception stale. CI checks the issue number's shape, not whether it is open or relevant; reviewers must check that. There are currently no exceptions. The real pre-gate entry must report all six cases as real passing tests; retaining its obsolete exception fails with `stale exception`, and losing activation fails with `no real test ran`.
 
-The job timeout is 15 minutes (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924). Time the complete integrated job twice on a candidate that changes this workload, and assess headroom from the maximum duration. Do not set `PNPM_MAX_WORKERS` for acceptance to carry over a disposable probe's resource cap.
+The job timeout is 15 minutes (observed range 319 to 620 seconds across runs as of 2026-10-31; the 620-second maximum is run 41049746924; the later 2026-11-01 baseline run 41290855615 took 688 seconds from its first step to its last). Time the complete integrated job twice on a candidate that changes this workload, and assess headroom from the maximum duration. Do not set `PNPM_MAX_WORKERS` for acceptance to carry over a disposable probe's resource cap.
 
-The workflow tests pin the CI commands exactly, including the complete four-file node:test list. Update them together with ciWiringProblems in the checker.
+The workflow tests require both the checker and canonical Node runner commands. `checkRepository` requires the isolation, checker, child-process-environment and codex-backend-compatibility test files to remain canonical entries. The runner alone discovers existing entries and does not enforce that four-file requirement. Its lower bound of one real test per file does not detect partial skips or reductions in case counts. Update the workflow tests together with `ciWiringProblems` in the checker.
 
 Workers preserve registered roots, inert pointers and scoped permits; they patch their own builtins before executing user code. Tests cover ordinary CJS-root loading with no outer preload, file/eval/ESM worker entries, nested workers, Node descendants and concurrent workers. Separate mutations pin each refusal and I1 (environment state), I2 (explicit startup-argument wiring), I3 (nested deduplication), and P0 (both preload routes removed). On the measured Node runtime the environment's `NODE_OPTIONS` can also preload the guard: removing I2 alone does not prove loss of protection, and P0 does not replace the individual I1/I2 tests.
 
