@@ -2946,8 +2946,8 @@
     padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
       max(2rem, env(safe-area-inset-left));
     font-size: var(--fs-body-sm);
-    color: var(--warn-fg, #ffd9a0);
-    background: var(--warn-bg, #7a3d0a);
+    color: var(--c-tool_running);
+    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
     border-bottom: 1px solid var(--line);
   }
 

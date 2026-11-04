@@ -131,6 +131,7 @@
           : null}
         statusLine={scenario.statusLine ?? { kind: "none" }}
         onOpenStatusLineHistory={(id) => (historyOpened = id)}
+        onOpenSessionLifecycle={(id) => (historyOpened = id)}
         onClose={() => (closed = true)}
       />
       <p id="history-opened" data-agent={historyOpened ?? ""}>{historyOpened ?? ""}</p>

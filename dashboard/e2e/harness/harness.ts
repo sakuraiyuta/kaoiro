@@ -111,6 +111,8 @@ if (view === "app") {
               ? "drawer-triggered"
               : overlayParam === "status-line-history"
                 ? "status-line-history"
+                : overlayParam === "session-lifecycle"
+                  ? "session-lifecycle"
                 : "dialog";
   if (overlay === "persona") {
     // issue #232 MF-3 a11y spec: PersonaDetailDialog fetches its detail
@@ -142,7 +144,9 @@ if (view === "app") {
       return new Response("", { status: 404 });
     };
   }
-  mount(OverlayHarness, { target, props: { overlay } });
+  const workParam = params.get("workState");
+  const workState = workParam === "ready" || workParam === "unavailable" ? workParam : null;
+  mount(OverlayHarness, { target, props: { overlay, workState, lifecycleError: params.get("lifecycleError") === "1" } });
 } else {
   mount(LobbyHarness, {
     target,

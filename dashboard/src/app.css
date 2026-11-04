@@ -48,6 +48,40 @@
   --fs-input: 0.85rem;
 }
 
+:where(:root) { color-scheme: dark; }
+
+:where(button) {
+  font-family: inherit;
+  font-size: var(--fs-body-sm);
+  color: var(--fg);
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+:where(button:hover:not(:disabled)) { border-color: var(--tone, var(--fg-dim)); }
+:where(button:disabled) { color: var(--fg-dim); cursor: default; }
+
+:where(input:not([type]), input[type="text"], input[type="search"],
+  input[type="password"], input[type="email"], input[type="tel"],
+  input[type="url"], input[type="number"], select, textarea) {
+  font-family: inherit;
+  font-size: var(--fs-input);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  max-width: 100%;
+}
+:where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--c-idle);
+}
+:where(h1, h2, h3, h4, h5, h6, strong, b) { font-weight: 600; }
+:where(a, a:visited) { color: var(--c-thinking); text-decoration: underline; }
+
 * {
   box-sizing: border-box;
 }

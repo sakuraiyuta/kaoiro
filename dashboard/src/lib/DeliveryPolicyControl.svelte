@@ -42,8 +42,9 @@
 </section>
 
 <style>
-  .delivery-policy { border-top: 1px solid var(--border, #555); padding: .75rem 0; font-size: .8rem; overflow-wrap: anywhere; }
-  p { margin: .35rem 0; }
+  .delivery-policy { border-top: 1px solid var(--line); padding: .75rem 0; font-size: var(--fs-body-sm); overflow-wrap: anywhere; }
+  strong { font-weight: 600; }
+  p { margin: .35rem 0; color: var(--fg-dim); }
   label { display: flex; align-items: center; gap: .4rem; min-height: 2.75rem; }
   button { margin: .35rem 0; padding: .1rem .4rem; border: 1px solid var(--line); border-radius: .3rem;
     background: var(--bg-card); color: var(--fg-dim); font: inherit; font-size: var(--fs-caption); cursor: pointer; }

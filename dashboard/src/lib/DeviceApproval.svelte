@@ -203,6 +203,8 @@
   }
 
   .close {
+    border-radius: 0;
+    padding: 1px 6px;
     border: none;
     background: none;
     font: inherit;

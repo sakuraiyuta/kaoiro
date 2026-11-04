@@ -4432,6 +4432,17 @@
 </section>
 
 <style>
+  .session-lifecycle-open {
+    padding: 0.35rem 0.6rem;
+    color: var(--fg-dim);
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    font-size: var(--fs-body-sm);
+    cursor: pointer;
+  }
+  .session-lifecycle-open:hover { color: var(--fg); border-color: var(--tone); }
+
   .detail {
     --tone: var(--c-idle);
     display: flex;
@@ -4840,6 +4851,7 @@
      was a flex item of `.portrait` directly. The `card` preset is
      unaffected because it sizes in rem. */
   .portrait-open {
+    border-radius: 0;
     display: flex;
     justify-content: center;
     width: 100%;
@@ -4952,7 +4964,7 @@
 
   .disconnect-reason {
     margin: 0.2rem 0 0;
-    color: var(--fg-muted);
+    color: var(--fg-dim);
     font-size: var(--fs-body-sm);
   }
 
@@ -4998,12 +5010,12 @@
 
   .cc-model-resolved {
     display: block;
-    color: var(--muted);
+    color: var(--fg-dim);
     font-size: 0.82em;
   }
 
   .switch-notice dd {
-    color: var(--c-info, var(--fg-dim));
+    color: var(--fg-dim);
     line-height: 1.45;
   }
 
@@ -5086,13 +5098,13 @@
    * failing. The tone matches the file's other error surfaces (switchNotice
    * error tone / permission_denied badges). */
   .cc-refresh-error {
-    color: var(--danger, #c62828);
-    border-color: var(--danger, #c62828);
+    color: var(--c-error);
+    border-color: var(--c-error);
   }
 
   .cc-refresh-error:hover:not(:disabled) {
-    color: var(--danger, #c62828);
-    border-color: var(--danger, #c62828);
+    color: var(--c-error);
+    border-color: var(--c-error);
   }
 
   .switch-menu {
@@ -5409,7 +5421,7 @@
   }
 
   .inter-agent-head .arrow {
-    font-weight: 700;
+    font-weight: 600;
     margin-right: 0.2em;
     color: var(--iam-tone);
   }
@@ -5537,7 +5549,7 @@
     margin-left: 0.5em;
     padding: 0 0.5em;
     font-size: var(--fs-metadata);
-    color: var(--c-accent, currentColor);
+    color: var(--c-error);
     background: transparent;
     border: 1px solid currentColor;
     border-radius: 3px;
@@ -5616,7 +5628,7 @@
   .reset-progress {
     margin: 0.4rem 0 0;
     padding: 0.35rem 0.6rem;
-    background: var(--surface-dim, rgba(0, 0, 0, 0.05));
+    background: rgba(0, 0, 0, 0.05);
     color: var(--fg-dim);
     font-size: var(--fs-caption);
     border-radius: 4px;

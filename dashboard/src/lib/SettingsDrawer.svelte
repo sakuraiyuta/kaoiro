@@ -791,7 +791,7 @@
     <WorkCapacitySettings {connection} generation={appConnectionGeneration} snapshot={workSettings} onSnapshot={onWorkSettings} />
   {/if}
 
-  <label class="row">
+  <label class="grid-sort">
     グリッドの並び順
     <select
       value={settings.gridSort}
@@ -1292,6 +1292,8 @@
     color: var(--fg-dim);
   }
 
+  .grid-sort select { width: 100%; min-width: 0; }
+
   label.row {
     flex-direction: row;
     align-items: center;
@@ -1401,9 +1403,9 @@
     align-self: flex-start;
     padding: 0.35rem 0.8rem;
     font-size: var(--fs-body-sm);
-    color: var(--danger, #c62828);
+    color: var(--c-error);
     background: transparent;
-    border: 1px solid var(--danger, #c62828);
+    border: 1px solid var(--c-error);
     border-radius: 0.4rem;
     cursor: pointer;
   }
@@ -1431,7 +1433,7 @@
   .quagmire .error {
     margin: 0;
     font-size: var(--fs-body-sm);
-    color: var(--danger, #c62828);
+    color: var(--c-error);
   }
 
   .status-retention input[type="number"],
@@ -1482,8 +1484,8 @@
   .conv-rally {
     padding: 0 0.35em;
     border-radius: 0.25em;
-    background: var(--warn-bg, #7a3d0a);
-    color: var(--warn-fg, #ffd9a0);
+    background: color-mix(in srgb, var(--c-tool_running) 22%, var(--bg-card));
+    color: var(--c-tool_running);
     white-space: nowrap;
   }
 
@@ -1580,8 +1582,8 @@
   }
 
   .confirm-actions button.danger {
-    color: var(--danger, #c62828);
-    border-color: var(--danger, #c62828);
+    color: var(--c-error);
+    border-color: var(--c-error);
   }
 
   .confirm-actions button:disabled {

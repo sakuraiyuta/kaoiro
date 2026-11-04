@@ -805,6 +805,7 @@
   /* Plain reset so the face's button wrapper does not alter
      `.sprite-slot`'s size/position — sized entirely by PersonaFace. */
   .face-open {
+    border-radius: 0;
     display: block;
     margin: 0;
     padding: 0;
@@ -859,7 +860,7 @@
 
   .disconnect-reason {
     margin: 0.2rem 0 0;
-    color: var(--fg-muted);
+    color: var(--fg-dim);
     font-size: var(--fs-body-sm);
   }
 
@@ -1059,6 +1060,7 @@
   /* --- clickable identity region (opens the detail view) -------------- */
 
   .open {
+    border-radius: 0;
     display: block;
     position: relative;
     width: 100%;

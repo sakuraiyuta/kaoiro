@@ -128,7 +128,7 @@
   }
 
   .tasklist-label {
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.04em;
   }
 

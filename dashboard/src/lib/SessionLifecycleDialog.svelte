@@ -102,14 +102,14 @@
 <style>
   :global(.modal-content.session-lifecycle-dialog) { width: min(48rem, calc(100vw - 2rem)); max-height: 85vh; overflow-y: auto; overflow-wrap: anywhere; }
   header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  h2 { font-size: 1.1rem; }
-  .target-id, .refresh-note { opacity: .75; font-size: .85rem; }
+  h2 { font-size: var(--fs-h2); }
+  .target-id, .refresh-note { color: var(--fg-dim); font-size: var(--fs-body); }
   .events { padding-inline-start: 1.5rem; }
-  .lifecycle-row { padding: .7rem 0; border-bottom: 1px solid #8884; }
+  .lifecycle-row { padding: .7rem 0; border-bottom: 1px solid var(--line); }
   .lifecycle-row p { margin: .3rem 0; }
   .kind { font-weight: 600; }
-  time, .trigger { font-size: .85rem; }
+  time, .trigger { font-size: var(--fs-body); }
   .trigger { display: block; }
-  .malformed, .incomplete { color: #a67b25; }
-  .error { color: #ce5757; }
+  .malformed, .incomplete { color: var(--c-tool_running); }
+  .error { color: var(--c-error); }
 </style>

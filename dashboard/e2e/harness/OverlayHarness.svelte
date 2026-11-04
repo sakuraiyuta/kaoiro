@@ -7,6 +7,10 @@
   import LaunchDialog from "../../src/lib/LaunchDialog.svelte";
   import Modal from "../../src/lib/Modal.svelte";
   import PersonaDetailDialog from "../../src/lib/PersonaDetailDialog.svelte";
+  import SessionLifecycleDialog from "../../src/lib/SessionLifecycleDialog.svelte";
+  import { parseSessionLifecycleReply } from "../../src/lib/protocol";
+  import lifecycleFixture from "../../../protocol/fixtures/session-lifecycle-query.json";
+  import type { WorkSettingsSnapshot } from "@kaoiro/protocol";
   import SettingsDrawer from "../../src/lib/SettingsDrawer.svelte";
   import StatusLineHistoryDialog from "../../src/lib/StatusLineHistoryDialog.svelte";
   import {
@@ -18,6 +22,8 @@
 
   let {
     overlay,
+    workState = null,
+    lifecycleError = false,
   }: {
     overlay:
       | "dialog"
@@ -26,10 +32,21 @@
       | "modal-empty"
       | "dialog-triggered"
       | "drawer-triggered"
-      | "status-line-history";
+      | "status-line-history"
+      | "session-lifecycle";
+    workState?: "ready" | "unavailable" | null;
+    lifecycleError?: boolean;
   } = $props();
 
   const connection = stubConnection();
+  const workSettings: WorkSettingsSnapshot | null = workState === "ready"
+    ? { version: "0", state: "ready", revision: 42, overrides: {},
+        effective: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+        fallbacks: { work_nominated_per_principal: 16, work_active_per_assignee: 16 },
+        sources: { work_nominated_per_principal: "default", work_active_per_assignee: "default" }, last_change: null }
+    : workState === "unavailable"
+      ? { version: "0", state: "unavailable", reason: "work_settings_corrupt", message: "fixture unavailable" }
+      : null;
   let personaOpen = $state(false);
   // issue #277 a11y spec: LaunchDialog/SettingsDrawer opened from a real
   // trigger <button>, same reasoning as `persona` above -- the
@@ -109,6 +126,12 @@
         onClose={() => (statusLineOpen = false)}
       />
     {/if}
+  {:else if overlay === "session-lifecycle"}
+    <SessionLifecycleDialog agentId="fixture" label="fixture" agents={{}} directory={{}} refreshKey={0}
+      onClose={() => {}} fetchEvents={async () => {
+        if (lifecycleError) throw new Error("fixture error");
+        return parseSessionLifecycleReply(lifecycleFixture.target);
+      }} />
   {:else if overlay === "dialog-triggered"}
     <button
       type="button"
@@ -138,6 +161,8 @@
         onClose={() => (drawerOpen = false)}
         onLogout={() => {}}
         connection={settingsDrawerConnection()}
+        isOperator={workState !== null}
+        {workSettings}
       />
     {/if}
   {:else}

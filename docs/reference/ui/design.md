@@ -2,7 +2,7 @@
 title: kaoiro design principles
 description: Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source.
 status: accepted
-last_updated: 2026-09-27
+last_updated: 2026-11-04
 related: [overview, personas, protocol, responsive-layout, responsive-reachability]
 format: stitch-design-md
 version: alpha
@@ -405,6 +405,8 @@ Places involving state colors resolve dynamically through `var(--tone)`.
 
 ### Buttons
 
+Native buttons inherit the dashboard font and use `--fs-body-sm`, `--fg`, `--bg-card`, `--line`, a 0.4rem radius and 0.35rem × 0.6rem padding. Component rules may override the baseline. Disabled buttons use `--fg-dim` without changing opacity.
+
 Three variants. All sit on `bg-card`; only outline and text color vary:
 
 - **Default** — border `var(--line)`, text `var(--fg)`, border rises to `var(--tone)` on hover
@@ -412,6 +414,8 @@ Three variants. All sit on `bg-card`; only outline and text color vary:
 - **Restore** — border/text `var(--c-waiting_input)`, background with the same 14% blend
 
 ### Inputs / Textarea
+
+Native text-like inputs, selects and textareas inherit the dashboard font and use `--fs-input`, `--fg`, `--bg`, `--line`, a 0.4rem radius and 0.35rem × 0.5rem padding. Checkbox, radio and range retain native rendering with `--c-idle` accent color. Focus outlines remain visible.
 
 - **input**: bg `var(--bg)` (darker than the body, giving an inset feel)
 - **textarea**: bg `var(--bg-card)`. During sending, border and background switch to a 22% `var(--c-tool_running)` blend, letting the input itself express state
@@ -497,8 +501,9 @@ lamp color, badge display, and label text, so it remains readable without sway.
 ### Don'ts
 
 - **Do not use saturation outside state.** Never borrow state-palette colors for
-  decorative accents, logo colors, or links; state color signals the momentary
-  state and loses meaning when reused as global decoration.
+  decorative accents or logo colors; state color signals the momentary
+  state and loses meaning when reused as global decoration. Links use underlined
+  `--c-thinking`.
 - **Do not paint broad surfaces with solid state colors.** Badge is the only
   exception; textarea/dock/button accents use 14–35% `color-mix` blends.
 - **Do not mix serif, sans-serif, or proportional fonts.** Use IBM Plex Mono (and

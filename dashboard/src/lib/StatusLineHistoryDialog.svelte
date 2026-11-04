@@ -167,6 +167,8 @@
   }
 
   .close {
+    border-radius: 0;
+    padding: 1px 6px;
     border: none;
     background: none;
     font: inherit;
@@ -220,6 +222,8 @@
   }
 
   .toggle {
+    border-radius: 0;
+    padding: 1px 6px;
     margin-top: 0.3rem;
     border: none;
     background: none;
