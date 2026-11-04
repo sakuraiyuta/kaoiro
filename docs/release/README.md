@@ -2,7 +2,7 @@
 title: Release notes
 description: One page per production release, listing what changed since the previous production release.
 status: accepted
-last_updated: 2026-10-28
+last_updated: 2026-11-04
 ---
 
 # Release notes
@@ -66,6 +66,7 @@ production run records outside the repository.
 
 | Release | Date | Previous | Highlights |
 |---|---|---|---|
+| [v2026.11.04.1](v2026.11.04.1.md) | 2026-11-04 | v2026.11.01.1 | Dashboard controls follow the design by default; no server, runner or wrapper product change |
 | [v2026.11.01.1](v2026.11.01.1.md) | 2026-11-01 | v2026.10.28.2 | OAuth device authorization grant for native clients, environment-consistency checks in the server deploy CLI, read-only observation of runner Codex work, live grid order and grid card faces in the dashboard |
 | [v2026.10.28.2](v2026.10.28.2.md) | 2026-10-28 | v2026.10.28.1 | New persona anzu, readable status-line links in the dashboard, a Service column in the Codex state recovery table of the runner runbook |
 | [v2026.10.28.1](v2026.10.28.1.md) | 2026-10-28 | v2026.10.26.1 | Codex CLI and SDK 0.164.0 with GPT-6.1 Terra, Codex state classification that recognizes external daemon home entries, preparation tool for the Codex backend default change, pending dialogs kept across later envelopes, delivery binding that survives a ledger restart (v2026.10.27.1 was tagged but never deployed) |
