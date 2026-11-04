@@ -150,8 +150,8 @@ sudo loginctl enable-linger "$USER"
 ```
 
 Safe to re-run (skips the wizard if already configured; `--reconfigure`
-forces it; `--dry-run` previews). macOS orchestration is not yet verified in
-production (issue #242).
+forces it; `--dry-run` previews). Automatic update on macOS is out of scope
+([issue #242](https://github.com/sakuraiyuta/kaoiro/issues/242)).
 
 Stuck? → the per-script manual path (install/switch + systemd/launchd by
 hand), exit codes, and log locations are in [runner install
