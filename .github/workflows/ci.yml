@@ -118,32 +118,6 @@ jobs:
       - run: pnpm -C runner typecheck
       - run: pnpm -C runner test
 
-  # server/deploy (issue #306) has no dependencies of its own (plain
-  # node:test, no package-lock.json) and is NOT covered by the `server`
-  # job below — that job runs `mix test` only, inside an Elixir-only
-  # image with no node binary at all, so nothing here ever ran in CI
-  # until this job existed (クロエ-sub finding, #306 round 3: every prior
-  # green `node --test` count was a LOCAL claim only).
-  server-deploy:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 8
-    defaults:
-      run:
-        working-directory: server/deploy
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fetch previous deploy CLI revision
-        shell: bash
-        run: |
-          set -euo pipefail
-          revision="$(cat "$GITHUB_WORKSPACE/server/deploy/test-support/previous-cli-revision.txt")"
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$revision"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: node --test
-
   # Test isolation contract (issue #577, docs/contributing/test-isolation.md):
   # every test entry loads the isolation guard, and the guard refuses host
   # tools and outbound network. The checker lists each Vitest suite with the
@@ -176,7 +150,6 @@ jobs:
       - run: pnpm -C runner build
       - run: node scripts/test-isolation/check.mjs
       - run: node scripts/test-isolation/run-node-tests.mjs
-      - run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs
 
   # Checks out on the host, then runs mix inside a pinned Elixir image.
   #

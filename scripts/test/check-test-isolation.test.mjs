@@ -726,18 +726,9 @@ test("the canary helper rejects a missing marker before command or network calls
 const REPOSITORY = REAL_REPOSITORY;
 const REAL_WORKFLOW = readFileSync(join(REPOSITORY, ".github/workflows/ci.yml"), "utf8");
 const CLI_STEP = "      - run: node scripts/test-isolation/check.mjs\n";
-const TEST_STEP = "      - run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs\n";
 
 test("the real workflow runs the checker and its tests in the test-isolation job", () => {
   assert.deepEqual(ciWiringProblems(REAL_WORKFLOW), []);
-});
-
-test("rejects workflow without compatibility-test entry", () => {
-  const workflow = REAL_WORKFLOW.replace(" scripts/test/codex-backend-compatibility.test.mjs", "");
-  assert.notEqual(workflow, REAL_WORKFLOW, "the compatibility test must appear in the canonical workflow entry");
-  const problems = ciWiringProblems(workflow);
-  assert.ok(problems.some(problem => problem.includes("scripts/test/codex-backend-compatibility.test.mjs")),
-    problems.join("\n"));
 });
 
 const wiringMutations = {
@@ -749,10 +740,6 @@ const wiringMutations = {
   "the checker step moves to another job": [
     text => text.replace(CLI_STEP, "").replace("  server:\n    runs-on: ubuntu-latest\n    steps:\n", `  server:\n    runs-on: ubuntu-latest\n    steps:\n${CLI_STEP}`),
     /missing the step `- run: node scripts\/test-isolation\/check\.mjs`/],
-  "the test step is removed": [text => text.replace(TEST_STEP, ""), /missing the step `- run: node --test scripts\/test\/test-isolation\.test\.mjs/],
-  "the test step drops the checker tests": [text => text.replace(" scripts/test/check-test-isolation.test.mjs", ""), /missing the step `- run: node --test scripts\/test\/test-isolation\.test\.mjs/],
-  "the test step drops the child environment test": [text => text.replace(" scripts/test/child-process-environment.test.mjs", ""), /missing the step `- run: node --test scripts\/test\/test-isolation\.test\.mjs/],
-  "the test step drops the compatibility test": [text => text.replace(" scripts/test/codex-backend-compatibility.test.mjs\n", "\n"), /missing the step `- run: node --test scripts\/test\/test-isolation\.test\.mjs/],
   "the runner step is removed": [text => text.replace("      - run: node scripts/test-isolation/run-node-tests.mjs\n", ""), /missing the step `- run: node scripts\/test-isolation\/run-node-tests\.mjs`/],
   "the job declares needs": [text => text.replace("  test-isolation:\n", "  test-isolation:\n    needs: runner\n"), /`needs: runner` can skip a step/],
   "the job is duplicated": [text => text.replace("  test-isolation:\n", "  test-isolation:\n  test-isolation:\n"), /duplicate job test-isolation/],
@@ -771,14 +758,13 @@ for (const [name, [mutate, expected]] of Object.entries(wiringMutations)) {
 const JOB = (...steps) => `jobs:\n  test-isolation:\n    runs-on: ubuntu-latest\n    steps:\n${steps.map(step => `      ${step}\n`).join("")}`;
 const CLI_JOB_STEP = "- run: node scripts/test-isolation/check.mjs";
 const RUNNER_JOB_STEP = "- run: node scripts/test-isolation/run-node-tests.mjs";
-const TEST_JOB_STEP = "- run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs";
 
-// The fixture repository plus the three entries the job's test step names.
+// Required entries must remain selected even without an explicit workflow file list.
 function connectedRepository() {
   const root = fixtureRepository();
   for (const path of ["scripts/test/test-isolation.test.mjs", "scripts/test/check-test-isolation.test.mjs",
     "scripts/test/child-process-environment.test.mjs", "scripts/test/codex-backend-compatibility.test.mjs"]) write(root, path, entry(path));
-  write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP, RUNNER_JOB_STEP, TEST_JOB_STEP));
+  write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP, RUNNER_JOB_STEP));
   return root;
 }
 
@@ -789,13 +775,29 @@ test("checkRepository reports a connected repository without problems", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+for (const path of ["scripts/test/test-isolation.test.mjs", "scripts/test/check-test-isolation.test.mjs",
+  "scripts/test/child-process-environment.test.mjs", "scripts/test/codex-backend-compatibility.test.mjs"]) {
+  test(`the checker rejects a missing required Node entry: ${path}`, () => {
+    const root = connectedRepository();
+    try {
+      rmSync(join(root, path));
+      const diagnosis = `${path}: missing required Node test entry`;
+      assert.ok(checkRepository(root, { observe: () => [] }).problems.includes(diagnosis));
+      assert.deepEqual(checkTestIsolation(root, { observe: () => [] }).problems, []);
+      const result = cli(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.ok(result.stderr.split("\n").includes(diagnosis), result.stderr);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 test("checkRepository adds the workflow problems to the checker's own, and only there", () => {
   const root = connectedRepository();
   try {
-    write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP, RUNNER_JOB_STEP));
+    write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP));
     const { problems } = checkRepository(root, { observe: () => [] });
     assert.equal(problems.length, 1, problems.join("\n"));
-    assert.match(problems[0], /missing the step `- run: node --test /);
+    assert.match(problems[0], /missing the step `- run: node scripts\/test-isolation\/run-node-tests.mjs`/);
     assert.deepEqual(checkTestIsolation(root, { observe: () => [] }).problems, []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -821,7 +823,7 @@ const cliMutations = {
   "the workflow has no test-isolation job": [root => write(root, ".github/workflows/ci.yml", "jobs:\n  other:\n    steps:\n      - run: node --test scripts/test/a.test.mjs\n"),
     ".github/workflows/ci.yml: job test-isolation not found"],
   "the job does not run the checker tests": [root => write(root, ".github/workflows/ci.yml", JOB(CLI_JOB_STEP)),
-    `.github/workflows/ci.yml job test-isolation: missing the step \`${TEST_JOB_STEP}\``],
+    `.github/workflows/ci.yml job test-isolation: missing the step \`${RUNNER_JOB_STEP}\``],
 };
 
 for (const [name, [mutate, diagnosis]] of Object.entries(cliMutations)) {

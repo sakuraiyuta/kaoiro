@@ -380,8 +380,9 @@ const CI_JOB = "test-isolation";
 // observation, and the tests keep its CLI and this reader honest. Each side
 // checks the other, so dropping either step fails the one that remains.
 const CI_STEPS = ["- run: node scripts/test-isolation/check.mjs",
-  "- run: node scripts/test-isolation/run-node-tests.mjs",
-  "- run: node --test scripts/test/test-isolation.test.mjs scripts/test/check-test-isolation.test.mjs scripts/test/child-process-environment.test.mjs scripts/test/codex-backend-compatibility.test.mjs"];
+  "- run: node scripts/test-isolation/run-node-tests.mjs"];
+const REQUIRED_NODE_TESTS = ["scripts/test/test-isolation.test.mjs", "scripts/test/check-test-isolation.test.mjs",
+  "scripts/test/child-process-environment.test.mjs", "scripts/test/codex-backend-compatibility.test.mjs"];
 const CI_UNSAFE_KEY = /^(?:-\s+)?(?:continue-on-error|if|needs)\s*:/;
 
 /** Returns how the test-isolation job of a workflow fails to run the checker and its tests. */
@@ -403,6 +404,10 @@ export function ciWiringProblems(text) {
 /** The checker's own problems plus the workflow wiring problems of the same tree. */
 export function checkRepository(root, options) {
   const { entries, problems } = checkTestIsolation(root, options);
+  const canonical = nodeEntries(root).entries;
+  for (const path of REQUIRED_NODE_TESTS) {
+    if (!canonical.includes(path)) problems.push(`${path}: missing required Node test entry`);
+  }
   const workflow = join(root, CI_WORKFLOW);
   problems.push(...(existsSync(workflow) ? ciWiringProblems(readFileSync(workflow, "utf8")) : [`${CI_WORKFLOW}: missing`]));
   return { entries, problems };
