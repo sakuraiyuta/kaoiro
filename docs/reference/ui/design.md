@@ -403,6 +403,9 @@ Places involving state colors resolve dynamically through `var(--tone)`.
   「続きを読む」 button by the same page's state table and the same sentence, in
   `.omitted`, for an empty trimmed head.
 
+Native controls use `color-scheme: dark` for browser-rendered UI.
+Headings (`h1`–`h6`), `strong` and `b` default to weight 600.
+
 ### Buttons
 
 Native buttons inherit the dashboard font and use `--fs-body-sm`, `--fg`, `--bg-card`, `--line`, a 0.4rem radius and 0.35rem × 0.6rem padding. Component rules may override the baseline. Disabled buttons use `--fg-dim` without changing opacity.

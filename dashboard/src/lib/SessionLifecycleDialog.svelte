@@ -111,5 +111,5 @@
   time, .trigger { font-size: var(--fs-body-sm); }
   .trigger { display: block; }
   .malformed, .incomplete { color: var(--c-tool_running); }
-  .error { color: var(--c-error); }
+  .error { color: var(--c-error); font-size: var(--fs-body-sm); }
 </style>

@@ -400,8 +400,7 @@ test("operator controls follow the dashboard baseline and grid sort fits", async
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
 });
 
-
-test("session history and delivery controls use the type scale and sidebar spacing", async ({ page }) => {
+test("session history uses the type scale and sidebar button has spacing", async ({ page }) => {
   await page.goto("/e2e/harness/index.html?view=overlay&overlay=session-lifecycle");
   const row = page.locator(".lifecycle-row.normal").first();
   await expect(row).toBeVisible();

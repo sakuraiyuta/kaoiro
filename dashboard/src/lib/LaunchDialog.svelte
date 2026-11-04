@@ -830,6 +830,7 @@
 </Modal>
 
 <style>
+  .hint { font-size: var(--fs-body-sm); color: var(--fg-dim); }
   /* issue #277: modal chrome (backdrop, centering, focus handling) now
      lives in Modal.svelte -- this sizes/positions ONLY the content box it
      renders into `.modal-content` (needs :global(), same reasoning as

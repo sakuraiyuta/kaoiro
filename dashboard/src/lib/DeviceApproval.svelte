@@ -212,6 +212,8 @@
     cursor: pointer;
   }
 
+  form label { font-size: var(--fs-body-sm); }
+
   form {
     display: flex;
     flex-direction: column;

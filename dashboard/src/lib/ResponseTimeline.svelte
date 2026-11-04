@@ -283,7 +283,6 @@
   }
 
   .row.inter-agent {
-    border-left: 3px solid color-mix(in srgb, var(--c-done) 60%, transparent);
     padding-left: 0.45rem;
   }
 
