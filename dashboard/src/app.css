@@ -76,7 +76,7 @@
   padding: 0.35rem 0.5rem;
   max-width: 100%;
 }
-:where(input:disabled, select:disabled, textarea:disabled) { color: var(--fg-dim); }
+:where(input:disabled, select:disabled, textarea:disabled) { color: var(--fg-dim); background: var(--bg-card); }
 :where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--c-idle);
 }

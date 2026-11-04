@@ -141,13 +141,14 @@
 </section>
 
 <style>
-  section { padding: 0.75rem 0; }
+  section { padding: 0.75rem 0; font-size: var(--fs-body-sm); }
   h3, p, a { font-size: var(--fs-body-sm); }
   h3, p { color: var(--fg-dim); }
   p[role="alert"] { color: var(--c-error); }
   p[role="status"] { color: var(--fg); }
   h3 { font-weight: 600; }
   p { margin: 0.35rem 0; overflow-wrap: anywhere; }
+  li { overflow-wrap: anywhere; }
   label { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.75rem; font-size: var(--fs-body-sm); color: var(--fg-dim); }
   input { width: 100%; min-width: 0; }
   button { margin: 0.35rem 0.25rem 0 0; white-space: normal; overflow-wrap: anywhere; }
