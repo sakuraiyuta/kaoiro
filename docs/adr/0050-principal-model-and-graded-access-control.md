@@ -24,7 +24,7 @@ Implementation issues are [#187](https://github.com/sakuraiyuta/kaoiro/issues/18
 [#190](https://github.com/sakuraiyuta/kaoiro/issues/190)
 (persistence foundation) /
 [#191](https://github.com/sakuraiyuta/kaoiro/issues/191)
-(graph editing tool).
+(graph editing tool; no dedicated graph editing client is planned, see D9).
 
 The questions to settle before starting Phase B and later (#188-#191) — whether
 to revise or supersede ADR-0021 (#188), the default for agent→agent edges (#189;
@@ -249,6 +249,11 @@ notification” is included in Phase B.
 
 ### D9 — Build the graph editing tool as an independent client
 
+> **Withdrawn on 2026-11-04.** The operator decided that fine-grained permissions,
+> if built, do not come with a dedicated graph editing client. No graph editing
+> client is planned. The text below is kept as the decision record. See
+> [issue #191](https://github.com/sakuraiyuta/kaoiro/issues/191).
+
 Implement the permission-editing UI as an independent client, not as a screen in
 the bundled dashboard. The bundled dashboard is only a reference implementation
 ([ADR-0007](0007-client-separation-reference-dashboard.md)), and the design already
@@ -295,7 +300,7 @@ whether to integrate or divide the work is decided in #190.
 - This lays groundwork for OSS publication and business expansion. Security models
   are hard to strengthen later, so choosing the strict side at the start is right.
 - Making permission editing a wire protocol lets operators build custom admin tools
-  (D9).
+  (D9; the dedicated graph editing client in D9 was withdrawn on 2026-11-04).
 
 ### Negative
 

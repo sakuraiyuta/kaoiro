@@ -19,7 +19,9 @@ related: [deployment]
 
 The default `<install-root>` is Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`
 and macOS `~/Library/Application Support/kaoiro`. Override with
-`KAOIRO_RUNNER_INSTALL_DIR` or each script's `--install-dir`.
+`KAOIRO_RUNNER_INSTALL_DIR` or each script's `--install-dir`. macOS is supported
+for the initial install only; automatic update and rollback are available only on
+Linux with systemd ([Runner update and rollback](../../operations/runner-update-and-rollback.md)).
 
 **Estimate disk space.** An expanded release is **about 1 GB each** (measured
 993 MB linux-x64 on 2026-09-18); the engine CLI itself is about 920 MB. The

@@ -18,6 +18,10 @@ self-test verification procedure and its dated measurement are in
 This page covers the runner side; the interleaved server-side steps are in
 [Server update and rollback](server-update-and-rollback.md).
 
+Automatic update and rollback are supported only on Linux with systemd. On macOS,
+the runner is supported for the initial install only; see
+[Running as a service (systemd / launchd)](runner-install.md#running-as-a-service-systemd--launchd).
+
 A change that can stop the fleet from starting or every agent's turns from
 completing (the runner's start path, the wrapper's turn lifecycle) follows
 [High-risk change release](high-risk-change-release.md) first: it adds a
