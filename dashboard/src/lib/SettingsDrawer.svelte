@@ -1181,7 +1181,7 @@
   .session-lifecycle form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
   .session-lifecycle form label { grid-column: 1 / -1; }
   .session-lifecycle input { min-width: 0; }
-  .session-lifecycle p { font-size: .85rem; opacity: .75; }
+  .session-lifecycle p { margin: 0; font-size: var(--fs-body-sm); color: var(--fg-dim); }
   /* issue #277: modal chrome (backdrop, native <dialog>, focus handling)
      now lives in Modal.svelte -- this positions/sizes ONLY the content
      box it renders into `.modal-content` (needs :global(), same
@@ -1284,6 +1284,8 @@
     border-color: var(--fg-dim);
   }
 
+  h3 { font-size: var(--fs-body-sm); color: var(--fg-dim); }
+
   label {
     display: flex;
     flex-direction: column;
@@ -1361,6 +1363,7 @@
 
   .conversation-toggle {
     display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 0.35rem;
     font-size: var(--fs-body-sm);
