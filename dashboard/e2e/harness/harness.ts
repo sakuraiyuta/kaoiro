@@ -93,6 +93,7 @@ if (view === "app") {
   const logCount = params.get("logCount");
   if (logCount !== null) scenario.logCount = Number(logCount);
   if (params.get("wrapperBuild") === "1") scenario.wrapperBuildInfo = true;
+  if (params.get("deliveryPolicy") === "1") scenario.deliveryPolicy = true;
   const statusLine = statusLineViewNamed(params.get("statusLine"));
   if (statusLine !== undefined) scenario.statusLine = statusLine;
   mount(DetailHarness, { target, props: { scenario } });

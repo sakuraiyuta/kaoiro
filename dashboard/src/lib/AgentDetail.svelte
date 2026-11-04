@@ -4433,6 +4433,7 @@
 
 <style>
   .session-lifecycle-open {
+    margin: 0.75rem 0;
     padding: 0.35rem 0.6rem;
     color: var(--fg-dim);
     background: var(--bg-card);

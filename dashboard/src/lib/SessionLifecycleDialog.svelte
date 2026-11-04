@@ -105,10 +105,10 @@
   h2 { font-size: var(--fs-h2); }
   .target-id, .refresh-note { color: var(--fg-dim); font-size: var(--fs-body); }
   .events { padding-inline-start: 1.5rem; }
-  .lifecycle-row { padding: .7rem 0; border-bottom: 1px solid var(--line); }
-  .lifecycle-row p { margin: .3rem 0; }
+  .lifecycle-row { font-size: var(--fs-body); padding: .7rem 0; border-bottom: 1px solid var(--line); }
+  .lifecycle-row p { margin: .3rem 0; font-size: var(--fs-body-sm); }
   .kind { font-weight: 600; }
-  time, .trigger { font-size: var(--fs-body); }
+  time, .trigger { font-size: var(--fs-body-sm); }
   .trigger { display: block; }
   .malformed, .incomplete { color: var(--c-tool_running); }
   .error { color: var(--c-error); }

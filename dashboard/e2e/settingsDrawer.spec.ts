@@ -376,6 +376,7 @@ test("operator controls follow the dashboard baseline and grid sort fits", async
   expect(await input.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe("rgb(20, 20, 29)");
   expect(await button.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe("rgb(27, 27, 39)");
   expect(await link.evaluate((e) => getComputedStyle(e).color)).toBe("rgb(127, 212, 232)");
+  expect(await link.evaluate((e) => getComputedStyle(e).fontSize)).toBe("12px");
   const layout = await page.locator("label").filter({ hasText: "グリッドの並び順" }).evaluate((label) => {
     const select = label.querySelector("select")!;
     const drawer = label.closest(".settings-drawer-content")!;
@@ -397,4 +398,20 @@ test("operator controls follow the dashboard baseline and grid sort fits", async
   expect(layout.textHeight).toBeLessThanOrEqual(layout.lineHeight * 2);
   expect(layout.selectWidth).toBeCloseTo(layout.labelWidth, 0);
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+});
+
+
+test("session history and delivery controls use the type scale and sidebar spacing", async ({ page }) => {
+  await page.goto("/e2e/harness/index.html?view=overlay&overlay=session-lifecycle");
+  const row = page.locator(".lifecycle-row.normal").first();
+  await expect(row).toBeVisible();
+  await expect(row.locator(".kind")).toBeVisible();
+  expect(await row.evaluate((e) => getComputedStyle(e).fontSize)).toBe("13.6px");
+  expect(await row.locator("time").evaluate((e) => getComputedStyle(e).fontSize)).toBe("12px");
+  await page.goto("/e2e/harness/index.html?view=detail&deliveryPolicy=1");
+  const policy = page.getByRole("region", { name: "実行中の割込配送" });
+  await expect(policy).toContainText("on（確認済み）");
+  const button = page.locator(".session-lifecycle-open");
+  await expect(button).toBeVisible();
+  expect(await button.evaluate((e) => parseFloat(getComputedStyle(e).marginTop))).toBeGreaterThan(0);
 });

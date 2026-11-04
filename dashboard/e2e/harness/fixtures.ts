@@ -49,6 +49,7 @@ function claudeExt(extra?: Record<string, unknown>): Record<string, unknown> {
 }
 
 export interface DetailScenario {
+  deliveryPolicy?: boolean;
   /** Current-agent pending decision rendered as an in-flow dock. */
   pending?: "permission" | "question";
   /** Add a second agent in waiting_permission so the blindspot /

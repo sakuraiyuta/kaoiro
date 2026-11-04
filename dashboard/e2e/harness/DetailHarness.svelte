@@ -3,6 +3,7 @@
   // `closed` flips when AgentDetail calls onClose — the specs use the
   // marker to prove the handle attention badge performs the same
   // "一覧へ戻す" as button.blindspot (T8, ADR-0052 F3).
+  import { DeliveryPolicyStore } from "../../src/lib/deliveryPolicyStore.svelte";
   import AgentDetail from "../../src/lib/AgentDetail.svelte";
   import { conversationEntryKey } from "../../src/lib/conversationTimeline";
   import {
@@ -22,6 +23,9 @@
   const agents = detailAgents(scenario);
   const manifest = detailManifest(scenario);
   const connection = stubConnection();
+  const policyStore = new DeliveryPolicyStore(() => ({ connection, operator: true, connected: true }));
+  policyStore.available = true;
+  policyStore.views = { "host.ao": { policy: "on", revision: 1, applied_revision: 1, confirmed: true, pending: false, wrapper_support: true, mechanisms: { operator_early: "none", inter_agent_early: "steer", inter_agent_yield: "none" } } };
   let closed = $state(false);
 
   // issue #237/#260: ResponseTimeline クリック(#122)を3通りの経路で再現する。
@@ -117,6 +121,9 @@
         {logs}
         {agents}
         {connection}
+        {...(scenario.deliveryPolicy ? { policyStore } : {})}
+        policyConnected={scenario.deliveryPolicy ?? false}
+        onDeliveryPolicyChange={scenario.deliveryPolicy ? () => {} : undefined}
         {manifest}
         origin={scenario.expandFromOrigin ? { x: 120, y: 120 } : null}
         {scrollToEntryKey}

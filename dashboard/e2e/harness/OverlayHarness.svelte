@@ -162,6 +162,7 @@
         onLogout={() => {}}
         connection={settingsDrawerConnection()}
         isOperator={workState !== null}
+        onOpenSessionLifecycle={workState !== null ? () => {} : undefined}
         {workSettings}
       />
     {/if}
