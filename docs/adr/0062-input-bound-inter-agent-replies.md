@@ -74,4 +74,4 @@ and serialization share the real Claude/Codex handoff boundary. No queue policy,
 native ownership, detached snapshot, or Antigravity/Grok legacy-mode change is
 included. See the [current contract](../reference/inter-agent/reply-basis.md#accepted-reply-follow-ups).
 This is a high-risk TL change through agent-common; production release follows
-[the canary procedure](../operations/high-risk-change-release.md).
+[the high-risk release procedure](../operations/high-risk-change-release.md).
