@@ -727,8 +727,44 @@ const REPOSITORY = REAL_REPOSITORY;
 const REAL_WORKFLOW = readFileSync(join(REPOSITORY, ".github/workflows/ci.yml"), "utf8");
 const CLI_STEP = "      - run: node scripts/test-isolation/check.mjs\n";
 
+function workflowJobLines(text, jobName) {
+  const lines = text.split("\n");
+  const header = new RegExp(`^  ${jobName}:\\s*$`);
+  const starts = lines.flatMap((line, index) => header.test(line) ? [index] : []);
+  assert.equal(starts.length, 1, `expected exactly one ${jobName} job header`);
+  const start = starts[0];
+  const end = lines.findIndex((line, index) => index > start && /^  [A-Za-z0-9_-]+:\s*$/.test(line));
+  return { lines, start, end: end < 0 ? lines.length : end };
+}
+
+function replaceExactlyOnce(text, anchor, replacement, description) {
+  const first = text.indexOf(anchor);
+  assert.notEqual(first, -1, `${description} anchor is missing`);
+  assert.equal(text.indexOf(anchor, first + anchor.length), -1, `${description} anchor is duplicated`);
+  return text.slice(0, first) + replacement + text.slice(first + anchor.length);
+}
+
+function insertWorkflowStep(text, jobName, step) {
+  const { lines, start, end } = workflowJobLines(text, jobName);
+  const steps = lines.flatMap((line, index) => index > start && index < end && /^    steps:\s*$/.test(line) ? [index] : []);
+  assert.equal(steps.length, 1, `expected exactly one steps: line in ${jobName} job`);
+  lines.splice(steps[0] + 1, 0, step.trimEnd());
+  return lines.join("\n");
+}
+
 test("the real workflow runs the checker and its tests in the test-isolation job", () => {
   assert.deepEqual(ciWiringProblems(REAL_WORKFLOW), []);
+});
+
+test("workflow move anchors reject missing or duplicate server jobs", () => {
+  assert.throws(() => insertWorkflowStep("jobs:\n", "server", CLI_STEP), /expected exactly one server job header/);
+  assert.throws(() => insertWorkflowStep("jobs:\n  server:\n    steps:\n  server:\n    steps:\n", "server", CLI_STEP), /expected exactly one server job header/);
+  assert.throws(() => insertWorkflowStep("jobs:\n  server:\n    runs-on: ubuntu-latest\n", "server", CLI_STEP), /expected exactly one steps: line/);
+});
+
+test("checker step replacement rejects a missing or duplicate anchor", () => {
+  assert.throws(() => replaceExactlyOnce("", CLI_STEP, "", "checker step"), /checker step anchor is missing/);
+  assert.throws(() => replaceExactlyOnce(`${CLI_STEP}${CLI_STEP}`, CLI_STEP, "", "checker step"), /checker step anchor is duplicated/);
 });
 
 const wiringMutations = {
@@ -738,7 +774,7 @@ const wiringMutations = {
   "the checker step is continue-on-error": [text => text.replace(CLI_STEP, `${CLI_STEP}        continue-on-error: true\n`), /`continue-on-error: true` can skip a step/],
   "the checker step has a false condition": [text => text.replace(CLI_STEP, `${CLI_STEP.replace("      - run:", "      - if: false\n        run:")}`), /`- if: false` can skip a step/],
   "the checker step moves to another job": [
-    text => text.replace(CLI_STEP, "").replace("  server:\n    runs-on: ubuntu-latest\n    steps:\n", `  server:\n    runs-on: ubuntu-latest\n    steps:\n${CLI_STEP}`),
+    text => insertWorkflowStep(replaceExactlyOnce(text, CLI_STEP, "", "checker step"), "server", CLI_STEP),
     /missing the step `- run: node scripts\/test-isolation\/check\.mjs`/],
   "the runner step is removed": [text => text.replace("      - run: node scripts/test-isolation/run-node-tests.mjs\n", ""), /missing the step `- run: node scripts\/test-isolation\/run-node-tests\.mjs`/],
   "the job declares needs": [text => text.replace("  test-isolation:\n", "  test-isolation:\n    needs: runner\n"), /`needs: runner` can skip a step/],
@@ -750,6 +786,10 @@ for (const [name, [mutate, expected]] of Object.entries(wiringMutations)) {
   test(`the workflow check is red when ${name}`, () => {
     const mutated = mutate(REAL_WORKFLOW);
     assert.notEqual(mutated, REAL_WORKFLOW, "the mutation did not change the workflow");
+    if (name === "the checker step moves to another job") {
+      const { lines, start, end } = workflowJobLines(mutated, "server");
+      assert.ok(lines.slice(start, end).join("\n").includes(CLI_STEP.trimEnd()), "the checker step must be inside the server job");
+    }
     const problems = ciWiringProblems(mutated);
     assert.ok(problems.some(problem => expected.test(problem)), problems.join("\n") || "no problems reported");
   });
