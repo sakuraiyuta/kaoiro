@@ -50,6 +50,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert_push("hosts", %{"hosts" => _, "ingest_warnings" => [warning]})
     assert warning =~ "keep a (a.zip)"
     assert warning =~ "exclude b (b.zip)"
+    Process.unlink(operator.channel_pid)
     assert_reply leave(operator), :ok
     _viewer = join_as(:viewer)
     assert_push("snapshot", %{})

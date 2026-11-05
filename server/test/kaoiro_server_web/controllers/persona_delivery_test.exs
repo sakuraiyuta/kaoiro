@@ -104,19 +104,22 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     end
   end
 
-  test "real ingest collision denies both claimant orientations and all image request forms",
-       ctx do
+  defp synthetic_scope(id, set) do
+    assets = PersonaAssets.delivery_snapshot()
+    entry = assets.manifest["personas"]["shared"]
+    file = assets.files[{"shared", "idle.png"}]
+    assets = put_in(assets.personas_by_id[id], %{"id" => id, "sprite_set" => set})
+    assets = put_in(assets.manifest["personas"][set], entry)
+    assets = put_in(assets.files[{set, "idle.png"}], file)
+    assets = put_in(assets.files[{set, "fatigued.png"}], file)
+    %{assets: assets, allowed: PersonaDelivery.allowed_sets(assets, AgentStates.snapshot())}
+  end
+
+  # Ingest now selects one claimant, so the ambiguous generation is supplied at the decision seam.
+  test "collision denies both claimant orientations at the decision and HTTP mapping", ctx do
     [a, b, u, _] = ctx.ids
-    canonical = PersonaAssets.delivery_snapshot().personas_by_id
-    assert canonical["visible-a"]["sprite_set"] == "shared"
-    assert canonical["hidden-b"]["sprite_set"] == "shared"
-    assert PersonaAssets.manifest()["personas"]["shared"]["name"] == "hidden-b"
-    {:ok, %{path: common}} = PersonaAssets.fetch_file("shared", "idle.png")
-    {:ok, %{path: leftover}} = PersonaAssets.fetch_file("shared", "fatigued.png")
-    assert File.read!(common) == ctx.other.idle
-    assert File.read!(leftover) == ctx.one.optional
-    refute ctx.one.idle == ctx.other.idle
     session = cookie("v")
+    denied_images(session, "unique")
     state(u, "unique", "unique")
 
     for {a_state, b_state} <- [
@@ -127,15 +130,20 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
         ] do
       state(a, "visible-a", "shared", a_state)
       state(b, "hidden-b", "shared", b_state)
-      manifest = body(session)
+      scope = synthetic_scope("visible-a", "shared")
+      manifest = PersonaDelivery.manifest(scope)
       assert Map.keys(manifest["personas"]) == ["unique"]
       refute Jason.encode!(manifest) =~ "hidden-b"
       refute Jason.encode!(manifest) =~ "visible-a"
 
-      assert response(get(session, manifest["personas"]["unique"]["states"]["idle"]["url"]), 200) ==
-               ctx.unique.idle
+      for file <- ~w(idle.png fatigued.png) do
+        assert {:ok, _} = PersonaDelivery.fetch_file(%{scope | allowed: :all}, "shared", file)
+        assert PersonaDelivery.fetch_file(scope, "shared", file) == :error
+      end
 
-      denied_images(session, "shared")
+      assert PersonaDelivery.fetch_file(scope, "shared", "missing.png") == :error
+
+      assert response(get(session, "/personas/unique/idle.png"), 200) == ctx.unique.idle
     end
 
     denied_images(session, "absent")
@@ -144,31 +152,27 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
       operator = cookie(token)
       assert body(operator)["personas"]["shared"]["name"] == "hidden-b"
       assert response(get(operator, "/personas/shared/idle.png"), 200) == ctx.other.idle
-      assert response(get(operator, "/personas/shared/fatigued.png"), 200) == ctx.one.optional
+      assert get(operator, "/personas/shared/fatigued.png").status == 404
     end
   end
 
-  test "hidden collider edits do not alter filtered body/version; collision removal restores access",
-       ctx do
+  # Ingest excludes one claimant; synthetic generations retain the viewer ambiguity check.
+  test "collider edits stay hidden and removal restores access", ctx do
     [a, b, u, _] = ctx.ids
     state(u, "unique", "unique")
-    session = cookie("v")
     state(a, "visible-a", "shared")
-    before = body(session)
-    old_b = File.read!(ctx.other.path)
+    before = synthetic_scope("visible-a", "shared") |> PersonaDelivery.manifest()
 
     PersonaPackFixture.write!(ctx.ingest, "b.zip", "hidden-b", "shared",
       name: "changed-hidden",
       version: "2.0.0"
     )
 
-    refute File.read!(ctx.other.path) == old_b
     :ok = PersonaAssets.rebuild()
-    {:ok, %{path: changed_common}} = PersonaAssets.fetch_file("shared", "idle.png")
-    refute File.read!(changed_common) == ctx.other.idle
-    assert body(session) == before
+    assert synthetic_scope("visible-a", "shared") |> PersonaDelivery.manifest() == before
     state(a, "visible-a", "shared", "disconnected")
     state(b, "hidden-b", "shared")
+    assert synthetic_scope("visible-a", "shared") |> PersonaDelivery.manifest() == before
 
     PersonaPackFixture.write!(ctx.ingest, "a.zip", "visible-a", "shared",
       optional: true,
@@ -177,21 +181,18 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     )
 
     :ok = PersonaAssets.rebuild()
-    {:ok, %{path: changed_unique}} = PersonaAssets.fetch_file("shared", "fatigued.png")
-    refute File.read!(changed_unique) == ctx.one.optional
-    assert body(session) == before
-
+    assert synthetic_scope("visible-a", "shared") |> PersonaDelivery.manifest() == before
     state(b, "hidden-b", "shared", "disconnected")
     state(a, "visible-a", "shared")
     File.rm!(Path.join(ctx.ingest, "b.zip"))
     :ok = PersonaAssets.rebuild()
-    restored = body(session)
+    restored = body(cookie("v"))
     assert restored["personas"]["shared"]["name"] == "changed-a"
     assert restored["version"] != before["version"]
-    assert get(session, "/personas/shared/fatigued.png").status == 200
+    assert get(cookie("v"), "/personas/shared/fatigued.png").status == 200
     PersonaPackFixture.write!(ctx.ingest, "b.zip", "hidden-b", "shared")
     :ok = PersonaAssets.rebuild()
-    assert body(session) == before
+    assert synthetic_scope("visible-a", "shared") |> PersonaDelivery.manifest() == before
   end
 
   test "canonical identity, viewer projection, membership and empty manifests", ctx do
@@ -221,47 +222,26 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     denied_images(session, "unique")
   end
 
-  test "viewer rejects the reserved sprite set even when ingest accepts a custom claimant",
-       ctx do
+  # Ingest rejects the reserved set, so a synthetic generation exercises the viewer guard.
+  test "viewer rejects the reserved set at the decision and HTTP mapping", ctx do
     [a, _, _, _] = ctx.ids
-
-    pack =
-      PersonaPackFixture.write!(ctx.ingest, "default-set.zip", "custom-default-set", "default")
-
-    :ok = PersonaAssets.rebuild()
-    canonical = PersonaAssets.delivery_snapshot().personas_by_id["custom-default-set"]
-    assert canonical["id"] == "custom-default-set"
-    assert canonical["sprite_set"] == "default"
-    viewer = cookie("v")
-    before = body(viewer)
+    session = cookie("v")
+    before = body(session)
     assert before["personas"] == %{}
 
     for {id, value} <- [
-          {canonical["id"], "idle"},
-          {canonical["id"], "disconnected"},
+          {"custom-default-set", "idle"},
+          {"custom-default-set", "disconnected"},
           {"default", "idle"}
         ] do
-      state(a, id, canonical["sprite_set"], value)
-      assert body(viewer) == before
-      denied_images(viewer, "default")
+      state(a, id, "default", value)
+      scope = synthetic_scope("custom-default-set", "default")
+      assert PersonaDelivery.manifest(scope) == before
+      assert PersonaDelivery.fetch_file(scope, "default", "idle.png") == :error
+      denied_images(session, "default")
     end
 
-    state(a, canonical["id"], canonical["sprite_set"])
-    url = body(cookie("o"))["personas"]["default"]["states"]["idle"]["url"]
-    assert url =~ "&auth=1"
-
-    for session <- [cookie("o"), cookie("a")],
-        path <- [url, "/personas/default/idle.png"],
-        method <- [:get, :head] do
-      conn =
-        session |> put_req_header("if-none-match", "*") |> dispatch(@endpoint, method, path, nil)
-
-      assert conn.status == 200
-      assert conn.resp_body == if(method == :head, do: "", else: pack.idle)
-      assert get_resp_header(conn, "cache-control") == ["private, no-store"]
-    end
-
-    assert get(build_conn(), url).status == 401
+    assert get(build_conn(), "/personas/default/idle.png").status == 401
   end
 
   test "cookie login, denial order, live revocation, no-store and unchanged detail authorization",
@@ -329,6 +309,7 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
              PersonaDelivery.version(entries, "public")
   end
 
+  # Ingest now selects and reclaims displaced packs before a pending request resumes.
   test "reclaimed selected file never falls through to a newer colliding generation", ctx do
     [_, _, u, _] = ctx.ids
     state(u, "unique", "unique")
@@ -348,7 +329,8 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
       :ok = PersonaAssets.rebuild()
       {:ok, %{path: new_path}} = PersonaAssets.fetch_file("unique", "idle.png")
       refute old_path == new_path
-      File.rm!(old_path)
+      # Rebuild now reclaims the displaced pack before the paused request resumes.
+      refute File.exists?(old_path)
     after
       :sys.resume(pid)
     end
@@ -442,18 +424,19 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
     end
   end
 
-  test "reversed ingest order still denies both metadata winners and unique files", ctx do
+  # Ingest selects by ID, so a synthetic generation exercises both ambiguous claimants.
+  test "renaming a zip does not select a different claimant", ctx do
     [a, b, _, _] = ctx.ids
     File.rename!(Path.join(ctx.ingest, "a.zip"), Path.join(ctx.ingest, "z.zip"))
     :ok = PersonaAssets.rebuild()
-    assert PersonaAssets.manifest()["personas"]["shared"]["name"] == "visible-a"
-    session = cookie("v")
+    assert PersonaAssets.manifest()["personas"]["shared"]["name"] == "hidden-b"
 
     for {left, right} <- [{"idle", "disconnected"}, {"disconnected", "idle"}] do
       state(a, "visible-a", "shared", left)
       state(b, "hidden-b", "shared", right)
-      assert body(session)["personas"] == %{}
-      denied_images(session, "shared")
+      scope = synthetic_scope("visible-a", "shared")
+      assert PersonaDelivery.manifest(scope)["personas"] == %{}
+      assert PersonaDelivery.fetch_file(scope, "shared", "idle.png") == :error
     end
   end
 
