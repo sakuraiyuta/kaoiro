@@ -31,11 +31,11 @@ failed with exit 78 for 35 minutes) removes the agents that would fix it, and
 both passed review and green tests.
 
 **Out of scope.** Changes to the server path that live wrappers use (join,
-channel, authentication, delivery) are not covered
-([issue #555](https://github.com/sakuraiyuta/kaoiro/issues/555)): a
-server-only update does not stop live wrappers, so the runner restart procedure
-in section 4 does not apply. Follow
-[Server update and rollback](server-update-and-rollback.md) for those.
+channel, authentication, delivery) are not covered: a server-only update does
+not stop live wrappers, so the runner restart procedure in section 4 does not
+apply. Follow [Server update and rollback](server-update-and-rollback.md) for
+those. When a server change must ship with a wrapper change, follow
+[Coordinated server and wrapper updates](runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
 
 ## 1. Is the change high risk?
 
