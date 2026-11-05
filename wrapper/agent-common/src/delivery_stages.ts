@@ -188,6 +188,13 @@ export class DeliveryStageReporter {
     if (delivery !== undefined) this.#report(delivery, "queued", { yield_disposition: disposition });
   }
 
+  retireEnvelopes(envelopes: readonly Envelope[]): void {
+    for (const envelope of envelopes) {
+      const delivery = this.#deliveryByEnvelope.get(envelope);
+      if (delivery !== undefined) this.#removeDelivery(delivery);
+    }
+  }
+
   settled(turnToken: string): void {
     this.#observeIdentity();
     for (const envelope of this.#turns.deliveryEnvelopesForTurn(turnToken)) {

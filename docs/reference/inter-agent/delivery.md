@@ -505,3 +505,20 @@ A false ceiling declares no in-flight mechanism on Claude/Codex; Antigravity
 continues to omit its declaration. The register's launch metadata and the next
 wrapper use the same applied snapshot. Live policy can narrow this declaration
 but cannot widen it. Config reload changes subsequent wrapper lifetimes only.
+
+### Permission synchronization expiry before dispatch
+
+A negotiating wrapper retires the exact unstarted delivery batch when its
+permission-sync wait expires. It does not acknowledge SDK dispatch or generate
+a second wrapper-owned peer error. Existing `skip-v1` recovery preserves the
+retirement across disconnect, reconciles skipped ranges and allows later ACKs
+to advance. The server delivers the existing `interrupted` non-dispatch notice;
+no new peer error code or server-first release is required with a server that
+already supports permission sync and `skip-v1`. A server with permission sync
+but without `skip-v1` cannot provide that reliability guarantee.
+
+A server `turn_number=0` status/failure notice needs no reply to the server
+and does not authorize immediate retry. If the original task still needs
+delivery, confirm the original peer's state with `list_agents` and act under
+the applicable operator/director instruction. The status notice itself is not
+a new reply authorization; current footer and tool rules remain authoritative.

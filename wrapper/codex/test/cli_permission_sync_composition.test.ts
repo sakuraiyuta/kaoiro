@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import type { WrapperConfig } from "@kaoiro/agent-common";
-import { ServerLink } from "@kaoiro/wrapper-core";
+import { ServerLink, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { CodexHost } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
@@ -27,9 +27,11 @@ const transport = {
   handlers: new Map<string, Receiver[]>(),
   joinReceivers: new Map<string, Receiver>(),
   onOpen: null as (() => void) | null,
+  pushes: [] as {event:string;payload:any}[],
 };
 
 class TestChannel {
+  state = "joined";
   on(event: string, receiver: Receiver): void {
     const receivers = transport.handlers.get(event) ?? [];
     receivers.push(receiver);
@@ -46,8 +48,17 @@ class TestChannel {
     return chain;
   }
 
-  push(): { receive: () => unknown } {
-    const chain = { receive: () => chain };
+  push(event:string, payload:unknown): { receive: () => unknown } {
+    transport.pushes.push({event,payload});
+    const chain = { receive: (status?: string, receiver?: (payload: unknown) => void) => {
+      if (status === "ok" && receiver && (event === "disconnect_intent" || event === "delivery_resync")) {
+        const request = payload as {request_id:string;missing_ranges:number[][]};
+        queueMicrotask(() => receiver(event === "delivery_resync" ? {
+          request_id:request.request_id,delivery:{issued_seq:1,acked_seq:1},skipped_ranges:request.missing_ranges,
+        } : {}));
+      }
+      return chain;
+    } };
     return chain;
   }
 
@@ -55,6 +66,7 @@ class TestChannel {
 }
 
 class TestSocket {
+  isConnected(): boolean { return true; }
   connect(): void {}
   channel(): TestChannel {
     return new TestChannel();
@@ -349,4 +361,26 @@ describe("Codex CLI permission-sync composition", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("retires a pre-start sync failure through the real CLI and allows delivery two to advance its ACK",async()=>{
+  let host:CodexHost|undefined, dispatches=0;
+  transport.pushes=[];
+  const thread:CodexThreadLike={async runStreamed(){dispatches++;async function* events():AsyncGenerator<ThreadEvent>{yield {type:"thread.started",thread_id:"cli-sync-timeout"};yield completed();}return {events:events()};}};
+  const running=runCodexCli({parseCliArgs:()=>({configPath:"test"}),loadConfig:()=>({...config}),
+    createServerLink:(url,id,options)=>{const link=createServerLink(url,id,options);vi.spyOn(link,"waitForPermissionSync").mockRejectedValueOnce(new PermissionSyncTimeoutError());return link;},
+    createHost:(cfg,options)=>host=new CodexHost(cfg,{...options,codexFactory:()=>({startThread:()=>thread,resumeThread:()=>thread})})});
+  const item=(seq:number)=>({version:"0",agent_id:"peer",persona:config.persona,display_name:"Peer",ts:"2026-11-06T00:00:00Z",type:"inter_agent_message",state:"thinking",ext:{},delivery_seq:seq,payload:{to:config.agent_id,conversation_id:`sync-${seq}`,turn_number:1,kind:"request",body:"input",meta:{done:false,propose_next:""},owner:{kind:"user",id:"operator"}}});
+  try{
+    await vi.waitFor(()=>expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
+    transport.joinReceivers.get("ok")?.({permission_sync:true,delivery_resync:"skip-v1",inter_agent_delivery_incarnation:"i",delivery:{issued_seq:0,acked_seq:0}});
+    emit("persona_prompt",{version:"0",prompt:"persona"});await vi.waitFor(()=>expect(host).toBeDefined());
+    emit("envelope",item(1));await vi.waitFor(()=>expect(transport.pushes.some(p=>p.event==="delivery_resync")).toBe(true));
+    expect(dispatches).toBe(0);expect(transport.pushes.filter(p=>p.event==="delivery_ack")).toHaveLength(0);
+    expect(transport.pushes.find(p=>p.event==="delivery_resync")?.payload).toMatchObject({reason:"interrupted",missing_ranges:[[1,1]]});
+    expect(transport.pushes.filter(p=>p.event==="envelope"&&p.payload.type==="inter_agent_message")).toHaveLength(0);
+    emit("delivery_status",{issued_seq:1,acked_seq:1});emit("permission_sync",{version:"0",control:null,next:null});
+    emit("envelope",item(2));await vi.waitFor(()=>expect(dispatches).toBe(1));
+    await vi.waitFor(()=>expect(transport.pushes.some(p=>p.event==="delivery_ack"&&p.payload.delivery_seq===2)).toBe(true));
+  }finally{host?.close();await running;}
 });

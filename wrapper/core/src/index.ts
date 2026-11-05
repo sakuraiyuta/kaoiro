@@ -58,6 +58,8 @@ export {
   MAX_REPLAY_IA_PUSH_BYTES,
   PEER_SESSION_RESET_WAIT_MS,
   ServerLink,
+  PermissionSyncTimeoutError,
+  PERMISSION_SYNC_TIMEOUT_MS,
   chunkReplayIaItems,
   hydrationVerdictFrom,
 } from "./transport.js";

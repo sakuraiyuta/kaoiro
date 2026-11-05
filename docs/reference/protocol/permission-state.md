@@ -319,3 +319,22 @@ observations and selected profile. Inspect runs again when a permission
 change starts a new generation. The field is displayed to the operator and
 is not used to decide permissions. Unknown inspect output remains explicitly
 unknown. See the [engine reference](../engines/grok-acp.md).
+
+### Synchronization failure visibility
+
+A permission-sync timeout emits an error result with the fixed recovery detail
+and leaves the wrapper at `waiting_input` after the normal transient `error`
+state. Pending model/effort choices are not treated as executed. A Codex repair
+retry belongs to its already-started input and explicitly reports that its
+earlier attempt may have executed.
+
+When disconnected or unjoined, `ServerLink.send` retains only the latest
+never-sent `is_error` result. On successful join it clears that single slot
+and attempts one push, then reannounces the latest cached state. Phoenix can
+flush earlier buffered states before this callback; ordering applies to the
+callback's result and state replay, not the first frame after join. Only
+`ServerLink.close()` discards the slot; `phx_close` does not. There is no retry
+after an attempted send, no durable result queue, and no retention of successful
+results or logs. Older superseded synchronization failures remain in local stderr.
+The latest delivered error appears in the normal dashboard history and its
+acknowledgeable badge; it does not keep the live agent in `error`.

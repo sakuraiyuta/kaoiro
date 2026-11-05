@@ -231,3 +231,15 @@ full topic index.
 - [Envelope contract](envelope.md).
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
+
+### Synchronization deadline
+
+Negotiating wrappers wait at most 30 seconds per uninterrupted unsynchronized
+episode, beginning at construction or loss of readiness. Rejoins do not renew
+the deadline. Rejected snapshots log their rejected field without payload values.
+Expiry fails waiting inputs before dispatch; it never releases the barrier.
+A later valid current-join snapshot enables future inputs, without retrying failed
+ones. A legitimate unsupported legacy join can release only when synchronization
+has not become mandatory. Claude Code and non-Linux Grok do not negotiate this
+contract. See [permission state](permission-state.md) for failure visibility and
+[delivery](../inter-agent/delivery.md) for unstarted peer-input retirement.

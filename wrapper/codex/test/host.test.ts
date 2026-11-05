@@ -1,3 +1,4 @@
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import {
   chmod,
@@ -5200,4 +5201,31 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     // turn 3 は resume が再試行され、正常完了する。
     expect(results[2]?.payload).not.toMatchObject({ is_error: true });
   });
+});
+
+it("settles permission sync expiry before exec with a visible result and pending model intact", async()=>{
+  const logs:Envelope[]=[], states:Envelope[]=[], ends:unknown[]=[];const dispatch=vi.fn();
+  const host=new CodexHost(CONFIG,{backend:"exec",appendSystemPrompt:"p",onState:e=>states.push(e),onLog:e=>logs.push(e),onTurnEnd:i=>ends.push(i),
+    codexFactory:()=>({startThread:dispatch,resumeThread:dispatch}),waitForPermissionSync:()=>Promise.reject(new PermissionSyncTimeoutError())});
+  await host.setModel("gpt-6-sol");const running=host.run("never dispatched");
+  try{await vi.waitFor(()=>expect(ends).toHaveLength(1));expect(dispatch).not.toHaveBeenCalled();
+    expect(logs.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
+    expect(states.some(e=>e.state==="error")).toBe(true);expect(states.at(-1)?.state).toBe("waiting_input");
+    expect(host.statusExtSnapshot()).toMatchObject({pending_model:"gpt-6-sol"});
+    expect(ends[0]).toMatchObject({error:{reason:"permission_sync_timeout"},cancellation:{started:false}});
+  }finally{host.close();await running;}
+});
+
+it("reports permission sync expiry during a repair retry as an already-started outer failure",async()=>{
+  let repairing=false;const logs:Envelope[]=[],ends:any[]=[],starts=vi.fn();
+  const {client}=makeClient([[{type:"thread.started",thread_id:"sync-repair"},usageEvent()],new Error("stream did not contain valid UTF-8 (code -32603)")]);
+  const host=new CodexHost(CONFIG,{backend:"exec",appendSystemPrompt:"p",onState:()=>{},onLog:e=>logs.push(e),onTurnStart:starts,onTurnEnd:i=>ends.push(i),codexFactory:()=>client,
+    waitForPermissionSync:()=>repairing?Promise.reject(new PermissionSyncTimeoutError()):Promise.resolve(),rolloutCorruptionVerifier:()=>"corrupted",
+    rolloutCorruptionRepairer:()=>{repairing=true;void host.setModel("gpt-6-sol");return {repaired:true,backupPath:"/tmp/sync-repair-backup"};}});
+  const running=host.run("first");
+  try{await vi.waitFor(()=>expect(ends).toHaveLength(1));await host.send("second");await vi.waitFor(()=>expect(ends).toHaveLength(2));
+    expect(starts).toHaveBeenCalledTimes(2);expect(ends[1]).toMatchObject({error:{reason:"interrupted"}});expect(ends[1].cancellation).toBeUndefined();
+    const failed=logs.filter(e=>e.type==="result"&&e.payload.is_error);expect(failed).toHaveLength(1);expect(failed[0]!.payload.error_detail).toContain("earlier attempt may have executed");
+    expect(host.statusExtSnapshot()).toMatchObject({pending_model:"gpt-6-sol"});
+  }finally{host.close();await running;}
 });

@@ -68,7 +68,7 @@ export interface AppServerRuntimeCompletion {
   settingsCommitted: boolean;
 }
 export class AppServerAdmissionError extends Error {
-  constructor(readonly reason: "interrupted" | "permission_gate_blocked" | "input_skipped") {
+  constructor(readonly reason: "interrupted" | "permission_gate_blocked" | "input_skipped" | "permission_sync_timeout") {
     super(`App-server admission cancelled: ${reason}`);
   }
 }

@@ -212,3 +212,5 @@ export { deliveryPersonaList } from "./persona_opt_in.js";
 export type { WorkToolHandlers } from "./work_tools.js";
 
 export const DEFAULT_CODEX_BACKEND = "app-server" as const;
+
+export { permissionSyncFailure, retirePermissionSyncInput } from "./permission_sync_failure.js";

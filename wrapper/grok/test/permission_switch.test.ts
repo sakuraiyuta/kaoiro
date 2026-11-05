@@ -1,3 +1,4 @@
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -561,4 +562,14 @@ it.each(["loading", "current"])("ignores a retired connection's delayed callback
   expect(JSON.stringify(metadata)).not.toContain("retired-marker");
   await host.interrupt(); await turn;
   await host.send("still-open");
+});
+
+it("settles permission sync expiry once before a prompt and accepts a later explicit input",async()=>{
+  let blocked=true;const ends=vi.fn(),starts=vi.fn();
+  const {host,envelopes,events}=await started({config:{...config,sandbox:"danger-full-access",network_access:true},onTurnEnd:ends,onTurnStart:starts,
+    waitForPermissionSync:()=>blocked?Promise.reject(new PermissionSyncTimeoutError()):Promise.resolve()});
+  await expect(host.send("never dispatched")).rejects.toBeInstanceOf(PermissionSyncTimeoutError);
+  expect(starts).not.toHaveBeenCalled();expect(ends).toHaveBeenCalledTimes(1);expect(events().filter(e=>e.event==="session/prompt")).toHaveLength(0);
+  expect(envelopes.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
+  expect(host.state).toBe("waiting_input");blocked=false;await host.send("recovered");expect(starts).toHaveBeenCalledTimes(1);
 });

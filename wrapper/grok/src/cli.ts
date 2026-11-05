@@ -1,3 +1,5 @@
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
+import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { randomUUID } from "node:crypto";
 import type { PermissionSelection, PermissionSyncMessage, WrapperPermissionLifecycleMessage } from "@kaoiro/protocol";
 import { resolve } from "node:path";
@@ -193,7 +195,8 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
           await hostReady;
           await host!.send(text, attachments);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          if (error instanceof PermissionSyncTimeoutError) return;
           if (attachments?.length) controlFailure("attachment input");
           else turnFailure();
         });
@@ -248,7 +251,8 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
               [id],
               token,
             );
-          } catch {
+          } catch (error) {
+            if (error instanceof PermissionSyncTimeoutError) return;
             for (const notice of interAgent.resolveTurnEnd(
               token,
               [id],
@@ -328,6 +332,14 @@ export async function runGrokCli(dependencies: GrokCliDependencies = {}) {
           error?: { detail: string; reason?: string };
         }) => {
           question.close();
+          if (error?.reason === "permission_sync_timeout") {
+            retirePermissionSyncInput({
+              envelopes: deliveries.get(turnToken) ?? [],
+              retire: envelopes => link?.retireInterAgentDeliveries(envelopes),
+              clearInjection: () => { interAgent.resolveTurnEnd(turnToken, conversationIds); },
+            });
+            return;
+          }
           for (const notice of interAgent.resolveTurnEnd(
             turnToken,
             conversationIds,

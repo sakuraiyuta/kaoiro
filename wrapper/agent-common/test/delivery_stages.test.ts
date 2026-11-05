@@ -461,3 +461,15 @@ describe("DeliveryStageReporter", () => {
     ]);
   });
 });
+
+it("retires exact local tracking without a stage and reclaims capacity while retaining its active sibling", () => {
+  const send = vi.fn(), overflow = vi.fn(), active = envelope(1);
+  const retired = Array.from({length:511}, (_, i) => envelope(i + 2));
+  const reporter = new DeliveryStageReporter({send,identity:()=>({incarnation:"i",generation:"g"}),
+    turns:{deliveryEnvelopesForTurn: token => token === "active" ? [active] : retired},onOverflow:overflow});
+  reporter.submitted("active","prompt_hook");for (const item of retired) reporter.queued(item);
+  send.mockClear();reporter.retireEnvelopes([...retired,envelope(5000)]);expect(send).not.toHaveBeenCalled();
+  for (let i=513;i<1024;i++) reporter.queued(envelope(i));expect(overflow).not.toHaveBeenCalled();
+  reporter.settled("active");expect(send).toHaveBeenCalledWith(expect.objectContaining({delivery_seq:1,stage:"settled"}));
+  send.mockClear();reporter.settled("retired");expect(send).not.toHaveBeenCalled();
+});

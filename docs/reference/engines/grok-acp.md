@@ -582,3 +582,6 @@ Unexpected ACP closure fails the host and closes its owned child, allowing
 the runner to recover the peer. Close aborts ToolHost handlers, closes ACP and stdin, sends SIGTERM to the
 owned process group and escalates after 3000 ms, below the runner's 5000 ms
 reset grace. Process-signal tests run in an isolated namespace.
+
+For permission synchronization deadlines and failed-input recovery, see
+[permission state](../protocol/permission-state.md#synchronization-failure-visibility).
