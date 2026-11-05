@@ -4049,6 +4049,14 @@ describe("permission sync deadlines and disconnected errors", () => {
     } finally { link.close();vi.useRealTimers(); }
   });
 
+  it("rejects an existing waiter and removes its timer on full close", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});
+    const link = setup(), waiting = link.waitForPermissionSync();
+    const rejection = expect(waiting).rejects.toThrow("permission_sync_closed");
+    try { link.close();await rejection;expect(vi.getTimerCount()).toBe(0); }
+    finally { link.close();vi.useRealTimers(); }
+  });
+
   it("rearms an early timer callback against the original monotonic deadline", async () => {
     vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date"]});
     const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
