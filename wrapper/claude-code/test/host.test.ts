@@ -10452,7 +10452,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
 
 describe("reserved resume receipt", () => {
   type Scenario = { host: AgentHost; note: SDKUserMessage; input: AsyncIterator<SDKUserMessage>;
-    hook: (id: string, text?: string, session?: string, agentId?: string) => Promise<unknown> };
+    hook: (id: string, text?: string, session?: string, agentId?: string, event?: string) => Promise<unknown> };
   async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}) {
     const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [];
     let host!: AgentHost;
@@ -10470,8 +10470,8 @@ describe("reserved resume receipt", () => {
         expect(note.priority).toBe("later");
         expect(note.message.content).toContain("[kaoiro-resume:");
         expect(host.activeInterAgentTurnToken()).toBeNull();
-        const hook = (id: string, text = note.message.content as string, session = "s", agentId?: string) =>
-          options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({ hook_event_name: "UserPromptSubmit",
+        const hook = (id: string, text = note.message.content as string, session = "s", agentId?: string, event = "UserPromptSubmit") =>
+          options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({ hook_event_name: event,
             session_id: session, prompt_id: id, prompt: text, ...(agentId ? { agent_id: agentId } : {}) } as never, undefined, { signal: new AbortController().signal });
         yield* script({ host, note, input, hook });
       })())),
@@ -10479,9 +10479,18 @@ describe("reserved resume receipt", () => {
     host.reserveResume("continue exactly once\nsecond line");
     try { await host.run("/compact"); } finally { host.close(); }
     expect(decisions).toEqual([]);
-    return { host, logs: JSON.stringify(logs), starts, ends, events: logs.flatMap(e => {
+    const events = logs.flatMap(e => {
       try { return [JSON.parse((e.payload as { text: string }).text)]; } catch { return []; }
-    }) };
+    });
+    const pending = events.filter(e => e.event === "resume_pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ submitted: true, receipt_id: expect.stringMatching(/^\[kaoiro-resume:/),
+      turn_token: expect.any(String), generation: expect.any(String), elapsed_ms: expect.any(Number), total_limit_ms: host.resumeReceiptMaxWaitMs });
+    for (const event of events.filter(e => e.receipt_id === pending[0].receipt_id)) {
+      expect(event.turn_token).toBe(pending[0].turn_token);
+      expect(event.generation).toBe(pending[0].generation);
+    }
+    return { host, logs: JSON.stringify(logs), starts, ends, events };
   }
 
   it.each([false, true])("keeps a pending note across foreign roots (native=%s) and admits only its own hook", async nativeContinuations => {
@@ -10648,9 +10657,9 @@ describe("reserved resume receipt", () => {
     expect(host.resumeReceiptMaxWaitMs).toBe(value); host.close();
   });
 
-  it("does not admit a subagent hook as the resume root", async () => {
+  it.each(["subagent", "wrong-event"])("does not admit a %s hook as the resume root", async kind => {
     const r = await exercise(async function* ({ host, hook }) {
-      await hook("subagent", undefined, undefined, "child");
+      await hook("subagent", undefined, undefined, kind === "subagent" ? "child" : undefined, kind === "wrong-event" ? "PreToolUse" : undefined);
       expect(host.hasPendingPushedReceipt()).toBe(true);
       expect(host.activeInterAgentTurnToken()).toBeNull();
       await hook("note"); yield result("success");
