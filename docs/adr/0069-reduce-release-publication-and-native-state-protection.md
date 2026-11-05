@@ -135,6 +135,6 @@ and Unit B ([`430e41a3`](https://github.com/sakuraiyuta/kaoiro/commit/430e41a3cc
 landed in production release
 [v2026.11.05.1](../release/v2026.11.05.1.md). Unit B's behavior change is in
 [`fa35ebd5`](https://github.com/sakuraiyuta/kaoiro/commit/fa35ebd59272ced39c7b8bf166965d28fe99e98a):
-it retired the exhaustive branch table and class-specific advice. For a
-refused Codex native update, the helper prints one safety instruction and,
-when it can identify the record, that record's `next` lines.
+it retired the exhaustive branch table and class-specific advice. A refusal
+during a Codex native state update prints one safety instruction; when the
+helper identifies the record, it also prints that record's `next` guidance.
