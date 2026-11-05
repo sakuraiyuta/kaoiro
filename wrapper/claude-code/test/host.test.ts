@@ -10463,7 +10463,7 @@ describe("reserved resume receipt", () => {
   type Scenario = { host: AgentHost; note: SDKUserMessage; input: AsyncIterator<SDKUserMessage>;
     replaceQuery: () => Promise<void>;
     hook: (id: string, text?: string, session?: string, agentId?: string, event?: string) => Promise<unknown> };
-  async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}, duringCompact?: (host: AgentHost) => Promise<unknown>) {
+  async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}, duringCompact?: (host: AgentHost) => Promise<unknown>, afterCompact?: (host: AgentHost) => Promise<unknown>) {
     const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [], admissions: string[] = [];
     let host!: AgentHost, queries = 0, secondRun: Promise<void> | undefined;
     const replacement = deferred(), replacementReady = deferred();
@@ -10480,6 +10480,7 @@ describe("reserved resume receipt", () => {
         await duringCompact?.(host);
         yield msg({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 100 } });
         yield result("success");
+        await afterCompact?.(host);
         const note = (await input.next()).value!;
         expect(note.priority).toBe("later");
         expect(note.message.content).toContain("[kaoiro-resume:");
@@ -10516,7 +10517,11 @@ describe("reserved resume receipt", () => {
     return { host, logs: JSON.stringify(logs), starts, ends, events, admissions };
   }
 
-  it.each([false, true])("prioritizes resume over peer and operator input queued during compact (scheduling=%s)", async scheduling => {
+  it.each([[false, true], [true, true], [true, false]])("prioritizes resume over peer and operator input (scheduling=%s, beforeBoundary=%s)", async (scheduling, beforeBoundary) => {
+    const queue = async (host: AgentHost) => {
+      await host.send("peer-X", undefined, [], "peer-X", { source: "peer" });
+      await host.send("operator-X", undefined, [], "operator-X", { source: "operator" });
+    };
     await exercise(async function* ({ host, input, hook }) {
       let ready=false; const next=input.next().then(x=>{ready=true;return x;});
       await hook("N", "native work"); yield result("success", { origin: { kind: "task-notification" } });
@@ -10525,10 +10530,7 @@ describe("reserved resume receipt", () => {
       yield result("success");
       expect((await input.next()).value!.message.content).toBe(scheduling ? "peer-X" : "operator-X");
       yield result("success"); expect(host.state).not.toBe("error");
-    }, { phase2RootScheduling:()=>scheduling }, async host => {
-      await host.send("peer-X", undefined, [], "peer-X", { source: "peer" });
-      await host.send("operator-X", undefined, [], "operator-X", { source: "operator" });
-    });
+    }, { phase2RootScheduling:()=>scheduling }, beforeBoundary ? queue : undefined, beforeBoundary ? undefined : queue);
   });
 
   it.each([false, true])("keeps a pending note across foreign roots (native=%s) and admits only its own hook", async nativeContinuations => {
