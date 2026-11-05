@@ -1,16 +1,19 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
-// Only external Phoenix/provider endpoints are fixtures. The built CLI creates
+// Only external Phoenix/provider endpoints are fixtures. The built runner launches the CLI with its generated config/environment. The CLI creates
 // its own ServerLink, controller, Host and pinned SDK/CLI without replacements.
-it.each(["operator", "peer"] as const)("fences %s delivery through the built CLI and native SDK on loopback", async source => {
+const cases = (["operator", "peer"] as const).flatMap(source =>
+  (["absent", "false", "persona-list", "ceiling-false"] as const).map(legacy => ({ source, legacy })));
+it.each(cases)("fences $source delivery with $legacy through the built runner, CLI and native SDK", async ({ source, legacy }) => {
+  const ceiling = legacy !== "ceiling-false";
   const root = await mkdtemp(join(tmpdir(), "fuji560-claude-native-"));
   const trace: Array<{ event: string; revision?: number; text?: string }> = [];
   const requests: any[] = [];
@@ -53,17 +56,33 @@ it.each(["operator", "peer"] as const)("fences %s delivery through the built CLI
   const wire = await phoenixLoopback(() => ({ delivery_policy: "v1", inter_agent_delivery_modes: "v1",
     inter_agent_reply_basis: "v1", inter_agent_delivery_incarnation: "i", work_control: "v1" }), (event, payload) => {
     if (event === "yield_claim") { claimCalls++; wire.push("delivery_policy", { version: "0", revision: 2, policy: "off" }); return { granted: true }; }
+    if (event === "envelope" && payload.type === "permission_request") {
+      wire.push("permission_decision", { request_id: (payload.payload as any).request_id, allow: true });
+    }
     if (event === "delivery_policy_applied") trace.push({ event: "policy_ack", revision: payload.revision as number });
     return {};
   });
-  const configPath = join(root, "config.json");
-  await writeFile(configPath, JSON.stringify({ agent_id: "fuji560.native.claude", persona: { id: "p", name: "P", sprite_set: "p" },
-    display_name: "P", server_url: wire.url, model: "claude-haiku-4-5-20251001", phase2_delivery: true,
-    allowed_tools: ["Bash"], permission_mode: "default" }));
+  const configPath = join(root, "runner.json");
+  const config = { host_id: "native", server_url: wire.url, cwd_allowlist: [root], capabilities: ["claude-code"],
+    codex: { auth_mode: "chatgpt" },
+    ...(legacy === "false" ? { claude_code: { phase2_delivery: false } } : {}),
+    in_flight_delivery: { "claude-code": { enabled: ceiling, default: true } } };
+  await writeFile(configPath, JSON.stringify(config));
+  const observerPath = join(root, "observer.mjs"), observationPath = join(root, "child.json");
+  await writeFile(observerPath, `import cp from 'node:child_process';import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
+const original=cp.spawn;cp.spawn=function(ex,args,options){
+ if(args?.[0]?.endsWith('/wrapper/claude-code/dist/cli.js')){
+  const c=JSON.parse(fs.readFileSync(args[1],'utf8'));
+  fs.writeFileSync(${JSON.stringify(observationPath)},JSON.stringify({ceiling:c.in_flight_delivery_enabled,legacy_key:Object.hasOwn(c,'phase2_delivery'),legacy_env:['KAOIRO_CLAUDE_PHASE2_DELIVERY','KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS'].filter(k=>Object.hasOwn(options.env,k))}));
+ }
+ return original.apply(this,arguments);
+};syncBuiltinESMExports();`);
   const env = { PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root, CLAUDE_CONFIG_DIR: join(root, "claude"),
     ANTHROPIC_API_KEY: "placeholder", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", LANG: "C.UTF-8" };
-  const cli = join(dirname(fileURLToPath(import.meta.url)), "../dist/cli.js");
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", LANG: "C.UTF-8", NODE_OPTIONS: `--import=${observerPath}`,
+    ...(legacy === "false" ? { KAOIRO_CLAUDE_PHASE2_DELIVERY: "0" } : {}),
+    ...(legacy === "persona-list" ? { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "different-persona" } : {}) };
+  const cli = fileURLToPath(new URL("../../../runner/dist/cli.js", import.meta.url));
   const child = spawn(process.execPath, [cli, configPath], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", chunk => { output += chunk; }); child.stderr.on("data", chunk => { output += chunk; });
@@ -85,12 +104,38 @@ it.each(["operator", "peer"] as const)("fences %s delivery through the built CLI
           ...(grant === "yield" ? { yield_token: "claim", work_id: "W", authority_epoch: 1 } : {}) } } });
   };
   try {
-    await check(() => expect(wire.joins).toBe(1));
-    expect(wire.received.find(item => item.event === "phx_join")?.payload.delivery_policy).toBe("v1");
+    await check(() => expect(wire.received.some(item => item.event === "register")).toBe(true));
+    const registration = wire.received.find(item => item.event === "register")!.payload;
+    expect((registration.engines as any[]).find(e => e.id === "claude-code").launch_delivery_policy).toMatchObject({ceiling,
+      mechanisms: {operator_early: ceiling ? "fold" : "none", inter_agent_early: ceiling ? "fold" : "none", inter_agent_yield: ceiling ? "tool_boundary" : "none"}});
+    wire.push("spawn", {version:"0",agent_id:"fuji560.native.claude",persona:{id:"p",name:"P",sprite_set:"p"},cwd:root,
+      engine:"claude-code",model:"claude-haiku-4-5-20251001",permission_mode:"default"});
+    await check(() => expect(wire.joins).toBe(2));
+    const declaration = wire.received.find(item => item.event === "phx_join" && item.payload.delivery_policy === "v1")!.payload;
+    expect(declaration.inter_agent_delivery_modes).toMatchObject({early:ceiling ? "fold" : "none",yield:ceiling ? "tool_boundary" : "none"});
+    expect(JSON.parse(await readFile(observationPath,"utf8"))).toEqual({ceiling,legacy_key:false,legacy_env:[]});
     await ack(1); wire.push("persona_prompt", { version: "0", prompt: "Native policy verification." });
     await check(() => expect(wire.received.some(item => item.event === "envelope" && item.payload.type === "state_change")).toBe(true));
     input(1, "BASE-NATIVE", "normal");
     await check(() => expect(held).toBeDefined());
+    if (!ceiling) {
+      input(2, "ON-NATIVE", "early"); input(3, "OFF-NATIVE", "yield");
+      await check(() => expect(source === "operator" ? output.includes("instruction: OFF-NATIVE") : wire.received.some(item => item.event === "delivery_stage" && item.payload.delivery_seq === 3)).toBe(true));
+      held!.writeHead(200); held!.end("one released"); held=undefined;
+      await check(() => expect(toolsIssued === 2 && held !== undefined).toBe(true));
+      held!.writeHead(200); held!.end("two released"); held=undefined;
+      await check(() => expect(requests.some(item => JSON.stringify(item.messages).includes("OFF-NATIVE"))).toBe(true));
+      await check(() => expect(wire.received.filter(item => item.event === "envelope" && item.payload.type === "result").length).toBeGreaterThanOrEqual(2));
+      expect(accepted()).toHaveLength(0); expect(claimCalls).toBe(0);
+      const queuedInputs=requests.flatMap(item=>item.messages.filter((message:any)=>message.role==="user" && /ON-NATIVE|OFF-NATIVE/.test(JSON.stringify(message.content))));
+      expect(queuedInputs.length).toBeGreaterThan(0);
+      expect(queuedInputs.every((message:any)=>!JSON.stringify(message.content).includes("fold_id:"))).toBe(true);
+      for (const seq of source === "peer" ? [2,3] : []) {
+        const submitted=wire.received.filter(item=>item.event === "delivery_stage" && item.payload.delivery_seq===seq && item.payload.stage==="submitted");
+        expect(submitted).toHaveLength(1);expect(submitted[0]!.payload.handoff).toBe("prompt_hook");
+      }
+      return;
+    }
     input(2, "ON-NATIVE", "early");
     await check(() => expect(accepted()).toHaveLength(1));
     expect(accepted()[0]).toContain('"policy_revision":1');
@@ -121,7 +166,7 @@ it.each(["operator", "peer"] as const)("fences %s delivery through the built CLI
       expect(stages.find(item => item.payload.stage === "submitted")?.payload).toMatchObject({ mode: "normal", handoff: "prompt_hook" });
       expect(stages.filter(item => item.payload.yield_disposition)).toHaveLength(1);
     }
-    console.log(JSON.stringify({ native_policy: { engine: "claude", source, credentialed_turns: 0, trace, accepted: accepted() } }));
+    console.log(JSON.stringify({ native_policy: { engine: "claude", source, legacy, credentialed_turns: 0, trace, accepted: accepted() } }));
   } finally {
     held?.end("cleanup");
     if (child.exitCode === null) child.kill("SIGTERM");

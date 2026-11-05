@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EngineKind, LaunchDeliveryPolicyMetadata, RunnerRegister } from "@kaoiro/protocol";
 import { buildRegister, parseRunnerConfig } from "../src/config.js";
 import { changedFields } from "../src/config-diff.js";
+import generations from "../../protocol/fixtures/claude-delivery-generations.json" with { type: "json" };
 import { HOST_DELIVERY_ROWS } from "../src/behaviour-settings.js";
 import { buildLaunchDeliveryMetadata, createDeliverySnapshot, deliveryJsonBytes, preflightDeliveryRegister,
   registerSizeEstimate, retiredDeliveryWarnings, withoutRetiredDeliveryInputs } from "../src/delivery-settings.js";
@@ -41,7 +42,7 @@ describe("host delivery settings", () => {
     expect(changed.engines?.every(e => Object.values(e.launch_delivery_policy!.mechanisms).every(mode => mode === "none"))).toBe(true);
     expect(changedFields(base, { ...base, in_flight_delivery: { codex: { default: false } } })).toEqual(["in_flight_delivery"]);
   });
-  it("captures immutable inputs and projects complete exact Claude persona overrides, but none for the retired Codex list", () => {
+  it("captures immutable inputs and ignores both retired persona lists", () => {
     const config = parseRunnerConfig(raw);
     const env = { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "P,__proto__", KAOIRO_CODEX_OPERATOR_STEER_PERSONAS: "P,__proto__" };
     const snapshot = createDeliverySnapshot(config, env);
@@ -52,9 +53,8 @@ describe("host delivery settings", () => {
     expect(Object.isFrozen(snapshot)).toBe(true); expect(Object.isFrozen(snapshot.engines.codex)).toBe(true);
     expect(codex.mechanisms).toEqual({ ...none, operator_early: "steer", inter_agent_early: "steer" });
     expect(codex).not.toHaveProperty("persona_overrides");
-    expect(claude.mechanisms).toEqual(none);
-    expect(claude.persona_overrides).toEqual({ P: fold, ["__proto__"]: fold });
-    expect(claude.persona_overrides).not.toHaveProperty("p");
+    expect(claude.mechanisms).toEqual(fold);
+    expect(claude).not.toHaveProperty("persona_overrides");
   });
   it("projects the Codex mechanisms from the ceiling and the backend alone", () => {
     const steer = { ...none, operator_early: "steer", inter_agent_early: "steer" };
@@ -114,12 +114,16 @@ describe("host delivery settings", () => {
     expect(warn).not.toHaveBeenCalled();
     const register = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined,
       createDeliverySnapshot(config, { KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: personas }));
-    expect(register.engines!.find(e => e.id === "claude-code")).not.toHaveProperty("launch_delivery_policy");
+    expect(register.engines!.find(e => e.id === "claude-code")).toHaveProperty("launch_delivery_policy");
+    expect(warn).not.toHaveBeenCalled();
+    const largeCatalog = Array.from({ length: 32 }, (_, i) => ({ value: `model-${i}`, display_name: "界".repeat(80) }));
+    const largeConfig = parseRunnerConfig(raw);
+    const pressured = buildRegister(largeConfig, undefined, "chatgpt", largeCatalog, undefined, largeCatalog, createDeliverySnapshot(largeConfig, {}), largeCatalog);
+    expect(pressured.engines!.every(e => e.launch_delivery_policy === undefined)).toBe(true);
     expect(register.engines!.find(e => e.id === "codex")).toHaveProperty("launch_delivery_policy");
     expect(register.in_flight_defaults?.["claude-code"]).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]![0])).toContain('"reason":"override_count"');
-    expect(String(warn.mock.calls[0]![0])).toContain('"size":4000');
+    expect(String(warn.mock.calls[0]![0])).toContain('"reason":"register_pressure"');
     expect(String(warn.mock.calls[0]![0])).not.toContain("private-persona");
   });
 });
@@ -154,12 +158,11 @@ describe("retired Codex operator-steer inputs in the runner", () => {
     expect(retiredDeliveryWarnings(file, { [flag]: "1", [list]: "P" }, new Set())).toEqual([]);
     expect(retiredDeliveryWarnings({ ...file, capabilities: ["claude-code", "codex"] }, { [flag]: "1" }, new Set())).toHaveLength(2);
   });
-  it("removes exactly the two retired variables from a child environment", () => {
+  it("removes exactly the four retired variables from a child environment", () => {
     const base = { [flag]: "1", [list]: "P", KAOIRO_CLAUDE_PHASE2_DELIVERY: "1", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "P",
       KAOIRO_CODEX_APPROVAL_AXIS: "1", KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "P", PATH: "/bin" };
     const child = withoutRetiredDeliveryInputs(base);
-    expect(child).toEqual({ KAOIRO_CLAUDE_PHASE2_DELIVERY: "1", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "P",
-      KAOIRO_CODEX_APPROVAL_AXIS: "1", KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "P", PATH: "/bin" });
+    expect(child).toEqual({ KAOIRO_CODEX_APPROVAL_AXIS: "1", KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS: "P", PATH: "/bin" });
     expect(base[flag]).toBe("1");
   });
 });
@@ -168,4 +171,32 @@ it("resolves omitted Codex selection before publishing delivery metadata", () =>
   const snapshot = createDeliverySnapshot(parseRunnerConfig({ ...raw, codex: {} }), {});
   expect(snapshot.engines.codex.codexBackend).toBe("app-server");
   expect(buildLaunchDeliveryMetadata(snapshot, "codex").mechanisms).toMatchObject({ operator_early: "steer", inter_agent_early: "steer" });
+});
+
+it("warns only on Claude hosts and never relays a retired Claude key", () => {
+  const flag = "KAOIRO_CLAUDE_PHASE2_DELIVERY", list = "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS";
+  const file = parseRunnerConfig({ ...raw, capabilities: ["codex"], claude_code: { phase2_delivery: false } });
+  expect(retiredDeliveryWarnings(file, { [flag]: "0", [list]: "private-sentinel" }, new Set())).toEqual([]);
+  file.capabilities = ["claude-code"];
+  const seen = new Set<string>();
+  const lines = retiredDeliveryWarnings(file, { [flag]: "0", [list]: "private-sentinel" }, seen);
+  expect(lines).toHaveLength(3);
+  expect(lines.join("")).not.toContain("private-sentinel");
+  expect(lines.join("")).toContain('"claude_code.phase2_delivery"');
+  expect(retiredDeliveryWarnings(file, { [flag]: "1", [list]: "other" }, seen)).toEqual([]);
+});
+
+it("keeps runner projection independent from the measured W1 declaration in mixed generations", () => {
+  const env={KAOIRO_CLAUDE_PHASE2_DELIVERY:"0",KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS:"other"};
+  const file=parseRunnerConfig({...raw,claude_code:{phase2_delivery:false}});
+  const metadata=buildLaunchDeliveryMetadata(createDeliverySnapshot(file,env),"claude-code");
+  const stripped=withoutRetiredDeliveryInputs(env);
+  expect(stripped).toEqual({});
+  expect(metadata.mechanisms.inter_agent_early).toBe("fold");
+  // The W1 parent measurement covers the absent inputs an R2 child receives.
+  expect(generations.w1.absent.inter_agent_delivery_modes.early).toBe("none");
+  // R1's resolver with false/excluding inputs projects none at cc585534.
+  const r1Projection={...none};
+  expect(r1Projection.inter_agent_early).not.toBe(metadata.mechanisms.inter_agent_early);
+  expect(generations.w1.false.inter_agent_delivery_modes.early).toBe("none");
 });

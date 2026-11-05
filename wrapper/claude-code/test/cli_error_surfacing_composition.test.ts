@@ -66,7 +66,7 @@ function captureWrites(stream: NodeJS.WriteStream): {
 describe("Claude CLI error surfacing — production sink negative control (issue #287, ふじ2 round2 M3)", () => {
   it("token 風の raw SDK text は process.stdout/stderr にも link.send の wire payload にも現れない", async () => {
     const sent: Envelope[] = [];
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {},
       currentSessionId: () => null,
       send: (envelope: Envelope) => {

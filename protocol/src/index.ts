@@ -231,7 +231,7 @@ export interface WrapperConfig {
   operator_steer?: boolean;
   /** Global opt-in for the Codex approval axis. Same rule as operator_steer. */
   approval_axis?: boolean;
-  /** Global opt-in for Claude phase-2 delivery. Same rule as operator_steer. */
+  /** Retired: recognized for direct-launch warnings, ignored for delivery. */
   phase2_delivery?: boolean;
   /** Claude phase-2 server claim wait. Omitted defaults to 2,000 ms. */
   yield_claim_timeout_ms?: number;

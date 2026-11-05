@@ -25,7 +25,7 @@ async function compose() {
   const requests: { request: unknown; options: unknown }[] = [];
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
-  const link = {
+  const link = { deliveryModes: () => undefined,
     close: () => {},
     send: () => {},
     currentSessionId: () => null,
@@ -35,7 +35,7 @@ async function compose() {
       return { outcome: "accepted", requestId: "rs-1" };
     },
   };
-  const host = {
+  const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
     state: "idle",
     statusExtSnapshot: () => ({}),
     run: async () => {},

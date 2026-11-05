@@ -62,11 +62,11 @@ describe("native continuation startup selection (issue #426)", () => {
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
-          return { close: () => {}, currentSessionId: () => null, send: () => {} } as never;
+          return { deliveryModes: () => undefined, close: () => {}, currentSessionId: () => null, send: () => {} } as never;
         },
         createHost: (_cfg, options) => {
           hostOptions = options;
-          return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never;
+          return { canPushLiveInput: () => false, canFoldLiveInput: () => false, state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never;
         },
       });
       expect(hostOptions?.nativeContinuations).toBe(on);

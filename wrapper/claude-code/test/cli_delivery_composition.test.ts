@@ -46,7 +46,7 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
-  it.each(["flag off", "no mode echo"] as const)("keeps legacy peer root scheduling when %s", async scenario => {
+  it.each(["ceiling off", "no mode echo"] as const)("keeps legacy peer root scheduling when %s", async scenario => {
     if (scenario === "no mode echo") vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "1");
     else vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY", "0");
     let linkOptions!: Record<string, any>;
@@ -58,7 +58,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>(resolve => { finish = resolve; });
     const running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ ...config }),
+      loadConfig: () => ({ ...config, ...(scenario === "ceiling off" ? { in_flight_delivery_enabled: false } : {}) }),
       createServerLink: (_url, _id, options) => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
@@ -73,7 +73,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_cfg, options) => {
         hostOptions = options;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { start(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], _token: string, policy?: { urgent?: boolean }) => {
@@ -741,7 +741,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           reportDisconnectIntent: async () => true,
         } as never;
       },
-      createHost: () => ({
+      createHost: () => ({ canPushLiveInput: () => false,
         state: "idle", statusExtSnapshot: () => ({}),
         run: async () => { started(); await finished; },
         send: async (text: string, _attachments: unknown, _cids: readonly string[], _token: string,
@@ -778,7 +778,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
           send: () => {}, close: () => {}, currentSessionId: () => null,
           acknowledgeInterAgentDelivery: () => {}, retireInterAgentDeliveries: () => true,
@@ -787,7 +787,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_cfg, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "error", statusExtSnapshot: () => ({}),
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
@@ -818,7 +818,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
           send: (envelope: Envelope) => { if (envelope.type === "state_change") states.push(envelope.state); },
           close: () => {}, currentSessionId: () => null,
@@ -869,7 +869,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
           send: () => {}, close: () => {}, currentSessionId: () => null,
           acknowledgeInterAgentDelivery: () => {},
@@ -879,7 +879,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
@@ -930,7 +930,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
           acknowledgeInterAgentDelivery: () => {},
           send: () => {}, close: () => {}, currentSessionId: () => null,
@@ -939,7 +939,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { started(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
@@ -978,7 +978,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           options.onReplyBasisMode!("v1");
           options.onPersonaPrompt?.("system prompt");
         });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
           send: () => {},
           close: () => {}, currentSessionId: () => null,
@@ -987,7 +987,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return { state: "idle", statusExtSnapshot: () => ({}), run: async () => { started(); await finished; } } as never;
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false, state: "idle", statusExtSnapshot: () => ({}), run: async () => { started(); await finished; } } as never;
       },
     });
     try {
@@ -1018,7 +1018,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const finished = new Promise<void>((resolve) => { finishHost = resolve; });
     let started!: () => void;
     const ready = new Promise<void>((resolve) => { started = resolve; });
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle",
       statusExtSnapshot: () => ({}),
       activeInterAgentTurnToken: () => firstTurnToken || null,
@@ -1038,7 +1038,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
           retireInterAgentDeliveries: retire,
           sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
@@ -1122,7 +1122,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
             linkOptions.onInterAgentDeliveryStatus({ issued_seq: 0, acked_seq: 0 });
             linkOptions.onPersonaPrompt("system prompt");
           });
-          return {
+          return { deliveryModes: () => undefined,
             acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
             close: () => {}, currentSessionId: () => null, setSessionId: () => {}, send: () => {},
             reportSessionLifecycle: () => {},
@@ -1191,7 +1191,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         linkOptions = options as unknown as Record<string, any>;
         options.deliveryPolicy?.acceptJoin({}, options.deliveryPolicy.beginJoin());
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
-        return {
+        return { deliveryModes: () => undefined,
           deliveryIncarnation: () => "server-incarnation",
           deliveryGeneration: () => "wrapper-generation",
           reportDeliveryStage: (report: Record<string, unknown>) => reports.push(report),
@@ -1201,7 +1201,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { startHost(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
@@ -1216,7 +1216,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     });
     try {
       await ready;
-      expect(linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "none", yield: "none", stage_reports: true });
+      expect(linkOptions.interAgentDeliveryModes).toEqual({ version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true });
       await linkOptions.onInterAgentMessage(inboundEnvelope(41));
       await vi.waitFor(() => expect(reports.map(report => report.stage)).toContain("submitted"));
       expect(beforeHookStages).toEqual(["queued"]);
@@ -1252,7 +1252,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       loadConfig: () => ({ ...config, server_url: wire.url }),
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { startHost(); await finished; },
           send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
@@ -1270,7 +1270,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       await vi.waitFor(() => expect(wire.joins).toBe(1));
       expect(wire.received.find(item => item.event === "phx_join")?.payload).toMatchObject({
         inter_agent_reply_basis: "v1",
-        inter_agent_delivery_modes: { version: "v1", early: "none", yield: "none", stage_reports: true },
+        inter_agent_delivery_modes: { version: "v1", early: "fold", yield: "tool_boundary", stage_reports: true },
         work_control: "v1",
       });
       wire.push("persona_prompt", { prompt: "system prompt" });
@@ -1309,7 +1309,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "idle", statusExtSnapshot: () => ({}),
           activeInterAgentTurnToken: () => "waiter-turn",
           run: async () => { startHost(); await finished; },
@@ -1378,7 +1378,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
           options.onReplyBasisMode!("v1");
           options.onPersonaPrompt!("system prompt");
         });
-        return {
+        return { deliveryModes: () => undefined,
           sendInterAgent: async (envelope: Envelope) =>
             envelope.payload.kind === "done" ? doneAcceptance : { kind: "accepted", stamp: null },
           send: () => {}, close: () => {}, currentSessionId: () => null,
@@ -1393,7 +1393,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
       createHost: (_config, options) => {
         hostOptions = options as unknown as Record<string, any>;
-        return {
+        return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
           state: "tool_running", statusExtSnapshot: () => ({}),
           activeInterAgentTurnToken: () => "identity-turn",
           run: async () => { startHost(); await finished; },
@@ -1438,7 +1438,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
 
-    const link = {
+    const link = { deliveryModes: () => undefined,
       acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
       close: () => {},
       currentSessionId: () => null,
@@ -1453,7 +1453,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const ready = new Promise<void>((resolve) => { startHost = resolve; });
     const finished = new Promise<void>((resolve) => { finishHost = resolve; });
     let running: Promise<void> | undefined;
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle",
       statusExtSnapshot: () => ({}),
       run: async () => { startHost(); await finished; },
