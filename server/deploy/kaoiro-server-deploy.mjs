@@ -422,7 +422,8 @@ function readRollbackCandidate(bin, containerId, identity, volumeId) {
       mount === null ||
       typeof mount !== "object" ||
       typeof mount.Type !== "string" ||
-      typeof mount.Name !== "string"
+      mount.Type === "" ||
+      (mount.Type === "volume" && (typeof mount.Name !== "string" || mount.Name === ""))
     ) {
       fail(`rollback candidate ${containerId} has malformed Docker mount metadata — refusing before storage mutation`);
     }

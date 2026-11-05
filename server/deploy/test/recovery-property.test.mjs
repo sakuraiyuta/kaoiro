@@ -327,6 +327,89 @@ function assertDestructive(world, preDeploy) {
 }
 
 const UPDATE_APPROVED = ["--maintenance-approved"];
+
+test("recovery property: compose and container inspection agree on the volume and bind mounts", (t) => {
+  const world = makeWorld(t, { overrideMount: true });
+  const check = () => {
+    const config = world.compose("config", "--format", "json");
+    assert.equal(config.status, 0, config.stderr);
+    const plan = JSON.parse(config.stdout);
+    const inspect = world.exec(["node", join(world.root, "bin", "docker"), "inspect", world.serviceContainer().id, "--format", "{{json .Mounts}}"]);
+    assert.equal(inspect.status, 0, inspect.stderr);
+    const mounts = JSON.parse(inspect.stdout);
+    for (const entry of plan.services.kaoiro.volumes) {
+      const actual = mounts.find((mount) => mount.Destination === entry.target);
+      assert.ok(actual, entry.target);
+      assert.equal(actual.Type, entry.type);
+      if (entry.type === "volume") assert.equal(actual.Name, plan.volumes[entry.source].name);
+      else {
+        assert.equal(actual.Source, entry.source);
+        assert.equal(actual.RW, !entry.read_only);
+        assert.equal(Object.hasOwn(actual, "Name"), false);
+      }
+    }
+    assert.equal(mounts.length, plan.services.kaoiro.volumes.length);
+  };
+  check();
+  const result = world.update(...UPDATE_APPROVED);
+  assert.equal(result.status, 0, result.stderr);
+  check();
+});
+
+for (const [name, mount] of [
+  ["null mount", null],
+  ["primitive mount", 7],
+  ["missing type", { Name: "other" }],
+  ["non-string type", { Type: 7, Name: "other" }],
+  ["empty type", { Type: "", Name: "other" }],
+  ["missing volume name", { Type: "volume" }],
+  ["non-string volume name", { Type: "volume", Name: 7 }],
+  ["empty volume name", { Type: "volume", Name: "" }],
+]) {
+  test(`recovery property: malformed ${name} refuses before mutation`, (t) => {
+    const world = makeWorld(t);
+    const update = world.update(...UPDATE_APPROVED);
+    assert.equal(update.status, 0, update.stderr);
+    world.edit((s) => { s.containers.find((c) => c.service === "kaoiro").mounts = [mount]; });
+    const before = digestDir(world.volumeDir);
+    const phase = world.journal().phase;
+    const calls = world.calls();
+    const rollback = world.cliRun("rollback", "--transaction", world.txId(), "--confirm-restore", "--fleet-stopped");
+    assert.notEqual(rollback.status, 0);
+    assert.match(rollback.stderr, /malformed Docker mount metadata/);
+    const added = world.state().calls.slice(calls);
+    assert.ok(!added.some((call) => call.startsWith("stop ") || call.includes("rollback-forensic.tar.gz") || call.includes("find /data -mindepth 1 -maxdepth 1 -exec rm")));
+    assert.equal(world.journal().phase, phase);
+    assert.equal(digestDir(world.volumeDir), before);
+  });
+}
+
+test("recovery property: foreign running volume consumer with a nameless bind refuses before mutation", (t) => {
+  const world = makeWorld(t);
+  const update = world.update(...UPDATE_APPROVED);
+  assert.equal(update.status, 0, update.stderr);
+  const foreignId = "0".repeat(63) + "1";
+  const ownId = world.serviceContainer().id;
+  assert.ok(foreignId < ownId);
+  world.edit((s) => s.containers.push({ id: foreignId, name: "foreign", image: s.containers[0].image,
+    status: "running", service: "other", labels: { "com.docker.compose.project": "other" }, mounts: [
+      { Type: "volume", Name: s.volume.name, Destination: "/data" },
+      { Type: "bind", Source: "/srv/other", Destination: "/other", RW: false },
+    ] }));
+  const before = digestDir(world.volumeDir);
+  const phase = world.journal().phase;
+  const calls = world.calls();
+  const rollback = world.cliRun("rollback", "--transaction", world.txId(), "--confirm-restore", "--fleet-stopped");
+  assert.notEqual(rollback.status, 0);
+  assert.match(rollback.stderr, /does not belong to/);
+  const added = world.state().calls.slice(calls);
+  assert.ok(added.some((call) => call.startsWith(`inspect ${foreignId} `)));
+  assert.ok(!added.some((call) => call.startsWith(`inspect ${ownId} `)));
+  assert.ok(!added.some((call) => call.startsWith("stop ") || call.includes("rollback-forensic.tar.gz") || call.includes("find /data -mindepth 1 -maxdepth 1 -exec rm")));
+  assert.equal(world.journal().phase, phase);
+  assert.equal(digestDir(world.volumeDir), before);
+});
+
 // A failure after `compose build` moved `latest`, whose own restore also
 // fails: the residue a later rollback or resume must cope with.
 const LATEST_LEFT_ON_TARGET = [
