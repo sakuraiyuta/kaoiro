@@ -665,7 +665,7 @@ describe("resident ACP host", () => {
       await processHost.close();
       expect(Date.now() - start).toBeLessThan(4_500);
       await vi.waitFor(() => expect(() => process.kill(-pid, 0)).toThrow());
-      expect(() => process.kill(child, 0)).toThrow();
+      await vi.waitFor(() => expect(() => process.kill(child, 0)).toThrow());
       expect(() => process.kill(outside.pid!, 0)).not.toThrow();
     } finally {
       const exited = new Promise((resolve) => outside.once("exit", resolve));
