@@ -86,7 +86,9 @@ const original=cp.spawn;cp.spawn=function(ex,args,options){
   const child = spawn(process.execPath, [cli, configPath], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", chunk => { output += chunk; }); child.stderr.on("data", chunk => { output += chunk; });
-  const exit = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
+  // The runner exits before its wrapper; inherited stdio stays open while
+  // the wrapper finishes native CLI shutdown and file writes.
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   const check = async (assertion: () => void) => vi.waitFor(() => {
     expect(child.exitCode, output).toBeNull(); assertion();
   }, { timeout: 25_000, interval: 20 });
@@ -170,7 +172,7 @@ const original=cp.spawn;cp.spawn=function(ex,args,options){
   } finally {
     held?.end("cleanup");
     if (child.exitCode === null) child.kill("SIGTERM");
-    await exit; await wire.close(); provider.closeAllConnections();
+    await closed; await wire.close(); provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve())); await rm(root, { recursive: true, force: true });
   }
 }, 45_000);
