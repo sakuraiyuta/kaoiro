@@ -215,8 +215,11 @@ for candidate sources and notice timing.
   `agy -p /usage --output-format json` →
   `command.data.groups[].buckets[]` with bucket ids in `gemini-*` and `3p-*`
   families and `window` values `5h` / `weekly`; the wrapper reads only the exact
-  ids `gemini-5h`, `gemini-weekly`, `3p-5h` and `3p-weekly` and ignores
-  model-specific buckets such as `gemini-argon-wtu-weekly`; `-p /model` → current model/effort;
+  ids `gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`, and
+  `gemini-argon-wtu-weekly`, selected by the committed model's quota group.
+  The specific `gemini-4-argon-` prefix selects weekly-only Argon; other
+  Gemini and Claude/GPT prefix mappings remain unchanged. Group display
+  names/descriptions are not runtime routing input; `-p /model` → current model/effort;
   `-p /permissions`, `-p /hooks`, `-p /help`.
 - **Wrapper rate-limit state:** a terminal `result.error` containing a
   `RESOURCE_EXHAUSTED` / HTTP 429 marker with a positive parsed reset delay
@@ -229,7 +232,8 @@ for candidate sources and notice timing.
   overlay and immediately settles the peer turn as `rate_limit`. If the
   attempted and committed model both have the same classified family, one
   same-family `/usage` confirmation may later clear only this terminal-derived
-  overlay when both expected buckets are present and positive. That state
+  overlay when all expected buckets are present and positive (weekly only for
+  Argon, both windows for Gemini and Claude/GPT). That state
   update does not rewrite the completed peer error. The measured sanitized
   stream and `/usage` response used by the host test are in
   [issue-393-terminal-stream.json](../../evidence/antigravity/issue-393-terminal-stream.json)
@@ -257,7 +261,12 @@ for candidate sources and notice timing.
   snapshot, an empty bucket, another family, or a positive-delay overlay cannot.
 - `/usage` snapshots are tied to the committed model family. A model change
   within the same family retains the snapshot; a family change or an
-  unclassified committed model invalidates it. A pending `setModel` does not
+  unclassified committed model invalidates it. Group changes also clear the
+  terminal overlay, pending confirmation and its floor timer, including a
+  CANCELED result that promotes the pending model. A failed cross-group
+  attempt still reports its quota error/reset delay but does not install a
+  new overlay or confirmation for the rolled-back current model.
+  A pending `setModel` does not
   change the family. Cache and 429 overlay are composed on every state publish;
   for an unclassified model, only the independent overlay can appear.
 - An agent with no configured model uses agy's default model but remains

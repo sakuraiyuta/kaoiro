@@ -90,6 +90,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 function makeHarness(options: {
+  model?: string;
   now?: () => string;
   usageProbeTimeoutMs?: number;
   usageProbeStopTimeoutMs?: number;
@@ -125,7 +126,7 @@ function makeHarness(options: {
     }
     return true;
   };
-  const cfg = config();
+  const cfg = config(options.model === undefined ? {} : { model: options.model });
   const host = createHarnessHost(cfg, {
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
@@ -263,7 +264,115 @@ const measuredGeminiLimits = {
   },
 };
 
+
+function threeGroupOutput(argonRemaining = 0.5): string {
+  const payload = JSON.parse(usageOutput("gemini"));
+  payload.command.data.groups.push(...JSON.parse(usageOutput("3p", 0.8, 0.9)).command.data.groups, {
+    name: "Gemini 4 Argon",
+    buckets: [{ id: "gemini-argon-wtu-weekly", window: "weekly", remaining_fraction: argonRemaining,
+      reset_time: "2026-10-04T12:00:00Z" }],
+  });
+  return JSON.stringify(payload);
+}
+
+const argonLimits = { seven_day: { utilization: 0.5, resets_at: 1791115200 } };
+
 describe("AntigravityHost usage probe state transitions", () => {
+  it("confirms Argon weekly independently of positive other groups", async () => {
+    const harness = makeHarness({ model: "gemini-4-argon-medium", now: () => "2026-10-03T10:00:00Z" });
+    try {
+      for (const remaining of [0.5, 0, 0.5, 0]) {
+        await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 0s" });
+        expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 0 });
+        harness.probes.at(-1)!.finish(threeGroupOutput(remaining));
+        await waitFor(() => statusRateLimits(harness)?.seven_day?.utilization === 1 - remaining);
+        expect(statusRateLimits(harness)).not.toHaveProperty("five_hour");
+      }
+    } finally { await harness.host.close(); }
+  });
+
+  it("reports the third Argon marker as stale only after two positive weekly confirmations", async () => {
+    const harness = makeHarness({ model: "gemini-4-argon-medium", now: () => "2026-10-03T10:00:00Z" });
+    try {
+      for (let i = 0; i < 2; i++) {
+        await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 0s" });
+        harness.probes.at(-1)!.finish(threeGroupOutput());
+        await waitFor(() => statusRateLimits(harness)?.seven_day?.utilization === 0.5);
+      }
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 0s" });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "api_error" });
+      expect(harness.probes).toHaveLength(2);
+    } finally { await harness.host.close(); }
+  });
+
+  it("keeps missing Argon usage absent and caps consecutive failed probes", async () => {
+    let nowMs = Date.parse("2026-10-03T10:00:00Z");
+    const harness = makeHarness({ model: "gemini-4-argon-medium", now: () => new Date(nowMs).toISOString() });
+    try {
+      for (let i = 0; i < 3; i++) {
+        harness.host.probeRateLimits();
+        expect(harness.probes).toHaveLength(i + 1);
+        harness.probes[i]!.finish(usageOutput("gemini"));
+        await waitFor(() => harness.warnings.length === i + 1);
+        expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
+        nowMs += USAGE_PROBE_INTERVAL_MS;
+      }
+      harness.host.probeRateLimits();
+      expect(harness.probes).toHaveLength(3);
+      expect(harness.warnings).toHaveLength(3);
+    } finally { await harness.host.close(); }
+  });
+
+  it.each(["gemini-4-argon-medium", "experimental-model"])("preserves immediate positive-delay errors for %s without usage", async (model) => {
+    const harness = makeHarness({ model, now: () => "2026-10-03T10:00:00Z" });
+    try {
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 151h" });
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 543600 });
+      expect(statusRateLimits(harness)).toEqual({ seven_day: { utilization: 1, status: "blocked", resets_at: 1791565200 } });
+      expect(harness.probes).toHaveLength(0);
+    } finally { await harness.host.close(); }
+  });
+
+  it("does not pause Gemini probes after a failed Argon switch with a positive delay", async () => {
+    let nowMs = Date.parse("2026-10-03T10:00:00Z");
+    const harness = makeHarness({ now: () => new Date(nowMs).toISOString() });
+    try {
+      await completeTurn(harness, { status: "SUCCESS" });
+      harness.probes[0]!.finish(usageOutput("gemini"));
+      await waitFor(() => statusRateLimits(harness) !== undefined);
+      nowMs += USAGE_PROBE_INTERVAL_MS;
+      await harness.host.setModel("gemini-4-argon-medium");
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 151h" });
+      expect(harness.host.statusSnapshot().model).toBe("gemini-2.5-pro");
+      expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 543600 });
+      expect(harness.probes).toHaveLength(2);
+      harness.probes[1]!.finish(usageOutput("gemini", 0.8, 0.5));
+      await waitFor(() => statusRateLimits(harness)?.seven_day?.utilization === 0.5);
+    } finally { await harness.host.close(); }
+  });
+
+  it.each([
+    ["gemini-2.5-pro", "gemini-4-argon-medium"],
+    ["gemini-4-argon-medium", "gemini-3.7-flash-medium"],
+    ["gemini-4-argon-medium", "gpt-5"],
+    ["gpt-5", "gemini-4-argon-medium"],
+    ["gemini-4-argon-medium", "experimental-model"],
+  ])("withdraws the old overlay on a CANCELED switch from %s to %s", async (model, next) => {
+    const harness = makeHarness({ model, now: () => "2026-10-03T10:00:00Z" });
+    try {
+      await completeTurn(harness, { status: "ERROR", error: "HTTP 429 Resets in 151h" });
+      await harness.host.setModel(next);
+      await completeTurn(harness, { status: "CANCELED" });
+      expect(harness.host.statusSnapshot()).not.toHaveProperty("rate_limits");
+      expect(harness.probes).toHaveLength(next === "experimental-model" ? 0 : 1);
+      if (next !== "experimental-model") {
+        harness.probes[0]!.finish(threeGroupOutput());
+        await waitFor(() => statusRateLimits(harness) !== undefined);
+        if (next.includes("argon")) expect(statusRateLimits(harness)).toEqual(argonLimits);
+      }
+    } finally { await harness.host.close(); }
+  });
+
   it("marks the shared probe environment without changing its parent", async () => {
     vi.stubEnv("KAOIRO_AGENT", undefined);
     vi.stubEnv("CODEX_HOME", "/fixture/state-home");
@@ -965,7 +1074,7 @@ if (args[0] === "models") {
     }
   });
 
-  it("keeps a rolled-back cross-family terminal 429 unconfirmed", async () => {
+  it("keeps a rolled-back cross-family terminal 429 out of the current snapshot", async () => {
     const harness = makeHarness({ now: () => "2026-10-03T10:00:00.000Z" });
     try {
       await completeTurn(harness, { status: "SUCCESS" });
@@ -980,10 +1089,7 @@ if (args[0] === "models") {
 
       expect(harness.host.statusSnapshot().model).toBe("gemini-2.5-pro");
       expect(harness.turnEndErrors.at(-1)).toEqual({ reason: "blocking_limit", rateLimitResetSeconds: 0 });
-      expect(harness.host.statusSnapshot().rate_limits).toEqual({
-        ...geminiLimits,
-        seven_day: { status: "blocked", utilization: 1, resets_at: 1791021600 },
-      });
+      expect(harness.host.statusSnapshot().rate_limits).toEqual(geminiLimits);
       expect(harness.probes).toHaveLength(1);
     } finally {
       await harness.host.close();

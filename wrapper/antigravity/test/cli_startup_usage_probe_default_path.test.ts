@@ -68,14 +68,14 @@ async function callWhoami(toolHost: ToolHost): Promise<Record<string, unknown>> 
 
 // Real spawn, real ServerLink over loopback, real host: nothing but the config
 // input is injected (createHost only keeps the options for the whoami tool).
-async function startup(usage: { stdout: string; code: number }, resume?: string, waitForWarning?: string) {
+async function startup(usage: { stdout: string; code: number }, resume?: string, waitForWarning?: string, model = "gemini-3.8-flash-high") {
   const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-startup-probe-"));
   const fake = writeFakeAgy(root, usage);
   const server = await phoenixLoopback(() => ({ permission_sync: false }));
   const persona = { id: "default", name: "Default", sprite_set: "default" };
   const config = {
     agent_id: "startup-probe.antigravity", display_name: "Probe", persona, server_url: server.url,
-    model: "gemini-3.8-flash-high", antigravity_cli_path: fake.path,
+    model, antigravity_cli_path: fake.path,
   };
   const stderr: string[] = [];
   const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
@@ -132,6 +132,19 @@ async function startup(usage: { stdout: string; code: number }, resume?: string,
 }
 
 describe("Antigravity startup usage probe through the default CLI path (issue #664)", () => {
+  it("publishes Argon weekly only through default startup and the whoami tool", async () => {
+    const payload = JSON.parse(USAGE_OK);
+    payload.command.data.groups.push({ buckets: [{ id: "gemini-argon-wtu-weekly", window: "weekly",
+      remaining_fraction: 0.5, reset_time: "2026-10-04T12:00:00Z" }] });
+    const { states, whoami, usageCalls } = await startup(
+      { stdout: JSON.stringify(payload), code: 0 }, "session-788", undefined, "gemini-4-argon-medium",
+    );
+    const expected = { seven_day: { utilization: 0.5, resets_at: 1791115200 } };
+    expect(usageCalls).toHaveLength(1);
+    expect(states.at(-1)?.ext?.rate_limits).toEqual(expected);
+    expect(whoami.rate_limits).toEqual(expected);
+  }, 15_000);
+
   it.each([["fresh", undefined], ["resumed", "session-664"]])(
     "%s idle start publishes both windows once, in state and in whoami",
     async (_name, resume) => {

@@ -58,6 +58,14 @@ function statRow(target: Element, label: string): Element | null {
 }
 
 describe("AgentCard stats (issue #183)", () => {
+  it("shows Argon weekly usage without borrowing a five-hour bar", async () => {
+    const target = await render({ engine: "antigravity", model: "gemini-4-argon-medium", rate_limits: {
+      seven_day: { utilization: 0.5, resets_at: Date.parse("2026-08-11T10:00:00Z") / 1000 },
+    } });
+    expect(statRow(target, "7day")?.textContent).toContain("50%");
+    expect(statRow(target, "5h")).toBeNull();
+  });
+
   it("ext が無ければ (viewer 相当) 追加行を一切描画しない", async () => {
     const target = await render(undefined);
     expect(target.querySelector(".stats")).toBeNull();

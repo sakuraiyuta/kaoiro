@@ -68,6 +68,7 @@ import {
   USAGE_PROBE_INTERVAL_MS,
   USAGE_PROBE_STOP_TIMEOUT_MS,
   modelToUsageFamily,
+  hasCompleteAgyUsageBuckets,
   parseAgyUsageOutput,
   startAgyUsageProbe,
   type AgyUsageFamily,
@@ -426,16 +427,12 @@ function correlatedToolName(topLevelName: unknown, nestedName: unknown): unknown
         : null;
 }
 
-function hasCompleteUsageBuckets(limits: AgyUsageRateLimits): boolean {
-  return limits.has("five_hour") && limits.has("seven_day");
-}
-
 function hasEmptyUsageBucket(limits: AgyUsageRateLimits): boolean {
   return [...limits.values()].some((limit) => limit.status === "blocked" || limit.utilization >= 1);
 }
 
-function hasOnlyPositiveUsageBuckets(limits: AgyUsageRateLimits): boolean {
-  return hasCompleteUsageBuckets(limits) && [...limits.values()].every(
+function hasOnlyPositiveUsageBuckets(limits: AgyUsageRateLimits, family: AgyUsageFamily): boolean {
+  return hasCompleteAgyUsageBuckets(limits, family) && [...limits.values()].every(
     (limit) => limit.status !== "blocked" && limit.utilization < 1,
   );
 }
@@ -1508,6 +1505,9 @@ export class AntigravityHost implements EngineAdapter {
           const currentFamily = this.#currentUsageFamily();
           const familyChanged = previousFamily !== currentFamily;
           if (familyChanged) {
+            this.#rateLimitOverlay = null;
+            this.#pendingTerminal429Confirmation = null;
+            this.#clearUsageProbeFloorTimer();
             this.#resetStaleTerminal429Count(currentFamily);
             this.#usageSnapshot = null;
             this.#usageProbeFailureFamily = currentFamily;
@@ -1533,7 +1533,12 @@ export class AntigravityHost implements EngineAdapter {
           const nowMs = Date.parse(this.#now());
           const overlayCreatedAtMs = Number.isFinite(nowMs) ? nowMs : Date.now();
           let terminalError: InterAgentErrorClassifyInput | undefined;
-          if (terminal429 && positiveResetDelay) {
+          if (terminal429 && attemptedFamily !== currentFamily) {
+            terminalError = {
+              reason: "blocking_limit",
+              ...(quota === null ? {} : { rateLimitResetSeconds: quota.resetDelaySeconds }),
+            };
+          } else if (terminal429 && positiveResetDelay) {
             this.#pendingTerminal429Confirmation = null;
             this.#clearUsageProbeFloorTimer();
             this.#rateLimitOverlay = {
@@ -2816,7 +2821,7 @@ export class AntigravityHost implements EngineAdapter {
     }
     this.#usageSnapshot = { family: probe.family, capturedAtMs, limits };
     this.#resetUsageProbeFailures(probe.family);
-    const complete = hasCompleteUsageBuckets(limits);
+    const complete = hasCompleteAgyUsageBuckets(limits, probe.family);
     if (sameFamily && complete && hasEmptyUsageBucket(limits)) {
       this.#resetStaleTerminal429Count(probe.family);
     }
@@ -2828,7 +2833,7 @@ export class AntigravityHost implements EngineAdapter {
       overlay.origin === "ambiguous_terminal_429" &&
       overlay.family === probe.family &&
       probe.startedAtMs >= overlay.createdAtMs;
-    if (postOverlayAmbiguousProbe && hasOnlyPositiveUsageBuckets(limits)) {
+    if (postOverlayAmbiguousProbe && hasOnlyPositiveUsageBuckets(limits, probe.family)) {
       if (this.#staleTerminal429Family !== probe.family) {
         this.#resetStaleTerminal429Count(probe.family);
       }

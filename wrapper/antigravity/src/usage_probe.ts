@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { signalTarget, type SignalTargetOperation } from "./subtree_termination.js";
 
-export type AgyUsageFamily = "gemini" | "3p";
+export type AgyUsageFamily = "gemini" | "3p" | "argon";
 export type AgyUsageWindow = "five_hour" | "seven_day";
 
 export type AgyUsageRateLimit = {
@@ -20,6 +20,7 @@ export const MAX_USAGE_PROBE_STDOUT_BYTES = 1024 * 1024;
 export function modelToUsageFamily(model: string | undefined): AgyUsageFamily | null {
   if (typeof model !== "string" || model.trim() === "") return null;
   const normalized = model.toLowerCase();
+  if (normalized.startsWith("gemini-4-argon-")) return "argon";
   if (normalized.startsWith("gemini-")) return "gemini";
   if (normalized.startsWith("claude-") || normalized.startsWith("gpt-")) return "3p";
   return null;
@@ -50,7 +51,14 @@ const KNOWN_USAGE_BUCKETS: Record<AgyUsageFamily, Record<string, { window: strin
     "3p-5h": { window: "5h", key: "five_hour" },
     "3p-weekly": { window: "weekly", key: "seven_day" },
   },
+  argon: {
+    "gemini-argon-wtu-weekly": { window: "weekly", key: "seven_day" },
+  },
 };
+
+export function hasCompleteAgyUsageBuckets(limits: AgyUsageRateLimits, family: AgyUsageFamily): boolean {
+  return Object.values(KNOWN_USAGE_BUCKETS[family]).every(({ key }) => limits.has(key));
+}
 
 /** Parses the measured `/usage` JSON and returns only the requested family. */
 export function parseAgyUsageOutput(
