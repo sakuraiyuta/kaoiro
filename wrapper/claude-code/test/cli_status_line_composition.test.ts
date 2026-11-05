@@ -28,14 +28,14 @@ async function compose() {
     agent_id: agentId,
     status_line: { text: "peer text", bytes: 9, updated_at: "t" },
   }));
-  const link = {
+  const link = { deliveryModes: () => undefined,
     close: () => {},
     currentSessionId: () => null,
     send: () => {},
     setStatusLine,
     readStatusLine,
   };
-  const host = {
+  const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
     state: "idle",
     statusExtSnapshot: () => ({}),
     statusSnapshot: () => ({ agent_id: config.agent_id, persona: config.persona, state: "idle" as const }),

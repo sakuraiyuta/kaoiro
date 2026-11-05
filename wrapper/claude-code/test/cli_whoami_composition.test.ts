@@ -20,7 +20,7 @@ const config: WrapperConfig = {
 describe("Claude CLI whoami composition (issue #254)", () => {
   it("announces fresh idle before starting the optional account probe", async () => {
     const order: string[] = [];
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {}, currentSessionId: () => null,
       send: (event: { type: string; ext?: Record<string, unknown> }) => {
         if (event.type === "state_change") {
@@ -29,7 +29,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
         }
       },
     };
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle", statusExtSnapshot: () => ({}),
       statusSnapshot: () => ({ agent_id: config.agent_id, persona: config.persona, state: "idle" as const }),
       probeRateLimits: () => { order.push("probe"); return Promise.resolve(); },
@@ -49,7 +49,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
 
   it("starts the isolated account probe during a resumed idle", async () => {
     const order: string[] = [];
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle", statusExtSnapshot: () => ({}),
       statusSnapshot: () => ({ agent_id: config.agent_id, persona: config.persona, state: "idle" as const }),
       probeRateLimits: () => { order.push("probe"); return Promise.resolve(); },
@@ -60,7 +60,7 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
-        return { close: () => {}, currentSessionId: () => null,
+        return { deliveryModes: () => undefined, close: () => {}, currentSessionId: () => null,
           send: () => order.push("idle"),
           setSessionId: (id: string) => order.push(`bind:${id}`),
         } as never;
@@ -75,12 +75,12 @@ describe("Claude CLI whoami composition (issue #254)", () => {
     const buildArtifact = JSON.parse(readFileSync(
       fileURLToPath(new URL("../dist/build-info.json", import.meta.url)), "utf8",
     )) as { revision: string; dirty: boolean; version: string; channel: "dev" | "release" };
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {},
       currentSessionId: () => null,
       send: () => {},
     };
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle",
       statusExtSnapshot: () => ({}),
       statusSnapshot: () => ({
@@ -125,12 +125,12 @@ describe("Claude CLI whoami composition (issue #254)", () => {
 
   it("actual composition passes the loaded build identity to ServerLink", async () => {
     let linkOptions!: Record<string, unknown>;
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {},
       currentSessionId: () => null,
       send: () => {},
     };
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle",
       statusExtSnapshot: () => ({}),
       statusSnapshot: () => ({
@@ -172,14 +172,14 @@ it("actual Claude CLI forwards the live join generation to the acceptance sink",
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _id, options) => {
       queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("system prompt"); });
-      return { send() {}, close() {}, currentSessionId: () => null,
+      return { deliveryModes: () => undefined, send() {}, close() {}, currentSessionId: () => null,
         replyBasisGeneration: () => generation,
         sendInterAgent: async (_envelope: unknown, bound?: number) => {
           seen.push(bound); return { kind: "accepted", stamp: null };
         },
       } as never;
     },
-    createHost: () => ({ state: "idle", statusExtSnapshot: () => ({}), run: async () => {} }) as never,
+    createHost: () => ({ canPushLiveInput: () => false, canFoldLiveInput: () => false, state: "idle", statusExtSnapshot: () => ({}), run: async () => {} }) as never,
     buildMcpServer: (actual, extras) => { interAgent = actual; return buildKaoiroMcpServer(actual, extras); },
   });
   interAgent.beginReplyInput("T");
@@ -195,11 +195,11 @@ it("whoami uses current directory names and never stale config across rename or 
   let handler!: NonNullable<ToolDescriptor["handler"]>;
   let name: string | undefined = "Original";
   const local = { ...config, display_name: "Stale config" };
-  const link = { close() {}, send() {}, currentSessionId: () => null,
+  const link = { deliveryModes: () => undefined, close() {}, send() {}, currentSessionId: () => null,
     reportDisconnectIntent: async () => true,
     requestSelfIdentity: async () => name === undefined ? null : { agent_id: config.agent_id, display_name: name },
   };
-  const host = { state: "idle", statusExtSnapshot: () => ({}),
+  const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false, state: "idle", statusExtSnapshot: () => ({}),
     statusSnapshot: () => ({ agent_id: config.agent_id, persona: config.persona, state: "idle" as const }),
     run: async () => {
       const read = async () => JSON.parse((await handler({})).content[0]!.text);

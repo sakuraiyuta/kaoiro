@@ -1,0 +1,33 @@
+{
+  "w1_parent": "cc58553495255f075b8bcc873fb095c576125a3d",
+  "w1_run": "fuji-cc58553-565w1-1105222814-cde0.e178444dfd5283d1",
+  "w1": {
+    "enabled": {
+      "delivery_policy": "v1",
+      "inter_agent_delivery_modes": {
+        "version": "v1",
+        "early": "fold",
+        "yield": "tool_boundary",
+        "stage_reports": true
+      }
+    },
+    "absent": {
+      "delivery_policy": "v1",
+      "inter_agent_delivery_modes": {
+        "version": "v1",
+        "early": "none",
+        "yield": "none",
+        "stage_reports": true
+      }
+    },
+    "false": {
+      "delivery_policy": "v1",
+      "inter_agent_delivery_modes": {
+        "version": "v1",
+        "early": "none",
+        "yield": "none",
+        "stage_reports": true
+      }
+    }
+  }
+}

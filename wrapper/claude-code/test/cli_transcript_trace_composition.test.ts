@@ -26,7 +26,7 @@ describe("Claude CLI transcript-trace composition (issue #352)", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
     try {
-      const link = {
+      const link = { deliveryModes: () => undefined,
         close: () => {},
         currentSessionId: () => null,
         send: () => {},
@@ -47,7 +47,7 @@ describe("Claude CLI transcript-trace composition (issue #352)", () => {
         },
         createHost: (_cfg, options) => {
           hostOptions = options as unknown as Record<string, any>;
-          return {
+          return { canPushLiveInput: () => false, canFoldLiveInput: () => false,
             state: "idle",
             statusExtSnapshot: () => ({}),
             run: async () => {

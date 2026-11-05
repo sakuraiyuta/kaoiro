@@ -131,6 +131,58 @@ defmodule KaoiroServerWeb.DeliveryPolicyTest do
 
   defp notification(id, "state_change"), do: state(id)
 
+  @claude_generations Path.expand(
+                        "../../../../protocol/fixtures/claude-delivery-generations.json",
+                        __DIR__
+                      )
+                      |> File.read!()
+                      |> Jason.decode!()
+
+  for {generation, supporting?, early} <- [
+        {"W2 ceiling true", true, "fold"},
+        {"W2 ceiling false", true, "none"},
+        {"W1 enabled", true,
+         @claude_generations["w1"]["enabled"]["inter_agent_delivery_modes"]["early"]},
+        {"W1 absent", true,
+         @claude_generations["w1"]["absent"]["inter_agent_delivery_modes"]["early"]},
+        {"W1 false", true,
+         @claude_generations["w1"]["false"]["inter_agent_delivery_modes"]["early"]},
+        {"W0", false, "fold"}
+      ] do
+    test "Claude generation matrix: #{generation}", %{id: id} do
+      params = %{
+        "inter_agent_delivery_modes" => %{
+          "version" => "v1",
+          "early" => unquote(early),
+          "yield" => "none",
+          "stage_reports" => true
+        }
+      }
+
+      params = if unquote(supporting?), do: Map.put(params, "delivery_policy", "v1"), else: params
+      {reply, socket} = wrapper(id, params)
+      assert Map.get(reply, "delivery_policy") == if(unquote(supporting?), do: "v1", else: nil)
+      operator = client(:operator)
+      @endpoint.subscribe("wrapper:" <> id)
+
+      if unquote(supporting?) do
+        instruction(operator, id, "early", "normal", "policy_unconfirmed")
+
+        assert_reply push(socket, "delivery_policy_applied", %{"version" => "0", "revision" => 1}),
+                     :ok
+      end
+
+      if unquote(early) == "fold" do
+        instruction(operator, id, "early", "early")
+      else
+        instruction(operator, id, "early", "normal", "unsupported_by_recipient")
+      end
+
+      assert_reply push(operator, "set_delivery_policy", request(id, "off", 1)), :ok
+      instruction(operator, id, "early", "normal", "recipient_policy_off")
+    end
+  end
+
   test "lobby declares policy controls and read is role-first, exact and side-effect free", %{
     id: id
   } do

@@ -98,7 +98,7 @@ describe.skipIf(process.env.KAOIRO_LIVE_CLAUDE !== "1")("Haiku via the installed
           options.onPersonaPrompt?.("Native model regression test");
           options.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
         });
-        return {
+        return { deliveryModes: () => undefined,
           send: (envelope: Envelope) => { sent.push(envelope); },
           close: () => {}, currentSessionId: () => null, setSessionId: () => {},
           reportSessionLifecycle: () => {}, acknowledgeInterAgentDelivery: () => {},

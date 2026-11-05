@@ -448,12 +448,12 @@ describe("issue #285 M3 — question twin and stream EOF", () => {
     const questionChanges: Array<string | null> = [];
     let hostOptions!: Record<string, any>;
 
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {},
       currentSessionId: () => null,
       send: (envelope: Envelope) => sent.push(envelope),
     };
-    const host = {
+    const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle",
       statusExtSnapshot: () => ({}),
       run: async () => {},

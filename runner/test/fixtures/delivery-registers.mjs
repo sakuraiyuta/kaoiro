@@ -13,7 +13,7 @@ function maximumMetadata() {
 }
 const config = parseRunnerConfig({ host_id: "delivery-integration", server_url: "ws://127.0.0.1/runner", cwd_allowlist: ["/tmp"],
   allowed_personas: ["ao"], capabilities: ids, codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" },
-  claude_code: { phase2_delivery: true }, in_flight_delivery: { codex: { default: false } } });
+  in_flight_delivery: { codex: { default: false } } });
 const snapshot = createDeliverySnapshot(config, {});
 const actual = buildRegister(config, undefined, "chatgpt", undefined, undefined, undefined, snapshot);
 const disabledConfig = { ...config, in_flight_delivery: { codex: { enabled: false, default: false } } };

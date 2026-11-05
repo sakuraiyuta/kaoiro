@@ -74,7 +74,7 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
       at: string;
     }> = [];
 
-    const link = {
+    const link = { deliveryModes: () => undefined,
       close: () => {},
       currentSessionId: () => null,
       setSessionId: () => {},

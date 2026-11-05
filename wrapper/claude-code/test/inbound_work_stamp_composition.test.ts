@@ -62,7 +62,7 @@ it("injects the work stamp of a delivered assignment into the Claude turn (issue
         reportDisconnectIntent: async () => true,
       } as never;
     },
-    createHost: () => ({
+    createHost: () => ({ canPushLiveInput: () => false, canFoldLiveInput: () => false,
       state: "idle", statusExtSnapshot: () => ({}),
       run: async () => { start(); await finished; },
       send: async (text: string) => { texts.push(text); },
