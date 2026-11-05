@@ -20,6 +20,7 @@ const transport = {
 };
 
 class TestChannel {
+  state = "joined";
   on(event: string, receiver: Receiver): void {
     const receivers = transport.handlers.get(event) ?? [];
     receivers.push(receiver);
@@ -50,6 +51,7 @@ class TestChannel {
 }
 
 class TestSocket {
+  isConnected(): boolean { return true; }
   connect(): void {}
   channel(): TestChannel {
     return new TestChannel();
