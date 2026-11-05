@@ -6979,10 +6979,10 @@ test("previous CLI revision is declared only in its shared file", () => {
   const archives = source.split("\n").filter(line => /^\s*const archive = execFileSync\("git"/.test(line));
   assert.equal(archives.length, 1);
   assert.match(archives[0], /"archive", revisionText\.trim\(\),/);
-  const result = spawnSync("git", ["-C", repository, "grep", "-I", "-l", "-z", "-F", revision, "--", ".", ":(exclude)scripts/issue-920-image-probe/**"], {encoding:"utf8"});
+  const result = spawnSync("git", ["-C", repository, "grep", "-I", "-l", "-z", "-F", revision, "--", "."], {encoding:"utf8"});
   assert.equal(result.status, 0, result.stderr);
   const paths = result.stdout.split("\0").filter(Boolean);
-  assert.ok(paths.includes(fixture));
+  assert.deepEqual(paths, [fixture]);
   const workflow = readFileSync(join(repository, ".github/workflows/ci.yml"), "utf8").split("\n");
   for (const job of ["test-isolation"]) {
     const start = workflow.indexOf(`  ${job}:`);
@@ -6993,16 +6993,6 @@ test("previous CLI revision is declared only in its shared file", () => {
     assert.equal(lines.filter(line => line === '[[ "$revision" =~ ^[0-9a-f]{40}$ ]]').length, 1);
     const fetches = lines.filter(line => /\bgit\b.*\bfetch\b/.test(line));
     assert.deepEqual(fetches, ['git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$revision"']);
-  }
-  for (const path of paths.filter(path => path !== fixture)) {
-    assert.equal(path, ".github/workflows/ci.yml", `unexpected revision literal in ${path}`);
-    const lines = readFileSync(join(repository, path), "utf8").split("\n");
-    const start = lines.indexOf("  server-image:");
-    const end = lines.findIndex((line, index) => index > start && /^ {0,2}\S/.test(line));
-    const matches = lines.map((line, index) => ({line, index})).filter(({line}) => line.includes(revision));
-    assert.equal(matches.length, 1);
-    assert.ok(start >= 0 && matches[0].index > start && (end < 0 || matches[0].index < end));
-    assert.equal(matches[0].line.trim(), `git fetch --no-tags --depth=1 origin c8f75a35be90f683983db9857d32fc9276bd0f53 ${revision}`);
   }
 });
 
