@@ -10550,6 +10550,7 @@ describe("reserved resume receipt", () => {
     expect(r.logs).toContain(({ terminal: "unowned_terminal", eof: "stream_eof", reset: "reset_after_write", rebind: "session_changed", close: "close" } as Record<string, string>)[why]);
     expect(r.logs).not.toContain('admitted_root');
     if (why !== "close") expect(r.host.state).toBe("error");
+    if (why === "terminal") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({ result_index: expect.any(Number), session_id: "s" });
   });
 
   it.each([false, true])("waits for terminal reduction with a bounded fence (timeout=%s)", async timeout => {
@@ -10629,18 +10630,21 @@ describe("reserved resume receipt", () => {
     expect(r.starts).toHaveLength(1);
   });
 
-  it.each(["queued", "deferred"])("cancels an unwritten %s resume note at reset", async mode => {
+  it.each(["queued", "deferred", "prepare", "closed"])("cancels an unwritten %s resume note", async mode => {
     const logs: Envelope[] = [], injected: string[] = [];
-    let injection: (() => Promise<void>) | undefined;
+    let injection: (() => Promise<void>) | undefined, preparations = 0;
     const host = new AgentHost(config, { onState: () => {}, onLog: e => logs.push(e),
-      enqueueInjection: mode === "queued" ? task => task() : async task => { injection = task; },
+      prepareInput: () => mode === "prepare" && ++preparations === 2 ? null : undefined,
+      enqueueInjection: ["queued", "prepare"].includes(mode) ? task => task() : async task => { injection = task; },
       queryFn: makeQueryFn(({ prompt }) => asQuery((async function* () {
         const input = prompt[Symbol.asyncIterator]();
         yield msg({ type: "system", subtype: "init", session_id: "s" });
         await input.next();
         yield msg({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 100 } });
-        yield msg({ type: "conversation_reset", new_conversation_id: "reset" });
+        if (mode === "closed") host.close();
+        else if (mode !== "prepare") yield msg({ type: "conversation_reset", new_conversation_id: "reset" });
         await injection?.();
+        if (mode === "closed") return;
         yield result("success");
         await host.send("after-reset");
         injected.push((await input.next()).value!.message.content as string);
@@ -10649,9 +10653,13 @@ describe("reserved resume receipt", () => {
     });
     host.reserveResume("obsolete note");
     try { await host.run("/compact"); } finally { host.close(); }
-    expect(injected).toEqual(["after-reset"]);
-    expect(JSON.stringify(logs)).not.toContain("resume_pending");
-    expect(JSON.stringify(logs)).toContain("reset_before_write");
+    expect(injected).toEqual(mode === "closed" ? [] : ["after-reset"]);
+    const cancelled = logs.flatMap(e => { try { return [JSON.parse((e.payload as { text: string }).text)]; } catch { return []; } });
+    expect(cancelled.filter(e => e.event === "resume_pending")).toHaveLength(0);
+    expect(cancelled.filter(e => e.event === "resume_receipt_cancelled")).toEqual([expect.objectContaining({
+      reason: mode === "prepare" ? "prepare_cancelled" : mode === "closed" ? "close" : "reset_before_write",
+      submitted: false, receipt_id: expect.stringMatching(/^\[kaoiro-resume:/),
+    })]);
   });
 
   it.each([1, 2_147_483_647])("accepts the valid total-budget boundary %s", value => {
