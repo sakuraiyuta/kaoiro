@@ -150,6 +150,7 @@ test("5-b runbook does not prescribe live copy or an outside-volume match", () =
   assert.ok(runbook.includes('4.3 (2) and the 4.3 (5-b) paragraph that begins\n  "For a genuinely new store".'));
   const section = runbook.split("**(5-b) Existing or uncertain persistence store: refusal and recovery**")[1]?.split("**(5-c)")[0];
   assert.ok(section);
+  assert.ok(section.includes("For a genuinely new store, establish independently"));
   assert.ok(!section.includes("docker cp <container>:/tmp/kaoiro_users.dets"));
   assert.ok(section.includes("Copying a live DETS file to the target volume does not unblock either"));
   assert.ok(section.includes("Do not point compose or an override outside"));
