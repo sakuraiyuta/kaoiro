@@ -908,8 +908,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp handle_wrapper_in(event, _payload, socket)
-       when event in ["work_check_request", "work_transfer_ack"] do
+  defp handle_wrapper_in("work_check_request", _payload, socket) do
+    {:reply, {:error, %{reason: "unsupported_work_operation"}}, socket}
+  end
+
+  defp handle_wrapper_in("work_transfer_ack", _payload, socket) do
     {:reply, {:error, %{reason: "unsupported_work_operation"}}, socket}
   end
 

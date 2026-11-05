@@ -2,6 +2,7 @@
 title: Director-requested session reset of an assigned peer
 description: A director holding an active work grant may request the session reset of its assignee through a dedicated wrapper-to-server request; authority comes from the server-owned work record alone, the target passes the operator reset's gates, and the result returns to the requester's own topic.
 status: accepted
+last_updated: 2026-11-05
 date: 2026-10-17
 opened: 2026-10-17
 supersedes: [43]

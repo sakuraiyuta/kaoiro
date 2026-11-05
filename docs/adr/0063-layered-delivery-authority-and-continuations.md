@@ -2,6 +2,7 @@
 title: Layered inter-agent delivery, authority and continuation admission
 description: Separate early delivery, causal reply basis and mutation authority; two-level interruption with accepted-assignment grants; revision-checked consequential actions; native-lifecycle admission of engine continuations gated by a bounded pilot.
 status: accepted
+last_updated: 2026-11-05
 date: 2026-09-28
 opened: 2026-09-28
 supersedes: []

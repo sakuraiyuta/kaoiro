@@ -33,6 +33,9 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
       |> subscribe_and_join(WrapperChannel, "wrapper:" <> id, %{
         "persona_id" => "default",
         "work_control" => "v1",
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_generation" => id,
+        "delivery_resync" => "skip-v1",
         "inter_agent_delivery_modes" => %{
           "version" => "v1",
           "early" => "fold",
