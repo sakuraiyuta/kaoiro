@@ -2551,7 +2551,7 @@ describe("work-control send rejection receipts", () => {
         sendInterAgent: async () => ({ kind: "rejected", reason, send_not_attempted: true, details: { work_id: "wrk_1", conversation_id: "linked-cid" } }),
       });
       if (captured) tool.beginReplyInput("link-turn");
-      const result = await tool.invoke({ to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1" }, captured ? { origin: { token: "link-turn" } } : undefined);
+      const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({ to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1" }, captured ? { origin: { token: "link-turn" } } : undefined);
       expect(result.isError).toBe(true);
       const body = JSON.parse(result.content[0]!.text);
       expect(body).toMatchObject({ error: reason, send_not_attempted: true, work_id: "wrk_1", conversation_id: "linked-cid" });
