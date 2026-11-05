@@ -10280,6 +10280,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
   });
 
   it("pauses the pending root receipt clock during a live task-notification turn", async () => {
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const ready = deferred();
     const notificationReady = deferred();
@@ -10323,6 +10324,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await notificationReady.promise;
       expect(host.receiptDiagnostics().notification_clock_pauses).toBe(1);
       expect(stderr.mock.calls.some(([line]) => String(line).includes('"event":"notification_clock_pause","count":1'))).toBe(true);
+      expect(scheduled.mock.calls.every(([, delay]) => Number.isFinite(delay ?? 0))).toBe(true);
       now = 5_000;
       expect(host.tickPendingReceiptRootTimeout()).toBe(false);
       expect(host.state).not.toBe("error");
@@ -10330,7 +10332,7 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       await running;
       expect(decisions).toEqual(["root"]);
       expect(host.receiptDiagnostics().root_hook_timeout).toBe(0);
-    } finally { releaseNotification.resolve(); host.close(); await running; stderr.mockRestore(); }
+    } finally { releaseNotification.resolve(); host.close(); await running; stderr.mockRestore(); scheduled.mockRestore(); }
   });
 
   it("fail-stops a missing root hook and cancels the queued input before it reaches Query", async () => {
@@ -10752,6 +10754,16 @@ describe("reserved resume receipt", () => {
         now = 5; await vi.advanceTimersByTimeAsync(1); expect(host.state).toBe("error");
       }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5 });
     } finally { vi.useRealTimers(); }
+  });
+
+  it("does not restore spent idle time after a notification", async () => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      now = 5; await hook("N", "native work");
+      now = 50; yield result("success", { origin: { kind: "task-notification" } });
+      await hook("note"); expect(host.state).toBe("error");
+    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    expect(r.events.find(e => e.event === "root_hook_timeout").reason).toBe("missing_hook");
   });
 
 });
