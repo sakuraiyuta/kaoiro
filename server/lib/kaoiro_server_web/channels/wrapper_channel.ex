@@ -3254,6 +3254,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:error, reason} ->
         {:error, %{reason: conversation_error(reason), send_not_attempted: true}}
     end
+  catch
+    :exit, _ ->
+      {:error,
+       %{
+         reason: "work_outcome_unknown",
+         send_not_attempted: true,
+         details: %{work_id: work_id, conversation_id: context.conversation_id}
+       }}
   end
 
   defp prepare_work_operation(nil, _enabled?, _principal, _context, _message),

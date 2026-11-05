@@ -79,6 +79,12 @@ receives the current work stamp. A race after preview may reject delivery even
 though the link or operation was committed; those changes are not rolled back.
 Unavailable or corrupt saved capacity settings also refuse link mutations.
 
+If the work store exits or times out during ordinary-message linking, the
+reply is `work_outcome_unknown` with `send_not_attempted: true` and
+`details: {work_id, conversation_id}`. Delivery has not started, but the link
+may still commit after the timeout. There is no operation ID or receipt for
+this path; inspect the work's links before retrying.
+
 ## Receipts, status and authority
 
 Each operation carries an `operation_id`. The server commits the work change

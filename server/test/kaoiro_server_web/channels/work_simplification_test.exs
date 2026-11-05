@@ -659,6 +659,158 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
              WorkStore.authorize_peer_reset(agent("director"), "assignee", work.work_id, 2)
   end
 
+  test "link timeout reports an unknown work outcome without delivery or a channel crash" do
+    Process.flag(:trap_exit, true)
+    director = peer("director")
+    _ = peer("assignee")
+    work = grant()
+    conversation = cid()
+    :ok = :sys.suspend(WorkStore)
+
+    try do
+      {ref, _} =
+        message(director, "director", "assignee", work, %{"conversation_id" => conversation})
+
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "work_outcome_unknown",
+                     send_not_attempted: true,
+                     details: %{work_id: work_id, conversation_id: ^conversation}
+                   } = rejection,
+                   7 * KaoiroServer.TestTimeouts.slow_path()
+
+      assert work_id == work.work_id
+      refute Map.has_key?(rejection.details, :operation_id)
+      refute Map.has_key?(rejection, :ingress_stamp)
+      assert Process.alive?(director.channel_pid)
+      assert ConversationStates.get(conversation) == nil
+      refute_push "envelope", %{"payload" => %{"conversation_id" => ^conversation}}
+    after
+      :ok = :sys.resume(WorkStore)
+    end
+
+    # The timed-out call can still commit its link after the store resumes.
+    loaded = WorkStore.all()[work.work_id]
+    assert conversation in loaded.links
+    assert loaded.revision == work.revision
+    assert loaded.receipts == work.receipts
+    assert ConversationStates.get(conversation) == nil
+
+    assert_reply push(director, "work_status_request", %{"work_id" => work.work_id}),
+                 :ok,
+                 %{work: %{links: links}}
+
+    assert conversation in links
+  end
+
+  test "basic operations refuse a thirty-third link without a revision or receipt" do
+    work = grant()
+
+    for _ <- 1..32 do
+      assert {:ok, _} =
+               WorkStore.link(agent("director"), work.work_id, %{
+                 recipient: "assignee",
+                 conversation_id: cid(),
+                 new_conversation?: true
+               })
+    end
+
+    before = WorkStore.all()[work.work_id]
+    operation_id = opid()
+    operation = %{"op" => "complete", "work_id" => work.work_id, "operation_id" => operation_id}
+    context = %{recipient: "assignee", conversation_id: cid(), new_conversation?: true}
+
+    assert {:error, {:work_capacity, %{limit: "work_links_per_work"}}} =
+             WorkStore.apply(agent("director"), operation, context)
+
+    assert WorkStore.all()[work.work_id] == before
+    assert {:error, :unknown_operation} = WorkStore.op_result(agent("director"), operation_id)
+
+    assert {:ok, %{work: %{state: "completed"}}} =
+             WorkStore.apply(agent("director"), operation, %{
+               context
+               | conversation_id: hd(before.links)
+             })
+  end
+
+  test "operator retries of removed operations return their existing receipts" do
+    operator = operator_socket()
+    work = grant()
+
+    for op <- @removed do
+      operation_id = opid()
+      operation = %{"op" => op, "operation_id" => operation_id, "work_id" => work.work_id}
+
+      receipt = %{
+        operation_id: operation_id,
+        principal: @operator,
+        op_digest:
+          :crypto.hash(:sha256, :erlang.term_to_binary(operation)) |> Base.encode16(case: :lower),
+        result: %{
+          op: op,
+          operation_id: operation_id,
+          outcome: "applied",
+          work: Map.take(work, [:work_id, :state, :revision, :authority_epoch])
+        },
+        issued_at_ms: System.system_time(:millisecond)
+      }
+
+      :sys.replace_state(WorkStore, fn state ->
+        state
+        |> update_in([:works, work.work_id, :receipts], &[receipt | &1])
+        |> put_in([:receipts, {{"user", "operator"}, operation_id}], {work.work_id, receipt})
+      end)
+
+      before = WorkStore.all()
+
+      assert_reply push(operator, "work_control", %{"work_control" => operation}),
+                   :error,
+                   %{
+                     reason: "work_operation_deduplicated",
+                     details: %{
+                       work_control_result: %{
+                         op: ^op,
+                         operation_id: ^operation_id,
+                         deduplicated: true
+                       }
+                     }
+                   }
+
+      assert WorkStore.all() == before
+      refute_push "work_changed", _
+    end
+  end
+
+  test "operation digests include ignored subject hash revision and reason fields" do
+    operation = %{
+      "op" => "assign",
+      "operation_id" => opid(),
+      "title" => "Digest preservation",
+      "assignee" => "assignee",
+      "director" => agent("director"),
+      "subject_hash" => "original",
+      "expected_revision" => 7,
+      "reason" => "original"
+    }
+
+    assert {:ok, _} = WorkStore.apply(@operator, operation, %{operator: true})
+    before = WorkStore.all()
+
+    for {key, value} <- [
+          {"subject_hash", "changed"},
+          {"expected_revision", 8},
+          {"reason", "changed"}
+        ] do
+      assert {:error, :operation_id_conflict} =
+               WorkStore.apply(@operator, Map.put(operation, key, value), %{operator: true})
+
+      assert WorkStore.all() == before
+    end
+
+    assert {:duplicate, _} = WorkStore.apply(@operator, operation, %{operator: true})
+  end
+
   test "basic updates sweep and restart preserve every legacy key and value" do
     work = legacy(grant())
     assert {:ok, _} = apply_op(@operator, work, "complete")
