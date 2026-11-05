@@ -1625,12 +1625,18 @@ describe("AgentHost — query injection", () => {
             if (typeof content !== "string") continue;
             injected.push(content);
             if (content.startsWith("[kaoiro] Compaction")) {
+              await args.options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+                hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: `resume-${injected.length}`, prompt: content,
+              } as never, undefined, { signal: new AbortController().signal });
               injections.signal();
             }
           }
         })();
         return asQuery(
-          script({ injection: injections.wait }),
+          (async function* () {
+            yield msg({ type: "system", subtype: "init", session_id: "s" });
+            yield* script({ injection: injections.wait });
+          })(),
           async () => {},
           async () => ({ totalTokens: 9000, maxTokens: 200000, percentage: 5 }),
         );
@@ -10442,4 +10448,254 @@ describe("AgentHost phase-2 pushed input receipts", () => {
       } finally { release.resolve(); host.close(); await running; stderr.mockRestore(); }
     },
   );
+});
+
+describe("reserved resume receipt", () => {
+  type Scenario = { host: AgentHost; note: SDKUserMessage; input: AsyncIterator<SDKUserMessage>;
+    hook: (id: string, text?: string, session?: string, agentId?: string) => Promise<unknown> };
+  async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}) {
+    const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [];
+    let host!: AgentHost;
+    host = new AgentHost(config, {
+      onState: () => {}, onLog: e => logs.push(e), enqueueInjection: task => task(),
+      onTurnStart: x => starts.push(x.turnToken), onTurnEnd: x => { if (x.turnToken) ends.push(x.turnToken); },
+      onPushedInputDecision: x => decisions.push(x.kind), ...extra,
+      queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        await input.next();
+        yield msg({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 100 } });
+        yield result("success");
+        const note = (await input.next()).value!;
+        expect(note.priority).toBe("later");
+        expect(note.message.content).toContain("[kaoiro-resume:");
+        expect(host.activeInterAgentTurnToken()).toBeNull();
+        const hook = (id: string, text = note.message.content as string, session = "s", agentId?: string) =>
+          options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({ hook_event_name: "UserPromptSubmit",
+            session_id: session, prompt_id: id, prompt: text, ...(agentId ? { agent_id: agentId } : {}) } as never, undefined, { signal: new AbortController().signal });
+        yield* script({ host, note, input, hook });
+      })())),
+    });
+    host.reserveResume("continue exactly once\nsecond line");
+    try { await host.run("/compact"); } finally { host.close(); }
+    expect(decisions).toEqual([]);
+    return { host, logs: JSON.stringify(logs), starts, ends, events: logs.flatMap(e => {
+      try { return [JSON.parse((e.payload as { text: string }).text)]; } catch { return []; }
+    }) };
+  }
+
+  it.each([false, true])("keeps a pending note across foreign roots (native=%s) and admits only its own hook", async nativeContinuations => {
+    const seen: string[] = [];
+    const r = await exercise(async function* ({ host, input, hook }) {
+      await host.send("after", undefined, [], "after");
+      let nextReady = false;
+      const next = input.next().then(x => { nextReady = true; return x; });
+      for (const id of ["N1", "N2"]) {
+        await hook(id, "<task-notification>event</task-notification>");
+        expect(host.activeInterAgentTurnToken()).toBeNull();
+        expect(host.hasPendingPushedReceipt()).toBe(true);
+        expect(host.canPushLiveInput()).toBe(false);
+        yield result("success", { origin: { kind: "task-notification", producer: "session-task" } });
+        expect(nextReady).toBe(false);
+      }
+      await hook("note");
+      seen.push(host.activeInterAgentTurnToken()!);
+      expect(host.hasPendingPushedReceipt()).toBe(false);
+      await hook("note");
+      yield result("success");
+      expect((await next).value!.message.content).toBe("after");
+      yield result("success");
+    }, { nativeContinuations });
+    expect(r.starts).toHaveLength(3);
+    expect(r.starts[1]).toBe(seen[0]);
+    expect(r.ends).toEqual(r.starts);
+    expect(r.logs).toContain('admitted_root');
+    expect(r.logs).not.toContain('resume_receipt_rejected');
+  });
+
+  it.each(["digest", "session", "fresh-conflict", "fold", "duplicate-id"])("refuses %s without a resume grant", async why => {
+    const r = await exercise(async function* ({ host, hook, note }) {
+      if (why === "fresh-conflict" || why === "fold") await hook("N1", "native work");
+      if (why === "duplicate-id") await hook("note");
+      await hook(why === "fold" ? "N1" : "different", (note.message.content as string) + (why === "digest" ? "changed" : ""), why === "session" ? "wrong" : "s");
+      expect(host.state).toBe("error");
+      await expect(host.send("blocked")).rejects.toThrow();
+      yield result("success");
+    });
+    expect(r.starts).toHaveLength(why === "duplicate-id" ? 2 : 1);
+  });
+
+  it.each(["terminal", "eof", "reset", "rebind", "close"])("records an unresolved receipt at %s", async why => {
+    const r = await exercise(async function* ({ host }) {
+      if (why === "terminal") yield result("success");
+      if (why === "reset") yield msg({ type: "conversation_reset", new_conversation_id: "reset" });
+      if (why === "rebind") yield msg({ type: "system", subtype: "init", session_id: "other" });
+      if (why === "close") host.close();
+    });
+    expect(r.logs).toContain(why === "close" ? 'resume_receipt_cancelled' : 'resume_receipt_rejected');
+    expect(r.logs).toContain(({ terminal: "unowned_terminal", eof: "stream_eof", reset: "reset_after_write", rebind: "session_changed", close: "close" } as Record<string, string>)[why]);
+    expect(r.logs).not.toContain('admitted_root');
+    if (why !== "close") expect(r.host.state).toBe("error");
+  });
+
+  it.each([false, true])("waits for terminal reduction with a bounded fence (timeout=%s)", async timeout => {
+    vi.useFakeTimers();
+    let current!: Scenario, admission: Promise<unknown> | undefined, duringRead: string | undefined;
+    try {
+      const r = await exercise(async function* (scenario) {
+        current = scenario;
+        await current.hook("N", "native work");
+        yield assistant([{ type: "tool_use", id: "task-write", name: "TaskCreate", input: { subject: "x" } }]);
+        yield result("success", { origin: { kind: "task-notification" } });
+        await admission;
+        if (timeout) expect(duringRead).toBe("error");
+        else { expect(current.host.activeInterAgentTurnToken()).not.toBeNull(); yield result("success"); }
+      }, { readTasklist: async () => {
+        admission = current.hook("note");
+        await Promise.resolve();
+        if (timeout) await vi.advanceTimersByTimeAsync(5_000);
+        duringRead = current.host.state;
+        return { kind: "updated", items: [] };
+      } });
+      expect(r.logs).toContain(timeout ? "terminal_fence_timeout" : "admitted_root");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity, 1.5, 2_147_483_648])("defaults total budget for invalid or absent value %s", value => {
+    const host = new AgentHost(config, { onState: () => {}, ...(value === undefined ? {} : { resumeReceiptMaxWaitMs: value }) });
+    expect(host.resumeReceiptMaxWaitMs).toBe(1_800_000);
+    host.close();
+  });
+
+  it.each(["idle", "single", "chain", "late-hook"])("bounds %s wait despite occupied time and SDK progress", async mode => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      if (mode !== "idle") {
+        for (let i = 0; i < (mode === "chain" ? 3 : 1); i++) {
+          await hook(`N${i}`, "native work");
+          now += 10;
+          yield assistant([{ type: "text", text: "progress" }]);
+          expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+          if (mode === "chain" && i < 2) yield result("success", { origin: { kind: "task-notification" } });
+        }
+      }
+      now = mode === "idle" ? 4 : 99;
+      expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      now++;
+      if (mode === "late-hook") await hook("note");
+      else expect(host.tickPendingReceiptRootTimeout()).toBe(true);
+      expect(host.state).toBe("error");
+      expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      await hook("late");
+      await expect(host.send("blocked")).rejects.toThrow();
+    }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    expect(r.logs).toContain(mode === "idle" ? 'missing_hook' : 'starved');
+    expect(r.logs.match(/resume_receipt_rejected/g)).toHaveLength(1);
+    expect(r.starts).toHaveLength(1);
+  });
+
+  it("admits immediately before total expiry and cancels the old timer", async () => {
+    let now = 0;
+    await exercise(async function* ({ host, hook }) {
+      await hook("N", "native work"); now = 99;
+      yield result("success", { origin: { kind: "task-notification" } });
+      await hook("note"); now = 200;
+      expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      yield result("success");
+    }, { nowMs: () => now, resumeReceiptMaxWaitMs: 100 });
+  });
+  it.each(["", "retired"])("refuses missing or retired prompt identity %s", async id => {
+    const r = await exercise(async function* ({ host, hook }) {
+      if (id) { await hook(id, "native work"); yield result("success", { origin: { kind: "task-notification" } }); }
+      await hook(id);
+      expect(host.state).toBe("error");
+    });
+    expect(r.logs).toContain("owner_still_live_or_fold_refused");
+    expect(r.starts).toHaveLength(1);
+  });
+
+  it.each(["queued", "deferred"])("cancels an unwritten %s resume note at reset", async mode => {
+    const logs: Envelope[] = [], injected: string[] = [];
+    let injection: (() => Promise<void>) | undefined;
+    const host = new AgentHost(config, { onState: () => {}, onLog: e => logs.push(e),
+      enqueueInjection: mode === "queued" ? task => task() : async task => { injection = task; },
+      queryFn: makeQueryFn(({ prompt }) => asQuery((async function* () {
+        const input = prompt[Symbol.asyncIterator]();
+        yield msg({ type: "system", subtype: "init", session_id: "s" });
+        await input.next();
+        yield msg({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 100 } });
+        yield msg({ type: "conversation_reset", new_conversation_id: "reset" });
+        await injection?.();
+        yield result("success");
+        await host.send("after-reset");
+        injected.push((await input.next()).value!.message.content as string);
+        yield result("success");
+      })())),
+    });
+    host.reserveResume("obsolete note");
+    try { await host.run("/compact"); } finally { host.close(); }
+    expect(injected).toEqual(["after-reset"]);
+    expect(JSON.stringify(logs)).not.toContain("resume_pending");
+    expect(JSON.stringify(logs)).toContain("reset_before_write");
+  });
+
+  it.each([1, 2_147_483_647])("accepts the valid total-budget boundary %s", value => {
+    const host = new AgentHost(config, { onState: () => {}, resumeReceiptMaxWaitMs: value });
+    expect(host.resumeReceiptMaxWaitMs).toBe(value); host.close();
+  });
+
+  it("does not admit a subagent hook as the resume root", async () => {
+    const r = await exercise(async function* ({ host, hook }) {
+      await hook("subagent", undefined, undefined, "child");
+      expect(host.hasPendingPushedReceipt()).toBe(true);
+      expect(host.activeInterAgentTurnToken()).toBeNull();
+      await hook("note"); yield result("success");
+    });
+    expect(r.starts).toHaveLength(2);
+  });
+
+  it.each([false, true])("runs the actual receipt timer while occupied=%s", async occupied => {
+    vi.useFakeTimers(); let now = 0;
+    try {
+      const r = await exercise(async function* ({ host, hook }) {
+        if (occupied) await hook("N", "native work");
+        now = occupied ? 100 : 5;
+        await vi.advanceTimersByTimeAsync(now);
+        expect(host.state).toBe("error");
+        expect(host.receiptDiagnostics().root_hook_timeout).toBe(1);
+      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+      expect(r.events.find(e => e.event === "root_hook_timeout")).toMatchObject({
+        reason: occupied ? "starved" : "missing_hook", submitted: true, elapsed_ms: now,
+        total_limit_ms: 100, occupancy_kind: occupied ? "foreign" : "none", pause_count: occupied ? 1 : 0,
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not grant a note after close releases its terminal fence", async () => {
+    let current!: Scenario, admission: Promise<unknown> | undefined;
+    const r = await exercise(async function* (scenario) {
+      current = scenario; await current.hook("N", "native work");
+      yield assistant([{ type: "tool_use", id: "task-write", name: "TaskCreate", input: { subject: "x" } }]);
+      yield result("success", { origin: { kind: "task-notification" } });
+      await admission;
+    }, { readTasklist: async () => {
+      admission = current.hook("note"); current.host.close();
+      return { kind: "updated", items: [] };
+    } });
+    expect(r.events.filter(e => e.event === "resume_receipt_cancelled")).toHaveLength(1);
+    expect(r.events.filter(e => e.event === "admitted_root")).toHaveLength(0);
+    expect(r.starts).toHaveLength(1);
+  });
+
+  it("refuses a new resume identity when the retirement ledger is full", async () => {
+    const r = await exercise(async function* ({ host, hook }) {
+      for (let i = 0; i < 8192; i++) {
+        await hook(`N${i}`, "native work");
+        yield result("success", { origin: { kind: "task-notification" } });
+      }
+      await hook("note"); expect(host.state).toBe("error");
+    }, { nowMs: () => 0 });
+    expect(r.starts).toHaveLength(1);
+  });
+
 });

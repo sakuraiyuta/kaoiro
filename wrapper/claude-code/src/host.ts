@@ -454,6 +454,7 @@ export interface AgentHostOptions {
   }) => void;
   phase2RootScheduling?: () => boolean;
   pendingReceiptRootTimeoutMs?: number;
+  resumeReceiptMaxWaitMs?: number;
   /** Synchronous final check before an input is yielded to the SDK. Undefined
    * keeps the queued input; null consumes it without starting a turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -659,6 +660,7 @@ interface QueuedTurn {
   urgent?: boolean;
   inputEnvelopes?: readonly Envelope[];
   operatorFolded?: boolean;
+  resumeId?: string;
 }
 
 interface PushedReceipt {
@@ -677,6 +679,18 @@ interface PushedReceipt {
   conversationIds: readonly string[];
   operatorInput?: boolean;
   written: boolean;
+}
+
+interface ResumeReceipt {
+  kind: "resume";
+  foldId: string;
+  digest: string;
+  sessionId: string;
+  generation: string;
+  query: Query;
+  written: true;
+  turn: QueuedTurn;
+  deadline: number;
 }
 
 interface NotificationTurn {
@@ -809,6 +823,7 @@ export class AgentHost implements EngineAdapter {
   readonly #probeFn: (deps?: ProbeSpawnDeps) => Promise<ProbeOutcome>;
   readonly #now: () => string;
   readonly #nowMs: () => number;
+  readonly #receiptNow: () => number;
   readonly #readTasklist: (sessionId: string) => Promise<TasklistReadResult>;
   /** setInterval handle for the TTL GC sweep, cleared in close(). null
    *  between construction and run() (sweep doesn't start until run). */
@@ -816,12 +831,14 @@ export class AgentHost implements EngineAdapter {
 
   readonly #queue: QueuedTurn[] = [];
   readonly #pushedQueue: PushedReceipt[] = [];
-  #pendingPushedReceipt: PushedReceipt | null = null;
+  #pendingPushedReceipt: PushedReceipt | ResumeReceipt | null = null;
   readonly #receiptWaiters = new Set<() => void>();
   readonly #hostRunGeneration = randomUUID();
   #pendingRootDeadline: number | null = null;
   #pendingRootRemaining: number | null = null;
   #pendingRootTimer: ReturnType<typeof setTimeout> | null = null;
+  #resumeResetGeneration = 0;
+  #terminalReduction: { done: Promise<void>; finish: () => void } | null = null;
   #receiptTimeoutCount = 0;
   #notificationClockPauses = 0;
   #urgentRootStreak = 0;
@@ -1121,6 +1138,7 @@ export class AgentHost implements EngineAdapter {
     this.#probeFn = options.probeFn ?? runClaudeProbe;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#receiptNow = options.nowMs ?? (() => performance.now());
     this.#readTasklist = options.readTasklist ?? readClaudeTasklist;
     this.#warn = (message): void => {
       if (options.warn !== undefined) {
@@ -1273,6 +1291,11 @@ export class AgentHost implements EngineAdapter {
 
   get pendingReceiptRootTimeoutMs(): number {
     return this.#options.pendingReceiptRootTimeoutMs ?? 2_000;
+  }
+
+  get resumeReceiptMaxWaitMs(): number {
+    const value = this.#options.resumeReceiptMaxWaitMs;
+    return Number.isSafeInteger(value) && value! > 0 && value! <= 2_147_483_647 ? value! : 1_800_000;
   }
 
   canFoldLiveInput(): boolean {
@@ -1540,7 +1563,7 @@ export class AgentHost implements EngineAdapter {
       for (const id of attachmentIds) this.#pendingUploads.delete(id);
     }
 
-    this.#queue.push({
+    this.#enqueueTurn({
       message: {
         type: "user",
         // Empty by design (ADR-0014 phase-0): in streaming-input mode the SDK
@@ -1561,6 +1584,11 @@ export class AgentHost implements EngineAdapter {
         inputEnvelopes: inputPolicy.envelopes ?? [],
       }),
     });
+  }
+
+  #enqueueTurn(turn: QueuedTurn): void {
+    this.#assertCanQueue();
+    this.#queue.push(turn);
     // Optimistic `sending` state (#32): raised here, where the host knows the
     // instruction was accepted, rather than waiting for an SDK message that
     // may not land until the model's first token.
@@ -1723,6 +1751,8 @@ export class AgentHost implements EngineAdapter {
    *  Clears the TTL GC interval so the host does not keep the Node event
    *  loop alive after the session has settled. */
   close(): void {
+    this.#cancelResumeReceipt("close");
+    this.#terminalReduction?.finish();
     this.#invalidateNative();
     this.toolOrigins.retire();
     if (this.#activeTurn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(this.#activeTurn.turnToken);
@@ -1946,6 +1976,7 @@ export class AgentHost implements EngineAdapter {
     if (this.#retiredResults.length > MAX_RETIRED_RESULTS) this.#retiredResults.shift();
     if (occupancy.promptId !== null) this.#retiredPromptIds.add(occupancy.promptId);
     this.#foreignOccupancy = null;
+    this.#resumePendingRootClock();
     this.#intervalAmbiguous = false;
     for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
     this.#wakeTurnBoundary();
@@ -1957,6 +1988,8 @@ export class AgentHost implements EngineAdapter {
     cancellationKind: "watchdog_fail_stop" | "admission_fail_stop" | "receipt_timeout_fail_stop",
     onFreeze: () => void,
   ): boolean {
+    this.#cancelResumeReceipt("admission_fail_stop");
+    this.#terminalReduction?.finish();
     this.#invalidateNative();
     this.#admissionFailStopped = true;
     this.#closed = true;
@@ -2363,10 +2396,90 @@ export class AgentHost implements EngineAdapter {
     this.#wakeTurnBoundary();
   }
 
+  async *#fenceTerminals(messages: AsyncIterable<SDKMessage>): AsyncGenerator<SDKMessage> {
+    for await (const message of messages) {
+      let reduction: { done: Promise<void>; finish: () => void } | null = null;
+      if (message.type === "result") {
+        let finish!: () => void;
+        reduction = { done: new Promise<void>(resolve => { finish = resolve; }), finish: () => finish() };
+        this.#terminalReduction = reduction;
+      }
+      // Iteration resumes only after the complete reducer, including its awaits
+      // and early continues. A hook may wait only for this already-received frame.
+      try { yield message; }
+      finally { reduction?.finish(); this.#terminalReduction = null; }
+    }
+  }
+
+  #recordResume(receipt: ResumeReceipt, event: string, reason?: string, promptId?: string, dimension?: string): void {
+    const text = JSON.stringify({ event, receipt_id: receipt.foldId, turn_token: receipt.turn.turnToken,
+      reason, context_dimension: dimension, prompt_id: promptId, generation: receipt.generation, submitted: true,
+      occupancy_kind: this.#activeTurn?.kind ?? (this.#foreignOccupancy ? "foreign" : "none"),
+      pause_count: this.#notificationClockPauses, total_limit_ms: this.resumeReceiptMaxWaitMs,
+      elapsed_ms: this.#receiptNow() - receipt.deadline + this.resumeReceiptMaxWaitMs });
+    writeRedactedStderr(`[kaoiro][claude-code-receipt] ${text}\n`);
+    this.#emitLog({ kind: "system", text });
+  }
+
+  #finishResumeReceipt(receipt: ResumeReceipt, event: string, reason?: string, promptId?: string, dimension?: string): void {
+    this.#recordResume(receipt, event, reason, promptId, dimension);
+    this.#pendingPushedReceipt = null;
+    this.#clearPendingRootClock();
+    this.#wakeReceiptWaiters();
+    this.#wakeTurnBoundary();
+    this.#wake();
+  }
+
+  #cancelResumeReceipt(reason: string): void {
+    const receipt = this.#pendingPushedReceipt;
+    if (receipt?.kind === "resume") this.#finishResumeReceipt(receipt, "resume_receipt_cancelled", reason);
+  }
+
+  #rejectResumeReceipt(receipt: ResumeReceipt, reason: string, dimension?: string): void {
+    this.#finishResumeReceipt(receipt, "resume_receipt_rejected", reason, undefined, dimension);
+    this.#unattributedTerminalFrozen = true;
+    this.#failStopLive(`resume receipt ${reason}; host admission stopped until this wrapper is relaunched`);
+  }
+
+  async #admitResume(input: HookInput): Promise<boolean> {
+    if (input.hook_event_name !== "UserPromptSubmit" || input.agent_id) return false;
+    const receipt = this.#pendingPushedReceipt;
+    if (receipt?.kind !== "resume" || !input.prompt.includes(receipt.foldId)) return false;
+    if (this.#closed || this.tickPendingReceiptRootTimeout()) return true;
+    const reduction = this.#terminalReduction;
+    if (reduction !== null) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([reduction.done.then(() => true),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 5_000); })]);
+      clearTimeout(timer);
+      if (this.#closed || this.#pendingPushedReceipt !== receipt || this.tickPendingReceiptRootTimeout()) return true;
+      if (!settled) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout"); return true; }
+    }
+    if (receipt.sessionId !== input.session_id || receipt.query !== this.#query || receipt.generation !== this.#hostRunGeneration) {
+      this.#rejectResumeReceipt(receipt, "context_mismatch", receipt.sessionId !== input.session_id ? "session" : receipt.query !== this.#query ? "query" : "generation");
+    } else if (createHash("sha256").update(input.prompt, "utf8").digest("hex") !== receipt.digest) {
+      this.#rejectResumeReceipt(receipt, "digest_mismatch");
+    } else if (!input.prompt_id || this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192 ||
+        this.#activeTurn !== null || this.#foreignOccupancy !== null) {
+      this.#rejectResumeReceipt(receipt, "owner_still_live_or_fold_refused");
+    } else {
+      const turn = receipt.turn;
+      this.#activeTurn = turn;
+      this.#openInterval(input.session_id);
+      this.toolOrigins.begin(turn.turnToken);
+      this.#everStartedTurn = true;
+      this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turn.turnToken, kind: "wrapper_input" });
+      this.#finishResumeReceipt(receipt, "admitted_root", undefined, input.prompt_id);
+      this.#options.onTurnStart?.({ turnToken: turn.turnToken, conversationIds: turn.conversationIds });
+      this.#options.onPromptAdmitted?.(turn.turnToken);
+    }
+    return true;
+  }
+
   #admitPrompt(input: HookInput): void {
     if (input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id || input.agent_id || this.#closed ||
         this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192) return;
-    const pushed = this.#pendingPushedReceipt;
+    const pushed = this.#pendingPushedReceipt?.kind === "resume" ? null : this.#pendingPushedReceipt;
     let rejectedPushedReceipt = false;
     if (pushed?.written && input.prompt.includes(pushed.foldId)) {
       const sameContext = pushed.sessionId === input.session_id &&
@@ -2408,6 +2521,11 @@ export class AgentHost implements EngineAdapter {
     }
     const active = this.#activeTurn;
     const owner = this.#promptOwners.get(input.prompt_id);
+    if (active?.kind !== "sdk_notification" && active?.resumeId && input.prompt.includes(active.resumeId) &&
+        [...this.#promptOwners].some(([id, entry]) => entry.token === active.turnToken && id !== input.prompt_id)) {
+      this.#failStopLive("resume receipt claimed a second prompt identity");
+      return;
+    }
     const wrapperContent = active?.kind !== "sdk_notification" ? active?.message.message.content : undefined;
     const wrapperMatch = active !== null && active.kind !== "sdk_notification" &&
       ((typeof wrapperContent === "string" && wrapperContent === input.prompt) ||
@@ -2510,7 +2628,8 @@ export class AgentHost implements EngineAdapter {
     this.#intervalAmbiguous = false;
     this.#openInterval(known);
     this.#noteIntervalSession(sessionId);
-    if (this.#pendingPushedReceipt !== null) {
+    if (this.#pendingPushedReceipt?.kind === "resume") this.#pausePendingRootClock();
+    else if (this.#pendingPushedReceipt !== null) {
       this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "foreign_occupancy");
     }
     // Paused, not dropped: a candidate is rearmed in full at the drain.
@@ -2539,12 +2658,16 @@ export class AgentHost implements EngineAdapter {
   }
 
   #resolvePushedReceipt(
-    receipt: PushedReceipt,
+    receipt: PushedReceipt | ResumeReceipt,
     kind: "fold" | "root" | "unknown",
     reason?: string,
     turnToken?: string,
   ): void {
     if (this.#pendingPushedReceipt !== receipt) return;
+    if (receipt.kind === "resume") {
+      this.#rejectResumeReceipt(receipt, reason ?? "unknown");
+      return;
+    }
     this.#pendingPushedReceipt = null;
     this.#wakeReceiptWaiters();
     this.#clearPendingRootClock();
@@ -2577,27 +2700,46 @@ export class AgentHost implements EngineAdapter {
 
   #pausePendingRootClock(): void {
     if (this.#pendingRootDeadline === null) return;
-    this.#pendingRootRemaining = Math.max(0, this.#pendingRootDeadline - this.#nowMs());
+    this.#pendingRootRemaining = Math.max(0, this.#pendingRootDeadline - this.#receiptNow());
     this.#pendingRootDeadline = null;
     if (this.#pendingRootTimer !== null) clearTimeout(this.#pendingRootTimer);
     this.#pendingRootTimer = null;
+    this.#scheduleReceiptTimer();
     this.#notificationClockPauses += 1;
     writeRedactedStderr(`[kaoiro][claude-code-receipt] ${JSON.stringify({ event: "notification_clock_pause", count: this.#notificationClockPauses })}\n`);
   }
 
   #resumePendingRootClock(): void {
     if (this.#pendingPushedReceipt === null || this.#pendingRootRemaining === null ||
-        this.#activeTurn?.kind === "sdk_notification") return;
-    const remaining = this.#pendingRootRemaining;
-    this.#pendingRootDeadline = this.#nowMs() + remaining;
+        this.#activeTurn?.kind === "sdk_notification" ||
+        (this.#pendingPushedReceipt.kind === "resume" && this.#foreignOccupancy !== null)) return;
+    this.#pendingRootDeadline = this.#receiptNow() + this.#pendingRootRemaining;
+    this.#scheduleReceiptTimer();
+  }
+
+  #scheduleReceiptTimer(): void {
     if (this.#pendingRootTimer !== null) clearTimeout(this.#pendingRootTimer);
-    this.#pendingRootTimer = setTimeout(() => this.tickPendingReceiptRootTimeout(), remaining);
+    const receipt = this.#pendingPushedReceipt;
+    const deadline = Math.min(this.#pendingRootDeadline ?? Infinity,
+      receipt?.kind === "resume" ? receipt.deadline : Infinity);
+    if (deadline === Infinity) return;
+    this.#pendingRootTimer = setTimeout(() => {
+      if (!this.tickPendingReceiptRootTimeout()) this.#scheduleReceiptTimer();
+    }, Math.max(1, Math.ceil(deadline - this.#receiptNow())));
     this.#pendingRootTimer.unref?.();
   }
 
   tickPendingReceiptRootTimeout(): boolean {
+    const resume = this.#pendingPushedReceipt;
+    if (resume?.kind === "resume" && !this.#closed && this.#receiptNow() >= Math.min(resume.deadline, this.#pendingRootDeadline ?? Infinity)) {
+      const reason = this.#receiptNow() >= resume.deadline ? "starved" : "missing_hook";
+      this.#receiptTimeoutCount += 1;
+      this.#recordResume(resume, "root_hook_timeout", reason);
+      this.#rejectResumeReceipt(resume, reason);
+      return true;
+    }
     // A closed host ignores hooks, so a missing root hook decides nothing.
-    if (this.#pendingRootDeadline === null || this.#nowMs() < this.#pendingRootDeadline ||
+    if (this.#pendingRootDeadline === null || this.#receiptNow() < this.#pendingRootDeadline ||
         this.#pendingPushedReceipt === null || this.#closed) return false;
     const receipt = this.#pendingPushedReceipt;
     this.#receiptTimeoutCount += 1;
@@ -2916,7 +3058,7 @@ export class AgentHost implements EngineAdapter {
         ...userHooks,
         UserPromptSubmit: [
           ...(userHooks.UserPromptSubmit ?? []),
-          { hooks: [async (input) => { await this.#observeNativeHook(input); this.#admitPrompt(input); return {}; }] },
+          { hooks: [async (input) => { if (!await this.#admitResume(input)) { await this.#observeNativeHook(input); this.#admitPrompt(input); } return {}; }] },
         ],
         PreToolUse: [
           ...(userHooks.PreToolUse ?? []),
@@ -3002,7 +3144,7 @@ export class AgentHost implements EngineAdapter {
       // The SDK stamps a session_id on every message; report it before deriving
       // state so the envelopes this message produces already carry it. Forward
       // only on change — the id is stable within a conversation (ADR-0014).
-      for await (const message of session) {
+      for await (const message of this.#fenceTerminals(session)) {
         if (message.type === "assistant") {
           for (const block of message.message.content) if (block.type === "tool_use" && block.name !== INTER_AGENT_TOOL_FQN) this.toolOrigins.observe(block.id);
         }
@@ -3039,6 +3181,7 @@ export class AgentHost implements EngineAdapter {
           if (hadPriorSession) {
             if (this.#pendingPushedReceipt !== null) {
               this.#resolvePushedReceipt(this.#pendingPushedReceipt, "unknown", "session_changed");
+              if (this.#admissionFailStopped) continue;
             }
             this.#clearNotificationCandidates();
             this.#promptOwners.clear();
@@ -3195,6 +3338,12 @@ export class AgentHost implements EngineAdapter {
               // #invalidateContextEpoch just below, which already treats
               // compact_boundary and conversation_reset alike.
               this.#resumeReservations.length = 0;
+              this.#resumeResetGeneration++;
+              for (const turn of this.#queue.filter(turn => turn.resumeId)) {
+                this.#emitLog({ kind: "system", text: JSON.stringify({ event: "resume_receipt_cancelled", receipt_id: turn.resumeId, reason: "reset_before_write", submitted: false }) });
+              }
+              this.#queue.splice(0, this.#queue.length, ...this.#queue.filter(turn => !turn.resumeId));
+              if (this.#pendingPushedReceipt?.kind === "resume") this.#rejectResumeReceipt(this.#pendingPushedReceipt, "reset_after_write");
               this.#emitSessionLifecycle("conversation_reset");
             }
             this.#invalidateContextEpoch(compact.tokens);
@@ -3271,6 +3420,8 @@ export class AgentHost implements EngineAdapter {
             this.#clearNotificationCandidates();
           } else if (!notificationResult && ownerKind === "sdk_notification") {
             this.#failStopLive("notification result lacks task-notification ownership; host admission stopped until this wrapper is relaunched");
+          } else if (!liveInterval && this.#pendingPushedReceipt?.kind === "resume") {
+            this.#rejectResumeReceipt(this.#pendingPushedReceipt, "unowned_terminal");
           } else if (result.is_error) {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
@@ -3290,6 +3441,7 @@ export class AgentHost implements EngineAdapter {
           this.#noteResultIndex(message);
           this.#toolNames.clear();
         }
+
       }
     } catch (err) {
       // issue #391: close() aborts #abort, and the SDK's ProcessTransport
@@ -4540,14 +4692,17 @@ export class AgentHost implements EngineAdapter {
     const prompt = this.#resumeReservations.shift() ?? null;
     if (prompt === null) return;
     const text = resumeInjectionText(prompt);
+    const resetGeneration = this.#resumeResetGeneration;
+    const resumeId = `[kaoiro-resume:${randomUUID()}]`;
     void this.#enqueueInjection(async () => {
-      // ふじ Stage B round 1 must-fix B4 (2026-08-31): emit AFTER the
-      // closed guard and the actual `send()`, not before queueing — a
-      // queue reject, or the closed guard tripping once the queued task
-      // finally runs, previously left a `resume_fired` record with no
-      // injection ever delivered.
-      if (this.#closed) return;
-      await this.send(text);
+      if (this.#closed || resetGeneration !== this.#resumeResetGeneration) {
+        this.#emitLog({ kind: "system", text: JSON.stringify({ event: "resume_receipt_cancelled", receipt_id: resumeId,
+          reason: this.#closed ? "close" : "reset_before_write", submitted: false }) });
+        return;
+      }
+      this.#enqueueTurn({ turnToken: randomUUID(), conversationIds: [], inputSource: "synthetic", resumeId,
+        message: { type: "user", session_id: "", parent_tool_use_id: null, priority: "later",
+          message: { role: "user", content: text.replace("\n\n", `\n${resumeId}\n\n`) } } });
       this.#emitSessionLifecycle("resume_fired");
     }).catch((err: unknown) => {
       // Closed or full queue. The reservation is already consumed above —
@@ -5050,6 +5205,7 @@ export class AgentHost implements EngineAdapter {
         const turn = this.#pickNextRoot();
         const prepared = this.#options.prepareInput?.(turn.turnToken);
         if (prepared === null) {
+          if (turn.resumeId) this.#emitLog({ kind: "system", text: JSON.stringify({ event: "resume_receipt_cancelled", receipt_id: turn.resumeId, reason: "prepare_cancelled", submitted: false }) });
           if (this.#queue.length === 0 && !this.#closed) {
             this.#machine = initialMachineState("waiting_input");
             this.#emitState("waiting_input");
@@ -5059,6 +5215,17 @@ export class AgentHost implements EngineAdapter {
         if (prepared !== undefined) {
           turn.message.message.content = prepared.text;
           turn.conversationIds = prepared.conversationIds;
+        }
+        if (turn.resumeId) {
+          const receipt: ResumeReceipt = { kind: "resume", foldId: turn.resumeId, turn, written: true,
+            digest: createHash("sha256").update(turn.message.message.content as string, "utf8").digest("hex"),
+            sessionId: this.#sessionId ?? "", query: this.#query!, generation: this.#hostRunGeneration,
+            deadline: this.#receiptNow() + this.resumeReceiptMaxWaitMs };
+          this.#pendingPushedReceipt = receipt;
+          this.#recordResume(receipt, "resume_pending");
+          this.#startPendingRootClock();
+          yield turn.message;
+          continue;
         }
         if (turn.inputSource === "peer") {
           if (turn.urgent) this.#urgentRootStreak += 1;
@@ -5229,6 +5396,8 @@ export class AgentHost implements EngineAdapter {
    * closed before notifying callbacks so any next batch the CLI attempts to
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
+    this.#terminalReduction?.finish();
+    if (this.#pendingPushedReceipt?.kind === "resume") this.#rejectResumeReceipt(this.#pendingPushedReceipt, "stream_eof");
     if (this.#foreignOccupancy !== null) {
       this.#failStopLive("SDK stream ended under a foreign root interval; host admission stopped until this wrapper is relaunched");
     }

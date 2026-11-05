@@ -252,6 +252,64 @@ operator's production settings. Keep mode advertisement off until the
 production-settings R3 result-to-hook measurement supports the configured
 root-hook timeout.
 
+### Reserved resume notes after compaction
+
+A nonblank `request_compact.resume_prompt` is queued once at its matching
+compact boundary. `resume_fired` means host queue acceptance, not model delivery.
+The note retains its supplied bytes behind an explanatory prefix and a unique
+`[kaoiro-resume:…]` correlation line. It uses SDK priority `later` so it starts
+an ordinary wrapper root instead of folding into a notification's authority.
+
+The SDK pulling the note does not start its token or watchdog. A pending
+receipt holds later wrapper inputs and live pushes until the trusted prompt
+hook confirms the exact prepared text, session, Query and host generation.
+The confirmed root gets the ordinary reply basis, tool origins and start,
+admission and end callbacks. A native notification retains its own proof and
+result owner; a foreign interval gets no send authority. Notification terminals
+cannot settle an unadmitted note. A same-ID fold, conflicting live root,
+context/digest mismatch or ownerless terminal fails closed; the note is never
+resent or promoted into a notification's permissions.
+
+`later` does not guarantee FIFO with native notifications. A persistent Monitor
+can enqueue another notice after the note and still overtake it. `next` avoids
+that overtake in a text-only schedule but can fold at a foreground tool boundary,
+so it does not preserve ordinary-root authority. Stop persistent Monitors before
+compaction when possible. There are two receipt budgets, both starting at yield:
+
+- The idle budget is `pending_receipt_root_timeout_ms` (default 2 seconds).
+  It pauses under tracked native or foreign occupancy and resumes afterwards.
+- The total budget uses the resolved Claude watchdog `inactivityMs` (default
+  30 minutes). Unlike the watchdog, it counts occupied time and never renews
+  on SDK progress or notification changes. A shorter watchdog setting can
+  therefore expire a note during one healthy long notification turn. An absent
+  or invalid direct Host budget falls back to 30 minutes; it cannot disable
+  the limit. The CLI retains its existing invalid-configuration rejection.
+
+Total expiry records `root_hook_timeout` with reason `starved`, freezes admission
+and enters sticky `error`. A late hook cannot acquire a token after the deadline.
+This bounds the input barrier; it does not guarantee delivery under an infinite
+notification stream or force the background CLI process to exit promptly.
+
+The previous terminal must finish ownership settlement before the next resume
+root is admitted. A resume hook may wait for an already-received terminal's
+asynchronous reduction, for at most 5 seconds; a timeout refuses admission and
+fail-stops. It never waits for a terminal that has not arrived. Close, reset,
+EOF and receipt expiry cannot revive a waiting admission callback.
+
+Existing system logs expose `resume_pending` and its total limit, followed by
+`admitted_root`, a rejection or cancellation, without logging note text. The
+stream-derived state is unchanged: an idle-like `waiting_input` after compact
+can still have a pending receipt. It is not evidence that the input pipeline
+is empty. An intentional session replacement cancels the note without replay;
+EOF or an in-place reset after submission fails closed. Reservations discarded
+before submission keep the existing reset behavior.
+
+When updating the SDK/CLI dependency pin or lock, run the native compact-resume
+tests in **both ownership modes**, including distinct root receipt after a
+notification terminal, N2 enqueue after the note, exact multiline digest
+admission and the occupied total deadline. A changed fold/order contract must
+be resolved before release. See [compact resume measurements](../../evidence/claude/2026-11-06-compact-resume.md).
+
 ### Recovering a fail-stopped Claude wrapper
 
 A fail-stopped host never admits input again, so recovery always means a new

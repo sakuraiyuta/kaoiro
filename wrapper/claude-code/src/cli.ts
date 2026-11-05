@@ -1342,6 +1342,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onNativeUnavailable: ({ reason }) => emitSystemLog(nativeUnavailableMessage(reason)),
     deliveryPolicy,
     pendingReceiptRootTimeoutMs,
+    resumeReceiptMaxWaitMs: turnWatchdog.settings.inactivityMs,
     phase2RootScheduling: () => earlyNegotiated() || yieldNegotiated(),
     onLog,
     onTask,
