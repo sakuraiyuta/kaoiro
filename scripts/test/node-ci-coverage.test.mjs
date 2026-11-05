@@ -52,12 +52,15 @@ test("an all-skipped exception is reached and accepted", () => fixture({ "except
 test("an exception cannot hide a failure", () => fixture({ "except.test.mjs":
   testFile('test("fail", () => { throw Error("bad"); });') }, (root, entries) => {
   const module = new URL("../test-isolation/run-node-tests.mjs", import.meta.url).href;
-  const source = `import { runNodeEntries } from ${JSON.stringify(module)}; console.log(JSON.stringify(runNodeEntries(${JSON.stringify(root)}, ${JSON.stringify(entries)}, [{ path: ${JSON.stringify(entries[0])}, issue: 872, reason: "fixture" }], { stderr: "pipe" })));`;
+  // Piped nested-runner stderr counts against runNodeEntries's inner 64 MiB spawnSync maxBuffer.
+  const source = `import { runNodeEntries } from ${JSON.stringify(module)}; console.log(JSON.stringify(runNodeEntries(${JSON.stringify(root)}, ${JSON.stringify(entries)}, ${JSON.stringify(exception(entries[0]))}, { stderr: "pipe" })));`;
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
+  delete env.NO_COLOR;
+  delete env.FORCE_COLOR;
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], { env, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stderr, /✖ fail|✖ failing tests|test at except\.test\.mjs/);
+  assert.equal(result.stderr, "");
   const lines = result.stdout.trim().split("\n").filter(Boolean);
   const problems = JSON.parse(lines.pop());
   has(problems, "test failed: fail");
