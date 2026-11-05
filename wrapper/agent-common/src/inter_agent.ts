@@ -153,8 +153,9 @@ function acceptedDeliveryFields(
 function workOperationRejectionResult(
   acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>,
   operationId?: string,
+  linkRejection = false,
 ): InterAgentToolResult {
-  const guidance = workRejectionGuidance(acceptance.reason, acceptance.details?.operation_id ?? operationId);
+  const guidance = workRejectionGuidance(acceptance.reason, linkRejection);
   return {
     isError: true,
     content: [{ type: "text", text: JSON.stringify({
@@ -167,11 +168,18 @@ function workOperationRejectionResult(
   };
 }
 
-function workRejectionGuidance(reason: string, operationId?: string): string {
-  if (operationId === undefined) {
+function isWorkLinkRejection(reason: string, workId: string | undefined, intent: DeliveryIntent, operation: WorkControl | undefined): boolean {
+  return workId !== undefined && intent !== "yield" && operation === undefined && [
+    "work_carriage_invalid", "work_capacity", "unknown_work", "work_state_conflict",
+    "work_settings_corrupt", "work_settings_unknown", "work_outcome_unknown",
+  ].includes(reason);
+}
+
+function workRejectionGuidance(reason: string, linkRejection = false): string {
+  if (linkRejection) {
     return reason === "work_outcome_unknown"
-      ? "The message was not sent, but its work link may have committed. Inspect work_status and the conversation links before retrying. No operation receipt exists for this message."
-      : "The message was not sent. Inspect work_status and correct the conversation or work link before retrying. No work operation was submitted.";
+      ? "The message was not sent, but its work link may have committed. Inspect work_status and the conversation links before retrying. To retry in a new conversation, omit conversation_id; an existing conversation must already be linked. No operation receipt exists for this message."
+      : "The message was not sent. Inspect work_status and correct the conversation or work link before retrying. Omit conversation_id to link a new conversation; an existing conversation must already be linked. No work operation was submitted.";
   }
   const receiptScope = "The operation receipt records the work-operation result and delivery knowledge, but not the delivery-intent downgrade; any downgrade is reported only in the send_to_agent result's delivery_authority field.";
   if (reason === "work_applied_message_rejected") {
@@ -568,7 +576,7 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
         "Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`. The server may downgrade non-normal requests, which require negotiated delivery modes.",
       ].join("\n"),
     ),
-  work_id: z.string().min(1).max(128).optional().describe("Work to continue in this conversation, or the work targeted by a yield. Required with delivery_intent=yield."),
+  work_id: z.string().min(1).max(128).optional().describe("Work to continue: omit conversation_id to link a new conversation; an existing conversation must already be linked to this work. Required with delivery_intent=yield to name the targeted work."),
   expected_authority_epoch: WORK_REVISION.optional().describe("Caller-supplied expected authority epoch, normally copied from an observed work stamp; the wrapper validates presence and numeric shape but the server checks it against the current grant. Required with delivery_intent=yield."),
   work_control: WORK_CONTROL_SCHEMA.optional().describe("One basic work operation (assign, accept_assignment, decline, complete, cancel) to apply before admitting this message."),
 };
@@ -2632,7 +2640,7 @@ export class InterAgentTool {
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
             if (captured) {
               if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
-              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id, args.work_id) };
+              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id, isWorkLinkRejection(acceptance.reason, args.work_id, requestedIntent, workControl)) };
             }
             return { kind: "rejected", message, acceptance };
           }
@@ -2663,8 +2671,9 @@ export class InterAgentTool {
       return outcome.result;
     }
     if (outcome.kind === "rejected") {
-      if (workControl !== undefined || args.work_id !== undefined) {
-        return workOperationRejectionResult(outcome.acceptance, workControl?.operation_id);
+      const linkRejection = isWorkLinkRejection(outcome.acceptance.reason, args.work_id, requestedIntent, workControl);
+      if (workControl !== undefined || linkRejection) {
+        return workOperationRejectionResult(outcome.acceptance, workControl?.operation_id, linkRejection);
       }
       if (outcome.acceptance.reason === "work_operation_deduplicated" || outcome.acceptance.reason === "work_outcome_unknown") {
         return workOperationRejectionResult(outcome.acceptance);
@@ -2848,13 +2857,13 @@ export class InterAgentTool {
     return localReplyError(code, guidance);
   }
 
-  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string, workId?: string): InterAgentToolResult {
+  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string, linkRejection = false): InterAgentToolResult {
     this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: clipUtf16Head(acceptance.reason, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
-    const isWorkRejection = operationId !== undefined || workId !== undefined ||
+    const isWorkRejection = operationId !== undefined || linkRejection ||
       acceptance.reason === "work_operation_deduplicated" ||
       acceptance.reason === "work_outcome_unknown" ||
       acceptance.reason === "work_applied_message_rejected";
-    const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason, acceptance.details?.operation_id ?? operationId) : undefined;
+    const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason, linkRejection) : undefined;
     const fields = { error: clipUtf16Head(acceptance.reason, 128), message: workGuidance ?? (acceptance.reason === "work_operation_deduplicated"
       ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
       : acceptance.reason === "work_outcome_unknown"

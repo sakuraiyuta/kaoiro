@@ -2540,8 +2540,8 @@ describe("work-control send rejection receipts", () => {
     return { tool, operationIds };
   }
 
-  it.each([false, true])("reports ordinary link failures without operation-id guidance (captured=%s)", async captured => {
-    for (const reason of ["work_outcome_unknown", "work_carriage_invalid", "work_capacity"]) {
+  it.each([[false, "normal"], [false, "early"], [true, "normal"], [true, "early"]] as const)("reports ordinary link failures without operation-id guidance (captured=%s, intent=%s)", async (captured, intent) => {
+    for (const reason of ["work_outcome_unknown", "work_carriage_invalid", "work_capacity", "unknown_work", "work_state_conflict", "work_settings_corrupt", "work_settings_unknown"]) {
       const tool = new InterAgentTool({
         config: configFor("self.agent"),
         getState: () => "tool_running",
@@ -2551,7 +2551,7 @@ describe("work-control send rejection receipts", () => {
         sendInterAgent: async () => ({ kind: "rejected", reason, send_not_attempted: true, details: { work_id: "wrk_1", conversation_id: "linked-cid" } }),
       });
       if (captured) tool.beginReplyInput("link-turn");
-      const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({ to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1" }, captured ? { origin: { token: "link-turn" } } : undefined);
+      const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({ to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1", delivery_intent: intent }, captured ? { origin: { token: "link-turn" } } : undefined);
       expect(result.isError).toBe(true);
       const body = JSON.parse(result.content[0]!.text);
       expect(body).toMatchObject({ error: reason, send_not_attempted: true, work_id: "wrk_1", conversation_id: "linked-cid" });
@@ -2560,6 +2560,98 @@ describe("work-control send rejection receipts", () => {
       expect(body.guidance).not.toContain("work_op_result");
       expect(body.guidance).not.toContain("operation_id");
     }
+  });
+
+  it.each([false, true])("preserves baseline non-work and yield rejection guidance (captured=%s)", async captured => {
+    const expected: Record<string, string> = {
+      peer_reconnecting_capacity: "send_to_agent failed: the peer is in a planned restart and its close-notice capacity is full; this message was not accepted and no reconnected notice will follow for this attempt — retry later with the same conversation_id=cid-x (peer_reconnecting_capacity).",
+      unknown_conversation_id: "send_to_agent failed: conversation_id=cid-x is unknown to the server — retry with the correct conversation_id, or omit it to start a new conversation (this can also mean the server restarted since this conversation began, which drops all of its state).",
+      delivery_backlog: "send_to_agent failed: server rejected the message (delivery_backlog)",
+      conversation_closed: "send_to_agent failed: server rejected the message (conversation_closed)",
+      work_carriage_invalid: "send_to_agent failed: server rejected the message (work_carriage_invalid)",
+    };
+    for (const intent of ["normal", "early", "yield"] as const) for (const [reason, text] of Object.entries(expected)) {
+      if (reason === "work_carriage_invalid" && intent !== "yield") continue;
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"), getState: () => "tool_running", send: () => {}, workTools,
+        ...(captured ? { replyBasisMode: () => "v1" as const } : {}),
+        sendInterAgent: async () => ({ kind: "rejected", reason, send_not_attempted: true }),
+      });
+      if (captured) tool.beginReplyInput("rejection-turn");
+      const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({
+        to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1", delivery_intent: intent,
+        ...(captured ? {} : { conversation_id: "cid-x" }),
+        ...(intent === "yield" ? { expected_authority_epoch: 1 } : {}),
+      }, captured ? { origin: { token: "rejection-turn" } } : undefined);
+      expect(result.isError).toBe(true);
+      if (captured) {
+        expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: reason, message: "Connection changed before send; retry intentionally after rejoin.", send_not_attempted: true });
+        expect(JSON.parse(result.content[0]!.text)).not.toHaveProperty("guidance");
+      } else {
+        expect(result.content[0]!.text).toBe(text);
+      }
+    }
+  });
+
+  it("keeps a rejection without work_id out of link guidance", async () => {
+    const { tool } = makeRejectedTool("work_carriage_invalid");
+    const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({ to: "peer.agent", kind: "inform", body: "Continue" });
+    expect(result.content[0]!.text).toBe("send_to_agent failed: server rejected the message (work_carriage_invalid)");
+  });
+
+  it("keeps receipt guidance for work controls even when work_id is also present", async () => {
+    const { tool } = makeRejectedTool("work_carriage_invalid");
+    const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({
+      to: "peer.agent", kind: "inform", body: "Finish", work_id: "wrk_1", work_control: { op: "complete", work_id: "wrk_1" },
+    });
+    const body = JSON.parse(result.content[0]!.text);
+    expect(body.guidance).toContain("Query work_op_result");
+    expect(body.operation_id).toMatch(/^op_/);
+  });
+
+  it.each(["normal", "early", "yield"] as const)("forwards work_id for %s through the descriptor handler", async intent => {
+    const payloads: InterAgentMessagePayload[] = [];
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"), getState: () => "tool_running", send: () => {}, workTools,
+      sendInterAgent: async envelope => { payloads.push(envelope.payload as unknown as InterAgentMessagePayload); return { kind: "accepted", stamp: null }; },
+    });
+    const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({
+      to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1", delivery_intent: intent,
+      ...(intent === "yield" ? { expected_authority_epoch: 2 } : {}),
+    });
+    expect(result.isError).not.toBe(true);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ work_id: "wrk_1", delivery_intent: intent, new_conversation: true });
+    expect(payloads[0]!.expected_authority_epoch).toBe(intent === "yield" ? 2 : undefined);
+  });
+
+  it.each(["normal", "early", "yield"] as const)("refuses an unnegotiated work_id before %s dispatch", async intent => {
+    const sendInterAgent = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"), getState: () => "tool_running", send: () => {}, sendInterAgent,
+      workTools: { ...workTools, workControlSupported: () => false },
+    });
+    const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({
+      to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1", delivery_intent: intent,
+      ...(intent === "yield" ? { expected_authority_epoch: 2 } : {}),
+    });
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: "work_control_unavailable", send_not_attempted: true });
+    expect(sendInterAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { delivery_intent: "yield", expected_authority_epoch: 1 },
+    { delivery_intent: "yield", work_id: "wrk_1" },
+    { delivery_intent: "yield" },
+    { delivery_intent: "normal", expected_authority_epoch: 1 },
+    { delivery_intent: "early", expected_authority_epoch: 1 },
+  ])("rejects invalid work/epoch intent combinations before dispatch: %j", async extra => {
+    const sendInterAgent = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+    const tool = new InterAgentTool({ config: configFor("self.agent"), getState: () => "tool_running", send: () => {}, sendInterAgent, workTools });
+    const result = await tool.descriptors().find(tool => tool.name === "send_to_agent")!.handler({ to: "peer.agent", kind: "inform", body: "Continue", ...extra });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("failed: invalid input");
+    expect(sendInterAgent).not.toHaveBeenCalled();
   });
 
   const args = {

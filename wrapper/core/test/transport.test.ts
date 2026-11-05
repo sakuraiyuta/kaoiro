@@ -3118,6 +3118,15 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       delivery: { advisory: { granted: "normal", downgrade } } });
   });
 
+  it("refuses an ordinary work link before pushing when work control is unnegotiated", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", { personaId: "ao" });
+    const envelope = interAgentEnvelope();
+    envelope.payload = { ...envelope.payload, work_id: "wrk_1" };
+    const pending = link.sendInterAgent(envelope);
+    expect(mock.pushes).toEqual([]);
+    await expect(pending).resolves.toEqual({ kind: "rejected", reason: "work_control_unavailable", send_not_attempted: true });
+  });
+
   it("sendInterAgent は error で rejected + reason を返し、記録はしない", async () => {
     const acks: unknown[] = [];
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
