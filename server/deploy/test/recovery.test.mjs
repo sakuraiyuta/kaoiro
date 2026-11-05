@@ -158,11 +158,17 @@ test("5-b runbook does not prescribe live copy or an outside-volume match", () =
   assert.ok(section.includes("if that cannot be established, do"));
 });
 
-test("refusals and deferred rows render a note and no command", () => {
-  const lines = renderRecovery(TX, journalAt(PHASE.ROLLBACK_RESTORING));
-  assert.deepEqual(lines.map((l) => [l.command, l.argv]), [["update", null], ["rollback", null]]);
-  assert.match(formatRecovery(lines), /4\.4 \(3a\)/);
-  assert.doesNotMatch(formatRecovery(lines), /^next:/m);
+test("interrupted destructive rollback phases permanently refuse both commands with manual guidance", () => {
+  for (const phase of [PHASE.ROLLBACK_STOPPED, PHASE.ROLLBACK_FORENSIC_ARCHIVED,
+    PHASE.ROLLBACK_RESTORING, PHASE.ROLLBACK_RESTORED]) {
+    const lines = renderRecovery(TX, journalAt(phase));
+    assert.deepEqual(lines.map((l) => [l.command, l.operation, l.closure, l.argv]), [
+      ["update", OPERATION.REFUSE, "closed", null],
+      ["rollback", OPERATION.REFUSE, "closed", null],
+    ], phase);
+    assert.match(formatRecovery(lines), /4\.4 \(3a\)/);
+    assert.doesNotMatch(formatRecovery(lines), /^next:/m);
+  }
 });
 
 test("a destructive rollback names --fleet-stopped only as an optional operator attestation", () => {
