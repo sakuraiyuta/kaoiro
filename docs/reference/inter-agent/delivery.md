@@ -327,9 +327,10 @@ stage history expires after its retention window; the summary survives for
 the recipient ledger's lifetime and resets when that ledger is deleted.
 
 `yield` is downgraded to early steering when eligible; Codex has no measured
-tool-boundary cut. The code default for an omitted Codex backend is exec; the
-app-server backend is chosen by the runner's `codex.backend`. Production selects
-app-server (operator decision E3); the default switch is tracked by
+tool-boundary cut. An omitted Codex backend selects app-server; the runner's
+`codex.backend` can explicitly select exec, which advertises no in-flight input.
+Existing hosts follow the [guarded fresh backend transition](../../operations/codex-backend-switch.md#fresh-backend-migration)
+before changing backends. The default change is tracked by
 [issue 564](https://github.com/sakuraiyuta/kaoiro/issues/564), and the dated
 observation is in the
 [C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md). Live per-agent policy
