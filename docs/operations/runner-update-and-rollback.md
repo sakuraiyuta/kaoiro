@@ -572,11 +572,12 @@ run settles, its printed lines describe the resulting record.
 #### Recovery table
 
 For an interrupted operation, inspect `next` and the worker result, preserve
-the named objects, and use the commands it prints. A held lock must be inspected
-using [stale operation locks](#stale-operation-locks) before removal. Use the
-recorded physical tool release for `resume` or `recover`; its version need not
-be the current release. `--allow-dirty` is development-only; a printed recovery
-command may be refused for an untagged source.
+the named objects, and use the commands it prints. A lock left by a dead worker
+may be removed only after the inspection in
+[stale operation locks](#stale-operation-locks). Use the recorded physical
+tool release for `resume` or `recover`; its version need not be the current
+release. `--allow-dirty` is development-only; a printed recovery command may
+be refused for an untagged source.
 
 `resume` continues the recorded operation without reinstalling or rebuilding.
 `recover` returns a never-started forward to its unchanged source, cancels a
