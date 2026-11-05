@@ -29,7 +29,7 @@ it("keeps the latest never-sent error through a real long rejoin and restores th
     link.send(make("state_change",""));
     await new Promise(resolve=>setTimeout(resolve,15_000));
     expect(results()).toHaveLength(1);
-    release();await until(()=>mode==="v1");wire.push("permission_sync",{version:"0",control:null,next:null});await link.waitForPermissionSync();await link.requestDirectory();
+    release();await until(()=>mode==="v1");wire.push("permission_sync",{version:"0",control:null,next:null});await until(()=>!link.permissionSyncPending());await link.waitForPermissionSync();await link.requestDirectory();
     expect(results().map(item=>(item.payload.payload as {text:string}).text)).toEqual(["connected control","latest fixed failure"]);
     const frames=wire.received.filter(item=>item.event==="envelope");
     const lastError=frames.findIndex(item=>(item.payload.payload as {text?:string}).text==="latest fixed failure");
