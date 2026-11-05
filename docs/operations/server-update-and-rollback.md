@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-11-05
+last_updated: 2026-11-06
 related: [deployment]
 ---
 
@@ -32,13 +32,14 @@ an already-running deployment to a new version.
 [Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) retires the Claude
 phase-2 flag, persona list and file-key gates. Inventory each affected runner's
 file and actual environment, direct launches, ceiling/default and stored
-per-agent policy before deployment. Unknown inventory stops that host.
+per-agent policy before deployment. Unknown or missing inventory stops
+deployment; do not use one host as evidence for another.
 To preserve disabled delivery, verify a false ceiling for subsequent launches
 or stored off for the live fence. Stored off with negotiated mechanisms keeps
 operator-priority roots; a false ceiling preserves FIFO scheduling.
 
-Retain the old enabling settings and their inventoried values through the
-C4C rollback window, even though warnings say they have no effect on W2.
+Retain the old settings (enabling or disabling) and their inventoried values
+through the C4C rollback window, even though warnings say they have no effect on W2.
 A rollback preserves W1 behavior only when its runner/relay is restored too
 and its old input remains effective. Remove old settings only after that
 window and at least one released version with warnings, coordinated with C5.

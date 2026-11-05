@@ -1,7 +1,7 @@
 ---
 title: "Codex backend switching and rollback"
 status: implemented
-last_updated: 2026-11-05
+last_updated: 2026-11-06
 ---
 
 # Codex backend switching and rollback
@@ -297,6 +297,12 @@ its `next` commands; inspect those commands and the worker result before retryin
 Backend maintenance does not replace that state procedure. Restore the fleet
 under the linked high-risk procedure; there is no separate staged first-turn
 check. Observe errors in actual turns and record affected peers.
+
+Wrappers sharing a `CODEX_HOME` can race while a native update migrates its
+state schema. For recognized SQLite initialization failures, the transport
+tries `initialize` up to three times and logs
+`codex: app-server initialize failed (attempt N/3), retrying in ... ms: ...`;
+persistent failures remain operator-visible errors.
 
 Running the global `codex` CLI against the same `~/.codex` also migrates the
 shared state, and opens the same race window for the wrappers that start next.
