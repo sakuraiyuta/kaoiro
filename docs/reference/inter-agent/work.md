@@ -116,13 +116,15 @@ Operator notices go only to the current assignee and director.
 the inbound rendering table retain all fifteen operation names so queued
 messages and durable receipts remain readable.
 
-For rollback compatibility, existing values of `holds`, `verdicts`,
+The v1 `WorkRecord` shape preserves existing values of `holds`, `verdicts`,
 `accepted_verdicts`, `transfers`, `subject`, `requires_verdict`, `reviews`, and
-`checks` are preserved. Their `WorkRecord` keys are optional for readers; optional
-typing does not remove stored values. New assignments initialize them to empty lists,
-`null`, or `false` as appropriate. They still appear in full `work_status`,
-`work_notice` and client `work_changed` records, but do not determine access,
-completion or any other server decision. U1 does not normalize or remove them.
+`checks`. Older wrappers read `work.transfers`, so these keys remain without a
+removal date for record-shape compatibility. Their keys are optional for
+readers; optional typing does not remove stored values. New assignments
+initialize them to empty lists, `null`, or `false` as appropriate. They still
+appear in full `work_status`, `work_notice` and client `work_changed` records,
+but do not determine access, completion or any other server decision. No
+removal is planned.
 
 An active grant also authorizes the director to request the assignee's reset
 through `request_peer_session_reset`
@@ -165,6 +167,9 @@ instead return `work_settings_corrupt`/`work_settings_unknown`, never a fabricat
 capacity refusal. They close mutation and authority grants while the store stays
 alive. See [configuration and recovery](../configuration/server.md#unavailable-settings).
 
-The retained transfer/verdict collection limits are configuration compatibility
-fields only. No supported operation grows these collections. Removing those
-fields or limits requires the separate U3 design.
+The four limits for transfer, verdict and check collections
+(`work_pending_transfers`, `work_verdicts_per_work`,
+`work_accepted_verdicts_per_work` and `work_checks_per_work`) remain v1 settings
+compatibility fields without a removal date. No supported operation grows
+these collections, and the limits do not affect current server decisions. No
+removal is planned.

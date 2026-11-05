@@ -535,7 +535,6 @@ proposed.
   default-on only for what the probes guarantee. This narrows the end state
   of the 2026-10-01 Amendment for Antigravity.
 
-
 ## Amendment (2026-11-05, basic work operations)
 
 [Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) narrows work to
@@ -563,3 +562,22 @@ operations and caller-declared conversation linkage. Server U1 and wrapper U2
 are released together with the runner stopped before the server update and
 restored only after the paired release is verified; rollback also restores the
 server and runner together.
+
+## Amendment (2026-11-05, retained v1 work compatibility)
+
+The operator decided in [issue #972](https://github.com/sakuraiyuta/kaoiro/issues/972)
+not to remove the eight legacy `WorkRecord` keys, the four transfer, verdict
+and check collection capacity settings (`work_pending_transfers`,
+`work_verdicts_per_work`, `work_accepted_verdicts_per_work` and
+`work_checks_per_work`), or the explicit `unsupported_work_operation` replies
+for `work_transfer_ack` and `work_check_request`. Keep the keys for v1
+record-shape compatibility and the settings and replies for v1 compatibility,
+without a removal date. The keys and limits do not affect current server
+decisions; the replies reject the retired requests. No removal is planned.
+
+This retention is for v1 compatibility, not rollback. The server rollback
+restores the pre-update archive with its corresponding image and does not
+depend on these keys; see
+[server update and rollback](../operations/server-update-and-rollback.md).
+Older wrappers read `work.transfers`, so that key remains part of the v1 record
+shape.

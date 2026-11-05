@@ -7,7 +7,7 @@ description: The flat outer-version stamping policy and the staged completion in
 
 # Protocol versioning policy
 
-### Versioning policy
+## Versioning policy
 
 - Receivers **ignore unknown keys** for forward compatibility.
 - ADR-0015 requires a flat outer `version` on **every wrapper/server/client message**. The
@@ -151,11 +151,13 @@ server state.
 narrows the meaning of negotiated `work_control: "v1"` without changing the
 outer `version: "0"`. Outbound work controls are the five basic operations;
 `work_check_request` and `work_transfer_ack` are removed from the wrapper's
-emitted controls and tools. The server temporarily recognizes both only to
-return `unsupported_work_operation`. Read-only receipt operations and the
-inbound rendering table retain all fifteen names; eight legacy `WorkRecord`
-keys become optional and can still carry old values. This is a coordinated
-server/wrapper release, following the [paired update and rollback
+emitted controls and tools. The server retains explicit
+`unsupported_work_operation` rejections for both controls indefinitely as v1
+wire compatibility; they have no removal date. Read-only receipt operations
+and the inbound rendering table retain all fifteen names. The eight legacy
+`WorkRecord` keys remain optional and keep their old values as v1 record-shape
+compatibility; they do not affect server decisions and have no removal date.
+This is a coordinated server/wrapper release, following the [paired update and rollback
 procedure](../../operations/runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
 
 ## Related protocol topics
