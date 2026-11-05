@@ -4049,6 +4049,19 @@ describe("permission sync deadlines and disconnected errors", () => {
     } finally { link.close();vi.useRealTimers(); }
   });
 
+  it("rearms an early timer callback against the original monotonic deadline", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date"]});
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const link = setup();let failure:unknown;
+    void link.waitForPermissionSync().catch(error => { failure = error; });
+    try {
+      now.mockReturnValue(30_999.5);await vi.advanceTimersByTimeAsync(30_000);
+      expect(failure).toBeUndefined();expect(vi.getTimerCount()).toBe(1);
+      now.mockReturnValue(31_000);await vi.advanceTimersByTimeAsync(1);
+      expect(failure).toBeInstanceOf(PermissionSyncTimeoutError);expect(vi.getTimerCount()).toBe(0);
+    } finally { link.close();now.mockRestore();vi.useRealTimers(); }
+  });
+
   it.each(["phx_error", "phx_close", "socket_error", "socket_close"])("invalidates a ready sync on %s", async event => {
     vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});const applied = vi.fn(), link = setup(applied);
     try {

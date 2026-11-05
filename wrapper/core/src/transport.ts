@@ -2123,8 +2123,14 @@ export class ServerLink {
   }
 
   #expirePermissionSyncIfDue(): void {
-    if (this.#permissionSyncReady || this.#permissionSyncExpired || this.#permissionSyncClosed ||
-        performance.now() < this.#permissionSyncDeadline) return;
+    if (this.#permissionSyncReady || this.#permissionSyncExpired || this.#permissionSyncClosed) return;
+    const remaining = this.#permissionSyncDeadline - performance.now();
+    if (remaining > 0) {
+      clearTimeout(this.#permissionSyncTimer);
+      this.#permissionSyncTimer = setTimeout(() => this.#expirePermissionSyncIfDue(), Math.max(1, Math.ceil(remaining)));
+      this.#permissionSyncTimer.unref?.();
+      return;
+    }
     this.#permissionSyncExpired = true;
     this.#rejectPermissionSync?.(new PermissionSyncTimeoutError());
     writeRedactedStderr("[kaoiro] permission_sync timed out; input dispatch remains gated\n");
