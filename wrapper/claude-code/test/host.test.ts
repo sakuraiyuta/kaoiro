@@ -10636,7 +10636,7 @@ describe("reserved resume receipt", () => {
         else if(action==="fold") {await vi.advanceTimersByTimeAsync(0);expect(host.state).toBe("error");}
         else if(action==="close") host.close();
         else if(action==="expire") {now=10_000;host.tickPendingReceiptRootTimeout();}
-        else {if(action==="late") now=10_000;else if(action==="fence-late") now=5_000;yield result("success",{origin:{kind:"task-notification"}});}
+        else {if(action==="late") now=1_000;else if(action==="fence-late") now=5_000;yield result("success",{origin:{kind:"task-notification"}});}
         await vi.advanceTimersByTimeAsync(0);
         if(action==="drain" || action==="duplicate") expect(host.activeInterAgentTurnToken()).not.toBeNull();
         await pending;
@@ -10645,7 +10645,7 @@ describe("reserved resume receipt", () => {
           yield result("success"); await vi.advanceTimersByTimeAsync(0); expect(ready).toBe(true);
           expect((await next).value!.message.content).toBe("after"); yield result("success");
         } else if(action==="close") expect(host.state).not.toBe("error"); else expect(host.state).toBe("error");
-      },{nowMs:()=>now,resumeReceiptMaxWaitMs:10_000});
+      },{nowMs:()=>now,resumeReceiptMaxWaitMs:action==="late" ? 1_000 : 10_000});
       expect(r.events.filter(e=>e.event==="admitted_root")).toHaveLength(["drain","duplicate"].includes(action)?1:0);
       if(action==="timeout") expect(r.logs).toContain("terminal_fence_timeout");
     } finally {vi.useRealTimers();}
