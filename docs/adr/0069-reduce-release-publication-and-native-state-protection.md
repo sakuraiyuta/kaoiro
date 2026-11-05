@@ -130,6 +130,11 @@ After a high-risk update, restore peers in bulk without a canary. Since a bulk
 restore cannot be stopped midway, the procedure handles partial success after
 the fact.
 
-This records policy only. Removing the canary and recovery table is a separate
-unit that needs its own design, including replacement guidance when a Codex
-native update stops partway.
+Issue 709 Unit A ([`344cee43`](https://github.com/sakuraiyuta/kaoiro/commit/344cee43e9e7cfacf9908f48fbdc348ec6863330))
+and Unit B ([`430e41a3`](https://github.com/sakuraiyuta/kaoiro/commit/430e41a3cc258a84f8558842c7f3fe019dbed6d2))
+landed in production release
+[v2026.11.05.1](../release/v2026.11.05.1.md). Unit B's behavior change is in
+[`fa35ebd5`](https://github.com/sakuraiyuta/kaoiro/commit/fa35ebd59272ced39c7b8bf166965d28fe99e98a):
+it retired the exhaustive branch table and class-specific advice. For a
+refused Codex native update, the helper prints one safety instruction and,
+when it can identify the record, that record's `next` lines.
