@@ -86,7 +86,7 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
   end
 
   @tag :tmp_dir
-  test "duplicate IDs and sprite sets do not depend on ZIP names", %{tmp_dir: tmp} do
+  test "duplicate ID filename precedence determines which sprite set competes", %{tmp_dir: tmp} do
     old_dir = Application.get_env(:kaoiro_server, :persona_dir)
     old_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
 
@@ -111,7 +111,8 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
     refute PersonaAssets.known_persona?("b")
     File.rename!(Path.join(tmp, "x.zip"), Path.join(tmp, "zz.zip"))
     assert :ok = PersonaAssets.rebuild()
-    refute PersonaAssets.known_persona?("b")
+    assert PersonaAssets.known_persona?("b")
+    assert PersonaAssets.get_persona("b")["sprite_set"] == "t"
     assert PersonaAssets.known_persona?("a")
   end
 end
