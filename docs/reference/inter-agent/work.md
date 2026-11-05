@@ -118,13 +118,13 @@ messages and durable receipts remain readable.
 
 The v1 `WorkRecord` shape preserves existing values of `holds`, `verdicts`,
 `accepted_verdicts`, `transfers`, `subject`, `requires_verdict`, `reviews`, and
-`checks`. Older wrappers read `work.transfers`, so these keys remain without a
-removal date for record-shape compatibility. Their keys are optional for
-readers; optional typing does not remove stored values. New assignments
-initialize them to empty lists, `null`, or `false` as appropriate. They still
-appear in full `work_status`, `work_notice` and client `work_changed` records,
-but do not determine access, completion or any other server decision. No
-removal is planned.
+`checks`. Server releases before `v2026.11.05.1` read these keys, so they
+remain without a removal date for record-shape compatibility. Their keys are
+optional for readers; optional typing does not remove stored values. New
+assignments initialize them to empty lists, `null`, or `false` as appropriate.
+They still appear in full `work_status`, `work_notice` and client
+`work_changed` records, but do not determine access, completion or any other
+server decision. No removal is planned.
 
 An active grant also authorizes the director to request the assignee's reset
 through `request_peer_session_reset`

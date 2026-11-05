@@ -565,19 +565,18 @@ server and runner together.
 
 ## Amendment (2026-11-05, retained v1 work compatibility)
 
-The operator decided in [issue #972](https://github.com/sakuraiyuta/kaoiro/issues/972)
-not to remove the eight legacy `WorkRecord` keys, the four transfer, verdict
+Decided in [issue #972](https://github.com/sakuraiyuta/kaoiro/issues/972) not
+to remove the eight legacy `WorkRecord` keys, the four transfer, verdict
 and check collection capacity settings (`work_pending_transfers`,
 `work_verdicts_per_work`, `work_accepted_verdicts_per_work` and
 `work_checks_per_work`), or the explicit `unsupported_work_operation` replies
 for `work_transfer_ack` and `work_check_request`. Keep the keys for v1
 record-shape compatibility and the settings and replies for v1 compatibility,
-without a removal date. The keys and limits do not affect current server
+without a removal date. Server releases before `v2026.11.05.1` read the eight
+keys. The keys and limits do not affect current server
 decisions; the replies reject the retired requests. No removal is planned.
 
 This retention is for v1 compatibility, not rollback. The server rollback
 restores the pre-update archive with its corresponding image and does not
 depend on these keys; see
 [server update and rollback](../operations/server-update-and-rollback.md).
-Older wrappers read `work.transfers`, so that key remains part of the v1 record
-shape.
