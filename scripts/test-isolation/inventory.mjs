@@ -21,5 +21,5 @@ const inventory = {
     firstImport: checker.firstImport(row.text) ?? null,
   })),
 };
-console.log(`${JSON.stringify(inventory, null, 2)}\n`);
+process.stdout.write(`${JSON.stringify(inventory, null, 2)}\n`);
 if (problems.length > 0) process.exitCode = 1;
