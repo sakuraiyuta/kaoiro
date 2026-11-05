@@ -380,3 +380,6 @@ The bridge accepts these invocations:
   If both `sandbox` and `network_access` conflict while the current sandbox is
   `danger-full-access`, narrow `sandbox` first: that sandbox fixes effective
   network access to `true`, so changing `network_access` alone cannot lower it.
+
+For permission synchronization deadlines and failed-input recovery, see
+[permission state](../protocol/permission-state.md#synchronization-failure-visibility).

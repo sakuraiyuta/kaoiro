@@ -1,3 +1,4 @@
+import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import { resolveDelivery, retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage } from "@kaoiro/agent-common";
 // Codex wrapper CLI — the composition root of the codex engine: loads the
@@ -1163,7 +1164,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       handoff,
     }) => {
       if (handoff?.outcome === "unknown") deliveryStages.unknownTurn(turnToken, handoff.reason);
-      else deliveryStages.settled(turnToken);
+      else if (error?.reason !== "permission_sync_timeout") deliveryStages.settled(turnToken);
       // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
       // is the reset boundary. `terminal` is set by the host on exactly
       // those two paths; a cancellation, a terminal-less EOF or a rejected
@@ -1177,6 +1178,17 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         authoritative: terminal !== undefined && abandoned === undefined,
         ...(abandoned === undefined ? {} : { why: abandonmentCause(abandoned) }),
       });
+      if (error?.reason === "permission_sync_timeout") {
+        retirePermissionSyncInput({
+          envelopes: interAgentTurns.deliveryEnvelopesForTurn(turnToken),
+          retire: envelopes => link?.retireInterAgentDeliveries(envelopes),
+          forgetStages: envelopes => deliveryStages.retireEnvelopes(envelopes),
+          clearInjection: () => { interAgent?.endSteeredTurn(turnToken, conversationIds); },
+        });
+        const settled = interAgentTurns.settle(turnToken);
+        if (settled !== undefined) interAgentTurns.dispatchNextForPeer(settled.peer);
+        return;
+      }
       if (cancellation?.kind === "watchdog_fail_stop") {
         // A watchdog cancellation is for a never-started token. Resolve its
         // own peer notices, but never dispatch a successor; the active token

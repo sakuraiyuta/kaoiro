@@ -102,6 +102,8 @@ import {
   SERVER_EVENT_VERSION_POLICY,
   WRAPPER_CONTROL_EVENT_POLICY,
   ServerLink,
+  PermissionSyncTimeoutError,
+  PERMISSION_SYNC_TIMEOUT_MS,
   chunkReplayIaItems,
   hydrationVerdictFrom,
 } from "../src/transport.js";
@@ -3388,12 +3390,14 @@ describe("ServerLink — server -> wrapper version check の構造 (issue #218)"
       emit(event, { version: "9" });
       expect(stderr, `${event} は不一致を警告する`).toHaveBeenCalledTimes(1);
       expect(stderr.mock.calls[0]![0]).toContain(event);
-      expect(stderr.mock.calls[0]![0]).toContain('"9"');
+      if (event === "permission_sync") expect(stderr.mock.calls[0]![0]).not.toContain('"9"');
+      else expect(stderr.mock.calls[0]![0]).toContain('"9"');
 
       stderr.mockClear();
       emit(event, {});
       expect(stderr, `${event} は欠落を警告する`).toHaveBeenCalledTimes(1);
-      expect(stderr.mock.calls[0]![0]).toContain("(absent)");
+      if (event === "permission_sync") expect(stderr.mock.calls[0]![0]).toContain("version mismatch");
+      else expect(stderr.mock.calls[0]![0]).toContain("(absent)");
 
       stderr.mockClear();
       emit(event, { version: "0" });
@@ -4011,5 +4015,144 @@ describe("self identity request failures", () => {
       expect(await link.requestSelfIdentity()).toBeNull();
       expect(mock.pushes).toHaveLength(count);
     } finally { link.close(); mock.channelState = "joined"; }
+  });
+});
+
+
+describe("permission sync deadlines and disconnected errors", () => {
+  beforeEach(() => { mock.handlers.clear();mock.joinReceivers.clear();mock.pushes = []; });
+  const sync = { version: "0", control: null, next: null };
+  const setup = (onSync = vi.fn()) => new ServerLink("ws://x/wrapper", "deadline", {
+    personaId: "p", permissionSync: { engine: "codex", onSync },
+  });
+  const join = (supported = true) => mock.joinReceivers.get("ok")?.({ permission_sync: supported });
+  const referenced = (ref = mock.joinRef) => {
+    for (const handler of mock.handlers.get("permission_sync") ?? []) {
+      (handler as (...args: unknown[]) => void)(sync, "ref", ref);
+    }
+  };
+
+  it("bounds the default initial wait, does not renew on rejoin, and recovers future waits only", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});const link = setup();
+    try {
+      let ready = false;
+      const first = link.waitForPermissionSync().then(() => { ready = true; }, error => error);
+      expect(link.permissionSyncPending()).toBe(true);
+      expect(PERMISSION_SYNC_TIMEOUT_MS).toBe(30_000);
+      await vi.advanceTimersByTimeAsync(29_999);expect(ready).toBe(false);
+      mock.onOpen?.();join();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await first).toBeInstanceOf(PermissionSyncTimeoutError);
+      await expect(link.waitForPermissionSync()).rejects.toBeInstanceOf(PermissionSyncTimeoutError);
+      referenced();await expect(link.waitForPermissionSync()).resolves.toBeUndefined();
+      expect(ready).toBe(false);expect(vi.getTimerCount()).toBe(0);
+    } finally { link.close();vi.useRealTimers(); }
+  });
+
+  it.each(["phx_error", "phx_close", "socket_error", "socket_close"])("invalidates a ready sync on %s", async event => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});const applied = vi.fn(), link = setup(applied);
+    try {
+      join();referenced();await link.waitForPermissionSync();
+      if (event === "socket_error") mock.onError?.();
+      else if (event === "socket_close") mock.onClose?.();
+      else emit(event, {});
+      let ready = false;void link.waitForPermissionSync().then(() => { ready = true; }, () => {});
+      await Promise.resolve();expect(ready).toBe(false);
+      referenced();expect(applied).toHaveBeenCalledTimes(1);
+    } finally { link.close();vi.useRealTimers(); }
+  });
+
+  it("keeps current-join application ahead of release and rejects stale or reentrant application", async () => {
+    const applied = vi.fn(() => { expect(link.permissionSyncPending()).toBe(true); });
+    const link = setup(applied);
+    try {
+      join();referenced("old");expect(applied).not.toHaveBeenCalled();
+      referenced();await link.waitForPermissionSync();
+      mock.onError?.();join();applied.mockImplementation(() => { mock.onError?.(); });
+      referenced();expect(link.permissionSyncPending()).toBe(true);
+    } finally { link.close(); }
+  });
+
+  it("uses the monotonic deadline before late application and permits an expired legacy baseline", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});const link = setup();
+    try {
+      join();const expired = link.waitForPermissionSync().catch(error => error);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 30_001);
+      referenced();expect(await expired).toBeInstanceOf(PermissionSyncTimeoutError);
+      await link.waitForPermissionSync();
+      vi.restoreAllMocks();mock.onError?.();const next = link.waitForPermissionSync().catch(error => error);
+      await vi.advanceTimersByTimeAsync(30_000);expect(await next).toBeInstanceOf(PermissionSyncTimeoutError);
+      join(false);await expect(link.waitForPermissionSync()).resolves.toBeUndefined();
+    } finally { link.close();vi.restoreAllMocks();vi.useRealTimers(); }
+  });
+
+  it("never releases on application failure, including after expiry or on a mandatory legacy join", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});const link = setup(vi.fn(() => { throw Error("private marker"); }));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      join();referenced();const failed = link.waitForPermissionSync().catch(error => error);
+      await vi.advanceTimersByTimeAsync(30_000);expect(await failed).toBeInstanceOf(PermissionSyncTimeoutError);
+      mock.onOpen?.();join();referenced();
+      await expect(link.waitForPermissionSync()).rejects.toBeInstanceOf(PermissionSyncTimeoutError);
+      emit("set_permission", { version: "0", revision: 1, sandbox: "read-only", network_access: false });
+      join(false);await expect(link.waitForPermissionSync()).rejects.toBeInstanceOf(PermissionSyncTimeoutError);
+      expect(stderr.mock.calls.flat().join("")).not.toContain("private marker");
+    } finally { link.close();stderr.mockRestore();vi.useRealTimers(); }
+  });
+
+  it.each([
+    [null, "payload"], [{version: 9}, "version"],
+    [{version:"0",control:null,next:{}}, "control/next"],
+    [{version:"0",control:{secret:"marker"},next:{}}, "control"],
+    [{version:"0",control:{revision:0,requested:{sandbox:"read-only",network_access:false},status:"pending",constraints:{approval:"never",enforcement:"os"}},next:{secret:"marker"}}, "next"],
+  ])("logs one rejected field without values", (payload, field) => {
+    const link = setup(), stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      join();emit("permission_sync", payload);
+      const lines = stderr.mock.calls.map(call => String(call[0]));
+      expect(lines.filter(line => line.includes("permission_sync rejected"))).toEqual([`[kaoiro] permission_sync rejected: field=${field}\n`]);
+      expect(lines.join("")).not.toContain("marker");expect(lines.join("")).not.toContain("secret");
+    } finally { link.close();stderr.mockRestore(); }
+  });
+
+  it("expires before a late throwing application and never completes a closed legacy join", async () => {
+    vi.useFakeTimers({toFake:["setTimeout","clearTimeout","Date","performance"]});
+    const link = setup(vi.fn(() => { throw Error("application failed"); }));
+    try {
+      join();let failure:unknown;void link.waitForPermissionSync().catch(error => { failure = error; });
+      vi.spyOn(performance,"now").mockReturnValue(performance.now()+30_001);
+      referenced();await Promise.resolve();expect(failure).toBeInstanceOf(PermissionSyncTimeoutError);
+    } finally { link.close();vi.restoreAllMocks();vi.useRealTimers(); }
+    let closed!:ServerLink;
+    closed = new ServerLink("ws://x/wrapper","closed",{personaId:"p",permissionSync:{engine:"codex",onNegotiated:()=>closed.close()}});
+    join(false);expect(closed.permissionSyncPending()).toBe(true);
+    await expect(closed.waitForPermissionSync()).rejects.toThrow("permission_sync_closed");
+  });
+
+  it("defers an error on an open socket whose channel is not joined", () => {
+    const link = new ServerLink("ws://x/wrapper","joining",{personaId:"p"});
+    try { mock.connected=true;mock.channelState="joining";link.send(result("held"));expect(mock.pushes).toEqual([]);
+      mock.channelState="joined";join();expect(mock.pushes).toHaveLength(1);
+    } finally { link.close(); }
+  });
+
+  const result = (text: string, is_error = true) => ({ version:"0",agent_id:"deadline",display_name:"P",ext:{},persona:{id:"p",name:"P",sprite_set:"p"},ts:"T",state:"error",type:"result",payload:{text,is_error} }) as Envelope;
+  it.each(["phx_error", "phx_close"])("holds the latest disconnected error through %s, flushes once, and clears only on close", event => {
+    const link = new ServerLink("ws://x/wrapper", "deadline", {personaId:"p"});
+    try {
+      link.send(result("connected"));expect(mock.pushes).toHaveLength(1);
+      mock.connected = false;link.send(result("old"));link.send(result("latest"));
+      expect(mock.pushes).toHaveLength(1);
+      link.send(result("success",false));link.send({...result("log"),type:"log"});
+      expect(mock.pushes).toHaveLength(3);
+      link.send({...result("state"),type:"state_change",state:"waiting_input",payload:{}});
+      emit(event, {});mock.connected = true;
+      join();join();
+      const frames = mock.pushes.filter(push => push.event === "envelope").map(push => push.payload as Envelope);
+      expect(frames.filter(frame => frame.type === "result" && frame.payload.is_error === true).map(frame => frame.payload.text)).toEqual(["connected","latest"]);
+      expect(frames.at(-1)?.state).toBe("waiting_input");
+      mock.connected = false;link.send(result("discard"));link.close();mock.connected = true;join();
+      expect(mock.pushes.filter(push => (push.payload as Envelope).payload?.text === "discard")).toHaveLength(0);
+    } finally { link.close(); }
   });
 });

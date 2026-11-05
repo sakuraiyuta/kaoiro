@@ -919,18 +919,24 @@ function permissionControlFrom(value: unknown): PermissionControlExt | null {
   }
 }
 
-function permissionSyncFrom(value: unknown): PermissionSyncMessage | null {
-  if (!isPlainObject(value) || typeof value.version !== "string") {
-    return null;
-  }
+export const PERMISSION_SYNC_TIMEOUT_MS = 30_000;
+
+export class PermissionSyncTimeoutError extends Error {
+  constructor() { super("permission_sync_timeout"); }
+}
+
+function permissionSyncFrom(value: unknown): { message: PermissionSyncMessage } | { field: string } {
+  if (!isPlainObject(value)) return { field: "payload" };
+  if (typeof value.version !== "string") return { field: "version" };
   if (value.control === null && value.next === null) {
-    return { version: WRAPPER_PROTOCOL_VERSION, control: null, next: null };
+    return { message: { version: WRAPPER_PROTOCOL_VERSION, control: null, next: null } };
   }
+  if ((value.control === null) !== (value.next === null)) return { field: "control/next" };
   const control = permissionControlFrom(value.control);
+  if (control === null) return { field: "control" };
   const next = permissionSelectionFrom(value.next, 0);
-  return control === null || next === null
-    ? null
-    : { version: WRAPPER_PROTOCOL_VERSION, control, next };
+  return next === null ? { field: "next" }
+    : { message: { version: WRAPPER_PROTOCOL_VERSION, control, next } };
 }
 
 function setPermissionSelectionFrom(value: unknown): PermissionSelection | null {
@@ -1587,6 +1593,13 @@ export class ServerLink {
    *  which are bound once in the constructor. */
   readonly #onInterAgentAck: ServerLinkOptions["onInterAgentAck"];
   readonly #permissionSync: ServerLinkOptions["permissionSync"];
+  #permissionSyncClosed = false;
+  #permissionSyncExpired = false;
+  #permissionSyncDeadline = 0;
+  #permissionSyncTimer: ReturnType<typeof setTimeout> | undefined;
+  #permissionSyncJoinRef: string | null = null;
+  #rejectPermissionSync: ((error: Error) => void) | null = null;
+  #deferredDisconnectedErrorResult: Envelope | null = null;
   #permissionSyncSupported = false;
   #permissionSyncGeneration = 0;
   #permissionSyncAccepting = false;
@@ -1639,6 +1652,7 @@ export class ServerLink {
     this.#deliveryRecovery = createDeliveryRecovery();
     this.#onInterAgentAck = options.onInterAgentAck;
     this.#permissionSync = options.permissionSync;
+    this.#beginPermissionSyncBarrier();
     this.#permissionSyncNegotiated = new Promise<boolean>((resolve) => {
       this.#resolvePermissionSyncNegotiated = resolve;
     });
@@ -1774,17 +1788,26 @@ export class ServerLink {
         options.onSetPermission?.(selection);
       }
     });
-    this.#bindServerEvent("permission_sync", (payload: unknown) => {
-      if (!this.#permissionSyncAccepting) return;
-      const message = permissionSyncFrom(payload);
-      if (message === null) return;
-      this.#permissionSyncAccepting = false;
-      if (message.next !== null && message.next.revision > 0) {
-        this.#permissionSyncRequiresSynchronization = true;
+    this.#bindServerEvent("permission_sync", (payload: unknown, joinRef?: unknown) => {
+      if (!this.#permissionSyncAccepting || !this.#permissionSyncJoinCurrent(joinRef)) return;
+      const parsed = permissionSyncFrom(payload);
+      if ("field" in parsed) {
+        writeRedactedStderr(`[kaoiro] permission_sync rejected: field=${parsed.field}\n`);
+        return;
       }
-      this.#permissionSync?.onSync?.(message, this.#permissionSyncGeneration);
-      this.#releasePermissionSyncBarrier?.();
-      this.#releasePermissionSyncBarrier = null;
+      const { message } = parsed;
+      this.#expirePermissionSyncIfDue();
+      this.#permissionSyncAccepting = false;
+      if (message.next !== null && message.next.revision > 0) this.#permissionSyncRequiresSynchronization = true;
+      const acceptedRef = this.#permissionSyncJoinRef;
+      try { this.#permissionSync?.onSync?.(message, this.#permissionSyncGeneration); }
+      catch {
+        writeRedactedStderr("[kaoiro] permission_sync application failed\n");
+        return;
+      }
+      if (acceptedRef === this.#permissionSyncJoinRef && this.#permissionSyncJoinCurrent(joinRef)) {
+        this.#completePermissionSync();
+      }
     });
     // protocol.md (ADR-0037 F6, phase-18-5): server -> wrapper `refresh_models`
     // has no payload fields; the topic already addresses the agent. Fire the
@@ -1957,6 +1980,7 @@ export class ServerLink {
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
     const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
+      this.#beginPermissionSyncBarrier();
       this.#deliveryPolicy?.disconnect();
       this.#policyJoinRef = null;
       this.#deliveryModes = null;
@@ -1992,6 +2016,11 @@ export class ServerLink {
     this.#channel
       .join()
       .receive("ok", (reply: unknown) => {
+        if (this.#permissionSyncClosed) return;
+        const deferredError = this.#deferredDisconnectedErrorResult;
+        this.#deferredDisconnectedErrorResult = null;
+        if (deferredError !== null) this.#pushEnvelope(deferredError);
+        if ((!this.#replyBasisTerminal || deferredError !== null) && this.#lastEnvelope) this.send(this.#lastEnvelope);
         if (this.#replyBasisTerminal) return;
         this.#policyJoin = this.#deliveryPolicy?.beginJoin() ?? 0;
         this.#policyJoinRef = (this.#channel as Channel & { joinRef?: () => string }).joinRef?.() ?? null;
@@ -2075,18 +2104,46 @@ export class ServerLink {
   }
 
   #beginPermissionSyncBarrier(): void {
-    if (this.#permissionSync === undefined) return;
+    if (this.#permissionSync === undefined || this.#permissionSyncClosed) return;
     this.#permissionSyncAccepting = false;
+    this.#permissionSyncJoinRef = null;
     if (!this.#permissionSyncReady) return;
     this.#permissionSyncReady = false;
+    this.#permissionSyncExpired = false;
     this.#permissionSyncGeneration += 1;
-    this.#permissionSyncBarrier = new Promise<void>((resolve) => {
-      this.#releasePermissionSyncBarrier = () => {
-        if (this.#permissionSyncReady) return;
-        this.#permissionSyncReady = true;
-        resolve();
-      };
+    this.#permissionSyncDeadline = performance.now() + PERMISSION_SYNC_TIMEOUT_MS;
+    this.#permissionSyncBarrier = new Promise<void>((resolve, reject) => {
+      this.#releasePermissionSyncBarrier = resolve;
+      this.#rejectPermissionSync = reject;
     });
+    // An idle episode can expire before any host owns a waiter.
+    void this.#permissionSyncBarrier.catch(() => {});
+    this.#permissionSyncTimer = setTimeout(() => this.#expirePermissionSyncIfDue(), PERMISSION_SYNC_TIMEOUT_MS);
+    this.#permissionSyncTimer.unref?.();
+  }
+
+  #expirePermissionSyncIfDue(): void {
+    if (this.#permissionSyncReady || this.#permissionSyncExpired || this.#permissionSyncClosed ||
+        performance.now() < this.#permissionSyncDeadline) return;
+    this.#permissionSyncExpired = true;
+    this.#rejectPermissionSync?.(new PermissionSyncTimeoutError());
+    writeRedactedStderr("[kaoiro] permission_sync timed out; input dispatch remains gated\n");
+  }
+
+  #completePermissionSync(): void {
+    if (this.#permissionSyncClosed) return;
+    this.#expirePermissionSyncIfDue();
+    clearTimeout(this.#permissionSyncTimer);
+    this.#releasePermissionSyncBarrier?.();
+    this.#permissionSyncReady = true;
+    this.#permissionSyncBarrier = Promise.resolve();
+    this.#releasePermissionSyncBarrier = null;
+    this.#rejectPermissionSync = null;
+  }
+
+  #permissionSyncJoinCurrent(joinRef?: unknown): boolean {
+    return !this.#permissionSyncClosed && this.#socket.isConnected() && this.#channel.state === "joined" &&
+      (joinRef === undefined || joinRef === this.#permissionSyncJoinRef);
   }
 
   #acceptPermissionSyncJoin(reply: unknown): void {
@@ -2100,13 +2157,13 @@ export class ServerLink {
     this.#permissionSync.onNegotiated?.(supported);
     if (!supported) {
       if (!this.#permissionSyncRequiresSynchronization) {
-        this.#releasePermissionSyncBarrier?.();
-        this.#releasePermissionSyncBarrier = null;
+        this.#completePermissionSync();
       }
       return;
     }
     this.#beginPermissionSyncBarrier();
-    this.#permissionSyncAccepting = true;
+    this.#permissionSyncJoinRef = (this.#channel as Channel & { joinRef?: () => string }).joinRef?.() ?? null;
+    this.#permissionSyncAccepting = !this.#permissionSyncClosed;
   }
 
   /** Resolves after the initial join reply says whether this server speaks
@@ -2120,7 +2177,7 @@ export class ServerLink {
   /** Waits for the current negotiated join's authoritative sync. A legacy
    *  server without a saved operator selection leaves the resolved barrier. */
   waitForPermissionSync(): Promise<void> {
-    return this.#permissionSyncBarrier;
+    return this.#permissionSyncClosed ? Promise.reject(new Error("permission_sync_closed")) : this.#permissionSyncBarrier;
   }
 
   /** Binds one server -> wrapper event with ADR-0015's receiver check in
@@ -2141,7 +2198,11 @@ export class ServerLink {
   ): void {
     const checked = SERVER_EVENT_VERSION_POLICY[event] === "checked";
     this.#channel.on(event, (payload: unknown, ...args: unknown[]) => {
-      if (checked) {
+      if (checked && event === "permission_sync") {
+        if (!isObject(payload) || payload.version !== WRAPPER_PROTOCOL_VERSION) {
+          writeRedactedStderr("permission_sync: server protocol version mismatch; accepting current version\n");
+        }
+      } else if (checked) {
         warnOnVersionMismatch(
           event,
           isObject(payload) ? payload.version : undefined,
@@ -2420,6 +2481,11 @@ export class ServerLink {
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
+    if (envelope.type === "result" && envelope.payload.is_error === true &&
+        (!this.#socket.isConnected() || this.#channel.state !== "joined")) {
+      if (!this.#permissionSyncClosed) this.#deferredDisconnectedErrorResult = envelope;
+      return;
+    }
     if (this.#protectReplyBasis && envelope.type === "inter_agent_message") {
       // Unbound fire-and-forget callers must not enter Phoenix's rejoin buffer.
       void this.sendInterAgent(envelope);
@@ -2907,6 +2973,11 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
+    this.#permissionSyncClosed = true;
+    this.#permissionSyncAccepting = false;
+    clearTimeout(this.#permissionSyncTimer);
+    this.#rejectPermissionSync?.(new Error("permission_sync_closed"));
+    this.#deferredDisconnectedErrorResult = null;
     this.#deliveryPolicy?.disconnect();
     this.#policyJoinRef = null;
     this.#failReplyBasis(true, true);

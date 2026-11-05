@@ -463,3 +463,18 @@ if (args[0] === "models") {
     expect(events).toEqual(["intent:crash", "close"]);
   });
 });
+
+it("retires a sync-failed batch without ACK or peer notice and resumes ACKs at the next input",async()=>{
+  let options:any,hostOptions:any,finish!:()=>void,ready!:()=>void,turn=0;
+  const done=new Promise<void>(r=>{finish=r;}), started=new Promise<void>(r=>{ready=r;});
+  const retired:Envelope[]=[],notices:Envelope[]=[],acks:number[]=[];
+  const signals=process.listeners("SIGINT");
+  const link={close:()=>{},send:(e:Envelope)=>{if(e.type==="inter_agent_message")notices.push(e);},noticeAttributionMode:()=>"v1",deliveryIncarnation:()=>"i",deliveryGeneration:()=>"g",acknowledgeInterAgentDelivery:(seq:number)=>acks.push(seq),retireInterAgentDeliveries:(items:Envelope[])=>{retired.push(...items);options.onInterAgentDeliveryStatus({issued_seq:1,acked_seq:1});return true;}};
+  const host={state:"waiting_input",statusExtSnapshot:()=>({}),activeInterAgentTurnToken:()=>null,run:async()=>{ready();await done;},send:async(_text:string,_ids:unknown,conversationIds:string[],turnToken:string)=>{
+    if(turn++===0)hostOptions.onTurnEnd({turnToken,conversationIds,error:{reason:"permission_sync_timeout"}});
+    else {hostOptions.onTurnStart({turnToken,conversationIds});hostOptions.onTurnEnd({turnToken,conversationIds});}hostOptions.onTurnBoundary({turnToken});}};
+  const running=runAntigravityCli({parseCliArgs:()=>({configPath:"test"}),loadConfig:()=>({...config}),createServerLink:(_u,_id,opts)=>{options=opts;queueMicrotask(()=>{opts.onPersonaPrompt?.("persona");opts.onInterAgentDeliveryStatus?.({issued_seq:0,acked_seq:0});});return link as never;},createHost:(_cfg,opts)=>{hostOptions=opts;return host as never;}});
+  try{await started;options.onInterAgentMessage(inbound(1,1));await vi.waitFor(()=>expect(retired).toHaveLength(1));expect(acks).toEqual([]);expect(notices).toEqual([]);
+    options.onInterAgentMessage(inbound(2,1));await vi.waitFor(()=>expect(acks).toEqual([2]));
+  }finally{finish();await running;for(const listener of process.listeners("SIGINT"))if(!signals.includes(listener))process.removeListener("SIGINT",listener);}
+});

@@ -1,3 +1,4 @@
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -4122,4 +4123,13 @@ describe("AntigravityHost result text size cap", () => {
     const { wireBytes } = await resultText("b".repeat(200_000));
     expect(wireBytes).toBeLessThan(65_536);
   });
+});
+
+it("settles permission sync expiry without spawning or rolling back an unattempted model",async()=>{
+  const {host,states,logs,calls,turnEnds}=hostHarness({waitForPermissionSync:()=>Promise.reject(new PermissionSyncTimeoutError())});
+  try{await host.setModel("missing-model");await host.send("never dispatched");await waitFor(()=>turnEnds.length===1);
+    expect(calls).toHaveLength(0);expect(host.statusSnapshot()).toMatchObject({pending_model:"missing-model"});
+    expect(logs.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
+    expect(states.slice(-2).map(e=>e.state)).toEqual(["error","waiting_input"]);expect(turnEnds[0]).toMatchObject({error:{reason:"permission_sync_timeout"},terminal:false});
+  }finally{host.close();}
 });

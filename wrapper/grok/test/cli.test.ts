@@ -1,3 +1,4 @@
+import {PermissionSyncTimeoutError} from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -429,4 +430,19 @@ describe("runGrokCli composition", () => {
       consoleError.mockRestore();
     }
   });
+});
+
+it("retires a real Grok CLI sync failure once without the generic duplicate failure log",async()=>{
+  const envelopes:Envelope[]=[],acks:number[]=[],outbound:Envelope[]=[],retired:Envelope[]=[];let callbacks!:ServerLinkOptions,blocked=true,probe!:Promise<void>;
+  const work=runGrokCli({parseCliArgs:()=>({configPath:"fixture"}),loadConfig:()=>({...config,sandbox:"danger-full-access",network_access:true}),loadWrapperBuildInfo:()=>buildInfo,
+    createServerLink:(_u,_id,opts)=>{callbacks=opts;const link=recordingLink(opts,envelopes,acks,outbound);return {...link,retireInterAgentDeliveries:(items:Envelope[])=>{retired.push(...items);callbacks.onInterAgentDeliveryStatus?.({issued_seq:1,acked_seq:1});return true;}} as ServerLink;},
+    createHost:opts=>new GrokHost({...opts,executable:fileURLToPath(new URL("./fixtures/grok.mjs",import.meta.url)),waitForPermissionSync:()=>blocked?Promise.reject(new PermissionSyncTimeoutError()):Promise.resolve()}),
+    onHostCreated:host=>{probe=(async()=>{
+      await vi.waitFor(()=>expect(host.state).toBe("waiting_input"),{timeout:5000});
+      callbacks.onInterAgentMessage?.({version:"0",agent_id:"peer",persona:config.persona,ts:"2026-11-06T00:00:00Z",type:"inter_agent_message",state:"thinking",delivery_seq:1,payload:{to:config.agent_id,conversation_id:"sync-timeout",turn_number:1,kind:"request",body:"input",meta:{done:false,propose_next:""},owner:{kind:"user",id:"operator"}}} as unknown as Envelope);
+      await vi.waitFor(()=>expect(retired).toHaveLength(1));expect(acks).toEqual([]);expect(outbound).toEqual([]);
+      expect(envelopes.filter(e=>e.type==="log"&&e.payload.text==="grok turn failed")).toEqual([]);
+      blocked=false;await host.send("recovered");
+    })().finally(()=>host.close());void probe.catch(()=>{});}});
+  await work;await probe;
 });

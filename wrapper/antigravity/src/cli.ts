@@ -1,3 +1,4 @@
+import { retirePermissionSyncInput } from "@kaoiro/agent-common";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -558,6 +559,16 @@ export async function runAntigravityCli(
           ? { why: cancellationCause(cancellation) }
           : {}),
       });
+      if (error?.reason === "permission_sync_timeout") {
+        retirePermissionSyncInput({
+          envelopes: interAgentTurns.deliveryEnvelopesForTurn(turnToken),
+          retire: envelopes => link?.retireInterAgentDeliveries(envelopes),
+          clearInjection: () => { interAgent.resolveTurnEnd(turnToken, conversationIds); },
+        });
+        const settled = interAgentTurns.settle(turnToken);
+        if (settled !== undefined && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(settled.peer);
+        return;
+      }
       if (cancellation?.kind === "watchdog_fail_stop") {
         for (const notice of interAgent.resolveTurnEnd(
           turnToken,

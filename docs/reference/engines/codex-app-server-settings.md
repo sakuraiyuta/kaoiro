@@ -102,3 +102,6 @@ between transport retirement and runtime terminal consumption, an interrupt can
 return false while marking the runtime attempt abandoned. That completed turn
 then preserves the old baseline and explicitly rolls back on the next turn.
 After runtime terminal consumption, interrupts return false without that effect.
+
+For permission synchronization deadlines and failed-input recovery, see
+[permission state](../protocol/permission-state.md#synchronization-failure-visibility).

@@ -1,4 +1,4 @@
-import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
+import { DEFAULT_CODEX_BACKEND, permissionSyncFailure } from "@kaoiro/agent-common";
 import { AppServerContextMeter } from "./app_server_context.js";
 // CodexHost owns one selected backend for a wrapper lifetime. App-server is
 // persistent; explicit exec uses one SDK process per turn. Both share the
@@ -32,7 +32,7 @@ import type {
   PermissionSyncMessage,
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
-import { DeliveryPolicyController } from "@kaoiro/wrapper-core";
+import { DeliveryPolicyController, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import {
   AGENT_MARKER_ENV,
   withAgentMarker,
@@ -176,8 +176,8 @@ export const DEFAULT_PERMISSION_GATE_TIMEOUT_MS = 30_000;
 const PERMISSION_GATE_RECOVERY = "Permission dispatch is blocked. The operator can reapply the same sandbox/network values to allocate a new revision, then resend the cancelled instruction. No automatic resend occurs.";
 
 class PermissionDispatchError extends Error {
-  constructor(readonly reason: "permission_gate_blocked" | "interrupted") {
-    super(PERMISSION_GATE_RECOVERY);
+  constructor(readonly reason: "permission_gate_blocked" | "interrupted" | "permission_sync_timeout") {
+    super(reason === "permission_sync_timeout" ? reason : PERMISSION_GATE_RECOVERY);
   }
 }
 
@@ -1827,8 +1827,12 @@ export class CodexHost implements EngineAdapter {
           this.#emitState("waiting_input");
         }
       } else if (!started && error instanceof AppServerAdmissionError && this.#appFailure === null) {
-        settled = true;this.#machine = initialMachineState("waiting_input");this.#emitState("waiting_input");
-        this.#options.onTurnEnd?.({ turnToken, conversationIds, error: { reason: error.reason, detail: PERMISSION_GATE_RECOVERY }, cancellation: { kind: "permission_gate", started: false } });
+        settled = true;
+        if (error.reason === "permission_sync_timeout") {
+          this.#emitResult(permissionSyncFailure());
+          this.#apply({ kind: "result", subtype: "error_during_execution" });
+        } else { this.#machine = initialMachineState("waiting_input");this.#emitState("waiting_input"); }
+        this.#options.onTurnEnd?.({ turnToken, conversationIds, error: { reason: error.reason, detail: error.reason === "permission_sync_timeout" ? error.reason : PERMISSION_GATE_RECOVERY }, cancellation: { kind: "permission_gate", started: false } });
       } else {
         const failed: AttemptedTurnSettings = attempted ?? { ...pending, permission: null, accountDefault: false, resolutionGeneration: this.#modelResolutionGeneration };
         if (error instanceof AppServerSettingsError) failed.appServer = { switchFailureReason: error.reason };
@@ -1905,19 +1909,24 @@ export class CodexHost implements EngineAdapter {
     const gate: PermissionDispatchWait = {
       generation: this.#lifecycleGeneration, deadline: null, blocked: null,
     };
-    const cancel = async (reason: "permission_gate_blocked" | "interrupted"): Promise<void> => {
+    const cancel = async (reason: "permission_gate_blocked" | "interrupted" | "permission_sync_timeout"): Promise<void> => {
       // Repair retries belong to an already-started outer turn. Its catch
       // and finally own failure settlement and finalization, not cancellation.
       if (retryAfterRepair) throw new PermissionDispatchError(reason);
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
       if (!settled.value) {
         settled.value = true;
-        this.#machine = initialMachineState("waiting_input");
-        this.#emitState("waiting_input");
+        if (reason === "permission_sync_timeout") {
+          this.#emitResult(permissionSyncFailure());
+          this.#apply({ kind: "result", subtype: "error_during_execution" });
+        } else {
+          this.#machine = initialMachineState("waiting_input");
+          this.#emitState("waiting_input");
+        }
         try {
           this.#options.onTurnEnd?.({
             turnToken, conversationIds,
-            error: { reason, detail: PERMISSION_GATE_RECOVERY },
+            error: { reason, detail: reason === "permission_sync_timeout" ? reason : PERMISSION_GATE_RECOVERY },
             cancellation: { kind: "permission_gate", started: false },
           });
         } finally {
@@ -2415,6 +2424,8 @@ export class CodexHost implements EngineAdapter {
             error_subtype: "error_rollout_corrupted",
             error_detail: detail,
           });
+        } else if (terminalError instanceof PermissionDispatchError && terminalError.reason === "permission_sync_timeout") {
+          this.#emitResult(permissionSyncFailure(true));
         } else {
           // issue #300: relay a bounded, masked stderr tail (plus a
           // wrapper-classified error_code/summary/hint when the tail's
@@ -2450,7 +2461,7 @@ export class CodexHost implements EngineAdapter {
           conversationIds,
           error: {
             detail,
-            ...(terminalError instanceof PermissionDispatchError ? { reason: terminalError.reason } : {}),
+            ...(terminalError instanceof PermissionDispatchError ? { reason: terminalError.reason === "permission_sync_timeout" ? "interrupted" : terminalError.reason } : {}),
           },
           ...(this.#turnAbandoned !== null
             ? { abandoned: this.#turnAbandoned }
@@ -2560,7 +2571,7 @@ export class CodexHost implements EngineAdapter {
   async #awaitPermissionDispatch(
     turnToken: string,
     gate: PermissionDispatchWait,
-  ): Promise<"permission_gate_blocked" | "interrupted" | null> {
+  ): Promise<"permission_gate_blocked" | "interrupted" | "permission_sync_timeout" | null> {
     const cancelled = () => this.#closed || gate.generation !== this.#lifecycleGeneration;
     const noteBlocked = () => {
       const blocked = this.#permissionState.blocked;
@@ -2614,6 +2625,10 @@ export class CodexHost implements EngineAdapter {
         // The first sync may itself have supplied the block and its deadline.
         if (timer === undefined) timer = setTimeout(wake, Math.max(0, gate.deadline! - performance.now()));
         await awakened;
+      } catch (error) {
+        if (cancelled()) return "interrupted";
+        if (error instanceof PermissionSyncTimeoutError) return "permission_sync_timeout";
+        throw error;
       } finally {
         clearTimeout(warning);
         clearTimeout(timer);

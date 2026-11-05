@@ -1,3 +1,4 @@
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
@@ -630,4 +631,13 @@ it("runs the app-server runtime when raw Host backend is omitted", async () => {
   await f.until(1);
   expect(f.createSession).toHaveBeenCalledTimes(1);
   f.terminal(); await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+});
+
+it("settles permission sync expiry without opening app-server or losing pending settings",async()=>{
+  let blocked=true;const f=fixture({waitForPermissionSync:()=>blocked?Promise.reject(new PermissionSyncTimeoutError()):Promise.resolve()});
+  await f.host.setModel("gpt-6-sol");await f.host.send("blocked");await vi.waitFor(()=>expect(f.ends).toHaveBeenCalledTimes(1));
+  expect(f.createSession).not.toHaveBeenCalled();expect(f.starts).not.toHaveBeenCalled();
+  expect(f.logs.filter(e=>e.type==="result")).toEqual([expect.objectContaining({payload:expect.objectContaining({is_error:true,error_detail:expect.stringContaining("No execution was started")})})]);
+  expect(f.host.statusExtSnapshot()).toMatchObject({pending_model:"gpt-6-sol"});expect(f.states.at(-1)?.state).toBe("waiting_input");
+  blocked=false;await f.host.send("recovered");await f.until(1);f.terminal();await vi.waitFor(()=>expect(f.ends).toHaveBeenCalledTimes(2));
 });

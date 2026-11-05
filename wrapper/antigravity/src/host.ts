@@ -28,8 +28,8 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
-import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
-import { clipUtf16Head } from "@kaoiro/wrapper-core";
+import { boundErrorDetail, writeRedactedStderr, permissionSyncFailure } from "@kaoiro/agent-common";
+import { clipUtf16Head, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import type {
   EngineModelInfo,
   PermissionAxesExt,
@@ -113,6 +113,7 @@ const EPOCH_STDERR_TERMINATING_PATTERN = /^terminating \d+ background task\(s\) 
 type TurnOutcome =
   | { kind: "stale" }
   | { kind: "skipped" }
+  | { kind: "permission_sync_timeout" }
   | { kind: "recovery_rejected"; detail: string; probeResult: "failed" | "child_launch_failed" }
   | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; attemptedModel: string | null | undefined }
   | { kind: "result"; event: AgyStreamEvent; attemptedModel: string | null }
@@ -1398,6 +1399,8 @@ export class AntigravityHost implements EngineAdapter {
       // replaces -- an unconditional rollback, not a match-gated one.
       outcome = !this.#isCurrent(generation)
         ? { kind: "stale" }
+        : caught instanceof PermissionSyncTimeoutError
+          ? { kind: "permission_sync_timeout" }
         : isRecoveryCandidate && !this.#turnStartReached
           ? {
               kind: "recovery_rejected",
@@ -1479,7 +1482,11 @@ export class AntigravityHost implements EngineAdapter {
       } else if (!this.#watchdogFailStopped) {
         let error: InterAgentErrorClassifyInput | undefined;
         let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
-        if (outcome.kind === "interrupted") {
+        if (outcome.kind === "permission_sync_timeout") {
+          this.#options.onLog?.(makeResult(this.#config, this.#now(), permissionSyncFailure()));
+          this.#apply({ kind: "result", subtype: "error_during_execution" });
+          error = { reason: "permission_sync_timeout" };
+        } else if (outcome.kind === "interrupted") {
           this.#terminalError("interrupted", outcome.attemptedModel);
           error = { reason: "interrupted" };
           cancellation = { kind: "interrupt", reason: "interrupted" };

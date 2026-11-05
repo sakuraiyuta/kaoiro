@@ -15,6 +15,7 @@ import {
   logEntryToPayload,
   makeLog,
   makeResult,
+  permissionSyncFailure,
   makeStateChange,
   stepState,
   writeRedactedStderr,
@@ -53,7 +54,7 @@ import {
   type PermissionPolicyExt,
   type SandboxProfile,
 } from "./grok/policy.js";
-import { formatTurnWatchdogLine } from "@kaoiro/wrapper-core";
+import { formatTurnWatchdogLine, PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { resolveTurnWatchdogSettings } from "./settings.js";
 import { GrokLaunchError } from "./grok/errors.js";
 import { GrokRateLimitReader, type GrokRateLimits } from "./grok/rate_limits.js";
@@ -711,14 +712,23 @@ export class GrokHost implements EngineAdapter {
           continue;
         }
         const turn = this.#queue[0]!;
-        if (!await this.#awaitDispatch()) {
+        let ready: boolean;
+        let syncTimeout = false;
+        try { ready = await this.#awaitDispatch(); }
+        catch (error) {
+          if (!(error instanceof PermissionSyncTimeoutError)) throw error;
+          ready = false;syncTimeout = true;
+        }
+        if (!ready) {
           if (this.#closing) return;
           this.#queue.shift();
-          const error = new Error("permission_gate_blocked");
+          const reason = syncTimeout ? "permission_sync_timeout" : "permission_gate_blocked";
+          const error = syncTimeout ? new PermissionSyncTimeoutError() : new Error(reason);
           this.#options.send(makeResult(this.#options.config, new Date().toISOString(),
-            { text: "", is_error: true, error_code: "permission_gate_blocked" }));
+            syncTimeout ? permissionSyncFailure() : { text: "", is_error: true, error_code: reason }));
+          if (syncTimeout) this.#state("error");
           this.#options.onTurnEnd?.({ turnToken: turn.token, conversationIds: turn.conversations,
-            error: { detail: "permission gate blocked", reason: "permission_gate_blocked" } });
+            error: { detail: reason, reason } });
           turn.reject(error);
           this.#state("waiting_input");
           continue;
