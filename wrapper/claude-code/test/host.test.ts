@@ -10457,14 +10457,14 @@ describe("reserved resume receipt", () => {
     replaceQuery: () => Promise<void>;
     hook: (id: string, text?: string, session?: string, agentId?: string, event?: string) => Promise<unknown> };
   async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}) {
-    const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [];
+    const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [], admissions: string[] = [];
     let host!: AgentHost, queries = 0, secondRun: Promise<void> | undefined;
     const replacement = deferred(), replacementReady = deferred();
     const intervals = vi.spyOn(globalThis, "setInterval");
     host = new AgentHost(config, {
       onState: () => {}, onLog: e => logs.push(e), enqueueInjection: task => task(),
       onTurnStart: x => starts.push(x.turnToken), onTurnEnd: x => { if (x.turnToken) ends.push(x.turnToken); },
-      onPushedInputDecision: x => decisions.push(x.kind), ...extra,
+      onPushedInputDecision: x => decisions.push(x.kind), onPromptAdmitted: token => admissions.push(token), ...extra,
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
         if (queries++ > 0) { replacementReady.resolve(); await replacement.promise; return; }
         const input = prompt[Symbol.asyncIterator]();
@@ -10500,7 +10500,12 @@ describe("reserved resume receipt", () => {
       expect(event.turn_token).toBe(pending[0].turn_token);
       expect(event.generation).toBe(pending[0].generation);
     }
-    return { host, logs: JSON.stringify(logs), starts, ends, events };
+    for (const event of events.filter(e => e.event === "admitted_root")) {
+      expect(event.prompt_id).toEqual(expect.any(String));
+      expect(event.active_prompt_ids).toContain(event.prompt_id);
+      expect(starts).toContain(event.turn_token);
+    }
+    return { host, logs: JSON.stringify(logs), starts, ends, events, admissions };
   }
 
   it.each([false, true])("keeps a pending note across foreign roots (native=%s) and admits only its own hook", async nativeContinuations => {
@@ -10543,6 +10548,7 @@ describe("reserved resume receipt", () => {
       yield result("success");
     });
     expect(r.starts).toHaveLength(why === "duplicate-id" ? 2 : 1);
+    expect(r.admissions).toHaveLength(why === "duplicate-id" ? 1 : 0);
     if (why === "fresh-conflict" || why === "fold") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
       foreign_prompt_id: "N1", prompt_id: why === "fold" ? "N1" : "different",
     });
@@ -10785,6 +10791,21 @@ describe("reserved resume receipt", () => {
       await hook("note"); expect(host.state).toBe("error");
     }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
     expect(r.events.find(e => e.event === "root_hook_timeout").reason).toBe("missing_hook");
+  });
+
+  it("retains foreign-frame backpressure after an admitted resume completes", async () => {
+    const r = await exercise(async function* ({ host, hook, input }) {
+      await hook("note"); yield result("success");
+      yield msg({ type: "assistant", session_id: "s", parent_tool_use_id: null,
+        message: { content: [{ type: "text", text: "native work without an opener hook" }] } });
+      await host.send("after"); let ready = false;
+      const next = input.next().then(x => { ready = true; return x; });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(ready).toBe(false); expect(host.activeInterAgentTurnToken()).toBeNull();
+      yield result("success");
+      expect((await next).value!.message.content).toBe("after"); yield result("success");
+    });
+    expect(r.starts).toHaveLength(3);
   });
 
 });
