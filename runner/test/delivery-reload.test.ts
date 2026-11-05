@@ -62,16 +62,16 @@ async function harness(extra: Record<string, unknown> = {}, dependencyOverrides:
 const mode = (register: RunnerRegister, engine: string) => register.engines!.find(e => e.id === engine)!.launch_delivery_policy!;
 
 describe("applied delivery snapshot publication", () => {
-  it("startup and successful reload publish ceilings, defaults, backend and both relayed flags together", async () => {
+  it("startup and successful reload publish ceilings, defaults, backend and retired flags together", async () => {
     const h = await harness({ claude_code: { phase2_delivery: false } });
     try {
       const original = h.spawn(); expect(original.in_flight_delivery_enabled).toBe(true);
-      expect(mode(h.registers[0]!, "claude-code").mechanisms.inter_agent_early).toBe("none");
+      expect(mode(h.registers[0]!, "claude-code").mechanisms.inter_agent_early).toBe("fold");
       const next = { claude_code: { phase2_delivery: true }, codex: { auth_mode: "chatgpt", backend: "app-server", operator_steer: true },
         in_flight_delivery: { "claude-code": { default: false }, codex: { default: false } } };
       await h.reload(next);
       expect(original.phase2_delivery).toBeUndefined();
-      expect(h.spawn().phase2_delivery).toBe(true); expect(h.spawn("codex").operator_steer).toBeUndefined();
+      expect(h.spawn()).not.toHaveProperty("phase2_delivery"); expect(h.spawn("codex").operator_steer).toBeUndefined();
       expect(mode(h.registers.at(-1)!, "claude-code").mechanisms.inter_agent_early).toBe("fold");
       expect(mode(h.registers.at(-1)!, "codex").mechanisms.operator_early).toBe("steer");
       expect(h.registers.at(-1)!.in_flight_defaults).toEqual({ "claude-code": false, codex: false, antigravity: false });
@@ -100,12 +100,12 @@ describe("applied delivery snapshot publication", () => {
       const next = { claude_code: { phase2_delivery: false }, codex: { auth_mode: "chatgpt", backend: "exec" },
         in_flight_delivery: { "claude-code": { enabled: false } } };
       await h.reload(next);
-      expect(h.registers).toEqual([initial]); expect(h.spawn().phase2_delivery).toBe(true);
+      expect(h.registers).toEqual([initial]); expect(h.spawn()).not.toHaveProperty("phase2_delivery");
       expect(h.spawn("codex").codex_backend).toBe("app-server");
       h.updates.mockImplementationOnce(() => { throw new Error("publication failure"); });
       await h.reload(next);
       expect(h.registers.at(-1)).toEqual(initial); expect(h.spawn().in_flight_delivery_enabled).toBe(true);
-      expect(h.spawn().phase2_delivery).toBe(true);
+      expect(h.spawn()).not.toHaveProperty("phase2_delivery");
     } finally { h.close(); }
   });
   it("catalog refresh awaiting a probe reads the snapshot applied by a concurrent reload", async () => {
@@ -121,7 +121,7 @@ describe("applied delivery snapshot publication", () => {
       expect(register.engines![0]!.models[0]!.value).toBe("fresh");
       expect(mode(register, "codex").ceiling).toBe(false); expect(register.in_flight_defaults?.codex).toBe(false);
       expect(mode(register, "claude-code").mechanisms.inter_agent_early).toBe("fold");
-      expect(h.spawn().phase2_delivery).toBe(true);
+      expect(h.spawn()).not.toHaveProperty("phase2_delivery");
     } finally { h.close(); }
   });
 });
@@ -170,4 +170,20 @@ describe("retirement warnings through the runner", () => {
       expect(retired(h)).toHaveLength(2);
     } finally { h.close(); }
   });
+});
+
+it("warns once per Claude legacy input at startup and reload without stale shadow warnings", async () => {
+  const h = await harness({}, {}, { KAOIRO_CLAUDE_PHASE2_DELIVERY: "0", KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: "private-sentinel" });
+  const warnings = () => h.stderr.filter(line => line.startsWith("runner: warn - ") && line.includes("is retired") && /CLAUDE|claude_code/.test(line));
+  try {
+    expect(warnings()).toHaveLength(2);
+    await h.reload({ claude_code: { phase2_delivery: false } });
+    expect(warnings()).toHaveLength(3);
+    await h.reload({ claude_code: { phase2_delivery: true } });
+    expect(warnings()).toHaveLength(3);
+    expect(h.spawn()).not.toHaveProperty("phase2_delivery");
+    expect(h.stderr.join("")).not.toContain("private-sentinel");
+    expect(h.stderr.join("")).not.toContain("still overrides");
+    expect(h.stderr.join("")).not.toContain("is deprecated");
+  } finally { h.close(); }
 });

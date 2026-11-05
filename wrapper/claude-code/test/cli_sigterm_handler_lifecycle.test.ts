@@ -27,7 +27,7 @@ async function runOnceAndSigterm(): Promise<{ closed: boolean }> {
     startedRun = resolve;
   });
   let closed = false;
-  const host = {
+  const host = { canPushLiveInput: () => false, canFoldLiveInput: () => false,
     state: "idle",
     statusExtSnapshot: () => ({}),
     run: async () => {
@@ -46,7 +46,7 @@ async function runOnceAndSigterm(): Promise<{ closed: boolean }> {
       queueMicrotask(() => {
         (options as unknown as Record<string, any>).onPersonaPrompt?.("system prompt");
       });
-      return {
+      return { deliveryModes: () => undefined,
         close: () => {},
         currentSessionId: () => null,
         send: () => {},

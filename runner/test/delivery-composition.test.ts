@@ -35,7 +35,7 @@ async function start(extra: Record<string, unknown>, environment: Record<string,
   const server = await endpoint(); const file = join(dir, "runner.config.json");
   mkdirSync(join(dir, "codex-home"));
   const config = { host_id: "composition", server_url: server.url, cwd_allowlist: [dir], capabilities: ["claude-code", "codex"],
-    codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" }, claude_code: { phase2_delivery: true }, ...extra };
+    codex: { backend: "app-server", auth_mode: "chatgpt", chatgpt_plan: "plus" }, ...extra };
   writeFileSync(file, JSON.stringify(config));
   let entry = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   if (changeEnvironment) {
@@ -150,3 +150,20 @@ describe("built runner and wrapper delivery composition", () => {
     } finally { await h.stop(); }
   }, 40_000);
 });
+
+it("R1-era relay inputs cannot gate a built W2 declaration even when launch metadata says none", async () => {
+  const root=mkdtempSync(join(tmpdir(),"fuji565-r1-w2-")), wire=await endpoint();
+  const path=join(root,"wrapper.json");
+  writeFileSync(path,JSON.stringify({agent_id:"mixed.direct",persona:{id:"P",name:"P",sprite_set:"P"},display_name:"P",server_url:wire.url,phase2_delivery:false,in_flight_delivery_enabled:true}));
+  const cli=fileURLToPath(new URL("../../wrapper/claude-code/dist/cli.js",import.meta.url));
+  const child=spawn(process.execPath,[cli,path],{env:{HOME:root,PATH:"/usr/bin:/bin",KAOIRO_CLAUDE_PHASE2_DELIVERY:"0",KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS:"private-excluded-persona"},stdio:["ignore","pipe","pipe"]});
+  let output="";child.stdout.on("data",x=>output+=x);child.stderr.on("data",x=>output+=x);
+  try{
+    await vi.waitFor(()=>expect(wire.joins.has("mixed.direct")).toBe(true),{timeout:10000});
+    expect(declaration(wire.joins.get("mixed.direct")!)).toEqual({operator_early:"fold",inter_agent_early:"fold",inter_agent_yield:"tool_boundary"});
+    const lines=output.split("\n").filter(x=>x.startsWith("claude: warn - "));
+    expect(lines).toHaveLength(3);expect(output).not.toContain("private-excluded-persona");
+  }finally{
+    const exited=child.exitCode!==null ? Promise.resolve() : once(child,"exit");child.kill("SIGTERM");await exited;await wire.close();rmSync(root,{recursive:true,force:true});
+  }
+},20000);

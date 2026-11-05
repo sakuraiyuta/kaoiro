@@ -1,10 +1,10 @@
 {
   "typescript": "5.9.3",
-  "raw": 514,
+  "raw": 519,
   "problems": [],
   "rows": [
     {
-      "path": "dashboard/test/agentCardPersonaDetail.integration.test.ts",
+      "path": "dashboard/test/agentCardFaceOpen.integration.test.ts",
       "imports": [
         "vitest"
       ],
@@ -316,6 +316,30 @@
       "firstImport": "./isolation.setup"
     },
     {
+      "path": "dashboard/test/deviceApproval.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/deviceApprovalApp.integration.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/deviceApprovalFake.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
       "path": "dashboard/test/directoryNameProjection.integration.test.ts",
       "imports": [
         "vitest"
@@ -349,6 +373,14 @@
     },
     {
       "path": "dashboard/test/expression.test.ts",
+      "imports": [
+        "vitest"
+      ],
+      "exception": null,
+      "firstImport": "./isolation.setup"
+    },
+    {
+      "path": "dashboard/test/gridSort.test.ts",
       "imports": [
         "vitest"
       ],
@@ -1164,14 +1196,6 @@
       "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
-      "path": "runner/test/codexStateRecoveryTable.test.ts",
-      "imports": [
-        "vitest"
-      ],
-      "exception": null,
-      "firstImport": "../../scripts/test/fixtures/test-isolation.mjs"
-    },
-    {
       "path": "runner/test/codexStateWorkflow.test.ts",
       "imports": [
         "vitest"
@@ -1676,7 +1700,23 @@
       "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
     },
     {
+      "path": "server/deploy/test/env-v2.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
       "path": "server/deploy/test/fuji-design-boundaries.test.mjs",
+      "imports": [
+        "node:test"
+      ],
+      "exception": null,
+      "firstImport": "../../../scripts/test/fixtures/test-isolation.mjs"
+    },
+    {
+      "path": "server/deploy/test/image-query.test.mjs",
       "imports": [
         "node:test"
       ],

@@ -2,25 +2,27 @@ import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { describe, expect, it } from "vitest";
 import {
   captureDeliveryEnvironment, resolveDelivery, retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage,
+  retiredClaudePhase2Inputs, retiredClaudePhase2Message,
 } from "../src/delivery_modes.js";
 
 const off = { operator_early: "none", inter_agent_early: "none", inter_agent_yield: "none" };
 const fold = { operator_early: "fold", inter_agent_early: "fold", inter_agent_yield: "tool_boundary" };
-describe("legacy delivery resolution under a host ceiling", () => {
+describe("delivery resolution under a host ceiling", () => {
   it.each([
-    ["0", true, "P", "P", true],
-    ["0", true, "P", "other", false],
-    [undefined, false, "P", "P", true],
-    ["", true, "bad id", "other", true],
-    ["1", false, "bad id", "other", true],
-    [undefined, false, "P,", "P", false],
-    [undefined, false, "bad id,P", "P", false],
-    [undefined, false, "p", "P", false],
-  ] as const)("preserves flag=%s config=%s list=%s persona=%s", (flag, config, list, persona, enabled) => {
+    ["0", true, "P", "P"],
+    ["0", true, "P", "other"],
+    [undefined, false, "P", "P"],
+    ["", true, "bad id", "other"],
+    ["1", false, "bad id", "other"],
+    [undefined, false, "P,", "P"],
+    [undefined, false, "bad id,P", "P"],
+    [undefined, false, "p", "P"],
+  ] as const)("preserves flag=%s config=%s list=%s persona=%s", (flag, config, list, persona) => {
     const env = captureDeliveryEnvironment({ KAOIRO_CLAUDE_PHASE2_DELIVERY: flag,
       KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS: list });
-    const input = { engine: "claude-code" as const, personaId: persona, phase2Delivery: config, env };
-    expect(resolveDelivery(input).mechanisms).toEqual(enabled ? fold : off);
+    const input = { engine: "claude-code" as const, personaId: persona, env };
+    expect(retiredClaudePhase2Inputs({ env, fileKey: config })).toContain("phase2_delivery");
+    expect(resolveDelivery(input).mechanisms).toEqual(fold);
     expect(resolveDelivery({ ...input, ceiling: false }).mechanisms).toEqual(off);
   });
   it("declares Codex steering from the backend and the ceiling alone", () => {
@@ -75,5 +77,25 @@ describe("retired Codex operator-steer inputs", () => {
     expect(retiredCodexOperatorSteerMessage("operator_steer", "wrapper")).toContain("operator_steer in the wrapper config");
     const present = retiredCodexOperatorSteerInputs({ env: { [list]: secret }, fileKey: undefined });
     expect(present.map(input => retiredCodexOperatorSteerMessage(input, "runner")).join("\n")).not.toContain(secret);
+  });
+});
+
+describe("retired Claude phase-2 inputs", () => {
+  const flag = "KAOIRO_CLAUDE_PHASE2_DELIVERY", list = "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS";
+  it("declares fold by default and warns for each present input without its value", () => {
+    expect(resolveDelivery({ engine: "claude-code", env: {} })).toEqual({ mechanisms: fold, source: "policy" });
+    expect(retiredClaudePhase2Inputs({ env: {}, fileKey: undefined })).toEqual([]);
+    expect(retiredClaudePhase2Inputs({ env: { [flag]: "", [list]: "" }, fileKey: undefined })).toEqual([]);
+    for (const fileKey of [true, false]) {
+      const inputs = retiredClaudePhase2Inputs({ env: { [flag]: "0", [list]: "private-sentinel" }, fileKey });
+      expect(inputs).toEqual([flag, list, "phase2_delivery"]);
+      for (const scope of ["runner", "wrapper"] as const) {
+        const text = inputs.map(input => retiredClaudePhase2Message(input, scope)).join("\n");
+        expect(text).not.toContain("private-sentinel");
+        expect(text).toContain("is retired and has no effect");
+        expect(text).toContain(scope === "runner" ? "in_flight_delivery.claude-code.enabled" : "in_flight_delivery_enabled");
+        expect(text).toContain("per-agent policy");
+      }
+    }
   });
 });

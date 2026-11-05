@@ -304,7 +304,7 @@ describe("peer input through the CLI after native closes (issue #426)", () => {
           createServerLink: (_url, _id, options) => {
             linkOptions = options as unknown as Record<string, any>;
             queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("system prompt"); });
-            return { close() {}, send() {}, currentSessionId: () => null, setSessionId() {}, reportSessionLifecycle() {}, reportDisconnectIntent: async () => true,
+            return { deliveryModes: () => undefined, close() {}, send() {}, currentSessionId: () => null, setSessionId() {}, reportSessionLifecycle() {}, reportDisconnectIntent: async () => true,
               acknowledgeInterAgentDelivery() {}, flushInterAgentRetirements: async () => {}, retireInterAgentDeliveries: () => true } as never;
           },
           createHost: (cfg, options) => {
@@ -345,11 +345,11 @@ describe("native unavailability in the operator log (issue #426)", () => {
         loadConfig: () => ({ ...cliConfig }),
         createServerLink: (_url, _agentId, options) => {
           queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
-          return { close: () => {}, currentSessionId: () => null, send: (envelope: Envelope) => { sent.push(envelope); } } as never;
+          return { deliveryModes: () => undefined, close: () => {}, currentSessionId: () => null, send: (envelope: Envelope) => { sent.push(envelope); } } as never;
         },
         createHost: (_cfg, options) => {
           hostOptions = options;
-          return { state: "idle", statusExtSnapshot: () => ({}), run: async () => { options.onNativeUnavailable?.({ reason: "evidence_unreadable" }); } } as never;
+          return { canPushLiveInput: () => false, canFoldLiveInput: () => false, state: "idle", statusExtSnapshot: () => ({}), run: async () => { options.onNativeUnavailable?.({ reason: "evidence_unreadable" }); } } as never;
         },
       });
     } finally { stderr.mockRestore(); stdout.mockRestore(); vi.unstubAllEnvs(); }

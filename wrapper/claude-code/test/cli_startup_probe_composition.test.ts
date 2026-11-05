@@ -75,7 +75,7 @@ async function runIdleCli(stdoutLine: string): Promise<{
     loadConfig: () => ({ ...config }),
     createServerLink: (_url, _agentId, options) => {
       queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
-      return {
+      return { deliveryModes: () => undefined,
         send: (envelope: Envelope) => { sent.push(envelope); },
         close: () => {},
         currentSessionId: () => null,

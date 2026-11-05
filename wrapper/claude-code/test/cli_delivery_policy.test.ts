@@ -21,7 +21,7 @@ function deferred() {
 it.each(["already off", "claim in flight"] as const)("keeps one ordinary yield root when policy is %s and on does not re-promote it", async boundary => {
   const ready = deferred(), endRoot = deferred(), rootReceived = deferred();
   const config: WrapperConfig = { agent_id: "policy-claude", persona: { id: "p", name: "P", sprite_set: "p" },
-    display_name: "P", server_url: "unused", phase2_delivery: true };
+    display_name: "P", server_url: "unused" };
   let claimCalls = 0, host!: AgentHost;
   const inputs: string[] = [];
   const wire = await phoenixLoopback(() => ({ inter_agent_delivery_modes: "v1", inter_agent_delivery_incarnation: "i",
@@ -99,3 +99,51 @@ it.each(["already off", "claim in flight"] as const)("keeps one ordinary yield r
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
   }
 }, 10_000);
+
+it.each(["ceiling false", "absent", "legacy false", "excluding list", "stored off"] as const)("orders queued peer and operator roots with %s", async mode => {
+  for(const key of ["KAOIRO_CLAUDE_PHASE2_DELIVERY","KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS"])vi.stubEnv(key,undefined);
+  if(mode==="legacy false")vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY","0");
+  if(mode==="excluding list")vi.stubEnv("KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS","other");
+  const ready=deferred(),release=deferred(),order:string[]=[];
+  let sent!: { mock: { calls: readonly unknown[][] } };
+  const wire=await phoenixLoopback(()=>({delivery_policy:"v1",inter_agent_delivery_modes:"v1",inter_agent_reply_basis:"v1"}));
+  const signals=process.listeners("SIGINT");
+  const running=runClaudeCli({
+    parseCliArgs:()=>({configPath:"test",prompt:undefined,resume:undefined}),
+    loadConfig:()=>({agent_id:"ordering",persona:{id:"P",name:"P",sprite_set:"P"},display_name:"P",server_url:wire.url,in_flight_delivery_enabled:mode!=="ceiling false",...(mode==="legacy false"?{phase2_delivery:false}:{})}),
+    createHost:(config,options)=>{
+      const host=new AgentHost(config,{...options,queryFn:((args:{prompt:AsyncIterable<SDKUserMessage>;options:any})=>Object.assign((async function*(){
+        const input=args.prompt[Symbol.asyncIterator]();
+        const hook=args.options.hooks.UserPromptSubmit.at(-1).hooks[0];
+        const root=(await input.next()).value!;
+        await hook({hook_event_name:"UserPromptSubmit",session_id:"ordering",prompt_id:"base",prompt:root.message.content},undefined,{signal:new AbortController().signal});
+        yield {type:"system",subtype:"init",session_id:"ordering"} as SDKMessage;
+        ready.resolve();await release.promise;
+        yield {type:"result",session_id:"ordering",result_index:0,subtype:"success",result:"base done"} as SDKMessage;
+        for(let i=1;i<=2;i++){
+          const text=(await input.next()).value!.message.content as string;
+          order.push(text.includes("OPERATOR-ROOT")?"operator":"peer");
+          await hook({hook_event_name:"UserPromptSubmit",session_id:"ordering",prompt_id:`root-${i}`,prompt:text},undefined,{signal:new AbortController().signal});
+          yield {type:"result",session_id:"ordering",result_index:i,subtype:"success",result:"done"} as SDKMessage;
+        }
+      })(),{interrupt:async()=>{},supportedModels:async()=>[]})as unknown as Query)as never});
+      host.probeRateLimits=async()=>{};sent=vi.spyOn(host,"send");return host;
+    },
+  });
+  try{
+    await vi.waitFor(()=>expect(wire.joins).toBe(1));
+    wire.push("delivery_policy",{version:"0",revision:1,policy:mode==="stored off"?"off":"on"});
+    wire.push("persona_prompt",{version:"0",prompt:"Ordering"});
+    await vi.waitFor(()=>expect(wire.received.some(x=>x.event==="envelope" && x.payload.type==="state_change")).toBe(true));
+    wire.push("instruction",{version:"0",text:"BASE",delivery_intent:"normal"});await ready.promise;
+    wire.push("envelope",{version:"0",agent_id:"peer",persona:{id:"peer",name:"Peer",sprite_set:"peer"},ts:"T",type:"inter_agent_message",state:"thinking",payload:{to:"ordering",conversation_id:"order",turn_number:1,kind:"inform",body:"PEER-ROOT",delivery_authority:{requested:"normal",granted:"normal"}}});
+    await vi.waitFor(()=>expect(sent.mock.calls.some(call=>String(call[0]).includes("PEER-ROOT"))).toBe(true));
+    wire.push("instruction",{version:"0",text:"OPERATOR-ROOT",delivery_intent:"normal"});
+    await vi.waitFor(()=>expect(sent.mock.calls.some(call=>String(call[0]).includes("OPERATOR-ROOT"))).toBe(true));
+    release.resolve();await vi.waitFor(()=>expect(order).toHaveLength(2));
+    expect(order).toEqual(mode==="ceiling false"?["peer","operator"]:["operator","peer"]);
+  }finally{
+    release.resolve();for(const listener of process.listeners("SIGINT"))if(!signals.includes(listener))listener("SIGINT");
+    await running;await wire.close();
+  }
+});

@@ -125,7 +125,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
           linkOptions.onPersonaPrompt?.("system prompt");
           linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
         });
-        return {
+        return { deliveryModes: () => undefined,
           close: () => {},
           currentSessionId: () => null,
           setSessionId: () => {},
@@ -182,7 +182,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
           linkOptions.onPersonaPrompt?.("system prompt");
           linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
         });
-        return {
+        return { deliveryModes: () => undefined,
           close: () => {},
           currentSessionId: () => null,
           setSessionId: () => {},
@@ -228,7 +228,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
           linkOptions.onPersonaPrompt?.("system prompt");
           linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
         });
-        return {
+        return { deliveryModes: () => undefined,
           close: () => {},
           currentSessionId: () => null,
           setSessionId: () => {},
@@ -288,7 +288,7 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
           linkOptions.onPersonaPrompt?.("system prompt");
           linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
         });
-        return {
+        return { deliveryModes: () => undefined,
           close: () => {},
           currentSessionId: () => null,
           setSessionId: () => {},
