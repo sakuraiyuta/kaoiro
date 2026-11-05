@@ -5391,9 +5391,7 @@ export class AgentHost implements EngineAdapter {
         ...(error === undefined ? {} : { error }),
       });
     }
-    const notify = this.#turnBoundaryNotify;
-    this.#turnBoundaryNotify = null;
-    notify?.();
+    this.#wakeTurnBoundary();
   }
 
   /** An abnormal terminal boundary only matters if this host had an active
