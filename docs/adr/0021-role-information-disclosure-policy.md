@@ -142,9 +142,7 @@ Canonical `(id, sprite_set)` matching is necessary but insufficient: multiple
 accepted IDs can contribute metadata and files to the same set. Count claimants
 from the complete asset snapshot and deny the entire ambiguous set to viewers,
 even if only one claimant is active. Manifest omission and generic image 404
-share that decision. Versions derive only from visible entries. Import and
-operator/admin collision semantics are separately tracked in
-[issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499).
+share that decision. Versions derive only from visible entries. Import collision selection retains one complete pack before publication ([issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499)); this viewer check remains in place.
 The endpoint, cache and concurrency contract is [persona delivery](../reference/protocol/persona-delivery.md).
 
 ## Consequences

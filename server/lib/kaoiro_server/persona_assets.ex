@@ -90,6 +90,8 @@ defmodule KaoiroServer.PersonaAssets do
   @doc "Manifest map as served by `GET /api/personas` (string keys)."
   def manifest, do: cache().manifest
 
+  def ingest_warnings, do: cache().ingest_warnings
+
   @doc "One immutable asset generation for authenticated delivery; never serialize this view."
   def delivery_snapshot, do: Map.take(cache(), [:manifest, :files, :personas_by_id])
 
@@ -424,8 +426,12 @@ defmodule KaoiroServer.PersonaAssets do
     end
 
     case load_packs(list_zips(dir), cache_dir) do
-      {:cache_error, reason} -> {:error, reason}
-      packs -> {:ok, assemble(drop_duplicate_ids(packs), cache_dir)}
+      {:cache_error, reason} ->
+        {:error, reason}
+
+      {packs, rejected} ->
+        {packs, collisions} = packs |> drop_duplicate_ids() |> resolve_sprite_sets()
+        {:ok, assemble(packs, cache_dir, rejected ++ collisions)}
     end
   end
 
@@ -435,20 +441,28 @@ defmodule KaoiroServer.PersonaAssets do
   # Halting on the first one avoids grinding every remaining zip through
   # a filesystem we already know is broken.
   defp load_packs(zips, cache_dir) do
-    Enum.reduce_while(zips, [], fn zip, acc ->
+    Enum.reduce_while(zips, {[], []}, fn zip, {packs, warnings} ->
       case extract_and_load(zip, cache_dir) do
-        {:cache_error, _reason} = error -> {:halt, error}
-        nil -> {:cont, acc}
-        pack -> {:cont, [pack | acc]}
+        {:cache_error, _reason} = error ->
+          {:halt, error}
+
+        nil ->
+          {:cont, {packs, warnings}}
+
+        {:reserved_set, name} ->
+          {:cont, {packs, ["#{name}: sprite_set default is reserved" | warnings]}}
+
+        pack ->
+          {:cont, {[pack | packs], warnings}}
       end
     end)
     |> case do
       {:cache_error, _reason} = error -> error
-      packs -> Enum.reverse(packs)
+      {packs, warnings} -> {Enum.reverse(packs), Enum.reverse(warnings)}
     end
   end
 
-  defp assemble(packs, cache_dir) do
+  defp assemble(packs, cache_dir, warnings) do
     reclaim_cache(cache_dir, packs)
 
     files = build_files(packs)
@@ -468,6 +482,7 @@ defmodule KaoiroServer.PersonaAssets do
     pack_details = Map.new(packs, fn p -> {p.manifest["id"], build_pack_detail(p)} end)
 
     %{
+      ingest_warnings: warnings,
       manifest: build_manifest(packs, files),
       files: files,
       personalities: personalities,
@@ -509,6 +524,7 @@ defmodule KaoiroServer.PersonaAssets do
          {:ok, sprites} <- collect_sprites(extracted_dir, manifest) do
       %{
         cache_key: hash,
+        source: Path.basename(zip_path),
         manifest: manifest,
         personality: personality,
         sprites: sprites
@@ -516,6 +532,13 @@ defmodule KaoiroServer.PersonaAssets do
     else
       {:cache_error, _reason} = error ->
         error
+
+      {:error, :reserved_sprite_set} ->
+        Logger.warning(
+          "skip persona pack #{Path.basename(zip_path)}: sprite_set default is reserved"
+        )
+
+        {:reserved_set, Path.basename(zip_path)}
 
       {:error, reason} ->
         Logger.warning("skip persona pack #{Path.basename(zip_path)}: #{reason}")
@@ -2127,6 +2150,9 @@ defmodule KaoiroServer.PersonaAssets do
       not string?(manifest["sprite_set"]) or not Regex.match?(@safe_name, manifest["sprite_set"]) ->
         {:error, "manifest.sprite_set must match #{inspect(@safe_name.source)}"}
 
+      manifest["sprite_set"] == @default_persona_id ->
+        {:error, :reserved_sprite_set}
+
       not valid_persona_name?(manifest["name"]) ->
         {:error,
          "manifest.name must be 1-#{@persona_name_max_graphemes} characters, at most #{@persona_name_max_bytes} UTF-8 bytes, with no control characters"}
@@ -2297,6 +2323,28 @@ defmodule KaoiroServer.PersonaAssets do
       end)
 
     Enum.reverse(kept)
+  end
+
+  defp resolve_sprite_sets(packs) do
+    packs
+    |> Enum.group_by(& &1.manifest["sprite_set"])
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce({[], []}, fn {set, group}, {kept, warnings} ->
+      [winner | excluded] = Enum.sort_by(group, & &1.manifest["id"])
+
+      warnings =
+        Enum.reduce(excluded, warnings, fn pack, acc ->
+          message =
+            "sprite_set #{set}: keep #{winner.manifest["id"]} (#{winner.source}); " <>
+              "exclude #{pack.manifest["id"]} (#{pack.source})"
+
+          Logger.warning(message)
+          [message | acc]
+        end)
+
+      {[winner | kept], warnings}
+    end)
+    |> then(fn {kept, warnings} -> {Enum.reverse(kept), Enum.reverse(warnings)} end)
   end
 
   # Any cache sub-dir whose name is not the current cache_key of some

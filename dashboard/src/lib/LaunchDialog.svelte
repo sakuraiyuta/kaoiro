@@ -19,6 +19,7 @@
 
   let {
     hosts,
+    ingestWarnings = null,
     connection,
     sessions,
     serverBuildRevision = null,
@@ -30,6 +31,7 @@
     deliveryPolicyAvailable?: boolean;
     canOperate?: () => boolean;
     hosts: HostInfo[];
+    ingestWarnings?: string[] | null;
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
     /** Server's own build_revision (issue #218, GET /api/health via
@@ -616,6 +618,12 @@
         <p class="build-revision-warning" role="status">
           ⚠ {buildRevisionWarning}
         </p>
+      {/if}
+
+      {#if ingestWarnings === null}
+        <p class="hint" role="status">pack の診断情報は未対応または未確認です。</p>
+      {:else if ingestWarnings.length > 0}
+        <p class="hint" role="status">{ingestWarnings.join("; ")}。衝突を解消し server を再起動後、画面を再読込してください。</p>
       {/if}
 
       <label>

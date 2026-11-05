@@ -86,6 +86,7 @@ async function renderLaunch(
   hosts: HostInfo[],
   serverBuildRevision: string | null,
   serverBuildDirty: boolean | null = false,
+  ingestWarnings: string[] | null = [],
 ): Promise<HTMLElement> {
   const target = document.createElement("div");
   document.body.append(target);
@@ -97,6 +98,7 @@ async function renderLaunch(
       sessions: null,
       serverBuildRevision,
       serverBuildDirty,
+      ingestWarnings,
       onClose: vi.fn(),
     },
   });
@@ -110,6 +112,14 @@ function warningText(target: Element): string | null {
 }
 
 describe("LaunchDialog build revision warning (issue #218)", () => {
+  it("shows collision diagnostics and treats a missing field as unknown", async () => {
+    const target = await renderLaunch([claudeHost()], null, false, ["shared: keep a (a.zip); exclude b (b.zip)"]);
+    expect(target.textContent).toContain("shared: keep a (a.zip); exclude b (b.zip)");
+    expect(target.textContent).toContain("再起動");
+    const legacy = await renderLaunch([claudeHost()], null, false, null);
+    expect(legacy.textContent).toContain("診断情報は未対応または未確認");
+  });
+
   it("revision が server と一致すれば警告なし", async () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
     const target = await renderLaunch(

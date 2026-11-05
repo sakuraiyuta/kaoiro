@@ -361,6 +361,7 @@
   // reveals the launch affordance. `spawnNotice` is a transient toast for the
   // runner's spawn outcome.
   let hosts = $state<HostInfo[]>([]);
+  let ingestWarnings = $state<string[] | null>(null);
   let isOperator = $state(false);
   const policyStore = new DeliveryPolicyStore(() => ({ connection, operator: isOperator, connected: status === "connected" }));
   let showLaunch = $state(false);
@@ -1376,10 +1377,11 @@
             spawnErrors = rest;
           }
         },
-        onHosts: (next, incomplete) => {
+        onHosts: (next, incomplete, warnings) => {
           // Operators alone receive `hosts`, so this is also the operator
           // signal that reveals the launch UI (#22).
           hosts = next;
+          ingestWarnings = warnings ?? null;
           isOperator = true;
           if (incomplete) hostsIncomplete = true;
           else hostsIncomplete = false;
@@ -2092,6 +2094,7 @@
     canOperate={() => isOperator && status === "connected"}
     {hosts}
     {connection}
+    {ingestWarnings}
     sessions={runnerSessions}
     serverBuildRevision={serverHealth?.build_revision ?? null}
     serverBuildDirty={serverHealth?.build_dirty ?? null}

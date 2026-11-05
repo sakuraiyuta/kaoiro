@@ -2930,7 +2930,7 @@ export interface KaoiroHandlers {
   /** Live launchable hosts (#22); pushed on join and on every host
    *  register/drop. Operator-only — its arrival also marks this client an
    *  operator (viewers never receive it). */
-  onHosts?: (hosts: HostInfo[], incomplete?: boolean) => void;
+  onHosts?: (hosts: HostInfo[], incomplete?: boolean, warnings?: string[] | null) => void;
   /** Restart-surviving identity ledger (ADR-0030); pushed once on
    *  operator join. Every known agent_id maps to its persona and a
    *  last_seen hint. Merged with the AgentStates snapshot on the client
@@ -5108,8 +5108,11 @@ export function connectKaoiro(
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  bindServerEvent(c, "hosts", (payload: { hosts?: unknown; hosts_incomplete?: unknown }) => {
-    handlers.onHosts?.(parseHosts(payload.hosts), payload.hosts_incomplete === true);
+  bindServerEvent(c, "hosts", (payload: { hosts?: unknown; hosts_incomplete?: unknown; ingest_warnings?: unknown; ingest_warnings_incomplete?: unknown }) => {
+    const warnings = Array.isArray(payload.ingest_warnings) && payload.ingest_warnings.every(w => typeof w === "string")
+      ? [...payload.ingest_warnings, ...(payload.ingest_warnings_incomplete === true ? ["警告の一部を表示できません"] : [])]
+      : null;
+    handlers.onHosts?.(parseHosts(payload.hosts), payload.hosts_incomplete === true, warnings);
   });
   bindServerEvent(c, "directory", (payload: { entries?: unknown; directory_incomplete?: unknown }) => {
     handlers.onDirectory?.(parseDirectory(payload.entries), payload.directory_incomplete === true);

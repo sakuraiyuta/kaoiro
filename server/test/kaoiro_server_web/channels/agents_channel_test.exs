@@ -23,6 +23,40 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServer.WorkStore
 
+  @tag :tmp_dir
+  test "pack warnings are operator-only siblings of hosts", %{tmp_dir: tmp} do
+    alias KaoiroServer.{PersonaAssets, PersonaPackFixture}
+    old_dir = Application.get_env(:kaoiro_server, :persona_dir)
+    old_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
+
+    on_exit(fn ->
+      if old_dir,
+        do: Application.put_env(:kaoiro_server, :persona_dir, old_dir),
+        else: Application.delete_env(:kaoiro_server, :persona_dir)
+
+      if old_cache,
+        do: Application.put_env(:kaoiro_server, :persona_cache_dir, old_cache),
+        else: Application.delete_env(:kaoiro_server, :persona_cache_dir)
+
+      PersonaAssets.rebuild()
+    end)
+
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    PersonaPackFixture.write!(tmp, "a.zip", "a", "shared")
+    PersonaPackFixture.write!(tmp, "b.zip", "b", "shared")
+    assert :ok = PersonaAssets.rebuild()
+    operator = join_as(:operator)
+    assert_push("hosts", %{"hosts" => _, "ingest_warnings" => [warning]})
+    assert warning =~ "keep a (a.zip)"
+    assert warning =~ "exclude b (b.zip)"
+    assert_reply leave(operator), :ok
+    _viewer = join_as(:viewer)
+    assert_push("snapshot", %{})
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => %{}})
+    refute_push("hosts", %{})
+  end
+
   test "viewer cannot create work through operator control" do
     socket = join_as(:viewer)
 

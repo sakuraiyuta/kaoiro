@@ -235,7 +235,6 @@ Viewer access is limited to canonical, unambiguous packs used by the logical
 viewer running-agent list; operator/admin retain the full catalog. Both entry
 points enforce the same snapshot-based policy. All accepted pack IDs contribute
 to ambiguity, including inactive ones; ambiguous sets are omitted/404 for
-viewers. Import and operator mixed-file behavior are unchanged and tracked in
-[issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499).
+viewers. Import collision selection retains one complete pack before publication ([issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499)).
 See [persona delivery](../reference/protocol/persona-delivery.md) for the current
 wire contract, version scope, URL cache migration and dashboard refresh rules.

@@ -48,7 +48,7 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
   revalidate the credential (cookie or bearer) and role before any asset
   lookup. Anonymous, invalid, and revoked credentials receive 401, even for
   nonexistent packs.
-- Operator/admin receive all packs. Viewers receive only packs used by the
+- Operator/admin receive all accepted packs. Viewers receive only packs used by the
   logical running-agent list: one `AgentStates` snapshot, projected through the
   same viewer envelope allowlist as the channel, excluding `disconnected`.
   Waiting, error and done agents qualify; directory-only records do not.
@@ -59,9 +59,7 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
   that snapshot's **complete** catalog. An inactive colliding pack still makes
   it ambiguous. Ambiguous and unused sets are omitted from the manifest and
   every direct image request returns the same generic 404 as a missing file.
-  This applies to HEAD, conditional requests and old URL forms too. Import
-  precedence and operator/admin mixed-asset behavior are unchanged
-  ([issue 499](https://github.com/sakuraiyuta/kaoiro/issues/499)).
+  This applies to HEAD, conditional requests and old URL forms too. Colliding imports are resolved before publication, retaining one complete pack.
 - HTTP `version` is 16 lowercase hex characters derived from only the returned
   entries and a fixed delivery-policy marker. Hidden pack edits do not affect
   it while the visible result remains unchanged. The nonsecret `auth=1` URL
@@ -84,13 +82,12 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
   reapplies it. Retry triggers are a new join, membership change or reload;
   pack-only rebuilds do not push a dashboard refresh.
 - Only indexed files from accepted packs can be served; unknown paths return 404
-  after authentication. Colliding packs can leave indexed files absent from the
-  overwritten manifest; viewers receive none of that set.
+  after authentication. Excluded packs do not contribute files.
 - A missing sprite falls back to the `idle` image. `disconnected` has no image (MUST NOT in
   personas.md) and is shown as grayscale idle. Missing manifests or unlisted sprite sets fall
   back to sprite-less rendering (CSS face in the reference implementation).
 - **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
-  additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md) F6); no manual restart is needed.
+  additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md) F6). Until [issue 970](https://github.com/sakuraiyuta/kaoiro/issues/970) is resolved, restart the server and reload the dashboard after changing packs.
 
 ## Personality prompt delivery (ADR-0029)
 
@@ -188,3 +185,5 @@ full topic index.
 - [Personality-prompt injection by engine](../engines/personality-injection.md).
 - [Personality configuration](../configuration/personality.md).
 - [Personality-prompt injection (design)](../../architecture/personality-injection.md).
+
+Operator-only `hosts` pushes include `ingest_warnings` alongside `hosts`; absent means diagnostics are unknown on older servers, not that no conflict exists. The launch dialog shows conflicts after a reconnect. An `ingest_warnings_incomplete` marker signals truncation; warnings are independent of the sprite manifest version.

@@ -2093,7 +2093,27 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp hosts_payload(hosts) when is_map(hosts) do
-    bounded_push_map_payload("hosts", "hosts", hosts, "hosts_incomplete")
+    warnings = PersonaAssets.ingest_warnings()
+
+    static = %{
+      "hosts" => %{},
+      "hosts_incomplete" => true,
+      "ingest_warnings" => [],
+      "ingest_warnings_incomplete" => true
+    }
+
+    warning_budget = TransportLimits.push_payload_budget("agents:lobby", "hosts", static)
+    projected_warnings = TransportLimits.bounded_list(warnings, warning_budget)
+    static = Map.put(static, "ingest_warnings", projected_warnings)
+    projected_hosts = bounded_push_map("hosts", hosts, static)
+
+    static
+    |> Map.put("hosts", projected_hosts)
+    |> maybe_drop_incomplete("hosts_incomplete", map_size(projected_hosts) < map_size(hosts))
+    |> maybe_drop_incomplete(
+      "ingest_warnings_incomplete",
+      length(projected_warnings) < length(warnings)
+    )
   end
 
   defp directory_payload(entries) do
