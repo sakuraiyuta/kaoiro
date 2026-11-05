@@ -10812,6 +10812,7 @@ describe("reserved resume receipt", () => {
       else if (action === "fold") await hook("notification");
       const waiting = action === "fresh" ? hook("note") : undefined;
       yield result("success", { origin: { kind: "task-notification" } });
+      if (action === "fresh") {await new Promise(resolve=>setTimeout(resolve,0));expect(host.activeInterAgentTurnToken()).not.toBeNull();}
       if (action === "admit" || action === "fresh") { await (waiting ?? hook("note")); yield result("success"); }
       else expect(host.state).toBe("error");
     }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
