@@ -639,7 +639,7 @@ test("recovery property: a legacy journal without the container id starts the na
   }
 });
 
-// Rollback-chain rows are deferred to L1b: they must render the runbook note
+// Rollback-chain rows refuse: they must render the runbook note
 // and no command, from the failing run and from `status` alike.
 const DEFERRED = [
   { name: "forensic archive fails", phase: PHASE.ROLLBACK_STOPPED,
@@ -649,7 +649,7 @@ const DEFERRED = [
   { name: "old image never reports healthy after compose up", phase: PHASE.ROLLBACK_RESTORED, healthFailsForOld: true },
 ];
 for (const recipe of DEFERRED) {
-  test(`recovery property: ${recipe.phase} (${recipe.name}) renders the L1b note and no command`, (t) => {
+  test(`recovery property: ${recipe.phase} (${recipe.name}) renders the manual recovery note and no command`, (t) => {
     const world = makeWorld(t);
     assert.equal(world.update(...UPDATE_APPROVED).status, 0);
     world.edit((s) => {

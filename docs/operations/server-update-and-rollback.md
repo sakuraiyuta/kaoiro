@@ -620,10 +620,10 @@ it):
 | up | refuse | destructive |
 | healthy | refuse | destructive |
 | done | refuse | destructive |
-| rollback_stopped | refuse | destructive-resume, deferred(L1b) |
-| rollback_forensic_archived | refuse | destructive-resume, deferred(L1b) |
-| rollback_restoring | refuse | destructive-resume, deferred(L1b) |
-| rollback_restored | refuse | destructive-resume, deferred(L1b) |
+| rollback_stopped | refuse | refuse |
+| rollback_forensic_archived | refuse | refuse |
+| rollback_restoring | refuse | refuse |
+| rollback_restored | refuse | refuse |
 | rolled_back | refuse | refuse |
 <!-- recovery-table:end -->
 
@@ -632,8 +632,8 @@ it):
 `old_image_saved` (by id, after checking it still runs the old image) and
 makes no fleet RPC, because it restores the server that ran before the
 transaction. Runners or wrappers that changed identity in the meantime are
-checked only by the next update's gate. `deferred(L1b)` rows are not
-automated yet; see (3a).
+checked only by the next update's gate. Interrupted destructive rollback
+phases refuse both commands; see (3a).
 
 **(0) A prepare-phase abort left `latest` pointing at the wrong image**
 
@@ -756,19 +756,196 @@ transaction's manifest, never “old image only” or “backup only”.
 **(3a) A rollback stopped part-way** (`rollback_stopped`,
 `rollback_forensic_archived`, `rollback_restoring`, `rollback_restored`)
 
-Neither `update` nor `rollback` acts on these phases yet (landing unit L1b of
-[issue #695](https://github.com/sakuraiyuta/kaoiro/issues/695)). Recover by
-hand from what the phase proves:
+Both `update` and `rollback` refuse these phases. Automatic resumption is
+not supported; the operator can recover using the recorded transaction and
+saved Compose plan. The journal is not changed.
 
-- `rollback_stopped` / `rollback_forensic_archived`: the volume has not been
-  touched. Keep the service stopped and keep `rollback-forensic.tar.gz` if it
-  exists.
-- `rollback_restoring`: the wipe may have begun; the volume can be anywhere
-  from intact to restored. Do not take a new archive over
-  `rollback-forensic.tar.gz`.
-- `rollback_restored`: the volume matched the recorded entries; a failure
-  after this point happened at the retag, `compose up` or the health poll, and
-  an old-image container may already be running.
+Use Bash, Docker with Compose, jq, GNU tar, Python 3 and the existing deploy CLI on the deployment host. Independently confirm that no deployment, rollback, backup, host-side writer, or other operator is active, and that the affected fleet is stopped or independently verified compatible with the old image. Docker's volume filter cannot find host-side writers or containers bind-mounting Docker's internal volume directory. If a lock exists, stop and follow 4.4 (0a), including its owner check. Never edit a journal.
+
+Save the entire block to a private file outside the repository, verify its contents and SHA-256, and set/export absolute ROOT (backup root), TX (transaction ID), REPO (checkout), HEALTH (reachable health URL) and, if used, CONFIG (deploy config). Run it as a child using `bash -eu /absolute/path/to/recovery.sh`; do not paste it into an interactive shell. It asks for fresh human confirmation immediately before wipe and before quarantine. Do not log the Compose config or .env. Stop on any nonzero exit or unexpected result. The block is an operator procedure, not an automatic gate.
+
+The saved plan is checked against file, environment, and normalized Compose hashes. `jq -S` can conservatively reject equivalent JSON serialized differently: investigate, never bypass. For the first three phases preserve the forensic archive, check the pre-deploy archive and required entries, restore, and compare a new archive of the restored volume including content hashes. For `rollback_restored` never wipe: a matching old-image container may already have written to the restored volume. Quarantine is a deliberate operator decision; it neither completes the journal nor preserves a rollback-tag claim.
+
+The manual process does not update the journal: after a partial or completed wipe, the original phase still appears even though it no longer describes the live volume. On any failure, stop; inspect actual container, volume, evidence files, tag, health and lock before deciding what happened. If forensic or verification evidence already exists, do not restart this block or overwrite it. After a wipe or possible start, never repeat the wipe based on the journal phase. If health fails after tagging or startup, investigate from tag/container/health state and preserve all evidence; do not rerun restoration. An unchanged preflight failure before any evidence or mutation can be retried only after correcting the verified cause and repeating all independent checks.
+
+```bash
+set -euo pipefail
+for tool in docker jq tar python3 sha256sum git node curl realpath stat; do command -v "$tool" >/dev/null; done
+: "${ROOT:?set ROOT}" "${TX:?set TX}" "${REPO:?set REPO}" "${HEALTH:?set HEALTH}"
+CONFIG_ARGS=()
+if [ -n "${CONFIG:-}" ]; then CONFIG_ARGS=(--config "$CONFIG"); fi
+SERVER=$REPO/server; DIR=$ROOT/$TX; J=$DIR/journal.json; M=$DIR/manifest.json
+[[ "$TX" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
+test ! -L "$DIR"
+test "$(realpath "$DIR")" = "$(realpath "$ROOT")/$TX"
+jq -e --arg tx "$TX" --slurpfile j "$J" '.transaction_id == $tx and $j[0].transaction_id == $tx and ($j[0].history | map(select(.phase=="old_image_saved")) | length == 1)' "$M" >/dev/null
+node "$REPO/server/deploy/kaoiro-server-deploy.mjs" status --repo "$REPO" "${CONFIG_ARGS[@]}" | jq -e --arg tx "$TX" '.locks == [] and .unfinishedTransaction.id == $tx' >/dev/null
+PHASE=$(jq -er '.phase' "$J")
+case "$PHASE" in rollback_stopped|rollback_forensic_archived|rollback_restoring|rollback_restored) ;; *) exit 1;; esac
+OLD=$(jq -er '.history[] | select(.phase=="old_image_saved") | .observation.old_image_id' "$J")
+SRC=$(jq -er '.history[] | select(.phase=="old_image_saved") | .observation.old_sha' "$J")
+VOL=$(jq -er '.volume_id' "$M"); PROJECT=$(jq -er '.recovery_plan.identity.project_name' "$M")
+ARCHIVE=$(jq -er '.archive.path' "$M")
+test "$SRC" = "$(jq -er '.source_sha' "$M")"
+test "$ARCHIVE" = "$DIR/archive.tar.gz"
+test "$(docker image inspect "$OLD" --format '{{.Id}}')" = "$OLD"
+test "$(sha256sum "$ARCHIVE" | cut -d' ' -f1)" = "$(jq -er '.archive.sha256' "$M")"
+LC_ALL=C tar tzf "$ARCHIVE" >/dev/null
+jq -e '.recovery_plan.compose_files | length >= 1 and length <= 2' "$M" >/dev/null
+FIRST=$(jq -er '.recovery_plan.compose_files[0].path' "$M")
+test "$FIRST" = "$DIR/recovery-compose.yaml"
+test "$(sha256sum "$FIRST" | cut -d' ' -f1)" = "$(jq -er '.recovery_plan.compose_files[0].sha256' "$M")"
+test "$(git -C "$REPO" show "$SRC:server/docker-compose.yaml" | sha256sum | cut -d' ' -f1)" = "$(sha256sum "$FIRST" | cut -d' ' -f1)"
+set -- -f "$FIRST"
+if jq -e '.recovery_plan.compose_files | length == 2' "$M" >/dev/null; then
+  SECOND=$(jq -er '.recovery_plan.compose_files[1].path' "$M")
+  case "$SECOND" in "$DIR/compose-override.yaml"|"$DIR/compose-override.yml") ;; *) exit 1;; esac
+  test "$(sha256sum "$SECOND" | cut -d' ' -f1)" = "$(jq -er '.recovery_plan.compose_files[1].sha256' "$M")"
+  set -- "$@" -f "$SECOND"
+fi
+if [ -f "$SERVER/.env" ]; then ENVHASH=$(sha256sum "$SERVER/.env" | cut -d' ' -f1); else ENVHASH=$(printf '' | sha256sum | cut -d' ' -f1); fi
+test "$ENVHASH" = "$(jq -er '.recovery_plan.env_sha256' "$M")"
+test "$(docker compose "$@" --project-directory "$SERVER" config --format json | jq -Sc . | tr -d '\n' | sha256sum | cut -d' ' -f1)" = "$(jq -er '.recovery_plan.compose_sha256' "$M")"
+IDS=$(docker ps -aq --no-trunc --filter "volume=$VOL")
+for ID in $IDS; do
+  [[ "$ID" =~ ^[0-9a-f]{64}$ ]]
+  docker inspect "$ID" | jq -e --arg project "$PROJECT" --arg phase "$PHASE" --arg old "$OLD" 'length == 1 and .[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "kaoiro" and (if $phase == "rollback_restored" then ((.[0].State.Running == false and .[0].State.Status == "exited") or (.[0].State.Running == true and .[0].Image == $old)) else (.[0].State.Running == false and .[0].State.Status == "exited") end)' >/dev/null
+done
+
+if [ "$PHASE" = rollback_stopped ]; then
+  FORENSIC=$DIR/rollback-forensic-manual.tar.gz
+  test ! -e "$FORENSIC"
+  test ! -L "$FORENSIC"
+  docker run --rm -v "$VOL:/data:ro" -v "$DIR:/backup" alpine:3 tar czf /backup/rollback-forensic-manual.tar.gz -C /data .
+  LC_ALL=C tar tzf "$FORENSIC" >/dev/null
+  python3 - "$FORENSIC" <<'PY'
+import os,sys
+fd=os.open(sys.argv[1],os.O_RDONLY)
+try: os.fsync(fd)
+finally: os.close(fd)
+PY
+  sha256sum "$FORENSIC"
+  FORENSIC_HASH=$(sha256sum "$FORENSIC" | cut -d' ' -f1)
+elif [ "$PHASE" != rollback_restored ]; then
+  FORENSIC=$(jq -er '.history[] | select(.phase=="rollback_forensic_archived") | .observation.archive.path' "$J")
+  test "$FORENSIC" = "$DIR/rollback-forensic.tar.gz"
+  test "$(sha256sum "$FORENSIC" | cut -d' ' -f1)" = "$(jq -er '.history[] | select(.phase=="rollback_forensic_archived") | .observation.archive.sha256' "$J")"
+  LC_ALL=C tar tzf "$FORENSIC" >/dev/null
+  FORENSIC_HASH=$(sha256sum "$FORENSIC" | cut -d' ' -f1)
+fi
+
+check_archives() {
+python3 - "$M" "$ARCHIVE" "$1" <<'PY'
+import hashlib, json, sys, tarfile
+
+def c_bytes(s):
+    data = s.encode('utf-8', 'surrogateescape'); out = bytearray(); i = 0
+    escapes = {ord('a'): 7, ord('b'): 8, ord('f'): 12, ord('n'): 10,
+               ord('r'): 13, ord('t'): 9, ord('v'): 11, ord('\\'): 92}
+    while i < len(data):
+        if data[i] != 92:
+            out.append(data[i]); i += 1; continue
+        i += 1
+        if i >= len(data): raise ValueError('incomplete tar name escape')
+        if i + 2 < len(data) and all(48 <= c <= 55 for c in data[i:i+3]):
+            out.append(int(data[i:i+3], 8)); i += 3
+        elif data[i] in escapes:
+            out.append(escapes[data[i]]); i += 1
+        else:
+            raise ValueError('unknown tar name escape')
+    return bytes(out)
+
+def read_archive(path):
+    records = []
+    with tarfile.open(path, 'r:*', encoding='utf-8', errors='surrogateescape') as tar:
+        for m in tar:
+            name = m.name.removeprefix('./').removesuffix('/')
+            if name in ('', '.'): continue
+            if m.isfile():
+                h = hashlib.sha256(); stream = tar.extractfile(m)
+                if stream is None: raise ValueError('unreadable regular file')
+                for chunk in iter(lambda: stream.read(1048576), b''): h.update(chunk)
+                kind, payload = 'file', h.hexdigest()
+            elif m.isdir(): kind, payload = 'dir', ''
+            elif m.issym(): kind, payload = 'symlink', m.linkname
+            elif m.islnk(): kind, payload = 'hardlink', m.linkname
+            else: raise ValueError('unsupported archive entry type')
+            records.append((name.encode('utf-8', 'surrogateescape'), f'{m.uid}:{m.gid}',
+                            f'{m.mode & 0o7777:04o}', kind, payload))
+    return sorted(records)
+
+with open(sys.argv[1], encoding='utf-8') as f: manifest = json.load(f)
+expected = sorted((c_bytes(e['path']), e['owner'], e['mode']) for e in manifest['required_entries'])
+original = read_archive(sys.argv[2])
+if sorted(row[:3] for row in original) != expected: raise SystemExit('archive differs from required_entries')
+if sys.argv[3]:
+    restored = read_archive(sys.argv[3])
+    if restored != original: raise SystemExit('restored archive differs from original')
+print('archive entries and content comparison passed' if sys.argv[3] else 'archive entries match manifest')
+PY
+}
+
+if [ "$PHASE" != rollback_restored ]; then
+check_archives ''
+test "$(sha256sum "$ARCHIVE" | cut -d' ' -f1)" = "$(jq -er '.archive.sha256' "$M")"
+node "$REPO/server/deploy/kaoiro-server-deploy.mjs" status --repo "$REPO" "${CONFIG_ARGS[@]}" | jq -e --arg tx "$TX" '.locks == [] and .unfinishedTransaction.id == $tx' >/dev/null
+IDS=$(docker ps -aq --no-trunc --filter "volume=$VOL")
+for ID in $IDS; do
+  [[ "$ID" =~ ^[0-9a-f]{64}$ ]]
+  docker inspect "$ID" | jq -e --arg project "$PROJECT" --arg phase "$PHASE" --arg old "$OLD" 'length == 1 and .[0].Config.Labels["com.docker.compose.project"] == $project and .[0].Config.Labels["com.docker.compose.service"] == "kaoiro" and (if $phase == "rollback_restored" then ((.[0].State.Running == false and .[0].State.Status == "exited") or (.[0].State.Running == true and .[0].Image == $old)) else (.[0].State.Running == false and .[0].State.Status == "exited") end)' >/dev/null
+done
+read -r -p 'Confirm fleet, direct writers and concurrent operations are stopped; type YES: ' ANSWER
+test "$ANSWER" = YES
+VERIFY=$DIR/manual-restore-verify.tar.gz
+test ! -e "$VERIFY"
+test ! -L "$VERIFY"
+docker run --rm -v "$VOL:/data" -v "$DIR:/backup:ro" alpine:3 sh -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/archive.tar.gz -C /data'
+docker run --rm -v "$VOL:/data:ro" -v "$DIR:/backup" alpine:3 tar czf /backup/manual-restore-verify.tar.gz -C /data .
+LC_ALL=C tar tzf "$VERIFY" >/dev/null
+check_archives "$VERIFY"
+python3 - "$VERIFY" <<'PY'
+import os,sys
+fd=os.open(sys.argv[1],os.O_RDONLY)
+try: os.fsync(fd)
+finally: os.close(fd)
+PY
+fi
+
+docker tag "$OLD" kaoiro-server:latest
+test "$(docker image inspect kaoiro-server:latest --format '{{.Id}}')" = "$OLD"
+ID=$(docker compose "$@" --project-directory "$SERVER" ps -q kaoiro)
+if [ -z "$ID" ]; then
+  docker compose "$@" --project-directory "$SERVER" up -d --no-build --force-recreate
+fi
+for i in $(seq 1 80); do
+  if curl -fsS "$HEALTH" 2>/dev/null | jq -e --arg src "$SRC" '.build_revision == $src and .build_dirty == false' >/dev/null; then break; fi
+  sleep 1
+done
+curl -fsS "$HEALTH" | jq -e --arg src "$SRC" '.build_revision == $src and .build_dirty == false' >/dev/null
+ID=$(docker compose "$@" --project-directory "$SERVER" ps -q kaoiro)
+test -n "$ID"
+test "$(docker inspect "$ID" --format '{{.Image}}')" = "$OLD"
+test "$(docker inspect "$ID" --format '{{.State.Status}}')" = running
+
+read -r -p 'Confirm fleet and no concurrent operations before quarantine; type YES: ' ANSWER
+test "$ANSWER" = YES
+node "$REPO/server/deploy/kaoiro-server-deploy.mjs" status --repo "$REPO" "${CONFIG_ARGS[@]}" | jq -e --arg tx "$TX" --arg src "$SRC" '.locks == [] and .unfinishedTransaction.id == $tx and .container.running == true and .health.build_revision == $src and .health.build_dirty == false' >/dev/null
+test "$(docker image inspect kaoiro-server:latest --format '{{.Id}}')" = "$OLD"
+test "$(docker inspect "$ID" --format '{{.Image}}')" = "$OLD"
+if [ ! -e "$ROOT/.quarantine" ]; then mkdir -m 700 "$ROOT/.quarantine"; fi
+test -d "$ROOT/.quarantine"
+test ! -L "$ROOT/.quarantine"
+test "$(stat -c %a "$ROOT/.quarantine")" = 700
+test "$(stat -c %d "$ROOT")" = "$(stat -c %d "$ROOT/.quarantine")"
+test ! -e "$ROOT/.quarantine/$TX"
+test ! -L "$ROOT/.quarantine/$TX"
+mv -T "$DIR" "$ROOT/.quarantine/$TX"
+if [ "$PHASE" != rollback_restored ]; then
+  test "$(sha256sum "$ROOT/.quarantine/$TX/$(basename "$FORENSIC")" | cut -d' ' -f1)" = "$FORENSIC_HASH"
+fi
+node "$REPO/server/deploy/kaoiro-server-deploy.mjs" status --repo "$REPO" "${CONFIG_ARGS[@]}" | jq -e --arg src "$SRC" '.locks == [] and .unfinishedTransaction == null and .container.running == true and .health.build_revision == $src and .health.build_dirty == false' >/dev/null
+test "$(docker inspect "$ID" --format '{{.State.Status}}')" = running
+```
 
 **(4) Runner does not restart** (4.3 step 7)
 

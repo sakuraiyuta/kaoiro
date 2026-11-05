@@ -1,7 +1,7 @@
 ---
 title: Transaction state table for server deploy and runner update
 status: accepted
-last_updated: 2026-10-31
+last_updated: 2026-11-06
 ---
 
 # Transaction state table for server deploy and runner update
@@ -17,6 +17,12 @@ is marked **(read, not run)**. The property tests in section 7 turn those claims
 into measurements; a unit corrects this page where a measurement disagrees.
 
 ## Decisions
+
+- For the four interrupted destructive rollback phases, automatic L1b resume
+  is not implemented. Both commands permanently refuse, and the operator
+  follows [manual recovery](../operations/server-update-and-rollback.md#44-failure-handling)
+  and quarantines only after the stated checks. Historical resume proposals
+  below do not describe the current implementation.
 
 - Children: [issue #584](https://github.com/sakuraiyuta/kaoiro/issues/584), [issue #681](https://github.com/sakuraiyuta/kaoiro/issues/681),
   [issue #553](https://github.com/sakuraiyuta/kaoiro/issues/553) and [issue #531](https://github.com/sakuraiyuta/kaoiro/issues/531). [Issue #530](https://github.com/sakuraiyuta/kaoiro/issues/530),
@@ -200,7 +206,7 @@ section 5.
 | `releases/<new-id>` not activated | `kaoiro-runner-install.sh` | any phase | prune after a later successful update; protected while an unresolved transaction names it (`protectedReleases` :379-389) | unchanged |
 | `current` / `previous` | switch, `previous` written first | `switch-authorized` and later | consistent by construction; recovery switches them back | unchanged |
 | `previous` = `current` = `releases/<source>` | kill between the two swaps (`kaoiro-runner-switch.sh:251-253`) | `switch-authorized` + `current=source` | — | harmless: `recover` admission holds and it leaves the links as they are (no-code-write); `switch.sh --rollback` would be a no-op |
-| unrecorded `rollback-forensic-resume-<n>.tar.gz` | C′ (5.3) | a `rollback_*` phase after a kill during the extra archive | nobody | the next resume uses `<n+1>`; `status` lists the unrecorded file as residue for the operator |
+| unrecorded forensic evidence | manual recovery in 4.4 (3a) | a `rollback_*` phase after a partial manual recovery | nobody | operator preserves existing evidence and investigates; automatic resume does not run |
 | snapshot directory partly removed, ref retired, transaction `completed` | `retire` `rmSync` (`codex-state.mjs:442-445`) | `completed` after a kill during `retire` | nobody (a rerun fails `verifySnapshot`) — R7 | `retire` rerun finishes the removal of exactly `ref.snapshot` when the ref already carries this retirement's evidence digest; `next` renders `retire` |
 | `current.tmp.<pid>` / `previous.tmp.<pid>` | `kaoiro_symlink_swap` (`kaoiro-runner-common.sh:303-309`) | after SIGKILL between `symlinkSync` and `renameSync` | nobody | non-blocking; `recover` and the next update remove a tmp sibling whose name matches exactly and whose pid is not alive, else list it |
 | server `<authority_root>/.lock.server` (+ `owner.json`), enrolled installations only | `acquireServerReleaseActivity` (`kaoiro-release-reconciliation.mjs:148-155`, `production-release-files.mjs:201-220`), right after the deploy lock (`kaoiro-server-deploy.mjs:1951-1955`, `:2758-2761`) | any phase after SIGKILL of `update` or `rollback` | the release layer's owner-checked `inspect-residue` then `recover-lock` (`docs/operations/build-identity-and-release-tags.md:354-361`); a named live owner refuses | unchanged mechanism; the server's lock message and `status` name both locks and render both `next:` steps; covered by the enrolled kill/replay case |
@@ -307,7 +313,7 @@ the read path render a working next command from it, and the result.
 | server `update` resume | journal checkpoints (phases) | a later phase of the same table + stale deploy lock (+ `.lock.server` if enrolled) | next invocation refused by the lock, naming both locks; then `status` renders the phase's entries | ok (each phase is a row) |
 | server `rollback` record-close (`preflight`) | one journal write | `preflight` (before) or `rolled_back` (after) + stale locks | as above | ok |
 | server `rollback` non-destructive | retag, read back, `docker start`, journal `rolled_back` | phase unchanged with `latest` already old and/or the container started | rerun is idempotent: retag again, image check, `docker start` on a running container exits 0 (`:2786-2791`), then the journal write; `status` renders the same entry | ok; kill-after recipes on the retag and on `docker start` added (7.1) |
-| server `rollback` destructive / resume | checkpoints B-E (5.3), `rollback_resumes[]`, extra forensic archive | a `rollback_*` phase + stale locks; possibly a **partial** `rollback-forensic-resume-<n>.tar.gz` that was never recorded | `status` renders destructive-resume; the partial file is not recorded, so the next resume picks the next free index (5.3) and lists the unrecorded file as residue | ok; residue row added (3.3) |
+| server `rollback` destructive | checkpoints B-E (5.3) | a `rollback_*` phase + stale locks | both commands refuse; the operator follows manual recovery in 4.4 (3a) | manual recovery, without editing the journal |
 | runner `recover` | `tx.recovery`, ref retired, staging disposed, `tx` retired, start, `recovery.completed` | any prefix, + `recover`'s stale `.lock.update` / `.lock.links` | stale-lock message → owner check → `next` renders `recover <uuid>` (open transaction, or retired by `recover` without `completed`) | fixed by `recovery.completed` and the `next` read path (5.4) |
 | runner `abandon` | one save (`retired`) | before: unchanged; after: retired. Locks stale. `abandon` does not touch the service | `next` renders `abandon` again (before) or nothing for that transaction (after) | ok |
 | runner `accept` | ref `restored`, original `restored`, receipt + terminal phase (one save) | `awaiting-acceptance` with partial settlement + stale locks | `next` renders `accept <uuid> <evidence>` (existing rerun contract, runbook "If a step fails, the recovery stays `awaiting-acceptance`") | ok |
@@ -372,7 +378,7 @@ and condition (for dispatch):
 | stopping … archived | update → refuse (before any Docker call or phase change); rollback → non-destructive | — |
 | starting, up, healthy | update → refuse; rollback → destructive | — |
 | done | update → refuse; rollback → destructive | at the CLI layer `update` never reaches this row, because `findUnfinishedTransaction` skips terminal phases (`kaoiro-deploy-transaction.mjs:62-65`); the table's `refuse` entry exists for the dispatch test and for `status` |
-| rollback_stopped … rollback_restored | update → refuse; rollback → destructive-resume (5.3) | — |
+| rollback_stopped … rollback_restored | update → refuse; rollback → refuse | operator follows manual recovery in 4.4 (3a) |
 | rolled_back | rollback → refuse (terminal) | — |
 
 Non-destructive rollback, two conditions:
@@ -390,10 +396,9 @@ Non-destructive rollback, two conditions:
   Postcondition, stated separately: "a container named N runs `old_image_id`".
   The identity of the object is not claimed.
 
-`closure`: L1 closes every entry except the `rollback_*` destructive-resume
-entries, `deferred(L1b)`.
+`closure`: the four `rollback_*` entries are closed refusals; manual recovery replaces the proposed automatic resume.
 
-### 5.3 Destructive rollback and its resume (L1b)
+### 5.3 Destructive rollback and its resume (superseded L1b proposal)
 
 Steps, each split into checks and mutations, in this order:
 
@@ -767,8 +772,8 @@ Each unit gets its own issue when it starts; L1 first.
 
 | Unit | Contents | Depends on | Closure gate (test-pinned) | Closes |
 |---|---|---|---|---|
-| L1 | server table, rendering, `invocation` / `target_sha`, S1-S4, harness, enrolled fixture | — | all server rows `closed` except the four `rollback_*` rows `deferred(L1b)` | 584; 681 state/message |
-| L1b | destructive rollback steps and resume (5.3), live fleet admission on resume, audit-only fleet record | L1 | no server row deferred | — |
+| L1 | server table, rendering, `invocation` / `target_sha`, S1-S4, harness, enrolled fixture | — | all server rows `closed`, including the four interrupted rollback refusals | 584; 681 state/message |
+| L1b | Automatic resume not implemented; manual recovery and quarantine in 4.4 (3a) | L1 | interrupted rollback rows are closed refusals | — |
 | L2 | superseded by [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709) N2 and N3 ([N3 plan](issue-709-n3-recovery-table.md)) | — | — | — |
 | L3 | superseded by issue #709 N2 (restore phases) and N3 | — | — | — |
 | L4 | correct 5-b refusal guidance | L1 (table, rendering, harness) | existing-store mismatch remains refused; guidance directs non-destructive rollback | [553](https://github.com/sakuraiyuta/kaoiro/issues/553) not planned after L4 lands |
