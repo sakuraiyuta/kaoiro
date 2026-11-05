@@ -66,7 +66,7 @@ it("projects Claude mixed-generation labels from the actual client wire", async 
     ["W2/S0",{policy:"unknown",confirmed:false,pending:false,wrapper_support:false},"状態不明・通常配送"],
     ["W0/S1",{mechanisms:fold,wrapper_support:false},"実行中の切替は未対応"],
     ["off",{mechanisms:none,policy:"off"},"off（新しい割込配送を停止）"],
-    ["pending",{mechanisms:fold,confirmed:false,pending:true,applied_revision:0},"確認待ち"],
+    ["pending",{mechanisms:fold,revision:2,confirmed:false,pending:true,applied_revision:1},"確認待ち"],
   ] as const){
     changed.mockClear();
     loop.send("delivery_policy_changed",{version:"0",agent_id:"host.p",delivery_policy:{...deliveryView,...patch}});
