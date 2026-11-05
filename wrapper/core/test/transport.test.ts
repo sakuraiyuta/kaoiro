@@ -2233,10 +2233,8 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
       conversation_id: "cid-1", turn_number: 1, work_id: "wrk_1", authority_epoch: 1,
     }),
     delivery_stage: (link) => link.reportDeliveryStage({ incarnation: "inc-1", delivery_seq: 1, stage: "queued", at: "2026-09-28T00:00:00Z" }),
-    work_transfer_ack: (link) => void link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" }),
     work_op_result_request: (link) => void link.requestWorkOpResult({ operation_id: "op_1_abcdefghijklmnopqrstuv" }),
     work_status_request: (link) => void link.requestWorkStatus({ work_id: "wrk_1" }),
-    work_check_request: (link) => void link.requestWorkCheck({ work_id: "wrk_1", action: "start", expected_revision: 1 }),
     delivery_resync: (link) => void link.requestInterAgentDeliveryResync({ request_id: "request", cutoff: 1, missing_ranges: [[1, 1]] }),
     history_reset: (link) => link.sendHistoryReset("r"),
     replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
@@ -3120,41 +3118,6 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       delivery: { advisory: { granted: "normal", downgrade } } });
   });
 
-  it("projects work-transfer acknowledgements without exposing extra server fields", async () => {
-    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
-      personaId: "ao",
-      workControl: "v1",
-    });
-    mock.joinReceivers.get("ok")?.({ work_control: "v1" });
-    const pending = link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" });
-    mock.lastPush?.receivers.get("ok")?.({
-      work_id: "wrk_1",
-      transfer_id: "trf_1",
-      state: "acknowledged",
-      work: { secret: "must not reach the tool" },
-    });
-    await expect(pending).resolves.toEqual({
-      work_id: "wrk_1",
-      transfer_id: "trf_1",
-      state: "acknowledged",
-    });
-  });
-
-  it.each([
-    { work_id: "other", transfer_id: "trf_1", state: "acknowledged" },
-    { work_id: "wrk_1", transfer_id: "other", state: "acknowledged" },
-    { work_id: "wrk_1", transfer_id: "trf_1", state: "pending" },
-  ])("rejects a malformed work-transfer acknowledgement result", async reply => {
-    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
-      personaId: "ao",
-      workControl: "v1",
-    });
-    mock.joinReceivers.get("ok")?.({ work_control: "v1" });
-    const pending = link.acknowledgeWorkTransfer({ work_id: "wrk_1", transfer_id: "trf_1" });
-    mock.lastPush?.receivers.get("ok")?.(reply);
-    await expect(pending).rejects.toThrow("work_transfer_ack returned an invalid result");
-  });
-
   it("sendInterAgent は error で rejected + reason を返し、記録はしない", async () => {
     const acks: unknown[] = [];
     const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
@@ -3184,6 +3147,10 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
     {
       reason: "work_outcome_unknown",
       details: { operation_id: "op_2_abcdefghijklmnopqrstuv" },
+    },
+    {
+      reason: "work_outcome_unknown",
+      details: { work_id: "wrk_1", conversation_id: "cid-1" },
     },
     {
       reason: "work_applied_message_rejected",

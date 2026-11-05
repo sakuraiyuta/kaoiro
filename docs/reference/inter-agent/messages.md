@@ -1,7 +1,7 @@
 ---
 title: Inter-agent message contract
 status: provisional
-last_updated: 2026-10-27
+last_updated: 2026-11-05
 description: Inter-agent message contract and its boundaries.
 ---
 
@@ -28,9 +28,14 @@ A `work_operation_deduplicated` rejection has no `ingress_stamp` and sets
 delivery knowledge (`recorded`, `not_recorded`, or `unknown`). The body was not
 sent by this attempt, so the sender must consult that delivery knowledge and
 explicitly decide whether to start a new delivery. A `work_outcome_unknown`
-rejection also has no `ingress_stamp`; it carries the `operation_id`. Query
-`work_op_result` with that ID and retry with the same ID only if it was not
-applied. A yield-only WorkStore timeout is downgraded and proceeds as an
+rejection also has no `ingress_stamp` and sets `send_not_attempted: true`.
+For an operation it carries `details.operation_id`; query `work_op_result`
+with that ID and retry with the same ID only if it was not applied.
+For ordinary-message linking it carries `details.work_id` and
+`details.conversation_id`, without an operation ID. The link may still commit,
+although delivery has not started. Inspect `work_status` and its links before
+retrying. The tool result flattens these details beside `error` and does not
+recommend an operation-receipt lookup for an ordinary message. A yield-only WorkStore timeout is downgraded and proceeds as an
 accepted send, rather than returning `work_outcome_unknown`. If a work
 operation applies but yield-token issuance fails, its receipt remains applied
 and early is only a fallback delivery mode. Recipient capability and early
@@ -121,9 +126,9 @@ Only the `type` value and `payload` schema are new.
 | `owner.kind` | MUST | `"user"` or `"agent"` |
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |
 | `delivery_intent` | optional | `normal` (default), `early`, or `yield`; the requested delivery mode. Non-normal values require negotiated delivery modes. |
-| `work_id` | MUST with `delivery_intent: "yield"` | Work targeted by the yield; work operations also carry their own `work_id`. |
+| `work_id` | optional; MUST with `delivery_intent: "yield"` | Work to link for a normal/early message, or work targeted by a yield. A new link requires active work, the director/assignee counterpart and explicit `new_conversation: true`. With `work_control`, the IDs must agree. |
 | `expected_authority_epoch` | MUST with `delivery_intent: "yield"` | Caller-supplied expectation, normally copied from an observed work stamp. The wrapper checks presence and numeric shape, then copies it unchanged; it does not prove the caller observed it. The server enforces the expected epoch against the current grant. |
-| `work_control` | optional | One typed operation with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. The wrapper issues `operation_id` when the caller omits it; a caller supplies one only to retry the same operation, because the server rejects an id whose embedded time is outside its validity window (`operation_id_expired`). |
+| `work_control` | optional | One of `assign`, `accept_assignment`, `decline`, `complete`, or `cancel` with `operation_id`, requiring negotiated `work_control: "v1"`. Applied before conversation admission and never relayed as executable input. The wrapper issues `operation_id` when the caller omits it; a caller supplies one only to retry the same operation, because the server rejects an id whose embedded time is outside its validity window (`operation_id_expired`). |
 | `delivery_authority` | server-owned | Requested and granted intent, downgrade, and a `yield_token` only for a granted yield. A sender-supplied value is rejected. |
 | `work` | server-owned | `{work_id, revision, authority_epoch, state}` at admission for a linked conversation. A sender-supplied value is rejected. The receiving wrapper renders a well-formed stamp to its model (see [Send and wait](send-and-wait.md)). |
 | `work_control_result` | server-owned | `{op, operation_id, outcome}` replaces an applied `work_control` in the relayed payload. A sender-supplied value is rejected. |
@@ -139,13 +144,9 @@ The wrapper treats `expected_authority_epoch` as the caller's expectation,
 not as evidence that the caller observed the stamp. The server's grant and
 epoch check is the authority boundary.
 
-A former assignee may read only its pending transfer obligations through
-`work_status`. Each such obligation includes `work_id` and `transfer_id`, so
-the former assignee can call `work_transfer_ack` even if the best-effort
-`work_notice` was lost. A named lookup returns
-`{work_id, access: "transfer_pending", pending_transfers}` instead of a
-complete work record for this role. `work_transfer_ack` returns only
-`{work_id, transfer_id, state: "acknowledged"}`, never a full work record.
+`work_status()` returns non-terminal work with `pending_transfers: []`.
+Named status is limited to the director, assignee or operator. Old transfer
+and review fields can still be present on the wire but grant no access.
 See [work authority and operations](work.md#work-authority-and-operations).
 
 For negotiated v1 ordinary sends, `in_reply_to` names the latest ordinary peer

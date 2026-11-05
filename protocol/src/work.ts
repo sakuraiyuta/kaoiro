@@ -86,6 +86,8 @@ export interface InterAgentSendRejection {
   details?: {
     capacity?: WorkCapacityDiagnostic;
     operation_id?: string;
+    work_id?: string;
+    conversation_id?: string;
     delivery?: "recorded" | "not_recorded" | "unknown";
     work_control_result?: WorkControlResult;
   };
@@ -172,7 +174,7 @@ export interface WorkCheckAudit {
   action: WorkCheckAction;
   revision: number;
   subject_hash?: string | null;
-  result: "ok" | WorkErrorCode;
+  result: "ok" | WorkErrorCode | "stale_work_revision" | "subject_mismatch" | "transfer_pending" | "verdict_not_effective";
   at: string;
   target?: WorkCheckTarget | null;
 }
@@ -185,18 +187,18 @@ export interface WorkRecord {
   director: WorkPrincipal;
   assignee: { kind: "agent"; id: string };
   resource_scope: string[];
-  requires_verdict: boolean;
+  requires_verdict?: boolean;
   state: WorkState;
   revision: number;
   authority_epoch: number;
-  transfers: WorkTransferObligation[];
+  transfers?: WorkTransferObligation[];
   subject?: WorkSubject | null;
-  holds: WorkHold[];
-  verdicts: WorkVerdict[];
-  accepted_verdicts: WorkAcceptedVerdict[];
+  holds?: WorkHold[];
+  verdicts?: WorkVerdict[];
+  accepted_verdicts?: WorkAcceptedVerdict[];
   links: string[];
   receipts: WorkOperationReceipt[];
-  checks: WorkCheckAudit[];
+  checks?: WorkCheckAudit[];
   created_at: string;
   updated_at: string;
 }
@@ -209,31 +211,14 @@ interface ExistingWorkOperation extends WorkOperationBase {
   work_id: string;
 }
 
-interface RevisionWorkOperation extends ExistingWorkOperation {
-  expected_revision: number;
-}
-
-interface BasisWorkOperation extends ExistingWorkOperation {
-  basis_revision: number;
-}
-
 export type WorkControl =
-  | (WorkOperationBase & { op: "assign"; title: string; assignee?: string; director?: WorkPrincipal; reviews?: string; resource_scope?: string[]; requires_verdict?: boolean })
-  | (ExistingWorkOperation & { op: "accept_assignment" | "decline" })
-  | (RevisionWorkOperation & { op: "revise" })
-  | (RevisionWorkOperation & { op: "hold"; reason: string })
-  | (RevisionWorkOperation & { op: "release"; hold_id: string; subject_hash?: string })
-  | (BasisWorkOperation & { op: "submit"; subject: { hash: string; label: string } })
-  | (BasisWorkOperation & { op: "verdict"; subject: { work_id: string; hash: string }; outcome: WorkVerdictOutcome })
-  | (ExistingWorkOperation & { op: "withdraw_verdict"; verdict_id: string })
-  | (RevisionWorkOperation & { op: "accept_verdict"; verdict_ref: WorkVerdictRef; subject_hash: string })
-  | (RevisionWorkOperation & { op: "revoke_verdict"; verdict_ref: WorkVerdictRef })
-  | (RevisionWorkOperation & { op: "complete"; subject_hash: string })
-  | (RevisionWorkOperation & { op: "cancel" })
-  | (RevisionWorkOperation & { op: "transfer"; director?: WorkPrincipal; assignee?: string })
-  | (RevisionWorkOperation & { op: "release_transfer"; transfer_id: string });
+  | (WorkOperationBase & { op: "assign"; title: string; assignee?: string; director?: WorkPrincipal; resource_scope?: string[] })
+  | (ExistingWorkOperation & { op: "accept_assignment" | "decline" | "complete" | "cancel" });
 
 export type WorkControlOp = WorkControl["op"];
+/** Persisted receipts and queued inbound messages can still name retired operations. */
+export type WorkReceiptOp = WorkControlOp | "revise" | "hold" | "release" | "submit" |
+  "verdict" | "withdraw_verdict" | "accept_verdict" | "revoke_verdict" | "transfer" | "release_transfer";
 export type WorkDeliveryKnowledge =
   | { status: "not_recorded"; reason: string }
   | { status: "recorded"; conversation_id: string; turn_number: number };
@@ -248,7 +233,7 @@ export interface WorkOperationReceipt {
 }
 
 export interface WorkControlResult {
-  op: WorkControlOp;
+  op: WorkReceiptOp;
   operation_id: string;
   outcome: "applied";
   deduplicated?: true;
@@ -267,11 +252,10 @@ export interface WorkError {
 }
 
 export type WorkErrorCode =
-  | "stale_work_revision"
+  | "unsupported_work_operation"
   | "work_not_authorized"
   | "unknown_work"
   | "work_state_conflict"
-  | "subject_mismatch"
   | "work_link_conflict"
   | "work_carriage_invalid"
   | "operation_id_conflict"
@@ -280,8 +264,6 @@ export type WorkErrorCode =
   | "work_capacity"
   | "work_settings_corrupt"
   | "work_settings_unknown"
-  | "transfer_pending"
-  | "verdict_not_effective"
   | "work_outcome_unknown"
   | "work_applied_message_rejected"
   | "invalid_delivery_stage"
@@ -355,13 +337,6 @@ export type YieldClaimResult =
   | { granted: true; repeated?: true }
   | { granted: false; reason: "unknown_yield" | "already_claimed" | "work_not_active" | "not_assignee" | "grant_changed" | "yield_interval" | "stale_channel" };
 
-export interface WorkTransferAckRequest { version: "0"; work_id: string; transfer_id: string }
-export interface WorkTransferAckResult {
-  work_id: WorkId;
-  transfer_id: string;
-  state: "acknowledged";
-  work?: never;
-}
 export interface WorkOpResultRequest { version: "0"; operation_id: string }
 export interface WorkStatusRequest { version: "0"; work_id?: string }
 export type WorkStatusResult =
@@ -369,12 +344,10 @@ export type WorkStatusResult =
   | { work_id: WorkId; access: "transfer_pending"; pending_transfers: PendingWorkTransfer[]; work?: never }
   | { works: WorkRecord[]; pending_transfers: PendingWorkTransfer[] };
 export type WorkOpResult = { receipt: WorkOperationReceipt } | { error: "unknown_operation" | "operation_id_expired" };
-export interface WorkCheckRequest { version: "0"; work_id: string; action: WorkCheckAction; subject_hash?: string; expected_revision: number; target?: WorkCheckTarget }
-export type WorkCheckResult = { ok: true; work: WorkRecord } | { ok: false; reason: WorkErrorCode; work: WorkRecord };
 export interface DeliveryStatusRequest { version: "0"; conversation_id?: string; turn_number?: number }
 
 export interface OperatorWorkControlRequest { version: "0"; work_control: WorkControl }
-interface WorkNoticeFields { version: "0"; op: WorkControlOp; reason: string; transfer_id?: string }
+interface WorkNoticeFields { version: "0"; op: WorkReceiptOp; reason: string; transfer_id?: string }
 export type WorkNotice =
   | (WorkNoticeFields & { work: WorkRecord })
   | (WorkNoticeFields & {

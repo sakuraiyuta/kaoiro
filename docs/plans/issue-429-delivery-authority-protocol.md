@@ -2,7 +2,7 @@
 title: Delivery intent, staged delivery, work grants and work_control (ADR-0063 phase 1)
 description: Protocol design for early delivery and stop intents, capability negotiation, staged delivery records, server-owned work records with assignment grants and revisions, and revision-checked consequential actions.
 status: approved
-last_updated: 2026-09-30
+last_updated: 2026-11-05
 ---
 
 # Delivery intent, staged delivery, work grants and work_control
@@ -891,6 +891,14 @@ caller's non-terminal works so a reconnected wrapper can resynchronize.
 Operator clients receive `work_changed` after every applied op.
 
 ### Ops
+
+The table below records the original phase-1 design.
+[Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) retires `revise`,
+`hold`, `release`, `submit`, `verdict`, `withdraw_verdict`, `accept_verdict`,
+`revoke_verdict`, `transfer`, and `release_transfer`, together with the
+`work_check` and `work_transfer_ack` tools. See the current five-operation
+contract and ordinary-message linking rules in [work authority and
+operations](../reference/inter-agent/work.md#work-authority-and-operations).
 
 | Op | Actor | Preconditions | Effect |
 | --- | --- | --- | --- |

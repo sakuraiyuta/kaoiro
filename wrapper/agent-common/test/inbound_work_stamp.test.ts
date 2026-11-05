@@ -142,11 +142,25 @@ describe("send_to_agent operation_id description (issue #690 part B)", () => {
     const branches = (schema.properties.work_control.oneOf ?? schema.properties.work_control.anyOf) as {
       properties: { op: { const: string }; operation_id?: { description?: string } };
     }[];
-    expect(branches.length).toBe(15);
+    expect(branches.map(branch => branch.properties.op.const)).toEqual(["assign", "accept_assignment", "decline", "complete", "cancel"]);
     for (const branch of branches) {
       expect(branch.properties.operation_id?.description, branch.properties.op.const).toMatch(
         /^Omit it; the wrapper issues a fresh one\./,
       );
     }
+  });
+});
+
+describe("five outbound controls and legacy receipt rendering", () => {
+  it.each(["assign", "accept_assignment", "decline", "complete", "cancel"])("accepts %s without an input revision or subject", op => {
+    const schema = z.object(SEND_TO_AGENT_INPUT_SHAPE);
+    const control = op === "assign" ? { op, title: "Task" } : { op, work_id: WORK_ID };
+    expect(schema.safeParse({ to: "peer", kind: "inform", body: "Task", work_control: control }).success).toBe(true);
+    expect(schema.safeParse({ to: "peer", kind: "inform", body: "Task", work_control: { ...control, expected_revision: 1 } }).success).toBe(false);
+  });
+
+  it.each(["revise", "hold", "release", "submit", "verdict", "withdraw_verdict", "accept_verdict", "revoke_verdict", "transfer", "release_transfer"])("rejects sending %s but still renders it on an old receipt", op => {
+    expect(z.object(SEND_TO_AGENT_INPUT_SHAPE).safeParse({ to: "peer", kind: "inform", body: "Task", work_control: { op, work_id: WORK_ID } }).success).toBe(false);
+    expect(formatInboundMessage(envelope({ ...stamp(), work_control_result: { op, outcome: "applied" } }))).toContain(`op=${op})`);
   });
 });

@@ -1,7 +1,7 @@
 ---
 title: Peer directory
 status: provisional
-last_updated: 2026-10-15
+last_updated: 2026-11-05
 ---
 
 # Peer directory
@@ -329,19 +329,19 @@ ADR-0063 phase 1 extends `send_to_agent` with optional
 `delivery_intent`, `work_id`, `expected_authority_epoch`, and
 `work_control`. The `work_control` operation carries an `operation_id`; the
 wrapper generates and returns one when the caller omits it. The additional
-tools are `work_transfer_ack({work_id, transfer_id})`,
-`work_op_result({operation_id})`, `work_status({work_id?})`,
-`work_check({work_id, action, expected_revision, subject_hash?})`, and
-`delivery_status({conversation_id, turn_number})`. These are contract names
-for the negotiated work and delivery implementation, not additions to the
-read-only auto-allow set above.
+tools are `work_op_result({operation_id})`, `work_status({work_id?})`, and
+`delivery_status({conversation_id, turn_number})`. `work_control` sends only
+`assign`, `accept_assignment`, `decline`, `complete`, and `cancel`, without
+manual artifact hashes or revisions. Normal/early messages may use `work_id`
+to continue active work in a declared new conversation. The status and receipt
+tools are outside the read-only auto-allow set above.
 
-The no-argument `work_status()` view carries
-`pending_transfers: Array<WorkTransferObligation & {work_id}>`. A former
-assignee can use that pair directly for `work_transfer_ack` without relying
-on a notice. With a named `work_id`, a caller whose sole access is a pending
-transfer receives `{work_id, access: "transfer_pending", pending_transfers}`
-without a complete work record.
+`work_status()` returns `pending_transfers: []`. Named records are available
+only to the director, assignee or operator. The wrapper exposes neither
+`work_check` nor `work_transfer_ack`. For ordinary linking failures, tool
+output preserves `error`, `send_not_attempted` and any work/conversation IDs.
+An unknown link outcome directs the caller to inspect `work_status` and its
+links; no operation ID or receipt exists for an ordinary message.
 
 Build `whoami` local fields from the shared host `EffectiveStatusSnapshot` and
 cache rather than a separate state envelope. Return model/effort/source and

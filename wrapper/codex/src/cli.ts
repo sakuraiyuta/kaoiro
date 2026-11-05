@@ -582,12 +582,6 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     workStatus: (input: { work_id?: string | undefined }) => link
       ? link.requestWorkStatus(input.work_id === undefined ? {} : { work_id: input.work_id })
       : Promise.reject(new Error("work_control_unavailable")),
-    workCheck: (input: { work_id: string; action: "start" | "land"; expected_revision: number; subject_hash?: string | undefined }) => link
-      ? link.requestWorkCheck({ work_id: input.work_id, action: input.action, expected_revision: input.expected_revision, ...(input.subject_hash === undefined ? {} : { subject_hash: input.subject_hash }) })
-      : Promise.reject(new Error("work_control_unavailable")),
-    workTransferAck: (input: { work_id: string; transfer_id: string }) => link
-      ? link.acknowledgeWorkTransfer(input)
-      : Promise.reject(new Error("work_control_unavailable")),
     workOpResult: (input: { operation_id: string }) => link
       ? link.requestWorkOpResult(input)
       : Promise.reject(new Error("work_control_unavailable")),

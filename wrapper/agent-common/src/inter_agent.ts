@@ -31,9 +31,8 @@ import type {
   DeliveryModes,
   InterAgentDeliveryStatus,
   WorkControl,
-  WorkControlOp,
+  WorkReceiptOp,
   WorkState,
-  WorkCheckResult,
   WorkOpResult,
   WorkStatusResult,
   DeliveryStatusResult,
@@ -155,7 +154,7 @@ function workOperationRejectionResult(
   acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>,
   operationId?: string,
 ): InterAgentToolResult {
-  const guidance = workRejectionGuidance(acceptance.reason);
+  const guidance = workRejectionGuidance(acceptance.reason, acceptance.details?.operation_id ?? operationId);
   return {
     isError: true,
     content: [{ type: "text", text: JSON.stringify({
@@ -168,7 +167,12 @@ function workOperationRejectionResult(
   };
 }
 
-function workRejectionGuidance(reason: string): string {
+function workRejectionGuidance(reason: string, operationId?: string): string {
+  if (operationId === undefined) {
+    return reason === "work_outcome_unknown"
+      ? "The message was not sent, but its work link may have committed. Inspect work_status and the conversation links before retrying. No operation receipt exists for this message."
+      : "The message was not sent. Inspect work_status and correct the conversation or work link before retrying. No work operation was submitted.";
+  }
   const receiptScope = "The operation receipt records the work-operation result and delivery knowledge, but not the delivery-intent downgrade; any downgrade is reported only in the send_to_agent result's delivery_authority field.";
   if (reason === "work_applied_message_rejected") {
     return `The work operation was applied, but message admission was rejected. Do not treat the body as delivered or repeat the work operation; use the returned operation result and delivery knowledge to decide separately whether to send the body. ${receiptScope}`;
@@ -427,8 +431,6 @@ function makeOperationId(nowMs: number): string {
 }
 const WORK_REVISION = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const WORK_PRINCIPAL_SCHEMA = z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1).max(256) }).strict();
-const WORK_SUBJECT_SCHEMA = z.object({ hash: z.string().min(1).max(256), label: z.string().min(1).max(256) }).strict();
-const WORK_VERDICT_REF_SCHEMA = z.object({ work_id: z.string().min(1).max(128), verdict_id: z.string().min(1).max(128) }).strict();
 const OPERATION_ID = z.string().regex(/^op_[0-9]{1,16}_[A-Za-z0-9_-]{22}$/);
 const OPERATION_ID_OPTIONAL = {
   operation_id: OPERATION_ID.optional().describe(
@@ -436,24 +438,12 @@ const OPERATION_ID_OPTIONAL = {
   ),
 };
 const EXISTING_WORK = { work_id: z.string().min(1).max(128) };
-const REVISION_WORK = { ...EXISTING_WORK, expected_revision: WORK_REVISION };
-const BASIS_WORK = { ...EXISTING_WORK, basis_revision: WORK_REVISION };
 const WORK_CONTROL_SCHEMA = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("assign"), ...OPERATION_ID_OPTIONAL, title: z.string().min(1).max(256), assignee: z.string().min(1).max(256).optional(), director: WORK_PRINCIPAL_SCHEMA.optional(), reviews: z.string().min(1).max(128).optional(), resource_scope: z.array(z.string().min(1).max(256)).max(64).optional(), requires_verdict: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal("assign"), ...OPERATION_ID_OPTIONAL, title: z.string().min(1).max(256), assignee: z.string().min(1).max(256).optional(), director: WORK_PRINCIPAL_SCHEMA.optional(), resource_scope: z.array(z.string().min(1).max(256)).max(64).optional() }).strict(),
   z.object({ op: z.literal("accept_assignment"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
   z.object({ op: z.literal("decline"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
-  z.object({ op: z.literal("revise"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK }).strict(),
-  z.object({ op: z.literal("hold"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, reason: z.string().min(1).max(512) }).strict(),
-  z.object({ op: z.literal("release"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, hold_id: z.string().min(1).max(128), subject_hash: z.string().min(1).max(256).optional() }).strict(),
-  z.object({ op: z.literal("submit"), ...OPERATION_ID_OPTIONAL, ...BASIS_WORK, subject: WORK_SUBJECT_SCHEMA }).strict(),
-  z.object({ op: z.literal("verdict"), ...OPERATION_ID_OPTIONAL, ...BASIS_WORK, subject: z.object({ work_id: z.string().min(1).max(128), hash: z.string().min(1).max(256) }).strict(), outcome: z.enum(["approve", "request_changes", "reject"]) }).strict(),
-  z.object({ op: z.literal("withdraw_verdict"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK, verdict_id: z.string().min(1).max(128) }).strict(),
-  z.object({ op: z.literal("accept_verdict"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, verdict_ref: WORK_VERDICT_REF_SCHEMA, subject_hash: z.string().min(1).max(256) }).strict(),
-  z.object({ op: z.literal("revoke_verdict"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, verdict_ref: WORK_VERDICT_REF_SCHEMA }).strict(),
-  z.object({ op: z.literal("complete"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, subject_hash: z.string().min(1).max(256) }).strict(),
-  z.object({ op: z.literal("cancel"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK }).strict(),
-  z.object({ op: z.literal("transfer"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, director: WORK_PRINCIPAL_SCHEMA.optional(), assignee: z.string().min(1).max(256).optional() }).strict(),
-  z.object({ op: z.literal("release_transfer"), ...OPERATION_ID_OPTIONAL, ...REVISION_WORK, transfer_id: z.string().min(1).max(128) }).strict(),
+  z.object({ op: z.literal("complete"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
+  z.object({ op: z.literal("cancel"), ...OPERATION_ID_OPTIONAL, ...EXISTING_WORK }).strict(),
 ]);
 
 /** Maximum number of pending inbound envelopes coalesced into one SDK turn
@@ -578,9 +568,9 @@ export const SEND_TO_AGENT_INPUT_SHAPE = {
         "Reserve `yield` for a director stopping a running work item; include `work_id` and `expected_authority_epoch`. The server may downgrade non-normal requests, which require negotiated delivery modes.",
       ].join("\n"),
     ),
-  work_id: z.string().min(1).max(128).optional().describe("Work targeted by a yield. Required with delivery_intent=yield."),
+  work_id: z.string().min(1).max(128).optional().describe("Work to continue in this conversation, or the work targeted by a yield. Required with delivery_intent=yield."),
   expected_authority_epoch: WORK_REVISION.optional().describe("Caller-supplied expected authority epoch, normally copied from an observed work stamp; the wrapper validates presence and numeric shape but the server checks it against the current grant. Required with delivery_intent=yield."),
-  work_control: WORK_CONTROL_SCHEMA.optional().describe("One revision-checked work operation to apply before admitting this message."),
+  work_control: WORK_CONTROL_SCHEMA.optional().describe("One basic work operation (assign, accept_assignment, decline, complete, cancel) to apply before admitting this message."),
 };
 
 /** Zod raw shape of set_status_line's input. The 32768 is frame hygiene in
@@ -605,8 +595,8 @@ const SEND_TO_AGENT_SCHEMA = z.object(SEND_TO_AGENT_INPUT_SHAPE).strict().superR
   if (value.delivery_intent === "yield") {
     if (value.work_id === undefined) context.addIssue({ code: "custom", path: ["work_id"], message: "work_id is required with delivery_intent=yield" });
     if (value.expected_authority_epoch === undefined) context.addIssue({ code: "custom", path: ["expected_authority_epoch"], message: "expected_authority_epoch is required with delivery_intent=yield" });
-  } else if (value.work_id !== undefined || value.expected_authority_epoch !== undefined) {
-    context.addIssue({ code: "custom", path: ["work_id"], message: "work_id and expected_authority_epoch require delivery_intent=yield" });
+  } else if (value.expected_authority_epoch !== undefined) {
+    context.addIssue({ code: "custom", path: ["expected_authority_epoch"], message: "expected_authority_epoch requires delivery_intent=yield" });
   }
 });
 
@@ -2642,7 +2632,7 @@ export class InterAgentTool {
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
             if (captured) {
               if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
-              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id) };
+              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message, workControl?.operation_id, args.work_id) };
             }
             return { kind: "rejected", message, acceptance };
           }
@@ -2673,8 +2663,8 @@ export class InterAgentTool {
       return outcome.result;
     }
     if (outcome.kind === "rejected") {
-      if (workControl !== undefined) {
-        return workOperationRejectionResult(outcome.acceptance, workControl.operation_id);
+      if (workControl !== undefined || args.work_id !== undefined) {
+        return workOperationRejectionResult(outcome.acceptance, workControl?.operation_id);
       }
       if (outcome.acceptance.reason === "work_operation_deduplicated" || outcome.acceptance.reason === "work_outcome_unknown") {
         return workOperationRejectionResult(outcome.acceptance);
@@ -2858,13 +2848,13 @@ export class InterAgentTool {
     return localReplyError(code, guidance);
   }
 
-  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string): InterAgentToolResult {
+  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string, operationId?: string, workId?: string): InterAgentToolResult {
     this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: clipUtf16Head(acceptance.reason, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
-    const isWorkRejection = operationId !== undefined ||
+    const isWorkRejection = operationId !== undefined || workId !== undefined ||
       acceptance.reason === "work_operation_deduplicated" ||
       acceptance.reason === "work_outcome_unknown" ||
       acceptance.reason === "work_applied_message_rejected";
-    const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason) : undefined;
+    const workGuidance = isWorkRejection ? workRejectionGuidance(acceptance.reason, acceptance.details?.operation_id ?? operationId) : undefined;
     const fields = { error: clipUtf16Head(acceptance.reason, 128), message: workGuidance ?? (acceptance.reason === "work_operation_deduplicated"
       ? "This attempt did not send the body. Check the receipt's delivery knowledge and explicitly decide whether a new delivery is needed."
       : acceptance.reason === "work_outcome_unknown"
@@ -3054,7 +3044,7 @@ export function formatInboundMessage(
 const WORK_STATES: Record<WorkState, true> = {
   nominated: true, active: true, completed: true, cancelled: true, declined: true, expired: true,
 };
-const WORK_CONTROL_OPS: Record<WorkControlOp, true> = {
+const WORK_CONTROL_OPS: Record<WorkReceiptOp, true> = {
   assign: true, accept_assignment: true, decline: true, revise: true, hold: true, release: true,
   submit: true, verdict: true, withdraw_verdict: true, accept_verdict: true, revoke_verdict: true,
   complete: true, cancel: true, transfer: true, release_transfer: true,

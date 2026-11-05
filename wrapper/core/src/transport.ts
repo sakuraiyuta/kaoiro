@@ -43,15 +43,11 @@ import type {
   WrapperPermissionLifecycleMessage,
   UserDirectoryEntry,
   UserRole,
-  WorkCheckRequest,
-  WorkCheckResult,
   WorkControlResult,
   WorkOpResult,
   WorkOpResultRequest,
   WorkStatusRequest,
   WorkStatusResult,
-  WorkTransferAckRequest,
-  WorkTransferAckResult,
   WorkNotice,
   DeliveryStatusRequest,
   DeliveryStatusResult,
@@ -147,7 +143,7 @@ interface PendingDeliveryStage {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null; delivery_authority?: DeliveryAuthority; delivery?: { advisory: DeliveryAdvisory }; work_control_result?: WorkControlResult }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { capacity?: WorkCapacityDiagnostic; conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { work_id?: string; capacity?: WorkCapacityDiagnostic; conversation_id?: string; expected_peer_turn?: number; supplied_basis?: number; operation_id?: string; delivery?: "recorded" | "not_recorded" | "unknown"; work_control_result?: WorkControlResult } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -270,10 +266,8 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   delivery_stage: "versioned",
   delivery_policy_applied: "versioned",
   yield_claim: "versioned",
-  work_transfer_ack: "versioned",
   work_op_result_request: "versioned",
   work_status_request: "versioned",
-  work_check_request: "versioned",
   delivery_resync: "versioned",
   disconnect_intent: "versioned",
   history_reset: "versioned",
@@ -1485,6 +1479,12 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
     result.details = { conversation_id: reply.conversation_id, expected_peer_turn: reply.expected_peer_turn as number, supplied_basis: reply.supplied_basis as number };
   }
   const details = isObject(reply.details) ? reply.details : null;
+  if (details && typeof details.work_id === "string") {
+    result.details = { ...(result.details ?? {}), work_id: details.work_id };
+  }
+  if (details && typeof details.conversation_id === "string") {
+    result.details = { ...(result.details ?? {}), conversation_id: details.conversation_id };
+  }
   const capacity = reason === "work_capacity" ? parseWorkCapacityDiagnostic(details?.capacity) : null;
   if (capacity) result.details = { ...(result.details ?? {}), capacity };
   const workResult = details && isObject(details.work_control_result) ? details.work_control_result : null;
@@ -2384,28 +2384,12 @@ export class ServerLink {
       .receive("timeout", () => { pending.inFlight = false; });
   }
 
-  async acknowledgeWorkTransfer(request: Omit<WorkTransferAckRequest, "version">): Promise<WorkTransferAckResult> {
-    const reply = await this.#requestWorkEvent("work_transfer_ack", request);
-    if (
-      reply.work_id !== request.work_id ||
-      reply.transfer_id !== request.transfer_id ||
-      reply.state !== "acknowledged"
-    ) {
-      throw new Error("work_transfer_ack returned an invalid result");
-    }
-    return { work_id: request.work_id, transfer_id: request.transfer_id, state: "acknowledged" };
-  }
-
   requestWorkOpResult(request: Omit<WorkOpResultRequest, "version">): Promise<WorkOpResult> {
     return this.#requestWorkEvent("work_op_result_request", request) as Promise<WorkOpResult>;
   }
 
   requestWorkStatus(request: Omit<WorkStatusRequest, "version"> = {}): Promise<WorkStatusResult> {
     return this.#requestWorkEvent("work_status_request", request) as Promise<WorkStatusResult>;
-  }
-
-  requestWorkCheck(request: Omit<WorkCheckRequest, "version">): Promise<WorkCheckResult> {
-    return this.#requestWorkEvent("work_check_request", request) as Promise<WorkCheckResult>;
   }
 
   requestDeliveryStatus(request: Omit<DeliveryStatusRequest, "version">): Promise<DeliveryStatusResult> {

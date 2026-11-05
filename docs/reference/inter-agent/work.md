@@ -18,8 +18,8 @@ Full records keep unset `origin`, `reviews`, and `subject` as `null`.
 
 The server accepts these operations under
 [issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965).
-The protocol and wrapper schema change in the separate U2 landing; U1 changes
-server behavior. U1 and U2 are released together, using the coordinated
+The outbound protocol and wrapper schema expose these five operations.
+U1 and U2 are released together, using the coordinated
 [runner update procedure](../../operations/runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
 
 | Operation | Actor | Required state | Result |
@@ -54,7 +54,8 @@ unrecorded removed operation, the wrapper channel returns:
 The operator channel exposes the same reason. `work_check_request` and
 `work_transfer_ack` remain recognized channel events but return that reason
 without applying anything. They no longer check implementation or landing,
-record an audit, or acknowledge a transfer.
+record an audit, or acknowledge a transfer. Current wrappers expose neither
+control tool and do not emit either request.
 
 ## Continuing work across conversations
 
@@ -111,9 +112,14 @@ does not delete a work with a live receipt. Old operation receipts stay readable
 assignee or an operator. A former assignee or a reviewer has no special access.
 Operator notices go only to the current assignee and director.
 
+`WorkControlOp` contains the five outbound operations. `WorkReceiptOp` and
+the inbound rendering table retain all fifteen operation names so queued
+messages and durable receipts remain readable.
+
 For rollback compatibility, existing values of `holds`, `verdicts`,
 `accepted_verdicts`, `transfers`, `subject`, `requires_verdict`, `reviews`, and
-`checks` are preserved. New assignments initialize them to empty lists,
+`checks` are preserved. Their `WorkRecord` keys are optional for readers; optional
+typing does not remove stored values. New assignments initialize them to empty lists,
 `null`, or `false` as appropriate. They still appear in full `work_status`,
 `work_notice` and client `work_changed` records, but do not determine access,
 completion or any other server decision. U1 does not normalize or remove them.

@@ -1,7 +1,7 @@
 ---
 title: Protocol versioning policy
 status: accepted
-last_updated: 2026-09-28
+last_updated: 2026-11-05
 description: The flat outer-version stamping policy and the staged completion inventory for every wrapper/server/client/runner route.
 ---
 
@@ -84,7 +84,7 @@ best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapp
 generated artifact; it is not inferred from runner identity.
 
 ADR-0063 phase 1 adds `delivery_stage`, `yield_claim`,
-`work_status_request`, `work_check_request`, `work_transfer_ack`, and
+`work_status_request` and
 `work_op_result_request` as flat `version: "0"` wrapper controls. Their
 policy registrations land with the shared wrapper implementation. The
 existing `delivery_status_request` accepts an optional message key.
@@ -144,6 +144,19 @@ The shape gate runs before role resolution, so viewers receive a shape verdict r
 `forbidden`. This preserves the intended priority and the one role resolution per message
 (issue #148). A malformed-payload verdict concerns the sender's own input and discloses no
 server state.
+
+## Narrowed work v1 contract
+
+[Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) intentionally
+narrows the meaning of negotiated `work_control: "v1"` without changing the
+outer `version: "0"`. Outbound work controls are the five basic operations;
+`work_check_request` and `work_transfer_ack` are removed from the wrapper's
+emitted controls and tools. The server temporarily recognizes both only to
+return `unsupported_work_operation`. Read-only receipt operations and the
+inbound rendering table retain all fifteen names; eight legacy `WorkRecord`
+keys become optional and can still carry old values. This is a coordinated
+server/wrapper release, following the [paired update and rollback
+procedure](../../operations/runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
 
 ## Related protocol topics
 

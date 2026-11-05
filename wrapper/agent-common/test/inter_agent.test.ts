@@ -264,8 +264,6 @@ describe("InterAgentTool", () => {
         deliveryModesSupported: () => false,
         deliveryModes: () => "legacy",
         workStatus: async () => ({ works: [], pending_transfers: [] }),
-        workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
-        workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }),
         workOpResult: async () => ({ error: "unknown_operation" }),
         deliveryStatus: async () => ({ status: "expired" }),
       },
@@ -2215,8 +2213,7 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
       workTools: {
         workControlSupported: () => true, deliveryModesSupported: () => true, deliveryModes: () => "legacy",
         workStatus: async () => ({ works: [], pending_transfers: [] }),
-        workCheck: async () => ({ ok: false, reason: "unknown_work" } as never),
-        workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }), workOpResult: async () => ({ error: "unknown_operation" }),
+        workOpResult: async () => ({ error: "unknown_operation" }),
         deliveryStatus: async () => ({ status: "expired" }),
       },
       sendInterAgent: async () => ({
@@ -2510,8 +2507,6 @@ describe("work-control send rejection receipts", () => {
     deliveryModesSupported: () => true,
     deliveryModes: () => "legacy" as const,
     workStatus: async () => ({ works: [], pending_transfers: [] }),
-    workCheck: async () => ({ ok: false, reason: "unknown_work", work: {} } as never),
-    workTransferAck: async () => ({ work_id: "w", transfer_id: "t", state: "acknowledged" as const }),
     workOpResult: async () => ({ error: "unknown_operation" }),
     deliveryStatus: async () => ({ status: "expired" }),
   };
@@ -2544,6 +2539,28 @@ describe("work-control send rejection receipts", () => {
     if (captured) tool.beginReplyInput("tool-turn");
     return { tool, operationIds };
   }
+
+  it.each([false, true])("reports ordinary link failures without operation-id guidance (captured=%s)", async captured => {
+    for (const reason of ["work_outcome_unknown", "work_carriage_invalid", "work_capacity"]) {
+      const tool = new InterAgentTool({
+        config: configFor("self.agent"),
+        getState: () => "tool_running",
+        send: () => {},
+        workTools,
+        ...(captured ? { replyBasisMode: () => "v1" as const } : {}),
+        sendInterAgent: async () => ({ kind: "rejected", reason, send_not_attempted: true, details: { work_id: "wrk_1", conversation_id: "linked-cid" } }),
+      });
+      if (captured) tool.beginReplyInput("link-turn");
+      const result = await tool.invoke({ to: "peer.agent", kind: "inform", body: "Continue", work_id: "wrk_1" }, captured ? { origin: { token: "link-turn" } } : undefined);
+      expect(result.isError).toBe(true);
+      const body = JSON.parse(result.content[0]!.text);
+      expect(body).toMatchObject({ error: reason, send_not_attempted: true, work_id: "wrk_1", conversation_id: "linked-cid" });
+      expect(body).not.toHaveProperty("operation_id");
+      expect(body.guidance).toContain("work_status");
+      expect(body.guidance).not.toContain("work_op_result");
+      expect(body.guidance).not.toContain("operation_id");
+    }
+  });
 
   const args = {
     to: "peer.agent",
