@@ -3,16 +3,19 @@
 // no Phoenix server involved. `pnpm exec playwright test` from dashboard/.
 import { defineConfig } from "@playwright/test";
 
+const port = process.env.KAOIRO_DASHBOARD_E2E_PORT;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   fullyParallel: true,
-  use: {
-    baseURL: "http://localhost:4173",
-  },
+  use: port ? { baseURL: `http://127.0.0.1:${port}` } : {},
   webServer: {
-    command: "pnpm exec vite --port 4173 --strictPort",
-    url: "http://localhost:4173/e2e/harness/index.html",
-    reuseExistingServer: !process.env.CI,
+    command: "pnpm exec vite --host 127.0.0.1 --port 4173",
+    // Vite reports a busy port before it logs the bound URL; capture only Local.
+    wait: {
+      stdout: /Local:\s+http:\/\/127\.0\.0\.1:(?<kaoiro_dashboard_e2e_port>\d+)\//,
+    },
+    reuseExistingServer: false,
   },
 });
