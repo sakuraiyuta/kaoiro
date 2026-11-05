@@ -18,8 +18,8 @@ async function jsonlFiles(dir: string): Promise<string[]> {
 const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 // The built CLI constructs the real Host, transport, SDK and bundled CLI.
 // Only external services are fixtures; production input, hooks and results remain intact.
-it.each(["native", "legacy"].flatMap(ownership =>
-  ["text", "tool", "root", "two", "starved"].map(scenario => ({ ownership, scenario }))))(
+it.each([... ["native", "legacy"].flatMap(ownership =>
+  ["text", "tool", "root", "two", "starved", "queued"].map(scenario => ({ ownership, scenario }))), { ownership: "native", scenario: "post" }])(
   "compact resume $ownership $scenario", async ({ownership,scenario}) => {
     const sdkPath = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const sdk = JSON.parse(await readFile(join(sdkPath, "package.json"), "utf8"));
@@ -33,7 +33,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
     }, cachedGrowthBookFeaturesAt: Date.now() }));
     const persistent = true;
     const resumeNote = "RESUME-991: resume work: reply to the original request, send a new work request, and write WORK-RESUMED to a file.\nUnicode: \u65e5\u672c\u8a9e \u00e9\nTrailing spaces:  \n";
-    let foldToolIssued = false; let action=0; const issued:any[]=[]; let taskIssued = false, compactIssued = false, compactSeen = false, searched = false, calls = 0;
+    let postSent = false; let foldToolIssued = false; let action=0; const issued:any[]=[]; let taskIssued = false, compactIssued = false, compactSeen = false, searched = false, calls = 0;
     let taskBarrier: ServerResponse | undefined;
     let secondBarrier: ServerResponse | undefined, held=false;
     const queueRows=async()=>{
@@ -60,7 +60,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
       if (compactRequest && !compactSeen) {
         compactSeen = true;
         if (!taskBarrier) throw Error("compact before Monitor barrier");
-        if(scenario!=="root"){taskBarrier.writeHead(200); taskBarrier.end("release"); taskBarrier = undefined;}
+        if(!["root","post"].includes(scenario)){taskBarrier.writeHead(200); taskBarrier.end("release"); taskBarrier = undefined;}
         await delay(1500);
       }
       for (const message of payload.messages ?? []) for (const part of Array.isArray(message.content) ? message.content : []) {
@@ -85,7 +85,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
         use = { name: "mcp__kaoiro__request_compact", input: { reason:"probe", resume_prompt:resumeNote } };
       }
       if (compactRequest) use = undefined;
-      if (!compactRequest && compactSeen && !foldToolIssued && ["tool","starved"].includes(scenario) && messages.includes("<task-notification>")) {
+      if (!compactRequest && compactSeen && !foldToolIssued && ["tool","starved","post"].includes(scenario) && messages.includes("<task-notification>")) {
         foldToolIssued = true; use = {name:"Bash",input:{command: shellQuote(process.execPath) + " -e 'setTimeout(()=>{},400)'",description:"notification tool boundary"}};
       }
 
@@ -102,9 +102,12 @@ it.each(["native", "legacy"].flatMap(ownership =>
         else use={name:"Bash",input:{command:"printf WORK-RESUMED > resumed.txt",description:"resume ordinary work"}};
         issued.push({action,id:`fixture_call_${calls}`,tool:use.name}); action++;
       }
+      if(scenario==="post" && messages.includes("<task-notification>") && !use && !postSent){
+        postSent=true; use={name:"mcp__kaoiro__send_to_agent",input:{to:"fixture.peer",kind:"request",body:"NATIVE-AFTER-RESUME",done:false}};
+      }
       const noteExact = (payload.messages ?? []).some((m: any) => (Array.isArray(m.content) ? m.content : [{ type: "text", text: m.content }])
         .some((part: any) => part.type === "text" && part.text?.includes(resumeNote)));
-      requests.push({ delivered, noteExact, noticeN2: messages.includes("<event>EVENT-991-N2</event>"),
+      requests.push({ delivered, noteExact, queued: messages.includes("QUEUED-991"), noticeN2: messages.includes("<event>EVENT-991-N2</event>"),
  call: calls, tool: use?.name ?? "text", offered: (payload.tools ?? []).map((t: any) => t.name), notice: messages.includes("<task-notification>") });
       const emit = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -158,6 +161,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
     const wait = async (ready: () => boolean | Promise<boolean>) => {
       const deadline = Date.now() + 30000;
       while (Date.now() < deadline) {
+        if (output.includes("notification result fail-stop")) throw Error(output);
         if (await ready()) return;
         if (child.exitCode !== null || child.signalCode !== null) break;
         await delay(30);
@@ -176,6 +180,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
           owner: { kind: "user", id: "fixture-operator" }, new_conversation: false, meta: { done: false, propose_next: "" } }, ext: {} });
       input(1, "START-991");
       await wait(()=>compactSeen);
+      if(scenario==="queued") input(2,"QUEUED-991");
       if(scenario==="starved"){
         await wait(()=>output.includes('"reason":"starved"'));
         await wait(()=>wire.received.some(x=>x.event==="envelope" && x.payload.type==="state_change" && x.payload.state==="error"));
@@ -184,7 +189,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
         return;
       }
       await wait(()=>issued.length===3 && toolResults.some((r:any)=>r.tool_use_id===issued[2].id));
-      await wait(()=>results().length>=(scenario==="root"?3:scenario==="two"?5:4));
+      await wait(()=>results().length>=(["root","post"].includes(scenario)?3:scenario==="two"?5:4));
       const trace=output.split("\n").filter(l=>l.startsWith("AUTH_TRACE ")).map(l=>JSON.parse(l.slice(11)));
       expect(trace.find(x=>x.event==="mode").nativeContinuations).toBe(ownership==="native");
       const hooks=trace.filter(x=>x.event==="hook" && x.input.hook_event_name==="UserPromptSubmit").map(x=>x.input);
@@ -192,7 +197,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
       expect(noteHook.prompt).toContain("[kaoiro-resume:");
       expect(noteHook.prompt.endsWith(resumeNote)).toBe(true);
       const noticeHooks=hooks.filter(x=>x.prompt.startsWith("<task-notification>"));
-      expect(noticeHooks).toHaveLength(scenario==="root"?0:scenario==="two"?2:1);
+      expect(noticeHooks).toHaveLength(["root","post"].includes(scenario)?0:scenario==="two"?2:1);
       expect(noticeHooks.every(x=>x.prompt_id!==noteHook.prompt_id)).toBe(true);
       expect(output).toContain('"event":"admitted_root"');
       expect(sends()).toHaveLength(2);
@@ -204,11 +209,24 @@ it.each(["native", "legacy"].flatMap(ownership =>
       expect(await readFile(join(cwd,"resumed.txt"),"utf8")).toBe("WORK-RESUMED");
       expect(output).not.toContain("notification result fail-stop");
       expect(requests.some((x:any)=>x.delivered && x.noteExact)).toBe(true);
-      if (scenario !== "root") expect(requests.some((x:any)=>x.notice && !x.delivered)).toBe(true);
+      if (!["root","post"].includes(scenario)) expect(requests.some((x:any)=>x.notice && !x.delivered)).toBe(true);
       if(scenario==="two"){
         expect(requests.some((x:any)=>x.noticeN2 && !x.delivered)).toBe(true);
         const rows=(await queueRows()).filter(q=>q.operation==="enqueue");
         expect(rows.findIndex(q=>q.content?.includes("<event>EVENT-991-N2</event>"))).toBeGreaterThan(rows.findIndex(q=>q.content?.startsWith("[kaoiro] Compaction")));
+      }
+      if(scenario==="queued"){
+        await wait(()=>requests.some((x:any)=>x.queued) && results().length>=5);
+        expect(requests.findIndex((x:any)=>x.queued)).toBeGreaterThan(requests.findIndex((x:any)=>x.delivered));
+      }
+      if(scenario==="post"){
+        taskBarrier!.end("after resume"); taskBarrier=undefined;
+        await wait(()=>sends().length===3 && results().length>=4);
+        const after=output.split("\n").filter(l=>l.startsWith("AUTH_TRACE ")).map(l=>JSON.parse(l.slice(11)));
+        const notification=after.find(x=>x.event==="onTurnStart" && x.args[0].kind==="sdk_notification").args[0].turnToken;
+        expect(notification).not.toBe(noteToken);
+        expect(after.filter(x=>x.event==="resolved_origin").at(-1)).toMatchObject({token:notification,aborted:false});
+        expect(sends()[2]!.payload.payload).toMatchObject({kind:"request",in_reply_to:0,body:"NATIVE-AFTER-RESUME"});
       }
       const before = results().length;
       input(3,"AFTER-991");
