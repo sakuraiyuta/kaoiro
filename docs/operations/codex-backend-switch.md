@@ -1,7 +1,7 @@
 ---
 title: "Codex backend switching and rollback"
 status: implemented
-last_updated: 2026-10-31
+last_updated: 2026-11-05
 ---
 
 # Codex backend switching and rollback
@@ -269,7 +269,10 @@ backend fallback is `pin-exec-fresh` followed by fresh exec restores; it does
 not resume app-server IDs on exec. Before a same-native **code** rollback,
 stop all Codex siblings, preserve explicit app-server selection and verify its
 application, then activate the known older code with the same native hash.
-Restore one app-server ID, check its continuation/history, then restore siblings.
+Follow the [fleet restoration procedure](high-risk-change-release.md#4-release-and-restore-the-fleet):
+inspect the offline list and confirmation count before bulk restore, then check
+each intended peer's connection and outcome. Record failures and let the operator
+decide whether to retry or roll back; partial success is not a restored fleet.
 If the runner cannot start, validate the selected backend with the offline
 loader before activating the old code. An old omitted-exec code target without
 explicit app-server preparation is not a valid rollback target. Native-hash or
@@ -283,15 +286,14 @@ This changes backend selection, not the installed release. App-server startup
 failure remains an operator-visible error and closes admission; there is no
 implicit exec fallback. Unexpected wrapper exits retain the Supervisor's
 bounded restart policy. A deliberate stop does not restart.
-After updating Codex, start one Codex agent and let its local state initialize
-before a bulk spawn or reset of agents sharing a `CODEX_HOME`. The first start
-after an update migrates the state schema in place, and separate wrappers can
-race while that happens. The transport retries a failed `initialize` up to 3
-times (about 2 s of added wait at most), which covered every measured
-collision, but the migrations measured were small; the note stays for a
-production home with large state databases. A retry is logged as
-`codex: app-server initialize failed (attempt N/3), retrying ...`. Persistent
-failures still surface as an operator-visible error with the attempt count.
+For a Codex native update, follow [Codex state backup](runner-update-and-rollback.md#codex-state-backup)
+and its stopped snapshot, start-intent and recovery requirements before restoring
+agents. Preserve the operation record and every named snapshot, staging and aside
+object. A refusal prints a safety instruction and, when a record is identified,
+its `next` commands; inspect those commands and the worker result before retrying.
+Backend maintenance does not replace that state procedure. Restore the fleet
+under the linked high-risk procedure; there is no separate staged first-turn
+check. Observe errors in actual turns and record affected peers.
 
 Running the global `codex` CLI against the same `~/.codex` also migrates the
 shared state, and opens the same race window for the wrappers that start next.
