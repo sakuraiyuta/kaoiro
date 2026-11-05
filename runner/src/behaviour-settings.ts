@@ -318,6 +318,7 @@ const FLAG_ROWS: readonly BehaviourRow[] = [
     "claude-code",
     "phase2_delivery",
     "KAOIRO_CLAUDE_PHASE2_DELIVERY",
+    true,
   ),
 ];
 

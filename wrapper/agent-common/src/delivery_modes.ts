@@ -1,5 +1,4 @@
 import type { DeliveryMechanisms, EngineKind } from "@kaoiro/protocol";
-import { flagArgument, personaOptInSource, type PersonaOptInSource } from "./persona_opt_in.js";
 
 export const DELIVERY_ENGINE_SETTINGS = [
   { engine: "claude-code", enabled: true, default: true },
@@ -44,6 +43,31 @@ export function retiredCodexOperatorSteerMessage(
     "in_flight_delivery.codex.default (new agents) or the per-agent policy (live).";
 }
 
+export const RETIRED_CLAUDE_PHASE2_ENV = [
+  "KAOIRO_CLAUDE_PHASE2_DELIVERY", "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS",
+] as const;
+export type RetiredClaudePhase2Input = typeof RETIRED_CLAUDE_PHASE2_ENV[number] | "phase2_delivery";
+
+export function retiredClaudePhase2Inputs(inputs: {
+  env: Readonly<Record<string, string | undefined>>;
+  fileKey: boolean | undefined;
+}): RetiredClaudePhase2Input[] {
+  const present: RetiredClaudePhase2Input[] = RETIRED_CLAUDE_PHASE2_ENV
+    .filter(name => inputs.env[name] !== undefined && inputs.env[name] !== "");
+  if (inputs.fileKey !== undefined) present.push("phase2_delivery");
+  return present;
+}
+
+export function retiredClaudePhase2Message(input: RetiredClaudePhase2Input, scope: "runner" | "wrapper"): string {
+  const label = input !== "phase2_delivery" ? input
+    : scope === "runner" ? '"claude_code.phase2_delivery" in runner.config.json' : "phase2_delivery in the wrapper config";
+  const replacement = scope === "runner"
+    ? "in_flight_delivery.claude-code.enabled (host ceiling, next spawn), in_flight_delivery.claude-code.default (new agents) or the per-agent policy (live)"
+    : "in_flight_delivery_enabled (wrapper ceiling, next launch) or the per-agent policy (live)";
+  return `${label} is retired and has no effect; neither a value of 0 nor a persona list that omits an agent ` +
+    `restricts in-flight delivery any more. Use ${replacement}.`;
+}
+
 export function captureDeliveryEnvironment(env: Readonly<Record<string, string | undefined>>): DeliveryEnvironment {
   const result: Partial<Record<typeof DELIVERY_ENV_KEYS[number], string>> = {};
   for (const key of DELIVERY_ENV_KEYS) if (env[key] !== undefined) result[key] = env[key];
@@ -55,24 +79,17 @@ export interface DeliveryInputs {
   personaId?: string | undefined;
   ceiling?: boolean | undefined;
   codexBackend?: "exec" | "app-server" | undefined;
-  phase2Delivery?: boolean | undefined;
   env: DeliveryEnvironment;
 }
 
-export function resolveDelivery(inputs: DeliveryInputs): { mechanisms: DeliveryMechanisms; source: PersonaOptInSource | "policy" } {
+export function resolveDelivery(inputs: DeliveryInputs): { mechanisms: DeliveryMechanisms; source: "off" | "policy" } {
   const mechanisms: DeliveryMechanisms = { operator_early: "none", inter_agent_early: "none", inter_agent_yield: "none" };
   if (inputs.ceiling === false) return { mechanisms, source: "off" };
-  const persona = inputs.personaId ?? "";
   if (inputs.engine === "claude-code") {
-    const source = personaOptInSource(persona,
-      flagArgument(inputs.env.KAOIRO_CLAUDE_PHASE2_DELIVERY, inputs.phase2Delivery),
-      inputs.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS);
-    if (source !== "off") {
-      mechanisms.operator_early = "fold";
-      mechanisms.inter_agent_early = "fold";
-      mechanisms.inter_agent_yield = "tool_boundary";
-    }
-    return { mechanisms, source };
+    mechanisms.operator_early = "fold";
+    mechanisms.inter_agent_early = "fold";
+    mechanisms.inter_agent_yield = "tool_boundary";
+    return { mechanisms, source: "policy" };
   }
   if (inputs.engine === "codex" && inputs.codexBackend === "app-server") {
     mechanisms.operator_early = "steer";
