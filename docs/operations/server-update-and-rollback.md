@@ -2,7 +2,7 @@
 title: Server update and rollback
 description: Updating an existing server deployment through the deploy CLI (kaoiro-server-deploy.mjs), preconditions, failure handling, and operational-success verification.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-05
 related: [deployment]
 ---
 
@@ -190,7 +190,7 @@ wrapper process has no prior high-water and applies the restored current row
 before acknowledging it. Confirm its matching current-revision ack and an
 eligible on/off control. Do not edit wrapper history, reset a policy on a
 timer, or treat a reconnect as recovery. For a wrapper release use the
-[high-risk canary procedure](high-risk-change-release.md).
+[high-risk release procedure](high-risk-change-release.md).
 
 ### Delivery policy store placement
 

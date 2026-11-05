@@ -109,3 +109,10 @@ seven-character label collisions have no authority.
 
 See [Build identity and release tags](../operations/build-identity-and-release-tags.md)
 for the current operational contract, activation gates and operator dispatch.
+
+## Later operational decision (2026-11-05)
+
+The operator removed the staged canary turn from the high-risk release
+procedure; see [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709#issuecomment-6648103777)
+and the [current procedure](../operations/high-risk-change-release.md#4-release-and-restore-the-fleet).
+The original decision above remains a historical record.

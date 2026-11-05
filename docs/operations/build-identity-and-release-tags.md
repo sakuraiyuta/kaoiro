@@ -2,7 +2,7 @@
 title: Build identity and release tags
 description: Immutable build identities (landing pairs and release tags), deployment completion and recovery.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-05
 related: [deployment, protocol]
 ---
 
@@ -120,8 +120,10 @@ do not move a landing tag to make rollback pass.
 For the first bridge upgrade from a server without `ReleaseFleet`, the execution
 card must order these steps: stop every required runner and confirm that their
 cgroups contain zero wrappers and every dashboard tile is offline; update the
-server with `--fleet-stopped`; update the runners; then run the canary. Use the
-flag only after both stop observations pass. A missing legacy RPC fails closed
+server with `--fleet-stopped`; update the runners; then perform the post-restart
+checks and restoration in steps 3–6 of the
+[high-risk release procedure](high-risk-change-release.md#4-release-and-restore-the-fleet).
+Use the flag only after both stop observations pass. A missing legacy RPC fails closed
 without the flag. Subsequent upgrades from a bridge server omit the flag and
 must obtain the live compatibility snapshot. Never carry this first-upgrade
 exception into ordinary execution cards.
@@ -132,7 +134,7 @@ Use the ordinary server update/rollback and runner update/rollback procedures.
 Completion requires the server health identity, runner registration and required
 wrapper acceptance to match the reviewed target. Detached `ENQUEUED` means only
 that submission succeeded: inspect the worker result and perform those checks.
-High-risk changes also require the [canary](high-risk-change-release.md#4-release-with-a-canary-stage).
+High-risk changes also follow the [release and restore procedure](high-risk-change-release.md#4-release-and-restore-the-fleet).
 Release tags and release notes record the operator's release decision; there is
 no completion collector, common receipt or enrolled admission gate.
 

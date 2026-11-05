@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-05
 related: [deployment]
 ---
 
@@ -25,8 +25,8 @@ the runner is supported for the initial install only; see
 A change that can stop the fleet from starting or every agent's turns from
 completing (the runner's start path, the wrapper's turn lifecycle) follows
 [High-risk change release](high-risk-change-release.md) first: it adds a
-production-shape start check and a canary stage before the steps below, and it
-links back here for the commands.
+production-shape start check and fleet restoration procedure, and it links back
+here for the update and rollback commands.
 
 ## Build identity preconditions
 

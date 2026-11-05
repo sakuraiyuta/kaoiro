@@ -1,8 +1,8 @@
 ---
 title: High-risk change release
-description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, the canary stage, and recovery when every agent has stopped.
+description: How to tell whether a change can stop the agents that would fix it, what to prepare first, the production-shape start gate for the runner, bulk restoration, and recovery when every agent has stopped.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-05
 related: [deployment]
 ---
 
@@ -13,11 +13,8 @@ related: [deployment]
 [answers Q1–Q5](https://github.com/sakuraiyuta/kaoiro/issues/240#issuecomment-6064701974)).
 The start gate in section 3 was measured on 2026-10-09
 ([evidence](../evidence/deployment/high-risk-change-start-gate.md)).
-The canary stage in section 4 was exercised on 2026-10-17 with release
-v2026.10.17.1 (TL, Claude Code): the runner restart left no old wrapper and
-no spawn, the canary turn completed normally within the time limit, and the
-rest of the fleet was restored
-([record](https://github.com/sakuraiyuta/kaoiro/issues/426)).
+The operator removed the staged turn check from this procedure
+([decision](https://github.com/sakuraiyuta/kaoiro/issues/709#issuecomment-6648103777)).
 
 This page answers one question: *can the change I am about to ship, or review,
 stop the agents that would repair it, and if so what do I prepare and in what
@@ -36,8 +33,8 @@ both passed review and green tests.
 **Out of scope.** Changes to the server path that live wrappers use (join,
 channel, authentication, delivery) are not covered
 ([issue #555](https://github.com/sakuraiyuta/kaoiro/issues/555)): a
-server-only update does not stop live wrappers, so the isolation used in
-section 4 does not carry over. Follow
+server-only update does not stop live wrappers, so the runner restart procedure
+in section 4 does not apply. Follow
 [Server update and rollback](server-update-and-rollback.md) for those.
 
 ## 1. Is the change high risk?
@@ -103,16 +100,15 @@ permanently, add it here. Listing every module the runner loads at start would
 include almost every file and erase the distinction, so the list names the
 modules that decide whether the fleet starts or a turn completes.
 
-Which engines does the change affect, and who is the canary? The canary persona
-is fixed per engine (operator decision, issue #240): the operator can change
-the choice by editing this table.
+Which engines does the change affect? A standby can help only if it is alive
+under a different runner; it is never a substitute for the operator's plan.
 
-| Where the change is | Engines affected | Canary persona | Standby agent of another engine (help only, never a plan) |
-|---|---|---|---|
-| `wrapper/claude-code/**` | claude-code | `ao` | Only one that is alive under a different runner (another host): codex or antigravity |
-| `wrapper/codex/**` | codex | `momo` | Only one under a different runner: claude-code or antigravity |
-| `wrapper/antigravity/**` | antigravity | `hiiro` | Only one under a different runner: claude-code or codex |
-| `wrapper/core/**`, `wrapper/agent-common/**`, `runner/**`, a pin change | all | `ao`, `momo` and `hiiro`, each affected engine in turn (section 4) | None; plain shell only |
+| Where the change is | Engines affected | Standby agent of another engine |
+|---|---|---|
+| `wrapper/claude-code/**` | claude-code | codex or antigravity on another runner |
+| `wrapper/codex/**` | codex | claude-code or antigravity on another runner |
+| `wrapper/antigravity/**` | antigravity | claude-code or codex on another runner |
+| `wrapper/core/**`, `wrapper/agent-common/**`, `runner/**`, a pin change | all | None; plain shell only |
 
 An agent under the same runner stops when the runner stops, so it is never a
 standby. If no standby agent exists, write "plain shell only" on the card in
@@ -131,8 +127,8 @@ change and discard it afterwards. The operator does the work.
 | B3 | If the same update deploys the server: the last good transaction id, and the recovery archive exists ([Server update and rollback](server-update-and-rollback.md#44-failure-handling)). |
 | B4 | The rollback commands are written with resolved values, not placeholders, in a note that does not live in an agent's session. The note holds no secret. |
 | B5 | For a change confined to one engine: a standby agent of another engine, alive under a different runner, is named and idle. Otherwise write "plain shell only". |
-| B6 | The rollback signal is fixed in advance: a canary turn that fails or times out means roll back immediately. Do not investigate first; investigating while the fleet is stopped lengthens the outage. |
-| B7 | The runner unit stops every process it started on restart: `systemctl --user show -p KillMode --value kaoiro-runner` prints `control-group`. If it prints anything else, the canary procedure does not hold (an old wrapper would survive the restart); do not use it. |
+| B6 | Decide in advance how the operator will respond to a failed update, runner start, identity or connectivity check, and prepare the rollback procedure. |
+| B7 | The runner unit stops every process it started on restart: `systemctl --user show -p KillMode --value kaoiro-runner` prints `control-group`. If it prints anything else, an old wrapper could survive the restart; stop and do not proceed. |
 
 The break-glass order is: (1) the operator's plain shell, which is always
 enough and is the only means when the runner cannot start; (2) a standby agent
@@ -140,10 +136,8 @@ of another engine, only as described in B5.
 
 ## 3. Production-shape start
 
-A fault in the start path stops the runner before any canary persona can run
-one turn, so the canary stage cannot catch it. A change that answers yes to FS
-is therefore not complete until the start shim and its verifier have started
-once in the **shape production runs**, on **production's own config, env and
+A change that answers yes to FS is not complete until the start shim and its
+verifier have started once in the **shape production runs**, on **production's own config, env and
 Node**, in an environment that carries **no inherited settings**. Issue #249
 shipped because the test fixtures only built the shape of a built release while
 production ran from a repo checkout.
@@ -326,102 +320,73 @@ Node. What it does not cover:
   ([Behaviour settings](../reference/configuration/runner.md#behaviour-settings)),
   which is why such an env variable stops the gate instead of being passed
   unchecked.
-- Wrapper spawn, a real connection and registration, and any model turn. Those
-  are what C2 and C3 check.
+- Wrapper spawn, a real connection and registration, and any model turn.
+  Connectivity and actual turns must be observed after restoration (section 4).
 - macOS: the block uses `ss` and `systemctl --user`, and was measured on Linux
   only.
 
-## 4. Release with a canary stage
+## 4. Release and restore the fleet
 
-```mermaid
-flowchart TD
-  A[Classify the change] -->|not high risk| N[Ordinary update runbooks]
-  A -->|high risk| B[Fill the card in section 2]
-  B --> C0[C0 production-shape start]
-  C0 --> C1[C1 switch and restart the runner; fleet stays stopped]
-  C1 --> C2[C2 restore one canary persona]
-  C2 --> C3[C3 operator sends one instruction]
-  C3 -->|normal reply in time| M{more affected engines?}
-  M -->|yes| C2
-  M -->|no| C4[C4 restore the rest]
-  C3 -->|error, abort or no reply| R[Roll back and stop]
-  C4 --> C5[C5 connectivity checks]
-```
+1. Run the gate in section 3 for FS changes; it is recommended for TL changes.
+   Stop if the gate or artifact verification fails; do not switch.
+2. Confirm every agent is idle and B7 holds, then switch and restart using
+   [Subsequent updates](runner-update-and-rollback.md#462-subsequent-updates).
+   Use the detached updater when the caller runs under the runner and wait for
+   the worker's actual result. If peer input arrives between reset and stop,
+   repeat preparation or stop immediately after join. Do not restore anyone yet.
+3. Once the journal shows the runner's `runner: host=... connecting to ...`
+   line, confirm no old wrapper survived:
 
-The canary works because restarting the runner on the new release stops the
-whole fleet, and restoring agents afterwards is an explicit operator action
-([ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)): the server
-sends a spawn to a runner only for an operator's spawn, restore or resume, and
-a runner starts with no agents. So the operator restores the canary persona
-alone, checks one turn on the new release, and only then restores the rest.
-This is a staged restore inside the stop window. It does not apply the release
-to one persona only: one runner serves every wrapper from one release. Until the
-canary passes, the other agents stay stopped.
+   ```sh
+   systemctl --user status kaoiro-runner --no-pager -l | grep -c 'node_modules/.pnpm/@kaoiro+'
+   ```
 
-It rests on two premises, both checked in C1: nothing restores agents by itself,
-and the restart kills the old wrappers (B7).
+   The count must be 0. This matches wrappers launched from a release, not the
+   `KAOIRO_WRAPPER_DEV` path. Run it again just before restoration. Confirm all
+   agent tiles are offline and the runner has received no `spawn` since start:
 
-- **C0.** The gate in section 3. Required for FS-class changes, recommended for
-  TL-class changes.
-- **C1.** Switch and restart with [Subsequent updates](runner-update-and-rollback.md#462-subsequent-updates),
-  after confirming that every agent is idle and B7 holds. Use the ordinary
-  detached updater when the caller runs under the runner. If peer input arrives
-  between reset and stop, repeat preparation or stop immediately after join.
-  Do not restore anyone.
-  Right after the restart, confirm that no old wrapper survived:
+   ```sh
+   journalctl --user -u kaoiro-runner --no-pager \
+     --since "$(systemctl --user show -p ActiveEnterTimestamp --value kaoiro-runner)" \
+     | grep -c 'phoenix receive:.*spawn'
+   ```
 
-  ```sh
-  systemctl --user status kaoiro-runner --no-pager -l | grep -c 'node_modules/.pnpm/@kaoiro+'
-  ```
+   This must print 0. These are read-only observations of the unit's cgroup
+   and journal; do not list and kill host processes. Stop and report an
+   unexpected wrapper, spawn or tile state.
+4. Check the runner's registered identity against the reviewed target using
+   [build identity](build-identity-and-release-tags.md#coordinated-production-builds)
+   and the [connectivity checks](server-update-and-rollback.md#3-connectivity-checks).
+   If the update, identity or connectivity check fails, stop before restoring
+   and use the prepared rollback procedure. If rollback is refused or the state
+   is uncertain, stop and preserve the records and snapshots for diagnosis.
+5. Before bulk restore, inspect the offline list and confirmation count and
+   decide how to handle any entry that should not be restored. Bulk restore
+   sends a restore request for every offline entry and has no exclusion option.
+   After confirmation, the requests are sent sequentially on a best-effort
+   basis and cannot be stopped midway; a submitted request is not proof that
+   the peer started ([ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)).
+6. After dispatch, the operator checks each intended peer's tile for connection,
+   offline status and error icons and repeats the runner connectivity checks.
+   Record successful, failed or still-offline, and unresolved peers separately.
+   Partial success is not a restored fleet. Inspect each failed peer's error and
+   runner/server evidence; the operator decides whether to resolve its cause
+   and retry that peer or use the prepared rollback. Do not delete a peer or its
+   session to clear an error. Record the update and restoration results in the
+   change tracker.
 
-  The count must be 0. It matches wrappers launched from a release, not the
-  `KAOIRO_WRAPPER_DEV` path. A surviving old wrapper runs the old code under the
-  new runner and reconnects to the server, so the premise is broken: stop the
-  canary procedure and report. The same count also shows whether any agent has
-  come back by itself, since a restored agent's wrapper appears in the unit's
-  cgroup too. Run it once the journal shows the runner's
-  `runner: host=... connecting to ...` line, and again just before C2. Two more
-  observations, both of which must come out clean: the runner has received no
-  `spawn` since this start, and every agent tile is in the offline section of
-  the dashboard.
+The operator observes errors or aborts in the first actual turns. If an engine
+fails, record the engine and affected peers; the operator decides whether to
+retry after resolving the cause or roll back using the existing procedure. Do
+not mark that engine verified, or assume other engines are healthy. There is no
+staged turn check: a defect in wrapper spawn, registration, native authentication
+or turn lifecycle can affect multiple restored peers before it is observed.
+The start gate and connectivity checks do not prove a model turn completed.
 
-  ```sh
-  journalctl --user -u kaoiro-runner --no-pager \
-    --since "$(systemctl --user show -p ActiveEnterTimestamp --value kaoiro-runner)" \
-    | grep -c 'phoenix receive:.*spawn'
-  ```
-
-  This must print 0 (the runner logs each `spawn` it receives). These are
-  read-only observations of the unit's own cgroup and journal; do not list and
-  kill host processes.
-- **C2.** Restore the canary persona alone from its offline tile (the
-  individual restore of ADR-0030). A change that touches the path of a brand-new
-  session also needs one fresh spawn. For a change that affects several engines
-  (the last row of the table in section 1), run C2 and C3 for each affected
-  engine's canary in turn, and go on to C4 only after all of them pass. An
-  engine whose canary was not run is recorded as unverified; it first runs at
-  C4.
-- **C3.** The operator sends one short fixed instruction that asks the agent to
-  repeat a marker word. **The clock starts when the instruction is sent**, not
-  when the agent was restored. Success means: the reply has an assistant body,
-  the turn ended with a normal result, it is not shown as an error or an abort,
-  and the agent's state returns to `waiting_input`. A turn that ends in an error
-  or an abort does not count, even if it carries a body. The time limit is
-  **5 minutes, provisionally**: it is not a measured value and the first real
-  update revises it. Run the canary on the default wiring; add no setting or
-  flag for it.
-- **C4.** Restore everyone else.
-- **C5.** Every agent is connected and none is in `error`; run the runner
-  connectivity checks in [Server update and rollback § 3](server-update-and-rollback.md#3-connectivity-checks).
-- **Failure.** If C3 fails or times out, roll back at once (B6) with
-  [Rollback](runner-update-and-rollback.md#463-rollback). What the procedure
-  guarantees is that no other wrapper session was resumed on the new code. The
-  canary's native binary can still write to shared homes and state (the Claude
-  home, the Codex home and state, the Antigravity session index), so whether
-  shared state also has to be restored depends on B2, B3 and the state-aware
-  steps in [Codex state backup](runner-update-and-rollback.md#codex-state-backup).
-- **Record.** Write the time and result of C2 to C4 in the tracker. This record
-  is what makes the stage "exercised".
+A Codex pin change may require the state-aware steps in
+[Codex state backup](runner-update-and-rollback.md#codex-state-backup). A restore
+can discard post-snapshot conversations from every affected restored Codex peer;
+preserve the snapshot and quarantine/aside trees under that procedure.
 
 ## 5. When every agent has stopped
 
@@ -442,8 +407,7 @@ link to them.
 
 - **Author.** State in the change whether it is high risk, which question (FS,
   TL or both) and which engines. For FS, attach the gate evidence from step 5 of
-  section 3. For a multi-engine change, name each canary and say which are
-  expected to run.
+  section 3, and identify the affected engines.
 - **Reviewer.** Check the diff against both questions and the commands in
   section 1, not only against the author's statement. If the author calls a
   listed path ordinary, the written reason is part of the review. This page

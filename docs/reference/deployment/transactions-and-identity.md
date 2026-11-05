@@ -2,7 +2,7 @@
 title: Transactions and identity
 description: Build-identity provenance verification for a completed server/runner update -- what proves the running code matches the target commit.
 status: accepted
-last_updated: 2026-10-25
+last_updated: 2026-11-05
 related: [deployment]
 ---
 
@@ -41,8 +41,8 @@ build identities and one frozen JSON for every build consumer. Historical
 landing pairs and current release tags remain readable. Build version and
 branch are not inferred from a short label. A completed server transaction
 covers only the server operation: also verify actual runner registration,
-required wrapper acceptance and any high-risk canary before recording release
-tags and notes. See [Build identity and release tags](../../operations/build-identity-and-release-tags.md).
+required wrapper acceptance and follow the high-risk release procedure before
+recording release tags and notes. See [Build identity and release tags](../../operations/build-identity-and-release-tags.md).
 
 ## Runner Codex state operations
 
