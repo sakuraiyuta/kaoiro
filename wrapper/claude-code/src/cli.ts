@@ -1,4 +1,4 @@
-import { resolveDelivery } from "@kaoiro/agent-common";
+import { resolveDelivery, retiredClaudePhase2Inputs, retiredClaudePhase2Message } from "@kaoiro/agent-common";
 // Minimal demo CLI — runs an agent session and prints color-coded state
 // transitions, so you can watch the kaoiro state follow real agent behavior.
 //
@@ -186,9 +186,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const pendingReceiptRootTimeoutMs = config.pending_receipt_root_timeout_ms ?? 2_000;
   const resolvedDelivery = resolveDelivery({
     engine: "claude-code", personaId: config.persona.id,
-    ceiling: config.in_flight_delivery_enabled, phase2Delivery: config.phase2_delivery,
+    ceiling: config.in_flight_delivery_enabled,
     env: process.env,
   });
+  for (const input of retiredClaudePhase2Inputs({ env: process.env, fileKey: config.phase2_delivery })) {
+    writeRedactedStderr(`claude: warn - ${retiredClaudePhase2Message(input, "wrapper")}\n`);
+  }
   const phase2Source = resolvedDelivery.source;
   const phase2Delivery = resolvedDelivery.mechanisms.inter_agent_early === "fold";
   writeRedactedStderr(`[claude phase2 delivery] source=${phase2Source}\n`);

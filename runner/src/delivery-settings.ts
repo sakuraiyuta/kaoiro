@@ -1,8 +1,8 @@
 import { DEFAULT_CODEX_BACKEND } from "@kaoiro/agent-common";
 import {
   captureDeliveryEnvironment, DELIVERY_ENGINE_SETTINGS, DELIVERY_ENV_KEYS,
-  deliveryPersonaList, resolveDelivery, RETIRED_CODEX_OPERATOR_STEER_ENV,
-  retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage,
+  resolveDelivery, RETIRED_CODEX_OPERATOR_STEER_ENV, RETIRED_CLAUDE_PHASE2_ENV,
+  retiredCodexOperatorSteerInputs, retiredCodexOperatorSteerMessage, retiredClaudePhase2Inputs, retiredClaudePhase2Message,
   type DeliveryEnvironment, type DeliveryInputs,
 } from "@kaoiro/agent-common";
 import type { EngineCatalogEntry, EngineKind, LaunchDeliveryPolicyMetadata, RunnerRegister } from "@kaoiro/protocol";
@@ -21,7 +21,6 @@ export function createDeliverySnapshot(config: RunnerConfig, env: Readonly<Recor
     ceiling: config.in_flight_delivery?.[row.engine]?.enabled ?? row.enabled,
     default: config.in_flight_delivery?.[row.engine]?.default ?? row.default,
     codexBackend: config.codex?.backend ?? DEFAULT_CODEX_BACKEND,
-    phase2Delivery: config.claude_code?.phase2_delivery,
     env: captured,
   })])) as Record<EngineKind, DeliveryInputs & { ceiling: boolean; default: boolean }>;
   return Object.freeze({ env: captured, engines: Object.freeze(engines) });
@@ -36,24 +35,26 @@ export function deliveryEnvironment(base: NodeJS.ProcessEnv, captured: DeliveryE
   return env;
 }
 
-/** The environment a wrapper child gets: the retired Codex inputs are
- *  removed, so a managed wrapper cannot warn a second time for what the
- *  runner already reported. */
 export function withoutRetiredDeliveryInputs(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result = { ...env };
-  for (const key of RETIRED_CODEX_OPERATOR_STEER_ENV) delete result[key];
+  for (const key of [...RETIRED_CODEX_OPERATOR_STEER_ENV, ...RETIRED_CLAUDE_PHASE2_ENV]) delete result[key];
   return result;
 }
 
-/** One line per retired Codex operator-steer input not yet in `seen`, adding
- *  it. `file` is the parsed file config (not the server-url override). */
 export function retiredDeliveryWarnings(file: RunnerConfig, env: DeliveryEnvironment, seen: Set<string>): string[] {
-  if (!(file.capabilities?.includes("codex") ?? true)) return [];
   const lines: string[] = [];
-  for (const input of retiredCodexOperatorSteerInputs({ env, fileKey: file.codex?.operator_steer })) {
-    if (seen.has(input)) continue;
+  const add = (input: string, message: string) => {
+    if (seen.has(input)) return;
     seen.add(input);
-    lines.push(`runner: warn - ${retiredCodexOperatorSteerMessage(input, "runner")}\n`);
+    lines.push(`runner: warn - ${message}\n`);
+  };
+  if (file.capabilities?.includes("codex") ?? true) {
+    for (const input of retiredCodexOperatorSteerInputs({ env, fileKey: file.codex?.operator_steer }))
+      add(input, retiredCodexOperatorSteerMessage(input, "runner"));
+  }
+  if (file.capabilities?.includes("claude-code") ?? true) {
+    for (const input of retiredClaudePhase2Inputs({ env, fileKey: file.claude_code?.phase2_delivery }))
+      add(input, retiredClaudePhase2Message(input, "runner"));
   }
   return lines;
 }
@@ -61,19 +62,7 @@ export function retiredDeliveryWarnings(file: RunnerConfig, env: DeliveryEnviron
 export function buildLaunchDeliveryMetadata(snapshot: AppliedDeliverySnapshot, engine: EngineKind): LaunchDeliveryPolicyMetadata {
   const inputs = snapshot.engines[engine];
   const mechanisms = resolveDelivery(inputs).mechanisms;
-  const list = engine === "claude-code" ? snapshot.env.KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS : undefined;
-  const overrides: NonNullable<LaunchDeliveryPolicyMetadata["persona_overrides"]> = Object.create(null);
-  const personas = deliveryPersonaList(list);
-  const first = personas[0];
-  if (first !== undefined) {
-    // Every valid member has the same opt-in; avoid reparsing an oversized list per member.
-    const modes = resolveDelivery({ ...inputs, personaId: first }).mechanisms;
-    if (JSON.stringify(modes) !== JSON.stringify(mechanisms)) {
-      for (const personaId of personas) overrides[personaId] = { ...modes };
-    }
-  }
-  return { version: "v1", ceiling: inputs.ceiling, mechanisms,
-    ...(Object.keys(overrides).length === 0 ? {} : { persona_overrides: overrides }) };
+  return { version: "v1", ceiling: inputs.ceiling, mechanisms };
 }
 
 export const DELIVERY_JSON_LIMIT = 8192;
