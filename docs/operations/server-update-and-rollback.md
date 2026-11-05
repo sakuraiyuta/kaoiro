@@ -762,12 +762,30 @@ saved Compose plan. The journal is not changed.
 
 Use Bash, Docker with Compose, jq, GNU tar, Python 3 and the existing deploy CLI on the deployment host. Independently confirm that no deployment, rollback, backup, host-side writer, or other operator is active, and that the affected fleet is stopped or independently verified compatible with the old image. Docker's volume filter cannot find host-side writers or containers bind-mounting Docker's internal volume directory. If a lock exists, stop and follow 4.4 (0a), including its owner check. Never edit a journal.
 
-Save the entire block to a private file outside the repository, verify its contents and SHA-256, and set/export absolute ROOT (backup root), TX (transaction ID), REPO (checkout), HEALTH (reachable health URL) and, if used, CONFIG (deploy config). Run it as a child using `bash -eu /absolute/path/to/recovery.sh`; do not paste it into an interactive shell. It asks for fresh human confirmation immediately before wipe and before quarantine. Do not log the Compose config or .env. Stop on any nonzero exit or unexpected result. The block is an operator procedure, not an automatic gate.
+Set and export an absolute `REPO` (the checkout). Extract the marked block
+into a private file outside the repository, replacing the output path below.
+Verify the saved file's contents and its SHA-256 against the expected value
+before running it.
+
+```sh
+sed -n '/^<!-- manual-recovery:begin -->$/,/^<!-- manual-recovery:end -->$/p' "$REPO/docs/operations/server-update-and-rollback.md" | sed '1,2d;$d' | sed '$d' > /absolute/path/to/recovery.sh
+```
+
+Expected SHA-256: `aa6c4cee757b77f9f8d2d15b3270cc6b21fbfd14ccbf802fc595f5341f65ecc1`
+
+Set and export absolute `ROOT` (backup root), `TX` (transaction ID),
+`HEALTH` (reachable health URL), and `CONFIG` (deploy config), if used.
+Run the saved file as a child using `bash -eu /absolute/path/to/recovery.sh`;
+do not paste it into an interactive shell. It asks for fresh human confirmation
+before wipe, before restoring the old image tag, and before quarantine. Do not
+log the Compose config or .env. Stop on any nonzero exit or unexpected result.
+The block is an operator procedure, not an automatic gate.
 
 The saved plan is checked against file, environment, and normalized Compose hashes. `jq -S` can conservatively reject equivalent JSON serialized differently: investigate, never bypass. For the first three phases preserve the forensic archive, check the pre-deploy archive and required entries, restore, and compare a new archive of the restored volume including content hashes. For `rollback_restored` never wipe: a matching old-image container may already have written to the restored volume. Quarantine is a deliberate operator decision; it neither completes the journal nor preserves a rollback-tag claim.
 
 The manual process does not update the journal: after a partial or completed wipe, the original phase still appears even though it no longer describes the live volume. On any failure, stop; inspect actual container, volume, evidence files, tag, health and lock before deciding what happened. If forensic or verification evidence already exists, do not restart this block or overwrite it. After a wipe or possible start, never repeat the wipe based on the journal phase. If health fails after tagging or startup, investigate from tag/container/health state and preserve all evidence; do not rerun restoration. An unchanged preflight failure before any evidence or mutation can be retried only after correcting the verified cause and repeating all independent checks.
 
+<!-- manual-recovery:begin -->
 ```bash
 set -euo pipefail
 for tool in docker jq tar python3 sha256sum git node curl realpath stat; do command -v "$tool" >/dev/null; done
@@ -911,6 +929,8 @@ finally: os.close(fd)
 PY
 fi
 
+read -r -p 'Confirm fleet compatibility and no concurrent operations before old image startup; type YES: ' ANSWER
+test "$ANSWER" = YES
 docker tag "$OLD" kaoiro-server:latest
 test "$(docker image inspect kaoiro-server:latest --format '{{.Id}}')" = "$OLD"
 ID=$(docker compose "$@" --project-directory "$SERVER" ps -q kaoiro)
@@ -946,6 +966,7 @@ fi
 node "$REPO/server/deploy/kaoiro-server-deploy.mjs" status --repo "$REPO" "${CONFIG_ARGS[@]}" | jq -e --arg src "$SRC" '.locks == [] and .unfinishedTransaction == null and .container.running == true and .health.build_revision == $src and .health.build_dirty == false' >/dev/null
 test "$(docker inspect "$ID" --format '{{.State.Status}}')" = running
 ```
+<!-- manual-recovery:end -->
 
 **(4) Runner does not restart** (4.3 step 7)
 

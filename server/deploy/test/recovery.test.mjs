@@ -1,5 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -175,6 +176,17 @@ test("a destructive rollback names --fleet-stopped only as an optional operator 
   const rollback = renderRecovery(TX, journalAt(PHASE.UP)).find((l) => l.command === "rollback");
   assert.equal(rollback.argv.includes("--fleet-stopped"), false);
   assert.deepEqual(rollback.optional.map((o) => o.flag), ["--fleet-stopped"]);
+});
+
+test("the manual recovery block matches the documented extraction checksum", () => {
+  const runbook = readFileSync(join(here, "../../../docs/operations/server-update-and-rollback.md"), "utf8");
+  const section = runbook.split("**(3a) A rollback stopped part-way**")[1]?.split("**(4) Runner does not restart**")[0];
+  assert.ok(section);
+  const expected = /Expected SHA-256: `([a-f0-9]{64})`/.exec(section);
+  const blocks = [...section.matchAll(/<!-- manual-recovery:begin -->\n```bash\n([\s\S]*?)\n```\n<!-- manual-recovery:end -->/g)];
+  assert.ok(expected, "documented checksum missing");
+  assert.equal(blocks.length, 1, "exactly one marked block is required");
+  assert.equal(createHash("sha256").update(blocks[0][1] + "\n").digest("hex"), expected[1]);
 });
 
 test("the runbook table equals the generated table", () => {
