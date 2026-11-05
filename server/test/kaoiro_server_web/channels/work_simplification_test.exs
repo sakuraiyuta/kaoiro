@@ -742,6 +742,7 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
                      "op" => "assign",
                      "operation_id" => opid(),
                      "title" => "Operator receipt owner",
+                     "director" => agent("director"),
                      "assignee" => "assignee"
                    }
                  }),
