@@ -347,15 +347,17 @@ reply snapshot or create a second owner; an unproved fold grants no authority.
 
 ### Claude recipient handoff
 
-The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` only
-when phase 2 is enabled: by `KAOIRO_CLAUDE_PHASE2_DELIVERY=1`, by a persona in
-`KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, or by `claude_code.phase2_delivery` in
-`runner.config.json` (see
-[Claude phase-2 delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls)).
-It uses those modes only after the server echoes delivery modes v1. With none of
-the three set, the modes are not advertised; that is the code default, and the
-configured production behavior is recorded separately in the
-[C0 baseline record](../../evidence/issue-463/2026-10-09-c0-baseline-and-codex-evidence.md).
+The Claude wrapper advertises `early: "fold"` and `yield: "tool_boundary"` when
+its launch ceiling permits, without the retired flag, list or file-key opt-ins.
+It uses the mechanisms only after delivery modes v1 negotiation and the
+per-agent policy fence. See [Claude delivery controls](../configuration/wrapper.md#claude-phase-2-delivery-controls).
+A stored off row blocks new folds/cuts, but does not remove the declaration.
+With an old server, the same process retains its last off fence across rejoin;
+a fresh wrapper has no such memory. An unknown dashboard policy display on
+that server is not proof that negotiated delivery cannot happen.
+Old runners and wrappers can disagree between launch projection and live
+capability during a mixed install; use the actual wrapper declaration and
+server policy state for live delivery.
 A Codex app-server wrapper advertises `early: "steer", yield: "none"`; Codex exec
 advertises `early: "none", yield: "none"`. An Antigravity wrapper declares no
 delivery modes at join: the server sends no `inter_agent_delivery_modes` echo,
@@ -372,8 +374,10 @@ count different boundaries: Claude permits two urgent root overtakes;
 Codex permits two IA writes in a running token while host-queue peer roots wait.
 Ordinary peer batches remain serial. An operator early instruction without
 attachments can also fold, without a peer reply ticket. Synthetic notices
-never request early or yield. With the flag off or without the matching server
+never request early or yield. With a false ceiling or without the matching server
 echo, root input retains its arrival order and phase-2 overtaking is disabled.
+With negotiated mechanisms, old false/excluding inputs are ignored; stored
+off fences in-flight acceptance while preserving operator-priority root order.
 
 For a fold, the wrapper reserves a fold slot for the live turn,
 then pushes text containing a correlation `fold_id`, a peer-input preamble,

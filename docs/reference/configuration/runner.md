@@ -99,8 +99,7 @@ keys. Omitted keys resolve independently:
 
 `enabled: false` is a launch ceiling: it disables every in-flight mechanism
 for that engine, even when a legacy flag or persona list enables it. `true`
-still requires the backend (Codex: app-server) and, for Claude, the existing legacy
-gate (`claude_code.phase2_delivery` and its environment override). Antigravity has no
+declares Claude fold/yield and Codex steering on app-server without legacy opt-ins. Antigravity has no
 in-flight mechanism even with an explicit true ceiling. `default` seeds a new
 server policy row when launch has no explicit choice; it never rewrites a stored
 row and cannot enable a mechanism beyond the ceiling.
@@ -114,19 +113,17 @@ latest applied snapshot. Existing wrappers keep their launch declaration.
 
 The runner captures `KAOIRO_CLAUDE_PHASE2_DELIVERY`,
 `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS`, `KAOIRO_CODEX_OPERATOR_STEER` and
-`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` at startup. Reload and spawned children
-use these captured values, including absence; restart the runner to change them.
-The two Codex variables are retired: they are captured only to warn, and are
-removed from every child environment. For the Claude pair, an empty flag falls
-back to the file, exactly `1` enables globally, and other set values defer to the
-persona list. One malformed persona ID invalidates the whole list; matching is
-case-sensitive. No new environment variable is added.
-
-Each retired Codex input that is present (the two variables, and `codex.operator_steer`
-in the file, `false` included) produces one `runner: warn -` line, once per
-process, at startup and after a reload that introduces it. The text names the
-input and the replacements and never prints a persona id or a list. See
-[Codex operator steer controls](wrapper.md#codex-operator-steer-controls).
+`KAOIRO_CODEX_OPERATOR_STEER_PERSONAS` at startup only to identify retired inputs.
+All four are removed from child environments, and neither retired file key is
+relayed. A nonempty variable or a present file key (including false) produces
+one warning per input name per runner process, at startup or a reload that
+introduces it, only for an advertised engine. Empty variables do not warn.
+Warnings name the input and replacement controls without printing its value.
+The old Claude flag/list and `claude_code.phase2_delivery` no longer gate delivery.
+Use the engine's ceiling, new-row default or per-agent live policy instead.
+Keep old settings through the [rollback window](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement);
+their readers are removed only after a released warning version and that window.
+No new environment variable is added.
 
 The runner explicitly registers every advertised engine's resolved default and
 bounded [launch metadata](../protocol/runner-control.md#launch-delivery-metadata).
@@ -177,7 +174,7 @@ hidden by a variable.
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | `permission_timeout_ms` | integer | 1..2147483647 | none (wait for the operator) | every wrapper (`parseConfig`) | variable > file > default |
 | `KAOIRO_CODEX_OPERATOR_STEER` | `codex.operator_steer` | boolean | `true` / `false` (variable: exactly `1` is on) | retired: no effect | none (the runner warns and does not relay or pass it) | not applicable |
 | `KAOIRO_CODEX_APPROVAL_AXIS` | `codex.approval_axis` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Codex wrapper (`flagArgument`) | variable > file > persona list |
-| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | `claude_code.phase2_delivery` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | Claude wrapper (`flagArgument`) | variable > file > persona list |
+| `KAOIRO_CLAUDE_PHASE2_DELIVERY` | `claude_code.phase2_delivery` | boolean | retained for warnings | ignored | runner / direct wrapper warning | retired; use ceiling and per-agent policy |
 | `KAOIRO_RUNNER_SERVER_URL` | `server_url` | string | `ws://` or `wss://` URL | required in the file | the runner (`applyServerUrlOverride`) | variable > file |
 | `KAOIRO_RUNNER_LOG_PHOENIX_HEARTBEATS` | `log_phoenix_heartbeats` | boolean | `true` / `false` (variable: exactly `1` is on) | `false` | the runner (live, per log line) | variable > file > default |
 

@@ -220,6 +220,16 @@ for all peers since then.
   [issue #567](https://github.com/sakuraiyuta/kaoiro/issues/567), which waits for
   issue #541 and is coordinated with issues #416 and #412.
 
+### C4C implementation boundary
+
+[Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) makes Claude
+fold/tool-boundary delivery available under the existing launch ceiling and
+live policy without legacy opt-ins. Old inputs remain recognized for warnings;
+managed children receive neither the variables nor the old file key. Keep
+negotiation, revision acknowledgement, final acceptance and ordering fences.
+C4B U2 and C4C land adjacently in one window. Reader removal waits for C5,
+a released warning version and the documented rollback window.
+
 ## Amendment (2026-10-16, launch-bound native continuations)
 
 The operator selected the wrapper-issued capability design for [issue #426](https://github.com/sakuraiyuta/kaoiro/issues/426), including [issue #674](https://github.com/sakuraiyuta/kaoiro/issues/674). The director approved the design after eight independent design review rounds (six must-fix findings in total, none remaining). This amendment records the accepted decision; final implementation acceptance and independent implementation review are pending. Landing remains default off, and production enablement requires a separate operator decision.

@@ -2,7 +2,7 @@
 title: Default-on in-flight delivery with a per-agent opt-out
 description: Design for making in-flight delivery the default on every engine, with a revisioned per-agent opt-out stored on the server and switchable from the dashboard at launch and live.
 status: approved
-last_updated: 2026-10-20
+last_updated: 2026-11-05
 ---
 
 # Default-on in-flight delivery with a per-agent opt-out
@@ -71,7 +71,22 @@ U1 preparation, unknown origins, reset failures and same-native code rollback.
 The U2 candidate and C4C must both be reviewed and checked before their adjacent
 landings, with no unrelated landing or standalone release between them.
 
-## Current state (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
+## C4C implementation boundary
+
+[Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) removes Claude's
+legacy opt-in gate. Omitted, false and persona-excluding old inputs all leave
+fold/yield supported under a true ceiling; the live policy still fences final
+acceptance. Runner warnings replace the old relay and shadow warnings; direct
+wrappers warn independently. Managed child environments strip both variables.
+No stored row is rewritten. Preserve old-runner persona-override wire decoding
+and size preflight even though the current runner no longer produces overrides.
+The [rollback window](../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement)
+retains old settings for W1 recovery, and C5 waits for a released warning version.
+The [W1 parent observation](../evidence/issue-463/2026-11-05-c4c-parent-declaration.md)
+records the historical declaration used by compatibility tests; those tests do
+not build a second wrapper revision. C4B U2 and C4C remain adjacent.
+
+## Design baseline (develop `0bfede23`, re-checked at `867696cb`; production decision E3)
 
 Source defaults and configured production behavior are separate:
 

@@ -27,6 +27,28 @@ an already-running deployment to a new version.
 > release-profile automation for it. Automation does not remove the [4.1](../architecture/deployment.md#build-and-restart-boundaries)
 > limits by itself — they remain until their own resolving condition is met.
 
+### Claude delivery opt-in retirement
+
+[Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) retires the Claude
+phase-2 flag, persona list and file-key gates. Inventory each affected runner's
+file and actual environment, direct launches, ceiling/default and stored
+per-agent policy before deployment. Unknown inventory stops that host.
+To preserve disabled delivery, verify a false ceiling for subsequent launches
+or stored off for the live fence. Stored off with negotiated mechanisms keeps
+operator-priority roots; a false ceiling preserves FIFO scheduling.
+
+Retain the old enabling settings and their inventoried values through the
+C4C rollback window, even though warnings say they have no effect on W2.
+A rollback preserves W1 behavior only when its runner/relay is restored too
+and its old input remains effective. Remove old settings only after that
+window and at least one released version with warnings, coordinated with C5.
+
+A C4C-only rollback restores W1 wrapper/runner code atop C4B U2. Reverting U2
+as well is a separate rollback requiring its [Codex backend preparation](codex-backend-switch.md#backend-selection-and-code-rollback).
+An old server cannot supply new policy revisions: a same-process last off
+survives rejoin, but a wrapper restart loses that memory. These are compatibility
+limits, not authorization for production rollback or deployment.
+
 ## 3. Connectivity checks
 
 1. server: verify with `docker compose ps`; open the dashboard at
