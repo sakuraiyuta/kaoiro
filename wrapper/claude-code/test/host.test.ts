@@ -10624,22 +10624,26 @@ describe("reserved resume receipt", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it.each(["drain", "duplicate", "timeout", "close", "expire"])("waits separately for an unread terminal: %s", async action => {
+  it.each(["drain", "duplicate", "timeout", "close", "expire", "late", "fold"])("waits separately for an unread terminal: %s", async action => {
     vi.useFakeTimers(); let now=0;
     try {
       const r=await exercise(async function* ({host,hook,input}) {
         await hook("N","native work"); await host.send("after");
         let ready=false; const next=input.next().then(x=>{ready=true;return x;});
-        const pending=action==="duplicate" ? Promise.all([hook("note"),hook("note")]) : hook("note");
+        const pending=action==="duplicate" ? Promise.all([hook("note"),hook("note")]) : hook(action==="fold" ? "N" : "note");
         expect(host.activeInterAgentTurnToken()).toBeNull(); expect(ready).toBe(false);
-        if(action==="timeout") await vi.advanceTimersByTimeAsync(5_000);
+        if(action==="timeout") {await vi.advanceTimersByTimeAsync(5_000);expect(host.state).toBe("error");}
+        else if(action==="fold") {await vi.advanceTimersByTimeAsync(0);expect(host.state).toBe("error");}
         else if(action==="close") host.close();
         else if(action==="expire") {now=10_000;host.tickPendingReceiptRootTimeout();}
-        else yield result("success",{origin:{kind:"task-notification"}});
+        else {if(action==="late") now=10_000;yield result("success",{origin:{kind:"task-notification"}});}
+        await vi.advanceTimersByTimeAsync(0);
+        if(action==="drain" || action==="duplicate") expect(host.activeInterAgentTurnToken()).not.toBeNull();
         await pending;
         if(action==="drain" || action==="duplicate") {
           expect(host.activeInterAgentTurnToken()).not.toBeNull(); expect(ready).toBe(false);
-          yield result("success"); expect((await next).value!.message.content).toBe("after"); yield result("success");
+          yield result("success"); await vi.advanceTimersByTimeAsync(0); expect(ready).toBe(true);
+          expect((await next).value!.message.content).toBe("after"); yield result("success");
         } else if(action==="close") expect(host.state).not.toBe("error"); else expect(host.state).toBe("error");
       },{nowMs:()=>now,resumeReceiptMaxWaitMs:10_000});
       expect(r.events.filter(e=>e.event==="admitted_root")).toHaveLength(["drain","duplicate"].includes(action)?1:0);
