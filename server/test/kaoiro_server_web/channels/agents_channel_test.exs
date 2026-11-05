@@ -44,12 +44,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     Application.put_env(:kaoiro_server, :persona_dir, tmp)
     Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
     PersonaPackFixture.write!(tmp, "a.zip", "a", "shared")
-    PersonaPackFixture.write!(tmp, "b.zip", "b", "shared")
+    PersonaPackFixture.write!(tmp, "b.zip", String.duplicate("b", 600), "shared", name: "B")
+    PersonaPackFixture.write!(tmp, "c.zip", "c", "shared")
     assert :ok = PersonaAssets.rebuild()
     operator = join_as(:operator)
     assert_push("hosts", %{"hosts" => _, "ingest_warnings" => [warning]})
     assert warning =~ "keep a (a.zip)"
-    assert warning =~ "exclude b (b.zip)"
+    assert warning =~ "exclude " <> String.duplicate("b", 100)
+    assert String.ends_with?(warning, " …")
+    assert String.length(warning) <= 514
     Process.unlink(operator.channel_pid)
     assert_reply leave(operator), :ok
     _viewer = join_as(:viewer)

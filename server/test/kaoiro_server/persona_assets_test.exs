@@ -592,8 +592,13 @@ defmodule KaoiroServer.PersonaAssetsTest do
 
     %{"personas" => personas} = PersonaAssets.manifest()
     assert Map.keys(personas) == ["dup"]
-    # Sorted zip listing means the first-alphabetical (`aa-`) wins.
-    assert PersonaAssets.prompt("dup") =~ "first"
+
+    hashes =
+      for name <- ~w(aa-1.0.0 zz-2.0.0),
+          do: :crypto.hash(:sha256, File.read!(Path.join(tmp, name <> ".zip")))
+
+    expected = if Enum.at(hashes, 0) < Enum.at(hashes, 1), do: "first", else: "second"
+    assert PersonaAssets.prompt("dup") =~ expected
   end
 
   test "fetch_file はマニフェスト掲載ファイルのみ解決する", %{tmp_dir: tmp} do

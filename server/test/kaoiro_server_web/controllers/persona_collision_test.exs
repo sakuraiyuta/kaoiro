@@ -39,7 +39,7 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
     assert :ok = PersonaAssets.rebuild()
     assert PersonaAssets.known_persona?("b")
     a = PersonaPackFixture.write!(dir, "a.zip", "a", "shared", name: "A")
-    PersonaPackFixture.write!(dir, "zz.zip", "a", "duplicate-id", name: "duplicate")
+    PersonaPackFixture.write!(dir, "zz.zip", "a", "zz-duplicate-id", name: "duplicate")
     PersonaPackFixture.write!(dir, "c.zip", "c", "shared", name: "C", source: "fuji-1.0.2.zip")
     PersonaPackFixture.write!(dir, "bad.zip", "bad", "default")
     PersonaPackFixture.write!(dir, "other.zip", "other", "other")
@@ -54,7 +54,7 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
                {"A", true, 404}
 
       refute Map.has_key?(manifest["personas"], "default")
-      refute Map.has_key?(manifest["personas"], "duplicate-id")
+      refute Map.has_key?(manifest["personas"], "zz-duplicate-id")
       assert PersonaAssets.known_persona?("a")
       refute PersonaAssets.known_persona?("b")
       refute PersonaAssets.known_persona?("c")
@@ -83,5 +83,35 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
 
     assert get(conn, "/personas/shared/idle.png").resp_body == b.idle
     assert PersonaAssets.known_persona?("b")
+  end
+
+  @tag :tmp_dir
+  test "duplicate IDs and sprite sets do not depend on ZIP names", %{tmp_dir: tmp} do
+    old_dir = Application.get_env(:kaoiro_server, :persona_dir)
+    old_cache = Application.get_env(:kaoiro_server, :persona_cache_dir)
+
+    on_exit(fn ->
+      if old_dir,
+        do: Application.put_env(:kaoiro_server, :persona_dir, old_dir),
+        else: Application.delete_env(:kaoiro_server, :persona_dir)
+
+      if old_cache,
+        do: Application.put_env(:kaoiro_server, :persona_cache_dir, old_cache),
+        else: Application.delete_env(:kaoiro_server, :persona_cache_dir)
+
+      PersonaAssets.rebuild()
+    end)
+
+    Application.put_env(:kaoiro_server, :persona_dir, tmp)
+    Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
+    PersonaPackFixture.write!(tmp, "a.zip", "a", "s")
+    PersonaPackFixture.write!(tmp, "x.zip", "b", "s")
+    PersonaPackFixture.write!(tmp, "y.zip", "b", "t")
+    assert :ok = PersonaAssets.rebuild()
+    refute PersonaAssets.known_persona?("b")
+    File.rename!(Path.join(tmp, "x.zip"), Path.join(tmp, "zz.zip"))
+    assert :ok = PersonaAssets.rebuild()
+    refute PersonaAssets.known_persona?("b")
+    assert PersonaAssets.known_persona?("a")
   end
 end

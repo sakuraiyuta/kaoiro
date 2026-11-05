@@ -2095,24 +2095,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp hosts_payload(hosts) when is_map(hosts) do
     warnings = PersonaAssets.ingest_warnings()
 
-    static = %{
-      "hosts" => %{},
-      "hosts_incomplete" => true,
-      "ingest_warnings" => [],
-      "ingest_warnings_incomplete" => true
-    }
+    summary =
+      case warnings do
+        [] ->
+          []
 
-    warning_budget = TransportLimits.push_payload_budget("agents:lobby", "hosts", static)
-    projected_warnings = TransportLimits.bounded_list(warnings, warning_budget)
-    static = Map.put(static, "ingest_warnings", projected_warnings)
-    projected_hosts = bounded_push_map("hosts", hosts, static)
+        [first | rest] ->
+          [
+            String.slice(first, 0, 512) <>
+              if(rest != [] or String.length(first) > 512, do: " …", else: "")
+          ]
+      end
+
+    static = %{"hosts" => %{}, "hosts_incomplete" => true, "ingest_warnings" => summary}
 
     static
-    |> Map.put("hosts", projected_hosts)
-    |> maybe_drop_incomplete("hosts_incomplete", map_size(projected_hosts) < map_size(hosts))
-    |> maybe_drop_incomplete(
-      "ingest_warnings_incomplete",
-      length(projected_warnings) < length(warnings)
+    |> Map.put("hosts", bounded_push_map("hosts", hosts, static))
+    |> then(
+      &maybe_drop_incomplete(&1, "hosts_incomplete", map_size(&1["hosts"]) < map_size(hosts))
     )
   end
 

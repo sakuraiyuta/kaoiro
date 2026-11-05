@@ -430,7 +430,12 @@ defmodule KaoiroServer.PersonaAssets do
         {:error, reason}
 
       {packs, rejected} ->
-        {packs, collisions} = packs |> drop_duplicate_ids() |> resolve_sprite_sets()
+        {packs, collisions} =
+          packs
+          |> Enum.sort_by(&{&1.manifest["id"], &1.manifest["sprite_set"], &1.content_hash})
+          |> drop_duplicate_ids()
+          |> resolve_sprite_sets()
+
         {:ok, assemble(packs, cache_dir, rejected ++ collisions)}
     end
   end
@@ -524,6 +529,7 @@ defmodule KaoiroServer.PersonaAssets do
          {:ok, sprites} <- collect_sprites(extracted_dir, manifest) do
       %{
         cache_key: hash,
+        content_hash: full_hash,
         source: Path.basename(zip_path),
         manifest: manifest,
         personality: personality,
@@ -2306,9 +2312,7 @@ defmodule KaoiroServer.PersonaAssets do
     Enum.uniq(@required_states ++ Enum.filter(states, &(&1 in @optional_states)))
   end
 
-  # First-writer-wins on duplicate manifest.id (docs/reference/personas/pack-format.md
-  # MUST). Deterministic thanks to the sorted zip listing so the winner
-  # is stable across restarts.
+  # Callers order duplicate IDs by set and content before this selection.
   defp drop_duplicate_ids(packs) do
     {kept, _seen} =
       Enum.reduce(packs, {[], MapSet.new()}, fn pack, {kept, seen} ->

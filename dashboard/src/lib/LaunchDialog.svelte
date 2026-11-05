@@ -623,7 +623,7 @@
       {#if ingestWarnings === null}
         <p class="hint" role="status">pack の診断情報は未対応または未確認です。</p>
       {:else if ingestWarnings.length > 0}
-        <p class="hint" role="status">{ingestWarnings.join("; ")}。衝突を解消し server を再起動後、画面を再読込してください。</p>
+        <p class="hint" role="status">{ingestWarnings.join("; ")}。設定を修正し server を再起動後、画面を再読込してください。</p>
       {/if}
 
       <label>

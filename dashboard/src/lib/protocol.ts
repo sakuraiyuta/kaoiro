@@ -5108,9 +5108,9 @@ export function connectKaoiro(
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  bindServerEvent(c, "hosts", (payload: { hosts?: unknown; hosts_incomplete?: unknown; ingest_warnings?: unknown; ingest_warnings_incomplete?: unknown }) => {
+  bindServerEvent(c, "hosts", (payload: { hosts?: unknown; hosts_incomplete?: unknown; ingest_warnings?: unknown }) => {
     const warnings = Array.isArray(payload.ingest_warnings) && payload.ingest_warnings.every(w => typeof w === "string")
-      ? [...payload.ingest_warnings, ...(payload.ingest_warnings_incomplete === true ? ["警告の一部を表示できません"] : [])]
+      ? payload.ingest_warnings
       : null;
     handlers.onHosts?.(parseHosts(payload.hosts), payload.hosts_incomplete === true, warnings);
   });

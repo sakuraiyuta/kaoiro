@@ -49,7 +49,6 @@ is the source of truth.
 | `name` | string | Required | Proper name of the persona defined by the pack (Japanese permitted; canonical—issue #209 D19). 1–64 grapheme clusters and at most 256 UTF-8 bytes; control characters prohibited (same domain as agent `display_name`, D24). |
 | `sprite_set` | string | Required | Sprite-set identifier. Usually identical to `id`. 1–256 characters. `default` is reserved for the sprite-less persona and must not be used by imported packs; see [Default persona](../../specs/personas.md#default-persona-plain-ai). |
 
-Each accepted pack must have a distinct `sprite_set`. For collisions, the server retains the pack with the first persona ID in ASCII byte order and excludes the others, including their prompts and images. A newly added ID can displace an existing pack; duplicate IDs are resolved first by ZIP filename. Operators see the set, selected and excluded IDs and ZIP names in the launch dialog. Remove the conflict, restart the server and reload the dashboard; a restart discards in-memory inter-agent conversations. A missing diagnostic from an older server does not mean there are no conflicts.
 | `version` | string | Required | Semver (for example, `1.0.0`). The author bumps it each time they update the pack. |
 | `license` | string | Required | License identifier (SPDX-compliant recommended; for example, `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`). AI-generated works may not have copyright, so confirm that the license label matches reality. Separately confirm how far the model's terms extend to Outputs. |
 | `min_kaoiro_version` | string | Required | Lower semver bound of the server version needed to operate. The server rejects import if it is lower. |
@@ -57,6 +56,8 @@ Each accepted pack must have a distinct `sprite_set`. For collisions, the server
 | `description` | string | Optional | One-line pack description, shown in the display UI. |
 | `author` | string | Optional | Author name. |
 | `homepage` | string | Optional | Source-project URL. |
+
+Each accepted pack must have a distinct `sprite_set`. For collisions, the server retains the pack with the first persona ID in ASCII byte order and excludes the others, including their prompts and images. A newly added ID can displace an existing pack; duplicate IDs are resolved first by sprite-set byte order and then by content hash. The launch dialog shows the first warning, including the set, selected and excluded IDs and ZIP names when they fit; an ellipsis marks omitted text or additional warnings. Remove the conflict, restart the server and reload the dashboard; a restart discards in-memory inter-agent conversations. A missing diagnostic from an older server does not mean there are no conflicts.
 
 Required `states` values (all seven; order is irrelevant):
 

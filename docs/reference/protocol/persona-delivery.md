@@ -89,6 +89,8 @@ Asset layout and format are defined by [personas](../../specs/personas.md); the 
 - **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
   additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md) F6). Until [issue 970](https://github.com/sakuraiyuta/kaoiro/issues/970) is resolved, restart the server and reload the dashboard after changing packs.
 
+Operator-only `hosts` pushes include `ingest_warnings` alongside `hosts`; absence means diagnostics are unknown on older servers. At most one bounded warning is shown; an ellipsis indicates omitted text or additional warnings. Diagnostics are independent of the sprite manifest version.
+
 ## Personality prompt delivery (ADR-0029)
 
 Under [ADR-0029](../../adr/0029-persona-server-sot-and-pack-distribution.md), the personality
@@ -185,5 +187,3 @@ full topic index.
 - [Personality-prompt injection by engine](../engines/personality-injection.md).
 - [Personality configuration](../configuration/personality.md).
 - [Personality-prompt injection (design)](../../architecture/personality-injection.md).
-
-Operator-only `hosts` pushes include `ingest_warnings` alongside `hosts`; absent means diagnostics are unknown on older servers, not that no conflict exists. The launch dialog shows conflicts after a reconnect. An `ingest_warnings_incomplete` marker signals truncation; warnings are independent of the sprite manifest version.

@@ -945,6 +945,7 @@
           // Reset here so only a genuine operator-capable rejoin (which
           // DOES get a fresh "hosts" push) re-raises the flag.
           hosts = [];
+          ingestWarnings = null;
           isOperator = false;
           // issue 482: a rejoin brings its own snapshot; nothing held belongs
           // to it, and a downgraded role must not keep the operator's setting.
@@ -1589,6 +1590,7 @@
     // Hide the launch UI until the next connection re-announces hosts; a
     // revoked/expired session must not keep the operator affordance.
     hosts = [];
+    ingestWarnings = null;
     isOperator = false;
     policyStore.reset();
     showLaunch = false;

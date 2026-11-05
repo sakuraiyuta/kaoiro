@@ -237,8 +237,11 @@ defmodule KaoiroServerWeb.PersonaDeliveryTest do
       state(a, id, "default", value)
       scope = synthetic_scope("custom-default-set", "default")
       assert PersonaDelivery.manifest(scope) == before
+
+      assert {:ok, _} =
+               PersonaDelivery.fetch_file(%{scope | allowed: :all}, "default", "idle.png")
+
       assert PersonaDelivery.fetch_file(scope, "default", "idle.png") == :error
-      denied_images(session, "default")
     end
 
     assert get(build_conn(), "/personas/default/idle.png").status == 401
