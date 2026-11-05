@@ -1,7 +1,7 @@
 ---
 title: "Codex home for production"
 status: implemented
-last_updated: 2026-10-01
+last_updated: 2026-11-05
 ---
 
 # Codex home for production
@@ -99,9 +99,8 @@ resolve any stale entry through the authorized
 [external-daemon procedure](runner-update-and-rollback.md#external-codex-daemons-and-their-home-entries).
 Every pin update requires the candidate classifier's pre-stop check; see
 [Codex state backup](runner-update-and-rollback.md#codex-state-backup).
-After an interrupted or refused operation, the
-[recovery table](runner-update-and-rollback.md#recovery-table) lists what
-each command does in each phase.
+After an interrupted or refused operation, follow the printed `next` lines
+and the [recovery guidance](runner-update-and-rollback.md#recovery-table).
 
 ### Hooks
 

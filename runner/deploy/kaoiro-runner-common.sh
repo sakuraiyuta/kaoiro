@@ -94,6 +94,7 @@ kaoiro_lock_acquire() {
 # records and locks, so the hint names the command to run once the lock is gone.
 kaoiro_codex_lock_acquire() {
   (kaoiro_lock_acquire "$1") && return 0
+  printf '%s: Preserve named home, snapshot, staging and aside objects; do not remove a lock until you have inspected it (see the recovery entry).\n' "$prog" >&2
   kaoiro_codex_state next "$2" >&2 || true
   exit 75
 }

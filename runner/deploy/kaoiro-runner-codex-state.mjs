@@ -8,7 +8,7 @@ import { nativeIdentity } from "./codex-native.mjs";
 import { verifyRelease } from "./verify-release.mjs";
 import { CREDENTIALS, assertNoExternalDaemon, atomicJSON, capacity, digest, durableRename, hasEntry, identity, inside, inventory, must, prepareRestore, sameState, snapshot, stateEntries, syncDirectory, verifySnapshot } from "./codex-snapshot.mjs";
 import { assertStopped, captureBinding, checkBinding, homePath, requireCgroupV2, runnerActivity, staticBinding, systemctl } from "./codex-service.mjs";
-import { ANCHORS, PHASES, classify, render, rowLines } from "./codex-state-recovery.mjs";
+import { ANCHORS, PHASES, rowLines } from "./codex-state-recovery.mjs";
 
 export const CODEX_STATE_SCHEMA = 2;
 const ID = /^(?:[a-f0-9]{40}(?:-dirty)?|unknown)$/;
@@ -494,7 +494,7 @@ function protectedReleases(root) {
   return [...ids].join("\n");
 }
 const ACTIONS = ["guard", "preflight", "prepare", "prepare-restore", "restore-target", "run", "resume", "recover", "prune", "promote", "inspect", "inventory", "summary", "target", "protected", "classify", "next"];
-const RUNS = ["run", "resume", "recover"];
+const SAFETY = "Preserve named home, snapshot, staging and aside objects; do not remove a lock until you have inspected it (see the recovery entry).";
 const context = root => ({ root, deploy, interpreter: process.execPath });
 // Read-only: takes no lock and writes nothing. Records are published by
 // atomic rename and temporary names are filtered, so a paused worker's
@@ -514,8 +514,8 @@ function next(root, uuid) {
 function nextAction(root, uuid) {
   try { console.log(next(root, uuid).join("\n")); }
   catch (error) {
-    if (classify(error.message) !== "cutover") throw error; // codex-recovery-rethrow: next-read
-    for (const line of [error.message, ...render("cutover")]) console.log(line);
+    if (!error.message.startsWith("Resolve old Codex state records with the previous tool release: ")) throw error; // codex-recovery-rethrow: next-read
+    for (const line of [error.message, `see: ${ANCHORS.cutover}`]) console.log(line);
   }
 }
 async function main(argv) {
@@ -544,11 +544,11 @@ async function main(argv) {
 // The hint is advice printed after the refusal has been decided, so a failure
 // to read the record or render it only drops lines.
 function report(error, [action, rootArg, ...args]) {
-  const message = String(error?.message ?? error), cls = classify(message), lines = [message];
+  const message = String(error?.message ?? error), lines = [message];
   // Inside a run's switch the run itself renders the hint for the state it
   // leaves; a hint from here would describe the record before that run settles.
   if (process.env.KAOIRO_CODEX_NESTED === "1") { console.error(`codex-state: ${message}`); return; }
-  let root, tx, held = [];
+  let root, tx;
   try { root = realpathSync(rootArg); } catch { /* no record to name */ }
   const candidates = [message.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)?.[0], ["guard", "preflight"].includes(action) ? args[1] : args[0]];
   // A restore selects its record by snapshot path.
@@ -557,8 +557,11 @@ function report(error, [action, rootArg, ...args]) {
     if (tx || !root || !UUID.test(uuid || "")) continue;
     try { tx = selected(root, uuid); } catch { /* not a record of this root */ }
   }
-  if (cls === "lock" && root) try { held = next(root); } catch { /* records unreadable */ }
-  try { lines.push(...render(cls, { message, tx, row: RUNS.includes(action), report: held, ...context(root) })); } catch { /* unrenderable record */ }
+  try { if (tx) lines.push(...rowLines(tx, context(root))); } catch { /* unrenderable record */ }
+  lines.push(SAFETY, `see: ${ANCHORS.table}`);
+  if (message.startsWith("CODEX_EXTERNAL_DAEMON_")) {
+    lines.push("stop external same-home writers and resolve runtime entries before retrying; never remove a held lock", `see: ${ANCHORS.backup}`);
+  }
   for (const line of lines) console.error(`codex-state: ${line}`);
 }
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(import.meta.filename)) {

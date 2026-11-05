@@ -8,7 +8,10 @@ import { pathToFileURL } from "node:url";
 import { createStateFixture, interruptStateWorker, type StateFixture } from "./codexStateFixture.js";
 import { makeReleaseTarball, revisionOf } from "./releaseFixture.js";
 
-export const recovery: any = await import(pathToFileURL(join(import.meta.dirname, "../deploy/codex-state-recovery.mjs")).href);
+const runtime: any = await import(pathToFileURL(join(import.meta.dirname, "../deploy/codex-state-recovery.mjs")).href);
+const cases = JSON.parse(readFileSync(join(import.meta.dirname, "codexStateRecoveryCases.json"), "utf8"));
+const keyPattern = (key: string) => new RegExp(`^${key.split("${}").map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s\\S]*")}$`);
+export const recovery: any = { ...runtime, branches: () => cases.branches, GUARDS: cases.GUARDS, SERVICE_OPS: { untouched: [], stop: ["stop"], start: ["start"], "stop-start": ["stop", "start"] }, keyPattern };
 const TOOL = revisionOf("n3-recovery-tool");
 const TERMINAL = ["completed", "failed", "restored"];
 const CREDENTIALS = ["auth.json", ".credentials.json", "secrets", "mcp-oauth-locks"];
@@ -399,14 +402,13 @@ export async function drive(label: string, c: Run, extra: { prepare?: (c: Run) =
     if (messages.length) expect(messages.some(m => recovery.keyPattern("${}" + m + "${}").test(r.stderr)), out).toBe(true);
     const injected = extra.injected ?? recipe.injected;
     if (injected) expect(r.stderr, out).toContain(injected);
-    const cls = decl.class;
-    if (cls && !recipe.shell) {
+    if (r.status !== 0) expect(r.stderr, out).toContain("Preserve named home, snapshot, staging and aside objects; do not remove a lock until you have inspected it (see the recovery entry).");
+    if (r.status !== 0 && after && ["RES", "REC", "PRN"].includes(cmd) && !existsSync(join(h.root, "codex-state/transactions/old.json"))) {
       const record = messages[0]?.startsWith("Unresolved") ? h.records().find((x: any) => r.stderr.includes(`requires recovery: ${x.uuid}`)) : after;
-      for (const l of recovery.render(recipe.nested ? "unclassified" : cls, { tx: record, ...context(h) })) expect(r.stderr, out).toContain(`codex-state: ${l}`);
+      expect(record, out).toBeDefined();
+      for (const entry of recovery.rowLines(record, context(h))) expect(r.stderr, out).toContain(entry);
     }
-    // A settled record is not resumed by rerunning the same command.
-    if (after && TERMINAL.includes(after.phase)) expect(r.stderr, out).not.toContain(recovery.render("transient")[0]);
-    if (cls === "lock" && recipe.shell) { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
+    if (recipe.shell && decl.class === "lock") { expect(r.stderr, out).toContain(`see: ${recovery.ANCHORS.lock}`); if (before && !TERMINAL.includes(before.phase)) expect(r.stderr, out).toContain(`${c.uuid} ${before.phase}`); }
     if (recipe.context) {
       const queries = readFileSync(join(h.dir, "queries"), "utf8").trim().split("\n");
       expect(queries.slice(0, recipe.context.length), `${out}\nsite context`).toEqual(recipe.context);

@@ -146,6 +146,15 @@ describe.skipIf(process.platform !== "linux")("records and cutover", { timeout: 
     const before=readFileSync(path);const r=h.forward();expect(r.status).not.toBe(0);expect(r.stderr).toContain("previous tool release");expect(h.callLog()).toBe("");expect(readFileSync(path)).toEqual(before);expect(existsSync(join(h.root,"codex-state/v2"))).toBe(false);
     expect(h.state("protected",h.root).status).not.toBe(0);ok(h.state("inventory",h.root));
   });
+  it("prints old-record guidance from next without changing state",()=>{
+    const dir=join(h.root,"codex-state/transactions");mkdirSync(dir,{recursive:true,mode:0o700});const path=join(dir,"old.json");writeFileSync(path,JSON.stringify({schema:1,phase:"prepared"}),{mode:0o600});
+    const before=readFileSync(path), r=h.state("next",h.root);ok(r);expect(r.stdout).toContain("Resolve old Codex state records with the previous tool release:");expect(r.stdout).toContain("#old-records-and-barriers");expect(readFileSync(path)).toEqual(before);
+    const protectedResult=h.state("protected",h.root);expect(protectedResult.status).not.toBe(0);expect(protectedResult.stdout.trim()).toBe("");expect(protectedResult.stderr).toContain("previous tool release");
+  });
+  it("keeps other next errors as refusals",()=>{
+    ok(h.forward());const record=tx();record.schema=3;rewrite(record);
+    const r=h.state("next",h.root);expect(r.status).not.toBe(0);expect(r.stderr).toContain("Preserve named home, snapshot, staging and aside objects");expect(r.stdout).not.toContain("previous tool release");
+  });
   it.each([false,null,"yes"])("refuses old unretired backup %s", retired=>{
     const dir=join(h.root,"codex-state/backups");mkdirSync(dir,{recursive:true,mode:0o700});writeFileSync(join(dir,"old.json"),JSON.stringify({retired}),{mode:0o600});
     expect(h.forward().status).not.toBe(0);expect(h.callLog()).toBe("");
