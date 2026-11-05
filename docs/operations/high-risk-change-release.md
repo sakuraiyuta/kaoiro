@@ -137,8 +137,9 @@ of another engine, only as described in B5.
 ## 3. Production-shape start
 
 A change that answers yes to FS is not complete until the start shim and its
-verifier have started once in the **shape production runs**, on **production's own config, env and
-Node**, in an environment that carries **no inherited settings**. Issue #249
+verifier have started once in the **shape production runs**, on **production's
+own config, env and Node**, in an environment that carries **no inherited
+settings**. Issue #249
 shipped because the test fixtures only built the shape of a built release while
 production ran from a repo checkout.
 
@@ -358,8 +359,9 @@ Node. What it does not cover:
    [build identity](build-identity-and-release-tags.md#coordinated-production-builds)
    and the [connectivity checks](server-update-and-rollback.md#3-connectivity-checks).
    If the update, identity or connectivity check fails, stop before restoring
-   and use the prepared rollback procedure. If rollback is refused or the state
-   is uncertain, stop and preserve the records and snapshots for diagnosis.
+   and use the prepared [rollback procedure](runner-update-and-rollback.md#463-rollback).
+   If rollback is refused or the state is uncertain, stop and preserve the
+   records and snapshots for diagnosis.
 5. Before bulk restore, inspect the offline list and confirmation count and
    decide how to handle any entry that should not be restored. Bulk restore
    sends a restore request for every offline entry and has no exclusion option.
@@ -382,11 +384,17 @@ not mark that engine verified, or assume other engines are healthy. There is no
 staged turn check: a defect in wrapper spawn, registration, native authentication
 or turn lifecycle can affect multiple restored peers before it is observed.
 The start gate and connectivity checks do not prove a model turn completed.
+Bulk restore requests restoration of existing offline entries; it does not
+exercise the ordinary path for spawning a brand-new agent, so a defect there
+can remain undetected until the first new spawn.
 
 A Codex pin change may require the state-aware steps in
 [Codex state backup](runner-update-and-rollback.md#codex-state-backup). A restore
 can discard post-snapshot conversations from every affected restored Codex peer;
-preserve the snapshot and quarantine/aside trees under that procedure.
+preserve the snapshot and quarantine/aside trees under that procedure. Before
+rollback, check how to handle shared state written by restored peers, including
+the Claude home, Codex home and state, and Antigravity session index, using
+the information prepared in B2 and B3.
 
 ## 5. When every agent has stopped
 
