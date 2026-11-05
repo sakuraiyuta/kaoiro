@@ -15,7 +15,6 @@ export const OPERATION = Object.freeze({
   RECORD_CLOSE: "record-close",
   NON_DESTRUCTIVE: "non-destructive",
   DESTRUCTIVE: "destructive",
-  DESTRUCTIVE_RESUME: "destructive-resume",
   REFUSE: "refuse",
 });
 
@@ -28,7 +27,6 @@ export const CONDITION = Object.freeze({
 });
 
 const CLOSED = "closed";
-const DEFERRED_L1B = "deferred(L1b)";
 const BUILD_PREPARED_GUIDANCE = "If an existing-store path mismatch caused the refusal, this CLI has no forward migration path for a store outside the state volume. Copying cannot unblock this transaction or a new update. Use the non-destructive rollback and see docs/operations/server-update-and-rollback.md 4.3 (5-b).";
 
 const entry = (command, operation, { condition = null, closure = CLOSED, note = null } = {}) =>
@@ -44,9 +42,8 @@ const nonDestructiveRollback = [
 const updateRefused = (note) => entry("update", OPERATION.REFUSE, { note });
 const midRollback = [
   updateRefused("a rollback is in progress for this transaction"),
-  entry("rollback", OPERATION.DESTRUCTIVE_RESUME, {
-    closure: DEFERRED_L1B,
-    note: "resuming a rollback that stopped part-way is not supported yet; follow docs/operations/server-update-and-rollback.md 4.4 (3a)",
+  entry("rollback", OPERATION.REFUSE, {
+    note: "a rollback that stopped part-way cannot be resumed; follow docs/operations/server-update-and-rollback.md 4.4 (3a)",
   }),
 ];
 
