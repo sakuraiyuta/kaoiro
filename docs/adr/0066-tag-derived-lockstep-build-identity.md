@@ -1,10 +1,11 @@
 ---
 title: Derive lockstep build identity from immutable landing tags
-status: accepted
+status: partly superseded
+last_updated: 2026-11-05
 date: 2026-10-09
 opened: 2026-10-09
 supersedes: [56]
-superseded_by: null
+superseded_by: 69
 related_specs: [deployment, protocol]
 related_adrs: [18, 53]
 ---

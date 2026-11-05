@@ -1,10 +1,13 @@
 ---
 title: N3 — runner recovery table, hint rendering and property test
-status: in-progress
-last_updated: 2026-10-25
+status: implemented
+last_updated: 2026-11-05
 ---
 
 # N3 — runner recovery table, hint rendering and property test
+
+Follow-up (2026-11-05): Unit B removed the Codex recovery table; see the
+[v2026.11.05.1 release note](../release/v2026.11.05.1.md).
 
 Unit N3 of [issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709)
 ([parent plan](issue-709-release-reduction.md), sections 5, 7, 8 D4 and
@@ -525,10 +528,10 @@ text.
 | helper `withLock()` L113 | free text | `lock` |
 | helper L51 old record | path and runbook file | `cutover` |
 | helper L337 and L465 warnings | free text | `failed` / `terminal` rendering |
-| updater L275–L278 lock-held | `<uuid>` placeholder | `lock`; `next <root> || true`, so the exit stays 75 |
+| updater L275–L278 lock-held | `<uuid>` placeholder | `lock`; `next <root> \|\| true`, so the exit stays 75 |
 | updater L393 `target` and L395 build-format preflight | no message (L393), or fixed text after a published record (L395) | `next <root> <uuid>` for the published record (r1 should 2) |
 | updater L388, L391 (prepare failed, no record), L400 (no record), L446, L448 | fixed text | `see:` anchors |
-| `common.sh` `kaoiro_lock_acquire` L85–L89, reached by the switch, install and updater links lock | "remove a stale lock dir" | `lock` wording with the anchor; callers holding a Codex root also run `next <root> || true` |
+| `common.sh` `kaoiro_lock_acquire` L85–L89, reached by the switch, install and updater links lock | "remove a stale lock dir" | `lock` wording with the anchor; callers holding a Codex root also run `next <root> \|\| true` |
 | switch L164, L217; install L205, L207 | fixed text | `see:` anchors; L164 runs `next <root>` when `--codex-transaction` was given |
 
 ### 5.3 `next`
@@ -707,4 +710,3 @@ against the code while writing the recipes.
 | Implementation review r1 S2 | The `transient` advice to rerun is rendered only while the record is unfinished | After a settle the record is `failed`, and its resume is a no-op |
 | Implementation review r1 S1 | G5 recipes inject a one-shot transitional read (`window(n, n)`) | With an open window, a neutralised site was covered by the next G5 site with the same message |
 | Implementation review r1 N2 | `next` prints the stale-lock anchor after the `lock present:` lines | An operator reading only `next` gets the procedure before removing a lock |
-

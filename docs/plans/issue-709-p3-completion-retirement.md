@@ -1,7 +1,13 @@
+---
+title: "P3: retire completion and enrollment"
+status: implemented
+last_updated: 2026-11-05
+---
+
 # P3: retire completion and enrollment
 
-Status: proposed; design review r2. Implementation classification: L (server
-and runner launch paths, shared safety checks and CLI/record consumers).
+Implementation classification: L (server and runner launch paths, shared
+safety checks and CLI/record consumers).
 Source baseline: `2d3040de0b5213a622df6b5c75f64ba49325f1d3`.
 Parent: [release reduction](issue-709-release-reduction.md), sections 3.4–3.6
 and P3 in section 7. This document authorizes no production operation.
@@ -23,9 +29,11 @@ consumer here, but its export and implementation retire in N2.
 
 P1 is present at this baseline. The director reports C1 and C2 complete; this
 design does not independently establish production enrollment or tag rules.
-P3 implementation lands only after P2, issue #695 L1b/L4/L5, and issues
-#711 then #713. Issue #711 owns the child-environment CI step; #713 lands
-on #711. P3 keeps their resulting child-process protections and CI wiring,
+P3 implementation landed after P2, [issue #695](https://github.com/sakuraiyuta/kaoiro/issues/695)
+L1b/L4/L5, and issues [#711](https://github.com/sakuraiyuta/kaoiro/issues/711)
+then [#713](https://github.com/sakuraiyuta/kaoiro/issues/713). [#711](https://github.com/sakuraiyuta/kaoiro/issues/711)
+owns the child-environment CI step; [#713](https://github.com/sakuraiyuta/kaoiro/issues/713)
+lands on [#711](https://github.com/sakuraiyuta/kaoiro/issues/711). P3 keeps their resulting child-process protections and CI wiring,
 then recalculates its reduced scope/call counts on that integrated tree.
 If the director changes this order, the later change must reconcile these
 files and return the changed design for review before landing. Use their

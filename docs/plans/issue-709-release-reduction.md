@@ -1,7 +1,7 @@
 ---
 title: Reduce release publication and native Codex state protection
-status: proposed
-last_updated: 2026-10-22
+status: accepted
+last_updated: 2026-11-05
 ---
 
 # Reduce release publication and native Codex state protection
@@ -12,17 +12,17 @@ Decision record: [ADR-0069](../adr/0069-reduce-release-publication-and-native-st
 Base of the analysis: `a51a64ca5200198e9f6226399863b963f00bf3bf`; every
 `file:line` refers to that commit.
 
-This page is a design for review. It changes no code, workflow, repository
-variable, ruleset, tag or production installation. Each landing unit in
-section 7 is a separate issue with its own design review where noted, and
-every operator operation it names needs its own approval.
+This page records the approved design. It changed no code, workflow,
+repository variable, ruleset, tag or production installation by itself. Each
+landing unit in section 7 was a separate issue with its own design review
+where noted, and every operator operation it named needed separate approval.
 
 Claims are marked **(measured)** with the probe in section 9, **(read)** when
 they come from reading code or documents at the base commit, and
 **(unmeasured)** when nothing has established them yet. Nothing in this design
-is approved while it depends on an unmeasured premise that section 9 lists as
-blocking. Design review rounds and their findings are recorded on the issue;
-this revision answers review r1.
+was approved while it depended on an unmeasured premise that section 9 lists
+as blocking. Design review rounds and their findings are recorded on the
+issue; review r3 approved the design.
 
 ## 1. Operator decision this design implements
 

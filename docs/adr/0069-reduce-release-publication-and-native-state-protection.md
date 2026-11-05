@@ -1,6 +1,7 @@
 ---
 title: Reduce release publication and native Codex state protection to what releases and wrapper start/resume need
-status: proposed
+status: accepted
+last_updated: 2026-11-05
 date: 2026-10-22
 opened: 2026-10-22
 supersedes: []
@@ -98,12 +99,12 @@ Proposed; the inventory, boundary, landing units and measurements are in the
   repository variables and production steps remain operator operations with
   their own approval.
 
-## Status gates
+## Status
 
-This ADR stays `proposed` until the design review passes and the operator
-records the decision points of plan section 8. Using schema-2 tags and
-stopping allocation additionally wait for the enrollment check (U2) and the
-tag-creation measurement (U6) of plan section 9.
+Accepted after the design review recorded on
+[issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709). Cutover C
+completed on 2026-10-24, including the enrollment check (U2), tag-creation
+measurement (U6), stopping allocation and first schema-2 release tag.
 
 ## Cutover record
 
@@ -112,5 +113,23 @@ Cutover C of the plan completed on 2026-10-24. C1 (U2) and C2 (U6) passed on
 schema-2 release tag, `v2026.10.24.1`, on
 `d0c43ed3c54016df8f5cb520aa6c286890922c16`. `v*` tags before that commit mean
 "landed" and tags from it on mean "released"
-([release notes](../release/README.md)). This record does not change the
-ADR's status, which still follows the gates above.
+([release notes](../release/README.md)).
+
+## Addendum — operator decision (2026-11-05)
+
+The operator decided on
+[issue #709](https://github.com/sakuraiyuta/kaoiro/issues/709) to keep the
+production-shape start gate, followed by strict artifact verification
+(`verify-release.mjs`). The release canary stage and the Codex state recovery
+table are not retained as guarantees.
+
+Keep `recover`, `resume`, snapshots and state-aware updates. Remove the
+exhaustive recovery-table guarantee: each refusal prints one safety line and,
+when a record is found, its `next` line; class-specific advice is removed.
+After a high-risk update, restore peers in bulk without a canary. Since a bulk
+restore cannot be stopped midway, the procedure handles partial success after
+the fact.
+
+This records policy only. Removing the canary and recovery table is a separate
+unit that needs its own design, including replacement guidance when a Codex
+native update stops partway.
