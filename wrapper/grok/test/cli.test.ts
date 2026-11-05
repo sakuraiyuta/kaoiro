@@ -442,6 +442,11 @@ it("retires a real Grok CLI sync failure once without the generic duplicate fail
       callbacks.onInterAgentMessage?.({version:"0",agent_id:"peer",persona:config.persona,ts:"2026-11-06T00:00:00Z",type:"inter_agent_message",state:"thinking",delivery_seq:1,payload:{to:config.agent_id,conversation_id:"sync-timeout",turn_number:1,kind:"request",body:"input",meta:{done:false,propose_next:""},owner:{kind:"user",id:"operator"}}} as unknown as Envelope);
       await vi.waitFor(()=>expect(retired).toHaveLength(1));expect(acks).toEqual([]);expect(outbound).toEqual([]);
       expect(envelopes.filter(e=>e.type==="log"&&e.payload.text==="grok turn failed")).toEqual([]);
+      callbacks.onInstruction?.("operator input");
+      await vi.waitFor(()=>expect(envelopes.filter(e=>e.type==="result"&&e.payload.is_error)).toHaveLength(2));
+      await new Promise<void>(resolve=>setImmediate(resolve));
+      expect(envelopes.filter(e=>e.type==="log"&&e.payload.text==="grok turn failed")).toEqual([]);
+      expect(retired).toHaveLength(1);
       blocked=false;await host.send("recovered");
     })().finally(()=>host.close());void probe.catch(()=>{});}});
   await work;await probe;
