@@ -10454,15 +10454,19 @@ describe("AgentHost phase-2 pushed input receipts", () => {
 
 describe("reserved resume receipt", () => {
   type Scenario = { host: AgentHost; note: SDKUserMessage; input: AsyncIterator<SDKUserMessage>;
+    replaceQuery: () => Promise<void>;
     hook: (id: string, text?: string, session?: string, agentId?: string, event?: string) => Promise<unknown> };
   async function exercise(script: (s: Scenario) => AsyncGenerator<SDKMessage>, extra: Partial<AgentHostOptions> = {}) {
     const logs: Envelope[] = [], starts: string[] = [], ends: string[] = [], decisions: string[] = [];
-    let host!: AgentHost;
+    let host!: AgentHost, queries = 0, secondRun: Promise<void> | undefined;
+    const replacement = deferred(), replacementReady = deferred();
+    const intervals = vi.spyOn(globalThis, "setInterval");
     host = new AgentHost(config, {
       onState: () => {}, onLog: e => logs.push(e), enqueueInjection: task => task(),
       onTurnStart: x => starts.push(x.turnToken), onTurnEnd: x => { if (x.turnToken) ends.push(x.turnToken); },
       onPushedInputDecision: x => decisions.push(x.kind), ...extra,
       queryFn: makeQueryFn(({ prompt, options }) => asQuery((async function* () {
+        if (queries++ > 0) { replacementReady.resolve(); await replacement.promise; return; }
         const input = prompt[Symbol.asyncIterator]();
         yield msg({ type: "system", subtype: "init", session_id: "s" });
         await input.next();
@@ -10475,11 +10479,15 @@ describe("reserved resume receipt", () => {
         const hook = (id: string, text = note.message.content as string, session = "s", agentId?: string, event = "UserPromptSubmit") =>
           options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({ hook_event_name: event,
             session_id: session, prompt_id: id, prompt: text, ...(agentId ? { agent_id: agentId } : {}) } as never, undefined, { signal: new AbortController().signal });
-        yield* script({ host, note, input, hook });
+        yield* script({ host, note, input, hook, replaceQuery: async () => { secondRun = host.run(); await replacementReady.promise; } });
       })())),
     });
     host.reserveResume("continue exactly once\nsecond line");
-    try { await host.run("/compact"); } finally { host.close(); }
+    try { await host.run("/compact"); } finally {
+      host.close(); replacement.resolve(); await secondRun;
+      for (const timer of intervals.mock.results) if (timer.type === "return") clearInterval(timer.value);
+      intervals.mockRestore();
+    }
     expect(decisions).toEqual([]);
     const events = logs.flatMap(e => {
       try { return [JSON.parse((e.payload as { text: string }).text)]; } catch { return []; }
@@ -10524,8 +10532,9 @@ describe("reserved resume receipt", () => {
     expect(r.logs).not.toContain('resume_receipt_rejected');
   });
 
-  it.each(["digest", "session", "fresh-conflict", "fold", "duplicate-id"])("refuses %s without a resume grant", async why => {
-    const r = await exercise(async function* ({ host, hook, note }) {
+  it.each(["digest", "session", "query", "fresh-conflict", "fold", "duplicate-id"])("refuses %s without a resume grant", async why => {
+    const r = await exercise(async function* ({ host, hook, note, replaceQuery }) {
+      if (why === "query") await replaceQuery();
       if (why === "fresh-conflict" || why === "fold") await hook("N1", "native work");
       if (why === "duplicate-id") await hook("note");
       await hook(why === "fold" ? "N1" : "different", (note.message.content as string) + (why === "digest" ? "changed" : ""), why === "session" ? "wrong" : "s");
@@ -10534,8 +10543,11 @@ describe("reserved resume receipt", () => {
       yield result("success");
     });
     expect(r.starts).toHaveLength(why === "duplicate-id" ? 2 : 1);
-    if (why === "digest" || why === "session") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
-      reason: why === "digest" ? "digest_mismatch" : "context_mismatch", ...(why === "session" ? { context_dimension: "session" } : {}),
+    if (why === "fresh-conflict" || why === "fold") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
+      foreign_prompt_id: "N1", prompt_id: why === "fold" ? "N1" : "different",
+    });
+    if (why === "digest" || why === "session" || why === "query") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
+      reason: why === "digest" ? "digest_mismatch" : "context_mismatch", ...(why === "digest" ? {} : { context_dimension: why }),
     });
   });
 
@@ -10741,6 +10753,7 @@ describe("reserved resume receipt", () => {
       else expect(host.state).toBe("error");
     }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
     expect(r.starts).toHaveLength(action === "admit" ? 3 : 2);
+    if (action === "starve") expect(r.events.find(e => e.event === "root_hook_timeout").occupancy_kind).toBe("sdk_notification");
     if (action === "fold" || action === "fresh") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
       prompt_id: action === "fold" ? "notification" : "note", active_turn_token: r.starts[1], active_prompt_ids: ["notification"],
     });
