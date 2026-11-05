@@ -269,6 +269,9 @@ backend fallback is `pin-exec-fresh` followed by fresh exec restores; it does
 not resume app-server IDs on exec. Before a same-native **code** rollback,
 stop all Codex siblings, preserve explicit app-server selection and verify its
 application, then activate the known older code with the same native hash.
+The target must also satisfy the [coordinated server and wrapper update contract](runner-update-and-rollback.md#coordinated-server-and-wrapper-updates);
+when that contract requires a paired rollback, restore both releases together.
+A matching native hash alone does not establish protocol compatibility.
 Follow the [fleet restoration procedure](high-risk-change-release.md#4-release-and-restore-the-fleet):
 inspect the offline list and confirmation count before bulk restore, then check
 each intended peer's connection and outcome. Record failures and let the operator
