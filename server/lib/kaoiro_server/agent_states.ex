@@ -969,7 +969,9 @@ defmodule KaoiroServer.AgentStates do
   end
 
   defp pending_envelope?(%{"ext" => ext}) when is_map(ext),
-    do: Map.has_key?(ext, "pending_permission") or Map.has_key?(ext, "pending_question")
+    do:
+      Map.has_key?(ext, "pending_permission") or Map.has_key?(ext, "pending_question") or
+        Map.has_key?(ext, "permission_gate")
 
   defp pending_envelope?(_envelope), do: false
 

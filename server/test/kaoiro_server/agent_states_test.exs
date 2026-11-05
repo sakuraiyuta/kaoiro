@@ -121,6 +121,29 @@ defmodule KaoiroServer.AgentStatesTest do
     assert projection == %{}
   end
 
+  test "wire projection preserves permission gates and compacts ordinary oversized envelopes" do
+    gate =
+      envelope("z-gate", %{
+        "payload" => %{"text" => "keep"},
+        "ext" => %{"permission_gate" => %{"status" => "blocked"}}
+      })
+
+    ordinary =
+      envelope("a-large", %{
+        "payload" => %{"text" => String.duplicate("x", 8_000_000)},
+        "ext" => %{"extra" => "discard"}
+      })
+
+    {projection, incomplete?} = AgentStates.wire_projection(%{"a-large" => ordinary, "z-gate" => gate})
+    assert incomplete?
+    assert projection["z-gate"] == gate
+    assert projection["a-large"]["ext"] == %{}
+    refute Map.has_key?(projection["a-large"], "payload")
+
+    oversized_gate = put_in(gate, ["payload", "text"], String.duplicate("x", 8_000_000))
+    assert {%{}, true} = AgentStates.wire_projection(%{"z-gate" => oversized_gate})
+  end
+
   test "wire projection は entry bytes 台帳で巨大 pending の一部を残して frame に収める" do
     pending = fn n ->
       envelope("agent-pending-#{n}", %{
