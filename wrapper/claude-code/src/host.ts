@@ -2457,6 +2457,7 @@ export class AgentHost implements EngineAdapter {
       this.#foreignOccupancy?.promptId !== input.prompt_id && !this.#retiredPromptIds.has(input.prompt_id);
     if (fresh && (this.#terminalReduction !== null || this.#activeTurn !== null || this.#foreignOccupancy !== null)) {
       let timer: ReturnType<typeof setTimeout> | undefined, notify: (() => void) | undefined;
+      const deadline = this.#receiptNow() + 5_000;
       const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 5_000); });
       try {
         while (this.#terminalReduction !== null || this.#activeTurn !== null || this.#foreignOccupancy !== null) {
@@ -2465,7 +2466,7 @@ export class AgentHost implements EngineAdapter {
           const settled = await Promise.race([boundary, expired, ...(reduction ? [reduction.done.then(() => true)] : [])]);
           this.#resumeBoundaryWaiters.delete(notify!);
           if (this.#closed || this.#pendingPushedReceipt !== receipt || this.tickPendingReceiptRootTimeout()) return true;
-          if (!settled) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout", { prompt_id: input.prompt_id }); return true; }
+          if (!settled || this.#receiptNow() >= deadline) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout", { prompt_id: input.prompt_id }); return true; }
         }
       } finally { clearTimeout(timer); if (notify) this.#resumeBoundaryWaiters.delete(notify); }
     }

@@ -10624,7 +10624,7 @@ describe("reserved resume receipt", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it.each(["drain", "duplicate", "timeout", "close", "expire", "late", "fold"])("waits separately for an unread terminal: %s", async action => {
+  it.each(["drain", "duplicate", "timeout", "close", "expire", "late", "fence-late", "fold"])("waits separately for an unread terminal: %s", async action => {
     vi.useFakeTimers(); let now=0;
     try {
       const r=await exercise(async function* ({host,hook,input}) {
@@ -10636,7 +10636,7 @@ describe("reserved resume receipt", () => {
         else if(action==="fold") {await vi.advanceTimersByTimeAsync(0);expect(host.state).toBe("error");}
         else if(action==="close") host.close();
         else if(action==="expire") {now=10_000;host.tickPendingReceiptRootTimeout();}
-        else {if(action==="late") now=10_000;yield result("success",{origin:{kind:"task-notification"}});}
+        else {if(action==="late") now=10_000;else if(action==="fence-late") now=5_000;yield result("success",{origin:{kind:"task-notification"}});}
         await vi.advanceTimersByTimeAsync(0);
         if(action==="drain" || action==="duplicate") expect(host.activeInterAgentTurnToken()).not.toBeNull();
         await pending;
