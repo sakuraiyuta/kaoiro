@@ -10523,6 +10523,9 @@ describe("reserved resume receipt", () => {
       yield result("success");
     });
     expect(r.starts).toHaveLength(why === "duplicate-id" ? 2 : 1);
+    if (why === "digest" || why === "session") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
+      reason: why === "digest" ? "digest_mismatch" : "context_mismatch", ...(why === "session" ? { context_dimension: "session" } : {}),
+    });
   });
 
   it.each(["terminal", "eof", "reset", "rebind", "close"])("records an unresolved receipt at %s", async why => {
@@ -10558,6 +10561,7 @@ describe("reserved resume receipt", () => {
         return { kind: "updated", items: [] };
       } });
       expect(r.logs).toContain(timeout ? "terminal_fence_timeout" : "admitted_root");
+      expect(r.events.filter(e => e.event === "resume_receipt_rejected")).toHaveLength(timeout ? 1 : 0);
     } finally { vi.useRealTimers(); }
   });
 
@@ -10671,20 +10675,25 @@ describe("reserved resume receipt", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("does not grant a note after close releases its terminal fence", async () => {
+  it.each(["close", "expire", "duplicate"])("settles exactly once when %s releases its terminal fence", async action => {
+    let now = 0;
     let current!: Scenario, admission: Promise<unknown> | undefined;
     const r = await exercise(async function* (scenario) {
       current = scenario; await current.hook("N", "native work");
       yield assistant([{ type: "tool_use", id: "task-write", name: "TaskCreate", input: { subject: "x" } }]);
       yield result("success", { origin: { kind: "task-notification" } });
       await admission;
-    }, { readTasklist: async () => {
-      admission = current.hook("note"); current.host.close();
+      if (action === "duplicate") { expect(current.host.state).not.toBe("error"); yield result("success"); }
+    }, { nowMs: () => now, resumeReceiptMaxWaitMs: 100, readTasklist: async () => {
+      admission = current.hook("note");
+      if (action === "close") current.host.close();
+      else if (action === "expire") now = 100;
+      else admission = Promise.all([admission, current.hook("note")]);
       return { kind: "updated", items: [] };
     } });
-    expect(r.events.filter(e => e.event === "resume_receipt_cancelled")).toHaveLength(1);
-    expect(r.events.filter(e => e.event === "admitted_root")).toHaveLength(0);
-    expect(r.starts).toHaveLength(1);
+    expect(r.events.filter(e => e.event === (action === "close" ? "resume_receipt_cancelled" : "resume_receipt_rejected"))).toHaveLength(action === "duplicate" ? 0 : 1);
+    expect(r.events.filter(e => e.event === "admitted_root")).toHaveLength(action === "duplicate" ? 1 : 0);
+    expect(r.starts).toHaveLength(action === "duplicate" ? 2 : 1);
   });
 
   it("refuses a new resume identity when the retirement ledger is full", async () => {
@@ -10696,6 +10705,44 @@ describe("reserved resume receipt", () => {
       await hook("note"); expect(host.state).toBe("error");
     }, { nowMs: () => 0 });
     expect(r.starts).toHaveLength(1);
+  });
+
+  it.each(["fold", "fresh", "admit", "starve"])("handles a tracked notification owner before resume: %s", async action => {
+    let now = 0;
+    const r = await exercise(async function* ({ host, hook }) {
+      yield msg({ type: "system", subtype: "task_started", session_id: "s", task_id: "task", task_type: "local_agent", is_backgrounded: true });
+      yield msg({ type: "system", subtype: "task_notification", session_id: "s", task_id: "task", tool_use_id: "parent", status: "completed", output_file: "/tmp/task", summary: "done" });
+      await hook("notification", "<task-notification><task-id>task</task-id><tool-use-id>parent</tool-use-id><status>completed</status><summary>Agent finished</summary><result>done</result></task-notification>");
+      expect(host.activeInterAgentTurnToken()).not.toBeNull();
+      now = 99; expect(host.tickPendingReceiptRootTimeout()).toBe(false);
+      if (action === "starve") { now = 100; expect(host.tickPendingReceiptRootTimeout()).toBe(true); }
+      else if (action !== "admit") await hook(action === "fold" ? "notification" : "note");
+      yield result("success", { origin: { kind: "task-notification" } });
+      if (action === "admit") { await hook("note"); yield result("success"); }
+      else expect(host.state).toBe("error");
+    }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
+    expect(r.starts).toHaveLength(action === "admit" ? 3 : 2);
+    if (action === "fold" || action === "fresh") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
+      prompt_id: action === "fold" ? "notification" : "note", active_turn_token: r.starts[1], active_prompt_ids: ["notification"],
+    });
+  });
+
+  it("records cancellation when another admission fail-stop closes the host", async () => {
+    const r = await exercise(async function* ({ host }) {
+      expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+      await expect(host.send("blocked")).rejects.toThrow();
+    });
+    expect(r.events.find(e => e.event === "resume_receipt_cancelled")).toMatchObject({ reason: "admission_fail_stop", submitted: true });
+  });
+
+  it("rearms a timer that fires before the monotonic deadline", async () => {
+    vi.useFakeTimers(); let now = 0;
+    try {
+      await exercise(async function* ({ host }) {
+        now = 4; await vi.advanceTimersByTimeAsync(5); expect(host.state).not.toBe("error");
+        now = 5; await vi.advanceTimersByTimeAsync(1); expect(host.state).toBe("error");
+      }, { nowMs: () => now, pendingReceiptRootTimeoutMs: 5 });
+    } finally { vi.useRealTimers(); }
   });
 
 });

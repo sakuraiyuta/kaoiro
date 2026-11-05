@@ -2411,9 +2411,11 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
-  #recordResume(receipt: ResumeReceipt, event: string, reason?: string, promptId?: string, dimension?: string): void {
+  #recordResume(receipt: ResumeReceipt, event: string, detail: Record<string, unknown> = {}): void {
     const text = JSON.stringify({ event, receipt_id: receipt.foldId, turn_token: receipt.turn.turnToken,
-      reason, context_dimension: dimension, prompt_id: promptId, generation: receipt.generation, submitted: true,
+      ...detail, generation: receipt.generation, submitted: true,
+      active_turn_token: this.#activeTurn?.turnToken, foreign_prompt_id: this.#foreignOccupancy?.promptId,
+      active_prompt_ids: [...this.#promptOwners].filter(([, owner]) => owner.token === this.#activeTurn?.turnToken).map(([id]) => id),
       occupancy_kind: this.#activeTurn?.kind ?? (this.#foreignOccupancy ? "foreign" : "none"),
       pause_count: this.#notificationClockPauses, total_limit_ms: this.resumeReceiptMaxWaitMs,
       elapsed_ms: this.#receiptNow() - receipt.deadline + this.resumeReceiptMaxWaitMs });
@@ -2421,8 +2423,8 @@ export class AgentHost implements EngineAdapter {
     this.#emitLog({ kind: "system", text });
   }
 
-  #finishResumeReceipt(receipt: ResumeReceipt, event: string, reason?: string, promptId?: string, dimension?: string): void {
-    this.#recordResume(receipt, event, reason, promptId, dimension);
+  #finishResumeReceipt(receipt: ResumeReceipt, event: string, detail: Record<string, unknown> = {}): void {
+    this.#recordResume(receipt, event, detail);
     this.#pendingPushedReceipt = null;
     this.#clearPendingRootClock();
     this.#wakeReceiptWaiters();
@@ -2432,11 +2434,11 @@ export class AgentHost implements EngineAdapter {
 
   #cancelResumeReceipt(reason: string): void {
     const receipt = this.#pendingPushedReceipt;
-    if (receipt?.kind === "resume") this.#finishResumeReceipt(receipt, "resume_receipt_cancelled", reason);
+    if (receipt?.kind === "resume") this.#finishResumeReceipt(receipt, "resume_receipt_cancelled", { reason });
   }
 
-  #rejectResumeReceipt(receipt: ResumeReceipt, reason: string, dimension?: string): void {
-    this.#finishResumeReceipt(receipt, "resume_receipt_rejected", reason, undefined, dimension);
+  #rejectResumeReceipt(receipt: ResumeReceipt, reason: string, detail: Record<string, unknown> = {}): void {
+    this.#finishResumeReceipt(receipt, "resume_receipt_rejected", { ...detail, reason });
     this.#unattributedTerminalFrozen = true;
     this.#failStopLive(`resume receipt ${reason}; host admission stopped until this wrapper is relaunched`);
   }
@@ -2456,12 +2458,13 @@ export class AgentHost implements EngineAdapter {
       if (!settled) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout"); return true; }
     }
     if (receipt.sessionId !== input.session_id || receipt.query !== this.#query || receipt.generation !== this.#hostRunGeneration) {
-      this.#rejectResumeReceipt(receipt, "context_mismatch", receipt.sessionId !== input.session_id ? "session" : receipt.query !== this.#query ? "query" : "generation");
+      this.#rejectResumeReceipt(receipt, "context_mismatch", { prompt_id: input.prompt_id,
+        context_dimension: receipt.sessionId !== input.session_id ? "session" : receipt.query !== this.#query ? "query" : "generation" });
     } else if (createHash("sha256").update(input.prompt, "utf8").digest("hex") !== receipt.digest) {
       this.#rejectResumeReceipt(receipt, "digest_mismatch");
     } else if (!input.prompt_id || this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192 ||
         this.#activeTurn !== null || this.#foreignOccupancy !== null) {
-      this.#rejectResumeReceipt(receipt, "owner_still_live_or_fold_refused");
+      this.#rejectResumeReceipt(receipt, "owner_still_live_or_fold_refused", { prompt_id: input.prompt_id });
     } else {
       const turn = receipt.turn;
       this.#activeTurn = turn;
@@ -2469,7 +2472,7 @@ export class AgentHost implements EngineAdapter {
       this.toolOrigins.begin(turn.turnToken);
       this.#everStartedTurn = true;
       this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turn.turnToken, kind: "wrapper_input" });
-      this.#finishResumeReceipt(receipt, "admitted_root", undefined, input.prompt_id);
+      this.#finishResumeReceipt(receipt, "admitted_root", { prompt_id: input.prompt_id });
       this.#options.onTurnStart?.({ turnToken: turn.turnToken, conversationIds: turn.conversationIds });
       this.#options.onPromptAdmitted?.(turn.turnToken);
     }
@@ -2734,7 +2737,7 @@ export class AgentHost implements EngineAdapter {
     if (resume?.kind === "resume" && !this.#closed && this.#receiptNow() >= Math.min(resume.deadline, this.#pendingRootDeadline ?? Infinity)) {
       const reason = this.#receiptNow() >= resume.deadline ? "starved" : "missing_hook";
       this.#receiptTimeoutCount += 1;
-      this.#recordResume(resume, "root_hook_timeout", reason);
+      this.#recordResume(resume, "root_hook_timeout", { reason });
       this.#rejectResumeReceipt(resume, reason);
       return true;
     }
@@ -3421,7 +3424,8 @@ export class AgentHost implements EngineAdapter {
           } else if (!notificationResult && ownerKind === "sdk_notification") {
             this.#failStopLive("notification result lacks task-notification ownership; host admission stopped until this wrapper is relaunched");
           } else if (!liveInterval && this.#pendingPushedReceipt?.kind === "resume") {
-            this.#rejectResumeReceipt(this.#pendingPushedReceipt, "unowned_terminal");
+            this.#rejectResumeReceipt(this.#pendingPushedReceipt, "unowned_terminal", {
+              result_index: message.type === "result" ? message.result_index : undefined, session_id: this.#sessionId });
           } else if (result.is_error) {
             this.#emitResult(result, sdkMessageToCost(message));
             const terminalReason = sdkMessageToTerminalReason(message);
