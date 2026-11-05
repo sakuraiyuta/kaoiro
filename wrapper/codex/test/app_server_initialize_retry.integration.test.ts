@@ -1,6 +1,6 @@
 import "../../../scripts/test/fixtures/test-isolation.mjs";
 import { mkdirSync, rmSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ const opened: AppServerTransport[] = [];
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "ao411-init-"));
+  await writeFile(join(home, "config.toml"), "[features]\nplugins = false\n");
   state = join(home, "state_5.sqlite");
   mkdirSync(state);
   vi.stubEnv("CODEX_HOME", home);

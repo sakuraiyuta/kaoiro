@@ -42,6 +42,7 @@ base_url = "http://127.0.0.1:${address.port}/v1"
 wire_api = "responses"
 [features]
 shell_snapshot = false
+plugins = false
 [analytics]
 enabled = false
 `;
