@@ -2,7 +2,7 @@
 title: Antigravity CLI usage and rate limits evidence
 description: Measured `/usage` response fields and the current Antigravity rate-limit mapping contract.
 status: provisional
-last_updated: 2026-10-24
+last_updated: 2026-11-06
 related: [antigravity-adapter]
 ---
 
@@ -20,27 +20,40 @@ On `agy` 1.4.7 (observed 2026-10-24, issue
 [#725](https://github.com/sakuraiyuta/kaoiro/issues/725)) the response gains a
 third group, "Gemini 4 Argon", with a bucket `gemini-argon-wtu-weekly` whose
 `window` is `weekly`. It shares the `gemini-` prefix and the window of the
-`gemini-weekly` bucket but has its own quota, so it must not be mapped to
-`seven_day`.
+`gemini-weekly` bucket but has its own quota, so it must not supply
+`seven_day` for an ordinary Gemini model. The current three-group structure
+is recorded in [the 1.5.1 evidence](agy-1.5.1-usage-groups-2026-11-05.md).
 
 No account-specific output is retained here. The raw live response contained
 quota values and is intentionally not checked in.
 
 ## Mapping contract
 
-- A committed `gemini-*` model selects the buckets with the exact ids
-  `gemini-5h` and `gemini-weekly`; committed `claude-*` and `gpt-*` models
-  select `3p-5h` and `3p-weekly`. A bucket with any other id (such as
-  `gemini-argon-wtu-weekly`), or whose `window` differs from the one expected
-  for its id, is ignored. Other models have no classified family and do not
-  expose an old probe snapshot.
+- A committed model with prefix `gemini-4-argon-` selects only the exact id
+  `gemini-argon-wtu-weekly`. Other `gemini-*` models select `gemini-5h` and
+  `gemini-weekly`; `claude-*` and `gpt-*` select `3p-5h` and `3p-weekly`.
+  Existing prefix classification is preserved, including older catalog and
+  declared extra models. Unrecognized prefixes have no vendor usage snapshot;
+  an independent terminal-429 overlay can still appear.
+- Select by exact bucket id and its expected vendor window, never group name
+  or description. Argon expects `weekly` only and has no `five_hour` value.
+  The other two groups require both windows for stale-429 confirmation;
+  partial readings can still be displayed. Another group's positive quota
+  cannot confirm that the selected group has quota remaining.
 - `5h` maps to `five_hour`; `weekly` maps to `seven_day`.
 - `utilization` is `clamp(1 - remaining_fraction, 0, 1)`.
 - `reset_time` maps to Unix-seconds `resets_at` only when
   `remaining_fraction < 1`. For unused buckets the timestamp moves with each
   probe, so it is not an active reset deadline.
 - A missing or unrecognized bucket set is an unusable sample. It does not
-  replace the last good snapshot for the current family.
+  replace the last good snapshot for the current group; before one exists,
+  vendor usage is absent. There is no other-group fallback. The existing
+  failure floor and three-consecutive-failure suppression apply; successful
+  turns reset the count, so this is not a lifetime warning limit.
+- A group change clears snapshot, terminal overlay, pending confirmation and
+  its timer, including CANCELED turns that promote a pending model. A failed
+  cross-group model attempt reports its quota error/reset delay without
+  installing an overlay for the rolled-back current model.
 
 ## Process observation correction
 

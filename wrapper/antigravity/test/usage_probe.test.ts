@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   modelToUsageFamily,
+  hasCompleteAgyUsageBuckets,
   parseAgyUsageOutput,
   startAgyUsageProbe,
 } from "../src/usage_probe.js";
@@ -77,6 +78,47 @@ describe("Antigravity usage probe parsing and process settlement", () => {
     expect(modelToUsageFamily("gpt-5")).toBe("3p");
     expect(modelToUsageFamily("unknown-model")).toBeNull();
     expect(modelToUsageFamily(undefined)).toBeNull();
+  });
+
+  it.each([
+    ["gemini-4-argon-medium", "argon"], ["GEMINI-4-ARGON-HIGH", "argon"],
+    ["gemini-4-argon-low", "argon"], ["gemini-3.7-flash-medium", "gemini"],
+    ["gemini-3.6-flash-high", "gemini"], ["gemini-3.1-pro-low", "gemini"],
+    ["claude-sonnet-4", "3p"], ["gpt-5", "3p"],
+    ["experimental-model", null], [" gemini-4-argon-low", null], ["  ", null],
+  ] as const)("selects the compatible quota group for %s", (model, family) => {
+    expect(modelToUsageFamily(model)).toBe(family);
+  });
+
+  it("selects only Argon weekly in every group order", () => {
+    const payload = JSON.parse(usageOutputWithArgon("last"));
+    const groups = payload.command.data.groups;
+    for (const order of [[0,1,2], [0,2,1], [1,0,2], [1,2,0], [2,0,1], [2,1,0]]) {
+      payload.command.data.groups = order.map((i) => groups[i]);
+      const limits = parseAgyUsageOutput(JSON.stringify(payload), "argon")!;
+      expect([...limits]).toEqual([["seven_day", { utilization: 1, status: "blocked", resets_at: 1791201600 }]]);
+      expect(hasCompleteAgyUsageBuckets(limits, "argon")).toBe(true);
+      expect(hasCompleteAgyUsageBuckets(limits, "gemini")).toBe(false);
+      expect(hasCompleteAgyUsageBuckets(limits, "3p")).toBe(false);
+    }
+  });
+
+  it("does not route quota by group names or descriptions", () => {
+    const payload = JSON.parse(usageOutputWithArgon("last"));
+    const before = JSON.stringify(payload);
+    for (const [i, group] of payload.command.data.groups.entries()) {
+      group.name = i === 0 ? "Gemini 4 Argon" : "Unrelated translated group";
+      group.description = "Changed membership text";
+    }
+    for (const family of ["gemini", "3p", "argon"] as const) {
+      expect(parseAgyUsageOutput(JSON.stringify(payload), family)).toEqual(parseAgyUsageOutput(before, family));
+    }
+  });
+
+  it.each(["5h", "monthly"])("rejects an Argon bucket with window %s", (window) => {
+    const payload = JSON.parse(usageOutputWithArgon("last"));
+    payload.command.data.groups[2].buckets[0].window = window;
+    expect(parseAgyUsageOutput(JSON.stringify(payload), "argon")).toBeNull();
   });
 
   it("parses a complete snapshot for one bucket family only", () => {

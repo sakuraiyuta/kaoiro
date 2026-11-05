@@ -6674,6 +6674,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(true_without_context, "context")
     end
 
+    test "directory preserves an Argon weekly-only snapshot and withdraws the old five-hour value" do
+      peer_id = "test.dir-argon-peer"
+      peer_socket = join_wrapper(peer_id)
+      self_socket = join_wrapper("test.dir-argon-self")
+      ref = push(self_socket, "envelope", envelope("test.dir-argon-self", "idle"))
+      assert_reply ref, :ok
+      weekly = %{"seven_day" => %{"utilization" => 0.5, "resets_at" => 1_791_115_200}}
+
+      for limits <- [Map.put(weekly, "five_hour", %{"utilization" => 0.1}), weekly] do
+        ref =
+          push(
+            peer_socket,
+            "envelope",
+            envelope(peer_id, "idle")
+            |> Map.put("ext", %{
+              "engine" => "antigravity",
+              "model" => "gemini-4-argon-medium",
+              "rate_limits" => limits
+            })
+          )
+
+        assert_reply ref, :ok
+        ref = push(self_socket, "directory_request", %{})
+        assert_reply ref, :ok, %{"agents" => agents}
+        entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+        assert entry["rate_limits"] == limits
+      end
+    end
+
     test "rate_limits は allow-list・bound・canonical 優先で projection する" do
       peer_id = "test.dir-rates-peer"
       peer_socket = join_wrapper(peer_id)

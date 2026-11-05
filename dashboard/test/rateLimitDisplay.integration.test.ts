@@ -77,6 +77,19 @@ function fmtResetLike(resetsAtSeconds: number): string {
 }
 
 describe("AgentDetail rate-limit snapshot freshness (#154)", () => {
+  it("renders an Antigravity Argon weekly-only snapshot without a five-hour row", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const e = envelope(Date.parse("2026-08-04T10:00:00Z") / 1000);
+    e.ext = { engine: "antigravity", model: "gemini-4-argon-medium", rate_limits: {
+      seven_day: { utilization: 0.5, resets_at: Date.parse("2026-08-04T10:00:00Z") / 1000 },
+    } };
+    component = mount(AgentDetail, { target, props: { envelope: e, onClose: vi.fn() } });
+    await tick();
+    expect(rateValue(target, "7day")).toContain("50%");
+    expect(rateValue(target, "5h")).toBeUndefined();
+  });
+
   it("reset が現在より過去なら stale utilization/status を捨てて窓明け表示にする", async () => {
     const target = await render(Date.parse("2026-07-28T09:59:59Z") / 1000);
     expect(rateValue(target, "5h")).toBe("リセット済み");
