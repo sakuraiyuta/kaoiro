@@ -215,63 +215,33 @@ and [ADR-0063](../../adr/0063-layered-delivery-authority-and-continuations.md).
 
 ## Claude phase-2 delivery controls
 
-`KAOIRO_CLAUDE_PHASE2_DELIVERY=1` in the Claude wrapper process environment
-enables advertising `early: "fold"` and `yield: "tool_boundary"` at join for
-every Claude peer. `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS=ao,other` instead
-enables only wrappers whose `persona.id` appears in that comma-separated list.
-Each item is trimmed and compared exactly, including case; glob patterns,
-empty items, and ids outside the persona-id character set invalidate the
-whole list. Both wrappers use one parser, `personaOptInSource` in agent-common. An empty or invalid list enables nobody. If the global flag is
-`1`, it wins over the list; other flag values do not enable phase 2 by
-themselves. With neither condition met, both modes remain unadvertised.
-The wrapper logs one startup line with `source=flag`, `source=persona_list`,
-or `source=off`, without printing the list or unrelated environment values.
+Claude advertises `early: "fold"` and `yield: "tool_boundary"` by default when
+`in_flight_delivery_enabled` is not false. The server must echo delivery modes
+v1, and live delivery still requires the existing per-agent policy and final
+host acceptance checks. `enabled: false` declares none; stored off prevents
+new in-flight acceptance without changing the negotiated declaration.
 
-The runner passes these delivery-control variables to Claude wrappers, and
-relays `claude_code.phase2_delivery: true` from `runner.config.json` as the global
-opt-in (a set `KAOIRO_CLAUDE_PHASE2_DELIVERY` wins over it, so `0` turns it off;
-`false` is the same as absent). There is no per-peer env override. It removes `CODEX_HOME` from
-Claude and Antigravity wrapper environments. A runner-managed single-peer
-canary therefore sets only the persona list in `runner.env` and restarts the
-runner; setting the global flag to `1` enables every Claude peer. The server
-must also echo delivery modes v1 before the wrapper uses either mode. The
-result-to-root-hook delay with production settings (R3) was measured on SDK
-0.3.280 / CLI 2.1.280 (7, 6 and 8 ms; one tool-free schedule, scripted local
-model) and again on CLI 2.1.284 (6 to 7 ms); see
-[the fold measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
-and [the 2.1.284 remeasurement](../../evidence/issue-429/2026-09-29-claude-2-1-284-remeasurement.md).
-It has not been repeated on the current SDK pin. Production runs with phase 2
-enabled by operator decision E3
-([issue 463 comment](https://github.com/sakuraiyuta/kaoiro/issues/463#issuecomment-6063194859)),
-not by a repeated R3. The existing normal stage reports remain available when
-phase 2 is off.
+`KAOIRO_CLAUDE_PHASE2_DELIVERY`, `KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS` and
+`phase2_delivery` are retired. A direct wrapper warns once for each nonempty
+variable or present file key (true or false), naming no values. They no longer
+enable or disable delivery. Direct-launch warnings point to the wrapper-local
+`in_flight_delivery_enabled` ceiling and per-agent policy; runner settings do
+not control a directly launched wrapper. The startup diagnostic is
+`[claude phase2 delivery] source=policy`, or `source=off` under a false ceiling.
 
-The following optional `WrapperConfig` fields control the Claude input
-scheduler. They are read when that wrapper starts; changing them requires a
-new wrapper process. A runner-managed deployment sets them in the
-`claude_code` block of `runner.config.json` (see
-[Runner configuration](runner.md#behaviour-settings): the runner relays the
-file value, and a set variable wins by the runner relaying nothing for that
-key). A directly launched wrapper may set them in its config JSON, where an
-explicit config value wins over its environment fallback.
+The runner warns for its own old inputs, removes both variables from child
+environments and does not relay `claude_code.phase2_delivery`. It also keeps
+`CODEX_HOME` out of Claude wrappers. See [host delivery settings](runner.md#host-delivery-ceilings-and-defaults)
+and the [rollback retention requirement](../../operations/server-update-and-rollback.md#claude-delivery-opt-in-retirement).
+A false ceiling retains FIFO root scheduling. With negotiated mechanisms,
+stored off still allows operator-priority root scheduling while preventing
+new folds/cuts; replacing an old false with stored off can change root order.
 
-| Field | Default | Input | Effect |
-| --- | ---: | --- | --- |
-| `yield_claim_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_YIELD_CLAIM_TIMEOUT_MS` | Maximum wait for a server `yield_claim` before downgrade to early input with `claim_timeout` |
-| `pending_receipt_root_timeout_ms` | 2,000 ms | Positive integer up to 60,000; fallback `KAOIRO_CLAUDE_PENDING_RECEIPT_ROOT_TIMEOUT_MS` | One bounded live-turn wait across successive fold receipts before a claimed cut; also the separate wait from the old result for a pushed fold or cut root hook, paused by a live task-notification turn |
-| `urgent_overtake_limit` | 2 root boundaries | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_URGENT_OVERTAKE_LIMIT` | Consecutive urgent peer roots allowed ahead of the oldest queued ordinary peer root; operator roots neither consume nor reset the count |
-| `folds_per_turn` | 3 batches | Integer from 1 through 64; fallback `KAOIRO_CLAUDE_FOLDS_PER_TURN` | Fold reservations allowed in one live turn; a pushed receipt that becomes void or unknown keeps its slot |
-
-If the live-turn pre-cut wait expires, the yield is downgraded with
-`receipt_wait_timeout`; the claim and interval remain consumed, and the host
-continues. If the post-result root-hook wait expires, the wrapper records
-`root_hook_timeout`, freezes admission and tool-origin authority, cancels
-queued input, and enters `error`. The wrapper then exits once its running turn
-ends, and the runner relaunches it; see
-[Claude fail-stop recovery](../engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper)
-for the session that relaunch uses and for the cases that need the operator.
-See [Claude recipient handoff](../inter-agent/delivery.md#claude-recipient-handoff)
-for stage and reply-authority behavior.
+The dated [fold measurements](../../evidence/issue-429/2026-09-28-claude-fold-measurements.md)
+and [2.1.284 remeasurement](../../evidence/issue-429/2026-09-29-claude-2-1-284-remeasurement.md)
+remain historical observations of their named pins, not current-pin timing
+claims. The native policy checks use an isolated local provider, not a billed
+or credentialed model. The first-production-flip checklist remains retired.
 
 ## See Also
 
