@@ -93,6 +93,7 @@ jobs:
       # spawned as real processes), and that build needs the sibling
       # workspace packages' dist, so build the whole wrapper first.
       - run: pnpm build
+      - run: pnpm -C ../runner build
       - run: uname -r && head -2 /etc/os-release && (bwrap --version || true)
       - run: pnpm test
 

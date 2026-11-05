@@ -106,3 +106,8 @@ flake rate, and a short sample is not a reliability claim.
 - [Multi-host deployment architecture](../architecture/deployment.md).
 - [High-risk change release](../operations/high-risk-change-release.md): read it
   before changing the runner start path or the wrapper turn lifecycle.
+
+The Claude managed-delivery native test also runs from the wrapper suite.
+Build both wrapper and runner before invoking it; the wrapper CI job does this
+in that order. It starts the built runner and observes its actual child config
+and environment, rather than constructing a second wrapper configuration.
