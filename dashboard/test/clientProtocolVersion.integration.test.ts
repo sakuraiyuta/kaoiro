@@ -413,6 +413,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("preserves missing hosts diagnostics as unknown and forwards warnings", async () => {
+  const handlers = makeHandlers();
+  const { conn, ws } = await connectAndJoin(handlers);
+  injectServerPush(ws, "hosts", { version: "0", hosts: {} });
+  expect(handlers.onHosts).toHaveBeenLastCalledWith([], false, null);
+  injectServerPush(ws, "hosts", { version: "0", hosts: {}, ingest_warnings: ["collision"] });
+  expect(handlers.onHosts).toHaveBeenLastCalledWith([], false, ["collision"]);
+  conn.disconnect();
+});
+
 describe("client -> server messages carry version (issue #208, ADR-0015)", () => {
   // Every case fires the push first, then advances fake timers with
   // settleSocket() so the auto-ack reply (a fake `setTimeout`) can run
