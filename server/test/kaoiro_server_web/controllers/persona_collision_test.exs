@@ -28,6 +28,7 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
     Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
     Application.put_env(:kaoiro_server, :client_tokens, "test:operator")
     conn = init_test_session(conn, %{"client_token" => "test"})
+
     b =
       PersonaPackFixture.write!(dir, "b.zip", "b", "shared",
         name: "B",
@@ -48,8 +49,10 @@ defmodule KaoiroServerWeb.PersonaCollisionTest do
       manifest = get(conn, "/api/personas") |> json_response(200)
       idle = get(conn, "/personas/shared/idle.png")
       optional = get(conn, "/personas/shared/fatigued.png")
+
       assert {manifest["personas"]["shared"]["name"], idle.resp_body == a.idle, optional.status} ==
                {"A", true, 404}
+
       refute Map.has_key?(manifest["personas"], "default")
       refute Map.has_key?(manifest["personas"], "duplicate-id")
       assert PersonaAssets.known_persona?("a")
