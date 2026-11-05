@@ -1,7 +1,7 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-10-15
+last_updated: 2026-11-06
 ---
 
 # Runner configuration
@@ -98,7 +98,7 @@ keys. Omitted keys resolve independently:
 | `grok` | `in_flight_delivery.grok` | `false` | `false` |
 
 `enabled: false` is a launch ceiling: it disables every in-flight mechanism
-for that engine, even when a legacy flag or persona list enables it. `true`
+for that engine, regardless of retired flags or persona lists. `true`
 declares Claude fold/yield and Codex steering on app-server without legacy opt-ins. Antigravity has no
 in-flight mechanism even with an explicit true ceiling. `default` seeds a new
 server policy row when launch has no explicit choice; it never rewrites a stored
