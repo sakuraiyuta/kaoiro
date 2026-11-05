@@ -1,5 +1,5 @@
-import {PermissionSyncTimeoutError} from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import {PermissionSyncTimeoutError} from "@kaoiro/wrapper-core";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLink, ServerLinkOptions } from "@kaoiro/wrapper-core";

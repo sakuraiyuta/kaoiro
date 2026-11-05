@@ -1,5 +1,5 @@
-import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";

@@ -1,5 +1,5 @@
-import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import {
   chmod,
   mkdir,

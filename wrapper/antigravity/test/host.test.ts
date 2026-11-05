@@ -1,5 +1,5 @@
-import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

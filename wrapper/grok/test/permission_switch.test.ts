@@ -1,5 +1,5 @@
-import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import "../../../scripts/test/fixtures/test-isolation.mjs";
+import { PermissionSyncTimeoutError } from "@kaoiro/wrapper-core";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
