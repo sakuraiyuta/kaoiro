@@ -295,9 +295,10 @@ This bounds the input barrier; it does not guarantee delivery under an infinite
 notification stream or force the background CLI process to exit promptly.
 
 The previous terminal must finish ownership settlement before the next resume
-root is admitted. A resume hook may wait for an already-received terminal's
-asynchronous reduction, for at most 5 seconds; a timeout refuses admission and
-fail-stops. It never waits for a terminal that has not arrived. Close, reset,
+root is admitted. A fresh-ID resume hook may wait for the live interval to retire and its
+terminal reduction to finish, with one 5-second ceiling across both waits.
+A timeout refuses admission and fail-stops; a same-ID fold is refused immediately.
+The SDK can deliver a hook while the previous terminal is still unread by Host. Close, reset,
 EOF and receipt expiry cannot revive a waiting admission callback.
 
 Existing system logs expose `resume_pending` and its total limit, followed by

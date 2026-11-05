@@ -842,6 +842,7 @@ export class AgentHost implements EngineAdapter {
   #pendingRootRemaining: number | null = null;
   #pendingRootTimer: ReturnType<typeof setTimeout> | null = null;
   #resumeResetGeneration = 0;
+  #resumeBoundaryWaiters = new Set<() => void>();
   #terminalReduction: { done: Promise<void>; finish: () => void } | null = null;
   #receiptTimeoutCount = 0;
   #notificationClockPauses = 0;
@@ -2452,14 +2453,21 @@ export class AgentHost implements EngineAdapter {
     const receipt = this.#pendingPushedReceipt;
     if (receipt?.kind !== "resume" || !input.prompt.includes(receipt.foldId)) return false;
     if (this.#closed || this.tickPendingReceiptRootTimeout()) return true;
-    const reduction = this.#terminalReduction;
-    if (reduction !== null) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const settled = await Promise.race([reduction.done.then(() => true),
-        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 5_000); })]);
-      clearTimeout(timer);
-      if (this.#closed || this.#pendingPushedReceipt !== receipt || this.tickPendingReceiptRootTimeout()) return true;
-      if (!settled) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout"); return true; }
+    const fresh = !!input.prompt_id && !this.#promptOwners.has(input.prompt_id) &&
+      this.#foreignOccupancy?.promptId !== input.prompt_id && !this.#retiredPromptIds.has(input.prompt_id);
+    if (fresh && (this.#terminalReduction !== null || this.#activeTurn !== null || this.#foreignOccupancy !== null)) {
+      let timer: ReturnType<typeof setTimeout> | undefined, notify: (() => void) | undefined;
+      const expired = new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 5_000); });
+      try {
+        while (this.#terminalReduction !== null || this.#activeTurn !== null || this.#foreignOccupancy !== null) {
+          const boundary = new Promise<true>(resolve => { notify = () => resolve(true); this.#resumeBoundaryWaiters.add(notify); });
+          const reduction = this.#terminalReduction;
+          const settled = await Promise.race([boundary, expired, ...(reduction ? [reduction.done.then(() => true)] : [])]);
+          this.#resumeBoundaryWaiters.delete(notify!);
+          if (this.#closed || this.#pendingPushedReceipt !== receipt || this.tickPendingReceiptRootTimeout()) return true;
+          if (!settled) { this.#rejectResumeReceipt(receipt, "terminal_fence_timeout", { prompt_id: input.prompt_id }); return true; }
+        }
+      } finally { clearTimeout(timer); if (notify) this.#resumeBoundaryWaiters.delete(notify); }
     }
     if (receipt.sessionId !== input.session_id || receipt.query !== this.#query || receipt.generation !== this.#hostRunGeneration) {
       this.#rejectResumeReceipt(receipt, "context_mismatch", { prompt_id: input.prompt_id,
@@ -5455,6 +5463,8 @@ export class AgentHost implements EngineAdapter {
   }
 
   #wakeTurnBoundary(): void {
+    for (const wake of this.#resumeBoundaryWaiters) wake();
+    this.#resumeBoundaryWaiters.clear();
     const notify = this.#turnBoundaryNotify;
     this.#turnBoundaryNotify = null;
     notify?.();

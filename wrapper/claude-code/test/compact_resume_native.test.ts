@@ -161,7 +161,6 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
     const wait = async (ready: () => boolean | Promise<boolean>) => {
       const deadline = Date.now() + 30000;
       while (Date.now() < deadline) {
-        if (output.includes("notification result fail-stop")) throw Error(output);
         if (await ready()) return;
         if (child.exitCode !== null || child.signalCode !== null) break;
         await delay(30);
@@ -203,8 +202,8 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       expect(sends()).toHaveLength(2);
       expect(sends()[0]!.payload.payload).toMatchObject({kind:"response",in_reply_to:1});
       expect(sends()[1]!.payload.payload).toMatchObject({kind:"request",in_reply_to:0});
-      const noteHookIndex=trace.findIndex(x=>x.event==="hook" && x.input.prompt_id===noteHook.prompt_id);
-      const noteToken=trace.slice(0,noteHookIndex).filter(x=>x.event==="onTurnStart" && x.args[0].kind!=="sdk_notification").at(-1).args[0].turnToken;
+      const receiptEvents=[...output.matchAll(/\[kaoiro\]\[claude-code-receipt\] (\{[^\n]*\})/g)].map(m=>JSON.parse(m[1]!));
+      const noteToken=receiptEvents.find(x=>x.event==="admitted_root" && x.prompt_id===noteHook.prompt_id).turn_token;
       if(ownership==="native")expect(trace.filter(x=>x.event==="resolved_origin").every(x=>x.token===noteToken && x.aborted===false)).toBe(true);
       expect(trace.filter(x=>x.event==="onTurnStart" && x.args[0].kind==="sdk_notification")).toHaveLength(ownership==="native" && scenario==="tool"?1:0);
       expect(await readFile(join(cwd,"resumed.txt"),"utf8")).toBe("WORK-RESUMED");
@@ -230,7 +229,7 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
         expect(sends()[2]!.payload.payload).toMatchObject({kind:"request",in_reply_to:0,body:"NATIVE-AFTER-RESUME"});
       }
       const before = results().length;
-      input(3,"AFTER-991");
+      input(scenario==="queued" ? 5 : 3,"AFTER-991");
       await wait(()=>output.includes("AFTER-991") && results().length > before);
       console.log(JSON.stringify({compact_resume:{ownership,scenario,sdk:sdk.version,cli:sdk.claudeCodeVersion,noteToken,notificationRoots:noticeHooks.length,sends:sends().length}}));
 

@@ -10567,7 +10567,11 @@ describe("reserved resume receipt", () => {
       if (why === "query") await replaceQuery();
       if (why === "fresh-conflict" || why === "fold") await hook("N1", "native work");
       if (why === "duplicate-id") await hook("note");
-      await hook(why === "fold" ? "N1" : "different", (note.message.content as string) + (why === "digest" ? "changed" : ""), why === "session" ? "wrong" : "s");
+      if (why === "fresh-conflict") {
+        vi.useFakeTimers();
+        try { const waiting=hook("different"); await vi.advanceTimersByTimeAsync(5_000); await waiting; }
+        finally { vi.useRealTimers(); }
+      } else await hook(why === "fold" ? "N1" : "different", (note.message.content as string) + (why === "digest" ? "changed" : ""), why === "session" ? "wrong" : "s");
       expect(host.state).toBe("error");
       await expect(host.send("blocked")).rejects.toThrow();
       yield result("success");
@@ -10618,6 +10622,29 @@ describe("reserved resume receipt", () => {
       expect(r.logs).toContain(timeout ? "terminal_fence_timeout" : "admitted_root");
       expect(r.events.filter(e => e.event === "resume_receipt_rejected")).toHaveLength(timeout ? 1 : 0);
     } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["drain", "duplicate", "timeout", "close", "expire"])("waits separately for an unread terminal: %s", async action => {
+    vi.useFakeTimers(); let now=0;
+    try {
+      const r=await exercise(async function* ({host,hook,input}) {
+        await hook("N","native work"); await host.send("after");
+        let ready=false; const next=input.next().then(x=>{ready=true;return x;});
+        const pending=action==="duplicate" ? Promise.all([hook("note"),hook("note")]) : hook("note");
+        expect(host.activeInterAgentTurnToken()).toBeNull(); expect(ready).toBe(false);
+        if(action==="timeout") await vi.advanceTimersByTimeAsync(5_000);
+        else if(action==="close") host.close();
+        else if(action==="expire") {now=10_000;host.tickPendingReceiptRootTimeout();}
+        else yield result("success",{origin:{kind:"task-notification"}});
+        await pending;
+        if(action==="drain" || action==="duplicate") {
+          expect(host.activeInterAgentTurnToken()).not.toBeNull(); expect(ready).toBe(false);
+          yield result("success"); expect((await next).value!.message.content).toBe("after"); yield result("success");
+        } else if(action==="close") expect(host.state).not.toBe("error"); else expect(host.state).toBe("error");
+      },{nowMs:()=>now,resumeReceiptMaxWaitMs:10_000});
+      expect(r.events.filter(e=>e.event==="admitted_root")).toHaveLength(["drain","duplicate"].includes(action)?1:0);
+      if(action==="timeout") expect(r.logs).toContain("terminal_fence_timeout");
+    } finally {vi.useRealTimers();}
   });
 
   it.each([undefined, 0, -1, NaN, Infinity, 1.5, 2_147_483_648])("defaults total budget for invalid or absent value %s", value => {
@@ -10778,14 +10805,15 @@ describe("reserved resume receipt", () => {
       expect(host.activeInterAgentTurnToken()).not.toBeNull();
       now = 99; expect(host.tickPendingReceiptRootTimeout()).toBe(false);
       if (action === "starve") { now = 100; expect(host.tickPendingReceiptRootTimeout()).toBe(true); }
-      else if (action !== "admit") await hook(action === "fold" ? "notification" : "note");
+      else if (action === "fold") await hook("notification");
+      const waiting = action === "fresh" ? hook("note") : undefined;
       yield result("success", { origin: { kind: "task-notification" } });
-      if (action === "admit") { await hook("note"); yield result("success"); }
+      if (action === "admit" || action === "fresh") { await (waiting ?? hook("note")); yield result("success"); }
       else expect(host.state).toBe("error");
     }, { nativeContinuations: false, nowMs: () => now, pendingReceiptRootTimeoutMs: 5, resumeReceiptMaxWaitMs: 100 });
-    expect(r.starts).toHaveLength(action === "admit" ? 3 : 2);
+    expect(r.starts).toHaveLength(action === "admit" || action === "fresh" ? 3 : 2);
     if (action === "starve") expect(r.events.find(e => e.event === "root_hook_timeout").occupancy_kind).toBe("sdk_notification");
-    if (action === "fold" || action === "fresh") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
+    if (action === "fold") expect(r.events.find(e => e.event === "resume_receipt_rejected")).toMatchObject({
       prompt_id: action === "fold" ? "notification" : "note", active_turn_token: r.starts[1], active_prompt_ids: ["notification"],
     });
   });
