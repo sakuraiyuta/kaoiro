@@ -38,6 +38,22 @@ function newId() {
 const service = () => state.containers.filter((c) => c.service === "kaoiro");
 const findContainer = (ref) => state.containers.find((c) => c.id === ref || c.name === ref);
 const resolveImage = (ref) => (state.images[ref] ? ref : state.tags[ref]);
+const bind = { type: "bind", source: "/srv/kaoiro/oauth-allowlist.txt", target: "/etc/kaoiro/oauth-allowlist.txt", read_only: true };
+const baseVolumes = () => [{ type: "volume", source: "kaoiro-state", target: "/var/lib/kaoiro", volume: {} }, bind];
+const inspectMounts = (volumes) => volumes.map((mount) => mount.type === "volume"
+  ? { Type: "volume", Name: state.volume.name, Destination: mount.target }
+  : { Type: mount.type, Source: mount.source, Destination: mount.target, RW: !mount.read_only });
+const initialMounts = () => inspectMounts([...baseVolumes(), ...(state.overrideMount
+  ? [{ type: "bind", source: "/srv/overlay", target: "/overlay", read_only: true }] : [])]);
+
+function composeVolumes(files) {
+  const volumes = baseVolumes();
+  for (const file of files.slice(1)) {
+    const override = JSON.parse(readFileSync(file, "utf8"));
+    volumes.push(...(override.services.kaoiro.volumes ?? []));
+  }
+  return volumes;
+}
 
 function volumeDigestLines(dir) {
   return readdirSync(dir).sort().map((name) => {
@@ -74,11 +90,7 @@ function compose(rest) {
     return finish();
   }
   if (sub === "config") {
-    const volumes = [{ type: "volume", source: "kaoiro-state", target: "/var/lib/kaoiro", volume: {} }];
-    for (const file of files.slice(1)) {
-      const override = JSON.parse(readFileSync(file, "utf8"));
-      volumes.push(...(override.services.kaoiro.volumes ?? []));
-    }
+    const volumes = composeVolumes(files);
     out({ name: "kaoiro", services: { kaoiro: { environment: { KAOIRO_USERS_PATH: "/var/lib/kaoiro/users.dets" }, volumes } }, volumes: { "kaoiro-state": { name: state.volume.name } } });
     return finish();
   }
@@ -103,7 +115,7 @@ function compose(rest) {
     if (current.length === 0 || force || current.some((c) => c.image !== image)) {
       state.containers = state.containers.filter((c) => c.service !== "kaoiro");
       state.containers.push({ id: newId(), name: "kaoiro-c1", image, status: "running", exitCode: 0, restartCount: 0,
-        startedAt: new Date().toISOString(), service: "kaoiro" });
+        startedAt: new Date().toISOString(), service: "kaoiro", mounts: inspectMounts(composeVolumes(files)) });
     } else {
       for (const c of current) c.status = "running";
     }
@@ -121,6 +133,7 @@ function compose(rest) {
 function inspect(target, format) {
   const container = findContainer(target);
   if (container) {
+    const mounts = container.mounts ?? initialMounts();
     const value = {
       "{{.Id}}": container.id,
       "{{.Image}}": container.image,
@@ -129,10 +142,10 @@ function inspect(target, format) {
       "{{.State.ExitCode}}": String(container.exitCode ?? 0),
       "{{.State.OOMKilled}}": "false",
       "{{.State.StartedAt}}": container.startedAt ?? "2026-10-20T00:00:00Z",
-      "{{json .Config.Labels}}": JSON.stringify({ "com.docker.compose.project": "kaoiro", "com.docker.compose.service": "kaoiro" }),
-      "{{json .Mounts}}": JSON.stringify([{ Type: "volume", Name: state.volume.name, Destination: "/var/lib/kaoiro" }]),
+      "{{json .Config.Labels}}": JSON.stringify(container.labels ?? { "com.docker.compose.project": "kaoiro", "com.docker.compose.service": "kaoiro" }),
+      "{{json .Mounts}}": JSON.stringify(mounts),
       "{{json .Config.Env}}": JSON.stringify(["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]),
-      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}': state.volume.name,
+      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}': mounts.filter((mount) => mount?.Destination === "/var/lib/kaoiro").map((mount) => mount.Name ?? "").join(""),
     }[format];
     if (format === "{{.RestartCount}}") {
       out(String(container.restartCount ?? 0));
