@@ -208,7 +208,7 @@ the operator check. Never carry an earlier acceptance forward automatically.
 |---|---|---|
 | `remove-pin` | `--maintenance-evidence <private-file>` | Explicit exec configured and applied, plus the whole-host fresh boundary. Remove only the backend key; wait for omitted app-server to be applied. Explicit app-server and already omitted configurations are refused. |
 | `pin-exec-fresh` | `--maintenance-evidence <private-file>` | Same whole-host fresh boundary. Select explicit exec. Already explicit exec still needs current observations and freshness; it is not a bypass. |
-| `restore-fresh` | `--maintenance-evidence <private-file> --agent <id> --backend <exec|app-server> --operator-config <private-file>` | Target disconnected/nil/work-free, no pending lifecycle work, and all known Codex routing on the same selected backend. A connected same-backend sibling with a non-nil pointer is allowed. Send normal restore once and observe target connection plus its normal Supervisor child. |
+| `restore-fresh` | `--maintenance-evidence <private-file> --agent <id> --backend <exec\|app-server> --operator-config <private-file>` | Target disconnected/nil/work-free, no pending lifecycle work, and all known Codex routing on the same selected backend. A connected same-backend sibling with a non-nil pointer is allowed. Send normal restore once and observe target connection plus its normal Supervisor child. |
 
 The operator runs restore from their own console too. Agents, including the
 director, never create, read or receive the operator token file. It contains

@@ -27,7 +27,7 @@ an already-running deployment to a new version.
 > release-profile automation for it. Automation does not remove the [4.1](../architecture/deployment.md#build-and-restart-boundaries)
 > limits by itself — they remain until their own resolving condition is met.
 
-### Claude delivery opt-in retirement
+## Claude delivery opt-in retirement
 
 [Issue #565](https://github.com/sakuraiyuta/kaoiro/issues/565) retires the Claude
 phase-2 flag, persona list and file-key gates. Inventory each affected runner's
