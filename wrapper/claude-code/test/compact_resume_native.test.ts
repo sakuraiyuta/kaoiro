@@ -32,6 +32,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
       tengu_amber_sentinel: true, tengu_kairos_push_notifications: true,
     }, cachedGrowthBookFeaturesAt: Date.now() }));
     const persistent = true;
+    const resumeNote = "RESUME-991: resume work: reply to the original request, send a new work request, and write WORK-RESUMED to a file.\nUnicode: \u65e5\u672c\u8a9e \u00e9\nTrailing spaces:  \n";
     let foldToolIssued = false; let action=0; const issued:any[]=[]; let taskIssued = false, compactIssued = false, compactSeen = false, searched = false, calls = 0;
     let taskBarrier: ServerResponse | undefined;
     let secondBarrier: ServerResponse | undefined, held=false;
@@ -81,7 +82,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
           persistent, timeout_ms: 60000 } };
       } else if (taskIssued && !compactIssued && offered("mcp__kaoiro__request_compact")) {
         compactIssued = true;
-        use = { name: "mcp__kaoiro__request_compact", input: { reason:"probe", resume_prompt:"RESUME-991: resume work: reply to the original request, send a new work request, and write WORK-RESUMED to a file." } };
+        use = { name: "mcp__kaoiro__request_compact", input: { reason:"probe", resume_prompt:resumeNote } };
       }
       if (compactRequest) use = undefined;
       if (!compactRequest && compactSeen && !foldToolIssued && ["tool","starved"].includes(scenario) && messages.includes("<task-notification>")) {
@@ -101,7 +102,9 @@ it.each(["native", "legacy"].flatMap(ownership =>
         else use={name:"Bash",input:{command:"printf WORK-RESUMED > resumed.txt",description:"resume ordinary work"}};
         issued.push({action,id:`fixture_call_${calls}`,tool:use.name}); action++;
       }
-      requests.push({ delivered,
+      const noteExact = (payload.messages ?? []).some((m: any) => (Array.isArray(m.content) ? m.content : [{ type: "text", text: m.content }])
+        .some((part: any) => part.type === "text" && part.text?.includes(resumeNote)));
+      requests.push({ delivered, noteExact, noticeN2: messages.includes("<event>EVENT-991-N2</event>"),
  call: calls, tool: use?.name ?? "text", offered: (payload.tools ?? []).map((t: any) => t.name), notice: messages.includes("<task-notification>") });
       const emit = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -187,7 +190,7 @@ it.each(["native", "legacy"].flatMap(ownership =>
       const hooks=trace.filter(x=>x.event==="hook" && x.input.hook_event_name==="UserPromptSubmit").map(x=>x.input);
       const noteHook=hooks.find(x=>x.prompt.startsWith("[kaoiro] Compaction has finished."));
       expect(noteHook.prompt).toContain("[kaoiro-resume:");
-      expect(noteHook.prompt).toContain("RESUME-991: resume work:");
+      expect(noteHook.prompt.endsWith(resumeNote)).toBe(true);
       const noticeHooks=hooks.filter(x=>x.prompt.startsWith("<task-notification>"));
       expect(noticeHooks).toHaveLength(scenario==="root"?0:scenario==="two"?2:1);
       expect(noticeHooks.every(x=>x.prompt_id!==noteHook.prompt_id)).toBe(true);
@@ -200,8 +203,10 @@ it.each(["native", "legacy"].flatMap(ownership =>
       expect(trace.filter(x=>x.event==="onTurnStart" && x.args[0].kind==="sdk_notification")).toHaveLength(ownership==="native" && scenario==="tool"?1:0);
       expect(await readFile(join(cwd,"resumed.txt"),"utf8")).toBe("WORK-RESUMED");
       expect(output).not.toContain("notification result fail-stop");
-      expect(requests.some((x:any)=>x.delivered)).toBe(true);
+      expect(requests.some((x:any)=>x.delivered && x.noteExact)).toBe(true);
+      if (scenario !== "root") expect(requests.some((x:any)=>x.notice && !x.delivered)).toBe(true);
       if(scenario==="two"){
+        expect(requests.some((x:any)=>x.noticeN2 && !x.delivered)).toBe(true);
         const rows=(await queueRows()).filter(q=>q.operation==="enqueue");
         expect(rows.findIndex(q=>q.content?.includes("<event>EVENT-991-N2</event>"))).toBeGreaterThan(rows.findIndex(q=>q.content?.startsWith("[kaoiro] Compaction")));
       }
