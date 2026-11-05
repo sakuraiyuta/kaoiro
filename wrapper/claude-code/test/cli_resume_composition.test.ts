@@ -106,7 +106,13 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
           const content = turn.message.content;
           if (typeof content !== "string") continue;
           injected.push(content);
-          if (content.startsWith("[kaoiro] Compaction")) signalNoteSeen();
+          if (content.startsWith("[kaoiro] Compaction")) {
+            expect(turn.priority).toBe("later");
+            await args.options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+              hook_event_name: "UserPromptSubmit", session_id: "s", prompt_id: "resume", prompt: content,
+            } as never, undefined, { signal: new AbortController().signal });
+            signalNoteSeen();
+          }
         }
       })();
       async function* gen(): AsyncGenerator<SDKMessage, void> {
@@ -149,6 +155,8 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         // args.prompt — ending the generator too early would race the
         // production enqueueInjection chain that delivers it.
         await noteSeen;
+        yield { type: "result", result_index: nextResultIndex(), session_id: "s",
+          subtype: "success", result: "resumed" } as unknown as SDKMessage;
       }
       return Object.assign(gen(), {
         interrupt: async () => {},
@@ -161,13 +169,14 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
         prompt: undefined,
         resume: undefined,
       }),
-      loadConfig: () => ({ ...config }),
+      loadConfig: () => ({ ...config, turn_watchdog_inactivity_ms: 120_000 }),
       createServerLink: (_url, _agentId, options) => {
         queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
         return link as never;
       },
       createHost: (cfg, options) => {
         const host = new AgentHost(cfg, { ...options, queryFn });
+        expect(host.resumeReceiptMaxWaitMs).toBe(120_000);
         // cli.ts sets deferQueryUntilFirstInput when no CLI prompt argument
         // is given (our test config), so run() blocks on #waitForFirstInput
         // before it ever calls queryFn. A harmless kick turn unblocks that
@@ -189,7 +198,9 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
     // Exact equality against the real composition function pins "prefix
     // 完全一致 + body byte-for-byte 一致" in one assertion, without
     // hand-restating the prefix text (which would drift from host.ts).
-    expect(notes[0]).toBe(resumeInjectionText(adversarialBody));
+    const marker = notes[0]!.match(/\n(\[kaoiro-resume:[0-9a-f-]{36}\])\n\n/)?.[1];
+    expect(marker).toBeDefined();
+    expect(notes[0]).toBe(resumeInjectionText(adversarialBody).replace("\n\n", `\n${marker}\n\n`));
     expect(notes[0]).not.toContain(secretReason);
 
     // must-fix B5: the real cli.ts `onSessionLifecycle` wiring reached the
