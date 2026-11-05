@@ -736,7 +736,21 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
 
   test "operator retries of removed operations return their existing receipts" do
     operator = operator_socket()
-    work = grant()
+
+    assert_reply push(operator, "work_control", %{
+                   "work_control" => %{
+                     "op" => "assign",
+                     "operation_id" => opid(),
+                     "title" => "Operator receipt owner",
+                     "assignee" => "assignee"
+                   }
+                 }),
+                 :ok,
+                 %{"work_control_result" => %{work: %{work_id: work_id}}}
+
+    assert_push "work_changed", %{"work" => %{work_id: ^work_id}}
+    work = WorkStore.all()[work_id]
+    principal = hd(work.receipts).principal
 
     for op <- @removed do
       operation_id = opid()
@@ -744,7 +758,7 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
 
       receipt = %{
         operation_id: operation_id,
-        principal: @operator,
+        principal: principal,
         op_digest:
           :crypto.hash(:sha256, :erlang.term_to_binary(operation)) |> Base.encode16(case: :lower),
         result: %{
@@ -759,7 +773,7 @@ defmodule KaoiroServerWeb.WorkSimplificationTest do
       :sys.replace_state(WorkStore, fn state ->
         state
         |> update_in([:works, work.work_id, :receipts], &[receipt | &1])
-        |> put_in([:receipts, {{"user", "operator"}, operation_id}], {work.work_id, receipt})
+        |> put_in([:receipts, {{"user", principal["id"]}, operation_id}], {work.work_id, receipt})
       end)
 
       before = WorkStore.all()
