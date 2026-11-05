@@ -203,7 +203,8 @@ it.each([... ["native", "legacy"].flatMap(ownership =>
       expect(sends()).toHaveLength(2);
       expect(sends()[0]!.payload.payload).toMatchObject({kind:"response",in_reply_to:1});
       expect(sends()[1]!.payload.payload).toMatchObject({kind:"request",in_reply_to:0});
-      const noteToken=trace.filter(x=>x.event==="onTurnStart" && x.args[0].kind!=="sdk_notification").at(-1).args[0].turnToken;
+      const noteHookIndex=trace.findIndex(x=>x.event==="hook" && x.input.prompt_id===noteHook.prompt_id);
+      const noteToken=trace.slice(0,noteHookIndex).filter(x=>x.event==="onTurnStart" && x.args[0].kind!=="sdk_notification").at(-1).args[0].turnToken;
       if(ownership==="native")expect(trace.filter(x=>x.event==="resolved_origin").every(x=>x.token===noteToken && x.aborted===false)).toBe(true);
       expect(trace.filter(x=>x.event==="onTurnStart" && x.args[0].kind==="sdk_notification")).toHaveLength(ownership==="native" && scenario==="tool"?1:0);
       expect(await readFile(join(cwd,"resumed.txt"),"utf8")).toBe("WORK-RESUMED");
