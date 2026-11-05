@@ -16,7 +16,6 @@ const base: RunnerConfig = {
 
 const FLAGS = [
   ["codex", "codex", "approval_axis", "KAOIRO_CODEX_APPROVAL_AXIS"],
-  ["claude_code", "claude-code", "phase2_delivery", "KAOIRO_CLAUDE_PHASE2_DELIVERY"],
 ] as const;
 
 describe.each(FLAGS)("%s.%s", (block, engine, key, variable) => {
@@ -66,17 +65,19 @@ describe.each(FLAGS)("%s.%s", (block, engine, key, variable) => {
   });
 });
 
-describe("codex.operator_steer (retired)", () => {
-  const variable = "KAOIRO_CODEX_OPERATOR_STEER";
-  const withFile = (value: boolean): RunnerConfig => ({ ...base, codex: { operator_steer: value } });
+describe.each([
+  ["codex", "codex", "operator_steer", "KAOIRO_CODEX_OPERATOR_STEER"],
+  ["claude_code", "claude-code", "phase2_delivery", "KAOIRO_CLAUDE_PHASE2_DELIVERY"],
+] as const)("%s.%s retired input", (block, engine, key, variable) => {
+  const withFile = (value: boolean): RunnerConfig => ({ ...base, [block]: { [key]: value } });
 
   it("file: still a JSON boolean only", () => {
     const parse = (value: unknown) =>
-      (parseRunnerConfig({ ...base, codex: { operator_steer: value } }).codex as Record<string, unknown>).operator_steer;
+      (parseRunnerConfig({ ...base, [block]: { [key]: value } })[block] as Record<string, unknown>)[key];
     expect(parse(true)).toBe(true);
     expect(parse(false)).toBe(false);
     for (const bad of [1, 0, "true", "1", null, []]) {
-      expect(() => parse(bad), JSON.stringify(bad)).toThrow("codex.operator_steer must be a boolean");
+      expect(() => parse(bad), JSON.stringify(bad)).toThrow(`${block}.${key} must be a boolean`);
     }
   });
 
@@ -99,6 +100,6 @@ describe("codex.operator_steer (retired)", () => {
   });
 
   it("does not read the variable of a disabled engine", () => {
-    expect(readSetVariables({ ...base, capabilities: ["claude-code", "antigravity"] }, { [variable]: "1" })).toEqual([]);
+    expect(readSetVariables({ ...base, capabilities: (["claude-code", "codex", "antigravity"] as const).filter(candidate => candidate !== engine) }, { [variable]: "1" })).toEqual([]);
   });
 });

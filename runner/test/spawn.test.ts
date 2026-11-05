@@ -135,7 +135,7 @@ process.exit(0);`);
   }
 });
 
-it("the default launcher gives a wrapper child neither retired Codex variable and keeps every other delivery variable", async () => {
+it("the default launcher gives a wrapper child no retired Codex or Claude variables and preserves approval inputs", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "ao563-runner-env-"));
   const names = ["KAOIRO_CODEX_OPERATOR_STEER", "KAOIRO_CODEX_OPERATOR_STEER_PERSONAS", "KAOIRO_CLAUDE_PHASE2_DELIVERY",
     "KAOIRO_CLAUDE_PHASE2_DELIVERY_PERSONAS", "KAOIRO_CODEX_APPROVAL_AXIS", "KAOIRO_CODEX_APPROVAL_AXIS_PERSONAS"] as const;
@@ -164,7 +164,8 @@ process.exit(0);`);
       const child = JSON.parse(readFileSync(dump, "utf8")) as Record<string, string>;
       expect(child, engine).not.toHaveProperty("KAOIRO_CODEX_OPERATOR_STEER");
       expect(child, engine).not.toHaveProperty("KAOIRO_CODEX_OPERATOR_STEER_PERSONAS");
-      for (const name of names.slice(2)) expect(child[name], `${engine} ${name}`).toBe(name.endsWith("PERSONAS") ? "P" : "1");
+      for (const name of names.slice(0, 4)) expect(child, engine).not.toHaveProperty(name);
+      for (const name of names.slice(4)) expect(child[name], `${engine} ${name}`).toBe(name.endsWith("PERSONAS") ? "P" : "1");
     }
     expect(process.env.KAOIRO_CODEX_OPERATOR_STEER).toBe("1");
     expect(process.env.KAOIRO_CODEX_OPERATOR_STEER_PERSONAS).toBe("P");
