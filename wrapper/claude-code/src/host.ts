@@ -330,6 +330,10 @@ function contextNoticeText(
   );
 }
 
+export function receiptRootClockPaused(kind: "resume" | "fold" | "cut", native: boolean, foreign: boolean): boolean {
+  return native || (kind === "resume" && foreign);
+}
+
 /** The turn injected once a `request_compact` `resume_prompt` reservation
  *  fires on `compact_boundary` (ADR-0055, phase-33 Stage A). The prefix is a
  *  FIXED literal — matching the `/compact` MUST just above it in the spec —
@@ -2714,8 +2718,7 @@ export class AgentHost implements EngineAdapter {
 
   #resumePendingRootClock(): void {
     if (this.#pendingPushedReceipt === null || this.#pendingRootRemaining === null ||
-        this.#activeTurn?.kind === "sdk_notification" ||
-        (this.#pendingPushedReceipt.kind === "resume" && this.#foreignOccupancy !== null)) return;
+        receiptRootClockPaused(this.#pendingPushedReceipt.kind, this.#activeTurn?.kind === "sdk_notification", this.#foreignOccupancy !== null)) return;
     this.#pendingRootDeadline = this.#receiptNow() + this.#pendingRootRemaining;
     this.#scheduleReceiptTimer();
   }
@@ -5257,6 +5260,9 @@ export class AgentHost implements EngineAdapter {
   }
 
   #pickNextRoot(): QueuedTurn {
+    // Establish the resume receipt barrier before input accumulated during compact.
+    const resumeIndex = this.#queue.findIndex(turn => turn.resumeId !== undefined);
+    if (resumeIndex >= 0) return this.#queue.splice(resumeIndex, 1)[0]!;
     if (!this.#options.phase2RootScheduling?.()) return this.#queue.shift()!;
     const operatorIndex = this.#queue.findIndex(turn => turn.inputSource === "operator");
     const ordinaryIndex = this.#queue.findIndex(turn => turn.inputSource === "peer" && !turn.urgent);

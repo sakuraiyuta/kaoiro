@@ -15,6 +15,7 @@ import {
   AgentHost,
   CONTEXT_NOTICE_THRESHOLD_PERCENT,
   initialStatusExt,
+  receiptRootClockPaused,
 } from "../src/host.js";
 import type {
   AgentHostOptions,
@@ -10453,6 +10454,12 @@ describe("AgentHost phase-2 pushed input receipts", () => {
 });
 
 describe("reserved resume receipt", () => {
+  it.each(["resume", "fold", "cut"] as const)("preserves the occupied clock policy for %s receipts", kind => {
+    expect(receiptRootClockPaused(kind, false, false)).toBe(false);
+    expect(receiptRootClockPaused(kind, true, false)).toBe(true);
+    expect(receiptRootClockPaused(kind, true, true)).toBe(true);
+    expect(receiptRootClockPaused(kind, false, true)).toBe(kind === "resume");
+  });
   type Scenario = { host: AgentHost; note: SDKUserMessage; input: AsyncIterator<SDKUserMessage>;
     replaceQuery: () => Promise<void>;
     hook: (id: string, text?: string, session?: string, agentId?: string, event?: string) => Promise<unknown> };

@@ -285,8 +285,12 @@ compaction when possible. There are two receipt budgets, both starting at yield:
   or invalid direct Host budget falls back to 30 minutes; it cannot disable
   the limit. The CLI retains its existing invalid-configuration rejection.
 
+A reserved note is selected before peer or operator input queued during compact,
+so its receipt establishes the input barrier before those ordinary roots.
+
 Total expiry records `root_hook_timeout` with reason `starved`, freezes admission
-and enters sticky `error`. A late hook cannot acquire a token after the deadline.
+and enters sticky `error`. The following `resume_receipt_rejected` record is the
+disposition of that same timeout, not a second failure. A late hook cannot acquire a token after the deadline.
 This bounds the input barrier; it does not guarantee delivery under an infinite
 notification stream or force the background CLI process to exit promptly.
 
