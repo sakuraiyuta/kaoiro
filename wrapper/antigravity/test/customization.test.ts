@@ -6,6 +6,28 @@ import { describe, expect, it } from "vitest";
 import { CUSTOMIZATION_OWNER_NAMESPACE, sweepStaleCustomizationDirs } from "../src/customization.js";
 
 describe("sweepStaleCustomizationDirs", () => {
+  it("preserves invalid owner PIDs without probing them", () => {
+    const root = mkdtempSync(join(tmpdir(), "agy-sweep-invalid-"));
+    const values = [0, -1, Number.MAX_SAFE_INTEGER + 1, null, "NaN", 1.5, 41, 42];
+    const probed: number[] = [];
+    try {
+      for (const [index, pid] of values.entries()) {
+        const path = join(root, `kaoiro-agy-${index}`);
+        mkdirSync(path);
+        writeFileSync(join(path, ".kaoiro-owner.json"), JSON.stringify({ namespace: CUSTOMIZATION_OWNER_NAMESPACE, uid: 1000, pid }));
+      }
+      sweepStaleCustomizationDirs({
+        baseDir: root, uid: 1000,
+        isProcessAlive: (pid) => { probed.push(pid); return pid === 41; },
+      });
+      expect(probed.sort()).toEqual([41, 42]);
+      for (let index = 0; index < values.length - 1; index++) {
+        expect(existsSync(join(root, `kaoiro-agy-${index}`))).toBe(true);
+      }
+      expect(existsSync(join(root, "kaoiro-agy-7"))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("同uid・namespaceの死んだ所有者だけを削除する", () => {
     const root = mkdtempSync(join(tmpdir(), "agy-sweep-test-"));
     const owned = join(root, "kaoiro-agy-owned");

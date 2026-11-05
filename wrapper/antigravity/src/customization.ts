@@ -147,7 +147,7 @@ export function sweepStaleCustomizationDirs(options: StaleSweepOptions = {}): vo
     const path = join(baseDir, entry.name);
     try {
       const marker = JSON.parse(readFileSync(join(path, ".kaoiro-owner.json"), "utf8")) as Record<string, unknown>;
-      const pid = typeof marker.pid === "number" && Number.isInteger(marker.pid) ? marker.pid : null;
+      const pid = typeof marker.pid === "number" && Number.isSafeInteger(marker.pid) && marker.pid > 0 ? marker.pid : null;
       if (marker.namespace !== CUSTOMIZATION_OWNER_NAMESPACE || marker.uid !== uid || pid === null) continue;
       if ((options.isProcessAlive ?? processIsAlive)(pid)) continue;
       rmSync(path, { recursive: true, force: true });
