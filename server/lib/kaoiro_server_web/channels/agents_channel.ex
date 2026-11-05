@@ -257,7 +257,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    persistence_failed timeout invalid_rally_turns
                    exceeds_launch_ceiling stale_work_revision work_not_authorized
                    unknown_work work_state_conflict subject_mismatch
-                   work_link_conflict work_carriage_invalid operation_id_conflict
+                   work_link_conflict work_carriage_invalid unsupported_work_operation operation_id_conflict
                    operation_id_expired unknown_operation work_capacity
                    transfer_pending verdict_not_effective
                    invalid_status_line_retention status_line_unavailable
@@ -742,12 +742,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         end)
       end
 
-      pending_old =
-        for transfer <- work.transfers,
-            transfer.state == "pending",
-            do: transfer.old_assignee["id"]
-
-      for id <- Enum.uniq([work.assignee["id"], work.director["id"] | pending_old]),
+      for id <- Enum.uniq([work.assignee["id"], work.director["id"]]),
           is_binary(id) and AgentStates.connected?(id) and WorkStore.work_control_enabled?(id) do
         principal = %{"kind" => "agent", "id" => id}
 
@@ -761,23 +756,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
               "op" => operation["op"],
               "reason" => "operator_control"
             }
-
-            notice =
-              if operation["op"] == "transfer" do
-                case work.transfers do
-                  [%{state: "pending", transfer_id: transfer_id} | _] ->
-                    visible? =
-                      Map.has_key?(view, :work) or
-                        Enum.any?(view.pending_transfers, &(&1.transfer_id == transfer_id))
-
-                    if visible?, do: Map.put(notice, "transfer_id", transfer_id), else: notice
-
-                  _ ->
-                    notice
-                end
-              else
-                notice
-              end
 
             KaoiroServerWeb.Endpoint.broadcast("wrapper:#{id}", "work_notice", notice)
 

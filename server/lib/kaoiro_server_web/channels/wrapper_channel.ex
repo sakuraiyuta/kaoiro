@@ -908,33 +908,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp handle_wrapper_in("work_check_request", payload, socket) do
-    with :ok <- require_work_control(socket),
-         %{ok: _} = result <- WorkStore.check(work_principal(socket), payload) do
-      {:reply, {:ok, result}, socket}
-    else
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
-    end
+  defp handle_wrapper_in(event, _payload, socket)
+       when event in ["work_check_request", "work_transfer_ack"] do
+    {:reply, {:error, %{reason: "unsupported_work_operation"}}, socket}
   end
-
-  defp handle_wrapper_in(
-         "work_transfer_ack",
-         %{"work_id" => work_id, "transfer_id" => transfer_id},
-         socket
-       )
-       when is_binary(work_id) and is_binary(transfer_id) do
-    with :ok <- require_work_control(socket),
-         {:ok, _work} <- WorkStore.transfer_ack(work_principal(socket), work_id, transfer_id) do
-      {:reply,
-       {:ok, %{"work_id" => work_id, "transfer_id" => transfer_id, "state" => "acknowledged"}},
-       socket}
-    else
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
-    end
-  end
-
-  defp handle_wrapper_in("work_transfer_ack", _payload, socket),
-    do: {:reply, {:error, %{reason: "invalid_payload"}}, socket}
 
   defp handle_wrapper_in("work_op_result_request", %{"operation_id" => operation_id}, socket)
        when is_binary(operation_id) do
@@ -3131,7 +3108,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
                   recipient: to,
                   conversation_id: cid,
                   turn_number: turn_number,
-                  new_conversation?: new_conversation?
+                  new_conversation?: new_conversation?,
+                  new_conversation_declared?: payload["new_conversation"] == true,
+                  work_id: payload["work_id"],
+                  delivery_intent: payload["delivery_intent"] || "normal"
                 }
 
                 context =
@@ -3247,6 +3227,32 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp preflight_inter_agent(_envelope, _from, _protected?, _work_enabled?, _sender_modes),
     do: {:ok, :not_inter_agent}
 
+  defp prepare_work_operation(
+         nil,
+         true,
+         principal,
+         %{work_id: work_id, delivery_intent: intent} = context,
+         message
+       )
+       when is_binary(work_id) and intent != "yield" do
+    with :ok <- preview_work_message(message),
+         {:ok, _work} <-
+           WorkStore.link(
+             principal,
+             work_id,
+             Map.put(context, :new_conversation?, context.new_conversation_declared?)
+           ) do
+      {:ok, {nil, nil}}
+    else
+      {:error, {:work_capacity, capacity}} ->
+        {:error,
+         %{reason: "work_capacity", send_not_attempted: true, details: %{capacity: capacity}}}
+
+      {:error, reason} ->
+        {:error, %{reason: conversation_error(reason), send_not_attempted: true}}
+    end
+  end
+
   defp prepare_work_operation(nil, _enabled?, _principal, _context, _message),
     do: {:ok, {nil, nil}}
 
@@ -3258,7 +3264,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          true,
          principal,
          context,
-         {cid, from, to, body, turn, done?, new?, admission}
+         message
        )
        when is_binary(op) and is_binary(operation_id) do
     digest = WorkStore.digest(operation)
@@ -3275,18 +3281,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:error, duplicate_work_reply(receipt)}
 
       {:error, :unknown_operation} ->
-        case ConversationStates.preview_bound_message(
-               cid,
-               from,
-               to,
-               body,
-               turn,
-               done?,
-               new?,
-               admission
-             ) do
-          {:error, reason} -> {:error, reason}
-          _ -> apply_work_operation(principal, operation, context)
+        with :ok <- preview_work_message(message) do
+          if context[:work_id] != nil and context.work_id != operation["work_id"],
+            do: {:error, :work_carriage_invalid},
+            else: apply_work_operation(principal, operation, context)
         end
 
       {:error, reason} ->
@@ -3296,13 +3294,44 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp prepare_work_operation(_, _, _, _, _), do: {:error, :work_state_conflict}
 
+  defp preview_work_message({cid, from, to, body, turn, done?, new?, admission}) do
+    case ConversationStates.preview_bound_message(
+           cid,
+           from,
+           to,
+           body,
+           turn,
+           done?,
+           new?,
+           admission
+         ) do
+      {:error, reason} -> {:error, reason}
+      _ -> :ok
+    end
+  end
+
   defp apply_work_operation(principal, operation, context) do
     try do
       case WorkStore.apply(principal, operation, context) do
-        {:ok, result} -> {:ok, {result, nil}}
-        {:ok, result, intent_decision} -> {:ok, {result, intent_decision}}
-        {:duplicate, receipt} -> {:error, duplicate_work_reply(receipt)}
-        {:error, reason} -> {:error, reason}
+        {:ok, result} ->
+          {:ok, {result, nil}}
+
+        {:ok, result, intent_decision} ->
+          {:ok, {result, intent_decision}}
+
+        {:duplicate, receipt} ->
+          {:error, duplicate_work_reply(receipt)}
+
+        {:error, :unsupported_work_operation} ->
+          {:error,
+           %{
+             reason: "unsupported_work_operation",
+             send_not_attempted: true,
+             details: %{operation_id: operation["operation_id"], delivery: "not_recorded"}
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     catch
       :exit, _ ->

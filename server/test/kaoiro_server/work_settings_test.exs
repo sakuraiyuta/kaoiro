@@ -266,7 +266,7 @@ defmodule KaoiroServer.WorkSettingsTest do
              WorkStore.apply(
                @actor,
                %{
-                 "op" => "revise",
+                 "op" => "complete",
                  "operation_id" => opid(),
                  "work_id" => id,
                  "expected_revision" => 1
@@ -301,82 +301,8 @@ defmodule KaoiroServer.WorkSettingsTest do
     WorkStore.apply(principal, args, context, name)
   end
 
-  test "each bounded collection emits its own capacity diagnostic with admission unlimited" do
+  test "per-work receipt capacity remains independent of admission limits" do
     cfg = Application.fetch_env!(:kaoiro_server, :work_store)
-
-    Application.put_env(
-      :kaoiro_server,
-      :work_store,
-      Keyword.merge(cfg,
-        work_nominated_per_principal: 0,
-        work_active_per_assignee: 0,
-        work_pending_transfers: 1,
-        work_verdicts_per_work: 1,
-        work_accepted_verdicts_per_work: 1
-      )
-    )
-
-    {_sup, name, _} = store()
-    assert {:ok, %{work: %{work_id: held}}} = assign(name, "held")
-    for _ <- 1..2, do: assert({:ok, _} = operate(name, held, "hold", %{"reason" => "pause"}))
-
-    assert {:error,
-            {:work_capacity, %{limit: "work_pending_transfers", scope: "holds", maximum: 2}}} =
-             operate(name, held, "hold", %{"reason" => "pause"})
-
-    assert {:ok, %{work: %{work_id: moved}}} = assign(name, "first")
-    assert {:ok, _} = operate(name, moved, "transfer", %{"assignee" => "second"})
-
-    assert {:error,
-            {:work_capacity, %{limit: "work_pending_transfers", scope: "transfers", maximum: 1}}} =
-             operate(name, moved, "transfer", %{"assignee" => "third"})
-
-    assert {:ok, %{work: %{work_id: target}}} = assign(name, "author")
-
-    assert {:ok, _} =
-             operate(
-               name,
-               target,
-               "submit",
-               %{"subject" => %{"hash" => "hash", "label" => "candidate"}},
-               agent("author")
-             )
-
-    assert {:ok, %{work: %{work_id: review}}} =
-             WorkStore.apply(
-               @actor,
-               %{
-                 "op" => "assign",
-                 "operation_id" => opid(),
-                 "title" => "Review",
-                 "assignee" => "reviewer",
-                 "director" => @actor,
-                 "reviews" => target
-               },
-               %{operator: true},
-               name
-             )
-
-    verdict = %{"subject" => %{"work_id" => target, "hash" => "hash"}, "outcome" => "approve"}
-    assert {:ok, _} = operate(name, review, "verdict", verdict, agent("reviewer"))
-
-    assert {:error,
-            {:work_capacity, %{limit: "work_verdicts_per_work", scope: "work", maximum: 1}}} =
-             operate(name, review, "verdict", verdict, agent("reviewer"))
-
-    verdict_id = hd(WorkStore.all(name)[review].verdicts).verdict_id
-
-    accepted = %{
-      "verdict_ref" => %{"work_id" => review, "verdict_id" => verdict_id},
-      "subject_hash" => "hash"
-    }
-
-    assert {:ok, _} = operate(name, target, "accept_verdict", accepted)
-
-    assert {:error,
-            {:work_capacity,
-             %{limit: "work_accepted_verdicts_per_work", scope: "work", maximum: 1}}} =
-             operate(name, target, "accept_verdict", accepted)
 
     Application.put_env(
       :kaoiro_server,
@@ -390,7 +316,7 @@ defmodule KaoiroServer.WorkSettingsTest do
     assert {:error,
             {:work_capacity,
              %{limit: "work_receipts_per_work_principal", scope: "work_principal", maximum: 1}}} =
-             operate(name, id, "revise")
+             operate(name, id, "complete")
   end
 
   test "link capacity is distinct from assign-link conflict and conversation closure does not decline" do
@@ -432,21 +358,31 @@ defmodule KaoiroServer.WorkSettingsTest do
 
     for _ <- 1..31 do
       assert {:ok, _} =
-               operate(name, id, "revise", %{}, agent("director"), %{
-                 recipient: "target",
-                 conversation_id: opid(),
-                 new_conversation?: true
-               })
+               WorkStore.link(
+                 agent("director"),
+                 id,
+                 %{
+                   recipient: "target",
+                   conversation_id: opid(),
+                   new_conversation?: true
+                 },
+                 name
+               )
     end
 
     assert length(WorkStore.all(name)[id].links) == 32
 
     assert {:error, {:work_capacity, %{limit: "work_links_per_work", scope: "work", maximum: 32}}} =
-             operate(name, id, "revise", %{}, agent("director"), %{
-               recipient: "target",
-               conversation_id: opid(),
-               new_conversation?: true
-             })
+             WorkStore.link(
+               agent("director"),
+               id,
+               %{
+                 recipient: "target",
+                 conversation_id: opid(),
+                 new_conversation?: true
+               },
+               name
+             )
   end
 
   test "declining a nomination frees its slot while the terminal record is retained" do
@@ -563,8 +499,7 @@ defmodule KaoiroServer.WorkSettingsTest do
             {:apply, @actor, %{}, %{}},
             {:lookup, @actor, opid(), "digest"},
             {:note_delivery, @actor, opid(), %{}, nil},
-            {:check, @actor, %{}},
-            {:transfer_ack, @actor, "work", "transfer"},
+            {:link, @actor, "work", %{}},
             {:admit_yield, @actor, "a", "c", 1, "w", 1},
             {:authorize_peer_reset, @actor, "target", "w", 1},
             {:claim, @actor, %{}},

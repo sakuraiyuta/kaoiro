@@ -1,8 +1,8 @@
 ---
 title: Work authority and operations
 status: provisional
-last_updated: 2026-10-17
-description: Durable work grants, operation receipts, and transfer obligations.
+last_updated: 2026-11-05
+description: Basic work authority, durable receipts, and conversation links.
 ---
 
 # Work authority and operations
@@ -12,68 +12,113 @@ The server owns these fields. An agent can nominate work with `assign` in a new
 conversation; the recipient gains active authority only after
 `accept_assignment`. An operator can assign active work directly. A conversation
 links to at most one work, and `done: true` does not complete that work.
-In current reducer output, unset `origin`, `reviews`, and `subject` values in
-full work records, and unset `subject_hash` and `target` values in check audits,
-are serialized as `null`.
+Full records keep unset `origin`, `reviews`, and `subject` as `null`.
 
-The [wire types](../../../protocol/src/work.ts) define each `work_control` op.
-The [operation table](../../plans/issue-429-delivery-authority-protocol.md#ops)
-defines actors and preconditions. Director ops use `expected_revision`; assignee
-ops use `basis_revision` where required. `transfer` advances the authority epoch.
-Changing the assignee creates a pending obligation. The old assignee calls
-`work_transfer_ack {work_id, transfer_id}`; the new assignee's `work_check` stays
-fenced until every pending obligation is acknowledged or overridden by the
-operator.
-The wire-level `work_check_request` may include an unenforced audit target
-`{ref, expected_old, actual?}`.
+## Basic operations
+
+The server accepts these operations under
+[issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965).
+The protocol and wrapper schema change in the separate U2 landing; U1 changes
+server behavior. U1 and U2 are released together, using the coordinated
+[runner update procedure](../../operations/runner-update-and-rollback.md#coordinated-server-and-wrapper-updates).
+
+| Operation | Actor | Required state | Result |
+|---|---|---|---|
+| `assign` | Agent, or operator with explicit director and assignee | Capacity and unclaimed conversation link | `nominated`; operator assignments are immediately `active` |
+| `accept_assignment` | Assignee | `nominated`, active capacity available | `active`, revision advances |
+| `decline` | Assignee | `nominated` | `declined` |
+| `complete` | Director or operator | `active` | `completed`, revision advances |
+| `cancel` | Director or operator | Non-terminal | `cancelled`, revision advances |
+
+`revision` is a server-maintained state version. The server ignores supplied
+`expected_revision`, `basis_revision`, and `subject_hash`; completion does not
+require an artifact, hold release or verdict. The director checks artifacts
+and review results through messages and files. Cancellation does not stop a
+running tool: confirm that the previous assignee has stopped before assigning
+the replacement work.
+
+`revise`, `hold`, `release`, `submit`, `verdict`, `withdraw_verdict`,
+`accept_verdict`, `revoke_verdict`, `transfer`, and `release_transfer` are
+rejected before actor or work lookup with `unsupported_work_operation`.
+Already-recorded operation IDs are deduplicated before this rejection. For an
+unrecorded removed operation, the wrapper channel returns:
+
+```json
+{
+  "reason": "unsupported_work_operation",
+  "send_not_attempted": true,
+  "details": {"operation_id": "<received operation ID>", "delivery": "not_recorded"}
+}
+```
+
+The operator channel exposes the same reason. `work_check_request` and
+`work_transfer_ack` remain recognized channel events but return that reason
+without applying anything. They no longer check implementation or landing,
+record an audit, or acknowledge a transfer.
+
+## Continuing work across conversations
+
+An ordinary `normal` or `early` message may carry `work_id` without a
+`work_control`. The sender must be the director or assignee of an active work
+and address its counterpart. `work_control` and a top-level `work_id` may be
+combined only when the IDs agree; the operation then owns the link update.
+
+A conversation already linked to that work stays linked without a change.
+An unlinked conversation requires an explicit `new_conversation: true` and
+must not belong to another work. A work has at most 32 links. The declaration
+is trusted: the same participants may link an existing open conversation by
+setting it to true. Missing or false declarations do not authorize this
+attachment. Third-party conversations and closed, stale, or otherwise
+inadmissible messages fail the existing conversation preview before any link
+mutation. `yield` does not create a link and still requires an existing one.
+
+The sequence is receipt lookup (operations only), conversation preview,
+serialized work/link update, delivery-intent admission, then conversation
+recording. Links do not advance the revision or create receipts. The recipient
+receives the current work stamp. A race after preview may reject delivery even
+though the link or operation was committed; those changes are not rolled back.
+Unavailable or corrupt saved capacity settings also refuse link mutations.
+
+## Receipts, status and authority
 
 Each operation carries an `operation_id`. The server commits the work change
-and its receipt in one WorkStore write. A duplicate ID with the same body
-returns the stored receipt without relaying another message. A duplicate ID
-with a different body is rejected. `work_op_result_request` reads the receipt
-without sending a message; `unknown_operation` means no receipt existed at the
-lookup point, while `operation_id_expired` means the ID is outside its validity
-window. Preserve an uncertain ID while checking the outcome.
+and receipt in one write. The same ID and operation map return the stored
+receipt without relaying another message, even if the message body differs.
+A different operation map under the same ID returns `operation_id_conflict`.
+`work_op_result_request` reads the receipt without sending a message:
+`unknown_operation` means none existed at lookup, while `operation_id_expired`
+means the ID is outside its validity window. Preserve an uncertain ID while
+checking the outcome. This lookup's error is inside an otherwise successful
+channel reply; callers must read its JSON `error` field.
 
 Yield tokens and the recipient's last granted claim time occupy one
-`{:yield_state, recipient}` record. A claim consumes its token and advances the
-interval in one write. An op with a yield request commits its work receipt
-first, then issues the token. If token issuance fails, the op stays applied
-and delivery first falls back to `early` with `yield_token_unavailable`.
-Recipient capability and early-quota checks may still change the final grant;
-the send reply's `delivery_authority` carries that final result. The receipt
-records only the op result.
+`{:yield_state, recipient}` object. A claim consumes its token and advances
+the interval in one write. Work application precedes conversation recording:
+a receipt's `delivery` independently reports `recorded`, `not_recorded`, or
+unknown. Delivery-intent downgrades are reported by `delivery_authority`;
+receipts record the operation result, not that final delivery decision.
+Receipts remain until their ID timestamp plus validity; terminal retention
+does not delete a work with a live receipt. Old operation receipts stay readable.
 
-Work application precedes conversation recording. A committed operation may
-therefore have no delivered message. The receipt's `delivery` field reports
-`recorded`, `not_recorded`, or an unknown outcome separately from its applied
-work result. `work_status_request` gives the caller's current authorized view;
-the old assignee can retrieve only its own pending transfer obligations, each
-with `work_id`, through either the full list or a named restricted view.
-Its `work_transfer_ack` reply confirms only `{work_id, transfer_id,
-state: "acknowledged"}`. Operator notices sent while an old assignee's
-obligation remains pending carry that restricted view, including only its
-own obligations, instead of the full work record.
-Receipts remain until their ID timestamp plus the configured validity window
-has passed, including IDs accepted ahead of server time. Terminal retention
-does not delete a work while it still holds a live receipt.
+`work_status_request` lists a caller's non-terminal work and always returns
+`pending_transfers: []`. A named record is available only to its director,
+assignee or an operator. A former assignee or a reviewer has no special access.
+Operator notices go only to the current assignee and director.
 
-`work_check` is a preflight for an assignee and records a bounded audit entry.
-`start` requires active
-assignment and no pending transfer. `land` additionally checks the supplied
-revision and subject hash, no holds, and an effective accepted verdict when
-`requires_verdict` is true. The final grant changes only through `complete`.
+For rollback compatibility, existing values of `holds`, `verdicts`,
+`accepted_verdicts`, `transfers`, `subject`, `requires_verdict`, `reviews`, and
+`checks` are preserved. New assignments initialize them to empty lists,
+`null`, or `false` as appropriate. They still appear in full `work_status`,
+`work_notice` and client `work_changed` records, but do not determine access,
+completion or any other server decision. U1 does not normalize or remove them.
 
-An active grant also authorizes one operation outside `work_control`: the
-director may request the assignee's session reset through
-`request_peer_session_reset` ([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)),
-naming `work_id` and `expected_authority_epoch` taken from its own work
-results. The reset does not advance the revision and is not an op; a
-`transfer` or override invalidates the director's request through the
-epoch, and the server answers any authority failure with
-`reset_not_authorized`.
-
-See [delivery](delivery.md) for `delivery_intent` and yield claims, and
+An active grant also authorizes the director to request the assignee's reset
+through `request_peer_session_reset`
+([ADR-0068](../../adr/0068-director-requested-peer-session-reset.md)).
+Use the record's actual `authority_epoch`, including retained values above 1.
+Reset and yield authorization still compare that epoch. New grants start at 1;
+without transfer there is no operation that advances it. Reset failures remain
+`reset_not_authorized`. See [delivery](delivery.md) for yield claims and
 [channel contracts](../protocol/channels.md) for request and reply shapes.
 
 ## Admission capacity and saved settings
@@ -107,3 +152,7 @@ servers may omit them. Assigning an already-linked conversation still returns
 instead return `work_settings_corrupt`/`work_settings_unknown`, never a fabricated
 capacity refusal. They close mutation and authority grants while the store stays
 alive. See [configuration and recovery](../configuration/server.md#unavailable-settings).
+
+The retained transfer/verdict collection limits are configuration compatibility
+fields only. No supported operation grows these collections. Removing those
+fields or limits requires the separate U3 design.

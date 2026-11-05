@@ -3092,22 +3092,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         }
       }
 
-      operator = %{"kind" => "user", "id" => "yield-capability-operator"}
-
-      for {revision, next_director} <- [{1, "temporary-director"}, {2, from}] do
-        assert {:ok, _} =
-                 KaoiroServer.WorkStore.apply(
-                   operator,
-                   %{
-                     "op" => "transfer",
-                     "operation_id" => op_id.(),
-                     "work_id" => active.work_id,
-                     "expected_revision" => revision,
-                     "director" => %{"kind" => "agent", "id" => next_director}
-                   },
-                   %{operator: true}
-                 )
-      end
+      :sys.replace_state(KaoiroServer.WorkStore, fn state ->
+        put_in(state, [:works, active.work_id, :authority_epoch], 2)
+      end)
 
       :ok = close(recipient)
       receiving = join.(to, %{recipient_modes | "early" => "fold"})
@@ -3398,13 +3385,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       env =
         put_in(env, ["payload", "work_control"], %{
-          "op" => "revise",
+          "op" => "submit",
           "operation_id" => operation_id,
           "work_id" => active.work_id,
           "expected_revision" => 0
         })
 
-      assert_reply push(sender, "envelope", env), :error, %{reason: "stale_work_revision"}
+      assert_reply push(sender, "envelope", env), :error, %{reason: "unsupported_work_operation"}
       assert ConversationStates.get(cid) == nil
 
       assert {:error, :unknown_operation} =
@@ -3522,7 +3509,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       env =
         put_in(env, ["payload", "work_control"], %{
-          "op" => "revise",
+          "op" => "complete",
           "operation_id" => operation_id,
           "work_id" => active.work_id,
           "expected_revision" => 1
@@ -3610,117 +3597,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       assert {:ok, %{delivery: %{status: "not_recorded"}}} =
                KaoiroServer.WorkStore.op_result(%{"kind" => "agent", "id" => from}, operation_id)
-    end
-
-    test "V49 rejected yield work message deletes its unclaimed token" do
-      from = "test.work-yield-rejected-from"
-      to = "test.work-yield-rejected-to"
-      cid = "work-yield-rejected-#{System.unique_integer([:positive])}"
-
-      modes = %{
-        "version" => "v1",
-        "early" => "fold",
-        "yield" => "tool_boundary",
-        "stage_reports" => true
-      }
-
-      join = fn id ->
-        join_wrapper(id, "default", %{
-          "inter_agent_delivery_ack" => "dispatch-v1",
-          "delivery_generation" => id,
-          "delivery_resync" => "skip-v1",
-          "inter_agent_reply_basis" => "v1",
-          "inter_agent_delivery_modes" => modes,
-          "work_control" => "v1"
-        })
-      end
-
-      sender = join.(from)
-      recipient = join.(to)
-      assert_reply push(sender, "envelope", envelope(from, "idle")), :ok
-      assert_reply push(recipient, "envelope", envelope(to, "idle")), :ok
-      on_exit(fn -> DeliveryStates.delete(to) end)
-
-      director = %{"kind" => "agent", "id" => from}
-      assignee = %{"kind" => "agent", "id" => to}
-
-      op_id = fn ->
-        "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
-      end
-
-      assert {:ok, %{work: nomination}} =
-               KaoiroServer.WorkStore.apply(
-                 director,
-                 %{"op" => "assign", "operation_id" => op_id.(), "title" => cid},
-                 %{recipient: to, conversation_id: cid, turn_number: 1, new_conversation?: true}
-               )
-
-      assert {:ok, %{work: active}} =
-               KaoiroServer.WorkStore.apply(
-                 assignee,
-                 %{
-                   "op" => "accept_assignment",
-                   "operation_id" => op_id.(),
-                   "work_id" => nomination.work_id
-                 },
-                 %{recipient: from, conversation_id: cid, turn_number: 2}
-               )
-
-      operation_id = op_id.()
-      env = inter_envelope(from, to, cid: cid)
-
-      env =
-        Map.update!(env, "payload", fn payload ->
-          payload
-          |> Map.put("delivery_intent", "yield")
-          |> Map.put("in_reply_to", 0)
-          |> Map.put("work_id", active.work_id)
-          |> Map.put("expected_authority_epoch", active.authority_epoch)
-          |> Map.put("work_control", %{
-            "op" => "revise",
-            "operation_id" => operation_id,
-            "work_id" => active.work_id,
-            "expected_revision" => 1
-          })
-        end)
-
-      :ok = :sys.suspend(ConversationStates)
-
-      on_exit(fn ->
-        :sys.resume(ConversationStates)
-        :sys.resume(KaoiroServer.WorkStore)
-      end)
-
-      ref = push(sender, "envelope", env)
-      assert wait_for_work_preview()
-      :ok = :sys.suspend(KaoiroServer.WorkStore)
-      :ok = :sys.resume(ConversationStates)
-
-      assert :ok =
-               ConversationStates.record_bound_message(
-                 cid,
-                 from,
-                 to,
-                 "competing turn",
-                 1,
-                 false,
-                 true,
-                 :legacy
-               )
-
-      :ok = :sys.resume(KaoiroServer.WorkStore)
-
-      assert_reply ref, :error, %{
-        reason: "work_applied_message_rejected",
-        details: %{work_control_result: %{operation_id: ^operation_id}}
-      }
-
-      assert {:ok, %{delivery: %{status: "not_recorded"}}} =
-               KaoiroServer.WorkStore.op_result(director, operation_id)
-
-      refute Enum.any?(:sys.get_state(KaoiroServer.WorkStore).yield_tokens, fn {_id, token} ->
-               token.work_id == active.work_id and token.state == "unclaimed"
-             end)
     end
 
     test "V27b V27c recorded turn before relay has unknown delivery outcome" do
@@ -9348,64 +9224,6 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   @tag :r1_fix
-  test "M2 former assignee acknowledgement confirms only its transfer" do
-    old = "test.r1-old-assignee"
-    sender = join_wrapper(old, "default", %{"work_control" => "v1"})
-    assert_reply push(sender, "envelope", envelope(old, "idle")), :ok
-    operator = %{"kind" => "user", "id" => "r1-ack-operator"}
-
-    id = fn ->
-      "op_#{System.system_time(:millisecond)}_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}"
-    end
-
-    assert {:ok, %{work: initial}} =
-             KaoiroServer.WorkStore.apply(
-               operator,
-               %{
-                 "op" => "assign",
-                 "operation_id" => id.(),
-                 "title" => "Restricted acknowledgement",
-                 "assignee" => old,
-                 "director" => operator
-               },
-               %{operator: true}
-             )
-
-    assert {:ok, _} =
-             KaoiroServer.WorkStore.apply(
-               operator,
-               %{
-                 "op" => "transfer",
-                 "operation_id" => id.(),
-                 "work_id" => initial.work_id,
-                 "expected_revision" => initial.revision,
-                 "assignee" => "test.r1-new-assignee"
-               },
-               %{operator: true}
-             )
-
-    assert {:ok, %{access: "transfer_pending", pending_transfers: [obligation]}} =
-             KaoiroServer.WorkStore.status(%{"kind" => "agent", "id" => old}, initial.work_id)
-
-    assert_reply push(sender, "work_transfer_ack", %{
-                   "work_id" => initial.work_id,
-                   "transfer_id" => obligation.transfer_id
-                 }),
-                 :ok,
-                 %{
-                   "work_id" => work_id,
-                   "transfer_id" => transfer_id,
-                   "state" => "acknowledged"
-                 } = response
-
-    assert work_id == initial.work_id
-    assert transfer_id == obligation.transfer_id
-    refute Map.has_key?(response, "work")
-    refute Map.has_key?(response, :work)
-
-    assert {:error, :unknown_work} =
-             KaoiroServer.WorkStore.status(%{"kind" => "agent", "id" => old}, initial.work_id)
-  end
 
   @tag :r1_fix
   test "M5 yield-to-early downgrade respects a full pair quota" do

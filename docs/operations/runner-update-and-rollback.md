@@ -241,6 +241,35 @@ Never delete the release referenced by `current` / `previous`, regardless of
 spawn**, so the active release continues to be read after startup; deleting it
 breaks a spawn that has not happened yet.
 
+#### Coordinated server and wrapper updates
+
+For [issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965), server U1
+and wrapper U2 form one production release. Landings may be separate, but do
+not leave production at either intermediate combination. The operator performs
+the existing maintenance and [high-risk release/restore procedure](high-risk-change-release.md#4-release-and-restore-the-fleet):
+
+1. Stop all agents and explicitly stop **every runner before the server
+   commit** (`systemctl --user stop kaoiro-runner`). The updater's later stop
+   does not replace this step. Stop manually launched/development wrappers
+   connected to that server as well.
+2. Apply the paired server release through the normal server deployment
+   procedure, then run the runner updater with `--detach`.
+3. Before restore, verify server and runner versions/identity and the runner
+   connection. Confirm that old wrappers and pending spawns are absent. All
+   agents being offline is expected at this stage.
+4. Use the high-risk procedure's offline list and confirmation count to bulk
+   restore. **After restore**, verify each wrapper's connection and
+   `wrapper_build_info`, and record every tile's restore outcome. Partial
+   success is not a completed restore.
+
+Follow the existing failure procedure if a check fails. For rollback, stop
+the runner first and restore the server **and** runner to the paired previous
+release. A server-only rollback can silently deliver an unlinked `work_id` and
+make a later yield fail; a runner-only rollback leaves old operation schemas.
+If updater activation fails and restarts the previous runner, stop that runner
+before paired recovery. Do not invent a new gate or treat an intermediate
+combination as supported. Production release approval is still required.
+
 ### 4.6.3 Rollback
 
 A rollback across Codex native hashes restores a retained snapshot before

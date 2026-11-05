@@ -533,3 +533,32 @@ proposed.
   ([issue #567](https://github.com/sakuraiyuta/kaoiro/issues/567)) is
   default-on only for what the probes guarantee. This narrows the end state
   of the 2026-10-01 Amendment for Antigravity.
+
+
+## Amendment (2026-11-05, basic work operations)
+
+[Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) narrows work to
+`assign`, `accept_assignment`, `decline`, `complete`, and `cancel`.
+
+- **D3 remains:** the server owns the accepted assignment, director, assignee,
+  scope and authority epoch. Existing epochs are preserved and still authorize
+  reset/yield; new work starts at 1. Removing transfer means no supported
+  operation advances the epoch. Cancellation does not stop running tools.
+- **D4:** revision is the server's state version. Callers do not provide an
+  expected revision. Work spans conversations through explicit `work_id`
+  linkage; ordinary messages may add links after conversation preview without
+  changing the revision or creating an operation receipt.
+- **D5:** the director compares artifact hashes and review decisions in messages
+  and files. The server checks completion authority and active state, not a
+  subject hash, hold, verdict or implementation/landing audit. Reviewers and
+  former assignees lose their special status-reading access.
+
+Receipts, duplicate-operation behavior, admission capacity and epoch-bound
+reset/yield authorization remain. Legacy review/hold/transfer fields retain
+existing values for rollback compatibility and still travel in full records,
+but have no authority or completion meaning. Physical removal is separate work.
+The [current work contract](../reference/inter-agent/work.md) defines the
+operations and caller-declared conversation linkage. Server U1 and wrapper U2
+are released together with the runner stopped before the server update and
+restored only after the paired release is verified; rollback also restores the
+server and runner together.

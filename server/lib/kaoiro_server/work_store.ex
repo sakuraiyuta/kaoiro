@@ -52,13 +52,8 @@ defmodule KaoiroServer.WorkStore do
     GenServer.call(server, {:op_result, principal, operation_id})
   end
 
-  def check(principal, request, server \\ __MODULE__) do
-    GenServer.call(server, {:check, principal, request})
-  end
-
-  def transfer_ack(principal, work_id, transfer_id, server \\ __MODULE__) do
-    GenServer.call(server, {:transfer_ack, principal, work_id, transfer_id})
-  end
+  def link(principal, work_id, context, server \\ __MODULE__),
+    do: GenServer.call(server, {:link, principal, work_id, context})
 
   def admit_yield(
         sender,
@@ -246,8 +241,7 @@ defmodule KaoiroServer.WorkStore do
                   :apply,
                   :lookup,
                   :note_delivery,
-                  :check,
-                  :transfer_ack,
+                  :link,
                   :admit_yield,
                   :authorize_peer_reset,
                   :claim,
@@ -612,19 +606,6 @@ defmodule KaoiroServer.WorkStore do
           {:ok, next_works, work_id, result} ->
             now = System.system_time(:millisecond)
 
-            result =
-              if operation["op"] == "transfer" do
-                claimed =
-                  for {_recipient, claim} <- state.claim_states,
-                      {_id, token} <- claim.tokens,
-                      token.work_id == work_id and token.state == "claimed",
-                      do: token.yield_token
-
-                Map.put(result, :claimed_yield_tokens, claimed)
-              else
-                result
-              end
-
             receipt = %{
               principal: principal,
               operation_id: operation_id,
@@ -725,25 +706,12 @@ defmodule KaoiroServer.WorkStore do
     {:reply, WorkReducer.status(state.works, principal, work_id), state}
   end
 
-  def handle_call({:check, principal, request}, _from, state) do
-    case WorkReducer.check(state.works, principal, request) do
-      {:ok, work_id, work, result} ->
-        persist_work(state.table, work_id, work)
-        {:reply, result, %{state | works: Map.put(state.works, work_id, work)}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call({:transfer_ack, principal, work_id, transfer_id}, _from, state) do
-    case WorkReducer.transfer_ack(state.works, principal, work_id, transfer_id) do
-      {:ok, work} ->
-        persist_work(state.table, work_id, work)
-        {:reply, {:ok, work}, %{state | works: Map.put(state.works, work_id, work)}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+  def handle_call({:link, principal, work_id, context}, _from, state) do
+    with {:ok, works, work} <- WorkReducer.link(state.works, principal, work_id, context) do
+      if work != state.works[work_id], do: persist_work(state.table, work_id, work)
+      {:reply, {:ok, work}, %{state | works: works}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 

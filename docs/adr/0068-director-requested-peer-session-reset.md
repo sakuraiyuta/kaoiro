@@ -165,3 +165,14 @@ director calls this tool under the same approval class as its own reset.
 - The wrapper's `session_lifecycle` ingress still accepts the other
   server-only kinds through its generic clause; this ADR closes only
   `session_reset_started` and leaves the rest to a follow-up issue.
+
+
+## Amendment (2026-11-05, basic work operations)
+
+[Issue #965](https://github.com/sakuraiyuta/kaoiro/issues/965) removes transfer
+without changing reset authorization. Callers still pass the authority epoch
+observed in their work result. Existing values above 1 are preserved; new work
+starts at 1 and no supported operation advances it. An active grant, matching
+director/assignee and matching epoch remain necessary, and terminal work cannot
+authorize a reset. Cancellation followed by a new assignment replaces transfer;
+it does not itself stop the previous assignee's running tools.

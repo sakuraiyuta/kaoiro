@@ -3,7 +3,10 @@ defmodule KaoiroServer.WorkReducer do
 
   @terminal ~w(completed cancelled declined expired)
   @max_links 32
-  @revision_ops ~w(revise hold release accept_verdict revoke_verdict complete cancel transfer release_transfer)
+  @removed_ops ~w(revise hold release submit verdict withdraw_verdict accept_verdict revoke_verdict transfer release_transfer)
+
+  def reduce(_, _, %{"op" => op}, _, _) when op in @removed_ops,
+    do: {:error, :unsupported_work_operation}
 
   def reduce(works, principal, %{"op" => "assign"} = op, context, config) do
     recipient = context[:recipient]
@@ -19,8 +22,7 @@ defmodule KaoiroServer.WorkReducer do
          :ok <- valid_principal(director),
          :ok <- check_capacity(works, principal, assignee, config, operator?),
          :ok <- assign_link_available(works, context),
-         :ok <- global_receipt_capacity(works, principal, config),
-         :ok <- review_authority(works, principal, op["reviews"]) do
+         :ok <- global_receipt_capacity(works, principal, config) do
       id = random_id("wrk_")
       now = timestamp()
       state = if operator?, do: "active", else: "nominated"
@@ -34,11 +36,11 @@ defmodule KaoiroServer.WorkReducer do
         work_id: id,
         title: title,
         origin: origin,
-        reviews: op["reviews"],
+        reviews: nil,
         director: director,
         assignee: %{"kind" => "agent", "id" => assignee},
         resource_scope: scopes,
-        requires_verdict: op["requires_verdict"] != false,
+        requires_verdict: false,
         state: state,
         revision: if(operator?, do: 1, else: 0),
         authority_epoch: 1,
@@ -69,7 +71,6 @@ defmodule KaoiroServer.WorkReducer do
     with %{state: state} = work <- works[id] || {:error, :unknown_work},
          :ok <- carriage(works, work, principal, context),
          :ok <- actor(work, principal, name),
-         :ok <- revision(work, op, name),
          :ok <- state_precondition(work, name, state),
          :ok <- receipt_capacity(works, work, principal, config),
          :ok <- link_capacity(work, context),
@@ -100,13 +101,7 @@ defmodule KaoiroServer.WorkReducer do
           principal == work.director or principal == work.assignee,
           do: work
 
-    pending =
-      for {_id, work} <- works,
-          transfer <- work.transfers,
-          transfer.state == "pending" and transfer.old_assignee == principal,
-          do: Map.put(transfer, :work_id, work.work_id)
-
-    {:ok, %{works: mine, pending_transfers: pending}}
+    {:ok, %{works: mine, pending_transfers: []}}
   end
 
   def status(works, principal, id) do
@@ -115,111 +110,24 @@ defmodule KaoiroServer.WorkReducer do
         {:error, :unknown_work}
 
       work ->
-        cond do
-          principal["kind"] == "user" or principal == work.director or principal == work.assignee or
-              reviewer_of?(works, principal, id) ->
-            {:ok, %{work: work}}
-
-          true ->
-            pending =
-              for transfer <- work.transfers,
-                  transfer.state == "pending" and transfer.old_assignee == principal,
-                  do: Map.put(transfer, :work_id, id)
-
-            if pending == [],
-              do: {:error, :unknown_work},
-              else: {:ok, %{work_id: id, access: "transfer_pending", pending_transfers: pending}}
-        end
+        if principal["kind"] == "user" or principal == work.director or principal == work.assignee,
+          do: {:ok, %{work: work}},
+          else: {:error, :work_not_authorized}
     end
   end
 
-  def check(works, principal, %{"work_id" => id} = request) do
-    case works[id] do
-      nil ->
-        {:error, :unknown_work}
-
-      work ->
-        if principal != work.assignee do
-          {:error, :work_not_authorized}
-        else
-          action = request["action"]
-
-          reason =
-            cond do
-              work.state != "active" ->
-                :work_state_conflict
-
-              principal != work.assignee ->
-                :work_not_authorized
-
-              request["expected_revision"] != work.revision ->
-                :stale_work_revision
-
-              Enum.any?(work.transfers, &(&1.state == "pending")) ->
-                :transfer_pending
-
-              work.holds != [] ->
-                :work_state_conflict
-
-              action == "land" and work.subject == nil ->
-                :subject_mismatch
-
-              action == "land" and request["subject_hash"] != work.subject.hash ->
-                :subject_mismatch
-
-              action == "land" and work.requires_verdict and not effective_verdict?(works, work) ->
-                :verdict_not_effective
-
-              action not in ~w(start land) ->
-                :work_state_conflict
-
-              true ->
-                nil
-            end
-
-          at = timestamp()
-
-          audit = %{
-            principal: principal,
-            action: action,
-            revision: work.revision,
-            subject_hash: request["subject_hash"],
-            result: reason || "ok",
-            at: at,
-            target: request["target"]
-          }
-
-          cap = config()[:work_checks_per_work]
-          next = %{work | checks: Enum.take([audit | work.checks], cap)}
-
-          result =
-            if reason, do: %{ok: false, reason: reason, work: next}, else: %{ok: true, work: next}
-
-          {:ok, id, next, result}
-        end
-    end
-  end
-
-  def check(_, _, _), do: {:error, :unknown_work}
-
-  def transfer_ack(works, principal, id, transfer_id) do
-    case works[id] do
-      nil ->
-        {:error, :unknown_work}
-
-      work ->
-        case Enum.find(work.transfers, &(&1.transfer_id == transfer_id)) do
-          %{state: "pending", old_assignee: ^principal} ->
-            transfers =
-              Enum.map(work.transfers, fn t ->
-                if t.transfer_id == transfer_id, do: %{t | state: "acknowledged"}, else: t
-              end)
-
-            {:ok, %{work | transfers: transfers, updated_at: timestamp()}}
-
-          _ ->
-            {:error, :work_not_authorized}
-        end
+  def link(works, principal, id, context) do
+    with %{} = work <- works[id] || {:error, :unknown_work},
+         true <- work.state == "active" || {:error, :work_state_conflict},
+         true <- principal in [work.director, work.assignee] || {:error, :work_carriage_invalid},
+         :ok <- carriage(works, work, principal, context),
+         :ok <- link_capacity(work, context) do
+      if context[:conversation_id] in work.links do
+        {:ok, works, work}
+      else
+        {next, linked} = maybe_link_new_conversation(works, work, context)
+        {:ok, next, linked}
+      end
     end
   end
 
@@ -238,278 +146,12 @@ defmodule KaoiroServer.WorkReducer do
     updated(work, works, %{state: "declined"})
   end
 
-  defp apply_op(works, work, _principal, %{"op" => "revise"}, _config) do
-    updated(work, works, %{revision: work.revision + 1, verdicts: invalidate(work.verdicts)})
-  end
-
-  defp apply_op(works, work, _principal, %{"op" => "hold", "reason" => reason}, config)
-       when is_binary(reason) and reason != "" do
-    if length(work.holds) >= config[:work_pending_transfers] * 2 do
-      capacity(:work_pending_transfers, :holds, config[:work_pending_transfers] * 2)
-    else
-      hold = %{hold_id: random_id("hold_"), reason: reason, set_at_revision: work.revision + 1}
-
-      updated(work, works, %{
-        revision: work.revision + 1,
-        holds: [hold | work.holds],
-        verdicts: invalidate(work.verdicts)
-      })
-    end
-  end
-
-  defp apply_op(works, work, _principal, %{"op" => "release", "hold_id" => id} = op, _config) do
-    cond do
-      not Enum.any?(work.holds, &(&1.hold_id == id)) ->
-        {:error, :work_state_conflict}
-
-      subject_hash(work) != op["subject_hash"] ->
-        {:error, :subject_mismatch}
-
-      true ->
-        updated(work, works, %{
-          revision: work.revision + 1,
-          holds: Enum.reject(work.holds, &(&1.hold_id == id)),
-          verdicts: invalidate(work.verdicts)
-        })
-    end
-  end
-
-  defp apply_op(
-         works,
-         work,
-         _principal,
-         %{"op" => "submit", "subject" => %{"hash" => hash, "label" => label}},
-         _config
-       )
-       when is_binary(hash) and hash != "" and is_binary(label) and label != "" do
-    seq = if work.subject, do: work.subject.seq + 1, else: 1
-
-    refs =
-      Enum.map(work.accepted_verdicts, fn ref ->
-        if ref.subject_hash != hash, do: Map.put(ref, :void, "subject_changed"), else: ref
-      end)
-
-    updated(work, works, %{
-      subject: %{hash: hash, label: label, seq: seq},
-      accepted_verdicts: refs
-    })
-  end
-
-  defp apply_op(
-         works,
-         work,
-         principal,
-         %{
-           "op" => "verdict",
-           "subject" => %{"work_id" => target, "hash" => hash},
-           "outcome" => outcome
-         },
-         config
-       )
-       when outcome in ~w(approve request_changes reject) do
-    cond do
-      work.reviews != target ->
-        {:error, :work_state_conflict}
-
-      length(work.verdicts) >= config[:work_verdicts_per_work] ->
-        capacity(:work_verdicts_per_work, :work, config[:work_verdicts_per_work])
-
-      true ->
-        verdict = %{
-          verdict_id: random_id("vrd_"),
-          author: principal,
-          subject: %{work_id: target, hash: hash},
-          outcome: outcome,
-          basis_revision: work.revision,
-          state: "recorded"
-        }
-
-        previous =
-          Enum.map(work.verdicts, fn v ->
-            if v.author == principal and v.state == "recorded",
-              do: %{v | state: "superseded"},
-              else: v
-          end)
-
-        updated(work, works, %{verdicts: [verdict | previous]})
-    end
-  end
-
-  defp apply_op(
-         works,
-         work,
-         principal,
-         %{"op" => "withdraw_verdict", "verdict_id" => id},
-         _config
-       ) do
-    case Enum.find(work.verdicts, &(&1.verdict_id == id)) do
-      %{author: ^principal, state: "recorded"} ->
-        updated(work, works, %{
-          verdicts:
-            Enum.map(work.verdicts, fn v ->
-              if v.verdict_id == id, do: %{v | state: "withdrawn"}, else: v
-            end)
-        })
-
-      _ ->
-        {:error, :work_state_conflict}
-    end
-  end
-
-  defp apply_op(
-         works,
-         work,
-         _principal,
-         %{
-           "op" => "accept_verdict",
-           "verdict_ref" => %{"work_id" => review_id, "verdict_id" => verdict_id},
-           "subject_hash" => hash
-         },
-         config
-       ) do
-    review = works[review_id]
-    verdict = if review, do: Enum.find(review.verdicts, &(&1.verdict_id == verdict_id))
-
-    cond do
-      review == nil or review.reviews != work.work_id ->
-        {:error, :work_state_conflict}
-
-      verdict == nil or verdict.state != "recorded" or verdict.outcome != "approve" ->
-        {:error, :work_state_conflict}
-
-      subject_hash(work) != hash or verdict.subject.hash != hash ->
-        {:error, :subject_mismatch}
-
-      length(work.accepted_verdicts) >= config[:work_accepted_verdicts_per_work] ->
-        capacity(
-          :work_accepted_verdicts_per_work,
-          :work,
-          config[:work_accepted_verdicts_per_work]
-        )
-
-      true ->
-        ref = %{
-          verdict_ref: %{work_id: review_id, verdict_id: verdict_id},
-          subject_hash: hash,
-          at_revision: work.revision + 1
-        }
-
-        updated(work, works, %{
-          revision: work.revision + 1,
-          accepted_verdicts: [ref | work.accepted_verdicts]
-        })
-    end
-  end
-
-  defp apply_op(
-         works,
-         work,
-         _principal,
-         %{"op" => "revoke_verdict", "verdict_ref" => ref},
-         _config
-       ) do
-    next =
-      Enum.reject(work.accepted_verdicts, fn accepted ->
-        accepted.verdict_ref.work_id == ref_field(ref, :work_id) and
-          accepted.verdict_ref.verdict_id == ref_field(ref, :verdict_id)
-      end)
-
-    if next == work.accepted_verdicts,
-      do: {:error, :work_state_conflict},
-      else: updated(work, works, %{revision: work.revision + 1, accepted_verdicts: next})
-  end
-
-  defp apply_op(works, work, _principal, %{"op" => "complete", "subject_hash" => hash}, _config) do
-    cond do
-      work.subject == nil or not is_binary(hash) or hash == "" ->
-        {:error, :subject_mismatch}
-
-      subject_hash(work) != hash ->
-        {:error, :subject_mismatch}
-
-      work.holds != [] ->
-        {:error, :work_state_conflict}
-
-      Enum.any?(work.transfers, &(&1.state == "pending")) ->
-        {:error, :transfer_pending}
-
-      work.requires_verdict and not effective_verdict?(works, work) ->
-        {:error, :verdict_not_effective}
-
-      true ->
-        updated(work, works, %{state: "completed", revision: work.revision + 1})
-    end
+  defp apply_op(works, work, _principal, %{"op" => "complete"}, _config) do
+    updated(work, works, %{state: "completed", revision: work.revision + 1})
   end
 
   defp apply_op(works, work, _principal, %{"op" => "cancel"}, _config) do
-    updated(work, works, %{
-      state: "cancelled",
-      revision: work.revision + 1,
-      verdicts: invalidate(work.verdicts)
-    })
-  end
-
-  defp apply_op(works, work, _principal, %{"op" => "transfer"} = op, config) do
-    director = op["director"] || work.director
-
-    assignee =
-      if op["assignee"], do: %{"kind" => "agent", "id" => op["assignee"]}, else: work.assignee
-
-    changed_writer? = assignee != work.assignee
-
-    cond do
-      director == work.director and not changed_writer? ->
-        {:error, :work_state_conflict}
-
-      changed_writer? and
-          Enum.count(work.transfers, &(&1.state == "pending")) >= config[:work_pending_transfers] ->
-        capacity(:work_pending_transfers, :transfers, config[:work_pending_transfers])
-
-      true ->
-        epoch = work.authority_epoch + 1
-
-        transfers =
-          if changed_writer?,
-            do: [
-              %{
-                transfer_id: random_id("trf_"),
-                epoch: epoch,
-                old_assignee: work.assignee,
-                new_assignee: assignee,
-                state: "pending"
-              }
-              | work.transfers
-            ],
-            else: work.transfers
-
-        updated(work, works, %{
-          director: director,
-          assignee: assignee,
-          transfers: transfers,
-          authority_epoch: epoch,
-          revision: work.revision + 1
-        })
-    end
-  end
-
-  defp apply_op(
-         works,
-         work,
-         _principal,
-         %{"op" => "release_transfer", "transfer_id" => id},
-         _config
-       ) do
-    if Enum.any?(work.transfers, &(&1.transfer_id == id and &1.state == "pending")) do
-      updated(work, works, %{
-        revision: work.revision + 1,
-        transfers:
-          Enum.map(work.transfers, fn t ->
-            if t.transfer_id == id, do: %{t | state: "overridden"}, else: t
-          end)
-      })
-    else
-      {:error, :work_state_conflict}
-    end
+    updated(work, works, %{state: "cancelled", revision: work.revision + 1})
   end
 
   defp apply_op(_, _, _, _, _), do: {:error, :work_state_conflict}
@@ -521,14 +163,11 @@ defmodule KaoiroServer.WorkReducer do
 
   defp actor(work, principal, name) do
     cond do
-      name in ~w(accept_assignment decline submit verdict withdraw_verdict) and
+      name in ~w(accept_assignment decline) and
           principal == work.assignee ->
         :ok
 
-      name in ~w(transfer release_transfer) and principal["kind"] == "user" ->
-        :ok
-
-      name in ~w(revise hold release accept_verdict revoke_verdict complete cancel) and
+      name in ~w(complete cancel) and
           (principal == work.director or principal["kind"] == "user") ->
         :ok
 
@@ -581,29 +220,11 @@ defmodule KaoiroServer.WorkReducer do
 
   defp link_capacity(_work, _context), do: :ok
 
-  defp ref_field(ref, key) when is_map(ref),
-    do: Map.get(ref, key) || Map.get(ref, Atom.to_string(key))
-
-  defp ref_field(_ref, _key), do: nil
-
-  defp revision(work, op, name) do
-    cond do
-      name in @revision_ops and op["expected_revision"] != work.revision ->
-        {:error, :stale_work_revision}
-
-      name in ~w(submit verdict) and op["basis_revision"] != work.revision ->
-        {:error, :stale_work_revision}
-
-      true ->
-        :ok
-    end
-  end
-
   defp state_precondition(_work, name, state) when name in ~w(accept_assignment decline) do
     if state == "nominated", do: :ok, else: {:error, :work_state_conflict}
   end
 
-  defp state_precondition(_work, name, state) when name in ~w(transfer cancel) do
+  defp state_precondition(_work, name, state) when name == "cancel" do
     if state in @terminal, do: {:error, :work_state_conflict}, else: :ok
   end
 
@@ -682,16 +303,6 @@ defmodule KaoiroServer.WorkReducer do
        {:work_capacity,
         %{limit: Atom.to_string(limit), scope: Atom.to_string(scope), maximum: maximum}}}
 
-  defp review_authority(_works, _principal, nil), do: :ok
-
-  defp review_authority(works, principal, id) do
-    case works[id] do
-      %{director: ^principal} -> :ok
-      %{} -> if(principal["kind"] == "user", do: :ok, else: {:error, :work_not_authorized})
-      _ -> {:error, :work_not_authorized}
-    end
-  end
-
   defp valid_title(value) when is_binary(value) and byte_size(value) in 1..256, do: :ok
   defp valid_title(_), do: {:error, :work_state_conflict}
 
@@ -710,33 +321,6 @@ defmodule KaoiroServer.WorkReducer do
 
   defp valid_principal(_), do: {:error, :work_state_conflict}
 
-  defp reviewer_of?(works, principal, id) do
-    Enum.any?(works, fn {_, work} -> work.reviews == id and work.assignee == principal end)
-  end
-
-  defp effective_verdict?(works, work) do
-    Enum.any?(work.accepted_verdicts, fn ref ->
-      review = works[ref.verdict_ref.work_id]
-
-      verdict =
-        if review, do: Enum.find(review.verdicts, &(&1.verdict_id == ref.verdict_ref.verdict_id))
-
-      ref[:void] == nil and ref.subject_hash == subject_hash(work) and
-        review != nil and review.state != "cancelled" and verdict != nil and
-        verdict.state == "recorded" and verdict.outcome == "approve" and
-        verdict.subject.hash == subject_hash(work)
-    end)
-  end
-
-  defp invalidate(verdicts),
-    do:
-      Enum.map(verdicts, fn verdict ->
-        if verdict.state == "recorded", do: %{verdict | state: "invalidated"}, else: verdict
-      end)
-
-  defp subject_hash(%{subject: %{hash: hash}}), do: hash
-  defp subject_hash(_), do: nil
-
   defp stamp(work),
     do: %{
       work_id: work.work_id,
@@ -749,6 +333,4 @@ defmodule KaoiroServer.WorkReducer do
 
   defp random_id(prefix),
     do: prefix <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
-
-  defp config, do: Application.get_env(:kaoiro_server, :work_store, [])
 end
